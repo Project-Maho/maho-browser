@@ -1,0 +1,14 @@
+{
+  "name": "maho-appium-tests",
+  "version": "1.0.0",
+  "description": "Appium test suite for Maho browser app",
+  "scripts": {
+    "test": "node run-tests.js",
+    "test:ios": "node run-tests.js",
+    "test:android": "node run-android-smoke.js",
+    "test:edge": "node edge-case-tests.js"
+  },
+  "dependencies": {
+    "webdriverio": "^9.7.4"
+  }
+}

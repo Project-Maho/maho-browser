@@ -1,0 +1,14 @@
+[package]
+name = "maho-jni"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+maho-core = { path = "../maho-core" }
+maho-types = { path = "../maho-types" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+jni = "0.21.1"

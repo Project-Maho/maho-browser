@@ -1,0 +1,812 @@
+use serde::{Deserialize, Serialize};
+
+use crate::autofill::{AutofillAddress, AutofillPayment};
+use crate::boost::BoostUpdate;
+use crate::common::{ImageData, MemoryPressureLevel, Orientation, Size, Url, UrlPattern};
+use crate::identifiers::{BoostId, FolderId, NoteId, PaneId, ProfileId, SpaceId, TabId};
+use crate::settings::SettingsUpdate;
+use crate::space::{SpaceColor, SpaceConfigUpdate};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum QuickAction {
+    NewTab,
+    NewSpace,
+    CloseTab,
+    CloseOtherTabs,
+    CloseAllTabs,
+    DuplicateTab,
+    PinTab,
+    UnpinTab,
+    MuteTab,
+    UnmuteTab,
+    MuteAllTabs,
+    FreezeTab,
+    UnfreezeTab,
+    ReloadTab,
+    HardReload,
+    CopyUrl,
+    ClearHistory,
+    ClearCookies,
+    OpenSettings,
+    OpenDownloads,
+    OpenBookmarks,
+    OpenHistory,
+    ToggleBoost,
+    ToggleSidebar,
+    ToggleContentBlocker,
+    NewFolder,
+    ArchiveTab,
+    RestoreLastClosed,
+    ToggleFullScreen,
+    ZoomIn,
+    ZoomOut,
+    ResetZoom,
+    FindInPage,
+    PrintPage,
+    ViewSource,
+    ToggleDevTools,
+    NextSpace,
+    PrevSpace,
+    SharePage,
+    NewIncognito,
+    ScrollToTop,
+    ScrollToBottom,
+    ClearBrowsingData,
+    Custom { action_id: String },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ShellEvent {
+    // Navigation (5)
+    NavigateTo {
+        tab_id: TabId,
+        url: Url,
+    },
+    GoBack {
+        tab_id: TabId,
+    },
+    GoForward {
+        tab_id: TabId,
+    },
+    Reload {
+        tab_id: TabId,
+    },
+    Stop {
+        tab_id: TabId,
+    },
+
+    // Tab management (12)
+    CreateTab {
+        space_id: SpaceId,
+        url: Option<Url>,
+        parent_id: Option<TabId>,
+    },
+    CloseTab {
+        tab_id: TabId,
+    },
+    ActivateTab {
+        tab_id: TabId,
+    },
+    DuplicateTab {
+        tab_id: TabId,
+    },
+    PinTab {
+        tab_id: TabId,
+    },
+    UnpinTab {
+        tab_id: TabId,
+    },
+    FavoriteTab {
+        tab_id: TabId,
+    },
+    UnfavoriteTab {
+        tab_id: TabId,
+    },
+    ReorderFavorite {
+        tab_id: TabId,
+        new_index: usize,
+    },
+    MuteTab {
+        tab_id: TabId,
+    },
+    UnmuteTab {
+        tab_id: TabId,
+    },
+    FreezeTab {
+        tab_id: TabId,
+    },
+    UnfreezeTab {
+        tab_id: TabId,
+    },
+    MoveTab {
+        tab_id: TabId,
+        target_space: SpaceId,
+        position: usize,
+    },
+    SetTabParent {
+        tab_id: TabId,
+        new_parent_id: Option<TabId>,
+    },
+    SetTabCustomTitle {
+        tab_id: TabId,
+        custom_title: Option<String>,
+    },
+    TabFaviconUpdated {
+        tab_id: TabId,
+        favicon: Option<ImageData>,
+    },
+    ReorderTab {
+        tab_id: TabId,
+        #[serde(default)]
+        before_tab_id: Option<TabId>,
+    },
+    CloseOtherTabs {
+        space_id: SpaceId,
+        tab_id: TabId,
+    },
+    CloseTabsToRight {
+        space_id: SpaceId,
+        tab_id: TabId,
+    },
+    CloseTabsToLeft {
+        space_id: SpaceId,
+        tab_id: TabId,
+    },
+    ReopenLastClosed,
+    RestoreArchivedTab {
+        tab_id: TabId,
+    },
+    DeleteArchivedTab {
+        tab_id: TabId,
+    },
+    ResetPinnedTab {
+        tab_id: TabId,
+    },
+
+    // Space management (5)
+    CreateSpace {
+        name: String,
+        color: SpaceColor,
+        profile_id: ProfileId,
+    },
+    DeleteSpace {
+        space_id: SpaceId,
+    },
+    ExportSpaceIntoFolder {
+        space_id: SpaceId,
+        target_space_id: SpaceId,
+    },
+    ActivateSpace {
+        space_id: SpaceId,
+    },
+    RenameSpace {
+        space_id: SpaceId,
+        name: String,
+    },
+    RecolorSpace {
+        space_id: SpaceId,
+        color: SpaceColor,
+    },
+    ReorderSpace {
+        space_id: SpaceId,
+        from: usize,
+        to: usize,
+    },
+
+    // Folder management (7)
+    CreateFolder {
+        space_id: SpaceId,
+        name: String,
+        #[serde(default)]
+        is_pinned: bool,
+    },
+    RenameFolder {
+        space_id: SpaceId,
+        folder_id: FolderId,
+        name: String,
+    },
+    DeleteFolder {
+        space_id: SpaceId,
+        folder_id: FolderId,
+    },
+    MoveFolderIntoFolder {
+        space_id: SpaceId,
+        folder_id: FolderId,
+        target_folder_id: FolderId,
+    },
+    MoveFolderToRoot {
+        space_id: SpaceId,
+        folder_id: FolderId,
+        #[serde(default)]
+        before_folder_id: Option<FolderId>,
+    },
+    ReorderFolder {
+        space_id: SpaceId,
+        folder_id: FolderId,
+        #[serde(default)]
+        parent_folder_id: Option<FolderId>,
+        #[serde(default)]
+        before_folder_id: Option<FolderId>,
+    },
+    ReorderTabInFolder {
+        space_id: SpaceId,
+        folder_id: FolderId,
+        tab_id: TabId,
+        to: usize,
+    },
+    MoveTabToRoot {
+        space_id: SpaceId,
+        folder_id: FolderId,
+        tab_id: TabId,
+        #[serde(default)]
+        before_tab_id: Option<TabId>,
+    },
+    MoveTabToFolder {
+        space_id: SpaceId,
+        folder_id: FolderId,
+        tab_id: TabId,
+    },
+    RemoveTabFromFolder {
+        space_id: SpaceId,
+        folder_id: FolderId,
+        tab_id: TabId,
+    },
+    ToggleFolderExpanded {
+        space_id: SpaceId,
+        folder_id: FolderId,
+    },
+    PinFolder {
+        space_id: SpaceId,
+        folder_id: FolderId,
+    },
+    UnpinFolder {
+        space_id: SpaceId,
+        folder_id: FolderId,
+    },
+
+    // Command bar (5)
+    CommandBarOpened,
+    CommandBarClosed,
+    CommandBarQuery {
+        text: String,
+        #[serde(default)]
+        mode: Option<String>,
+    },
+    CommandBarSelect {
+        index: usize,
+    },
+    CommandBarAction {
+        action: QuickAction,
+    },
+    SaveSearch {
+        query: String,
+    },
+    AddSearchEngine {
+        engine: crate::search_engine::SearchEngine,
+    },
+    RemoveSearchEngine {
+        id: String,
+    },
+    SetDefaultSearchEngine {
+        id: String,
+    },
+
+    // Notification management
+    DismissNotification {
+        notification_id: String,
+    },
+    DismissAllNotifications,
+    NotificationAction {
+        notification_id: String,
+        action_id: String,
+    },
+    SetNotificationFilter {
+        origin: String,
+        allowed: bool,
+    },
+
+    // Split view (3)
+    CreateSplit {
+        tab_ids: Vec<TabId>,
+        orientation: Orientation,
+    },
+    RemoveSplit {
+        pane_id: PaneId,
+    },
+    ResizeSplit {
+        pane_id: PaneId,
+        ratio: f64,
+    },
+
+    // Boosts (4)
+    CreateBoost {
+        url_pattern: UrlPattern,
+    },
+    UpdateBoost {
+        boost_id: BoostId,
+        changes: BoostUpdate,
+    },
+    ToggleBoost {
+        boost_id: BoostId,
+        enabled: bool,
+    },
+    DeleteBoost {
+        boost_id: BoostId,
+    },
+
+    // CSS Mods (3)
+    InstallCssMod {
+        name: String,
+        css: String,
+        description: Option<String>,
+        author: Option<String>,
+        version: Option<String>,
+        homepage: Option<String>,
+        source_url: Option<String>,
+    },
+    ToggleCssMod {
+        mod_id: String,
+    },
+    UninstallCssMod {
+        mod_id: String,
+    },
+    UpdateCssMod {
+        mod_id: String,
+        css: String,
+    },
+
+    // Content Blocker (5)
+    ToggleContentBlocker {
+        enabled: bool,
+    },
+    TogglePopupBlocking {
+        enabled: bool,
+    },
+    AddFilterList {
+        id: String,
+        name: String,
+        url: String,
+    },
+    RemoveFilterList {
+        id: String,
+    },
+    ToggleFilterList {
+        id: String,
+        enabled: bool,
+    },
+
+    // Notes (3)
+    CreateNote {
+        linked_tab: Option<TabId>,
+        content: String,
+    },
+    UpdateNote {
+        note_id: NoteId,
+        content: String,
+    },
+    DeleteNote {
+        note_id: NoteId,
+    },
+
+    // Settings (1)
+    UpdateSettings {
+        changes: SettingsUpdate,
+    },
+
+    // Window/sidebar (4)
+    SidebarToggled {
+        visible: bool,
+    },
+    SidebarResized {
+        width: f64,
+    },
+    WindowResized {
+        size: Size,
+    },
+    WindowFocusChanged {
+        focused: bool,
+    },
+
+    // Tab lifecycle from webview (4)
+    TabTitleUpdated {
+        tab_id: TabId,
+        title: String,
+    },
+    TabUrlUpdated {
+        tab_id: TabId,
+        url: Url,
+    },
+    TabLoadingChanged {
+        tab_id: TabId,
+        is_loading: bool,
+    },
+    TabNavigationStateChanged {
+        tab_id: TabId,
+        can_go_back: bool,
+        can_go_forward: bool,
+    },
+    TabSecurityChanged {
+        tab_id: TabId,
+        is_secure: bool,
+    },
+
+    // History/Bookmarks/Permissions/Zoom/Download/Print/PiP/DevTools/Reader (8)
+    SearchHistory {
+        query: String,
+        limit: usize,
+    },
+    ClearHistory,
+    DeleteHistoryEntry {
+        entry_id: String,
+    },
+    AddBookmark {
+        url: String,
+        title: String,
+        folder_id: Option<String>,
+    },
+    RemoveBookmark {
+        bookmark_id: String,
+    },
+    MoveBookmark {
+        bookmark_id: String,
+        folder_id: Option<String>,
+    },
+    SearchBookmarks {
+        query: String,
+    },
+    GrantPermission {
+        origin: String,
+        permission: String,
+    },
+    RevokePermission {
+        origin: String,
+        permission: String,
+    },
+    QueryPermission {
+        origin: String,
+        permission: String,
+    },
+    SetZoom {
+        tab_id: TabId,
+        zoom_level: f64,
+    },
+    ResetZoom {
+        tab_id: TabId,
+    },
+    PauseDownload {
+        download_id: String,
+    },
+    ResumeDownload {
+        download_id: String,
+    },
+    CancelDownload {
+        download_id: String,
+    },
+    RemoveDownload {
+        download_id: String,
+    },
+    RestoreDownloadName {
+        download_id: String,
+    },
+    TogglePiP {
+        tab_id: TabId,
+    },
+    ToggleDevTools {
+        tab_id: TabId,
+    },
+    PrintPage {
+        tab_id: TabId,
+    },
+    ViewSource {
+        tab_id: TabId,
+    },
+
+    // App lifecycle / boosts / extensions (8)
+    AppLaunched,
+    AppWillTerminate,
+    MemoryWarning {
+        level: MemoryPressureLevel,
+    },
+    ToggleGlobalBoosts,
+    ToggleJsBoosts,
+    ToggleExtension {
+        extension_id: String,
+    },
+    RemoveExtension {
+        extension_id: String,
+    },
+
+    // Account & Sync (3)
+    SignIn {
+        email: String,
+        password: String,
+        #[serde(default)]
+        display_name: Option<String>,
+        #[serde(default)]
+        access_token: Option<String>,
+        #[serde(default)]
+        user_id: Option<String>,
+        #[serde(default)]
+        device_id: Option<String>,
+    },
+    SignOut,
+    ToggleSync,
+
+    // Air traffic control (4)
+    CreateTrafficRule {
+        rule: crate::air_traffic::TrafficRule,
+    },
+    DeleteTrafficRule {
+        rule_id: String,
+    },
+    UpdateTrafficRule {
+        rule: crate::air_traffic::TrafficRule,
+    },
+    SetDefaultLinkBehavior {
+        behavior: crate::air_traffic::DefaultLinkBehavior,
+    },
+
+    // Profile management (4)
+    UpdateSpaceConfig {
+        changes: SpaceConfigUpdate,
+    },
+    CreateProfile {
+        name: String,
+    },
+    DeleteProfile {
+        profile_id: ProfileId,
+    },
+    UpdateProfile {
+        profile_id: ProfileId,
+        name: Option<String>,
+        avatar_color: Option<String>,
+        download_path: Option<String>,
+        archive_timeout_hours: Option<u32>,
+    },
+    SwitchProfile {
+        profile_id: ProfileId,
+    },
+
+    // Passwords & Autofill (6)
+    SearchPasswords {
+        query: String,
+    },
+    DeletePassword {
+        password_id: String,
+    },
+    AddPassword {
+        domain: String,
+        username: String,
+        password: String,
+    },
+    AddAutofillAddress {
+        address: AutofillAddress,
+    },
+    DeleteAutofillAddress {
+        id: String,
+    },
+    AddAutofillPayment {
+        payment: AutofillPayment,
+    },
+    DeleteAutofillPayment {
+        id: String,
+    },
+
+    // Settings reset (1)
+    ResetSettings,
+
+    // Reading list (4)
+    AddToReadingList {
+        url: String,
+        title: String,
+    },
+    RemoveFromReadingList {
+        item_id: String,
+    },
+    MarkReadingListItemRead {
+        item_id: String,
+    },
+    MarkReadingListItemUnread {
+        item_id: String,
+    },
+
+    // LLM / AI helpers (7)
+    LlmResult {
+        request_id: String,
+        result: String,
+    },
+    LlmError {
+        request_id: String,
+        error: String,
+    },
+    RequestPagePreview {
+        url: String,
+    },
+    RequestTidyTabs {
+        space_id: SpaceId,
+    },
+    ApplyTidyTabs {
+        space_id: SpaceId,
+    },
+    ChatMessage {
+        message: String,
+        include_page_context: bool,
+        #[serde(default)]
+        tools_enabled: Option<bool>,
+    },
+    ToolPermissionResponse {
+        call_id: String,
+        granted: bool,
+    },
+    ToolActionResult {
+        call_id: String,
+        success: bool,
+        result: String,
+    },
+    RequestSkillsList,
+    UseSkill {
+        skill_id: String,
+        user_input: String,
+        page_context: Option<String>,
+    },
+}
+
+impl ShellEvent {
+    pub fn is_navigation_event(&self) -> bool {
+        matches!(
+            self,
+            Self::NavigateTo { .. }
+                | Self::GoBack { .. }
+                | Self::GoForward { .. }
+                | Self::Reload { .. }
+                | Self::Stop { .. }
+        )
+    }
+
+    pub fn is_tab_management_event(&self) -> bool {
+        matches!(
+            self,
+            Self::CreateTab { .. }
+                | Self::CloseTab { .. }
+                | Self::ActivateTab { .. }
+                | Self::DuplicateTab { .. }
+                | Self::PinTab { .. }
+                | Self::UnpinTab { .. }
+                | Self::FavoriteTab { .. }
+                | Self::UnfavoriteTab { .. }
+                | Self::ReorderFavorite { .. }
+                | Self::MuteTab { .. }
+                | Self::UnmuteTab { .. }
+                | Self::FreezeTab { .. }
+                | Self::UnfreezeTab { .. }
+                | Self::MoveTab { .. }
+                | Self::SetTabParent { .. }
+                | Self::SetTabCustomTitle { .. }
+                | Self::TabFaviconUpdated { .. }
+                | Self::ReorderTab { .. }
+                | Self::CloseOtherTabs { .. }
+                | Self::CloseTabsToRight { .. }
+                | Self::CloseTabsToLeft { .. }
+                | Self::ReopenLastClosed
+                | Self::RestoreArchivedTab { .. }
+                | Self::DeleteArchivedTab { .. }
+                | Self::ResetPinnedTab { .. }
+        )
+    }
+
+    pub fn is_space_management_event(&self) -> bool {
+        matches!(
+            self,
+            Self::CreateSpace { .. }
+                | Self::DeleteSpace { .. }
+                | Self::ExportSpaceIntoFolder { .. }
+                | Self::ActivateSpace { .. }
+                | Self::RenameSpace { .. }
+                | Self::RecolorSpace { .. }
+                | Self::ReorderSpace { .. }
+        )
+    }
+
+    pub fn is_folder_management_event(&self) -> bool {
+        matches!(
+            self,
+            Self::CreateFolder { .. }
+                | Self::RenameFolder { .. }
+                | Self::DeleteFolder { .. }
+                | Self::MoveFolderIntoFolder { .. }
+                | Self::MoveFolderToRoot { .. }
+                | Self::ReorderFolder { .. }
+                | Self::ReorderTabInFolder { .. }
+                | Self::MoveTabToRoot { .. }
+                | Self::MoveTabToFolder { .. }
+                | Self::RemoveTabFromFolder { .. }
+                | Self::ToggleFolderExpanded { .. }
+                | Self::PinFolder { .. }
+                | Self::UnpinFolder { .. }
+        )
+    }
+
+    pub fn is_command_bar_event(&self) -> bool {
+        matches!(
+            self,
+            Self::CommandBarOpened
+                | Self::CommandBarClosed
+                | Self::CommandBarQuery { .. }
+                | Self::CommandBarSelect { .. }
+                | Self::CommandBarAction { .. }
+                | Self::SaveSearch { .. }
+                | Self::AddSearchEngine { .. }
+                | Self::RemoveSearchEngine { .. }
+                | Self::SetDefaultSearchEngine { .. }
+        )
+    }
+
+    pub fn is_notification_event(&self) -> bool {
+        matches!(
+            self,
+            Self::DismissNotification { .. }
+                | Self::DismissAllNotifications
+                | Self::NotificationAction { .. }
+                | Self::SetNotificationFilter { .. }
+        )
+    }
+
+    pub fn is_history_event(&self) -> bool {
+        matches!(
+            self,
+            Self::SearchHistory { .. } | Self::ClearHistory | Self::DeleteHistoryEntry { .. }
+        )
+    }
+
+    pub fn is_bookmark_event(&self) -> bool {
+        matches!(
+            self,
+            Self::AddBookmark { .. }
+                | Self::RemoveBookmark { .. }
+                | Self::MoveBookmark { .. }
+                | Self::SearchBookmarks { .. }
+        )
+    }
+
+    pub fn is_permission_event(&self) -> bool {
+        matches!(
+            self,
+            Self::GrantPermission { .. } | Self::RevokePermission { .. } | Self::QueryPermission { .. }
+        )
+    }
+
+    pub fn is_zoom_event(&self) -> bool {
+        matches!(self, Self::SetZoom { .. } | Self::ResetZoom { .. })
+    }
+
+    pub fn is_download_event(&self) -> bool {
+        matches!(
+            self,
+            Self::PauseDownload { .. }
+                | Self::ResumeDownload { .. }
+                | Self::CancelDownload { .. }
+                | Self::RemoveDownload { .. }
+                | Self::RestoreDownloadName { .. }
+        )
+    }
+
+    pub fn is_browsing_event(&self) -> bool {
+        matches!(
+            self,
+            Self::TabTitleUpdated { .. }
+                | Self::TabUrlUpdated { .. }
+                | Self::TabLoadingChanged { .. }
+                | Self::TabNavigationStateChanged { .. }
+                | Self::TabSecurityChanged { .. }
+        )
+    }
+
+    pub fn is_lifecycle_event(&self) -> bool {
+        matches!(
+            self,
+            Self::AppLaunched | Self::AppWillTerminate | Self::MemoryWarning { .. }
+        )
+    }
+}

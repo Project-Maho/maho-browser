@@ -1,0 +1,22 @@
+import("//ui/webui/resources/tools/build_webui.gni")
+
+assert(!is_android)
+
+build_webui("build") {
+  grd_prefix = "maho_boost"
+
+  static_files = [
+    "boost.html",
+    "boost.css",
+  ]
+
+  ts_files = [ "app.ts" ]
+
+  ts_deps = [ "//ui/webui/resources/mojo:build_ts" ]
+
+  webui_context_type = "trusted"
+
+  mojo_files_deps =
+      [ "//maho/browser/ui/webui/maho_boost:mojo_bindings_ts__generator" ]
+  mojo_files = [ "$root_gen_dir/maho/browser/ui/webui/maho_boost/maho_boost.mojom-webui.ts" ]
+}

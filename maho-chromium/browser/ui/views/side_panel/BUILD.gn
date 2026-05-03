@@ -1,0 +1,24 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+source_set("side_panel") {
+  sources = [
+    "maho_ai_side_panel_coordinator.cc",
+    "maho_ai_side_panel_coordinator.h",
+  ]
+
+  deps = [
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/side_panel",
+    "//chrome/browser/ui/views/side_panel",
+    "//maho/browser/ui/webui/maho_ai",
+    "//chrome/browser/ui/webui/top_chrome",
+    "//chrome/browser/ui/webui:webui_util",
+    "//content/public/browser",
+    "//maho/components/constants",
+    "//ui/views",
+    "//ui/views/controls/webview",
+    "//url",
+  ]
+}

@@ -1,0 +1,86 @@
+name: Release macOS
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install tools
+        run: |
+          brew install xcodegen xcpretty
+
+      - name: Bump version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "$VERSION" > version.txt
+          bash scripts/bump-version.sh
+
+      - name: Build Rust FFI
+        run: cargo build --release -p maho-ffi
+
+      - name: Generate Xcode project
+        working-directory: macos-shell
+        run: xcodegen generate
+
+      - name: Archive
+        working-directory: macos-shell
+        run: |
+          xcodebuild archive \
+            -project Maho.xcodeproj \
+            -scheme Maho \
+            -configuration Release \
+            -archivePath build/Maho.xcarchive \
+            CODE_SIGN_IDENTITY="${{ secrets.MACOS_SIGN_IDENTITY }}" \
+            DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
+            ENABLE_HARDENED_RUNTIME=YES \
+            CODE_SIGN_ENTITLEMENTS=Maho.entitlements
+
+      - name: Export app
+        working-directory: macos-shell
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath build/Maho.xcarchive \
+            -exportOptionsPlist ../ci/export-options-macos.plist \
+            -exportPath build/export
+
+      - name: Create DMG
+        run: |
+          hdiutil create -volname Maho -srcfolder macos-shell/build/export/Maho.app \
+            -ov -format UDZO macos-shell/build/Maho.dmg
+
+      - name: Notarize
+        if: ${{ secrets.APPLE_ID != '' }}
+        run: |
+          xcrun notarytool submit macos-shell/build/Maho.dmg \
+            --apple-id "${{ secrets.APPLE_ID }}" \
+            --password "${{ secrets.NOTARIZE_PASSWORD }}" \
+            --team-id "${{ secrets.APPLE_TEAM_ID }}" \
+            --wait
+          xcrun stapler staple macos-shell/build/Maho.dmg
+
+      - name: Generate Sparkle appcast
+        run: |
+          SPARKLE_BIN=$(find ~/Library/Developer -name generate_appcast -type f 2>/dev/null | head -1 || echo "")
+          if [ -n "$SPARKLE_BIN" ]; then
+            "$SPARKLE_BIN" macos-shell/build/
+          else
+            echo "WARNING: Sparkle generate_appcast not found, skipping appcast generation"
+          fi
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            macos-shell/build/Maho.dmg
+            macos-shell/build/appcast.xml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

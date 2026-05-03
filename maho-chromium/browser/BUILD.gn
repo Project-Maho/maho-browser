@@ -1,0 +1,157 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+source_set("maho_core_holder") {
+  sources = [
+    "maho_core_holder.cc",
+    "maho_core_holder.h",
+  ]
+}
+
+source_set("maho_context_menus") {
+  sources = [
+    "ui/context_menu/maho_context_menu_ids.h",
+    "ui/context_menu/maho_tab_context_menu.cc",
+    "ui/context_menu/maho_tab_context_menu.h",
+    "ui/context_menu/maho_address_bar_context_menu.cc",
+    "ui/context_menu/maho_address_bar_context_menu.h",
+    "ui/context_menu/maho_space_context_menu.cc",
+    "ui/context_menu/maho_space_context_menu.h",
+    "ui/context_menu/maho_favorites_context_menu.cc",
+    "ui/context_menu/maho_favorites_context_menu.h",
+    "ui/context_menu/maho_folder_context_menu.cc",
+    "ui/context_menu/maho_folder_context_menu.h",
+    "ui/views/sidebar/maho_sidebar_drag_util.cc",
+    "ui/views/sidebar/maho_sidebar_drag_util.h",
+    "ui/views/sidebar/maho_sidebar_action_popover_view.cc",
+    "ui/views/sidebar/maho_sidebar_action_popover_view.h",
+    "ui/views/space_manage/maho_space_manage_dialog.cc",
+    "ui/views/space_manage/maho_space_manage_dialog.h",
+  ]
+  deps = [
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/tabs:tab_enums",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//content/public/browser",
+    "//maho/browser:maho_core_holder",
+    "//maho/browser:maho_space_profile_bridge",
+    "//maho/components/constants",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//net",
+    "//ui/base",
+    "//ui/compositor",
+    "//ui/color",
+    "//ui/display",
+    "//ui/gfx",
+    "//ui/menus",
+    "//ui/shell_dialogs",
+    "//ui/views",
+    "//url",
+  ]
+}
+
+if (is_mac) {
+  source_set("maho_little_arc") {
+    sources = [
+      "ui/views/little_arc/maho_little_arc_window.cc",
+      "ui/views/little_arc/maho_little_arc_window.h",
+    ]
+    deps = [
+      "//base",
+      "//chrome/browser:browser",
+      "//chrome/browser/ui:ui",
+      "//chrome/browser/ui/views/frame:frame",
+      "//ui/base",
+      "//ui/gfx",
+      "//ui/views",
+      "//url",
+    ]
+  }
+}
+
+if (is_win) {
+  # Windows Little Arc plumbing is intentionally stubbed for now.
+}
+
+if (is_linux) {
+  # Linux Little Arc plumbing is intentionally stubbed for now.
+}
+
+source_set("maho_ui_stubs") {
+  sources = [
+    "ui/theme/maho_color_mixer.cc",
+    "ui/theme/maho_color_mixer.h",
+    "ui/theme/maho_space_theme_state.cc",
+    "ui/theme/maho_space_theme_state.h",
+    "ui/theme/maho_theme_helper.cc",
+    "ui/theme/maho_theme_helper.h",
+    "ui/downloads/maho_download_theme.cc",
+    "ui/downloads/maho_download_theme.h",
+    "ui/find_bar/maho_find_bar_theme.cc",
+    "ui/find_bar/maho_find_bar_theme.h",
+    "ui/reader/maho_reader_theme.cc",
+    "ui/reader/maho_reader_theme.h",
+    "ui/permissions/maho_permission_theme.cc",
+    "ui/permissions/maho_permission_theme.h",
+    "ui/site_control/maho_page_info_ui.cc",
+    "ui/site_control/maho_page_info_ui.h",
+    "ui/notifications/maho_notification_overlay.cc",
+    "ui/notifications/maho_notification_overlay.h",
+    "ui/tab_preview/maho_tab_preview_controller.cc",
+    "ui/tab_preview/maho_tab_preview_controller.h",
+  ]
+  deps = [
+    "//base",
+    "//ui/color",
+  ]
+}
+
+source_set("maho_link_preview") {
+  sources = [
+    "ui/link_preview/link_hover_script_string.h",
+    "ui/link_preview/maho_link_preview_manager.cc",
+    "ui/link_preview/maho_link_preview_manager.h",
+  ]
+  deps = [
+    ":maho_core_holder",
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//components/prefs",
+    "//content/public/browser",
+    "//maho/third_party/maho:maho_bridge",
+    "//net",
+    "//services/network/public/cpp",
+    "//third_party/blink/public/mojom:mojom_platform",
+    "//ui/gfx/geometry",
+    "//ui/views",
+    "//url",
+  ]
+}
+
+source_set("maho_space_profile_bridge") {
+  sources = [
+    "maho_space_profile_bridge.cc",
+    "maho_space_profile_bridge.h",
+  ]
+  deps = [
+    "//base",
+    "//chrome/browser:browser_process",
+    "//chrome/browser/profiles:profile",
+  ]
+}
+
+source_set("maho_browser_main_extra_parts") {
+  sources = [
+    "maho_browser_main_extra_parts.cc",
+    "maho_browser_main_extra_parts.h",
+  ]
+  deps = [
+    ":maho_core_holder",
+    ":maho_ui_stubs",
+    "//base",
+    "//chrome/browser:main_extra_parts",
+    "//maho/third_party/maho:maho_bridge",
+    "//ui/color",
+  ]
+}

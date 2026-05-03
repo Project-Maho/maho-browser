@@ -1,0 +1,2265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Maho Settings Hybrid Mockup</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg-0: #05060a;
+      --bg-1: #11131b;
+      --bg-2: #181b25;
+      --bg-3: #1f2330;
+      --bg-4: rgba(255, 255, 255, 0.055);
+      --window: rgba(16, 18, 27, 0.94);
+      --window-edge: rgba(255, 255, 255, 0.085);
+      --sidebar: rgba(29, 33, 46, 0.9);
+      --sidebar-hover: rgba(255, 255, 255, 0.055);
+      --sidebar-active: rgba(150, 176, 255, 0.13);
+      --sidebar-active-border: rgba(150, 176, 255, 0.24);
+      --content: #171a23;
+      --card: rgba(31, 35, 48, 0.92);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --row-border: rgba(255, 255, 255, 0.07);
+      --field: rgba(9, 11, 17, 0.38);
+      --field-border: rgba(255, 255, 255, 0.09);
+      --field-disabled: rgba(255, 255, 255, 0.025);
+      --text-strong: #f5f6fb;
+      --text-body: #d0d6e8;
+      --text-muted: #98a1ba;
+      --text-faint: #7c869d;
+      --accent: #9bb2ff;
+      --accent-soft: rgba(155, 178, 255, 0.15);
+      --live: #74d59c;
+      --live-soft: rgba(116, 213, 156, 0.14);
+      --api: #82b4ff;
+      --api-soft: rgba(130, 180, 255, 0.14);
+      --bridge: #c39dff;
+      --bridge-soft: rgba(195, 157, 255, 0.14);
+      --hybrid: #ffd27a;
+      --hybrid-soft: rgba(255, 210, 122, 0.14);
+      --shadow: 0 34px 90px rgba(0, 0, 0, 0.46);
+      --radius-window: 26px;
+      --radius-card: 18px;
+      --radius-row: 14px;
+      --radius-field: 12px;
+      --sidebar-width: 222px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      align-items: center;
+      background: #0a0c12;
+      color: var(--text-strong);
+      display: grid;
+      font-family: "SF Pro Display", "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      padding: 28px;
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+    }
+
+    .page {
+      display: grid;
+      gap: 14px;
+      width: min(1160px, 100%);
+    }
+
+    .intro-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .intro-pill {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-radius: 999px;
+      color: var(--text-body);
+      font-size: 12px;
+      letter-spacing: 0.02em;
+      padding: 6px 11px;
+    }
+
+    .window {
+      background: #10121b;
+      border: 1px solid var(--window-edge);
+      border-radius: var(--radius-window);
+      box-shadow: var(--shadow);
+      height: min(94vh, 980px);
+      overflow: hidden;
+      width: min(100%, 1040px);
+    }
+
+    .titlebar {
+      align-items: center;
+      background: #151924;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      height: 42px;
+      padding: 0 16px;
+    }
+
+    .traffic-lights {
+      display: flex;
+      gap: 8px;
+      justify-self: start;
+    }
+
+    .traffic-light {
+      border-radius: 50%;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 0 0 1px rgba(0, 0, 0, 0.15);
+      height: 12px;
+      width: 12px;
+    }
+
+    .traffic-light.red { background: #ff5f57; }
+    .traffic-light.yellow { background: #ffbd2e; }
+    .traffic-light.green { background: #28c840; }
+
+    .titlebar-title {
+      color: var(--text-body);
+      font-size: 12px;
+      font-weight: 600;
+      justify-self: center;
+      letter-spacing: 0.03em;
+    }
+
+    .titlebar-path {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 999px;
+      color: var(--text-muted);
+      font-size: 11px;
+      justify-self: end;
+      padding: 5px 10px;
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+      height: calc(100% - 42px);
+    }
+
+    .sidebar {
+      background: #1a1e2a;
+      border-right: 1px solid rgba(255, 255, 255, 0.055);
+      padding: 14px 10px 16px;
+    }
+
+    .sidebar-scroll,
+    .content-scroll {
+      height: 100%;
+      overflow: auto;
+      scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+      scrollbar-width: thin;
+    }
+
+    .sidebar-scroll::-webkit-scrollbar,
+    .content-scroll::-webkit-scrollbar {
+      height: 10px;
+      width: 10px;
+    }
+
+    .sidebar-scroll::-webkit-scrollbar-thumb,
+    .content-scroll::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.16);
+      border: 2px solid transparent;
+      border-radius: 999px;
+      background-clip: padding-box;
+    }
+
+    .sidebar-brand {
+      display: grid;
+      gap: 7px;
+      margin-bottom: 14px;
+      padding: 10px 10px 12px;
+    }
+
+    .sidebar-brand-kicker {
+      color: var(--accent);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+
+    .sidebar-brand-title {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+
+    .nav-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding-bottom: 10px;
+    }
+
+    .nav-item {
+      align-items: center;
+      appearance: none;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 14px;
+      color: var(--text-body);
+      cursor: pointer;
+      display: grid;
+      gap: 11px;
+      grid-template-columns: 22px minmax(0, 1fr);
+      min-height: 44px;
+      padding: 10px 12px;
+      text-align: left;
+      transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+      width: 100%;
+    }
+
+    .nav-item:hover {
+      background: var(--sidebar-hover);
+      border-color: rgba(255, 255, 255, 0.04);
+    }
+
+    .nav-item.active {
+      background: var(--sidebar-active);
+      border-color: var(--sidebar-active-border);
+      transform: translateX(1px);
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+    }
+
+    .nav-symbol {
+      align-items: center;
+      background: rgba(255, 255, 255, 0.055);
+      border-radius: 8px;
+      color: var(--accent);
+      display: grid;
+      font-size: 11px;
+      font-weight: 700;
+      height: 22px;
+      letter-spacing: 0.06em;
+      place-items: center;
+      width: 22px;
+    }
+
+    .nav-copy {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .nav-title {
+      font-size: 12.5px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .nav-meta {
+      color: var(--text-faint);
+      display: flex;
+      font-size: 11px;
+      gap: 7px;
+      overflow: hidden;
+    }
+
+    .content {
+      background: var(--content);
+      position: relative;
+    }
+
+    .content-scroll {
+      padding: 26px 24px 28px 28px;
+    }
+
+    .pane {
+      display: none;
+      gap: 18px;
+    }
+
+    .pane.active {
+      animation: fadeUp 180ms ease;
+      display: grid;
+    }
+
+    @keyframes fadeUp {
+      from {
+        opacity: 0;
+        transform: translateY(8px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .pane-header {
+      display: grid;
+      gap: 10px;
+    }
+
+    .pane-kicker {
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+
+    .pane-title {
+      font-size: 31px;
+      font-weight: 700;
+      letter-spacing: -0.04em;
+      line-height: 1.03;
+      margin: 0;
+    }
+
+    .pane-summary {
+      color: var(--text-muted);
+      font-size: 13px;
+      line-height: 1.6;
+      margin: 0;
+      max-width: 70ch;
+    }
+
+    .pane-badges,
+    .card-badges,
+    .row-badges,
+    .token-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .badge,
+    .inline-badge,
+    .token {
+      align-items: center;
+      border-radius: 999px;
+      display: inline-flex;
+      font-size: 11px;
+      font-weight: 600;
+      gap: 6px;
+      letter-spacing: 0.01em;
+      padding: 6px 10px;
+      white-space: nowrap;
+    }
+
+    .badge.is-live,
+    .inline-badge.is-live,
+    .token.is-live {
+      background: var(--live-soft);
+      color: var(--live);
+    }
+
+    .badge.is-api,
+    .inline-badge.is-api,
+    .token.is-api {
+      background: var(--api-soft);
+      color: var(--api);
+    }
+
+    .badge.is-bridge,
+    .inline-badge.is-bridge,
+    .token.is-bridge {
+      background: var(--bridge-soft);
+      color: var(--bridge);
+    }
+
+    .badge.is-hybrid,
+    .inline-badge.is-hybrid,
+    .token.is-hybrid {
+      background: var(--hybrid-soft);
+      color: var(--hybrid);
+    }
+
+    .overview-banner {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 16px;
+      color: var(--text-body);
+      display: grid;
+      gap: 12px;
+      padding: 15px 16px;
+    }
+
+    .overview-title {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+
+    .overview-copy {
+      color: var(--text-body);
+      font-size: 13px;
+      line-height: 1.6;
+      margin: 0;
+    }
+
+    .cards-grid {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .settings-card {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius-card);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+      display: grid;
+      gap: 16px;
+      overflow: hidden;
+      padding: 16px;
+    }
+
+    .settings-card.span-2 {
+      grid-column: 1 / -1;
+    }
+
+    .card-header {
+      align-items: start;
+      display: flex;
+      gap: 12px;
+      justify-content: space-between;
+    }
+
+    .card-title-group {
+      display: grid;
+      gap: 6px;
+    }
+
+    .card-title {
+      font-size: 17px;
+      font-weight: 650;
+      letter-spacing: -0.025em;
+      margin: 0;
+    }
+
+    .card-copy {
+      color: var(--text-muted);
+      font-size: 12.5px;
+      line-height: 1.55;
+      margin: 0;
+      max-width: 58ch;
+    }
+
+    .card-footnote {
+      color: var(--text-faint);
+      font-size: 12px;
+      line-height: 1.6;
+      margin: 0;
+    }
+
+    .rows {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .setting-row {
+      align-items: center;
+      border-top: 1px solid var(--row-border);
+      display: grid;
+      gap: 18px;
+      grid-template-columns: minmax(0, 1fr) minmax(270px, 344px);
+      padding: 14px 0;
+    }
+
+    .setting-row:first-child {
+      border-top: 0;
+      padding-top: 0;
+    }
+
+    .setting-copy {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .setting-label {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+
+    .setting-description {
+      color: var(--text-muted);
+      font-size: 12.5px;
+      line-height: 1.55;
+      margin: 0;
+    }
+
+    .setting-control {
+      justify-self: stretch;
+      width: 100%;
+    }
+
+    .field-shell,
+    .textarea-shell,
+    .slider-shell {
+      align-items: center;
+      background: var(--field);
+      border: 1px solid var(--field-border);
+      border-radius: var(--radius-field);
+      display: flex;
+      gap: 10px;
+      min-height: 44px;
+      padding: 0 12px;
+      width: 100%;
+    }
+
+    .textarea-shell {
+      align-items: stretch;
+      min-height: 118px;
+      padding: 12px;
+    }
+
+    .field-shell.is-disabled,
+    .textarea-shell.is-disabled,
+    .slider-shell.is-disabled,
+    .segmented.is-disabled,
+    .toggle.is-disabled,
+    .swatches.is-disabled,
+    .placeholder-panel.is-disabled {
+      background: var(--field-disabled);
+      border-color: rgba(255, 255, 255, 0.05);
+      opacity: 0.7;
+    }
+
+    .field,
+    .textarea {
+      appearance: none;
+      background: transparent;
+      border: 0;
+      color: var(--text-strong);
+      flex: 1 1 auto;
+      font-size: 13px;
+      min-width: 0;
+      outline: none;
+    }
+
+    .field::placeholder,
+    .textarea::placeholder {
+      color: var(--text-faint);
+    }
+
+    .textarea {
+      line-height: 1.55;
+      min-height: 92px;
+      resize: none;
+    }
+
+    .field-suffix,
+    .slider-readout {
+      color: var(--text-faint);
+      font-size: 12px;
+      flex: 0 0 auto;
+    }
+
+    .segmented {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: var(--radius-field);
+      display: inline-flex;
+      padding: 4px;
+      width: 100%;
+    }
+
+    .segment {
+      appearance: none;
+      background: transparent;
+      border: 0;
+      border-radius: 10px;
+      color: var(--text-muted);
+      cursor: pointer;
+      flex: 1 1 auto;
+      min-height: 34px;
+      padding: 0 10px;
+      transition: background 120ms ease, color 120ms ease;
+    }
+
+    .segment.is-active {
+      background: rgba(155, 178, 255, 0.14);
+      color: var(--text-strong);
+      box-shadow: inset 0 0 0 1px rgba(155, 178, 255, 0.16);
+    }
+
+    .toggle {
+      align-items: center;
+      appearance: none;
+      background: transparent;
+      border: 0;
+      color: var(--text-body);
+      cursor: pointer;
+      display: inline-flex;
+      gap: 12px;
+      justify-content: flex-end;
+      width: 100%;
+    }
+
+    .toggle-track {
+      align-items: center;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 999px;
+      display: inline-flex;
+      height: 28px;
+      padding: 3px;
+      transition: background 140ms ease, border-color 140ms ease;
+      width: 48px;
+    }
+
+    .toggle-thumb {
+      background: #ffffff;
+      border-radius: 50%;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+      display: block;
+      height: 20px;
+      transform: translateX(0);
+      transition: transform 140ms ease;
+      width: 20px;
+    }
+
+    .toggle-label {
+      color: var(--text-muted);
+      font-size: 12px;
+      min-width: 24px;
+      text-align: right;
+    }
+
+    .toggle.is-on .toggle-track {
+      background: rgba(116, 213, 156, 0.26);
+      border-color: rgba(116, 213, 156, 0.34);
+    }
+
+    .toggle.is-on .toggle-thumb {
+      transform: translateX(20px);
+    }
+
+    .toggle.is-on .toggle-label {
+      color: var(--text-strong);
+    }
+
+    .slider-shell {
+      padding: 10px 12px;
+    }
+
+    .slider {
+      accent-color: var(--accent);
+      flex: 1 1 auto;
+      width: 100%;
+    }
+
+    .placeholder-panel,
+    .mini-surface,
+    .site-rule,
+    .key-row {
+      background: rgba(255, 255, 255, 0.028);
+      border: 1px solid rgba(255, 255, 255, 0.065);
+      border-radius: 14px;
+    }
+
+    .placeholder-panel {
+      display: grid;
+      gap: 12px;
+      padding: 14px;
+    }
+
+    .placeholder-title {
+      color: var(--text-body);
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+
+    .placeholder-copy {
+      color: var(--text-muted);
+      font-size: 12.5px;
+      line-height: 1.6;
+      margin: 0;
+    }
+
+    .mini-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .mini-grid.two {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .mini-surface {
+      display: grid;
+      gap: 8px;
+      min-height: 118px;
+      padding: 14px;
+    }
+
+    .mini-surface-kicker {
+      color: var(--text-faint);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    .mini-surface-title {
+      font-size: 15px;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+    }
+
+    .mini-surface-copy {
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.55;
+      margin: 0;
+    }
+
+    .key-list,
+    .site-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .key-row,
+    .site-rule {
+      align-items: center;
+      display: grid;
+      gap: 10px;
+      grid-template-columns: minmax(0, 1fr) auto;
+      padding: 12px 14px;
+    }
+
+    .key-copy,
+    .site-copy {
+      display: grid;
+      gap: 4px;
+    }
+
+    .key-title,
+    .site-title {
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .key-description,
+    .site-description {
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.55;
+      margin: 0;
+    }
+
+    .keycaps {
+      display: inline-flex;
+      gap: 6px;
+    }
+
+    .keycap {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-bottom-color: rgba(255, 255, 255, 0.14);
+      border-radius: 10px;
+      color: var(--text-body);
+      font-size: 11px;
+      font-weight: 700;
+      min-width: 28px;
+      padding: 8px 10px;
+      text-align: center;
+    }
+
+    .ghost-button {
+      appearance: none;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 11px;
+      color: var(--text-body);
+      min-height: 36px;
+      padding: 0 12px;
+    }
+
+    .status-note {
+      color: var(--text-faint);
+      font-size: 12px;
+      line-height: 1.55;
+      margin: 0;
+    }
+
+    .split-note {
+      display: grid;
+      gap: 10px;
+    }
+
+    .feature-list {
+      color: var(--text-muted);
+      display: grid;
+      gap: 7px;
+      font-size: 12.5px;
+      line-height: 1.55;
+      margin: 0;
+      padding-left: 18px;
+    }
+
+    .feature-list li::marker {
+      color: var(--accent);
+    }
+
+    @media (max-width: 980px) {
+      body {
+        padding: 16px;
+      }
+
+      .window {
+        height: auto;
+        min-height: 92vh;
+      }
+
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+        border-right: 0;
+      }
+
+      .cards-grid,
+      .mini-grid,
+      .mini-grid.two {
+        grid-template-columns: 1fr;
+      }
+
+      .setting-row,
+      .key-row,
+      .site-rule {
+        grid-template-columns: 1fr;
+      }
+
+      .setting-control {
+        justify-self: stretch;
+      }
+
+      .titlebar {
+        grid-template-columns: 1fr auto;
+        gap: 12px;
+      }
+
+      .titlebar-title {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="intro-pills">
+      <span class="intro-pill">Swift 16-pane shell</span>
+      <span class="intro-pill">Browser-hosted at <strong>chrome://maho-settings</strong></span>
+      <span class="intro-pill">Current live bridge: 14 prefs</span>
+      <span class="intro-pill">Search folds into General, not a top-level pane</span>
+    </div>
+
+    <div class="window">
+      <div class="titlebar">
+        <div class="traffic-lights">
+          <span class="traffic-light red"></span>
+          <span class="traffic-light yellow"></span>
+          <span class="traffic-light green"></span>
+        </div>
+        <div class="titlebar-title">Maho Settings</div>
+        <div class="titlebar-path">chrome://maho-settings</div>
+      </div>
+
+      <div class="workspace">
+        <aside class="sidebar">
+          <div class="sidebar-scroll">
+            <div class="sidebar-brand">
+              <div class="sidebar-brand-kicker">Hybrid direction</div>
+              <div class="sidebar-brand-title">Settings</div>
+            </div>
+
+            <nav class="nav-list" aria-label="Settings panes">
+              <button class="nav-item active" data-pane="general" type="button">
+                <span class="nav-symbol">G</span>
+                <span class="nav-copy">
+                  <span class="nav-title">General</span>
+                  <span class="nav-meta">Live + bridge</span>
+                </span>
+              </button>
+              <button class="nav-item" data-pane="appearance" type="button">
+                <span class="nav-symbol">A</span>
+                <span class="nav-copy">
+                  <span class="nav-title">Appearance</span>
+                  <span class="nav-meta">Live + API</span>
+                </span>
+              </button>
+              <button class="nav-item" data-pane="privacy" type="button">
+                <span class="nav-symbol">P</span>
+                <span class="nav-copy">
+                  <span class="nav-title">Privacy</span>
+                  <span class="nav-meta">Live + API</span>
+                </span>
+              </button>
+              <button class="nav-item" data-pane="shortcuts" type="button">
+                <span class="nav-symbol">⌘</span>
+                <span class="nav-copy">
+                  <span class="nav-title">Shortcuts</span>
+                  <span class="nav-meta">Needs service API</span>
+                </span>
+              </button>
+              <button class="nav-item" data-pane="profiles" type="button">
+                <span class="nav-symbol">P</span>
+                <span class="nav-copy">
+                  <span class="nav-title">Profiles</span>
+                  <span class="nav-meta">Needs Maho bridge</span>
+                </span>
+              </button>
+              <button class="nav-item" data-pane="advanced" type="button">
+                <span class="nav-symbol">A</span>
+                <span class="nav-copy">
+                  <span class="nav-title">Advanced</span>
+                  <span class="nav-meta">Live + API</span>
+                </span>
+              </button>
+              <button class="nav-item" data-pane="notifications" type="button">
+                <span class="nav-symbol">N</span>
+                <span class="nav-copy">
+                  <span class="nav-title">Notifications</span>
+                  <span class="nav-meta">Live + API</span>
+                </span>
+              </button>
+              <button class="nav-item" data-pane="autofill" type="button">
+                <span class="nav-symbol">A</span>
+                <span class="nav-copy">
+                  <span class="nav-title">Autofill</span>
+                  <span class="nav-meta">Needs service API</span>
+                </span>
+              </button>
+              <button class="nav-item" data-pane="content-blocker" type="button">
+                <span class="nav-symbol">C</span>
+                <span class="nav-copy">
+                  <span class="nav-title">Content Blocker</span>
+                  <span class="nav-meta">Needs Maho bridge</span>
+                </span>
+              </button>
+              <button class="nav-item" data-pane="atc" type="button">
+                <span class="nav-symbol">AT</span>
+                <span class="nav-copy">
+                  <span class="nav-title">Air Traffic Control</span>
+                  <span class="nav-meta">Needs Maho bridge</span>
+                </span>
+              </button>
+              <button class="nav-item" data-pane="passwords" type="button">
+                <span class="nav-symbol">PW</span>
+                <span class="nav-copy">
+                  <span class="nav-title">Passwords</span>
+                  <span class="nav-meta">Needs service API</span>
+                </span>
+              </button>
+              <button class="nav-item" data-pane="account-sync" type="button">
+                <span class="nav-symbol">AS</span>
+                <span class="nav-copy">
+                  <span class="nav-title">Account &amp; Sync</span>
+                  <span class="nav-meta">Needs Maho bridge</span>
+                </span>
+              </button>
+              <button class="nav-item" data-pane="css-mods" type="button">
+                <span class="nav-symbol">CSS</span>
+                <span class="nav-copy">
+                  <span class="nav-title">CSS Mods</span>
+                  <span class="nav-meta">Needs Maho bridge</span>
+                </span>
+              </button>
+              <button class="nav-item" data-pane="theme-store" type="button">
+                <span class="nav-symbol">TS</span>
+                <span class="nav-copy">
+                  <span class="nav-title">Theme Store</span>
+                  <span class="nav-meta">Needs Maho bridge</span>
+                </span>
+              </button>
+              <button class="nav-item" data-pane="extensions" type="button">
+                <span class="nav-symbol">EX</span>
+                <span class="nav-copy">
+                  <span class="nav-title">Extensions</span>
+                  <span class="nav-meta">Needs service API</span>
+                </span>
+              </button>
+              <button class="nav-item" data-pane="maho-ai" type="button">
+                <span class="nav-symbol">AI</span>
+                <span class="nav-copy">
+                  <span class="nav-title">Maho AI</span>
+                  <span class="nav-meta">Needs Maho bridge</span>
+                </span>
+              </button>
+            </nav>
+          </div>
+        </aside>
+
+        <main class="content">
+          <div class="content-scroll">
+            <section class="pane active" data-pane="general">
+              <header class="pane-header">
+                <div class="pane-kicker">Workspace</div>
+                <h1 class="pane-title">General</h1>
+                <p class="pane-summary">
+                  Use the Swift shell as the outer frame, but keep the first hybrid pass grounded in the rows that already write through Chromium today. Search stays here as part of browsing defaults instead of becoming its own pane.
+                </p>
+                <div class="pane-badges">
+                  <span class="badge is-hybrid">Swift shell landing pane</span>
+                  <span class="badge is-live">Live via Chromium prefs</span>
+                  <span class="badge is-bridge">Extra Swift rows still need bridge work</span>
+                </div>
+              </header>
+
+              <div class="overview-banner">
+                <div class="overview-title">How this pane should work</div>
+                <p class="overview-copy">
+                  The browser-hosted version should feel as rich as the old Swift General pane, but only a few rows are genuinely live today: homepage, startup behavior, download prompt, and search suggestions. Everything else is presented as a clearly-marked future lane.
+                </p>
+              </div>
+
+              <div class="cards-grid">
+                <article class="settings-card span-2">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Daily browsing defaults</h2>
+                      <p class="card-copy">These are the rows that can move into the Swift-style shell immediately without inventing new backend work.</p>
+                    </div>
+                    <div class="card-badges">
+                      <span class="badge is-live">Live via Chromium prefs</span>
+                    </div>
+                  </div>
+                  <div class="rows">
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Home page</div>
+                        <p class="setting-description">The page Maho should treat as your default starting point. <span class="inline-badge is-live">general.homepage</span></p>
+                      </div>
+                      <div class="setting-control">
+                        <label class="field-shell"><input class="field" value="chrome://newtab"></label>
+                      </div>
+                    </div>
+
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">On startup</div>
+                        <p class="setting-description">Choose whether the browser resumes your last context or starts from a clean page. <span class="inline-badge is-live">general.restore_on_startup</span></p>
+                      </div>
+                      <div class="setting-control">
+                        <div class="segmented">
+                          <button class="segment" type="button">New Tab page</button>
+                          <button class="segment is-active" type="button">Continue</button>
+                          <button class="segment" type="button">Specific pages</button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Ask where to save each file before downloading</div>
+                        <p class="setting-description">Mirror the current browser-hosted download prompt behavior inside the richer shell. <span class="inline-badge is-live">general.prompt_for_download</span></p>
+                      </div>
+                      <div class="setting-control">
+                        <button class="toggle is-on" type="button" aria-pressed="true">
+                          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                          <span class="toggle-label">On</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="settings-card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Search &amp; discovery</h2>
+                      <p class="card-copy">Search exists today as behavior inside settings, not as its own pane in the Swift shell.</p>
+                    </div>
+                    <div class="card-badges">
+                      <span class="badge is-live">Live + API mix</span>
+                    </div>
+                  </div>
+                  <div class="rows">
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Search suggestions</div>
+                        <p class="setting-description">Keep inline search suggestions lightweight. <span class="inline-badge is-live">search.suggestions</span></p>
+                      </div>
+                      <div class="setting-control">
+                        <button class="toggle is-on" type="button" aria-pressed="true">
+                          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                          <span class="toggle-label">On</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Default search engine</div>
+                        <p class="setting-description">The Swift pane had this in General, but the browser-hosted version still needs a structured service layer. <span class="inline-badge is-api">Needs Chromium service API</span></p>
+                      </div>
+                      <div class="setting-control">
+                        <label class="field-shell is-disabled">
+                          <select class="field" disabled>
+                            <option selected>Google</option>
+                            <option>DuckDuckGo</option>
+                            <option>Perplexity</option>
+                          </select>
+                          <span class="field-suffix">▾</span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="settings-card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Swift reference lanes</h2>
+                      <p class="card-copy">These are the rows that make the old native pane feel rich, but they should stay clearly marked until the bridge exists.</p>
+                    </div>
+                    <div class="card-badges">
+                      <span class="badge is-bridge">Needs Maho bridge</span>
+                    </div>
+                  </div>
+                  <div class="rows">
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Archive timeout</div>
+                        <p class="setting-description">Tabs inactive for this duration would be archived automatically. <span class="inline-badge is-bridge">Swift reference</span></p>
+                      </div>
+                      <div class="setting-control">
+                        <label class="field-shell is-disabled">
+                          <select class="field" disabled>
+                            <option>12 hours</option>
+                            <option selected>24 hours</option>
+                            <option>7 days</option>
+                          </select>
+                          <span class="field-suffix">▾</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Today Tab Timeout</div>
+                        <p class="setting-description">A direct carry-over from the Swift General pane. <span class="inline-badge is-bridge">Needs Maho bridge</span></p>
+                      </div>
+                      <div class="setting-control">
+                        <label class="field-shell is-disabled">
+                          <select class="field" disabled>
+                            <option>1 hour</option>
+                            <option>24 hours</option>
+                            <option selected>Never</option>
+                          </select>
+                          <span class="field-suffix">▾</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Download path</div>
+                        <p class="setting-description">Keep file destination and notes app behavior together only after the product bridge exists. <span class="inline-badge is-bridge">Needs Maho bridge</span></p>
+                      </div>
+                      <div class="setting-control">
+                        <label class="field-shell is-disabled"><input class="field" value="~/Downloads/Maho" disabled></label>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <section class="pane" data-pane="appearance">
+              <header class="pane-header">
+                <div class="pane-kicker">Reading</div>
+                <h1 class="pane-title">Appearance</h1>
+                <p class="pane-summary">
+                  Keep the first layer grounded in the real browser-theme and font preferences, then layer in shell-specific polish only where the next API surface is clear.
+                </p>
+                <div class="pane-badges">
+                  <span class="badge is-live">Live via Chromium prefs</span>
+                  <span class="badge is-api">Shell polish needs API work</span>
+                </div>
+              </header>
+
+              <div class="cards-grid">
+                <article class="settings-card span-2">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Browser chrome</h2>
+                      <p class="card-copy">This is the safest first-wave migration target: take the live rows that already exist and place them inside the Swift shell without changing their backend model.</p>
+                    </div>
+                    <div class="card-badges">
+                      <span class="badge is-live">Live via Chromium prefs</span>
+                    </div>
+                  </div>
+                  <div class="rows">
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Browser theme</div>
+                        <p class="setting-description">Choose whether the browser chrome follows the system appearance or stays light or dark. <span class="inline-badge is-live">appearance.theme</span></p>
+                      </div>
+                      <div class="setting-control">
+                        <div class="segmented">
+                          <button class="segment is-active" type="button">Match system</button>
+                          <button class="segment" type="button">Light</button>
+                          <button class="segment" type="button">Dark</button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Show Home button</div>
+                        <p class="setting-description">Display a Home button in the toolbar so the chosen start page stays close. <span class="inline-badge is-live">appearance.show_home_button</span></p>
+                      </div>
+                      <div class="setting-control">
+                        <button class="toggle is-on" type="button" aria-pressed="true">
+                          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                          <span class="toggle-label">On</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Default font size</div>
+                        <p class="setting-description">Baseline text size for pages that rely on browser defaults. <span class="inline-badge is-live">appearance.font_size</span></p>
+                      </div>
+                      <div class="setting-control">
+                        <label class="field-shell"><input class="field" value="16"><span class="field-suffix">px</span></label>
+                      </div>
+                    </div>
+
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Minimum font size</div>
+                        <p class="setting-description">Prevent pages from rendering tiny text. <span class="inline-badge is-live">appearance.minimum_font_size</span></p>
+                      </div>
+                      <div class="setting-control">
+                        <label class="field-shell"><input class="field" value="12"><span class="field-suffix">px</span></label>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="settings-card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Shell polish backlog</h2>
+                      <p class="card-copy">These cues help the redesign feel Arc-like and Swift-native, but they should not be presented as already-backed settings.</p>
+                    </div>
+                    <div class="card-badges">
+                      <span class="badge is-api">Needs Chromium service API</span>
+                    </div>
+                  </div>
+                  <div class="rows">
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Accent color</div>
+                        <p class="setting-description">A browser-shell concept only until the new UI contract exists.</p>
+                      </div>
+                      <div class="setting-control">
+                        <div class="segmented is-disabled">
+                          <button class="segment is-active" type="button" disabled>Blue</button>
+                          <button class="segment" type="button" disabled>Green</button>
+                          <button class="segment" type="button" disabled>Gold</button>
+                          <button class="segment" type="button" disabled>Lavender</button>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Sidebar density</div>
+                        <p class="setting-description">Useful once the Swift-style pane host becomes the real browser shell.</p>
+                      </div>
+                      <div class="setting-control">
+                        <div class="segmented is-disabled">
+                          <button class="segment" type="button" disabled>Compact</button>
+                          <button class="segment is-active" type="button" disabled>Comfortable</button>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Sidebar width</div>
+                        <p class="setting-description">The mockup keeps the Swift reference width at 222px. The real control can come later.</p>
+                      </div>
+                      <div class="setting-control">
+                        <div class="slider-shell is-disabled">
+                          <input class="slider" type="range" min="180" max="400" value="222" disabled>
+                          <span class="slider-readout">222px</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="settings-card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">CSS surface</h2>
+                      <p class="card-copy">Custom browser chrome styling belongs in the hybrid vision, but it should stay explicitly bridge-backed.</p>
+                    </div>
+                    <div class="card-badges">
+                      <span class="badge is-bridge">Needs Maho bridge</span>
+                    </div>
+                  </div>
+                  <div class="rows">
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Custom chrome CSS</div>
+                        <p class="setting-description">This should align with the dedicated CSS Mods pane rather than masquerading as a live pref.</p>
+                      </div>
+                      <div class="setting-control">
+                        <label class="textarea-shell is-disabled">
+                          <textarea class="textarea" disabled>/* future browser chrome hooks */
+.toolbar {
+  backdrop-filter: blur(20px);
+}</textarea>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <section class="pane" data-pane="privacy">
+              <header class="pane-header">
+                <div class="pane-kicker">Protection</div>
+                <h1 class="pane-title">Privacy</h1>
+                <p class="pane-summary">
+                  Keep the live privacy toggles visible and approachable, while making it obvious that per-site permissions and richer rule management still require a structured service layer.
+                </p>
+                <div class="pane-badges">
+                  <span class="badge is-live">Live via Chromium prefs</span>
+                  <span class="badge is-api">Site rules need service APIs</span>
+                  <span class="badge is-bridge">Content Blocker stays a dedicated pane</span>
+                </div>
+              </header>
+
+              <div class="cards-grid">
+                <article class="settings-card span-2">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Safety &amp; tracking</h2>
+                      <p class="card-copy">These are the real privacy controls that already map to browser behavior today.</p>
+                    </div>
+                    <div class="card-badges">
+                      <span class="badge is-live">Live via Chromium prefs</span>
+                    </div>
+                  </div>
+                  <div class="rows">
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Send “Do Not Track”</div>
+                        <p class="setting-description">Ask sites not to track browsing activity where they choose to honor the request. <span class="inline-badge is-live">privacy.do_not_track</span></p>
+                      </div>
+                      <div class="setting-control">
+                        <button class="toggle" type="button" aria-pressed="false">
+                          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                          <span class="toggle-label">Off</span>
+                        </button>
+                      </div>
+                    </div>
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Safe Browsing</div>
+                        <p class="setting-description">Warn about known dangerous sites and downloads before they become a problem. <span class="inline-badge is-live">privacy.safe_browsing</span></p>
+                      </div>
+                      <div class="setting-control">
+                        <button class="toggle is-on" type="button" aria-pressed="true">
+                          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                          <span class="toggle-label">On</span>
+                        </button>
+                      </div>
+                    </div>
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Block third-party cookies</div>
+                        <p class="setting-description">Expose Chromium’s cookie-controls mode as a simpler toggle in the first pass. <span class="inline-badge is-live">privacy.block_third_party_cookies</span></p>
+                      </div>
+                      <div class="setting-control">
+                        <button class="toggle is-on" type="button" aria-pressed="true">
+                          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                          <span class="toggle-label">On</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="settings-card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Permissions &amp; site rules</h2>
+                      <p class="card-copy">Once the shell exists, these should be presented as structured, table-like experiences instead of bolted-on generic settings pages.</p>
+                    </div>
+                    <div class="card-badges">
+                      <span class="badge is-api">Needs Chromium service API</span>
+                    </div>
+                  </div>
+                  <div class="site-list">
+                    <div class="site-rule">
+                      <div class="site-copy">
+                        <div class="site-title">notifications.maho.app</div>
+                        <p class="site-description">Notification requests currently allowed for this profile.</p>
+                      </div>
+                      <span class="token is-live">Allow</span>
+                    </div>
+                    <div class="site-rule">
+                      <div class="site-copy">
+                        <div class="site-title">camera.example.dev</div>
+                        <p class="site-description">Camera blocked until the permissions table lands.</p>
+                      </div>
+                      <span class="token is-api">Manage later</span>
+                    </div>
+                    <div class="site-rule">
+                      <div class="site-copy">
+                        <div class="site-title">tracking-demo.test</div>
+                        <p class="site-description">Site exception views belong in dedicated service-backed lists.</p>
+                      </div>
+                      <span class="token is-api">Block</span>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="settings-card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Relationship to Content Blocker</h2>
+                      <p class="card-copy">The hybrid shell should make this boundary legible: browser privacy prefs stay here; Maho’s richer blocker model gets its own pane.</p>
+                    </div>
+                    <div class="card-badges">
+                      <span class="badge is-bridge">Needs Maho bridge</span>
+                    </div>
+                  </div>
+                  <div class="placeholder-panel">
+                    <div class="placeholder-title">Dedicated blocker workflows belong elsewhere</div>
+                    <p class="placeholder-copy">Filter lists, element hiding, site-scoped overrides, and curated rules should all live in the Content Blocker pane instead of crowding the simple privacy surface.</p>
+                    <div class="token-row">
+                      <span class="token is-live">Privacy prefs stay lean</span>
+                      <span class="token is-bridge">Blocker remains specialized</span>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <section class="pane" data-pane="shortcuts">
+              <header class="pane-header">
+                <div class="pane-kicker">Keyboard</div>
+                <h1 class="pane-title">Shortcuts</h1>
+                <p class="pane-summary">
+                  This pane should feel first-class in the hybrid shell, but it is not a flat pref list. It needs editable, conflict-aware keybinding data and proper CRUD flows.
+                </p>
+                <div class="pane-badges">
+                  <span class="badge is-api">Needs Chromium service API</span>
+                  <span class="badge is-hybrid">Critical Swift parity pane</span>
+                </div>
+              </header>
+
+              <div class="cards-grid">
+                <article class="settings-card span-2">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Editable shortcuts</h2>
+                      <p class="card-copy">The mockup keeps the Swift pane in place and shows what a browser-hosted shortcut editor could look like once the data model exists.</p>
+                    </div>
+                    <div class="card-badges">
+                      <span class="badge is-api">Needs Chromium service API</span>
+                    </div>
+                  </div>
+                  <div class="key-list">
+                    <div class="key-row">
+                      <div class="key-copy">
+                        <div class="key-title">Open Settings</div>
+                        <p class="key-description">Keep the native-feeling Preferences shortcut visible in the browser-hosted version.</p>
+                      </div>
+                      <div class="keycaps"><span class="keycap">⌘</span><span class="keycap">,</span></div>
+                    </div>
+                    <div class="key-row">
+                      <div class="key-copy">
+                        <div class="key-title">Open Maho AI</div>
+                        <p class="key-description">Carry the existing AI entry point directly into the new shell.</p>
+                      </div>
+                      <div class="keycaps"><span class="keycap">⌘</span><span class="keycap">E</span></div>
+                    </div>
+                    <div class="key-row">
+                      <div class="key-copy">
+                        <div class="key-title">Focus Address Bar</div>
+                        <p class="key-description">A browser-hosted shortcut table should handle conflicts with existing Chromium accelerators.</p>
+                      </div>
+                      <div class="keycaps"><span class="keycap">⌘</span><span class="keycap">L</span></div>
+                    </div>
+                    <div class="key-row">
+                      <div class="key-copy">
+                        <div class="key-title">Open Command Bar</div>
+                        <p class="key-description">This should be editable, searchable, and grouped by feature area.</p>
+                      </div>
+                      <button class="ghost-button" type="button">Edit keybinding</button>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="settings-card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Swift anchors to preserve</h2>
+                      <p class="card-copy">The new shell should keep these entry points feeling native even after settings move entirely into the browser.</p>
+                    </div>
+                    <div class="card-badges">
+                      <span class="badge is-hybrid">Keep the feel</span>
+                    </div>
+                  </div>
+                  <ul class="feature-list">
+                    <li>Preferences remains a quick, predictable `⌘,` action.</li>
+                    <li>Maho AI remains reachable from the sidebar star and `⌘E`.</li>
+                    <li>Shortcut editing should feel like a Swift settings table, not a raw flags list.</li>
+                  </ul>
+                </article>
+
+                <article class="settings-card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Why this cannot stay a pref map</h2>
+                      <p class="card-copy">Shortcuts need indexed actions, duplicate detection, and grouped presentation. Treating them as plain strings would make the hybrid shell feel unfinished.</p>
+                    </div>
+                    <div class="card-badges">
+                      <span class="badge is-api">Structured CRUD</span>
+                    </div>
+                  </div>
+                  <p class="card-footnote">Recommendation: introduce a real service API for keyboard actions before claiming parity here.</p>
+                </article>
+              </div>
+            </section>
+
+            <section class="pane" data-pane="profiles">
+              <header class="pane-header">
+                <div class="pane-kicker">Spaces</div>
+                <h1 class="pane-title">Profiles</h1>
+                <p class="pane-summary">
+                  The Swift app treated profiles like living workspaces. The hybrid shell should keep that feeling, which means more than just another list of browser profiles.
+                </p>
+                <div class="pane-badges">
+                  <span class="badge is-bridge">Needs Maho bridge</span>
+                  <span class="badge is-api">Some browser-side slices can still use APIs</span>
+                </div>
+              </header>
+
+              <div class="cards-grid">
+                <article class="settings-card span-2">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Workspace profiles</h2>
+                      <p class="card-copy">This mockup keeps the Swift-style workspace feeling: visual identity, opening behavior, and product-specific rules in one place.</p>
+                    </div>
+                    <div class="card-badges">
+                      <span class="badge is-bridge">Needs Maho bridge</span>
+                    </div>
+                  </div>
+                  <div class="mini-grid">
+                    <div class="mini-surface">
+                      <div class="mini-surface-kicker">Default</div>
+                      <div class="mini-surface-title">Personal</div>
+                      <p class="mini-surface-copy">Warm opening context, quiet notifications, Maho Notes, and the main home page.</p>
+                      <div class="token-row">
+                        <span class="token is-bridge">Blue icon</span>
+                        <span class="token is-live">Continue startup</span>
+                      </div>
+                    </div>
+                    <div class="mini-surface">
+                      <div class="mini-surface-kicker">Research</div>
+                      <div class="mini-surface-title">Work</div>
+                      <p class="mini-surface-copy">Third-party cookies blocked, aggressive blocking rules, and a calmer extension surface.</p>
+                      <div class="token-row">
+                        <span class="token is-bridge">Recovery phrase</span>
+                        <span class="token is-api">Scoped extensions</span>
+                      </div>
+                    </div>
+                    <div class="mini-surface">
+                      <div class="mini-surface-kicker">Experiment</div>
+                      <div class="mini-surface-title">AI Lab</div>
+                      <p class="mini-surface-copy">Pinned AI provider, debugging defaults, and a faster startup stack for testing.</p>
+                      <div class="token-row">
+                        <span class="token is-bridge">Maho AI preset</span>
+                        <span class="token is-live">Prompt download</span>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="settings-card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Profile sheet actions</h2>
+                      <p class="card-copy">These subflows existed in the Swift app and should stay attached to this pane, not drift into generic modals elsewhere.</p>
+                    </div>
+                    <div class="card-badges">
+                      <span class="badge is-bridge">Needs Maho bridge</span>
+                    </div>
+                  </div>
+                  <ul class="feature-list">
+                    <li>Icon picker</li>
+                    <li>Recovery phrase flow</li>
+                    <li>Profile-config sheet</li>
+                    <li>Per-profile notes and download defaults</li>
+                  </ul>
+                </article>
+
+                <article class="settings-card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">What can stay browser-side</h2>
+                      <p class="card-copy">Search-engine selection, site data, extension scope, and permission summaries can likely remain Chromium-facing if the bridge boundary is kept clean.</p>
+                    </div>
+                    <div class="card-badges">
+                      <span class="badge is-api">Possible service slice</span>
+                    </div>
+                  </div>
+                  <p class="card-footnote">Profiles should be a mixed pane: bridge-owned identity and product state, API-owned browser data tables.</p>
+                </article>
+              </div>
+            </section>
+
+            <section class="pane" data-pane="advanced">
+              <header class="pane-header">
+                <div class="pane-kicker">Performance</div>
+                <h1 class="pane-title">Advanced</h1>
+                <p class="pane-summary">
+                  The hybrid shell should keep deep system-facing settings visually calm, with only the real low-level toggles active in the first phase.
+                </p>
+                <div class="pane-badges">
+                  <span class="badge is-live">Live via Chromium prefs</span>
+                  <span class="badge is-api">Diagnostics need service APIs</span>
+                </div>
+              </header>
+
+              <div class="cards-grid">
+                <article class="settings-card span-2">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Runtime &amp; performance</h2>
+                      <p class="card-copy">These controls are already real today and should move directly into the Swift-style pane host.</p>
+                    </div>
+                    <div class="card-badges">
+                      <span class="badge is-live">Live via Chromium prefs</span>
+                    </div>
+                  </div>
+                  <div class="rows">
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Use hardware acceleration when available</div>
+                        <p class="setting-description">This one is special because it uses browser local state rather than profile prefs. <span class="inline-badge is-live">advanced.hardware_acceleration</span></p>
+                      </div>
+                      <div class="setting-control">
+                        <button class="toggle is-on" type="button" aria-pressed="true">
+                          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                          <span class="toggle-label">On</span>
+                        </button>
+                      </div>
+                    </div>
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Preload pages</div>
+                        <p class="setting-description">Expose the current browser-backed preload modes, including the read-time normalization of deprecated value <code>1</code> to standard <code>0</code>. <span class="inline-badge is-live">advanced.preload_pages</span></p>
+                      </div>
+                      <div class="setting-control">
+                        <div class="segmented">
+                          <button class="segment" type="button">Disabled</button>
+                          <button class="segment is-active" type="button">Standard</button>
+                          <button class="segment" type="button">Extended</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <p class="card-footnote">Design note: the advanced pane can stay visually restrained while still surfacing important backend nuance in copy.</p>
+                </article>
+
+                <article class="settings-card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Diagnostics</h2>
+                      <p class="card-copy">A real hybrid version should expose compact, browser-hosted diagnostics instead of kicking users out to scattered internal pages.</p>
+                    </div>
+                    <div class="card-badges">
+                      <span class="badge is-api">Needs Chromium service API</span>
+                    </div>
+                  </div>
+                  <div class="mini-grid two">
+                    <div class="mini-surface">
+                      <div class="mini-surface-kicker">GPU</div>
+                      <div class="mini-surface-title">Acceleration report</div>
+                      <p class="mini-surface-copy">Renderer, compositor, and feature status in a browser-hosted summary.</p>
+                    </div>
+                    <div class="mini-surface">
+                      <div class="mini-surface-kicker">Network</div>
+                      <div class="mini-surface-title">Preload behavior</div>
+                      <p class="mini-surface-copy">Explain standard vs extended preloading without sending users to generic Chromium pages.</p>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="settings-card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">System-facing actions</h2>
+                      <p class="card-copy">Keep import, reset, and recovery operations in a separate advanced lane once the shell is in place.</p>
+                    </div>
+                    <div class="card-badges">
+                      <span class="badge is-api">Future service flows</span>
+                    </div>
+                  </div>
+                  <p class="card-footnote">This pane should remain small in the first release: migrate the live toggles first, then add structured action surfaces later.</p>
+                </article>
+              </div>
+            </section>
+
+            <section class="pane" data-pane="notifications">
+              <header class="pane-header">
+                <div class="pane-kicker">Attention</div>
+                <h1 class="pane-title">Notifications</h1>
+                <p class="pane-summary">
+                  Notifications should start with the one real browser-backed control, then expand into per-site management only when a proper list surface exists.
+                </p>
+                <div class="pane-badges">
+                  <span class="badge is-live">Live via Chromium prefs</span>
+                  <span class="badge is-api">Per-site rules need service APIs</span>
+                </div>
+              </header>
+
+              <div class="cards-grid">
+                <article class="settings-card span-2">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Permission prompts</h2>
+                      <p class="card-copy">Use the Swift shell to make this feel calmer, even though the first live surface is still intentionally small.</p>
+                    </div>
+                    <div class="card-badges">
+                      <span class="badge is-live">Live via Chromium prefs</span>
+                    </div>
+                  </div>
+                  <div class="rows">
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Use quieter notification permission prompts</div>
+                        <p class="setting-description">Reduce interruption-heavy permission requests on supported sites. <span class="inline-badge is-live">notifications.quiet_permission_ui</span></p>
+                      </div>
+                      <div class="setting-control">
+                        <button class="toggle is-on" type="button" aria-pressed="true">
+                          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                          <span class="toggle-label">On</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="settings-card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Site exceptions</h2>
+                      <p class="card-copy">This is the obvious second step once the first live toggle has moved into the new pane host.</p>
+                    </div>
+                    <div class="card-badges">
+                      <span class="badge is-api">Needs Chromium service API</span>
+                    </div>
+                  </div>
+                  <div class="site-list">
+                    <div class="site-rule">
+                      <div class="site-copy">
+                        <div class="site-title">chat.maho.dev</div>
+                        <p class="site-description">Allowed to notify this workspace.</p>
+                      </div>
+                      <span class="token is-live">Allow</span>
+                    </div>
+                    <div class="site-rule">
+                      <div class="site-copy">
+                        <div class="site-title">news-push.example</div>
+                        <p class="site-description">Quieted by default, editable in a future per-site table.</p>
+                      </div>
+                      <span class="token is-api">Quiet</span>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="settings-card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Hybrid reading</h2>
+                      <p class="card-copy">This pane is intentionally honest: one live pref today, more structure later. The shell should still make it feel complete.</p>
+                    </div>
+                    <div class="card-badges">
+                      <span class="badge is-hybrid">Small but intentional</span>
+                    </div>
+                  </div>
+                  <p class="card-footnote">Good mockup signal: even the thin panes look purposeful once they live inside the Swift navigation model.</p>
+                </article>
+              </div>
+            </section>
+
+            <section class="pane" data-pane="autofill">
+              <header class="pane-header">
+                <div class="pane-kicker">Identity</div>
+                <h1 class="pane-title">Autofill</h1>
+                <p class="pane-summary">Autofill needs more than toggles: saved addresses, payment methods, and scoped form profiles should be presented as structured browser-hosted data sets.</p>
+                <div class="pane-badges">
+                  <span class="badge is-api">Needs Chromium service API</span>
+                </div>
+              </header>
+              <div class="cards-grid">
+                <article class="settings-card span-2">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Saved data overview</h2>
+                      <p class="card-copy">This pane should feel like a clean account surface inside the Swift shell, not like a redirect to generic settings pages.</p>
+                    </div>
+                    <div class="card-badges"><span class="badge is-api">Needs Chromium service API</span></div>
+                  </div>
+                  <div class="mini-grid">
+                    <div class="mini-surface">
+                      <div class="mini-surface-kicker">Addresses</div>
+                      <div class="mini-surface-title">3 saved profiles</div>
+                      <p class="mini-surface-copy">Shipping, billing, and work identities with clear edit entry points.</p>
+                    </div>
+                    <div class="mini-surface">
+                      <div class="mini-surface-kicker">Payments</div>
+                      <div class="mini-surface-title">2 cards on file</div>
+                      <p class="mini-surface-copy">Browser-managed payment methods and issuer metadata.</p>
+                    </div>
+                    <div class="mini-surface">
+                      <div class="mini-surface-kicker">Forms</div>
+                      <div class="mini-surface-title">Site-scope rules</div>
+                      <p class="mini-surface-copy">Per-profile rules that keep autofill behavior predictable.</p>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <section class="pane" data-pane="content-blocker">
+              <header class="pane-header">
+                <div class="pane-kicker">Blocking</div>
+                <h1 class="pane-title">Content Blocker</h1>
+                <p class="pane-summary">This is product-specific territory. Keep it in the hybrid shell, but be explicit that richer rule management belongs to the Maho side of the boundary.</p>
+                <div class="pane-badges">
+                  <span class="badge is-bridge">Needs Maho bridge</span>
+                </div>
+              </header>
+              <div class="cards-grid">
+                <article class="settings-card span-2">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Rule sets &amp; exceptions</h2>
+                      <p class="card-copy">A hybrid blocker pane can still look browser-hosted while being powered by a dedicated Maho model.</p>
+                    </div>
+                    <div class="card-badges"><span class="badge is-bridge">Needs Maho bridge</span></div>
+                  </div>
+                  <div class="mini-grid two">
+                    <div class="mini-surface">
+                      <div class="mini-surface-kicker">Curated lists</div>
+                      <div class="mini-surface-title">Privacy filters</div>
+                      <p class="mini-surface-copy">Regional lists, cosmetic filters, and workspace-specific presets.</p>
+                    </div>
+                    <div class="mini-surface">
+                      <div class="mini-surface-kicker">Overrides</div>
+                      <div class="mini-surface-title">Site exceptions</div>
+                      <p class="mini-surface-copy">Per-site allowlists, element hiding, and hand-tuned rules.</p>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <section class="pane" data-pane="atc">
+              <header class="pane-header">
+                <div class="pane-kicker">Flow</div>
+                <h1 class="pane-title">Air Traffic Control</h1>
+                <p class="pane-summary">Keep this pane present in the shell even if the first browser-hosted release cannot back it yet. It is part of the product’s identity, not an optional extra.</p>
+                <div class="pane-badges">
+                  <span class="badge is-bridge">Needs Maho bridge</span>
+                </div>
+              </header>
+              <div class="cards-grid">
+                <article class="settings-card span-2">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Traffic rules</h2>
+                      <p class="card-copy">A future version can manage workspace-level routing, network pacing, or site-specific flow rules from here without leaking implementation details into generic Chromium settings.</p>
+                    </div>
+                    <div class="card-badges"><span class="badge is-bridge">Needs Maho bridge</span></div>
+                  </div>
+                  <ul class="feature-list">
+                    <li>Site handoff rules between profiles</li>
+                    <li>Workspace-level pacing or queueing policies</li>
+                    <li>Context-aware defaults for research-heavy browsing</li>
+                  </ul>
+                </article>
+              </div>
+            </section>
+
+            <section class="pane" data-pane="passwords">
+              <header class="pane-header">
+                <div class="pane-kicker">Security</div>
+                <h1 class="pane-title">Passwords</h1>
+                <p class="pane-summary">This should become a structured browser-hosted vault surface with passkeys, import/export, and device reauth, not a thin settings subsection.</p>
+                <div class="pane-badges">
+                  <span class="badge is-api">Needs Chromium service API</span>
+                </div>
+              </header>
+              <div class="cards-grid">
+                <article class="settings-card span-2">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Vault &amp; passkeys</h2>
+                      <p class="card-copy">The hybrid shell can keep this pane calm and product-shaped while still delegating the actual data model to Chromium-side services.</p>
+                    </div>
+                    <div class="card-badges"><span class="badge is-api">Needs Chromium service API</span></div>
+                  </div>
+                  <div class="mini-grid two">
+                    <div class="mini-surface">
+                      <div class="mini-surface-kicker">Stored secrets</div>
+                      <div class="mini-surface-title">41 passwords</div>
+                      <p class="mini-surface-copy">Searchable list, device reauth, and site-level history.</p>
+                    </div>
+                    <div class="mini-surface">
+                      <div class="mini-surface-kicker">Modern auth</div>
+                      <div class="mini-surface-title">8 passkeys</div>
+                      <p class="mini-surface-copy">Passkey management, rename flows, and export-safe summaries.</p>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <section class="pane" data-pane="account-sync">
+              <header class="pane-header">
+                <div class="pane-kicker">Identity</div>
+                <h1 class="pane-title">Account &amp; Sync</h1>
+                <p class="pane-summary">This needs a clear hybrid boundary: browser-owned sync data can stay service-backed, while Maho-specific account and recovery behavior stays in the bridge.</p>
+                <div class="pane-badges">
+                  <span class="badge is-bridge">Needs Maho bridge</span>
+                  <span class="badge is-api">Browser sync slices can still be API-backed</span>
+                </div>
+              </header>
+              <div class="cards-grid">
+                <article class="settings-card span-2">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Identity &amp; recovery</h2>
+                      <p class="card-copy">The shell should keep account presence, sync posture, and recovery actions in one place instead of scattering them across Chrome surfaces.</p>
+                    </div>
+                    <div class="card-badges"><span class="badge is-bridge">Needs Maho bridge</span></div>
+                  </div>
+                  <div class="rows">
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Signed-in account</div>
+                        <p class="setting-description">Maho identity, avatar, and recovery entry points should stay product-owned.</p>
+                      </div>
+                      <div class="setting-control">
+                        <label class="field-shell is-disabled"><input class="field" value="indo@maho.app" disabled></label>
+                      </div>
+                    </div>
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Sync scope</div>
+                        <p class="setting-description">Bookmarks, tabs, and settings can remain browser-facing if the bridge boundary stays clean.</p>
+                      </div>
+                      <div class="setting-control">
+                        <div class="segmented is-disabled">
+                          <button class="segment is-active" type="button" disabled>Everything</button>
+                          <button class="segment" type="button" disabled>Custom</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <section class="pane" data-pane="css-mods">
+              <header class="pane-header">
+                <div class="pane-kicker">Styling</div>
+                <h1 class="pane-title">CSS Mods</h1>
+                <p class="pane-summary">The Swift shell gave this its own identity. The browser-hosted redesign should preserve that and avoid hiding it behind a small advanced text area.</p>
+                <div class="pane-badges">
+                  <span class="badge is-bridge">Needs Maho bridge</span>
+                </div>
+              </header>
+              <div class="cards-grid">
+                <article class="settings-card span-2">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Style library</h2>
+                      <p class="card-copy">A dedicated pane keeps custom browser chrome styles, site overrides, and reusable snippets grouped together instead of pretending they are already normal prefs.</p>
+                    </div>
+                    <div class="card-badges"><span class="badge is-bridge">Needs Maho bridge</span></div>
+                  </div>
+                  <div class="mini-grid two">
+                    <div class="mini-surface">
+                      <div class="mini-surface-kicker">Installed</div>
+                      <div class="mini-surface-title">Sidebar gloss</div>
+                      <p class="mini-surface-copy">A reusable browser-chrome stylesheet for the Swift-inspired shell.</p>
+                    </div>
+                    <div class="mini-surface">
+                      <div class="mini-surface-kicker">Per-site</div>
+                      <div class="mini-surface-title">Reading mode tweaks</div>
+                      <p class="mini-surface-copy">Scoped CSS mods attached to selected sites or workspaces.</p>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <section class="pane" data-pane="theme-store">
+              <header class="pane-header">
+                <div class="pane-kicker">Visuals</div>
+                <h1 class="pane-title">Theme Store</h1>
+                <p class="pane-summary">If the Swift app gave themes a real home, the browser-hosted version should too. It should feel like curated product customization, not a generic extensions gallery.</p>
+                <div class="pane-badges">
+                  <span class="badge is-bridge">Needs Maho bridge</span>
+                </div>
+              </header>
+              <div class="cards-grid">
+                <article class="settings-card span-2">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Curated themes</h2>
+                      <p class="card-copy">The shell can preview themes directly in-context once the product-backed catalog exists.</p>
+                    </div>
+                    <div class="card-badges"><span class="badge is-bridge">Needs Maho bridge</span></div>
+                  </div>
+                  <div class="mini-grid">
+                    <div class="mini-surface">
+                      <div class="mini-surface-kicker">Featured</div>
+                      <div class="mini-surface-title">Midnight Indigo</div>
+                      <p class="mini-surface-copy">Closer to Arc-like depth, tuned for the Swift pane shell.</p>
+                    </div>
+                    <div class="mini-surface">
+                      <div class="mini-surface-kicker">Installed</div>
+                      <div class="mini-surface-title">Slate Studio</div>
+                      <p class="mini-surface-copy">Muted chrome, soft cards, quieter selection states.</p>
+                    </div>
+                    <div class="mini-surface">
+                      <div class="mini-surface-kicker">Preview</div>
+                      <div class="mini-surface-title">Warm Paper</div>
+                      <p class="mini-surface-copy">A lighter reading palette for focus-heavy profiles.</p>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <section class="pane" data-pane="extensions">
+              <header class="pane-header">
+                <div class="pane-kicker">Integrations</div>
+                <h1 class="pane-title">Extensions</h1>
+                <p class="pane-summary">Extensions belong in the Swift pane hierarchy, but the browser-hosted version needs real list and permissions APIs before this can be anything more than a shell concept.</p>
+                <div class="pane-badges">
+                  <span class="badge is-api">Needs Chromium service API</span>
+                </div>
+              </header>
+              <div class="cards-grid">
+                <article class="settings-card span-2">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Installed extensions</h2>
+                      <p class="card-copy">The hybrid shell should give extensions a clean, product-shaped home instead of forcing a jump to generic management UIs.</p>
+                    </div>
+                    <div class="card-badges"><span class="badge is-api">Needs Chromium service API</span></div>
+                  </div>
+                  <div class="mini-grid two">
+                    <div class="mini-surface">
+                      <div class="mini-surface-kicker">Pinned</div>
+                      <div class="mini-surface-title">Grammarly</div>
+                      <p class="mini-surface-copy">Per-site access, quick toggle, and toolbar visibility.</p>
+                    </div>
+                    <div class="mini-surface">
+                      <div class="mini-surface-kicker">Developer mode</div>
+                      <div class="mini-surface-title">Unpacked workspace tool</div>
+                      <p class="mini-surface-copy">Browser-hosted install state and diagnostics.</p>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <section class="pane" data-pane="maho-ai">
+              <header class="pane-header">
+                <div class="pane-kicker">Assistant</div>
+                <h1 class="pane-title">Maho AI</h1>
+                <p class="pane-summary">
+                  This pane should stay unmistakably product-specific: provider choice, secure key storage, entry points, and context behavior all belong here even after settings move into the browser.
+                </p>
+                <div class="pane-badges">
+                  <span class="badge is-bridge">Needs Maho bridge</span>
+                  <span class="badge is-hybrid">Keep ⌘E and the sidebar star</span>
+                </div>
+              </header>
+
+              <div class="cards-grid">
+                <article class="settings-card span-2">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Providers &amp; models</h2>
+                      <p class="card-copy">A browser-hosted shell should still respect the shell-owned boundary for API keys, provider state, and Maho-specific AI behavior.</p>
+                    </div>
+                    <div class="card-badges"><span class="badge is-bridge">Needs Maho bridge</span></div>
+                  </div>
+                  <div class="rows">
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">AI provider</div>
+                        <p class="setting-description">Provider choice should stay explicitly product-owned.</p>
+                      </div>
+                      <div class="setting-control">
+                        <label class="field-shell is-disabled">
+                          <select class="field" disabled>
+                            <option selected>Claude</option>
+                            <option>OpenAI</option>
+                            <option>Gemini</option>
+                          </select>
+                          <span class="field-suffix">▾</span>
+                        </label>
+                      </div>
+                    </div>
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Default model</div>
+                        <p class="setting-description">Model presets should be stored alongside the AI provider contract, not as plain prefs.</p>
+                      </div>
+                      <div class="setting-control">
+                        <label class="field-shell is-disabled">
+                          <select class="field" disabled>
+                            <option selected>Claude 3.7 Sonnet</option>
+                            <option>GPT-4.1</option>
+                            <option>Gemini 2.5 Pro</option>
+                          </select>
+                          <span class="field-suffix">▾</span>
+                        </label>
+                      </div>
+                    </div>
+                    <div class="setting-row">
+                      <div class="setting-copy">
+                        <div class="setting-label">Secure API keys</div>
+                        <p class="setting-description">The browser shell can render the controls, but secure storage remains a shell-owned concern.</p>
+                      </div>
+                      <div class="setting-control">
+                        <button class="ghost-button" type="button">Manage provider keys</button>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="settings-card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Entry points</h2>
+                      <p class="card-copy">Make AI feel integrated into the browser shell, not hidden behind a feature flag.</p>
+                    </div>
+                    <div class="card-badges"><span class="badge is-bridge">Needs Maho bridge</span></div>
+                  </div>
+                  <div class="key-list">
+                    <div class="key-row">
+                      <div class="key-copy">
+                        <div class="key-title">Sidebar AI button</div>
+                        <p class="key-description">The star entry point should remain visible beside refresh controls.</p>
+                      </div>
+                      <span class="token is-hybrid">Star button</span>
+                    </div>
+                    <div class="key-row">
+                      <div class="key-copy">
+                        <div class="key-title">Keyboard entry</div>
+                        <p class="key-description">Preserve the fast `⌘E` route into the AI panel.</p>
+                      </div>
+                      <div class="keycaps"><span class="keycap">⌘</span><span class="keycap">E</span></div>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="settings-card">
+                  <div class="card-header">
+                    <div class="card-title-group">
+                      <h2 class="card-title">Bridge boundary</h2>
+                      <p class="card-copy">The shell can look browser-native while still being honest about where the AI system actually lives.</p>
+                    </div>
+                    <div class="card-badges"><span class="badge is-bridge">Bridge-owned state</span></div>
+                  </div>
+                  <p class="card-footnote">Recommended split: browser-hosted pane shell and presentation, shell-owned secure store and provider orchestration.</p>
+                </article>
+              </div>
+            </section>
+          </div>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const navItems = [...document.querySelectorAll('.nav-item')];
+    const panes = [...document.querySelectorAll('.pane')];
+
+    function selectPane(id) {
+      navItems.forEach((item) => {
+        const active = item.dataset.pane === id;
+        item.classList.toggle('active', active);
+        item.setAttribute('aria-current', active ? 'page' : 'false');
+      });
+
+      panes.forEach((pane) => {
+        pane.classList.toggle('active', pane.dataset.pane === id);
+      });
+    }
+
+    navItems.forEach((item) => {
+      item.addEventListener('click', () => selectPane(item.dataset.pane));
+    });
+
+    document.addEventListener('click', (event) => {
+      const toggle = event.target.closest('.toggle');
+      if (toggle && !toggle.classList.contains('is-disabled')) {
+        const on = !toggle.classList.contains('is-on');
+        toggle.classList.toggle('is-on', on);
+        toggle.setAttribute('aria-pressed', String(on));
+        const label = toggle.querySelector('.toggle-label');
+        if (label) {
+          label.textContent = on ? 'On' : 'Off';
+        }
+      }
+
+      const segment = event.target.closest('.segment');
+      if (segment && !segment.disabled) {
+        const group = segment.closest('.segmented');
+        if (group && !group.classList.contains('is-disabled')) {
+          group.querySelectorAll('.segment').forEach((button) => button.classList.remove('is-active'));
+          segment.classList.add('is-active');
+        }
+      }
+
+    });
+  </script>
+</body>
+</html>

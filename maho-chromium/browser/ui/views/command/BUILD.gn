@@ -1,0 +1,38 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+source_set("maho_command_overlay") {
+  sources = [
+    "maho_command_action_handler.cc",
+    "maho_command_action_handler.h",
+    "maho_command_model.cc",
+    "maho_command_model.h",
+    "maho_command_overlay_controller.cc",
+    "maho_command_overlay_controller.h",
+    "maho_command_overlay_view.cc",
+    "maho_command_overlay_view.h",
+    "maho_command_result_row_view.cc",
+    "maho_command_result_row_view.h",
+  ]
+
+  deps = [
+    "//base",
+    "//chrome/browser/devtools",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui:browser_navigator_params_headers",
+    "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/side_panel",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//content/public/browser",
+    "//maho/browser:maho_core_holder",
+    "//maho/components/constants",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//skia",
+    "//ui/base",
+    "//ui/color",
+    "//ui/compositor",
+    "//ui/events",
+    "//ui/gfx",
+    "//ui/views",
+    "//url",
+  ]
+}

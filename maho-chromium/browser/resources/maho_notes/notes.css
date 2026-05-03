@@ -1,0 +1,7 @@
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  margin: 0;
+  padding: 0;
+  background: var(--color-sys-base-container, #1a1a2e);
+  color: var(--color-sys-on-surface, #e0e0e0);
+}

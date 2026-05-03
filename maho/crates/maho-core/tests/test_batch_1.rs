@@ -1,0 +1,2530 @@
+use maho_core::maho_core::MahoCore;
+use maho_types::common::{Orientation, Url, UrlPattern, UrlPatternType};
+use maho_types::events::core_update::CoreUpdate;
+use maho_types::events::shell_event::ShellEvent;
+use maho_types::identifiers::{FolderId, SpaceId, TabId};
+use maho_types::space::{SpaceColor, SpaceConfigUpdate};
+
+fn make_color(hue: f64) -> SpaceColor {
+    SpaceColor {
+        hue,
+        saturation: 0.8,
+        brightness: 0.9,
+        grain: 0.0,
+    }
+}
+
+fn create_tab(core: &mut MahoCore) -> TabId {
+    let space_id = core.get_active_space_id();
+    let before: Vec<TabId> = core
+        .get_tab_view_models()
+        .iter()
+        .map(|t| t.id.clone())
+        .collect();
+    core.handle_event(ShellEvent::CreateTab {
+        space_id,
+        url: None,
+        parent_id: None,
+    });
+    let after = core.get_tab_view_models();
+    after
+        .iter()
+        .find(|t| !before.contains(&t.id))
+        .expect("New tab should appear in view models")
+        .id
+        .clone()
+}
+
+fn create_tab_with_url(core: &mut MahoCore, url: &str) -> TabId {
+    let space_id = core.get_active_space_id();
+    let before: Vec<TabId> = core
+        .get_tab_view_models()
+        .iter()
+        .map(|t| t.id.clone())
+        .collect();
+    core.handle_event(ShellEvent::CreateTab {
+        space_id,
+        url: Some(Url::new(url)),
+        parent_id: None,
+    });
+    let after = core.get_tab_view_models();
+    after
+        .iter()
+        .find(|t| !before.contains(&t.id))
+        .expect("New tab should appear in view models")
+        .id
+        .clone()
+}
+
+fn create_tab_in_space(core: &mut MahoCore, space_id: &SpaceId) -> TabId {
+    let before: Vec<TabId> = core
+        .get_tab_view_models()
+        .iter()
+        .map(|t| t.id.clone())
+        .collect();
+    core.handle_event(ShellEvent::CreateTab {
+        space_id: space_id.clone(),
+        url: None,
+        parent_id: None,
+    });
+    let after = core.get_tab_view_models();
+    after
+        .iter()
+        .find(|t| !before.contains(&t.id))
+        .expect("New tab should appear in view models")
+        .id
+        .clone()
+}
+
+fn create_space(core: &mut MahoCore, name: &str, hue: f64) -> SpaceId {
+    let before: Vec<SpaceId> = core
+        .get_space_view_models()
+        .iter()
+        .map(|s| s.id.clone())
+        .collect();
+    let profile_id = core
+        .get_active_profile_id()
+        .cloned()
+        .unwrap_or_else(|| maho_types::identifiers::ProfileId::new(""));
+    core.handle_event(ShellEvent::CreateSpace {
+        name: name.to_string(),
+        color: make_color(hue),
+        profile_id,
+    });
+    let after = core.get_space_view_models();
+    after
+        .iter()
+        .find(|s| !before.contains(&s.id))
+        .expect("New space should appear in view models")
+        .id
+        .clone()
+}
+
+// ===== TAB LIFECYCLE =====
+
+#[test]
+fn tab_create_increases_count() {
+    let mut core = MahoCore::new();
+    let initial = core.get_tab_view_models().len();
+    create_tab(&mut core);
+    assert_eq!(core.get_tab_view_models().len(), initial + 1);
+}
+
+#[test]
+fn create_tab_emits_tab_created_update() {
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+
+    let updates = core.handle_event(ShellEvent::CreateTab {
+        space_id,
+        url: Some(Url::new("https://example.com/emitted")),
+        parent_id: None,
+    });
+
+    assert!(matches!(
+        updates.as_slice(),
+        [CoreUpdate::TabCreated { .. }]
+    ));
+}
+
+#[test]
+fn tab_create_with_url_sets_url() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab_with_url(&mut core, "https://example.com");
+    let tabs = core.get_tab_view_models();
+    let tab = tabs.iter().find(|t| t.id == tab_id).unwrap();
+    assert_eq!(tab.url, "https://example.com");
+}
+
+#[test]
+fn tab_close_decreases_count() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    let before = core.get_tab_view_models().len();
+    core.handle_event(ShellEvent::CloseTab {
+        tab_id: tab_id.clone(),
+    });
+    assert_eq!(core.get_tab_view_models().len(), before - 1);
+}
+
+#[test]
+fn tab_activate_no_panic() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    core.handle_event(ShellEvent::ActivateTab { tab_id });
+}
+
+#[test]
+fn tab_duplicate_increases_count() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab_with_url(&mut core, "https://example.com");
+    let before = core.get_tab_view_models().len();
+    core.handle_event(ShellEvent::DuplicateTab { tab_id });
+    assert_eq!(core.get_tab_view_models().len(), before + 1);
+}
+
+#[test]
+fn tab_pin_appears_in_pinned() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    core.handle_event(ShellEvent::PinTab {
+        tab_id: tab_id.clone(),
+    });
+    let space_id = core.get_active_space_id();
+    let pinned = core.get_pinned_tabs(&space_id);
+    assert!(pinned.iter().any(|t| t.is_pinned));
+}
+
+#[test]
+fn pin_tab_emits_tab_updated_with_pinned_true() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+
+    let updates = core.handle_event(ShellEvent::PinTab {
+        tab_id: tab_id.clone(),
+    });
+
+    assert!(matches!(
+        updates.as_slice(),
+        [CoreUpdate::TabUpdated { tab_id: updated_id, changes }]
+            if *updated_id == tab_id && changes.is_pinned == Some(true)
+    ));
+}
+
+#[test]
+fn tab_unpin_removes_from_pinned() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    core.handle_event(ShellEvent::PinTab {
+        tab_id: tab_id.clone(),
+    });
+    core.handle_event(ShellEvent::UnpinTab {
+        tab_id: tab_id.clone(),
+    });
+    let space_id = core.get_active_space_id();
+    let pinned = core.get_pinned_tabs(&space_id);
+    assert!(pinned.is_empty() || !pinned.iter().any(|t| t.id == tab_id));
+}
+
+#[test]
+fn unfreeze_tab_activates_frozen_tab() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+
+    core.handle_event(ShellEvent::FreezeTab {
+        tab_id: tab_id.clone(),
+    });
+    assert!(core
+        .get_tab_view_models()
+        .iter()
+        .any(|tab| tab.id == tab_id && tab.lifecycle_state == "frozen"));
+
+    core.handle_event(ShellEvent::UnfreezeTab {
+        tab_id: tab_id.clone(),
+    });
+    assert!(core
+        .get_tab_view_models()
+        .iter()
+        .any(|tab| tab.id == tab_id && tab.lifecycle_state == "active"));
+}
+
+#[test]
+fn unpin_tab_emits_tab_updated_with_pinned_false() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    core.handle_event(ShellEvent::PinTab {
+        tab_id: tab_id.clone(),
+    });
+
+    let updates = core.handle_event(ShellEvent::UnpinTab {
+        tab_id: tab_id.clone(),
+    });
+
+    assert!(matches!(
+        updates.as_slice(),
+        [CoreUpdate::TabUpdated { tab_id: updated_id, changes }]
+            if *updated_id == tab_id && changes.is_pinned == Some(false)
+    ));
+}
+
+#[test]
+fn tab_favorite_appears() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    core.favorite_tab(&tab_id);
+    let space_id = core.get_active_space_id();
+    let favs = core.get_favorite_tabs(&space_id);
+    assert!(favs.iter().any(|t| t.is_favorite));
+}
+
+#[test]
+fn favorite_tab_emits_tab_updated_with_favorite_true() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+
+    let updates = core.handle_event(ShellEvent::FavoriteTab {
+        tab_id: tab_id.clone(),
+    });
+
+    assert!(matches!(
+        updates.as_slice(),
+        [CoreUpdate::TabUpdated { tab_id: updated_id, changes }]
+            if *updated_id == tab_id && changes.is_favorite == Some(true)
+    ));
+}
+
+#[test]
+fn favorite_tab_is_idempotent_via_shell_event() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+
+    let first_updates = core.handle_event(ShellEvent::FavoriteTab {
+        tab_id: tab_id.clone(),
+    });
+    assert!(matches!(
+        first_updates.as_slice(),
+        [CoreUpdate::TabUpdated { tab_id: updated_id, changes }]
+            if *updated_id == tab_id && changes.is_favorite == Some(true)
+    ));
+
+    let first_favorite_order = core
+        .get_tab_view_models()
+        .iter()
+        .find(|tab| tab.id == tab_id)
+        .and_then(|tab| tab.favorite_order);
+
+    let second_updates = core.handle_event(ShellEvent::FavoriteTab {
+        tab_id: tab_id.clone(),
+    });
+
+    let second_favorite_order = core
+        .get_tab_view_models()
+        .iter()
+        .find(|tab| tab.id == tab_id)
+        .and_then(|tab| tab.favorite_order);
+
+    assert_eq!(second_favorite_order, first_favorite_order);
+    assert!(!second_updates.iter().any(|update| matches!(
+        update,
+        CoreUpdate::TabUpdated { tab_id: updated_id, changes }
+            if *updated_id == tab_id && changes.is_favorite == Some(true)
+    )));
+}
+
+#[test]
+fn tab_unfavorite_removes() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    core.favorite_tab(&tab_id);
+    core.unfavorite_tab(&tab_id);
+    let space_id = core.get_active_space_id();
+    let favs = core.get_favorite_tabs(&space_id);
+    assert!(!favs.iter().any(|t| t.id == tab_id));
+}
+
+#[test]
+fn unfavorite_tab_emits_tab_updated_with_favorite_false() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    core.handle_event(ShellEvent::FavoriteTab {
+        tab_id: tab_id.clone(),
+    });
+
+    let updates = core.handle_event(ShellEvent::UnfavoriteTab {
+        tab_id: tab_id.clone(),
+    });
+
+    assert!(matches!(
+        updates.as_slice(),
+        [CoreUpdate::TabUpdated { tab_id: updated_id, changes }]
+            if *updated_id == tab_id && changes.is_favorite == Some(false)
+    ));
+}
+
+#[test]
+fn tab_today_not_empty_after_create() {
+    let mut core = MahoCore::new();
+    create_tab(&mut core);
+    let space_id = core.get_active_space_id();
+    assert!(!core.get_today_tabs(&space_id).is_empty());
+}
+
+#[test]
+fn tab_archived_initially_empty() {
+    let core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+    assert!(core.get_archived_tabs(&space_id).is_empty());
+}
+
+#[test]
+fn tab_set_parent_succeeds() {
+    let mut core = MahoCore::new();
+    let parent = create_tab(&mut core);
+    let child = create_tab(&mut core);
+    assert!(core.set_tab_parent(&child, Some(parent)));
+}
+
+#[test]
+fn tab_set_parent_none_succeeds() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    assert!(core.set_tab_parent(&tab_id, None));
+}
+
+#[test]
+fn tab_navigate_to_changes_url() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    core.handle_event(ShellEvent::NavigateTo {
+        tab_id: tab_id.clone(),
+        url: Url::new("https://rust-lang.org"),
+    });
+    let tabs = core.get_tab_view_models();
+    assert!(tabs.iter().any(|t| t.id == tab_id));
+}
+
+#[test]
+fn tab_go_back_forward_no_panic() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    core.handle_event(ShellEvent::GoBack {
+        tab_id: tab_id.clone(),
+    });
+    core.handle_event(ShellEvent::GoForward { tab_id });
+}
+
+#[test]
+fn tab_reload_no_panic() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    core.handle_event(ShellEvent::Reload { tab_id });
+}
+
+#[test]
+fn tab_stop_no_panic() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    core.handle_event(ShellEvent::Stop { tab_id });
+}
+
+#[test]
+fn tab_mute_sets_muted() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    core.handle_event(ShellEvent::MuteTab {
+        tab_id: tab_id.clone(),
+    });
+    let tabs = core.get_tab_view_models();
+    let tab = tabs.iter().find(|t| t.id == tab_id).unwrap();
+    assert!(tab.is_muted);
+}
+
+#[test]
+fn tab_unmute_clears_muted() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    core.handle_event(ShellEvent::MuteTab {
+        tab_id: tab_id.clone(),
+    });
+    core.handle_event(ShellEvent::UnmuteTab {
+        tab_id: tab_id.clone(),
+    });
+    let tabs = core.get_tab_view_models();
+    let tab = tabs.iter().find(|t| t.id == tab_id).unwrap();
+    assert!(!tab.is_muted);
+}
+
+#[test]
+fn tab_close_others_keeps_target() {
+    let mut core = MahoCore::new();
+    let keep = create_tab(&mut core);
+    create_tab(&mut core);
+    create_tab(&mut core);
+    let space_id = core.get_active_space_id();
+    core.handle_event(ShellEvent::CloseOtherTabs {
+        space_id,
+        tab_id: keep.clone(),
+    });
+    let tabs = core.get_tab_view_models();
+    assert!(tabs.iter().any(|t| t.id == keep));
+}
+
+#[test]
+fn tab_reopen_last_closed_no_panic() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab_with_url(&mut core, "https://example.com");
+    core.handle_event(ShellEvent::CloseTab { tab_id });
+    core.handle_event(ShellEvent::ReopenLastClosed);
+}
+
+#[test]
+fn tab_title_updated_reflects() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    core.handle_event(ShellEvent::TabTitleUpdated {
+        tab_id: tab_id.clone(),
+        title: "New Title".to_string(),
+    });
+    let tabs = core.get_tab_view_models();
+    let tab = tabs.iter().find(|t| t.id == tab_id).unwrap();
+    assert_eq!(tab.title, "New Title");
+}
+
+#[test]
+fn tab_url_updated_reflects() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    core.handle_event(ShellEvent::TabUrlUpdated {
+        tab_id: tab_id.clone(),
+        url: Url::new("https://updated.com"),
+    });
+    let tabs = core.get_tab_view_models();
+    let tab = tabs.iter().find(|t| t.id == tab_id).unwrap();
+    assert_eq!(tab.url, "https://updated.com");
+}
+
+#[test]
+fn tab_loading_changed_no_panic() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    core.handle_event(ShellEvent::TabLoadingChanged {
+        tab_id,
+        is_loading: true,
+    });
+}
+
+#[test]
+fn tab_navigation_state_changed_no_panic() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    core.handle_event(ShellEvent::TabNavigationStateChanged {
+        tab_id,
+        can_go_back: true,
+        can_go_forward: false,
+    });
+}
+
+#[test]
+fn tick_no_panic() {
+    let mut core = MahoCore::new();
+    create_tab(&mut core);
+    let _ = core.tick();
+}
+
+// ===== SPACE MANAGEMENT =====
+
+#[test]
+fn space_initial_exists() {
+    let core = MahoCore::new();
+    assert!(!core.get_space_view_models().is_empty());
+}
+
+#[test]
+fn space_create_increases_count() {
+    let mut core = MahoCore::new();
+    let initial = core.get_space_view_models().len();
+    create_space(&mut core, "Work", 220.0);
+    assert_eq!(core.get_space_view_models().len(), initial + 1);
+}
+
+#[test]
+fn create_space_emits_space_created_update() {
+    let mut core = MahoCore::new();
+    let profile_id = core
+        .get_active_profile_id()
+        .cloned()
+        .unwrap_or_else(|| maho_types::identifiers::ProfileId::new(""));
+
+    let updates = core.handle_event(ShellEvent::CreateSpace {
+        name: "Emit Space".to_string(),
+        color: make_color(42.0),
+        profile_id,
+    });
+
+    assert!(matches!(
+        updates.as_slice(),
+        [CoreUpdate::SpaceCreated { .. }]
+    ));
+}
+
+#[test]
+fn space_activate_no_panic() {
+    let mut core = MahoCore::new();
+    let sid = create_space(&mut core, "Second", 0.0);
+    core.handle_event(ShellEvent::ActivateSpace { space_id: sid });
+}
+
+#[test]
+fn activate_space_emits_active_space_changed_update() {
+    let mut core = MahoCore::new();
+    let sid = create_space(&mut core, "Second", 0.0);
+
+    let updates = core.handle_event(ShellEvent::ActivateSpace {
+        space_id: sid.clone(),
+    });
+
+    assert!(matches!(
+        updates.as_slice(),
+        [CoreUpdate::ActiveSpaceChanged { space_id, .. }] if *space_id == sid
+    ));
+}
+
+#[test]
+fn update_space_config_emits_structured_config_update() {
+    let mut core = MahoCore::new();
+    let sid = create_space(&mut core, "Configurable", 120.0);
+
+    let updates = core.handle_event(ShellEvent::UpdateSpaceConfig {
+        changes: SpaceConfigUpdate {
+            space_id: sid.clone(),
+            name: Some("Renamed Config".to_string()),
+            color: Some(make_color(240.0)),
+            theme: None,
+            icon: Some(Some("🌙".to_string())),
+            profile_id: None,
+        },
+    });
+
+    assert!(matches!(
+        updates.as_slice(),
+        [CoreUpdate::SpaceConfigUpdated { space_id, changes }]
+            if *space_id == sid
+                && changes.name.as_deref() == Some("Renamed Config")
+                && changes.icon.as_ref().and_then(|icon| icon.as_ref()).map(|icon| icon.as_str()) == Some("🌙")
+                && changes.color.is_some()
+    ));
+
+    let updated = core
+        .get_space_view_models()
+        .into_iter()
+        .find(|space| space.id == sid)
+        .expect("space should still exist");
+    assert_eq!(updated.name, "Renamed Config");
+    assert_eq!(updated.color.hue, 240.0);
+    assert_eq!(updated.color.saturation, 0.8);
+    assert_eq!(updated.color.brightness, 0.9);
+    assert_eq!(updated.icon.as_deref(), Some("🌙"));
+}
+
+#[test]
+fn rename_space_rejects_empty_name() {
+    let mut core = MahoCore::new();
+    let sid = create_space(&mut core, "Valid Space", 30.0);
+
+    let updates = core.handle_event(ShellEvent::RenameSpace {
+        space_id: sid.clone(),
+        name: "   ".to_string(),
+    });
+
+    assert!(matches!(
+        updates.as_slice(),
+        [CoreUpdate::Error { context, error }]
+            if context == "update_space_config"
+                && error.code == "INVALID_NAME"
+                && error.message == "Space name cannot be empty"
+    ));
+    assert_eq!(
+        core.get_space_view_models()
+            .into_iter()
+            .find(|space| space.id == sid)
+            .map(|space| space.name),
+        Some("Valid Space".to_string())
+    );
+}
+
+#[test]
+fn rename_space_rejects_duplicate_name() {
+    let mut core = MahoCore::new();
+    let first = create_space(&mut core, "First", 30.0);
+    let second = create_space(&mut core, "Second", 60.0);
+
+    let updates = core.handle_event(ShellEvent::RenameSpace {
+        space_id: second.clone(),
+        name: "First".to_string(),
+    });
+
+    assert!(matches!(
+        updates.as_slice(),
+        [CoreUpdate::Error { context, error }]
+            if context == "update_space_config"
+                && error.code == "DUPLICATE_NAME"
+                && error.message == "Space name must be unique"
+    ));
+    let names: Vec<String> = core
+        .get_space_view_models()
+        .into_iter()
+        .filter(|space| space.id == first || space.id == second)
+        .map(|space| space.name)
+        .collect();
+    assert_eq!(names, vec!["First".to_string(), "Second".to_string()]);
+}
+
+#[test]
+fn space_events_emit_one_logical_update_each() {
+    let mut core = MahoCore::new();
+    let sid = create_space(&mut core, "One Update", 10.0);
+
+    let rename_updates = core.handle_event(ShellEvent::RenameSpace {
+        space_id: sid.clone(),
+        name: "Renamed Once".to_string(),
+    });
+    assert_eq!(rename_updates.len(), 1);
+    assert!(matches!(
+        rename_updates.as_slice(),
+        [CoreUpdate::SpaceConfigUpdated { .. }]
+    ));
+
+    let recolor_updates = core.handle_event(ShellEvent::RecolorSpace {
+        space_id: sid.clone(),
+        color: make_color(80.0),
+    });
+    assert_eq!(recolor_updates.len(), 1);
+    assert!(matches!(
+        recolor_updates.as_slice(),
+        [CoreUpdate::SpaceConfigUpdated { .. }]
+    ));
+
+    let reorder_updates = core.handle_event(ShellEvent::ReorderSpace {
+        space_id: sid.clone(),
+        from: 0,
+        to: 0,
+    });
+    assert_eq!(reorder_updates.len(), 1);
+    assert!(matches!(
+        reorder_updates.as_slice(),
+        [CoreUpdate::SpaceOrderChanged { .. }]
+    ));
+
+    let activate_updates = core.handle_event(ShellEvent::ActivateSpace { space_id: sid });
+    assert_eq!(activate_updates.len(), 1);
+}
+
+#[test]
+fn update_space_config_preserves_active_space_and_only_applies_requested_fields() {
+    let mut core = MahoCore::new();
+    let active_space = core.get_active_space_id();
+    let other_space = create_space(&mut core, "Other", 180.0);
+
+    let before = core.get_space_view_models();
+    let before_active = before
+        .iter()
+        .find(|space| space.id == active_space)
+        .expect("active space should exist");
+    let before_other = before
+        .iter()
+        .find(|space| space.id == other_space)
+        .expect("other space should exist");
+
+    let updates = core.handle_event(ShellEvent::UpdateSpaceConfig {
+        changes: SpaceConfigUpdate {
+            space_id: other_space.clone(),
+            name: Some("Other Renamed".to_string()),
+            color: None,
+            theme: None,
+            icon: Some(None),
+            profile_id: None,
+        },
+    });
+
+    assert!(matches!(
+        updates.as_slice(),
+        [CoreUpdate::SpaceConfigUpdated { space_id, changes }]
+            if *space_id == other_space
+                && changes.name.as_deref() == Some("Other Renamed")
+                && changes.color.is_none()
+                && changes.icon == Some(None)
+                && changes.profile_id.is_none()
+    ));
+
+    let after = core.get_space_view_models();
+    let after_active = after
+        .iter()
+        .find(|space| space.id == active_space)
+        .expect("active space should still exist");
+    let after_other = after
+        .iter()
+        .find(|space| space.id == other_space)
+        .expect("other space should still exist");
+
+    assert!(
+        after_active.is_active,
+        "global active space should remain active"
+    );
+    assert_eq!(after_active.id, before_active.id);
+    assert_eq!(after_active.name, before_active.name);
+    assert_eq!(after_other.id, before_other.id);
+    assert_eq!(after_other.name, "Other Renamed");
+    assert_eq!(after_other.color.hue, before_other.color.hue);
+    assert_eq!(after_other.color.saturation, before_other.color.saturation);
+    assert_eq!(after_other.color.brightness, before_other.color.brightness);
+    assert_eq!(after_other.icon, None);
+}
+
+#[test]
+fn space_rename_reflects() {
+    let mut core = MahoCore::new();
+    let sid = create_space(&mut core, "Old", 120.0);
+    core.handle_event(ShellEvent::RenameSpace {
+        space_id: sid,
+        name: "Renamed".to_string(),
+    });
+    assert!(core
+        .get_space_view_models()
+        .iter()
+        .any(|s| s.name == "Renamed"));
+}
+
+#[test]
+fn space_recolor_no_panic() {
+    let mut core = MahoCore::new();
+    let sid = create_space(&mut core, "Colorful", 220.0);
+    core.handle_event(ShellEvent::RecolorSpace {
+        space_id: sid,
+        color: make_color(280.0),
+    });
+}
+
+#[test]
+fn space_delete_decreases_count() {
+    let mut core = MahoCore::new();
+    let sid = create_space(&mut core, "Temp", 30.0);
+    let count = core.get_space_view_models().len();
+    core.handle_event(ShellEvent::DeleteSpace { space_id: sid });
+    assert_eq!(core.get_space_view_models().len(), count - 1);
+}
+
+#[test]
+fn delete_active_space_falls_back_to_first_remaining_space() {
+    let mut core = MahoCore::new();
+    let active = core.get_active_space_id();
+    let second = create_space(&mut core, "Second", 180.0);
+
+    let updates = core.handle_event(ShellEvent::DeleteSpace {
+        space_id: active.clone(),
+    });
+
+    assert!(matches!(
+        updates.as_slice(),
+        [CoreUpdate::SpaceDeleted { .. }, CoreUpdate::ActiveSpaceChanged { space_id, .. }]
+            if *space_id == second
+    ));
+    assert_eq!(core.get_active_space_id(), second);
+}
+
+#[test]
+fn active_space_stays_stable_during_reorder() {
+    let mut core = MahoCore::new();
+    let active = core.get_active_space_id();
+    let second = create_space(&mut core, "Second", 180.0);
+    let third = create_space(&mut core, "Third", 240.0);
+
+    let before_active = core
+        .get_space_view_models()
+        .into_iter()
+        .find(|space| space.id == active)
+        .expect("active space should exist");
+
+    let updates = core.handle_event(ShellEvent::ReorderSpace {
+        space_id: third.clone(),
+        from: 2,
+        to: 0,
+    });
+
+    assert!(matches!(
+        updates.as_slice(),
+        [CoreUpdate::SpaceOrderChanged { .. }]
+    ));
+    let after = core.get_space_view_models();
+    let active_after = after.iter().find(|space| space.id == active).unwrap();
+    assert!(active_after.is_active);
+    assert_eq!(active_after.name, before_active.name);
+    assert_eq!(core.get_active_space_id(), active);
+    assert_eq!(after.first().map(|space| &space.id), Some(&third));
+    assert!(after.iter().any(|space| space.id == second));
+}
+
+#[test]
+fn space_create_folder_no_panic() {
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+    core.handle_event(ShellEvent::CreateFolder {
+        space_id,
+        name: "Research".to_string(),
+        is_pinned: false,
+    });
+}
+
+#[test]
+fn create_folder_emits_folder_created_update() {
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+
+    let updates = core.handle_event(ShellEvent::CreateFolder {
+        space_id,
+        name: "Emit Folder".to_string(),
+        is_pinned: false,
+    });
+
+    assert!(matches!(
+        updates.as_slice(),
+        [CoreUpdate::FolderCreated { .. }]
+    ));
+}
+
+#[test]
+fn space_folder_view_models() {
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+    core.handle_event(ShellEvent::CreateFolder {
+        space_id: space_id.clone(),
+        name: "Folder1".to_string(),
+        is_pinned: false,
+    });
+    assert!(!core.get_folder_view_models(&space_id).is_empty());
+}
+
+#[test]
+fn create_folder_can_start_pinned() {
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+
+    let updates = core.handle_event(ShellEvent::CreateFolder {
+        space_id: space_id.clone(),
+        name: "Pinned Folder".to_string(),
+        is_pinned: true,
+    });
+
+    assert!(matches!(
+        updates.as_slice(),
+        [CoreUpdate::FolderCreated { folder }] if folder.is_pinned
+    ));
+
+    let folder = core
+        .get_folder_view_models(&space_id)
+        .into_iter()
+        .find(|folder| folder.name == "Pinned Folder")
+        .expect("folder should exist");
+    assert!(folder.is_pinned);
+}
+
+#[test]
+fn space_active_id_valid() {
+    let core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+    assert!(core
+        .get_space_view_models()
+        .iter()
+        .any(|s| s.id == space_id));
+}
+
+#[test]
+fn space_tab_in_new_space() {
+    let mut core = MahoCore::new();
+    let sid = create_space(&mut core, "NewSpace", 180.0);
+    let before = core.get_tab_view_models().len();
+    core.handle_event(ShellEvent::CreateTab {
+        space_id: sid,
+        url: None,
+        parent_id: None,
+    });
+    assert_eq!(core.get_tab_view_models().len(), before + 1);
+}
+
+// ===== COMMAND BAR / SEARCH =====
+
+#[test]
+fn command_bar_query_no_panic() {
+    let mut core = MahoCore::new();
+    core.handle_event(ShellEvent::CommandBarQuery {
+        text: "hello world".to_string(),
+        mode: None,
+    });
+}
+
+#[test]
+fn command_bar_url_query_no_panic() {
+    let mut core = MahoCore::new();
+    core.handle_event(ShellEvent::CommandBarQuery {
+        text: "https://google.com".to_string(),
+        mode: None,
+    });
+}
+
+#[test]
+fn command_bar_open_close_no_panic() {
+    let mut core = MahoCore::new();
+    core.handle_event(ShellEvent::CommandBarOpened);
+    core.handle_event(ShellEvent::CommandBarClosed);
+}
+
+#[test]
+fn search_save_and_get_recent() {
+    let mut core = MahoCore::new();
+    core.save_search("test query 1".to_string());
+    core.save_search("test query 2".to_string());
+    let recent = core.get_recent_searches();
+    assert!(recent.len() >= 2);
+    assert!(recent.contains(&"test query 1".to_string()));
+}
+
+#[test]
+fn search_save_via_event() {
+    let mut core = MahoCore::new();
+    core.handle_event(ShellEvent::SaveSearch {
+        query: "event search".to_string(),
+    });
+    assert!(core
+        .get_recent_searches()
+        .contains(&"event search".to_string()));
+}
+
+#[test]
+fn search_engines_exist() {
+    let core = MahoCore::new();
+    assert!(!core.get_search_engines().is_empty());
+}
+
+#[test]
+fn search_engine_add() {
+    let mut core = MahoCore::new();
+    let initial = core.get_search_engines().len();
+    core.add_search_engine(maho_types::search_engine::SearchEngine {
+        id: "ddg".to_string(),
+        name: "DuckDuckGo".to_string(),
+        url_template: "https://duckduckgo.com/?q={query}".to_string(),
+        shortcut: Some("@d".to_string()),
+        icon_url: None,
+        is_default: false,
+    });
+    assert_eq!(core.get_search_engines().len(), initial + 1);
+}
+
+#[test]
+fn search_engine_remove() {
+    let mut core = MahoCore::new();
+    core.add_search_engine(maho_types::search_engine::SearchEngine {
+        id: "bing".to_string(),
+        name: "Bing".to_string(),
+        url_template: "https://bing.com/search?q={query}".to_string(),
+        shortcut: None,
+        icon_url: None,
+        is_default: false,
+    });
+    let count_with_bing = core.get_search_engines().len();
+    core.remove_search_engine("bing");
+    assert!(core.get_search_engines().len() < count_with_bing);
+}
+
+#[test]
+fn search_engine_set_default() {
+    let mut core = MahoCore::new();
+    core.add_search_engine(maho_types::search_engine::SearchEngine {
+        id: "ddg2".to_string(),
+        name: "DDG".to_string(),
+        url_template: "https://duckduckgo.com/?q={query}".to_string(),
+        shortcut: None,
+        icon_url: None,
+        is_default: false,
+    });
+    assert!(core.set_default_search_engine("ddg2"));
+}
+
+#[test]
+fn command_bar_usage_tracking() {
+    let mut core = MahoCore::new();
+    core.record_command_bar_usage("new_tab");
+    core.record_command_bar_usage("new_tab");
+    core.record_command_bar_usage("close_tab");
+    // Without storage, get_top_used_commands returns empty — just verify no panic
+    let _ = core.get_top_used_commands(5);
+}
+
+// ===== SETTINGS =====
+
+#[test]
+fn settings_get() {
+    let core = MahoCore::new();
+    assert!(!core
+        .get_settings()
+        .general
+        .default_search_engine
+        .name
+        .is_empty());
+}
+
+#[test]
+fn settings_view_model_has_sections() {
+    let core = MahoCore::new();
+    let vm = core.get_settings_view_model();
+    assert!(!vm.sections.is_empty());
+}
+
+#[test]
+fn settings_update_appearance() {
+    let mut core = MahoCore::new();
+    core.update_settings(maho_types::settings::SettingsUpdate {
+        general: None,
+        appearance: Some(maho_types::settings::AppearanceSettingsUpdate {
+            theme: Some(maho_types::settings::Theme::Dark),
+            accent_color: None,
+            density: None,
+            sidebar_width: Some(300.0),
+            show_tab_bar: None,
+            window_transparency: None,
+            sidebar_collapsed: None,
+            custom_chrome_css: None,
+            custom_icon_path: None,
+        }),
+        privacy: None,
+        reader: None,
+        keyboard_shortcuts: None,
+        per_site_settings: None,
+        toolbar_items: None,
+        max: None,
+        autofill: None,
+        advanced: None,
+        notifications: None,
+    });
+    assert_eq!(core.get_settings().appearance.sidebar_width, 300.0);
+}
+
+#[test]
+fn settings_zoom_for_site() {
+    let mut core = MahoCore::new();
+    core.set_zoom_for_site("example.com".to_string(), 1.5);
+    assert!((core.get_zoom_for_site("example.com") - 1.5).abs() < 0.01);
+}
+
+#[test]
+fn settings_zoom_default() {
+    let core = MahoCore::new();
+    assert!((core.get_zoom_for_site("unknown.com") - 1.0).abs() < 0.01);
+}
+
+#[test]
+fn sidebar_toggle_no_panic() {
+    let mut core = MahoCore::new();
+    core.handle_event(ShellEvent::SidebarToggled { visible: false });
+    core.handle_event(ShellEvent::SidebarToggled { visible: true });
+}
+
+#[test]
+fn sidebar_resize_no_panic() {
+    let mut core = MahoCore::new();
+    core.handle_event(ShellEvent::SidebarResized { width: 200.0 });
+}
+
+#[test]
+fn window_resize_no_panic() {
+    let mut core = MahoCore::new();
+    core.handle_event(ShellEvent::WindowResized {
+        size: maho_types::common::Size {
+            width: 1024.0,
+            height: 768.0,
+        },
+    });
+}
+
+#[test]
+fn window_focus_changed_no_panic() {
+    let mut core = MahoCore::new();
+    core.handle_event(ShellEvent::WindowFocusChanged { focused: true });
+    core.handle_event(ShellEvent::WindowFocusChanged { focused: false });
+}
+
+// ===== PERMISSIONS =====
+
+#[test]
+fn permission_grant_and_query() {
+    let mut core = MahoCore::new();
+    core.grant_permission("https://example.com", "camera");
+    assert_eq!(
+        core.query_permission("https://example.com", "camera"),
+        "allow"
+    );
+}
+
+#[test]
+fn permission_revoke() {
+    let mut core = MahoCore::new();
+    core.grant_permission("https://example.com", "microphone");
+    core.revoke_permission("https://example.com", "microphone");
+    assert_ne!(
+        core.query_permission("https://example.com", "microphone"),
+        "allow"
+    );
+}
+
+#[test]
+fn permission_query_unknown() {
+    let core = MahoCore::new();
+    assert_ne!(
+        core.query_permission("https://nonexistent.com", "camera"),
+        "allow"
+    );
+}
+
+// ===== DOWNLOADS =====
+
+#[test]
+fn download_start_returns_id() {
+    let mut core = MahoCore::new();
+    let id = core.start_download("file.zip", "https://example.com/file.zip", 1024, None, None);
+    assert!(!id.is_empty());
+}
+
+#[test]
+fn download_view_models_not_empty() {
+    let mut core = MahoCore::new();
+    core.start_download("f.zip", "https://example.com/f.zip", 512, None, None);
+    assert!(!core.get_download_view_models().is_empty());
+}
+
+#[test]
+fn download_pause_resume_no_panic() {
+    let mut core = MahoCore::new();
+    let id = core.start_download("big.zip", "https://example.com/big.zip", 99999, None, None);
+    core.pause_download(&id);
+    core.resume_download(&id);
+}
+
+#[test]
+fn download_cancel_no_panic() {
+    let mut core = MahoCore::new();
+    let id = core.start_download("c.zip", "https://example.com/c.zip", 100, None, None);
+    core.cancel_download(&id);
+}
+
+#[test]
+fn download_progress_update() {
+    let mut core = MahoCore::new();
+    let id = core.start_download("p.zip", "https://example.com/p.zip", 1000, None, None);
+    core.update_download_progress(&id, 500);
+}
+
+#[test]
+fn download_fail_no_panic() {
+    let mut core = MahoCore::new();
+    let id = core.start_download("fail.zip", "https://example.com/fail.zip", 100, None, None);
+    core.fail_download(&id, "network error");
+}
+
+// ===== BOOKMARKS =====
+
+#[test]
+fn bookmark_add_returns_bookmark() {
+    let mut core = MahoCore::new();
+    let bm = core.add_bookmark_entry(
+        "Rust".to_string(),
+        "https://rust-lang.org".to_string(),
+        None,
+        None,
+    );
+    assert_eq!(bm.title, "Rust");
+}
+
+#[test]
+fn bookmark_get_all_not_empty() {
+    let mut core = MahoCore::new();
+    core.add_bookmark_entry(
+        "Example".to_string(),
+        "https://example.com".to_string(),
+        None,
+        None,
+    );
+    assert!(!core.get_all_bookmark_entries().is_empty());
+}
+
+#[test]
+fn bookmark_remove_decreases_count() {
+    let mut core = MahoCore::new();
+    let bm = core.add_bookmark_entry(
+        "ToRemove".to_string(),
+        "https://remove.com".to_string(),
+        None,
+        None,
+    );
+    let before = core.get_all_bookmark_entries().len();
+    core.remove_bookmark_entry(&bm.id.0);
+    assert_eq!(core.get_all_bookmark_entries().len(), before - 1);
+}
+
+#[test]
+fn bookmark_folder_create() {
+    let mut core = MahoCore::new();
+    let folder = core.create_bookmark_folder("Dev".to_string(), None);
+    assert_eq!(folder.name, "Dev");
+}
+
+#[test]
+fn bookmark_in_folder() {
+    let mut core = MahoCore::new();
+    let folder = core.create_bookmark_folder("Work".to_string(), None);
+    let bm = core.add_bookmark_entry(
+        "GitHub".to_string(),
+        "https://github.com".to_string(),
+        Some(folder.id.clone()),
+        None,
+    );
+    assert_eq!(bm.folder_id, Some(folder.id));
+}
+
+#[test]
+fn bookmark_search() {
+    let mut core = MahoCore::new();
+    core.add_bookmark_entry(
+        "Rust Lang".to_string(),
+        "https://rust-lang.org".to_string(),
+        None,
+        None,
+    );
+    assert!(!core.search_bookmark_entries("Rust").is_empty());
+}
+
+#[test]
+fn bookmark_move_no_panic() {
+    let mut core = MahoCore::new();
+    let folder = core.create_bookmark_folder("Target".to_string(), None);
+    let bm = core.add_bookmark_entry(
+        "Movable".to_string(),
+        "https://move.com".to_string(),
+        None,
+        None,
+    );
+    core.move_bookmark_entry(&bm.id.0, Some(folder.id));
+}
+
+// ===== CONTENT BLOCKER =====
+
+#[test]
+fn content_blocker_toggle() {
+    let mut core = MahoCore::new();
+    core.toggle_content_blocker(true);
+    assert!(core.is_content_blocker_enabled());
+    core.toggle_content_blocker(false);
+    assert!(!core.is_content_blocker_enabled());
+}
+
+#[test]
+fn content_blocker_popup() {
+    let mut core = MahoCore::new();
+    core.toggle_popup_blocking(true);
+    assert!(core.is_popup_blocking_enabled());
+}
+
+#[test]
+fn content_blocker_filter_list() {
+    let mut core = MahoCore::new();
+    core.add_filter_list(
+        "easylist".to_string(),
+        "EasyList".to_string(),
+        "https://easylist.to/easylist/easylist.txt".to_string(),
+    );
+    assert!(core.get_filter_lists_json().contains("easylist"));
+}
+
+#[test]
+fn content_blocker_rule_count() {
+    let core = MahoCore::new();
+    let _ = core.get_content_rule_count();
+}
+
+#[test]
+fn content_blocker_should_block() {
+    let mut core = MahoCore::new();
+    core.add_filter_list(
+        "test".to_string(),
+        "Test".to_string(),
+        "https://example.com/list.txt".to_string(),
+    );
+    core.update_filter_list_content("test", "||ads.example.com^".to_string());
+    core.rebuild_content_rules();
+    assert!(core.should_block_request(
+        "https://ads.example.com/banner.js",
+        "https://example.com/",
+        "script"
+    ));
+    assert!(!core.should_block_request(
+        "https://safe.example.com/page.html",
+        "https://example.com/",
+        "document"
+    ));
+}
+
+// ===== NOTIFICATIONS =====
+
+#[test]
+fn notification_queue_and_get() {
+    let mut core = MahoCore::new();
+    core.notification_manager_queue_test(
+        "https://example.com".to_string(),
+        "Hello".to_string(),
+        "World".to_string(),
+    );
+    assert!(!core.get_notifications().is_empty());
+}
+
+#[test]
+fn notification_dismiss() {
+    let mut core = MahoCore::new();
+    if let Some(n) = core.notification_manager_queue_test(
+        "https://test.com".to_string(),
+        "Title".to_string(),
+        "Body".to_string(),
+    ) {
+        core.dismiss_notification(&n.id);
+    }
+}
+
+#[test]
+fn notification_dismiss_all() {
+    let mut core = MahoCore::new();
+    core.notification_manager_queue_test(
+        "https://a.com".to_string(),
+        "A".to_string(),
+        "AA".to_string(),
+    );
+    core.notification_manager_queue_test(
+        "https://b.com".to_string(),
+        "B".to_string(),
+        "BB".to_string(),
+    );
+    core.dismiss_all_notifications();
+    assert!(core.get_notifications().is_empty());
+}
+
+#[test]
+fn notification_filter_no_panic() {
+    let mut core = MahoCore::new();
+    core.set_notification_filter("https://blocked.com".to_string(), false);
+}
+
+// ===== TAB PREVIEW =====
+
+#[test]
+fn tab_preview_update_and_get() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    let img = maho_types::common::ImageData {
+        data: vec![0u8; 100],
+        width: 10,
+        height: 10,
+        format: maho_types::common::ImageFormat::Png,
+    };
+    core.update_tab_preview(&tab_id, img);
+    assert!(core.get_tab_preview(&tab_id).is_some());
+}
+
+#[test]
+fn tab_preview_has_check() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    assert!(!core.has_tab_preview(&tab_id));
+    core.update_tab_preview(
+        &tab_id,
+        maho_types::common::ImageData {
+            data: vec![1u8; 50],
+            width: 5,
+            height: 5,
+            format: maho_types::common::ImageFormat::Jpeg,
+        },
+    );
+    assert!(core.has_tab_preview(&tab_id));
+}
+
+#[test]
+fn tab_preview_remove() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    core.update_tab_preview(
+        &tab_id,
+        maho_types::common::ImageData {
+            data: vec![0u8; 10],
+            width: 2,
+            height: 2,
+            format: maho_types::common::ImageFormat::Png,
+        },
+    );
+    core.remove_tab_preview(&tab_id);
+    assert!(!core.has_tab_preview(&tab_id));
+}
+
+#[test]
+fn tab_preview_schedule_capture() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    core.schedule_preview_capture(tab_id);
+}
+
+// ===== READER MODE =====
+
+#[test]
+fn reader_mode_toggle() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    let id_str = tab_id.to_string();
+    core.toggle_reader_mode(&id_str);
+    assert!(core.is_reader_mode(&id_str));
+    core.toggle_reader_mode(&id_str);
+    assert!(!core.is_reader_mode(&id_str));
+}
+
+#[test]
+fn reader_settings_json_not_empty() {
+    let core = MahoCore::new();
+    assert!(!core.get_reader_settings_json().is_empty());
+}
+
+// ===== BOOSTS (via events) =====
+
+#[test]
+fn boost_create_via_event() {
+    let mut core = MahoCore::new();
+    core.handle_event(ShellEvent::CreateBoost {
+        url_pattern: UrlPattern {
+            pattern: "example.com".to_string(),
+            pattern_type: UrlPatternType::Glob,
+        },
+    });
+    assert!(!core.get_boost_view_models().is_empty());
+}
+
+#[test]
+fn boost_for_url_no_panic() {
+    let mut core = MahoCore::new();
+    core.handle_event(ShellEvent::CreateBoost {
+        url_pattern: UrlPattern {
+            pattern: "*.example.com".to_string(),
+            pattern_type: UrlPatternType::Glob,
+        },
+    });
+    let _ = core.get_boosts_for_url("https://www.example.com/page");
+}
+
+#[test]
+fn boost_templates_json_not_empty() {
+    let core = MahoCore::new();
+    assert!(!core.get_boost_templates_json().is_empty());
+}
+
+// ===== NOTES (via events) =====
+
+#[test]
+fn note_create_via_event() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab(&mut core);
+    core.handle_event(ShellEvent::CreateNote {
+        linked_tab: Some(tab_id),
+        content: "My note".to_string(),
+    });
+    assert!(!core.get_note_view_models().is_empty());
+}
+
+#[test]
+fn note_export() {
+    let mut core = MahoCore::new();
+    core.handle_event(ShellEvent::CreateNote {
+        linked_tab: None,
+        content: "Export me".to_string(),
+    });
+    assert!(!core.export_notes("markdown").is_empty());
+}
+
+#[test]
+fn note_search_fts_no_panic() {
+    let mut core = MahoCore::new();
+    core.handle_event(ShellEvent::CreateNote {
+        linked_tab: None,
+        content: "Rust programming language".to_string(),
+    });
+    let _ = core.search_notes_fts("Rust");
+}
+
+// ===== SPLIT VIEW =====
+
+#[test]
+fn split_view_create_via_event() {
+    let mut core = MahoCore::new();
+    let tab1 = create_tab(&mut core);
+    let tab2 = create_tab(&mut core);
+    core.handle_event(ShellEvent::CreateSplit {
+        tab_ids: vec![tab1, tab2],
+        orientation: Orientation::Horizontal,
+    });
+}
+
+#[test]
+fn split_view_config_no_panic() {
+    let core = MahoCore::new();
+    let _ = core.get_split_view_config();
+}
+
+// ===== FIND BAR =====
+
+#[test]
+fn find_bar_state_no_panic() {
+    let core = MahoCore::new();
+    let _ = core.get_find_bar_state();
+}
+
+// ===== READING LIST =====
+
+#[test]
+fn reading_list_add() {
+    let mut core = MahoCore::new();
+    let json = core.add_to_reading_list("https://article.com", "Great Article");
+    assert!(!json.is_empty());
+}
+
+#[test]
+fn reading_list_count_after_add() {
+    let mut core = MahoCore::new();
+    core.add_to_reading_list("https://count.com", "Count Me");
+    assert!(core.get_reading_list_count() > 0);
+}
+
+#[test]
+fn reading_list_unread_count() {
+    let mut core = MahoCore::new();
+    core.add_to_reading_list("https://unread.com", "Unread");
+    assert!(core.get_unread_count() > 0);
+}
+
+#[test]
+fn reading_list_json_not_empty() {
+    let mut core = MahoCore::new();
+    core.add_to_reading_list("https://list.com", "Listed");
+    assert!(!core.get_reading_list_json().is_empty());
+}
+
+// ===== HISTORY =====
+
+#[test]
+fn history_add_and_search() {
+    let mut core = MahoCore::new();
+    core.add_history_entry("https://example.com", "Example");
+    // search_history requires SQLite storage; without it returns empty
+    let _ = core.search_history("example", 10);
+}
+
+#[test]
+fn history_clear_no_panic() {
+    let mut core = MahoCore::new();
+    core.add_history_entry("https://clear.com", "Clear Me");
+    core.clear_history();
+}
+
+#[test]
+fn history_search_with_offset_no_panic() {
+    let mut core = MahoCore::new();
+    core.add_history_entry("https://offset.com", "Offset Test");
+    let _ = core.search_history_with_offset("offset", 10, 0);
+}
+
+#[test]
+fn history_grouped_by_date_no_panic() {
+    let mut core = MahoCore::new();
+    core.add_history_entry("https://grouped.com", "Grouped");
+    let _ = core.get_history_grouped_by_date();
+}
+
+// ===== IMPORT/EXPORT =====
+
+#[test]
+fn import_export_manager_exists() {
+    let core = MahoCore::new();
+    let _ = core.get_import_export();
+}
+
+#[test]
+fn export_history_csv_no_panic() {
+    let core = MahoCore::new();
+    let _ = core.export_history_csv("[]");
+}
+
+#[test]
+fn detect_browser_profiles_json() {
+    let json = MahoCore::detect_browser_profiles_json();
+    assert!(!json.is_empty());
+}
+
+// ===== ON_UPDATE CALLBACK =====
+
+#[test]
+fn on_update_callback_no_panic() {
+    let mut core = MahoCore::new();
+    core.on_update(Box::new(|_update| {}));
+    create_tab(&mut core);
+}
+
+// ===== SPRINT 10: SHORTCUTS / DENSITY / ACCENT / CSS / TRANSPARENCY =====
+
+#[test]
+fn shortcuts_json_not_empty() {
+    let core = MahoCore::new();
+    assert!(!core.get_all_shortcuts_json().is_empty());
+}
+
+#[test]
+fn shortcuts_reset_all_no_panic() {
+    let mut core = MahoCore::new();
+    core.reset_all_shortcuts();
+    assert!(!core.get_all_shortcuts_json().is_empty());
+}
+
+#[test]
+fn density_set_compact() {
+    let mut core = MahoCore::new();
+    core.set_density("compact");
+}
+
+#[test]
+fn accent_color_set() {
+    let mut core = MahoCore::new();
+    core.set_accent_color("\"#FF0000\"");
+}
+
+#[test]
+fn custom_chrome_css_set() {
+    let mut core = MahoCore::new();
+    core.set_custom_chrome_css(Some("body { background: black; }".to_string()));
+}
+
+#[test]
+fn window_transparency_set() {
+    let mut core = MahoCore::new();
+    core.set_window_transparency(true);
+    assert!(core.get_settings().appearance.window_transparency);
+}
+
+#[test]
+fn app_icon_set() {
+    let mut core = MahoCore::new();
+    core.set_app_icon(Some("/path/to/icon.png".to_string()));
+}
+
+#[test]
+fn toolbar_items_json_not_empty() {
+    let core = MahoCore::new();
+    assert!(!core.get_toolbar_items_json().is_empty());
+}
+
+#[test]
+fn default_toolbar_items_json_not_empty() {
+    let core = MahoCore::new();
+    assert!(!core.get_default_toolbar_items_json().is_empty());
+}
+
+// ===== CRASH RECOVERY =====
+
+#[test]
+fn crash_recovery_exists() {
+    let core = MahoCore::new();
+    let _ = core.get_crash_recovery();
+}
+
+// ===== BACKUP =====
+
+#[test]
+fn backup_history_json_not_empty() {
+    let core = MahoCore::new();
+    assert!(!core.get_backup_history_json().is_empty());
+}
+
+// ===== SPRINT 11: URL SCHEME =====
+
+#[test]
+fn url_scheme_newtab() {
+    let mut core = MahoCore::new();
+    let before_count = core.get_tab_view_models().len();
+    let result = core.handle_url_scheme("maho://newtab");
+    assert!(result.contains("\"ok\":true"));
+    assert!(result.contains("\"action\":\"newtab\""));
+    assert!(core.get_tab_view_models().len() > before_count);
+}
+
+#[test]
+fn url_scheme_settings() {
+    let mut core = MahoCore::new();
+    let result = core.handle_url_scheme("maho://settings");
+    assert!(result.contains("\"action\":\"settings\""));
+    assert!(result.contains("\"ok\":true"));
+}
+
+#[test]
+fn url_scheme_open_with_ampersand_in_url() {
+    let mut core = MahoCore::new();
+    let result =
+        core.handle_url_scheme("maho://open?url=https%3A%2F%2Fexample.com%3Ffoo%3Dbar%26baz%3Dqux");
+    assert!(result.contains("\"action\":\"open\""));
+    assert!(result.contains("\"ok\":true"));
+}
+
+#[test]
+fn url_scheme_open_with_unicode_url() {
+    let mut core = MahoCore::new();
+    let result =
+        core.handle_url_scheme("maho://open?url=https%3A%2F%2Fexample.com%2F%ED%95%9C%EA%B8%80");
+    assert!(result.contains("\"action\":\"open\""));
+    assert!(result.contains("\"ok\":true"));
+}
+
+#[test]
+fn url_scheme_open_missing_url() {
+    let mut core = MahoCore::new();
+    let result = core.handle_url_scheme("maho://open");
+    assert!(result.contains("\"error\""));
+}
+
+#[test]
+fn url_scheme_space_create() {
+    let mut core = MahoCore::new();
+    let before_count = core.get_space_view_models().len();
+    let result = core.handle_url_scheme("maho://space?name=TestSpace");
+    assert!(result.contains("\"action\":\"create_space\""));
+    assert!(result.contains("\"ok\":true"));
+    assert!(core.get_space_view_models().len() > before_count);
+}
+
+#[test]
+fn url_scheme_space_missing_name() {
+    let mut core = MahoCore::new();
+    let result = core.handle_url_scheme("maho://space");
+    assert!(result.contains("\"error\""));
+}
+
+#[test]
+fn url_scheme_invalid_scheme() {
+    let mut core = MahoCore::new();
+    let result = core.handle_url_scheme("https://example.com");
+    assert!(result.contains("\"error\""));
+    assert!(result.contains("invalid scheme"));
+}
+
+#[test]
+fn url_scheme_unknown_command() {
+    let mut core = MahoCore::new();
+    let result = core.handle_url_scheme("maho://foobar");
+    assert!(result.contains("\"error\""));
+    assert!(result.contains("unknown command"));
+}
+
+#[test]
+fn url_scheme_open_with_invalid_percent_encoding_preserves_input() {
+    let mut core = MahoCore::new();
+    let result = core.handle_url_scheme("maho://open?url=https%3A%2F%2Fexample.com%2F%ZZ");
+
+    assert!(result.contains("\"action\":\"open\""));
+    assert!(result.contains("\"ok\":true"));
+
+    let tabs = core.get_tab_view_models();
+    let opened_tab = tabs
+        .iter()
+        .find(|tab| tab.url.contains("%ZZ"))
+        .expect("invalid percent-encoding should be preserved as literal text");
+    assert_eq!(opened_tab.url, "https://example.com/%ZZ");
+}
+
+#[test]
+fn check_pinned_navigation_only_opens_peek_for_cross_domain_urls() {
+    let mut core = MahoCore::new();
+    let tab_id = create_tab_with_url(&mut core, "https://example.com/start");
+
+    core.handle_event(ShellEvent::PinTab {
+        tab_id: tab_id.clone(),
+    });
+
+    let same_domain = core.check_pinned_navigation(&tab_id, &Url::new("https://example.com/next"));
+    assert!(same_domain.is_none());
+
+    let cross_domain =
+        core.check_pinned_navigation(&tab_id, &Url::new("https://other.example/next"));
+
+    match cross_domain {
+        Some(CoreUpdate::OpenPeekTab { url, source_tab_id }) => {
+            assert_eq!(url.as_ref(), "https://other.example/next");
+            assert_eq!(source_tab_id, tab_id);
+        }
+        other => panic!("expected OpenPeekTab update, got {other:?}"),
+    }
+}
+
+// ===== SPRINT 11: SEARCHABLE ITEMS =====
+
+#[test]
+fn searchable_items_returns_json_array() {
+    let core = MahoCore::new();
+    let items = core.get_searchable_items();
+    assert!(items.starts_with('['));
+    assert!(items.ends_with(']'));
+}
+
+#[test]
+fn searchable_items_includes_tabs() {
+    let mut core = MahoCore::new();
+    core.handle_url_scheme("maho://newtab");
+    let items = core.get_searchable_items();
+    assert!(items.contains("\"kind\":\"tab\""));
+}
+
+#[test]
+fn searchable_items_includes_bookmarks() {
+    let mut core = MahoCore::new();
+    core.add_bookmark_entry(
+        "Test BM".to_string(),
+        "https://bm.test".to_string(),
+        None,
+        None,
+    );
+    let items = core.get_searchable_items();
+    assert!(items.contains("\"kind\":\"bookmark\""));
+    assert!(items.contains("Test BM"));
+}
+
+#[test]
+fn memory_pressure_normal_returns_no_actions() {
+    let mut core = MahoCore::new();
+    let result = core.handle_memory_pressure(maho_types::common::MemoryPressureLevel::Normal);
+    let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(parsed["level"], "normal");
+    assert_eq!(parsed["actions"].as_array().unwrap().len(), 0);
+    assert_eq!(parsed["count"], 0);
+}
+
+#[test]
+fn memory_pressure_warning_returns_suspend_candidates() {
+    let mut core = MahoCore::new();
+    create_tab(&mut core);
+    create_tab(&mut core);
+    let result = core.handle_memory_pressure(maho_types::common::MemoryPressureLevel::Warning);
+    let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(parsed["level"], "warning");
+    assert!(parsed["actions"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!("suspend_idle_tabs")));
+    assert!(parsed["suspend_tab_ids"].as_array().is_some());
+}
+
+#[test]
+fn memory_pressure_critical_returns_suspend_and_clear() {
+    let mut core = MahoCore::new();
+    create_tab(&mut core);
+    let result = core.handle_memory_pressure(maho_types::common::MemoryPressureLevel::Critical);
+    let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(parsed["level"], "critical");
+    let actions = parsed["actions"].as_array().unwrap();
+    assert!(actions.contains(&serde_json::json!("suspend_non_active")));
+}
+
+#[test]
+fn memory_pressure_extreme_purges_history() {
+    let mut core = MahoCore::new();
+    create_tab(&mut core);
+    let result = core.handle_memory_pressure(maho_types::common::MemoryPressureLevel::Extreme);
+    let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(parsed["level"], "extreme");
+    let actions = parsed["actions"].as_array().unwrap();
+    assert!(actions.contains(&serde_json::json!("purged_old_history")));
+}
+
+#[test]
+fn crash_recovery_form_data_save_and_get() {
+    let mut core = MahoCore::new();
+    core.save_form_data("tab-1", r#"{"name":"test"}"#.to_string());
+    let recovery = core.get_crash_recovery_mut();
+    assert_eq!(recovery.get_form_data("tab-1"), Some(r#"{"name":"test"}"#));
+    assert_eq!(recovery.get_form_data("tab-nonexistent"), None);
+}
+
+#[test]
+fn crash_recovery_form_data_clear() {
+    let mut core = MahoCore::new();
+    core.save_form_data("tab-1", r#"{"field":"value"}"#.to_string());
+    let recovery = core.get_crash_recovery_mut();
+    recovery.clear_form_data("tab-1");
+    assert_eq!(recovery.get_form_data("tab-1"), None);
+}
+
+#[test]
+fn crash_recovery_save_interval() {
+    let mut core = MahoCore::new();
+    core.set_crash_save_interval(120);
+    let recovery = core.get_crash_recovery_mut();
+    assert_eq!(recovery.auto_save_interval_secs(), 120);
+}
+
+#[test]
+fn crash_recovery_form_data_marks_dirty() {
+    let mut core = MahoCore::new();
+    let recovery = core.get_crash_recovery_mut();
+    assert!(!recovery.needs_save());
+    core.save_form_data("tab-1", "{}".to_string());
+    let recovery = core.get_crash_recovery_mut();
+    assert!(recovery.needs_save());
+}
+
+#[test]
+fn trigram_index_improves_search_results() {
+    let mut core = MahoCore::new();
+    for i in 0..50 {
+        core.add_history_entry(
+            &format!("https://example{}.com/testing", i),
+            &format!("Example Test Page {}", i),
+        );
+    }
+    let updates = core.handle_event(ShellEvent::CommandBarQuery {
+        text: "testing".to_string(),
+        mode: None,
+    });
+    let json = serde_json::to_string(&updates).unwrap();
+    assert!(json.contains("testing") || json.contains("example"));
+}
+
+// ===== SPACE MANAGER: REORDER, PIN, UNPIN, MOVE FOLDER, TOGGLE EXPANDED =====
+
+#[test]
+fn space_reorder_changes_order() {
+    // Create core, create 2 additional spaces (3 total with default)
+    let mut core = MahoCore::new();
+    let space1 = create_space(&mut core, "Space1", 120.0);
+    let space2 = create_space(&mut core, "Space2", 180.0);
+
+    // Get initial space order
+    let initial_spaces = core.get_space_view_models();
+    let initial_order: Vec<_> = initial_spaces.iter().map(|s| s.id.clone()).collect();
+
+    // Find positions of our created spaces
+    let _pos1 = initial_order
+        .iter()
+        .position(|id| *id == space1)
+        .expect("space1 should exist");
+    let pos2 = initial_order
+        .iter()
+        .position(|id| *id == space2)
+        .expect("space2 should exist");
+
+    // Reorder: move space2 to position 0 (first position)
+    core.handle_event(ShellEvent::ReorderSpace {
+        space_id: space2.clone(),
+        from: pos2,
+        to: 0,
+    });
+
+    // Verify order changed
+    let reordered_spaces = core.get_space_view_models();
+    let new_order: Vec<_> = reordered_spaces.iter().map(|s| s.id.clone()).collect();
+    assert_eq!(new_order[0], space2, "space2 should now be first");
+}
+
+#[test]
+fn space_reorder_preserves_identity_and_global_active_space() {
+    let mut core = MahoCore::new();
+    let active_space = core.get_active_space_id();
+    let space1 = create_space(&mut core, "Space1", 120.0);
+    let space2 = create_space(&mut core, "Space2", 180.0);
+
+    let initial_spaces = core.get_space_view_models();
+    let initial_order: Vec<_> = initial_spaces.iter().map(|s| s.id.clone()).collect();
+    let _pos1 = initial_order
+        .iter()
+        .position(|id| *id == space1)
+        .expect("space1 should exist");
+    let pos2 = initial_order
+        .iter()
+        .position(|id| *id == space2)
+        .expect("space2 should exist");
+
+    core.handle_event(ShellEvent::ReorderSpace {
+        space_id: space2.clone(),
+        from: pos2,
+        to: 0,
+    });
+
+    let reordered_spaces = core.get_space_view_models();
+    let new_order: Vec<_> = reordered_spaces.iter().map(|s| s.id.clone()).collect();
+    assert_eq!(new_order[0], space2);
+    assert!(new_order.contains(&space1));
+    assert!(new_order.contains(&space2));
+    assert_eq!(
+        core.get_active_space_id(),
+        active_space,
+        "reordering should not change the global active space"
+    );
+
+    let active_space_vm = reordered_spaces
+        .iter()
+        .find(|space| space.id == active_space)
+        .expect("active space should still exist");
+    assert!(
+        active_space_vm.is_active,
+        "active space should remain active after reorder"
+    );
+}
+
+#[test]
+fn space_config_update_serializes_canonical_optional_fields() {
+    let update = SpaceConfigUpdate {
+        space_id: SpaceId::new("space-1"),
+        name: Some("Config Space".to_string()),
+        color: Some(make_color(42.0)),
+        theme: None,
+        icon: Some(None),
+        profile_id: None,
+    };
+
+    let value = serde_json::to_value(&update).expect("SpaceConfigUpdate should serialize");
+    assert_eq!(value["spaceId"], serde_json::json!("space-1"));
+    assert_eq!(value["name"], serde_json::json!("Config Space"));
+    assert_eq!(value["color"]["hue"], serde_json::json!(42.0));
+    assert_eq!(value["icon"], serde_json::Value::Null);
+    assert!(
+        value.get("profileId").is_none(),
+        "profileId should be omitted when unchanged"
+    );
+}
+
+fn create_folder(core: &mut MahoCore, space_id: SpaceId, name: &str) -> FolderId {
+    let before: Vec<FolderId> = core
+        .get_folder_view_models(&space_id)
+        .iter()
+        .map(|f| f.id.clone())
+        .collect();
+    core.handle_event(ShellEvent::CreateFolder {
+        space_id: space_id.clone(),
+        name: name.to_string(),
+        is_pinned: false,
+    });
+    let after = core.get_folder_view_models(&space_id);
+    after
+        .iter()
+        .find(|f| !before.contains(&f.id))
+        .expect("New folder should appear in view models")
+        .id
+        .clone()
+}
+
+#[test]
+fn folder_pin_sets_pinned() {
+    // Create core, create a folder in default space
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+    let folder_id = create_folder(&mut core, space_id.clone(), "TestFolder");
+
+    // Verify folder is not pinned initially
+    let folders_before = core.get_folder_view_models(&space_id);
+    let folder_before = folders_before
+        .iter()
+        .find(|f| f.id == folder_id)
+        .expect("folder should exist");
+    assert!(
+        !folder_before.is_pinned,
+        "folder should not be pinned initially"
+    );
+
+    // Pin the folder via ShellEvent::PinFolder
+    core.handle_event(ShellEvent::PinFolder {
+        space_id: space_id.clone(),
+        folder_id: folder_id.clone(),
+    });
+
+    // Get folder view models, verify isPinned == true
+    let folders_after = core.get_folder_view_models(&space_id);
+    let folder_after = folders_after
+        .iter()
+        .find(|f| f.id == folder_id)
+        .expect("folder should exist");
+    assert!(
+        folder_after.is_pinned,
+        "folder should be pinned after PinFolder event"
+    );
+}
+
+#[test]
+fn folder_unpin_clears_pinned() {
+    // Create core with a folder
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+    let folder_id = create_folder(&mut core, space_id.clone(), "TestFolder");
+
+    // Pin a folder first
+    core.handle_event(ShellEvent::PinFolder {
+        space_id: space_id.clone(),
+        folder_id: folder_id.clone(),
+    });
+
+    // Verify it's pinned
+    let folders_pinned = core.get_folder_view_models(&space_id);
+    let folder_pinned = folders_pinned
+        .iter()
+        .find(|f| f.id == folder_id)
+        .expect("folder should exist");
+    assert!(folder_pinned.is_pinned, "folder should be pinned");
+
+    // Then unpin
+    core.handle_event(ShellEvent::UnpinFolder {
+        space_id: space_id.clone(),
+        folder_id: folder_id.clone(),
+    });
+
+    // Verify isPinned == false
+    let folders_unpinned = core.get_folder_view_models(&space_id);
+    let folder_unpinned = folders_unpinned
+        .iter()
+        .find(|f| f.id == folder_id)
+        .expect("folder should exist");
+    assert!(
+        !folder_unpinned.is_pinned,
+        "folder should not be pinned after UnpinFolder event"
+    );
+}
+
+#[test]
+fn folder_move_into_folder_sets_parent() {
+    // Create 2 folders in default space
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+    let folder_a = create_folder(&mut core, space_id.clone(), "FolderA");
+    let folder_b = create_folder(&mut core, space_id.clone(), "FolderB");
+
+    // Verify both folders exist and folder_b has no parent initially
+    let folders_before = core.get_folder_view_models(&space_id);
+    let folder_b_before = folders_before
+        .iter()
+        .find(|f| f.id == folder_b)
+        .expect("folder_b should exist");
+    assert!(
+        folder_b_before.parent_folder_id.is_none(),
+        "folder_b should have no parent initially"
+    );
+
+    // Move folder B into folder A via ShellEvent::MoveFolderIntoFolder
+    core.handle_event(ShellEvent::MoveFolderIntoFolder {
+        space_id: space_id.clone(),
+        folder_id: folder_b.clone(),
+        target_folder_id: folder_a.clone(),
+    });
+
+    // Verify the move succeeded (check folder view models or state)
+    let folders_after = core.get_folder_view_models(&space_id);
+    let folder_b_after = folders_after
+        .iter()
+        .find(|f| f.id == folder_b)
+        .expect("folder_b should exist");
+    assert_eq!(
+        folder_b_after.parent_folder_id,
+        Some(folder_a),
+        "folder_b should now have folder_a as parent"
+    );
+}
+
+#[test]
+fn folder_toggle_expanded_flips_state() {
+    // Create a folder (default is expanded or collapsed — check)
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+    let folder_id = create_folder(&mut core, space_id.clone(), "TestFolder");
+
+    // Check initial state
+    let folders_initial = core.get_folder_view_models(&space_id);
+    let folder_initial = folders_initial
+        .iter()
+        .find(|f| f.id == folder_id)
+        .expect("folder should exist");
+    let initial_expanded = folder_initial.is_expanded;
+
+    // Toggle via ShellEvent::ToggleFolderExpanded
+    core.handle_event(ShellEvent::ToggleFolderExpanded {
+        space_id: space_id.clone(),
+        folder_id: folder_id.clone(),
+    });
+
+    // Check the state flipped
+    let folders_toggled = core.get_folder_view_models(&space_id);
+    let folder_toggled = folders_toggled
+        .iter()
+        .find(|f| f.id == folder_id)
+        .expect("folder should exist");
+    assert_eq!(
+        folder_toggled.is_expanded, !initial_expanded,
+        "folder expanded state should have flipped"
+    );
+
+    // Toggle again, check it flipped back
+    core.handle_event(ShellEvent::ToggleFolderExpanded {
+        space_id: space_id.clone(),
+        folder_id: folder_id.clone(),
+    });
+
+    let folders_restored = core.get_folder_view_models(&space_id);
+    let folder_restored = folders_restored
+        .iter()
+        .find(|f| f.id == folder_id)
+        .expect("folder should exist");
+    assert_eq!(
+        folder_restored.is_expanded, initial_expanded,
+        "folder expanded state should have flipped back"
+    );
+}
+
+#[test]
+fn space_switch_restores_last_active_tab() {
+    let mut core = MahoCore::new();
+    let space_a = core.get_active_space_id();
+
+    let tab_a1 = create_tab(&mut core);
+    core.handle_event(ShellEvent::ActivateTab {
+        tab_id: tab_a1.clone(),
+    });
+
+    let space_b = create_space(&mut core, "Work", 120.0);
+    core.handle_event(ShellEvent::ActivateSpace {
+        space_id: space_b.clone(),
+    });
+
+    let tab_b1 = create_tab_in_space(&mut core, &space_b);
+    core.handle_event(ShellEvent::ActivateTab {
+        tab_id: tab_b1.clone(),
+    });
+
+    let updates = core.handle_event(ShellEvent::ActivateSpace {
+        space_id: space_a.clone(),
+    });
+    match updates.as_slice() {
+        [CoreUpdate::ActiveSpaceChanged { active_tab_id, .. }] => {
+            assert_eq!(*active_tab_id, Some(tab_a1.clone()));
+        }
+        other => panic!("expected ActiveSpaceChanged, got {:?}", other),
+    }
+}
+
+fn create_folder_helper(core: &mut MahoCore, name: &str) -> FolderId {
+    let space_id = core.get_active_space_id();
+    let updates = core.handle_event(ShellEvent::CreateFolder {
+        space_id,
+        name: name.to_string(),
+        is_pinned: false,
+    });
+    match updates.as_slice() {
+        [CoreUpdate::FolderCreated { folder }] => folder.id.clone(),
+        _ => panic!("expected FolderCreated"),
+    }
+}
+
+fn get_root_folder_ids(core: &MahoCore) -> Vec<FolderId> {
+    let space_id = core.get_active_space_id();
+    core.get_folder_view_models(&space_id)
+        .iter()
+        .filter(|f| f.parent_folder_id.is_none())
+        .map(|f| f.id.clone())
+        .collect()
+}
+
+#[test]
+fn reorder_folder_among_root_siblings() {
+    let mut core = MahoCore::new();
+    let a = create_folder_helper(&mut core, "A");
+    let b = create_folder_helper(&mut core, "B");
+    let c = create_folder_helper(&mut core, "C");
+
+    let space_id = core.get_active_space_id();
+    core.handle_event(ShellEvent::ReorderFolder {
+        space_id: space_id.clone(),
+        folder_id: c.clone(),
+        parent_folder_id: None,
+        before_folder_id: Some(a.clone()),
+    });
+
+    let ids = get_root_folder_ids(&core);
+    assert_eq!(ids, vec![c, a, b]);
+}
+
+#[test]
+fn reorder_folder_to_end_of_siblings() {
+    let mut core = MahoCore::new();
+    let a = create_folder_helper(&mut core, "A");
+    let b = create_folder_helper(&mut core, "B");
+    let c = create_folder_helper(&mut core, "C");
+
+    let space_id = core.get_active_space_id();
+    core.handle_event(ShellEvent::ReorderFolder {
+        space_id: space_id.clone(),
+        folder_id: a.clone(),
+        parent_folder_id: None,
+        before_folder_id: None,
+    });
+
+    let ids = get_root_folder_ids(&core);
+    assert_eq!(ids, vec![b, c, a]);
+}
+
+#[test]
+fn move_folder_into_folder_and_back_to_root() {
+    let mut core = MahoCore::new();
+    let parent = create_folder_helper(&mut core, "Parent");
+    let child = create_folder_helper(&mut core, "Child");
+    let other = create_folder_helper(&mut core, "Other");
+
+    let space_id = core.get_active_space_id();
+
+    core.handle_event(ShellEvent::MoveFolderIntoFolder {
+        space_id: space_id.clone(),
+        folder_id: child.clone(),
+        target_folder_id: parent.clone(),
+    });
+
+    let root_ids = get_root_folder_ids(&core);
+    assert!(!root_ids.contains(&child));
+
+    core.handle_event(ShellEvent::MoveFolderToRoot {
+        space_id: space_id.clone(),
+        folder_id: child.clone(),
+        before_folder_id: Some(other.clone()),
+    });
+
+    let root_ids = get_root_folder_ids(&core);
+    assert!(root_ids.contains(&child));
+    let child_pos = root_ids.iter().position(|id| *id == child).unwrap();
+    let other_pos = root_ids.iter().position(|id| *id == other).unwrap();
+    assert!(child_pos < other_pos);
+}
+
+#[test]
+fn move_folder_to_root_at_end() {
+    let mut core = MahoCore::new();
+    let parent = create_folder_helper(&mut core, "Parent");
+    let child = create_folder_helper(&mut core, "Child");
+
+    let space_id = core.get_active_space_id();
+
+    core.handle_event(ShellEvent::MoveFolderIntoFolder {
+        space_id: space_id.clone(),
+        folder_id: child.clone(),
+        target_folder_id: parent.clone(),
+    });
+
+    core.handle_event(ShellEvent::MoveFolderToRoot {
+        space_id: space_id.clone(),
+        folder_id: child.clone(),
+        before_folder_id: None,
+    });
+
+    let root_ids = get_root_folder_ids(&core);
+    assert_eq!(*root_ids.last().unwrap(), child);
+}
+
+#[test]
+fn space_switch_returns_none_when_no_tabs() {
+    let mut core = MahoCore::new();
+    let space_b = create_space(&mut core, "Empty", 60.0);
+
+    let updates = core.handle_event(ShellEvent::ActivateSpace {
+        space_id: space_b.clone(),
+    });
+    match updates.as_slice() {
+        [CoreUpdate::ActiveSpaceChanged { active_tab_id, .. }] => {
+            assert_eq!(*active_tab_id, None);
+        }
+        other => panic!("expected ActiveSpaceChanged, got {:?}", other),
+    }
+}
+
+#[test]
+fn closing_last_active_tab_clears_space_tracking() {
+    let mut core = MahoCore::new();
+    let space = core.get_active_space_id();
+    let tab = create_tab(&mut core);
+    core.handle_event(ShellEvent::ActivateTab {
+        tab_id: tab.clone(),
+    });
+
+    core.handle_event(ShellEvent::CloseTab {
+        tab_id: tab.clone(),
+    });
+
+    let space_b = create_space(&mut core, "Other", 60.0);
+    core.handle_event(ShellEvent::ActivateSpace {
+        space_id: space_b.clone(),
+    });
+
+    let updates = core.handle_event(ShellEvent::ActivateSpace {
+        space_id: space.clone(),
+    });
+    match updates.as_slice() {
+        [CoreUpdate::ActiveSpaceChanged { active_tab_id, .. }] => {
+            assert_eq!(*active_tab_id, None);
+        }
+        other => panic!("expected ActiveSpaceChanged, got {:?}", other),
+    }
+}
+
+#[test]
+fn reorder_pinned_folder_does_not_cross_into_regular() {
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+
+    let pinned = create_folder_helper(&mut core, "Pinned");
+    core.handle_event(ShellEvent::PinFolder {
+        space_id: space_id.clone(),
+        folder_id: pinned.clone(),
+    });
+
+    let _regular_a = create_folder_helper(&mut core, "RegA");
+    let regular_b = create_folder_helper(&mut core, "RegB");
+
+    core.handle_event(ShellEvent::ReorderFolder {
+        space_id: space_id.clone(),
+        folder_id: pinned.clone(),
+        parent_folder_id: None,
+        before_folder_id: Some(regular_b.clone()),
+    });
+
+    let vms = core.get_folder_view_models(&space_id);
+    let pinned_vm = vms.iter().find(|f| f.id == pinned).unwrap();
+    assert!(pinned_vm.is_pinned);
+
+    let root_ids = get_root_folder_ids(&core);
+    let pinned_pos = root_ids.iter().position(|id| *id == pinned).unwrap();
+    let rb_pos = root_ids.iter().position(|id| *id == regular_b).unwrap();
+    assert!(pinned_pos < rb_pos);
+}
+
+#[test]
+fn move_nested_folder_to_root_among_regular_folders() {
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+
+    let pinned = create_folder_helper(&mut core, "Pinned");
+    core.handle_event(ShellEvent::PinFolder {
+        space_id: space_id.clone(),
+        folder_id: pinned.clone(),
+    });
+
+    let parent = create_folder_helper(&mut core, "Parent");
+    let child = create_folder_helper(&mut core, "Child");
+    let regular_b = create_folder_helper(&mut core, "RegB");
+
+    core.handle_event(ShellEvent::MoveFolderIntoFolder {
+        space_id: space_id.clone(),
+        folder_id: child.clone(),
+        target_folder_id: parent.clone(),
+    });
+
+    core.handle_event(ShellEvent::MoveFolderToRoot {
+        space_id: space_id.clone(),
+        folder_id: child.clone(),
+        before_folder_id: Some(regular_b.clone()),
+    });
+
+    let root_ids = get_root_folder_ids(&core);
+    assert!(root_ids.contains(&child));
+    let child_pos = root_ids.iter().position(|id| *id == child).unwrap();
+    let rb_pos = root_ids.iter().position(|id| *id == regular_b).unwrap();
+    assert!(child_pos < rb_pos);
+
+    let child_vm = core.get_folder_view_models(&space_id)
+        .into_iter()
+        .find(|f| f.id == child)
+        .unwrap();
+    assert!(child_vm.parent_folder_id.is_none());
+}

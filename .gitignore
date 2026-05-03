@@ -1,0 +1,23 @@
+# Chromium upstream source (121GB) — managed by gclient, not git
+chromium/
+
+# Build artifacts
+maho/target/
+maho-chromium/third_party/maho/prebuilt/
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.xcworkspace/
+*.xcuserdata/
+
+# Serena
+.serena/
+.sisyphus/

@@ -1,0 +1,38 @@
+import("//mojo/public/tools/bindings/mojom.gni")
+
+mojom("mojo_bindings") {
+  sources = [ "maho_space_manage.mojom" ]
+  webui_module_path = "/"
+}
+
+source_set("maho_space_manage") {
+  sources = [
+    "maho_space_manage_page_handler.cc",
+    "maho_space_manage_page_handler.h",
+    "maho_space_manage_ui.cc",
+    "maho_space_manage_ui.h",
+  ]
+
+  public_deps = [
+    ":mojo_bindings",
+    "//base",
+    "//content/public/browser",
+    "//maho/browser/ui/webui/maho_space_config:mojo_bindings",
+  ]
+
+  deps = [
+    "//chrome/browser/profiles:profile",
+    "//maho/browser:maho_core_holder",
+    "//maho/browser:maho_space_profile_bridge",
+    "//maho/browser:maho_ui_stubs",
+    "//maho/browser:maho_context_menus",
+    "//maho/browser/resources/maho_space_manage:resources",
+    "//maho/components/constants",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//mojo/public/cpp/bindings",
+    "//ui/color",
+    "//ui/webui",
+    "//url",
+  ]
+}

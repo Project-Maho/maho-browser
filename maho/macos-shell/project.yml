@@ -1,0 +1,63 @@
+name: Maho
+options:
+  bundleIdPrefix: com.maho
+  deploymentTarget:
+    macOS: "13.0"
+  xcodeVersion: "15.0"
+  
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.9.1
+
+targets:
+  Maho:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+        type: group
+      - path: Assets.xcassets
+    settings:
+      base:
+        INFOPLIST_FILE: Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.maho.browser
+        PRODUCT_NAME: Maho
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_OBJC_BRIDGING_HEADER: Maho-Bridging-Header.h
+        HEADER_SEARCH_PATHS: include
+        OTHER_LDFLAGS:
+          - "-L$(SRCROOT)/../target/release"
+          - "-lmaho_ffi"
+          - "-lSystem"
+          - "-lc"
+          - "-lresolv"
+          - "-lm"
+        CODE_SIGN_ENTITLEMENTS: Maho.entitlements
+      configs:
+        Release:
+          ENABLE_HARDENED_RUNTIME: YES
+          CODE_SIGN_IDENTITY: "Developer ID Application"
+    dependencies:
+      - package: Sparkle
+        product: Sparkle
+
+  MahoUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: UITests
+        type: group
+    settings:
+      base:
+        INFOPLIST_FILE: UITests/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.maho.browser.uitests
+        PRODUCT_NAME: MahoUITests
+        TEST_TARGET_NAME: Maho
+    dependencies:
+      - target: Maho

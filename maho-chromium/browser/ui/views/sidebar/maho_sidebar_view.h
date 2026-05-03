@@ -1,0 +1,98 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+
+#ifndef MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_VIEW_H_
+#define MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_VIEW_H_
+
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/values.h"
+#include "base/functional/callback_forward.h"
+#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
+#include "ui/views/view.h"
+
+class Browser;
+class TabStripModel;
+
+namespace ui {
+class Event;
+}  // namespace ui
+
+namespace maho {
+
+class MahoSidebarCreateSpaceView;
+class MahoSidebarFavoritesGridView;
+class MahoSidebarFooterView;
+class MahoSidebarSearchView;
+class MahoSidebarTabListView;
+class MahoSidebarTopBarView;
+
+class MahoSidebarView : public views::View,
+                        public TabStripModelObserver,
+                        public MahoSpaceProfileBridge::Observer {
+  METADATA_HEADER(MahoSidebarView, views::View)
+
+ public:
+  explicit MahoSidebarView(Browser* browser);
+  MahoSidebarView(const MahoSidebarView&) = delete;
+  MahoSidebarView& operator=(const MahoSidebarView&) = delete;
+  ~MahoSidebarView() override;
+
+  void OnThemeChanged() override;
+
+  void ShowCreateSpace();
+
+  // Test-only accessors for live browser tests. Keep minimal.
+  MahoSidebarFavoritesGridView* favorites_view_for_testing() {
+    return favorites_view_;
+  }
+  MahoSidebarTabListView* tab_list_view_for_testing() {
+    return tab_list_view_;
+  }
+
+ private:
+  void BuildUi();
+  void ScheduleRefreshAll();
+  void RefreshFavoritesAndViewState();
+  static MahoSidebarFavoritesModel BuildFavoritesModelOnBackground(
+      const std::string& active_space_id_json);
+  void OnFavoritesModelReady(MahoSidebarFavoritesModel favorites_model);
+  void RefreshAll();
+  void ApplyViewState(const MahoSidebarViewStateModel& model);
+  void UpdateTopBar(const MahoSidebarTopBarModel& model);
+  void UpdateSearch(const MahoSidebarSearchModel& model);
+  void UpdateFavorites(const MahoSidebarFavoritesModel& model);
+  void UpdateTabList(const MahoSidebarTabListModel& model);
+  void UpdateFooter(const MahoSidebarFooterModel& model);
+
+  TabStripModel* tab_strip_model() const;
+
+  void OnSpaceProfileBridgeChanged() override;
+
+  void OnTabStripModelChanged(
+      TabStripModel* tab_strip_model,
+      const TabStripModelChange& change,
+      const TabStripSelectionChange& selection) override;
+  void OnTabChangedAt(tabs::TabInterface* tab,
+                      int index,
+                      TabChangeType change_type) override;
+  void OnTabPinnedStateChanged(tabs::TabInterface* tab, int index) override;
+  void OnTabGroupChanged(const TabGroupChange& change) override;
+
+  raw_ptr<Browser> browser_;
+  raw_ptr<MahoSidebarTopBarView> top_bar_view_ = nullptr;
+  raw_ptr<MahoSidebarSearchView> search_view_ = nullptr;
+  raw_ptr<MahoSidebarFavoritesGridView> favorites_view_ = nullptr;
+  raw_ptr<MahoSidebarTabListView> tab_list_view_ = nullptr;
+  raw_ptr<MahoSidebarFooterView> footer_view_ = nullptr;
+  raw_ptr<MahoSidebarCreateSpaceView> create_space_view_ = nullptr;
+  MahoSidebarStateAdapter state_adapter_;
+
+  bool refresh_scheduled_ = false;
+  base::WeakPtrFactory<MahoSidebarView> weak_factory_{this};
+};
+
+}  // namespace maho
+
+#endif  // MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_VIEW_H_

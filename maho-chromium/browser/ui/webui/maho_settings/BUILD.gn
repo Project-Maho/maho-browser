@@ -1,0 +1,34 @@
+import("//mojo/public/tools/bindings/mojom.gni")
+
+mojom("mojo_bindings") {
+  sources = [ "maho_settings.mojom" ]
+  webui_module_path = "/"
+}
+
+source_set("maho_settings") {
+  sources = [
+    "maho_settings_page_handler.cc",
+    "maho_settings_page_handler.h",
+    "maho_settings_ui.cc",
+    "maho_settings_ui.h",
+  ]
+
+  public_deps = [
+    ":mojo_bindings",
+    "//base",
+    "//content/public/browser",
+  ]
+
+  deps = [
+    "//chrome/browser/profiles:profile",
+    "//components/content_settings/core/browser",
+    "//components/prefs",
+    "//components/safe_browsing/core/common",
+    "//maho/browser/resources/maho_settings:resources",
+    "//maho/components/constants",
+    "//mojo/public/cpp/bindings",
+    "//services/network/public/mojom",
+    "//ui/webui",
+    "//url",
+  ]
+}

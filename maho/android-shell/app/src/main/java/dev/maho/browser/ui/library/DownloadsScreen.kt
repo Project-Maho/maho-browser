@@ -1,0 +1,330 @@
+@file:OptIn(ExperimentalMaterial3Api::class)
+
+package dev.maho.browser.ui.library
+
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import dev.maho.browser.bridge.BridgeDownloads
+import dev.maho.browser.models.CoreUpdate
+import dev.maho.browser.models.DownloadState
+import dev.maho.browser.models.DownloadViewModel
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DownloadsScreen(
+    onBack: () -> Unit = {},
+) {
+    var downloads by remember { mutableStateOf<List<DownloadViewModel>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        isLoading = true
+        downloads = BridgeDownloads.getDownloads()
+        isLoading = false
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Downloads") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .padding(padding)
+                .fillMaxSize(),
+        ) {
+            when {
+                isLoading -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                }
+                downloads.isEmpty() -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                Icons.Filled.Download,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                text = "No Downloads",
+                                style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier.padding(top = 8.dp),
+                            )
+                        }
+                    }
+                }
+                else -> {
+                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        items(
+                            items = downloads,
+                            key = { it.id },
+                        ) { download ->
+                            DownloadItem(
+                                download = download,
+                                onPause = {
+                                    BridgeDownloads.pauseDownload(download.id)
+                                },
+                                onResume = {
+                                    BridgeDownloads.resumeDownload(download.id)
+                                },
+                                onCancel = {
+                                    BridgeDownloads.cancelDownload(download.id)
+                                },
+                                onRemove = {
+                                    BridgeDownloads.removeDownload(download.id)
+                                    downloads = downloads.filter { it.id != download.id }
+                                },
+                                onProgressUpdate = { updated ->
+                                    downloads = downloads.map {
+                                        if (it.id == updated.id) updated else it
+                                    }
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DownloadItem(
+    download: DownloadViewModel,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onCancel: () -> Unit,
+    onRemove: () -> Unit,
+    onProgressUpdate: (DownloadViewModel) -> Unit,
+) {
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            if (value == SwipeToDismissBoxValue.EndToStart) {
+                onRemove()
+                true
+            } else {
+                false
+            }
+        },
+    )
+
+    var expanded by remember { mutableStateOf(false) }
+    val progress = if (download.totalBytes > 0) {
+        download.receivedBytes.toFloat() / download.totalBytes.toFloat()
+    } else {
+        0f
+    }
+
+    SwipeToDismissBox(
+        state = dismissState,
+        backgroundContent = {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp),
+                contentAlignment = Alignment.CenterEnd,
+            ) {
+                Icon(
+                    Icons.Filled.Delete,
+                    contentDescription = "Delete",
+                    tint = Color.White,
+                )
+            }
+        },
+        enableDismissFromStartToEnd = false,
+    ) {
+        ListItem(
+            headlineContent = {
+                Text(
+                    text = download.filename,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            },
+            supportingContent = {
+                Column {
+                    if (download.state == DownloadState.Downloading || download.state == DownloadState.Paused) {
+                        LinearProgressIndicator(
+                            progress = { progress.coerceIn(0f, 1f) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = formatBytes(download.receivedBytes) + " / " + formatBytes(download.totalBytes),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = stateLabel(download.state),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = stateColor(download.state),
+                        )
+                    }
+                }
+            },
+            trailingContent = {
+                Box {
+                    IconButton(onClick = { expanded = true }) {
+                        Icon(Icons.Filled.MoreVert, contentDescription = "Actions")
+                    }
+                    DropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false },
+                    ) {
+                        when (download.state) {
+                            DownloadState.Downloading -> {
+                                DropdownMenuItem(
+                                    text = { Text("Pause") },
+                                    leadingIcon = {
+                                        Icon(Icons.Filled.Pause, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        expanded = false
+                                        onPause()
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Cancel") },
+                                    leadingIcon = {
+                                        Icon(Icons.Filled.Delete, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        expanded = false
+                                        onCancel()
+                                    },
+                                )
+                            }
+                            DownloadState.Paused -> {
+                                DropdownMenuItem(
+                                    text = { Text("Resume") },
+                                    leadingIcon = {
+                                        Icon(Icons.Filled.PlayArrow, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        expanded = false
+                                        onResume()
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Cancel") },
+                                    leadingIcon = {
+                                        Icon(Icons.Filled.Delete, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        expanded = false
+                                        onCancel()
+                                    },
+                                )
+                            }
+                            else -> {
+                                DropdownMenuItem(
+                                    text = { Text("Remove") },
+                                    leadingIcon = {
+                                        Icon(Icons.Filled.Delete, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        expanded = false
+                                        onRemove()
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+        )
+    }
+}
+
+private fun stateLabel(state: DownloadState): String = when (state) {
+    DownloadState.Downloading -> "Downloading"
+    DownloadState.Paused -> "Paused"
+    DownloadState.Completed -> "Completed"
+    DownloadState.Failed -> "Failed"
+    DownloadState.Cancelled -> "Cancelled"
+}
+
+private fun stateColor(state: DownloadState): Color = when (state) {
+    DownloadState.Downloading -> Color(0xFF2196F3)
+    DownloadState.Paused -> Color(0xFFFF9800)
+    DownloadState.Completed -> Color(0xFF4CAF50)
+    DownloadState.Failed -> Color(0xFFF44336)
+    DownloadState.Cancelled -> Color(0xFF9E9E9E)
+}
+
+private fun formatBytes(bytes: Long): String {
+    if (bytes < 1024) return "$bytes B"
+    val kb = bytes / 1024.0
+    if (kb < 1024) return "%.1f KB".format(kb)
+    val mb = kb / 1024.0
+    if (mb < 1024) return "%.1f MB".format(mb)
+    val gb = mb / 1024.0
+    return "%.1f GB".format(gb)
+}
+
+fun isDownloadUpdate(update: CoreUpdate): Boolean = when (update) {
+    is CoreUpdate.DownloadStarted -> true
+    is CoreUpdate.DownloadProgress -> true
+    is CoreUpdate.DownloadCompleted -> true
+    else -> false
+}

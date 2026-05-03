@@ -1,0 +1,28 @@
+[package]
+name = "maho-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+maho-types = { path = "../maho-types" }
+maho-storage = { path = "../maho-storage" }
+uuid = { workspace = true }
+chrono = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+psl = { workspace = true }
+adblock = "0.12.2"
+aes-gcm = "0.10"
+argon2 = "0.5"
+rand = "0.8"
+bip39 = "2.1"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3"
+serde_json = { workspace = true }
+
+[[bench]]
+name = "core_bench"
+harness = false

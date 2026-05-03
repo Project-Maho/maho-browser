@@ -1,0 +1,627 @@
+//! SyncManager — orchestrates cross-device synchronization.
+//!
+//! Architecture: The SyncManager is synchronous. The shell layer (macOS/iOS/Android)
+//! manages the WebSocket connection and feeds messages here. The SyncManager
+//! processes LWW (Last-Writer-Wins) entity sync and produces outgoing messages.
+
+use crate::sync_models::{
+    DeviceId, DeviceInfo, ReceivedTab, SyncConfig, SyncEntity, SyncEntityType, SyncMessage,
+    SyncStatus,
+};
+use std::collections::HashMap;
+
+/// SyncManager manages LWW entity sync, device tracking, and message queuing.
+pub struct SyncManager {
+    config: SyncConfig,
+    status: SyncStatus,
+    last_error: Option<String>,
+    devices: HashMap<DeviceId, DeviceInfo>,
+    received_tabs: Vec<ReceivedTab>,
+    outgoing_messages: Vec<SyncMessage>,
+    encryption_key: Option<crate::sync_crypto::EncryptionKey>,
+    pending_pushes: Vec<SyncEntity>,
+    entity_versions: HashMap<String, u64>,
+    last_pulled_version: u64,
+}
+
+impl SyncManager {
+    pub fn new(config: SyncConfig) -> Self {
+        Self {
+            config,
+            status: SyncStatus::Idle,
+            last_error: None,
+            devices: HashMap::new(),
+            received_tabs: Vec::new(),
+            outgoing_messages: Vec::new(),
+            encryption_key: None,
+            pending_pushes: Vec::new(),
+            entity_versions: HashMap::new(),
+            last_pulled_version: 0,
+        }
+    }
+
+    /// Get current sync status
+    pub fn status(&self) -> &SyncStatus {
+        &self.status
+    }
+
+    pub fn last_error(&self) -> Option<&str> {
+        self.last_error.as_deref()
+    }
+
+    /// Set the E2E encryption key (derived from sync seed)
+    pub fn set_encryption_key(&mut self, key: crate::sync_crypto::EncryptionKey) {
+        self.encryption_key = Some(key);
+    }
+
+    /// Check if encryption is configured
+    pub fn has_encryption_key(&self) -> bool {
+        self.encryption_key.is_some()
+    }
+
+    /// Set sync status (called by shell when connection state changes)
+    pub fn set_status(&mut self, status: SyncStatus) {
+        self.status = status;
+    }
+
+    /// Get current config
+    pub fn config(&self) -> &SyncConfig {
+        &self.config
+    }
+
+    /// Update config
+    pub fn update_config(&mut self, config: SyncConfig) {
+        self.config = config;
+    }
+
+    // === LWW Entity Sync ===
+
+    /// Queue an outgoing entity push. If syncing/synced, add EntityPush to
+    /// outgoing_messages (encrypt if key set). Otherwise add to pending_pushes.
+    pub fn push_entity(&mut self, entity: SyncEntity) {
+        if self.status == SyncStatus::Synced || self.status == SyncStatus::Syncing {
+            let message = SyncMessage::EntityPush { entity };
+
+            if let Some(key) = &self.encryption_key {
+                match serde_json::to_vec(&message) {
+                    Ok(plaintext) => match crate::sync_crypto::encrypt_update(&plaintext, key) {
+                        Ok(data) => {
+                            self.outgoing_messages.push(SyncMessage::Encrypted { data });
+                        }
+                        Err(e) => {
+                            self.last_error = Some(format!("Encrypt error: {}", e));
+                        }
+                    },
+                    Err(e) => {
+                        self.last_error = Some(format!("Serialize error: {}", e));
+                    }
+                }
+            } else {
+                self.outgoing_messages.push(message);
+            }
+        } else {
+            self.pending_pushes.push(entity);
+        }
+    }
+
+    /// Send an EntityPull message to request entities newer than given version
+    pub fn pull_entities(&mut self, entity_type: Option<SyncEntityType>) {
+        let message = SyncMessage::EntityPull {
+            entity_type,
+            since_version: self.last_pulled_version,
+        };
+
+        if let Some(key) = &self.encryption_key {
+            match serde_json::to_vec(&message) {
+                Ok(plaintext) => match crate::sync_crypto::encrypt_update(&plaintext, key) {
+                    Ok(data) => {
+                        self.outgoing_messages.push(SyncMessage::Encrypted { data });
+                    }
+                    Err(e) => {
+                        self.last_error = Some(format!("Encrypt error: {}", e));
+                    }
+                },
+                Err(e) => {
+                    self.last_error = Some(format!("Serialize error: {}", e));
+                }
+            }
+        } else {
+            self.outgoing_messages.push(message);
+        }
+    }
+
+    /// Apply a remote entity if its version is newer than the locally tracked version.
+    /// Returns true if the entity was applied.
+    pub fn apply_remote_entity(&mut self, entity: &SyncEntity) -> bool {
+        let local_version = self
+            .entity_versions
+            .get(&entity.entity_id)
+            .copied()
+            .unwrap_or(0);
+        if entity.version > local_version {
+            self.entity_versions
+                .insert(entity.entity_id.clone(), entity.version);
+            if entity.entity_type == SyncEntityType::Tab {
+                self.last_pulled_version = self.last_pulled_version.max(entity.version);
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Apply a batch of remote entities. Returns the list of actually-applied entities.
+    pub fn apply_remote_batch(&mut self, entities: Vec<SyncEntity>) -> Vec<SyncEntity> {
+        let mut applied = Vec::new();
+        for entity in entities {
+            if self.apply_remote_entity(&entity) {
+                applied.push(entity);
+            }
+        }
+        applied
+    }
+
+    /// Get a view of pending entity pushes
+    pub fn get_pending_pushes(&self) -> &[SyncEntity] {
+        &self.pending_pushes
+    }
+
+    /// Take all pending entity pushes
+    pub fn drain_pending_pushes(&mut self) -> Vec<SyncEntity> {
+        std::mem::take(&mut self.pending_pushes)
+    }
+
+    // === Incoming Message Handling ===
+
+    /// Process an incoming sync message
+    pub fn handle_incoming_message(&mut self, msg: SyncMessage) {
+        match msg {
+            SyncMessage::Encrypted { data } => match &self.encryption_key {
+                Some(key) => match crate::sync_crypto::decrypt_update(&data, key) {
+                    Ok(decrypted) => match serde_json::from_slice::<SyncMessage>(&decrypted) {
+                        Ok(inner) => self.handle_incoming_message(inner),
+                        Err(e) => {
+                            self.status = SyncStatus::Error;
+                            self.last_error =
+                                Some(format!("Decrypt error: invalid nested message: {}", e));
+                        }
+                    },
+                    Err(e) => {
+                        self.status = SyncStatus::Error;
+                        self.last_error = Some(format!("Decrypt error: {}", e));
+                    }
+                },
+                None => {
+                    self.status = SyncStatus::Error;
+                    self.last_error =
+                        Some("Encrypted sync message received without key".to_string());
+                }
+            },
+            SyncMessage::EntityPush { entity } => {
+                self.apply_remote_entity(&entity);
+            }
+            SyncMessage::EntityBatch { entities } => {
+                self.apply_remote_batch(entities);
+            }
+            SyncMessage::Ack { entity_id, version } => {
+                self.entity_versions.insert(entity_id, version);
+            }
+            SyncMessage::EntityPull { .. } => {
+                // EntityPull is handled by the server/peer — we don't process it here
+            }
+            SyncMessage::SendTab {
+                url,
+                title,
+                sender_device,
+                ..
+            } => {
+                let sender_name = self
+                    .devices
+                    .get(&sender_device)
+                    .map(|d| d.name.clone())
+                    .unwrap_or_else(|| "Unknown".to_string());
+                let sender_type = self
+                    .devices
+                    .get(&sender_device)
+                    .map(|d| d.device_type.clone())
+                    .unwrap_or(crate::sync_models::DeviceType::Unknown);
+                self.received_tabs.push(ReceivedTab {
+                    url,
+                    title,
+                    sender_name,
+                    sender_device_type: sender_type,
+                    received_at: chrono::Utc::now().to_rfc3339(),
+                });
+            }
+            SyncMessage::DeviceJoined { device } => {
+                self.devices.insert(device.id.clone(), device);
+            }
+            SyncMessage::DeviceLeft { device_id } => {
+                self.devices.remove(&device_id);
+            }
+            SyncMessage::Ping => {
+                self.outgoing_messages.push(SyncMessage::Pong);
+            }
+            SyncMessage::Pong => {}
+        }
+    }
+
+    // === Outgoing ===
+
+    /// Send a tab to a specific device
+    pub fn send_tab(&mut self, url: &str, title: &str, target_device_id: &str) {
+        let message = SyncMessage::SendTab {
+            url: url.to_string(),
+            title: title.to_string(),
+            sender_device: self.config.device_id.clone(),
+            target_device: target_device_id.to_string(),
+        };
+
+        if let Some(key) = &self.encryption_key {
+            match serde_json::to_vec(&message) {
+                Ok(plaintext) => match crate::sync_crypto::encrypt_update(&plaintext, key) {
+                    Ok(data) => {
+                        self.outgoing_messages.push(SyncMessage::Encrypted { data });
+                    }
+                    Err(e) => {
+                        self.last_error = Some(format!("Encrypt error: {}", e));
+                    }
+                },
+                Err(e) => {
+                    self.last_error = Some(format!("Serialize error: {}", e));
+                }
+            }
+        } else {
+            self.outgoing_messages.push(message);
+        }
+    }
+
+    /// Get and drain outgoing messages (shell sends these via WebSocket)
+    pub fn drain_outgoing_messages(&mut self) -> Vec<SyncMessage> {
+        std::mem::take(&mut self.outgoing_messages)
+    }
+
+    /// Get and drain received tabs (UI polls this)
+    pub fn drain_received_tabs(&mut self) -> Vec<ReceivedTab> {
+        std::mem::take(&mut self.received_tabs)
+    }
+
+    // === Device Management ===
+
+    /// Get all known connected devices
+    pub fn get_devices(&self) -> Vec<&DeviceInfo> {
+        self.devices.values().collect()
+    }
+
+    /// Remove a device from the sync group
+    pub fn remove_device(&mut self, device_id: &str) {
+        self.devices.remove(device_id);
+        self.outgoing_messages.push(SyncMessage::DeviceLeft {
+            device_id: device_id.to_string(),
+        });
+    }
+
+    // === Sync Handshake ===
+
+    /// Flush pending pushes (when reconnecting after offline)
+    pub fn flush_offline_queue(&mut self) {
+        let pending = self.drain_pending_pushes();
+        for entity in pending {
+            self.push_entity(entity);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sync_crypto;
+    use crate::sync_models::{DeviceType, SyncEntityType, SyncMessage, SyncStatus};
+
+    fn default_config() -> SyncConfig {
+        SyncConfig {
+            server_url: "wss://test.example.com".to_string(),
+            sync_key: None,
+            device_id: "test-device-1".to_string(),
+            device_name: "Test Device".to_string(),
+            auto_sync: true,
+            sync_interval_secs: 30,
+        }
+    }
+
+    fn make_entity(id: &str, version: u64) -> SyncEntity {
+        SyncEntity {
+            entity_type: SyncEntityType::Tab,
+            entity_id: id.to_string(),
+            version,
+            modified_at: 1000,
+            payload_json: r#"{"url":"https://example.com"}"#.to_string(),
+            deleted: false,
+        }
+    }
+
+    fn make_device(id: &str, name: &str) -> DeviceInfo {
+        DeviceInfo {
+            id: id.to_string(),
+            name: name.to_string(),
+            device_type: DeviceType::Mac,
+            last_seen: "2026-01-01T00:00:00Z".to_string(),
+            is_online: true,
+        }
+    }
+
+    fn test_encryption_key() -> sync_crypto::EncryptionKey {
+        let seed = sync_crypto::generate_sync_seed();
+        sync_crypto::derive_encryption_key(&seed).unwrap()
+    }
+
+    // CM-01
+    #[test]
+    fn test_push_entity_synced_state() {
+        let mut mgr = SyncManager::new(default_config());
+        mgr.set_status(SyncStatus::Synced);
+        let entity = make_entity("tab-1", 1);
+        mgr.push_entity(entity);
+        let msgs = mgr.drain_outgoing_messages();
+        assert_eq!(msgs.len(), 1);
+        match &msgs[0] {
+            SyncMessage::EntityPush { entity } => {
+                assert_eq!(entity.entity_id, "tab-1");
+            }
+            other => panic!("Expected EntityPush, got {:?}", other),
+        }
+    }
+
+    // CM-02
+    #[test]
+    fn test_push_entity_idle_state() {
+        let mut mgr = SyncManager::new(default_config());
+        // status defaults to Idle
+        let entity = make_entity("tab-2", 1);
+        mgr.push_entity(entity);
+        let msgs = mgr.drain_outgoing_messages();
+        assert!(msgs.is_empty());
+        assert_eq!(mgr.get_pending_pushes().len(), 1);
+        assert_eq!(mgr.get_pending_pushes()[0].entity_id, "tab-2");
+    }
+
+    // CM-03
+    #[test]
+    fn test_push_entity_with_encryption() {
+        let mut mgr = SyncManager::new(default_config());
+        mgr.set_status(SyncStatus::Synced);
+        mgr.set_encryption_key(test_encryption_key());
+        let entity = make_entity("tab-3", 1);
+        mgr.push_entity(entity);
+        let msgs = mgr.drain_outgoing_messages();
+        assert_eq!(msgs.len(), 1);
+        match &msgs[0] {
+            SyncMessage::Encrypted { data } => {
+                assert!(!data.is_empty());
+            }
+            other => panic!("Expected Encrypted, got {:?}", other),
+        }
+    }
+
+    // CM-04
+    #[test]
+    fn test_pull_entities() {
+        let mut mgr = SyncManager::new(default_config());
+        mgr.pull_entities(Some(SyncEntityType::Tab));
+        let msgs = mgr.drain_outgoing_messages();
+        assert_eq!(msgs.len(), 1);
+        match &msgs[0] {
+            SyncMessage::EntityPull {
+                entity_type,
+                since_version,
+            } => {
+                assert_eq!(entity_type, &Some(SyncEntityType::Tab));
+                assert_eq!(*since_version, 0);
+            }
+            other => panic!("Expected EntityPull, got {:?}", other),
+        }
+    }
+
+    // CM-05
+    #[test]
+    fn test_apply_remote_entity_newer() {
+        let mut mgr = SyncManager::new(default_config());
+        let entity = make_entity("tab-5", 10);
+        assert!(mgr.apply_remote_entity(&entity));
+        // Version should be stored
+        assert_eq!(mgr.entity_versions.get("tab-5"), Some(&10));
+    }
+
+    // CM-06
+    #[test]
+    fn test_apply_remote_entity_older() {
+        let mut mgr = SyncManager::new(default_config());
+        // Insert a version first
+        let newer = make_entity("tab-6", 10);
+        mgr.apply_remote_entity(&newer);
+        // Now try an older version
+        let older = make_entity("tab-6", 5);
+        assert!(!mgr.apply_remote_entity(&older));
+        // Version should remain 10
+        assert_eq!(mgr.entity_versions.get("tab-6"), Some(&10));
+    }
+
+    // CM-07
+    #[test]
+    fn test_apply_remote_batch() {
+        let mut mgr = SyncManager::new(default_config());
+        // Pre-populate some versions
+        mgr.entity_versions.insert("e-1".to_string(), 5);
+        mgr.entity_versions.insert("e-2".to_string(), 5);
+
+        let batch = vec![
+            make_entity("e-1", 10), // newer → apply
+            make_entity("e-2", 3),  // older → skip
+            make_entity("e-3", 1),  // new → apply
+            make_entity("e-4", 7),  // new → apply
+            make_entity("e-1", 4),  // older than updated → skip
+        ];
+        let applied = mgr.apply_remote_batch(batch);
+        assert_eq!(applied.len(), 3);
+    }
+
+    // CM-08
+    #[test]
+    fn test_handle_incoming_entity_push() {
+        let mut mgr = SyncManager::new(default_config());
+        let msg = SyncMessage::EntityPush {
+            entity: make_entity("tab-8", 5),
+        };
+        mgr.handle_incoming_message(msg);
+        assert_eq!(mgr.entity_versions.get("tab-8"), Some(&5));
+    }
+
+    // CM-09
+    #[test]
+    fn test_handle_incoming_encrypted() {
+        let key = test_encryption_key();
+        let mut mgr = SyncManager::new(default_config());
+        mgr.set_encryption_key(key);
+
+        // Build an encrypted EntityPush message using the same key
+        let inner = SyncMessage::EntityPush {
+            entity: make_entity("tab-9", 3),
+        };
+        let plaintext = serde_json::to_vec(&inner).unwrap();
+        let encrypted_data = sync_crypto::encrypt_update(&plaintext, mgr.encryption_key.as_ref().unwrap()).unwrap();
+
+        mgr.handle_incoming_message(SyncMessage::Encrypted {
+            data: encrypted_data,
+        });
+        assert_eq!(mgr.entity_versions.get("tab-9"), Some(&3));
+        assert_ne!(mgr.status(), &SyncStatus::Error);
+    }
+
+    // CM-10
+    #[test]
+    fn test_handle_incoming_encrypted_no_key() {
+        let mut mgr = SyncManager::new(default_config());
+        // No encryption key set
+        mgr.handle_incoming_message(SyncMessage::Encrypted {
+            data: vec![0u8; 64],
+        });
+        assert_eq!(mgr.status(), &SyncStatus::Error);
+        assert!(mgr.last_error().unwrap().contains("without key"));
+    }
+
+    // CM-11
+    #[test]
+    fn test_handle_incoming_send_tab() {
+        let mut mgr = SyncManager::new(default_config());
+        // Register sender device so name is known
+        let device = make_device("sender-1", "MacBook Pro");
+        mgr.devices.insert(device.id.clone(), device);
+
+        mgr.handle_incoming_message(SyncMessage::SendTab {
+            url: "https://example.com".to_string(),
+            title: "Example".to_string(),
+            sender_device: "sender-1".to_string(),
+            target_device: "test-device-1".to_string(),
+        });
+
+        let tabs = mgr.drain_received_tabs();
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(tabs[0].url, "https://example.com");
+        assert_eq!(tabs[0].title, "Example");
+        assert_eq!(tabs[0].sender_name, "MacBook Pro");
+    }
+
+    // CM-12
+    #[test]
+    fn test_handle_incoming_device_joined() {
+        let mut mgr = SyncManager::new(default_config());
+        let device = make_device("dev-2", "iPhone");
+        mgr.handle_incoming_message(SyncMessage::DeviceJoined {
+            device: device.clone(),
+        });
+        let devices = mgr.get_devices();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].id, "dev-2");
+        assert_eq!(devices[0].name, "iPhone");
+    }
+
+    // CM-13
+    #[test]
+    fn test_handle_incoming_ping() {
+        let mut mgr = SyncManager::new(default_config());
+        mgr.handle_incoming_message(SyncMessage::Ping);
+        let msgs = mgr.drain_outgoing_messages();
+        assert_eq!(msgs.len(), 1);
+        match &msgs[0] {
+            SyncMessage::Pong => {}
+            other => panic!("Expected Pong, got {:?}", other),
+        }
+    }
+
+    // CM-14
+    #[test]
+    fn test_send_tab_with_encryption() {
+        let mut mgr = SyncManager::new(default_config());
+        mgr.set_encryption_key(test_encryption_key());
+        mgr.send_tab("https://example.com", "Example", "target-dev");
+        let msgs = mgr.drain_outgoing_messages();
+        assert_eq!(msgs.len(), 1);
+        match &msgs[0] {
+            SyncMessage::Encrypted { data } => {
+                assert!(!data.is_empty());
+            }
+            other => panic!("Expected Encrypted, got {:?}", other),
+        }
+    }
+
+    // CM-15
+    #[test]
+    fn test_flush_offline_queue() {
+        let mut mgr = SyncManager::new(default_config());
+        // Push while idle → goes to pending
+        mgr.push_entity(make_entity("p-1", 1));
+        mgr.push_entity(make_entity("p-2", 2));
+        assert_eq!(mgr.get_pending_pushes().len(), 2);
+        assert!(mgr.drain_outgoing_messages().is_empty());
+
+        // Now go online and flush
+        mgr.set_status(SyncStatus::Synced);
+        mgr.flush_offline_queue();
+        assert!(mgr.get_pending_pushes().is_empty());
+        let msgs = mgr.drain_outgoing_messages();
+        assert_eq!(msgs.len(), 2);
+    }
+
+    // CM-16
+    #[test]
+    fn test_drain_outgoing_messages() {
+        let mut mgr = SyncManager::new(default_config());
+        mgr.handle_incoming_message(SyncMessage::Ping);
+        mgr.handle_incoming_message(SyncMessage::Ping);
+        let msgs = mgr.drain_outgoing_messages();
+        assert_eq!(msgs.len(), 2);
+        // After drain, outgoing should be empty
+        assert!(mgr.drain_outgoing_messages().is_empty());
+    }
+
+    // CM-17
+    #[test]
+    fn test_drain_received_tabs() {
+        let mut mgr = SyncManager::new(default_config());
+        mgr.handle_incoming_message(SyncMessage::SendTab {
+            url: "https://a.com".to_string(),
+            title: "A".to_string(),
+            sender_device: "s1".to_string(),
+            target_device: "test-device-1".to_string(),
+        });
+        mgr.handle_incoming_message(SyncMessage::SendTab {
+            url: "https://b.com".to_string(),
+            title: "B".to_string(),
+            sender_device: "s2".to_string(),
+            target_device: "test-device-1".to_string(),
+        });
+        let tabs = mgr.drain_received_tabs();
+        assert_eq!(tabs.len(), 2);
+        // After drain, received_tabs should be empty
+        assert!(mgr.drain_received_tabs().is_empty());
+    }
+}

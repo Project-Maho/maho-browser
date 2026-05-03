@@ -1,0 +1,50 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+# Prebuilt maho-core Rust static library.
+
+import("//build/config/compiler/compiler.gni")
+
+config("maho_include_config") {
+  include_dirs = [ "." ]
+}
+
+source_set("maho_ffi_headers") {
+  sources = [ "maho_ffi.h" ]
+  public_configs = [ ":maho_include_config" ]
+}
+
+# C++ wrapper that calls into maho-core via extern "C" FFI
+source_set("maho_bridge") {
+  sources = [
+    "maho_bridge.cc",
+    "maho_bridge.h",
+  ]
+  public_deps = [ ":maho_ffi_headers" ]
+  deps = [ ":maho_core_prebuilt" ]
+}
+
+# Prebuilt Rust static library
+config("maho_core_prebuilt_config") {
+  if (target_cpu == "arm64") {
+    lib_dirs = [ "prebuilt/arm64" ]
+  } else if (target_cpu == "x64") {
+    lib_dirs = [ "prebuilt/x64" ]
+  }
+  libs = [ "maho_core" ]
+
+  # Rust std dependencies needed when linking a Rust static lib
+  if (is_mac) {
+    frameworks = [
+      "CoreFoundation.framework",
+      "Security.framework",
+      "SystemConfiguration.framework",
+    ]
+    libs += [
+      "resolv",
+      "c++",
+    ]
+  }
+}
+
+group("maho_core_prebuilt") {
+  all_dependent_configs = [ ":maho_core_prebuilt_config" ]
+}

@@ -1,0 +1,305 @@
+import Foundation
+import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
+
+struct TabCardView: View {
+    let tab: TabViewModel
+    let isActive: Bool
+    let previewImage: Data?
+    let deckIndex: Int
+    let onTap: () -> Void
+    let onClose: () -> Void
+
+    private var host: String {
+        URLComponents(string: tab.url)?.host?.replacingOccurrences(of: "www.", with: "") ?? "New tab"
+    }
+
+    private var title: String {
+        let trimmed = tab.title.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        return trimmed.isEmpty ? host : trimmed
+    }
+
+    private var statusLabel: String {
+        if tab.isLoading {
+            return "Loading"
+        }
+        if tab.isPlayingAudio {
+            return "Playing"
+        }
+        if tab.isPinned {
+            return "Pinned"
+        }
+        if tab.isMuted {
+            return "Muted"
+        }
+        return "Open"
+    }
+
+    var body: some View {
+        Button {
+            onTap()
+        } label: {
+            cardContent
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button {
+                MahoBridge.shared.duplicateTab(tabId: tab.id)
+            } label: {
+                Label("Duplicate", systemImage: "plus.square.on.square")
+            }
+
+            Button {
+                if tab.isPinned {
+                    MahoBridge.shared.unpinTab(tabId: tab.id)
+                } else {
+                    MahoBridge.shared.pinTab(tabId: tab.id)
+                }
+            } label: {
+                Label(tab.isPinned ? "Unpin" : "Pin", systemImage: tab.isPinned ? "pin.slash" : "pin")
+            }
+
+            Button {
+                if tab.isMuted {
+                    MahoBridge.shared.unmuteTab(tabId: tab.id)
+                } else {
+                    MahoBridge.shared.muteTab(tabId: tab.id)
+                }
+            } label: {
+                Label(tab.isMuted ? "Unmute" : "Mute", systemImage: tab.isMuted ? "speaker.wave.2" : "speaker.slash")
+            }
+
+            Divider()
+
+            Button(role: .destructive) {
+                onClose()
+            } label: {
+                Label("Close", systemImage: "xmark")
+            }
+        }
+        .accessibilityIdentifier("tabCard_\(tab.id)")
+        .accessibilityLabel(title)
+        .accessibilityHint("Opens this tab.")
+        .accessibilityValue(isActive ? "active" : "inactive")
+    }
+
+    private var cardContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            thumbnailArea
+            infoPanel
+        }
+        .background(cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: ShellTheme.Radius.card, style: .continuous))
+        .overlay(alignment: .topLeading) {
+            deckLayerAccent
+        }
+        .overlay(activeStroke)
+        .shadow(
+            color: shadowStyle.color,
+            radius: shadowStyle.radius,
+            x: shadowStyle.x,
+            y: shadowStyle.y
+        )
+        .scaleEffect(isActive ? 1 : 0.985)
+        .rotationEffect(.degrees(isActive ? 0 : (deckIndex.isMultiple(of: 2) ? -0.45 : 0.45)))
+    }
+
+    private var thumbnailArea: some View {
+        ZStack(alignment: .topTrailing) {
+            previewBackground
+                .frame(height: ShellTheme.Size.tabPreviewHeight + ShellTheme.Spacing.page)
+                .clipped()
+
+            LinearGradient(
+                colors: [
+                    Color.clear,
+                    Color.black.opacity(0.05),
+                    Color.black.opacity(0.18)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+
+            Button {
+                onClose()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.primary.opacity(0.75))
+                    .padding(ShellTheme.Spacing.xSmall)
+                    .background(
+                        ShellTheme.Palette.tabGridFloatingSurface,
+                        in: Circle()
+                    )
+            }
+            .buttonStyle(.plain)
+            .padding(ShellTheme.Spacing.xSmall)
+            .accessibilityIdentifier("tabCardClose_\(tab.id)")
+            .accessibilityLabel("Close tab")
+            .accessibilityHint("Closes this tab from the tab switcher.")
+        }
+    }
+
+    @ViewBuilder
+    private var previewBackground: some View {
+#if canImport(UIKit)
+        if let previewImage, let uiImage = UIImage(data: previewImage) {
+            Image(uiImage: uiImage)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } else {
+            placeholderPreview
+        }
+#else
+        placeholderPreview
+#endif
+    }
+
+    private var infoPanel: some View {
+        VStack(alignment: .leading, spacing: ShellTheme.Spacing.small) {
+            HStack(alignment: .top, spacing: ShellTheme.Spacing.small) {
+                faviconBadge
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+
+                    Text(host)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+
+                if isActive {
+                    Image(systemName: "circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(ShellTheme.Palette.accent)
+                }
+            }
+
+            HStack(spacing: ShellTheme.Spacing.small) {
+                Label(statusLabel, systemImage: tab.isLoading ? "hourglass" : "circle.fill")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 0)
+
+                HStack(spacing: ShellTheme.Spacing.small) {
+                    if tab.isPinned {
+                        metaIcon("pin.fill")
+                    }
+
+                    if tab.isMuted {
+                        metaIcon("speaker.slash.fill")
+                    }
+
+                    if tab.isPlayingAudio {
+                        metaIcon("speaker.wave.2.fill")
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, ShellTheme.Spacing.medium)
+        .padding(.top, ShellTheme.Spacing.medium)
+        .padding(.bottom, ShellTheme.Spacing.medium)
+        .background(panelBackground)
+    }
+
+    private var placeholderPreview: some View {
+        LinearGradient(
+            colors: [
+                ShellTheme.Palette.tabPreviewFallback,
+                ShellTheme.Palette.tabPreviewPlaceholder
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .overlay {
+            VStack(spacing: ShellTheme.Spacing.small) {
+                Image(systemName: "globe")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+
+                RoundedRectangle(cornerRadius: ShellTheme.Radius.button, style: .continuous)
+                    .fill(Color.white.opacity(0.32))
+                    .frame(width: 56, height: 4)
+
+                RoundedRectangle(cornerRadius: ShellTheme.Radius.button, style: .continuous)
+                    .fill(Color.white.opacity(0.2))
+                    .frame(width: 82, height: 4)
+            }
+            .padding(ShellTheme.Spacing.large)
+        }
+    }
+
+    private var faviconBadge: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: ShellTheme.Radius.button, style: .continuous)
+                .fill(ShellTheme.Palette.tabGridMetaFill)
+                .frame(width: ShellTheme.Size.tabGridFavicon, height: ShellTheme.Size.tabGridFavicon)
+
+            Image(systemName: tab.isFavorite ? "star.fill" : "globe")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(tab.isFavorite ? Color.orange : ShellTheme.Palette.accent)
+        }
+    }
+
+    private func metaIcon(_ systemName: String) -> some View {
+        Image(systemName: systemName)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
+    }
+
+    private var shadowStyle: ShellShadowStyle {
+        isActive ? ShellTheme.Elevation.tabDeckCard : ShellTheme.Elevation.tabCard
+    }
+
+    private var cardBackground: some View {
+        RoundedRectangle(cornerRadius: ShellTheme.Radius.card, style: .continuous)
+            .fill(ShellTheme.Materials.tabGridCard)
+            .background(
+                RoundedRectangle(cornerRadius: ShellTheme.Radius.card, style: .continuous)
+                    .fill(ShellTheme.Palette.tabCardSurface.opacity(isActive ? 0.96 : 0.88))
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: ShellTheme.Radius.card, style: .continuous)
+                    .strokeBorder(ShellTheme.Palette.overlayBorder, lineWidth: ShellTheme.Stroke.hairline)
+            }
+    }
+
+    private var deckLayerAccent: some View {
+        RoundedRectangle(cornerRadius: ShellTheme.Radius.card, style: .continuous)
+            .fill(ShellTheme.Palette.tabGridMetaFill)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.top, ShellTheme.Spacing.small)
+            .padding(.horizontal, ShellTheme.Spacing.small)
+            .offset(y: ShellTheme.Spacing.small)
+            .opacity(isActive ? 0 : 0.55)
+            .allowsHitTesting(false)
+    }
+
+    private var panelBackground: some View {
+        (isActive ? ShellTheme.Palette.tabGridActiveFill : ShellTheme.Palette.tabCardSurface)
+            .overlay(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(isActive ? 0.18 : 0.1),
+                        Color.clear
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+    }
+
+    private var activeStroke: some View {
+        RoundedRectangle(cornerRadius: ShellTheme.Radius.card, style: .continuous)
+            .strokeBorder(isActive ? ShellTheme.Palette.accent : Color.clear, lineWidth: ShellTheme.Stroke.activeTab)
+    }
+}

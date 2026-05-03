@@ -1,0 +1,55 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+
+module maho_command.mojom;
+
+// Maps to maho-types SuggestionType enum.
+enum SuggestionType {
+  kTab = 0,
+  kBookmark = 1,
+  kHistory = 2,
+  kAction = 3,
+  kNavigation = 4,
+  kCalculator = 5,
+  kUnitConversion = 6,
+  kArchivedTab = 7,
+  kClosedTab = 8,
+};
+
+struct MatchRange {
+  int32 start;
+  int32 end;
+};
+
+struct Suggestion {
+  string title;
+  string url;
+  string subtitle;
+  string key;
+  string? action_id;
+  SuggestionType type;
+  int32 tab_index;  // -1 if not a tab
+  array<MatchRange> match_ranges;
+};
+
+// Used by the WebUI page to bootstrap bidirectional communication.
+interface PageHandlerFactory {
+  // The WebUI calls this method when the page is first initialized.
+  CreatePageHandler(pending_remote<Page> page,
+                    pending_receiver<PageHandler> handler);
+};
+
+// Browser-side handler for requests from WebUI page.
+interface PageHandler {
+  // Returns suggestions matching the input query.
+  Query(string input) => (array<Suggestion> suggestions);
+
+  // Opens the suggestion (activates tab or navigates).
+  OpenSuggestion(int32 index, string url, int32 tab_index);
+
+  // Executes an action by its ID (e.g. "new_tab", "close_tab").
+  ExecuteAction(string action_id);
+};
+
+// WebUI-side interface for browser-to-page push updates.
+interface Page {
+};

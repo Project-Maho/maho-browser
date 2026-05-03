@@ -1,0 +1,70 @@
+name: Release iOS
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - name: Install tools
+        run: brew install xcodegen
+
+      - name: Bump version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "$VERSION" > version.txt
+          bash scripts/bump-version.sh
+
+      - name: Build Rust FFI for iOS
+        run: cargo build --release --target aarch64-apple-ios -p maho-ffi
+
+      - name: Generate Xcode project
+        working-directory: ios-shell
+        run: xcodegen generate
+
+      - name: Archive
+        working-directory: ios-shell
+        run: |
+          xcodebuild archive \
+            -project Maho.xcodeproj \
+            -scheme Maho \
+            -configuration Release \
+            -archivePath build/Maho.xcarchive \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY="${{ secrets.IOS_SIGN_IDENTITY }}" \
+            DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}"
+
+      - name: Export IPA
+        working-directory: ios-shell
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath build/Maho.xcarchive \
+            -exportOptionsPlist ../ci/export-options-ios.plist \
+            -exportPath build/export
+
+      - name: Upload to App Store Connect
+        if: secrets.APP_STORE_CONNECT_KEY_ID != ''
+        run: |
+          xcrun altool --upload-app \
+            -f ios-shell/build/export/Maho.ipa \
+            -t ios \
+            --apiKey "${{ secrets.APP_STORE_CONNECT_KEY_ID }}" \
+            --apiIssuer "${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}"
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ios-shell/build/export/Maho.ipa
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

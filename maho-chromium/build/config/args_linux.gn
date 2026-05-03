@@ -1,0 +1,10 @@
+# Common release settings for Linux builds.
+# Generated/edited by hand for local GN setup.
+is_official_build = false
+is_debug = false
+symbol_level = 0
+
+target_os = "linux"
+target_cpu = "x64"
+maho_root = "//maho"
+use_sysroot = true

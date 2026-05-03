@@ -1,0 +1,46 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+
+#ifndef MAHO_CHROMIUM_THIRD_PARTY_MAHO_MAHO_BRIDGE_H_
+#define MAHO_CHROMIUM_THIRD_PARTY_MAHO_MAHO_BRIDGE_H_
+
+#include <cstddef>
+#include <string>
+
+#include "maho_ffi.h"
+
+namespace maho::core {
+
+// Lifecycle — returns opaque MahoCore pointer from Rust FFI.
+MahoCore* Create();
+void Destroy(MahoCore* core);
+
+// Version info
+std::string Version();
+
+// Content blocking
+bool ShouldBlockRequest(MahoCore* core,
+                        const char* url,
+                        const char* source_url,
+                        const char* request_type);
+bool SaveContentEngineCache(MahoCore* core, const char* path);
+bool LoadContentEngineCache(MahoCore* core, const char* path);
+
+std::string GetCosmeticResources(MahoCore* core, const char* url);
+
+// History search (returns JSON)
+std::string SearchHistory(MahoCore* core,
+                          const char* query,
+                          size_t limit);
+
+// Generic event handler (returns JSON)
+std::string HandleEvent(MahoCore* core, const char* event_json);
+
+// String memory management (for Rust-allocated strings)
+void FreeString(char* str);
+
+// Logging bridge — routes Rust log output to Chromium LOG().
+void InstallLogCallback();
+
+}  // namespace maho::core
+
+#endif  // MAHO_CHROMIUM_THIRD_PARTY_MAHO_MAHO_BRIDGE_H_

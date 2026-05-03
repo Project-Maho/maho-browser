@@ -1,0 +1,1021 @@
+import SwiftUI
+import WebKit
+#if canImport(UIKit)
+import UIKit
+#endif
+
+struct MainBrowserView: View {
+    enum ShellRoute {
+        case home
+        case browsing(TabId)
+
+        var isBrowsing: Bool {
+            if case .browsing = self { return true }
+            return false
+        }
+
+        var browsingTabId: TabId? {
+            guard case .browsing(let tabId) = self else { return nil }
+            return tabId
+        }
+    }
+
+    @StateObject private var browserVM = BrowserViewModel()
+    @State private var showTabGrid = false
+    @State private var showSettings = false
+    @State private var showHistory = false
+    @State private var showBookmarks = false
+    @State private var showReadingList = false
+    @State private var showFindInPage = false
+    @State private var isIncognito = false
+    @State private var activeTabId: TabId?
+    @State private var activeSpaceId: SpaceId?
+    @State private var tabs: [TabViewModel] = []
+    @State private var spaces: [SpaceViewModel] = []
+    @State private var tintColor: Color = ShellTheme.Palette.accent
+    @State private var isBottomBarVisible = true
+    @State private var chromeVisibilityProgress: CGFloat = 1
+    @State private var bottomBarTabSwipeOffset: CGFloat = 0
+    @State private var pendingNavigationUrl: String?
+    @State private var isReaderMode = false
+    @State private var zoomLevel = 1.0
+    @State private var isDesktopMode = false
+    @State private var defaultUserAgent: String?
+    @StateObject private var pageSummarizer = PageSummarizer()
+    @State private var showSummaryOverlay = false
+    @State private var showPinchSummary = false
+    @State private var pinchSummaryTitle = ""
+    @State private var pinchSummarySentences: [String] = []
+    @State private var shellRoute: ShellRoute = .home
+    @State private var homeQuery = ""
+    @State private var focusHomeSearchRequest = false
+    @State private var pendingHomeSearchFocusAfterTabGridDismiss = false
+    @StateObject private var pinchSummarizer = PageSummarizer()
+    @State private var browseForMeSeed = UUID()
+    @State private var showPageMenu = false
+
+    private let bridge = MahoBridge.shared
+    private let tickTimer = Timer.publish(every: 0.35, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        ZStack {
+            shellBackgroundLayer
+
+            if let activeTabId {
+                BrowserView(
+                    viewModel: browserVM,
+                    tabId: activeTabId,
+                    isBarVisible: $isBottomBarVisible,
+                    tintColor: $tintColor,
+                    chromeVisibilityProgress: $chromeVisibilityProgress,
+                    onPinchSummarize: triggerPinchSummarize
+                )
+            }
+
+            if !isBrowsing {
+                HomeSearchView(
+                    activeSpaceName: activeSpaceName,
+                    activeSpaceTabCount: currentSpaceTabs.count,
+                    recentTabs: recentTabs,
+                    topSites: topSites,
+                    showsUnderlyingPage: activeTabId != nil,
+                    onSelectSite: createTabAndNavigate,
+                    onResumeTab: resumeTabFromHome
+                )
+                .transition(.opacity)
+                .zIndex(0)
+            }
+            Color.clear
+                .safeAreaInset(edge: .bottom) {
+                    Color.clear.frame(height: bottomChromeInset)
+                }
+            .animation(.spring(response: 0.3, dampingFraction: 0.86), value: chromeVisibilityProgress)
+
+            if isBrowsing {
+                VStack(spacing: 0) {
+                    if isIncognito {
+                        incognitoStateBanner
+                            .padding(.top, ShellTheme.Spacing.small)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+
+                    Spacer()
+                }
+                .animation(.spring(response: 0.32, dampingFraction: 0.86), value: isIncognito)
+            }
+
+            VStack(spacing: 0) {
+                if showFindInPage, let activeTabId = browsingTabId {
+                    FindInPageView(tabId: activeTabId, isVisible: $showFindInPage)
+                        .padding(.top, ShellTheme.Spacing.small)
+                }
+
+                Spacer()
+
+                ArcBottomBar(
+                    tabCount: currentSpaceTabs.count,
+                    tintColor: effectiveTintColor,
+                    isIncognito: isIncognito,
+                    isHomeMode: !isBrowsing,
+                    isLoading: browserVM.isLoading,
+                    canReload: activeTabId != nil,
+                    canShare: shareURL != nil,
+                    isReaderMode: isReaderMode,
+                    isDesktopMode: isDesktopMode,
+                    zoomLevel: zoomLevel,
+                    pageTitle: browserVM.currentTitle,
+                    pageHost: displayHost(for: browserVM.currentUrl) ?? "",
+                    canGoBack: browserVM.canGoBack,
+                    canGoForward: browserVM.canGoForward,
+                    tabSwipeOffset: bottomBarTabSwipeOffset,
+                    spaces: spacesMenuItems,
+                    homeQuery: $homeQuery,
+                    homeSearchFocusRequest: $focusHomeSearchRequest,
+                    onTabsTapped: {
+                        refreshState()
+                        showTabGrid = true
+                    },
+                    onAddressTapped: {
+                        transitionToHome()
+                    },
+                    onHomeSubmit: submitHomeQuery,
+                    onGoBack: goBack,
+                    onGoForward: goForward,
+                    onTabSwipeLeft: {
+                        switchTab(direction: .next)
+                    },
+                    onTabSwipeRight: {
+                        switchTab(direction: .previous)
+                    },
+                    onSelectSpace: selectSpace,
+                    onMenuTapped: {
+                        showPageMenu = true
+                    },
+                    onToggleIncognito: toggleIncognito,
+                    onFindInPage: {
+                        guard browsingTabId != nil else { return }
+                        showFindInPage = true
+                    },
+                    onSettings: {
+                        showSettings = true
+                    },
+                    onShare: shareCurrentPage,
+                    onReload: reloadCurrentPage,
+                    onToggleReader: toggleReaderMode,
+                    onZoomIn: {
+                        adjustZoom(by: 0.1)
+                    },
+                    onZoomOut: {
+                        adjustZoom(by: -0.1)
+                    },
+                    onToggleDesktop: toggleDesktopMode,
+                    onPiP: {
+                        if let webView = browserVM.webView {
+                            PiPManager.shared.enablePiP(for: webView)
+                        }
+                    },
+                    onBrowseForMe: {
+                        guard browsingTabId != nil else { return }
+                        showPinchSummary = false
+                        browseForMeSeed = UUID()
+                        showSummaryOverlay = true
+                        pageSummarizer.summarize(webView: browserVM.webView)
+                    }
+                )
+                .padding(.horizontal, ShellTheme.Spacing.medium)
+                .padding(.bottom, ShellTheme.Spacing.xSmall)
+                .offset(y: bottomBarVerticalOffset)
+                .scaleEffect(bottomBarScale, anchor: .bottom)
+                .opacity(bottomBarOpacity)
+                .allowsHitTesting(isBrowsing ? isBottomBarVisible : true)
+                .accessibilityHidden(isBrowsing ? !isBottomBarVisible : false)
+                .accessibilityIdentifier("mainBrowserBottomBar")
+                .accessibilityValue((isBrowsing ? isBottomBarVisible : true) ? "visible" : "hidden")
+            }
+            .zIndex(2)
+            .animation(.spring(response: 0.28, dampingFraction: 0.88), value: isBottomBarVisible)
+            .animation(.spring(response: 0.3, dampingFraction: 0.86), value: chromeVisibilityProgress)
+            .animation(.spring(response: 0.28, dampingFraction: 0.88), value: showFindInPage)
+
+            if showSummaryOverlay {
+                ZStack(alignment: .top) {
+                    Rectangle()
+                        .fill(.ultraThinMaterial)
+                        .overlay {
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.02),
+                                    ShellTheme.Palette.overlayDim.opacity(0.18),
+                                    ShellTheme.Palette.overlayDim.opacity(0.3)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        }
+                        .ignoresSafeArea()
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+
+                    VStack(spacing: ShellTheme.Spacing.mediumLarge) {
+                        SummaryOverlayView(
+                            state: pageSummarizer.state,
+                            onDismiss: {
+                                showSummaryOverlay = false
+                                pageSummarizer.reset()
+                            }
+                        )
+                        .id(browseForMeSeed)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        Spacer()
+                    }
+                    .padding(.top, ShellTheme.Spacing.page)
+                }
+                .animation(.spring(response: 0.35, dampingFraction: 0.85), value: showSummaryOverlay)
+            }
+
+            if showPinchSummary {
+                PinchSummaryView(
+                    title: pinchSummaryTitle,
+                    sentences: pinchSummarySentences,
+                    onDismiss: {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                            showPinchSummary = false
+                        }
+                    }
+                )
+                .transition(.scale(scale: 0.85).combined(with: .opacity))
+                .zIndex(10)
+            }
+        }
+        .sheet(isPresented: $showTabGrid, onDismiss: handleTabGridDismiss) {
+            TabGridSheet(
+                onNewTab: createNewTabFromGrid
+            )
+            .presentationDragIndicator(.hidden)
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsRootView()
+        }
+        .sheet(isPresented: $showHistory) {
+            HistoryView { url in
+                showHistory = false
+                createTabAndNavigate(url)
+            }
+        }
+        .sheet(isPresented: $showBookmarks) {
+            BookmarksView { url in
+                showBookmarks = false
+                createTabAndNavigate(url)
+            }
+        }
+        .sheet(isPresented: $showReadingList) {
+            ReadingListView { url in
+                showReadingList = false
+                createTabAndNavigate(url)
+            }
+        }
+        .confirmationDialog("Page menu", isPresented: $showPageMenu, titleVisibility: .hidden) {
+            if isBrowsing {
+                Button("Reload", action: reloadCurrentPage)
+                    .disabled(!canReloadCurrentPage)
+
+                Button("Share", action: shareCurrentPage)
+                    .disabled(!canShareCurrentPage)
+
+                Button("History") {
+                    showHistory = true
+                }
+
+                Button("Bookmarks") {
+                    showBookmarks = true
+                }
+
+                Button("Reading List") {
+                    showReadingList = true
+                }
+
+                Button("Find in Page") {
+                    guard browsingTabId != nil else { return }
+                    showFindInPage = true
+                }
+
+                Button(isReaderMode ? "Hide Reader" : "Reader", action: toggleReaderMode)
+
+                Button(isDesktopMode ? "Mobile Site" : "Desktop Site", action: toggleDesktopMode)
+
+                Button("Zoom Out") {
+                    adjustZoom(by: -0.1)
+                }
+
+                Button("Zoom In") {
+                    adjustZoom(by: 0.1)
+                }
+
+                Button("Browse for Me") {
+                    guard browsingTabId != nil else { return }
+                    showPinchSummary = false
+                    browseForMeSeed = UUID()
+                    showSummaryOverlay = true
+                    pageSummarizer.summarize(webView: browserVM.webView)
+                }
+
+                Button("Picture in Picture") {
+                    if let webView = browserVM.webView {
+                        PiPManager.shared.enablePiP(for: webView)
+                    }
+                }
+            }
+
+            Button(isIncognito ? "Exit Private" : "Private", action: toggleIncognito)
+            Button("Settings") {
+                showSettings = true
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .onAppear {
+            loadBrowserState()
+            setupDeepLinkHandler()
+        }
+        .onReceive(tickTimer) { _ in
+            processUpdates(bridge.tick())
+            if let url = pendingNavigationUrl, browserVM.webView != nil {
+                pendingNavigationUrl = nil
+                browserVM.navigate(to: url)
+            }
+            updateHandoffIfNeeded()
+        }
+        .userActivity(HandoffManager.activityType) { activity in
+            updateHandoffActivity(activity)
+        }
+        .onReceive(pinchSummarizer.$state) { newState in
+            if case .result(let sentences) = newState {
+                pinchSummarySentences = sentences
+                showSummaryOverlay = false
+                pageSummarizer.reset()
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                    showPinchSummary = true
+                }
+                pinchSummarizer.reset()
+            } else if case .error = newState {
+                pinchSummarizer.reset()
+            }
+        }
+    }
+
+    private func setupDeepLinkHandler() {
+        DeepLinkHandler.shared.onOpenURL = { [self] urlString in
+            createTabAndNavigate(urlString)
+        }
+        DeepLinkHandler.shared.onSearch = { [self] query in
+            let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+            let searchURL = "https://www.google.com/search?q=\(encoded)"
+            createTabAndNavigate(searchURL)
+        }
+        DeepLinkHandler.shared.onNewTab = { [self] in
+            activeTabId = nil
+            transitionToHome()
+        }
+        HandoffManager.shared.onReceiveURL = { [self] url in
+            createTabAndNavigate(url.absoluteString)
+        }
+    }
+
+    private func updateHandoffIfNeeded() {
+        guard activeTabId != nil, let url = URL(string: browserVM.currentUrl) else { return }
+        _ = HandoffManager.shared.makeActivity(with: url)
+    }
+
+    private func updateHandoffActivity(_ activity: NSUserActivity) {
+        guard activeTabId != nil, let url = URL(string: browserVM.currentUrl) else { return }
+        _ = HandoffManager.shared.makeActivity(with: url)
+    }
+
+    private var currentSpaceTabs: [TabViewModel] {
+        guard let activeSpaceId else { return tabs }
+        return tabs.filter { $0.spaceId == activeSpaceId }
+    }
+
+    private var recentTabs: [TabViewModel] {
+        currentSpaceTabs
+            .sorted { $0.lastActiveAt > $1.lastActiveAt }
+            .prefix(3)
+            .map { $0 }
+    }
+
+    private var topSites: [TabViewModel] {
+        var seen = Set<String>()
+        return currentSpaceTabs
+            .sorted { $0.lastActiveAt > $1.lastActiveAt }
+            .filter { tab in
+                guard !tab.url.isEmpty else { return false }
+                return seen.insert(tab.url).inserted
+            }
+            .prefix(8)
+            .map { $0 }
+    }
+
+    private var effectiveTintColor: Color {
+        isIncognito ? ShellTheme.Palette.incognitoTint : tintColor
+    }
+
+    private var browsingTabId: TabId? {
+        guard case .browsing(let tabId) = shellRoute else { return nil }
+        return tabId
+    }
+
+    private var isBrowsing: Bool {
+        browsingTabId != nil
+    }
+
+    private var activeSpaceName: String {
+        spaces.first(where: { $0.id == activeSpaceId })?.name ?? "Space"
+    }
+
+    private var backgroundColor: Color {
+        if isIncognito {
+            return ShellTheme.Palette.incognitoBackground
+        }
+
+        return activeTabId != nil ? ShellTheme.Palette.browsingBackground : ShellTheme.Palette.homeBackground
+    }
+
+    @ViewBuilder
+    private var shellBackgroundLayer: some View {
+        if isIncognito {
+            LinearGradient(
+                colors: [
+                    ShellTheme.Palette.incognitoBackground,
+                    ShellTheme.Palette.incognitoTint,
+                    ShellTheme.Palette.incognitoBackground
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .overlay {
+                VStack {
+                    RoundedRectangle(cornerRadius: ShellTheme.Radius.overlay, style: .continuous)
+                        .fill(ShellTheme.Palette.incognitoSurface)
+                        .frame(maxWidth: ShellTheme.Size.incognitoBannerMaxWidth)
+                        .frame(height: 160)
+                        .blur(radius: 0.5)
+                        .offset(y: -96)
+
+                    Spacer()
+                }
+            }
+            .ignoresSafeArea()
+        } else {
+            backgroundColor.ignoresSafeArea()
+        }
+    }
+
+    private var incognitoStateBanner: some View {
+        HStack(alignment: .center, spacing: ShellTheme.Spacing.medium) {
+            ZStack {
+                RoundedRectangle(cornerRadius: ShellTheme.Radius.card, style: .continuous)
+                    .fill(ShellTheme.Palette.incognitoSurfaceStrong)
+                    .frame(width: ShellTheme.Size.summaryStateIcon, height: ShellTheme.Size.summaryStateIcon)
+
+                Image(systemName: "eye.slash.fill")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(ShellTheme.Palette.incognitoForeground)
+            }
+
+            Text("Private")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(ShellTheme.Palette.incognitoForeground)
+
+            Spacer(minLength: 0)
+        }
+        .padding(ShellTheme.Spacing.medium)
+        .frame(maxWidth: ShellTheme.Size.incognitoBannerMaxWidth)
+        .background(
+            RoundedRectangle(cornerRadius: ShellTheme.Radius.overlay, style: .continuous)
+                .fill(ShellTheme.Palette.incognitoSurface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: ShellTheme.Radius.overlay, style: .continuous)
+                .strokeBorder(ShellTheme.Palette.incognitoBorder, lineWidth: ShellTheme.Stroke.hairline)
+        )
+        .shadow(
+            color: ShellTheme.Elevation.bottomBar(isIncognito: true).color,
+            radius: ShellTheme.Elevation.bottomBar(isIncognito: true).radius,
+            x: ShellTheme.Elevation.bottomBar(isIncognito: true).x,
+            y: ShellTheme.Elevation.bottomBar(isIncognito: true).y
+        )
+        .padding(.horizontal, ShellTheme.Spacing.large)
+        .frame(maxWidth: .infinity)
+        .accessibilityIdentifier("incognitoStateBanner")
+        .accessibilityValue("active")
+    }
+
+    private var shareURL: URL? {
+        URL(string: browserVM.currentUrl)
+    }
+
+    private var canReloadCurrentPage: Bool {
+        activeTabId != nil
+    }
+
+    private var canShareCurrentPage: Bool {
+        shareURL != nil
+    }
+
+    private var bottomChromeInset: CGFloat {
+        let collapsedInset = ShellTheme.Size.bottomInsetWithoutBar
+        let expandedInset = ShellTheme.Size.bottomInsetWithBar
+        let visibilityProgress = activeTabId == nil ? CGFloat(1) : chromeVisibilityProgress
+        return collapsedInset + ((expandedInset - collapsedInset) * visibilityProgress)
+    }
+
+    private var bottomBarOpacity: Double {
+        let visibleProgress: CGFloat = max(chromeVisibilityProgress, isBottomBarVisible ? 1 : 0)
+        let overlayWeight = showSummaryOverlay || showPinchSummary ? CGFloat(0.78) : CGFloat(1)
+        let opacity = (CGFloat(0.18) + (visibleProgress * CGFloat(0.82))) * overlayWeight
+        return Double(opacity)
+    }
+
+    private var bottomBarVerticalOffset: CGFloat {
+        let hiddenOffset = ShellTheme.Size.bottomInsetWithBar + ShellTheme.Spacing.field
+        let progress: CGFloat = max(chromeVisibilityProgress, isBottomBarVisible ? 1 : 0)
+        let overlayLift = showSummaryOverlay || showPinchSummary ? ShellTheme.Spacing.small : CGFloat.zero
+        return ((CGFloat(1) - progress) * hiddenOffset) + overlayLift
+    }
+
+    private var bottomBarScale: CGFloat {
+        let progress: CGFloat = max(chromeVisibilityProgress, isBottomBarVisible ? 1 : 0)
+        let overlayScale = showSummaryOverlay || showPinchSummary ? CGFloat(0.97) : CGFloat(1)
+        return (CGFloat(0.92) + (progress * CGFloat(0.08))) * overlayScale
+    }
+
+    private var spacesMenuItems: [ArcBottomBar.SpaceMenuItem] {
+        spaces.map { space in
+            ArcBottomBar.SpaceMenuItem(id: space.id, name: space.name, isActive: space.isActive)
+        }
+    }
+
+    private var orderedBrowsingTabs: [TabViewModel] {
+        currentSpaceTabs.sorted { $0.lastActiveAt > $1.lastActiveAt }
+    }
+
+    private func loadBrowserState() {
+        refreshState()
+        if isBrowsing {
+            isBottomBarVisible = true
+            chromeVisibilityProgress = 1
+        }
+    }
+
+    private func refreshState() {
+        tabs = bridge.getTabViewModels()
+        spaces = bridge.getSpaceViewModels()
+        activeSpaceId = bridge.getActiveSpaceId() ?? spaces.first?.id
+        activeTabId = bridge.getActiveTabId()
+
+        if let tab = currentActiveTab {
+            if browsingTabId != nil || pendingNavigationUrl != nil {
+                shellRoute = .browsing(tab.id)
+            }
+            browserVM.tabId = tab.id
+            browserVM.currentTitle = tab.title
+            browserVM.currentUrl = tab.url
+            browserVM.isLoading = tab.isLoading
+            browserVM.isSecure = tab.url.hasPrefix("https://")
+            tintColor = tintColorForTab(tab)
+            reapplyPageOptionsIfNeeded()
+        } else {
+            browserVM.tabId = ""
+            browserVM.currentTitle = ""
+            browserVM.currentUrl = ""
+            browserVM.isLoading = false
+            tintColor = ShellTheme.Palette.accent
+            isBottomBarVisible = true
+            showFindInPage = false
+            isReaderMode = false
+            zoomLevel = 1.0
+            isDesktopMode = false
+            defaultUserAgent = nil
+            shellRoute = .home
+            chromeVisibilityProgress = 1
+            bottomBarTabSwipeOffset = 0
+        }
+    }
+
+    private var currentActiveTab: TabViewModel? {
+        guard let activeTabId else { return nil }
+        return tabs.first(where: { $0.id == activeTabId })
+    }
+
+    private func processUpdates(_ updates: [CoreUpdate]) {
+        guard !updates.isEmpty else { return }
+
+        var requiresRefresh = false
+
+        for update in updates {
+            browserVM.handleCoreUpdate(update)
+
+            switch update {
+            case .fullState,
+                 .tabCreated,
+                 .tabUpdated,
+                 .tabClosed,
+                 .tabOrderChanged,
+                 .spaceCreated,
+                 .spaceUpdated,
+                 .spaceDeleted,
+                 .spaceRenamed,
+                 .spaceRecolored,
+                 .spaceReordered,
+                 .spaceOrderChanged,
+                 .activeSpaceChanged,
+                 .tabsMigrated,
+                 .tabLifecycleChanged,
+                 .navigateTab:
+                requiresRefresh = true
+            case .showFindBar(let tabId):
+                activeTabId = tabId
+                shellRoute = .browsing(tabId)
+                showFindInPage = true
+            default:
+                break
+            }
+        }
+
+        if requiresRefresh {
+            refreshState()
+        }
+    }
+
+    private func createNewTabFromGrid() -> Bool {
+        guard let targetSpaceId = activeSpaceId ?? spaces.first?.id else { return false }
+
+        shellRoute = .home
+        homeQuery = ""
+        pendingHomeSearchFocusAfterTabGridDismiss = true
+        bridge.createTab(url: nil, inSpace: targetSpaceId)
+        refreshState()
+#if canImport(UIKit)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+#endif
+        return true
+    }
+
+    private func handleTabGridDismiss() {
+        refreshState()
+
+        if pendingHomeSearchFocusAfterTabGridDismiss {
+            pendingHomeSearchFocusAfterTabGridDismiss = false
+            focusHomeSearchRequest = true
+        }
+    }
+
+    private func createTabAndNavigate(_ query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard let targetSpaceId = activeSpaceId ?? spaces.first?.id else { return }
+
+        homeQuery = ""
+        let destination = normalizedURL(from: trimmed)
+        pendingNavigationUrl = destination
+        browserVM.currentUrl = destination
+        browserVM.currentTitle = ""
+        bridge.createTab(url: Url(destination), inSpace: targetSpaceId)
+        refreshState()
+
+        let fallbackTabId = currentSpaceTabs.sorted(by: { $0.lastActiveAt > $1.lastActiveAt }).first?.id
+
+        if let activatedTab = bridge.getActiveTabId() ?? fallbackTabId {
+            activeTabId = activatedTab
+            shellRoute = .browsing(activatedTab)
+            browserVM.tabId = activatedTab
+            isBottomBarVisible = true
+            chromeVisibilityProgress = 1
+        }
+    }
+
+    private func reloadCurrentPage() {
+        guard browsingTabId != nil else { return }
+        browserVM.reload()
+    }
+
+    private func activateTab(_ id: TabId) {
+        bridge.activateTab(id: id)
+        refreshState()
+        shellRoute = .browsing(id)
+        isBottomBarVisible = true
+        chromeVisibilityProgress = 1
+    }
+
+    private func resumeTabFromHome(_ id: TabId) {
+        activateTab(id)
+    }
+
+    private func transitionToHome() {
+        shellRoute = .home
+        homeQuery = ""
+        showFindInPage = false
+        isBottomBarVisible = true
+        chromeVisibilityProgress = 1
+        bottomBarTabSwipeOffset = 0
+    }
+
+    private func submitHomeQuery() {
+        createTabAndNavigate(homeQuery)
+    }
+
+    private func goBack() {
+        guard browsingTabId != nil else { return }
+        browserVM.goBack()
+    }
+
+    private func goForward() {
+        guard browsingTabId != nil else { return }
+        browserVM.goForward()
+    }
+
+    private enum TabSwitchDirection {
+        case previous
+        case next
+    }
+
+    private func switchTab(direction: TabSwitchDirection) {
+        guard let activeTabId else { return }
+        let orderedTabs = orderedBrowsingTabs
+        guard orderedTabs.count > 1,
+              let currentIndex = orderedTabs.firstIndex(where: { $0.id == activeTabId }) else {
+            resetTabSwipeOffset()
+            return
+        }
+
+        let targetIndex: Int
+        let offsetDirection: CGFloat
+
+        switch direction {
+        case .previous:
+            guard currentIndex > 0 else {
+                bounceTabSwipeOffset(direction: 1)
+                return
+            }
+            targetIndex = currentIndex - 1
+            offsetDirection = 1
+        case .next:
+            guard currentIndex < orderedTabs.count - 1 else {
+                bounceTabSwipeOffset(direction: -1)
+                return
+            }
+            targetIndex = currentIndex + 1
+            offsetDirection = -1
+        }
+
+        let targetTab = orderedTabs[targetIndex]
+        withAnimation(.easeOut(duration: 0.16)) {
+            bottomBarTabSwipeOffset = 18 * offsetDirection
+        }
+        activateTab(targetTab.id)
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.76)) {
+            bottomBarTabSwipeOffset = 0
+        }
+
+#if canImport(UIKit)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+#endif
+    }
+
+    private func bounceTabSwipeOffset(direction: CGFloat) {
+        withAnimation(.easeOut(duration: 0.12)) {
+            bottomBarTabSwipeOffset = 10 * direction
+        }
+        resetTabSwipeOffset(delay: 0.12)
+    }
+
+    private func resetTabSwipeOffset(delay: Double = 0) {
+        let reset = {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
+                bottomBarTabSwipeOffset = 0
+            }
+        }
+
+        if delay == 0 {
+            reset()
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: reset)
+        }
+    }
+
+    private func selectSpace(_ id: SpaceId) {
+        bridge.activateSpace(id: id)
+        refreshState()
+
+        if let firstTab = currentSpaceTabs.sorted(by: { $0.lastActiveAt > $1.lastActiveAt }).first {
+            activateTab(firstTab.id)
+        } else {
+            transitionToHome()
+            activeTabId = nil
+            browserVM.tabId = ""
+        }
+    }
+
+    private func toggleReaderMode() {
+        guard browsingTabId != nil else { return }
+        isReaderMode.toggle()
+        applyReaderMode()
+    }
+
+    private func triggerPinchSummarize() {
+        guard browsingTabId != nil, !showPinchSummary, !showSummaryOverlay else { return }
+        pinchSummaryTitle = browserVM.currentTitle
+        pinchSummarizer.summarize(webView: browserVM.webView)
+    }
+
+    private func translatePage() {
+        guard browsingTabId != nil else { return }
+        browserVM.translatePage()
+    }
+
+    private func applyReaderMode() {
+        guard let webView = browserVM.webView else { return }
+
+        let readerEnabled = isReaderMode ? "true" : "false"
+        let script = """
+        (function() {
+            const rssLink = document.querySelector('link[rel="alternate"][type="application/rss+xml"]');
+            const existing = document.getElementById('maho-reader-style');
+            if (
+                \(readerEnabled)
+            ) {
+                if (!existing) {
+                    const style = document.createElement('style');
+                    style.id = 'maho-reader-style';
+                    style.textContent = `
+                        html, body { background: #f8f5ef !important; color: #1f1a17 !important; }
+                        header, nav, footer, aside, [role="banner"], [role="navigation"], [role="complementary"], [role="contentinfo"], .sidebar, .navigation, .nav, .footer, .header { display: none !important; }
+                        body { max-width: 760px !important; margin: 0 auto !important; padding: 32px 20px 80px !important; font-size: 20px !important; line-height: 1.75 !important; }
+                        article, main, [role="main"] { max-width: 100% !important; margin: 0 auto !important; }
+                        p, li, blockquote { font-size: inherit !important; line-height: inherit !important; }
+                        img, video { max-width: 100% !important; height: auto !important; }
+                    `;
+                    document.head.appendChild(style);
+                }
+                document.documentElement.setAttribute('data-maho-reader', rssLink ? 'rss' : 'article');
+            } else {
+                existing?.remove();
+                document.documentElement.removeAttribute('data-maho-reader');
+            }
+            return document.documentElement.getAttribute('data-maho-reader') || '';
+        })();
+        """
+
+        webView.evaluateJavaScript(script)
+    }
+
+    private func adjustZoom(by delta: Double) {
+        guard browsingTabId != nil else { return }
+        let updatedZoom = min(max(zoomLevel + delta, 0.5), 2.0)
+        zoomLevel = (updatedZoom * 10).rounded() / 10
+        browserVM.setZoom(zoomLevel)
+
+        let percentage = Int((zoomLevel * 100).rounded())
+        browserVM.webView?.evaluateJavaScript("document.body.style.zoom = '\(percentage)%';")
+    }
+
+    private func toggleDesktopMode() {
+        guard browsingTabId != nil else { return }
+        isDesktopMode.toggle()
+        applyDesktopMode(reload: true)
+    }
+
+    private func applyDesktopMode(reload: Bool) {
+        guard let webView = browserVM.webView else { return }
+
+        if defaultUserAgent == nil {
+            if let currentCustomUserAgent = webView.customUserAgent, !currentCustomUserAgent.isEmpty {
+                defaultUserAgent = currentCustomUserAgent
+            } else {
+                webView.evaluateJavaScript("navigator.userAgent") { result, _ in
+                    guard let userAgent = result as? String else { return }
+                    if defaultUserAgent == nil {
+                        defaultUserAgent = userAgent
+                    }
+                    if isDesktopMode {
+                        webView.customUserAgent = desktopUserAgent(from: userAgent)
+                        if reload {
+                            browserVM.reload()
+                        }
+                    }
+                }
+                return
+            }
+        }
+
+        if isDesktopMode {
+            webView.customUserAgent = desktopUserAgent(from: defaultUserAgent ?? "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15")
+        } else {
+            webView.customUserAgent = defaultUserAgent
+        }
+
+        if reload {
+            browserVM.reload()
+        }
+    }
+
+    private func reapplyPageOptionsIfNeeded() {
+        guard browserVM.webView != nil else { return }
+
+        if isReaderMode {
+            applyReaderMode()
+        }
+
+        if abs(zoomLevel - 1.0) > 0.001 {
+            let percentage = Int((zoomLevel * 100).rounded())
+            browserVM.webView?.evaluateJavaScript("document.body.style.zoom = '\(percentage)%';")
+        }
+
+        if isDesktopMode {
+            applyDesktopMode(reload: false)
+        }
+    }
+
+    private func desktopUserAgent(from userAgent: String) -> String {
+        userAgent
+            .replacingOccurrences(of: #"\s+Mobile/[^ ]+"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+CriOS/[^ ]+"#, with: " Version/17.0", options: .regularExpression)
+    }
+
+    private func toggleIncognito() {
+        isIncognito.toggle()
+        if isIncognito {
+            tintColor = ShellTheme.Palette.incognitoTint
+            showSummaryOverlay = false
+            pageSummarizer.reset()
+        } else if let tab = currentActiveTab {
+            tintColor = tintColorForTab(tab)
+        } else {
+            tintColor = ShellTheme.Palette.accent
+        }
+    }
+
+    private func shareCurrentPage() {
+#if canImport(UIKit)
+        guard let url = shareURL else { return }
+
+        let activityVC = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let rootVC = scene.windows.first?.rootViewController else {
+            return
+        }
+
+        var presenter = rootVC
+        while let presented = presenter.presentedViewController {
+            presenter = presented
+        }
+
+        if let popover = activityVC.popoverPresentationController {
+            popover.sourceView = presenter.view
+            popover.sourceRect = CGRect(
+                x: presenter.view.bounds.midX,
+                y: presenter.view.bounds.maxY - ShellTheme.Size.bottomBarMinHeight,
+                width: 1,
+                height: 1
+            )
+            popover.permittedArrowDirections = []
+        }
+
+        presenter.present(activityVC, animated: true)
+#endif
+    }
+
+    private func normalizedURL(from input: String) -> String {
+        if input.contains(".") && !input.contains(" ") {
+            return input.hasPrefix("http://") || input.hasPrefix("https://") ? input : "https://\(input)"
+        }
+
+        let encoded = input.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? input
+        return "https://www.google.com/search?q=\(encoded)"
+    }
+
+    private func displayHost(for urlString: String) -> String? {
+        guard let components = URLComponents(string: urlString) else { return nil }
+        return components.host ?? urlString
+    }
+
+    private func tintColorForTab(_ tab: TabViewModel) -> Color {
+        if tab.isPinned {
+            return .orange
+        }
+        if tab.isFavorite {
+            return .yellow
+        }
+        if let host = displayHost(for: tab.url) {
+            return colorSeed(for: host)
+        }
+        return ShellTheme.Palette.accent
+    }
+
+    private func colorSeed(for string: String) -> Color {
+        let scalarSum = string.unicodeScalars.reduce(0) { partialResult, scalar in
+            partialResult + Int(scalar.value)
+        }
+        let hue = Double(scalarSum % 360) / 360.0
+        return Color(hue: hue, saturation: 0.56, brightness: 0.9)
+    }
+}

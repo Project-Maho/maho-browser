@@ -1,0 +1,7 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+source_set("constants") {
+  sources = [
+    "webui_url_constants.h",
+  ]
+}

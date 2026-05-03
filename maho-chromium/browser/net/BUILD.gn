@@ -1,0 +1,23 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+source_set("net") {
+  sources = [
+    "maho_ad_block_throttle.cc",
+    "maho_ad_block_throttle.h",
+    "maho_cosmetic_filters_handler.cc",
+    "maho_cosmetic_filters_handler.h",
+    "maho_webstore_ua_throttle.cc",
+    "maho_webstore_ua_throttle.h",
+  ]
+  deps = [
+    "//maho/browser:maho_core_holder",
+    "//maho/third_party/maho:maho_bridge",
+    "//base",
+    "//content/public/browser",
+    "//net",
+    "//services/network/public/cpp",
+    "//services/network/public/mojom",
+    "//third_party/blink/public/common",
+    "//url",
+  ]
+}

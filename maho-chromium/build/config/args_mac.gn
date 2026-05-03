@@ -1,0 +1,9 @@
+# Common release settings for macOS builds.
+# Generated/edited by hand for local GN setup.
+is_official_build = false
+is_debug = false
+symbol_level = 0
+
+target_os = "mac"
+target_cpu = "arm64"
+maho_root = "//maho"

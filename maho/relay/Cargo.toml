@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["server", "entity", "migration"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["serde", "v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+sea-orm = { version = "1", features = ["sqlx-sqlite", "runtime-tokio-rustls"] }
+argon2 = "0.5"
+sha2 = "0.10"
+rand = "0.8"

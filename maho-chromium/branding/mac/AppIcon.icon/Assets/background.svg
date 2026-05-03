@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Maho icon background">
+  <rect width="1024" height="1024" rx="230" fill="#1a1a2e"/>
+  <rect x="56" y="56" width="912" height="912" rx="194" fill="none" stroke="#252542" stroke-width="12" opacity="0.7"/>
+  <path d="M170 292c0-67 54-121 121-121h442c67 0 121 54 121 121v440c0 67-54 121-121 121H291c-67 0-121-54-121-121V292Z" fill="#1d1d33" opacity="0.45"/>
+</svg>

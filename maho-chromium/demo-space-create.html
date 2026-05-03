@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Maho — Create a Space</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --shell-bg: #1a1a2e;
+    --form-surface: rgba(30, 30, 52, 0.92);
+    --form-border: rgba(60, 60, 90, 0.72);
+    --preview-surface: rgba(30, 30, 52, 0.42);
+    --preview-border: rgba(60, 60, 90, 0.5);
+    --row-fill: rgba(36, 36, 62, 0.88);
+    --row-border: rgba(56, 56, 86, 0.92);
+    --pill-fill: rgba(42, 42, 68, 0.8);
+    --pill-border: rgba(66, 66, 96, 0.72);
+    --create-btn: #474d9f;
+    --create-btn-hover: #545bba;
+    --text-primary: #e8e8f0;
+    --text-secondary: rgba(180, 180, 210, 0.9);
+    --text-muted: rgba(150, 150, 185, 0.78);
+    --accent: #7c83d4;
+  }
+
+  body {
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--shell-bg);
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .dialog {
+    width: 980px;
+    height: 612px;
+    display: flex;
+    gap: 22px;
+    padding: 24px;
+  }
+
+  /* ─── Left Panel ─── */
+  .left {
+    width: 344px;
+    flex-shrink: 0;
+    background: var(--form-surface);
+    border: 1px solid var(--form-border);
+    border-radius: 30px;
+    padding: 26px;
+    display: flex;
+    flex-direction: column;
+    backdrop-filter: blur(40px);
+  }
+
+  .illustration {
+    width: 76px;
+    height: 76px;
+    border-radius: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 22px;
+    transition: background 0.3s;
+  }
+  .illustration-orb {
+    width: 52px;
+    height: 52px;
+    border-radius: 18px;
+    border: 1px solid rgba(255,255,255,0.12);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    transition: background 0.3s;
+  }
+
+  .eyebrow {
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+  }
+
+  .title {
+    font-size: 30px;
+    font-weight: 600;
+    line-height: 1.15;
+    margin-bottom: 10px;
+  }
+
+  .subtitle {
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    margin-bottom: 28px;
+  }
+
+  /* Card rows */
+  .card-row {
+    background: var(--row-fill);
+    border: 1px solid var(--row-border);
+    border-radius: 22px;
+    padding: 14px 18px;
+    margin-bottom: 12px;
+    transition: border-color 0.2s;
+  }
+  .card-row:focus-within {
+    border-color: var(--accent);
+  }
+
+  .card-row-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+
+  .card-row input[type="text"] {
+    width: 100%;
+    background: transparent;
+    border: none;
+    outline: none;
+    font-size: 17px;
+    font-weight: 500;
+    color: var(--text-primary);
+    font-family: inherit;
+  }
+  .card-row input[type="text"]::placeholder {
+    color: rgba(140,140,170,0.5);
+  }
+
+  /* Icon row */
+  .icon-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .icon-row-icon {
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+  .icon-row-text {
+    flex: 1;
+    min-width: 0;
+  }
+  .icon-row-title {
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .icon-row-desc {
+    font-size: 11.5px;
+    color: var(--text-muted);
+    margin-top: 3px;
+  }
+
+  /* Pill select */
+  .pill-select {
+    background: var(--pill-fill);
+    border: 1px solid var(--pill-border);
+    border-radius: 16px;
+    height: 32px;
+    padding: 0 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .pill-select select {
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 500;
+    font-family: inherit;
+    -webkit-appearance: none;
+    cursor: pointer;
+  }
+  .pill-chevron {
+    font-size: 9px;
+    color: var(--text-secondary);
+  }
+
+  /* Theme dot */
+  .theme-dot {
+    width: 22px;
+    height: 22px;
+    border-radius: 11px;
+    border: 1px solid rgba(255,255,255,0.14);
+    flex-shrink: 0;
+    transition: background 0.3s;
+  }
+
+  /* Bottom buttons */
+  .bottom-spacer { flex: 1; }
+
+  .create-btn {
+    width: 100%;
+    height: 52px;
+    border-radius: 16px;
+    border: none;
+    background: var(--create-btn);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, opacity 0.15s;
+    margin-bottom: 12px;
+  }
+  .create-btn:hover { background: var(--create-btn-hover); }
+  .create-btn:disabled { opacity: 0.5; cursor: default; }
+
+  .cancel-btn {
+    width: 100%;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    padding: 6px 0;
+  }
+  .cancel-btn:hover { color: var(--text-primary); }
+
+  /* ─── Right Panel ─── */
+  .right {
+    flex: 1;
+    background: var(--preview-surface);
+    border: 1px solid var(--preview-border);
+    border-radius: 30px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    backdrop-filter: blur(40px);
+  }
+
+  .preview-canvas-wrap {
+    flex: 1;
+    border-radius: 22px;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.4s;
+  }
+
+  .preview-label {
+    position: absolute;
+    bottom: 24px;
+    left: 28px;
+    font-size: 20px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.92);
+    text-shadow: 0 1px 8px rgba(0,0,0,0.3);
+    pointer-events: none;
+  }
+
+  .preview-noise {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    mix-blend-mode: overlay;
+    pointer-events: none;
+    transition: opacity 0.3s;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='1'/%3E%3C/svg%3E");
+    background-size: 256px;
+  }
+
+  /* Controls */
+  .preview-controls {
+    padding: 16px 8px 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .color-palette {
+    display: flex;
+    gap: 6px;
+    justify-content: center;
+  }
+  .color-swatch {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    cursor: pointer;
+    transition: border-color 0.15s, transform 0.15s;
+    position: relative;
+  }
+  .color-swatch:hover { transform: scale(1.12); }
+  .color-swatch.active {
+    border-color: #fff;
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+
+  .mode-tabs {
+    display: flex;
+    gap: 4px;
+    background: rgba(30,30,50,0.6);
+    border-radius: 12px;
+    padding: 3px;
+  }
+  .mode-tab {
+    flex: 1;
+    padding: 7px 0;
+    border-radius: 10px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .mode-tab.active {
+    background: rgba(60,60,100,0.6);
+    color: var(--text-primary);
+  }
+
+  .slider-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .slider-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    width: 70px;
+    flex-shrink: 0;
+  }
+  .slider-row input[type="range"] {
+    flex: 1;
+    -webkit-appearance: none;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(100,100,140,0.3);
+    outline: none;
+  }
+  .slider-row input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+    cursor: pointer;
+  }
+
+  /* Gradient overlay */
+  .gradient-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.4s;
+  }
+</style>
+</head>
+<body>
+
+<div class="dialog">
+  <!-- Left Column -->
+  <div class="left">
+    <div class="illustration" id="illust">
+      <div class="illustration-orb" id="illust-orb">
+        <span>⊞</span>
+      </div>
+    </div>
+
+    <div class="eyebrow">New Space</div>
+    <div class="title">Create a Space</div>
+    <div class="subtitle">Separate your tabs with calm, focused themes built for work, life, and everything in between.</div>
+
+    <!-- Name -->
+    <div class="card-row">
+      <div class="card-row-label">Space name</div>
+      <input type="text" id="name-input" placeholder="Enter a name" autofocus>
+    </div>
+
+    <!-- Profile -->
+    <div class="card-row">
+      <div class="icon-row">
+        <div class="icon-row-icon">👤</div>
+        <div class="icon-row-text">
+          <div class="icon-row-title">Profile</div>
+          <div class="icon-row-desc">Choose the browser identity for this space</div>
+        </div>
+        <div class="pill-select">
+          <select id="profile-select">
+            <option>Default</option>
+            <option>Work</option>
+            <option>Personal</option>
+          </select>
+          <span class="pill-chevron">▾</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Theme studio -->
+    <div class="card-row" id="theme-row">
+      <div class="icon-row">
+        <div class="icon-row-icon">✦</div>
+        <div class="icon-row-text">
+          <div class="icon-row-title">Theme studio</div>
+          <div class="icon-row-desc" id="theme-desc">Solid · ready to customize</div>
+        </div>
+        <div class="theme-dot" id="theme-dot"></div>
+      </div>
+    </div>
+
+    <div class="bottom-spacer"></div>
+    <button class="create-btn" id="create-btn" disabled>Create Space</button>
+    <button class="cancel-btn">Cancel</button>
+  </div>
+
+  <!-- Right Column -->
+  <div class="right">
+    <div class="preview-canvas-wrap" id="preview">
+      <div class="gradient-overlay" id="gradient-overlay"></div>
+      <div class="preview-noise" id="preview-noise"></div>
+      <div class="preview-label" id="preview-label">Space</div>
+    </div>
+
+    <div class="preview-controls">
+      <div class="color-palette" id="palette"></div>
+
+      <div class="mode-tabs">
+        <button class="mode-tab" data-mode="solid">Solid</button>
+        <button class="mode-tab active" data-mode="zen">Zen</button>
+        <button class="mode-tab" data-mode="gradient">Gradient</button>
+      </div>
+
+      <div class="slider-row">
+        <span class="slider-label">Grain</span>
+        <input type="range" id="grain-slider" min="0" max="100" value="0">
+      </div>
+      <div class="slider-row">
+        <span class="slider-label">Brightness</span>
+        <input type="range" id="brightness-slider" min="15" max="100" value="90">
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const COLORS = [
+  { title: 'Cream',   h: 0.10, s: 0.15, b: 0.95 },
+  { title: 'Pink',    h: 0.92, s: 0.80, b: 0.90 },
+  { title: 'Purple',  h: 0.75, s: 0.80, b: 0.90 },
+  { title: 'Red',     h: 0.00, s: 0.80, b: 0.90 },
+  { title: 'Orange',  h: 0.08, s: 0.80, b: 0.90 },
+  { title: 'Yellow',  h: 0.15, s: 0.80, b: 0.90 },
+  { title: 'Green',   h: 0.35, s: 0.80, b: 0.90 },
+  { title: 'Blue',    h: 0.58, s: 0.80, b: 0.90 },
+  { title: 'Indigo',  h: 0.62, s: 0.30, b: 0.55 },
+];
+
+let selectedIndex = 7; // Blue
+let mode = 'zen';
+let grain = 0;
+let brightness = 90;
+
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => document.querySelectorAll(s);
+
+function hsbToHsl(h, s, b) {
+  const l = b * (1 - s / 2);
+  const sl = l === 0 || l === 1 ? 0 : (b - l) / Math.min(l, 1 - l);
+  return { h: Math.round(h * 360), s: Math.round(sl * 100), l: Math.round(l * 100) };
+}
+
+function hsbToCss(h, s, b) {
+  const hsl = hsbToHsl(h, s, b);
+  return `hsl(${hsl.h}, ${hsl.s}%, ${hsl.l}%)`;
+}
+
+function buildPalette() {
+  const palette = $('#palette');
+  palette.innerHTML = '';
+  COLORS.forEach((c, i) => {
+    const swatch = document.createElement('div');
+    swatch.className = 'color-swatch' + (i === selectedIndex ? ' active' : '');
+    swatch.style.background = hsbToCss(c.h, c.s, c.b);
+    swatch.addEventListener('click', () => {
+      selectedIndex = i;
+      brightness = Math.round(c.b * 100);
+      $('#brightness-slider').value = brightness;
+      update();
+    });
+    palette.appendChild(swatch);
+  });
+}
+
+function update() {
+  const c = COLORS[selectedIndex];
+  const bAdj = brightness / 100;
+  const color = hsbToCss(c.h, c.s, bAdj);
+  const colorDark = hsbToCss(c.h, c.s, bAdj * 0.6);
+  const colorMid = hsbToCss(c.h, c.s * 0.7, bAdj * 0.8);
+
+  // Preview
+  const preview = $('#preview');
+  if (mode === 'solid') {
+    preview.style.background = color;
+    $('#gradient-overlay').style.opacity = '0';
+  } else if (mode === 'zen') {
+    preview.style.background = `radial-gradient(ellipse at 30% 40%, ${color} 0%, ${colorDark} 100%)`;
+    $('#gradient-overlay').style.opacity = '0';
+  } else {
+    preview.style.background = color;
+    const angle = 135;
+    const comp = hsbToCss((c.h + 0.5) % 1, c.s * 0.8, bAdj * 0.85);
+    $('#gradient-overlay').style.background = `linear-gradient(${angle}deg, ${color} 0%, ${comp} 50%, ${colorMid} 100%)`;
+    $('#gradient-overlay').style.opacity = '1';
+  }
+
+  // Grain
+  $('#preview-noise').style.opacity = grain / 200;
+
+  // Theme dot & illustration
+  $('#theme-dot').style.background = color;
+  $('#illust').style.background = hsbToCss(c.h, c.s * 0.3, bAdj * 0.85) + '28';
+  $('#illust-orb').style.background = hsbToCss(c.h, c.s * 0.4, bAdj * 0.85) + '38';
+
+  // Description
+  const modeLabel = mode === 'solid' ? 'Solid' : mode === 'zen' ? 'Zen' : 'Gradient';
+  const hex = cssToHex(color);
+  $('#theme-desc').textContent = mode === 'gradient'
+    ? `Gradient · 2 tones · Complementary`
+    : `${modeLabel} · ${hex}`;
+
+  // Palette active state
+  $$('.color-swatch').forEach((s, i) => {
+    s.classList.toggle('active', i === selectedIndex);
+  });
+
+  // Mode tabs
+  $$('.mode-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.mode === mode);
+  });
+}
+
+function cssToHex(cssColor) {
+  const d = document.createElement('div');
+  d.style.color = cssColor;
+  document.body.appendChild(d);
+  const rgb = getComputedStyle(d).color;
+  document.body.removeChild(d);
+  const m = rgb.match(/(\d+)/g);
+  if (!m) return '#000000';
+  return '#' + m.slice(0, 3).map(n => parseInt(n).toString(16).padStart(2, '0')).join('').toUpperCase();
+}
+
+// Name input → create button + preview label
+$('#name-input').addEventListener('input', (e) => {
+  const v = e.target.value.trim();
+  $('#create-btn').disabled = !v;
+  $('#preview-label').textContent = v || 'Space';
+});
+
+// Mode tabs
+$$('.mode-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    mode = tab.dataset.mode;
+    update();
+  });
+});
+
+// Sliders
+$('#grain-slider').addEventListener('input', (e) => {
+  grain = parseInt(e.target.value);
+  update();
+});
+$('#brightness-slider').addEventListener('input', (e) => {
+  brightness = parseInt(e.target.value);
+  update();
+});
+
+// Create button
+$('#create-btn').addEventListener('click', () => {
+  const name = $('#name-input').value.trim();
+  if (!name) return;
+  alert(`Space "${name}" created!\n\nProfile: ${$('#profile-select').value}\nColor: ${COLORS[selectedIndex].title}\nMode: ${mode}\nGrain: ${grain}%\nBrightness: ${brightness}%`);
+});
+
+buildPalette();
+update();
+$('#name-input').focus();
+</script>
+</body>
+</html>

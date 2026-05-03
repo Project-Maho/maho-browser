@@ -1,0 +1,305 @@
+#include "maho/browser/ui/webui/maho_space_config/maho_space_config_page_handler.h"
+
+#include <optional>
+#include <utility>
+#include <vector>
+
+#include "base/functional/bind.h"
+#include "base/json/json_reader.h"
+#include "base/json/json_writer.h"
+#include "base/task/thread_pool.h"
+#include "base/values.h"
+#include "chrome/browser/ui/browser.h"
+#include "content/public/browser/web_contents.h"
+#include "maho/browser/maho_core_holder.h"
+#include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/ui/theme/maho_space_theme_state.h"
+#include "maho/third_party/maho/maho_ffi.h"
+#include "ui/color/color_provider_manager.h"
+
+extern "C" {
+void maho_core_update_space_theme(MahoCore* ptr,
+                                  const char* space_id,
+                                  const char* theme_json);
+}
+
+namespace {
+
+maho_space_config::mojom::SpaceInfoPtr LoadSpaceOnPool(
+    const std::string& space_id) {
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return nullptr;
+  }
+
+  char* json_str = maho_core_get_space_view_models(core);
+  if (!json_str) {
+    return nullptr;
+  }
+  std::string json(json_str);
+  maho_string_free(json_str);
+
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_list()) {
+    return nullptr;
+  }
+
+  for (const auto& item : parsed->GetList()) {
+    const auto* dict = item.GetIfDict();
+    if (!dict) {
+      continue;
+    }
+    const std::string* id = dict->FindString("id");
+    if (!id || *id != space_id) {
+      continue;
+    }
+
+    auto info = maho_space_config::mojom::SpaceInfo::New();
+    info->id = *id;
+
+    const std::string* name = dict->FindString("name");
+    info->name = name ? *name : std::string();
+
+    const std::string* icon = dict->FindString("icon");
+    info->icon = icon ? *icon : std::string();
+
+    const std::string* color = dict->FindString("color");
+    info->color = color ? *color : std::string();
+
+    const std::string* theme = dict->FindString("theme_json");
+    if (theme && !theme->empty()) {
+      info->theme_json = *theme;
+    }
+
+    const std::string* pid = dict->FindString("profile_id");
+    if (pid && !pid->empty()) {
+      info->profile_id = *pid;
+    }
+
+    return info;
+  }
+
+  return nullptr;
+}
+
+std::vector<maho_space_config::mojom::ProfileInfoPtr> BuildProfilesOnPool() {
+  std::vector<maho_space_config::mojom::ProfileInfoPtr> profiles;
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return profiles;
+  }
+
+  char* json_str = maho_core_list_profiles(core);
+  if (!json_str) {
+    return profiles;
+  }
+  std::string json(json_str);
+  maho_string_free(json_str);
+
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_list()) {
+    return profiles;
+  }
+
+  for (const auto& item : parsed->GetList()) {
+    const auto* dict = item.GetIfDict();
+    if (!dict) {
+      continue;
+    }
+    const std::string* id = dict->FindString("id");
+    const std::string* name = dict->FindString("name");
+    if (!id || !name) {
+      continue;
+    }
+
+    auto profile = maho_space_config::mojom::ProfileInfo::New();
+    profile->id = *id;
+    profile->name = *name;
+    profile->is_default = dict->FindBool("is_default").value_or(false);
+    profiles.push_back(std::move(profile));
+  }
+
+  return profiles;
+}
+
+bool RenameSpaceOnPool(const std::string& space_id,
+                       const std::string& name) {
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return false;
+  }
+  maho_core_rename_space(core, space_id.c_str(), name.c_str());
+  return true;
+}
+
+bool RecolorSpaceOnPool(const std::string& space_id,
+                        const std::string& color_hex,
+                        const std::string& theme_json) {
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return false;
+  }
+
+  base::Value::Dict color_dict;
+  color_dict.Set("color", color_hex);
+  std::string color_json;
+  base::JSONWriter::Write(color_dict, &color_json);
+
+  maho_core_recolor_space(core, space_id.c_str(), color_json.c_str());
+
+  if (!theme_json.empty()) {
+    maho_core_update_space_theme(core, space_id.c_str(), theme_json.c_str());
+  }
+
+  return true;
+}
+
+}  // namespace
+
+MahoSpaceConfigPageHandler::MahoSpaceConfigPageHandler(
+    mojo::PendingReceiver<maho_space_config::mojom::PageHandler> receiver,
+    mojo::PendingRemote<maho_space_config::mojom::Page> page,
+    Browser* browser,
+    content::WebContents* web_contents,
+    const std::string& space_id,
+    maho_space_config::mojom::InitialFocus initial_focus)
+    : receiver_(this, std::move(receiver)),
+      page_(std::move(page)),
+      browser_(browser),
+      web_contents_(web_contents),
+      space_id_(space_id),
+      initial_focus_(initial_focus) {}
+
+MahoSpaceConfigPageHandler::~MahoSpaceConfigPageHandler() = default;
+
+void MahoSpaceConfigPageHandler::GetSpaceInfo(GetSpaceInfoCallback callback) {
+  auto focus = initial_focus_;
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE,
+      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
+      base::BindOnce(&LoadSpaceOnPool, space_id_),
+      base::BindOnce(
+          [](maho_space_config::mojom::InitialFocus focus,
+             GetSpaceInfoCallback cb,
+             maho_space_config::mojom::SpaceInfoPtr info) {
+            std::move(cb).Run(std::move(info), focus);
+          },
+          focus, std::move(callback)));
+}
+
+void MahoSpaceConfigPageHandler::GetProfiles(GetProfilesCallback callback) {
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE,
+      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
+      base::BindOnce(&BuildProfilesOnPool),
+      std::move(callback));
+}
+
+void MahoSpaceConfigPageHandler::UpdateName(
+    const std::string& name,
+    UpdateNameCallback callback) {
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE,
+      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
+      base::BindOnce(&RenameSpaceOnPool, space_id_, name),
+      std::move(callback));
+}
+
+void MahoSpaceConfigPageHandler::UpdateIcon(
+    const std::string& icon,
+    UpdateIconCallback callback) {
+  // Icon is stored as part of color_json in the view model.
+  // Recolor with the icon embedded.
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE,
+      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
+      base::BindOnce(
+          [](const std::string& space_id, const std::string& icon) -> bool {
+            MahoCore* core = maho::GetCore();
+            if (!core) {
+              return false;
+            }
+
+            // Read current space to get existing color, then update with icon.
+            char* json_str = maho_core_get_space_view_models(core);
+            if (!json_str) {
+              return false;
+            }
+            std::string json(json_str);
+            maho_string_free(json_str);
+
+            std::optional<base::Value> parsed =
+                base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+            if (!parsed || !parsed->is_list()) {
+              return false;
+            }
+
+            for (const auto& item : parsed->GetList()) {
+              const auto* dict = item.GetIfDict();
+              if (!dict) {
+                continue;
+              }
+              const std::string* id = dict->FindString("id");
+              if (!id || *id != space_id) {
+                continue;
+              }
+              const std::string* existing_color = dict->FindString("color");
+              std::string current_color =
+                  (existing_color && !existing_color->empty())
+                      ? *existing_color
+                      : "#5F8BFF";
+
+              base::Value::Dict color_dict;
+              color_dict.Set("color", current_color);
+              color_dict.Set("icon", icon);
+              std::string color_json;
+              base::JSONWriter::Write(color_dict, &color_json);
+              maho_core_recolor_space(core, space_id.c_str(),
+                                      color_json.c_str());
+              return true;
+            }
+            return false;
+          },
+          space_id_, icon),
+      std::move(callback));
+}
+
+void MahoSpaceConfigPageHandler::UpdateColor(
+    const std::string& color_hex,
+    const std::optional<std::string>& theme_json,
+    UpdateColorCallback callback) {
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE,
+      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
+      base::BindOnce(&RecolorSpaceOnPool, space_id_, color_hex,
+                     theme_json.value_or(std::string())),
+      base::BindOnce(
+          [](base::WeakPtr<MahoSpaceConfigPageHandler> weak_self,
+             UpdateColorCallback cb, bool success) {
+            if (weak_self && success) {
+              MahoSpaceThemeState::UpdateFromCore();
+              ui::ColorProviderManager::Get().ResetColorProviderCache();
+            }
+            std::move(cb).Run(success);
+          },
+          weak_factory_.GetWeakPtr(), std::move(callback)));
+}
+
+void MahoSpaceConfigPageHandler::UpdateProfile(
+    const std::optional<std::string>& profile_id,
+    UpdateProfileCallback callback) {
+  auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+  if (bridge && profile_id.has_value()) {
+    bridge->RegisterSpace(space_id_,
+                          base::FilePath::FromASCII(profile_id.value()));
+  }
+  std::move(callback).Run(true);
+}
+
+void MahoSpaceConfigPageHandler::CloseDialog() {
+  if (web_contents_) {
+    web_contents_->ClosePage();
+  }
+}

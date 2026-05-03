@@ -1,0 +1,27 @@
+import("//ui/webui/resources/tools/build_webui.gni")
+
+assert(!is_android)
+
+build_webui("build") {
+  grd_prefix = "maho_settings"
+
+  static_files = [
+    "settings.html",
+    "settings.css",
+  ]
+
+  ts_files = [
+    "app.ts",
+    "models.ts",
+    "schema/setting_schema.ts",
+    "schema/panes.ts",
+  ]
+
+  ts_deps = [ "//ui/webui/resources/mojo:build_ts" ]
+
+  webui_context_type = "trusted"
+
+  mojo_files_deps =
+      [ "//maho/browser/ui/webui/maho_settings:mojo_bindings_ts__generator" ]
+  mojo_files = [ "$root_gen_dir/maho/browser/ui/webui/maho_settings/maho_settings.mojom-webui.ts" ]
+}
