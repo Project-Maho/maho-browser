@@ -37,6 +37,7 @@ class SidebarController: NSViewController, CoreUpdateObserver {
     private var navControlRowTopConstraint: NSLayoutConstraint?
     private var navControlRowLeadingConstraint: NSLayoutConstraint?
     private var addressBarHeightConstraint: NSLayoutConstraint?
+    private let sidebarHeaderDragView = SidebarHeaderDragView()
 
     private enum LayoutMetrics {
         static let defaultNavigationRowTopInset: CGFloat = 6
@@ -226,7 +227,17 @@ class SidebarController: NSViewController, CoreUpdateObserver {
         bodyContainerBottomToFooterConstraint = bodyContainerView.bottomAnchor.constraint(equalTo: footerContainerView.topAnchor)
         bodyContainerBottomToContainerConstraint = bodyContainerView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
 
+        sidebarHeaderDragView.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(sidebarHeaderDragView)
+        container.addSubview(navControlRow, positioned: .above, relativeTo: sidebarHeaderDragView)
+        container.addSubview(addressBar, positioned: .above, relativeTo: sidebarHeaderDragView)
+
         NSLayoutConstraint.activate([
+            sidebarHeaderDragView.topAnchor.constraint(equalTo: container.topAnchor),
+            sidebarHeaderDragView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            sidebarHeaderDragView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            sidebarHeaderDragView.bottomAnchor.constraint(equalTo: addressBar.topAnchor),
+
             navControlRowTopConstraint!,
             navControlRowLeadingConstraint!,
             navControlRow.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -ChromeGeometry.navRowTrailingInset),
@@ -757,7 +768,7 @@ class SidebarController: NSViewController, CoreUpdateObserver {
 
         let leftControlGroup = makeNavigationControlGroup()
         let rightControlGroup = makeNavigationControlGroup()
-        let spacerView = NSView()
+        let spacerView = SidebarHeaderDragSpacerView()
         spacerView.translatesAutoresizingMaskIntoConstraints = false
         spacerView.setContentHuggingPriority(.defaultLow, for: .horizontal)
         spacerView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -1792,6 +1803,18 @@ private final class SidebarClickableView: NSButton {
 
     @objc private func handleClick() {
         onClick?()
+    }
+}
+
+private final class SidebarHeaderDragView: NSView {
+    override func mouseDown(with event: NSEvent) {
+        window?.performDrag(with: event)
+    }
+}
+
+private final class SidebarHeaderDragSpacerView: NSView {
+    override func mouseDown(with event: NSEvent) {
+        window?.performDrag(with: event)
     }
 }
 

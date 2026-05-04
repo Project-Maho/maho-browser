@@ -5,28 +5,30 @@
 
 #include <string>
 
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/values.h"
-#include "content/public/browser/web_contents_observer.h"
+#include "maho/browser/ai/maho_ai_llm_client.h"
 #include "maho/browser/ui/webui/maho_inline_edit/maho_inline_edit.mojom.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "services/network/public/cpp/simple_url_loader_stream_consumer.h"
 
 class Browser;
 class PrefService;
 
+namespace content {
+class WebContents;
+}  // namespace content
+
 namespace network {
-class SimpleURLLoader;
 class SharedURLLoaderFactory;
 }  // namespace network
 
 class MahoInlineEditHandler
-    : public maho_inline_edit::mojom::InlineEditPageHandler,
-      public network::SimpleURLLoaderStreamConsumer {
+    : public maho_inline_edit::mojom::InlineEditPageHandler {
  public:
   MahoInlineEditHandler(
       Browser* browser,
@@ -47,12 +49,6 @@ class MahoInlineEditHandler
                    RequestEditCallback callback) override;
   void ApplyEdit(const std::string& edited_text) override;
 
-  // network::SimpleURLLoaderStreamConsumer:
-  void OnDataReceived(std::string_view string_piece,
-                      base::OnceClosure resume) override;
-  void OnComplete(bool success) override;
-  void OnRetry(base::OnceClosure start_retry) override;
-
  private:
   content::WebContents* GetActiveWebContents();
   void ExecuteJsInActiveTab(const std::u16string& script);
@@ -60,22 +56,16 @@ class MahoInlineEditHandler
   static std::string HandleEventOnBackground(const std::string& event_json);
   void OnRustEventResponse(RequestEditCallback callback,
                            const std::string& rust_response_json);
-  void StartLlmRequest(const std::string& api_key,
-                       const base::ListValue& prompt_messages,
+  void StartLlmRequest(base::ListValue prompt_messages,
                        RequestEditCallback callback);
-  void ProcessSSEBuffer();
-  void FinalizeStreaming();
+  void FinalizeStreaming(const std::string& result);
+  void HandleLlmError(const std::string& error);
 
   SEQUENCE_CHECKER(sequence_checker_);
 
   raw_ptr<Browser> browser_;
   raw_ptr<PrefService> prefs_;
-  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
-
-  std::unique_ptr<network::SimpleURLLoader> url_loader_;
-  std::string sse_buffer_;
-  std::string accumulated_response_;
-  bool is_streaming_ = false;
+  MahoAiLlmClient llm_client_;
 
   RequestEditCallback pending_callback_;
 

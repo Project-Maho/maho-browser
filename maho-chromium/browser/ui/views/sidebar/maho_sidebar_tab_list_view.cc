@@ -23,6 +23,7 @@
 #include "chrome/browser/ui/tab_ui_helper.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "content/public/browser/web_contents.h"
 #include "components/tabs/public/tab_interface.h"
 #include "maho/browser/ui/context_menu/maho_tab_context_menu.h"
 #include "maho/browser/maho_core_holder.h"
@@ -1420,6 +1421,39 @@ void MahoSidebarTabListView::Update(const MahoSidebarTabListModel& model,
   PruneLocalTitleCache(model);
   last_model_ = model;
   has_last_model_ = true;
+
+  // Rebuild stable WebContents* → core tab_id map for observer lookups.
+  contents_to_core_id_.clear();
+  if (browser) {
+    TabStripModel* strip = browser->tab_strip_model();
+    auto populate = [&](const std::vector<SidebarTreeNode>& nodes) {
+      for (const auto& node : nodes) {
+        if (node.kind == SidebarNodeKind::kTab &&
+            node.tab_strip_index >= 0 && !node.tab_id.empty() &&
+            strip->ContainsIndex(node.tab_strip_index)) {
+          content::WebContents* wc =
+              strip->GetWebContentsAt(node.tab_strip_index);
+          if (wc) {
+            contents_to_core_id_[wc] = node.tab_id;
+          }
+        }
+        for (const auto& child : node.children) {
+          if (child.kind == SidebarNodeKind::kTab &&
+              child.tab_strip_index >= 0 && !child.tab_id.empty() &&
+              strip->ContainsIndex(child.tab_strip_index)) {
+            content::WebContents* wc =
+                strip->GetWebContentsAt(child.tab_strip_index);
+            if (wc) {
+              contents_to_core_id_[wc] = child.tab_id;
+            }
+          }
+        }
+      }
+    };
+    populate(model.pinned_tree);
+    populate(model.normal_tree);
+  }
+
   RebuildRows(model, browser);
 }
 
@@ -1484,7 +1518,8 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
   pinned_section_target_ = nullptr;
   normal_section_target_ = nullptr;
 
-  const bool has_tree = !model.pinned_tree.empty() || !model.normal_tree.empty();
+  const bool has_tree = !active_space_id_.empty() ||
+                        !model.pinned_tree.empty() || !model.normal_tree.empty();
   const bool has_flat = !model.pinned_tabs.empty() || !model.tabs.empty();
 
   if (!has_tree && !has_flat) {
@@ -1617,10 +1652,6 @@ void MahoSidebarTabListView::RebuildTreeSection(
     const std::vector<SidebarTreeNode>& nodes,
     MahoSidebarTabSection section,
     Browser* browser) {
-  if (nodes.empty()) {
-    return;
-  }
-
   const bool emphasized = (section == MahoSidebarTabSection::kPinned);
   auto* section_container = AddSectionContainer(parent, emphasized, section);
 
@@ -1640,7 +1671,9 @@ void MahoSidebarTabListView::RebuildTreeSection(
   rows_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
-  RebuildTreeNodes(rows_container, nodes, section, browser);
+  if (!nodes.empty()) {
+    RebuildTreeNodes(rows_container, nodes, section, browser);
+  }
 }
 
 void MahoSidebarTabListView::RebuildTreeNodes(
@@ -1811,6 +1844,18 @@ void MahoSidebarTabListView::PruneLocalTitleCache(
       ++it;
     }
   }
+}
+
+std::string MahoSidebarTabListView::FindCoreTabIdByWebContents(
+    content::WebContents* contents) const {
+  if (!contents) {
+    return std::string();
+  }
+  auto it = contents_to_core_id_.find(contents);
+  if (it != contents_to_core_id_.end()) {
+    return it->second;
+  }
+  return std::string();
 }
 
 }  // namespace maho

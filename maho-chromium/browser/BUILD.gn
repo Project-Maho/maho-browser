@@ -7,6 +7,20 @@ source_set("maho_core_holder") {
   ]
 }
 
+source_set("maho_ai_client") {
+  sources = [
+    "ai/maho_ai_llm_client.cc",
+    "ai/maho_ai_llm_client.h",
+  ]
+  deps = [
+    "//base",
+    "//components/prefs",
+    "//net",
+    "//services/network/public/cpp",
+    "//url",
+  ]
+}
+
 source_set("maho_context_menus") {
   sources = [
     "ui/context_menu/maho_context_menu_ids.h",

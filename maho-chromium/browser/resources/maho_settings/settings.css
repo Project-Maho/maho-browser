@@ -173,22 +173,6 @@ maho-settings-app {
   padding: 10px 10px 8px;
 }
 
-.sidebar-brand-kicker {
-  color: var(--maho-settings-accent-strong);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-}
-
-.preferences-section__eyebrow {
-  color: var(--maho-settings-accent-strong);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-
 .sidebar-title,
 .preferences-section__title {
   font-family: var(--maho-settings-font-display);
@@ -200,23 +184,6 @@ maho-settings-app {
   font-size: 18px;
   line-height: 1.1;
   margin-top: 0;
-}
-
-.preferences-section__description,
-.preferences-section__summary,
-.setting-row__description,
-.preferences-footer,
-.sidebar-nav-button__detail {
-  color: var(--maho-settings-text-muted);
-}
-
-.preferences-section__description,
-.preferences-section__summary,
-.setting-row__description,
-.preferences-footer {
-  font-size: 14px;
-  line-height: 1.6;
-  margin: 0;
 }
 
 .sidebar-navigation {
@@ -270,10 +237,6 @@ maho-settings-app {
   color: var(--maho-settings-text-primary);
 }
 
-.sidebar-nav-button.is-active .sidebar-nav-button__detail {
-  color: var(--maho-settings-text-secondary);
-}
-
 .sidebar-nav-button__badge {
   align-items: center;
   background: rgba(255, 255, 255, 0.055);
@@ -303,13 +266,6 @@ maho-settings-app {
   font-size: 12px;
   font-weight: 600;
   letter-spacing: -0.01em;
-}
-
-.sidebar-nav-button__detail {
-  color: #7c869d;
-  display: flex;
-  font-size: 10.5px;
-  gap: 6px;
 }
 
 .preferences-content {
@@ -462,13 +418,8 @@ maho-settings-app {
 .preferences-section__description {
   color: var(--maho-settings-text-secondary);
   font-size: 15px;
-}
-
-.preferences-section__summary {
-  color: var(--maho-settings-text-muted);
-  font-size: 13px;
-  line-height: 1.5;
-  max-width: 70ch;
+  line-height: 1.6;
+  margin: 0;
 }
 
 .overview-banner {
@@ -553,6 +504,7 @@ maho-settings-app {
   color: var(--maho-settings-text-muted);
   font-size: 12.5px;
   line-height: 1.45;
+  margin: 0;
   max-width: 58ch;
 }
 
@@ -590,6 +542,50 @@ maho-settings-app {
   width: 100%;
 }
 
+.setting-capability-stub {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  width: 100%;
+}
+
+.setting-capability-stub__status {
+  color: var(--maho-settings-text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.setting-capability-stub__missing {
+  color: #82b4ff;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.setting-capability-stub__summary {
+  color: var(--maho-settings-text-secondary);
+  font-size: 12.5px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.setting-capability-stub__bullets {
+  color: var(--maho-settings-text-muted);
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.setting-capability-stub__bullets li {
+  line-height: 1.45;
+}
+
 .setting-switch {
   align-items: center;
   appearance: none;
@@ -602,27 +598,6 @@ maho-settings-app {
   justify-content: flex-end;
   padding: 0;
   width: 100%;
-}
-
-.setting-switch:disabled,
-.setting-input:disabled,
-.setting-textarea:disabled,
-.setting-slider:disabled,
-.setting-segment:disabled,
-.setting-select:disabled {
-  opacity: 0.68;
-}
-
-.setting-switch.is-disabled,
-.setting-input-shell.is-disabled,
-.setting-slider-shell.is-disabled,
-.setting-segmented.is-disabled,
-.setting-textarea.is-disabled {
-  cursor: default;
-}
-
-.setting-switch.is-disabled {
-  pointer-events: none;
 }
 
 .setting-switch:focus-visible {
@@ -796,6 +771,10 @@ maho-settings-app {
 }
 
 .preferences-footer {
+  color: var(--maho-settings-text-muted);
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 0;
   padding: 4px var(--maho-settings-space-2) var(--maho-settings-space-4);
 }
 
@@ -952,12 +931,46 @@ maho-settings-app {
   }
 
   .preferences-workspace {
-    grid-template-columns: 1fr;
+    grid-template-columns: 68px minmax(0, 1fr);
   }
 
   .preferences-sidebar {
-    border-bottom: 1px solid var(--maho-settings-border);
-    border-right: none;
+    border-right: 1px solid rgba(255, 255, 255, 0.055);
+    padding-inline: 6px;
+  }
+
+  .sidebar-brand-card {
+    margin-bottom: 10px;
+    padding-inline: 0;
+    place-items: center;
+  }
+
+  .sidebar-title {
+    display: none;
+  }
+
+  .sidebar-navigation {
+    align-items: center;
+  }
+
+  .sidebar-nav-button {
+    gap: 0;
+    grid-template-columns: 1fr;
+    justify-items: center;
+    padding-inline: 8px;
+  }
+
+  .sidebar-nav-button__text {
+    border: 0;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    padding: 0;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
   }
 }
 

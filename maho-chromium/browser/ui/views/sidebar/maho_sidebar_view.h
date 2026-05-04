@@ -10,6 +10,7 @@
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_create_space_view.h"
 #include "ui/views/view.h"
 
 class Browser;
@@ -43,6 +44,8 @@ class MahoSidebarView : public views::View,
 
   void ShowCreateSpace();
 
+  bool IsPositionInWindowCaption(const gfx::Point& point) const;
+
   // Test-only accessors for live browser tests. Keep minimal.
   MahoSidebarFavoritesGridView* favorites_view_for_testing() {
     return favorites_view_;
@@ -50,9 +53,16 @@ class MahoSidebarView : public views::View,
   MahoSidebarTabListView* tab_list_view_for_testing() {
     return tab_list_view_;
   }
+  MahoSidebarFooterView* footer_view_for_testing() { return footer_view_; }
+  MahoSidebarSearchView* search_view_for_testing() { return search_view_; }
+  bool is_create_mode_for_testing() const {
+    return create_space_view_ && create_space_view_->GetVisible();
+  }
 
  private:
   void BuildUi();
+  void SetCreateMode(bool in_create_mode);
+  void HandleCreateSpaceClosed();
   void ScheduleRefreshAll();
   void RefreshFavoritesAndViewState();
   static MahoSidebarFavoritesModel BuildFavoritesModelOnBackground(
@@ -81,6 +91,7 @@ class MahoSidebarView : public views::View,
   void OnTabGroupChanged(const TabGroupChange& change) override;
 
   raw_ptr<Browser> browser_;
+  raw_ptr<views::View> normal_surface_ = nullptr;
   raw_ptr<MahoSidebarTopBarView> top_bar_view_ = nullptr;
   raw_ptr<MahoSidebarSearchView> search_view_ = nullptr;
   raw_ptr<MahoSidebarFavoritesGridView> favorites_view_ = nullptr;

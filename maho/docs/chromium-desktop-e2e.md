@@ -23,7 +23,8 @@ python3 maho/build/scripts/e2e_chromium_sidebar.py --scenario phase2_seeded_favo
 ## Prerequisites
 
 - macOS with Accessibility permission granted to the Terminal or Python process that launches the harness.
-- A built app bundle at `/Users/indo/code/project/maho-workspace/chromium/src/out/Release/Maho.app` by default.
+- Build the Chromium app bundle in `out/Default` by default, not `out/Release`.
+- A built app bundle at `/Users/indo/code/project/maho-workspace/chromium/src/out/Default/Maho.app` by default.
 - The maho-core prebuilt static library from the maho-chromium build flow, since Chromium is launched from the overlay build output.
 
 If you need a different app bundle location, set `MAHO_APP_PATH`.
@@ -34,7 +35,7 @@ The harness reads these environment variables:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `MAHO_APP_PATH` | `/Users/indo/code/project/maho-workspace/chromium/src/out/Release/Maho.app` | Path to the app bundle the harness launches. |
+| `MAHO_APP_PATH` | `/Users/indo/code/project/maho-workspace/chromium/src/out/Default/Maho.app` | Path to the app bundle the harness launches. |
 | `MAHO_E2E_ARTIFACT_DIR` | `/tmp/maho-chromium-e2e-spaces` | Root directory for per-scenario artifacts. |
 | `MAHO_E2E_KEEP_PROFILE=1` | unset | Keeps the temporary browser profile directory after each scenario. When unset, the profile is removed at the end of the run. |
 | `MAHO_E2E_APP_READY_TIMEOUT_MS` | `30000` | Wait time for app readiness and the seeded page polling. |

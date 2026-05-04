@@ -12,6 +12,18 @@ interface NavItem {
   icon: string;
 }
 
+interface CapabilityBullet {
+  title: string;
+  detail: string;
+}
+
+interface CapabilityStub {
+  title: string;
+  summary: string;
+  missing: string;
+  bullets?: CapabilityBullet[];
+}
+
 const NAV_ITEMS: NavItem[] = [
   {id: 'general', label: 'General', icon: '⚙️'},
   {id: 'appearance', label: 'Appearance', icon: '🎨'},
@@ -172,6 +184,56 @@ export class MahoSettings extends CrLitElement {
       font-size: 13px;
       color: var(--maho-text-secondary, #999);
     }
+
+    .capability-stub {
+      padding: 16px 0;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .capability-stub__summary {
+      display: grid;
+      gap: 6px;
+    }
+
+    .capability-stub__title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--maho-text, #e0e0e0);
+    }
+
+    .capability-stub__text {
+      font-size: 13px;
+      line-height: 1.45;
+      color: var(--maho-text-secondary, #999);
+    }
+
+    .capability-stub__missing {
+      font-size: 12px;
+      color: var(--maho-accent, #5B9CF6);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+
+    .capability-stub__bullets {
+      margin: 0;
+      padding-left: 18px;
+      display: grid;
+      gap: 8px;
+      color: var(--maho-text, #e0e0e0);
+      font-size: 13px;
+    }
+
+    .capability-stub__bullets li {
+      line-height: 1.4;
+    }
+
+    .capability-stub__bullet-detail {
+      color: var(--maho-text-secondary, #999);
+      margin-left: 4px;
+    }
   `;
 
   @state() activeSection: SectionId = 'general';
@@ -208,6 +270,28 @@ export class MahoSettings extends CrLitElement {
         class="toggle ${val ? 'on' : ''}"
         @click=${() => this.updateSetting(key, !val)}
       ></button>
+    `;
+  }
+
+  private renderCapabilityStub(stub: CapabilityStub) {
+    return html`
+      <div class="capability-stub">
+        <div class="capability-stub__summary">
+          <div class="capability-stub__title">${stub.title}</div>
+          <div class="capability-stub__text">${stub.summary}</div>
+          <div class="capability-stub__missing">Missing capability: ${stub.missing}</div>
+        </div>
+        ${stub.bullets?.length ? html`
+          <ul class="capability-stub__bullets">
+            ${stub.bullets.map(bullet => html`
+              <li>
+                <strong>${bullet.title}</strong>
+                <span class="capability-stub__bullet-detail">${bullet.detail}</span>
+              </li>
+            `)}
+          </ul>
+        ` : html``}
+      </div>
     `;
   }
 
@@ -343,58 +427,32 @@ export class MahoSettings extends CrLitElement {
         return html`
           <h2>AI</h2>
           <settings-section title="AI Assistant">
-            <div class="field">
-              <div class="field-info">
-                <div class="field-label">Enable AI</div>
-                <div class="field-desc">Enable the built-in AI assistant</div>
-              </div>
-              <div class="field-control">${this.renderToggle('aiEnabled')}</div>
-            </div>
-            <div class="field">
-              <div class="field-info">
-                <div class="field-label">AI Provider</div>
-                <div class="field-desc">Choose your preferred AI model provider</div>
-              </div>
-              <div class="field-control">
-                <select @change=${(e: Event) => this.onSelectChange('aiProvider', e)}>
-                  <option>Claude</option>
-                  <option>OpenAI</option>
-                  <option>Gemini</option>
-                  <option>Local (Ollama)</option>
-                </select>
-              </div>
-            </div>
+            ${this.renderCapabilityStub({
+              title: 'AI Assistant capabilities are staged, not live',
+              summary: 'This pane documents the assistant surface, but the browser-side AI service and provider plumbing are not implemented in this build yet.',
+              missing: 'browser-side AI service',
+              bullets: [
+                {title: 'Enable AI', detail: 'future toggle for turning the assistant on or off'},
+                {title: 'AI Provider', detail: 'future provider picker for Claude, OpenAI, Gemini, or local models'},
+              ],
+            })}
           </settings-section>
         `;
       case 'sync':
         return html`
           <h2>Sync</h2>
           <settings-section title="Sync Settings">
-            <div class="field">
-              <div class="field-info">
-                <div class="field-label">Enable Sync</div>
-                <div class="field-desc">Sync data across your devices</div>
-              </div>
-              <div class="field-control">${this.renderToggle('syncEnabled')}</div>
-            </div>
-            <div class="field">
-              <div class="field-info">
-                <div class="field-label">Sync Bookmarks</div>
-              </div>
-              <div class="field-control">${this.renderToggle('syncBookmarks')}</div>
-            </div>
-            <div class="field">
-              <div class="field-info">
-                <div class="field-label">Sync History</div>
-              </div>
-              <div class="field-control">${this.renderToggle('syncHistory')}</div>
-            </div>
-            <div class="field">
-              <div class="field-info">
-                <div class="field-label">Sync Open Tabs</div>
-              </div>
-              <div class="field-control">${this.renderToggle('syncTabs')}</div>
-            </div>
+            ${this.renderCapabilityStub({
+              title: 'Sync is a capability stub for now',
+              summary: 'Cross-device sync needs account and transport plumbing that is not present yet, so this pane stays honest instead of pretending to control a real service.',
+              missing: 'sync backend and account state',
+              bullets: [
+                {title: 'Enable Sync', detail: 'future master switch for the sync service'},
+                {title: 'Sync Bookmarks', detail: 'future per-dataset sync control'},
+                {title: 'Sync History', detail: 'future per-dataset sync control'},
+                {title: 'Sync Open Tabs', detail: 'future per-dataset sync control'},
+              ],
+            })}
           </settings-section>
         `;
       case 'about':

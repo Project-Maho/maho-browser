@@ -9,13 +9,14 @@
 
 #include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
+#include "cc/paint/paint_flags.h"
 #include "maho/browser/ui/views/command/maho_command_action_handler.h"
 #include "maho/browser/ui/views/command/maho_command_model.h"
 #include "maho/browser/ui/views/command/maho_command_result_row_view.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/color/color_id.h"
-#include "ui/events/event.h"
 #include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/background.h"
@@ -24,21 +25,66 @@
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/layout/flex_layout.h"
+#include "ui/views/layout/flex_layout_types.h"
 #include "ui/views/style/typography.h"
+#include "ui/views/widget/widget.h"
 
 namespace maho {
 
 namespace {
 
-constexpr int kOverlayWidthDp = 600;
-constexpr int kOverlayMaxHeightDp = 480;
-constexpr int kOverlayCornerRadiusDp = 12;
-constexpr int kOverlayBorderWidthDp = 1;
-constexpr int kContentPaddingDp = 8;
-constexpr int kTextfieldHeightDp = 44;
-constexpr int kTextfieldCornerRadiusDp = 8;
-constexpr int kTextfieldPaddingHDp = 12;
-constexpr int kResultsSpacingDp = 2;
+constexpr int kPanelCornerRadiusDp = 16;
+constexpr int kPanelBorderWidthDp = 1;
+constexpr int kPanelPaddingDp = 12;
+constexpr int kSearchRowHeightDp = 44;
+constexpr int kSearchRowCornerRadiusDp = 12;
+constexpr int kSearchRowPaddingHDp = 14;
+constexpr int kResultsSpacingDp = 4;
+constexpr int kMaxResultsHeightDp = 420;
+constexpr int kSearchIconSizeDp = 16;
+
+constexpr SkColor kPanelColor = SkColorSetRGB(0x1A, 0x1D, 0x26);
+constexpr SkColor kPanelBorderColor = SkColorSetARGB(0x30, 0xFF, 0xFF, 0xFF);
+constexpr SkColor kSearchRowColor = SkColorSetRGB(0x22, 0x26, 0x30);
+constexpr SkColor kSearchRowBorderColor = SkColorSetARGB(0x28, 0xFF, 0xFF, 0xFF);
+constexpr SkColor kPrimaryTextColor = SkColorSetRGB(0xF0, 0xF2, 0xF5);
+constexpr SkColor kSecondaryTextColor = SkColorSetRGB(0x8A, 0x92, 0xA6);
+constexpr SkColor kSearchIconColor = SkColorSetRGB(0x8A, 0x92, 0xA6);
+
+class SearchIconView : public views::View {
+ public:
+  SearchIconView() {
+    SetPreferredSize(gfx::Size(kSearchIconSizeDp, kSearchIconSizeDp));
+  }
+
+  SearchIconView(const SearchIconView&) = delete;
+  SearchIconView& operator=(const SearchIconView&) = delete;
+  ~SearchIconView() override = default;
+
+  void OnPaint(gfx::Canvas* canvas) override {
+    views::View::OnPaint(canvas);
+
+    const gfx::Rect bounds = GetContentsBounds();
+    cc::PaintFlags flags;
+    flags.setAntiAlias(true);
+    flags.setStyle(cc::PaintFlags::kStroke_Style);
+    flags.setStrokeWidth(1.6f);
+    flags.setColor(kSearchIconColor);
+
+    float cx = bounds.CenterPoint().x() - 1.5f;
+    float cy = bounds.CenterPoint().y() - 1.5f;
+    canvas->DrawCircle(gfx::PointF(cx, cy), 4.5f, flags);
+    canvas->DrawLine(
+        gfx::PointF(cx + 3.5f, cy + 3.5f),
+        gfx::PointF(bounds.right() - 1.0f, bounds.bottom() - 1.0f), flags);
+  }
+
+  METADATA_HEADER(SearchIconView, views::View)
+};
+
+BEGIN_METADATA(SearchIconView)
+END_METADATA
 
 }  // namespace
 
@@ -53,38 +99,49 @@ MahoCommandOverlayView::MahoCommandOverlayView(
       dismiss_callback_(std::move(dismiss_callback)) {
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical,
-      gfx::Insets(kContentPaddingDp), kResultsSpacingDp));
+      gfx::Insets(kPanelPaddingDp), kResultsSpacingDp));
   layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
-  SetBackground(views::CreateRoundedRectBackground(ui::kColorSysSurface2,
-                                                   kOverlayCornerRadiusDp));
-  SetBorder(views::CreateRoundedRectBorder(kOverlayBorderWidthDp,
-                                           kOverlayCornerRadiusDp,
-                                           ui::kColorSysNeutralOutline));
+  SetBackground(
+      views::CreateRoundedRectBackground(kPanelColor, kPanelCornerRadiusDp));
+  SetBorder(views::CreateRoundedRectBorder(
+      kPanelBorderWidthDp, kPanelCornerRadiusDp, kPanelBorderColor));
 
-  textfield_ = AddChildView(std::make_unique<views::Textfield>());
-  textfield_->SetPlaceholderText(
-      u"Search tabs, bookmarks, actions\u2026");
+  auto* search_row = AddChildView(std::make_unique<views::View>());
+  auto* search_layout =
+      search_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kHorizontal,
+          gfx::Insets::VH(0, kSearchRowPaddingHDp), 10));
+  search_layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kCenter);
+  search_row->SetPreferredSize(gfx::Size(0, kSearchRowHeightDp));
+  search_row->SetBackground(views::CreateRoundedRectBackground(
+      kSearchRowColor, kSearchRowCornerRadiusDp));
+  search_row->SetBorder(views::CreateRoundedRectBorder(
+      1, kSearchRowCornerRadiusDp, kSearchRowBorderColor));
+
+  search_row->AddChildView(std::make_unique<SearchIconView>());
+
+  textfield_ = search_row->AddChildView(std::make_unique<views::Textfield>());
+  textfield_->SetPlaceholderText(u"Search tabs, bookmarks, actions\u2026");
   textfield_->set_controller(this);
-  textfield_->SetPreferredSize(gfx::Size(0, kTextfieldHeightDp));
+  textfield_->SetPreferredSize(gfx::Size(0, kSearchRowHeightDp - 8));
   textfield_->SetBackgroundEnabled(false);
-  textfield_->SetBorder(views::CreateEmptyBorder(
-      gfx::Insets::VH(0, kTextfieldPaddingHDp)));
-  textfield_->SetFontList(
-      views::style::GetFont(views::style::CONTEXT_TEXTFIELD,
-                            views::style::STYLE_BODY_3));
+  textfield_->SetBorder(views::CreateEmptyBorder(gfx::Insets()));
+  textfield_->SetTextColor(kPrimaryTextColor);
+  textfield_->set_placeholder_text_color(kSecondaryTextColor);
+  search_layout->SetFlexForView(textfield_, 1);
 
   scroll_view_ = AddChildView(std::make_unique<views::ScrollView>());
   scroll_view_->SetDrawOverflowIndicator(false);
   scroll_view_->SetHorizontalScrollBarMode(
       views::ScrollView::ScrollBarMode::kDisabled);
-  scroll_view_->ClipHeightTo(0, kOverlayMaxHeightDp - kTextfieldHeightDp -
-                                    kContentPaddingDp * 3);
+  scroll_view_->ClipHeightTo(0, kMaxResultsHeightDp);
   layout->SetFlexForView(scroll_view_, 1);
 
-  results_container_ = scroll_view_->SetContents(
-      std::make_unique<views::View>());
+  results_container_ =
+      scroll_view_->SetContents(std::make_unique<views::View>());
   auto* results_layout = results_container_->SetLayoutManager(
       std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kVertical, gfx::Insets(),
@@ -96,12 +153,10 @@ MahoCommandOverlayView::MahoCommandOverlayView(
       std::make_unique<views::Label>(
           u"Type to search tabs, bookmarks, actions\u2026",
           views::style::CONTEXT_LABEL, views::style::STYLE_BODY_4));
-  hint_label_->SetEnabledColorId(ui::kColorSysOnSurfaceSubtle);
+  hint_label_->SetEnabledColor(kSecondaryTextColor);
   hint_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
-  hint_label_->SetBorder(views::CreateEmptyBorder(
-      gfx::Insets::TLBR(20, 0, 20, 0)));
-
-  SetPreferredSize(gfx::Size(kOverlayWidthDp, 0));
+  hint_label_->SetBorder(
+      views::CreateEmptyBorder(gfx::Insets::TLBR(20, 0, 20, 0)));
 }
 
 MahoCommandOverlayView::~MahoCommandOverlayView() {
@@ -119,7 +174,7 @@ void MahoCommandOverlayView::ContentsChanged(
 }
 
 bool MahoCommandOverlayView::HandleKeyEvent(views::Textfield* sender,
-                                             const ui::KeyEvent& key_event) {
+                                              const ui::KeyEvent& key_event) {
   if (key_event.type() != ui::EventType::kKeyPressed)
     return false;
 
@@ -175,11 +230,12 @@ void MahoCommandOverlayView::UpdateResultViews(
               u"No results", views::style::CONTEXT_LABEL,
               views::style::STYLE_BODY_4));
     }
-    hint_label_->SetEnabledColorId(ui::kColorSysOnSurfaceSubtle);
+    hint_label_->SetEnabledColor(kSecondaryTextColor);
     hint_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
     hint_label_->SetBorder(
         views::CreateEmptyBorder(gfx::Insets::TLBR(20, 0, 20, 0)));
     InvalidateLayout();
+    ResizeWidgetToContents();
     return;
   }
 
@@ -191,6 +247,7 @@ void MahoCommandOverlayView::UpdateResultViews(
     }
   }
   InvalidateLayout();
+  ResizeWidgetToContents();
 }
 
 void MahoCommandOverlayView::UpdateSelection(int new_index) {
@@ -223,6 +280,17 @@ void MahoCommandOverlayView::ActivateSelected() {
 void MahoCommandOverlayView::Dismiss() {
   if (dismiss_callback_)
     std::move(dismiss_callback_).Run();
+}
+
+void MahoCommandOverlayView::ResizeWidgetToContents() {
+  auto* widget = GetWidget();
+  if (!widget)
+    return;
+
+  gfx::Size preferred = GetPreferredSize();
+  gfx::Rect bounds = widget->GetWindowBoundsInScreen();
+  bounds.set_height(preferred.height());
+  widget->SetBounds(bounds);
 }
 
 }  // namespace maho

@@ -8,13 +8,9 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
-#include "base/strings/string_split.h"
-#include "base/strings/string_util.h"
-#include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
-#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"  // nogncheck
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include <optional>
@@ -29,108 +25,46 @@
 #include "content/public/common/isolated_world_ids.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/third_party/maho/maho_bridge.h"
-#include "net/traffic_annotation/network_traffic_annotation.h"
-#include "services/network/public/cpp/resource_request.h"
-#include "services/network/public/cpp/shared_url_loader_factory.h"
-#include "services/network/public/cpp/simple_url_loader.h"
 
 namespace {
 
 const char kMahoAiApiKeyPref[] = "maho.ai.api_key";
 const char kMahoAiEndpointPref[] = "maho.ai.endpoint";
 const char kMahoAiModelPref[] = "maho.ai.model";
-const char kMahoAiProviderPref[] = "maho.ai.provider";
-const char kMahoAiLocalServerEndpointPref[] = "maho.ai.localServer.endpoint";
-const char kMahoAiLocalServerModelPref[] = "maho.ai.localServer.model";
-const char kMahoAiCustomEndpointPref[] = "maho.ai.custom.endpoint";
-const char kMahoAiCustomModelPref[] = "maho.ai.custom.model";
-const char kMahoAiLocalServerProvider[] = "Local Server";
-const char kMahoAiLegacyCustomProvider[] = "Custom";
 const char kOpenAIEndpoint[] = "https://api.openai.com/v1/chat/completions";
-const char kDefaultLocalServerEndpoint[] = "http://localhost:11434/v1";
 const char kDefaultModel[] = "gpt-4o-mini";
-
 constexpr size_t kMaxHistory = 200;
 
-constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
-    net::DefineNetworkTrafficAnnotation("maho_ai_llm_request", R"(
-      semantics {
-        sender: "Maho AI Panel"
-        description: "Sends chat messages to an OpenAI-compatible LLM endpoint."
-        trigger: "User sends a message in the Maho AI side panel."
-        data: "Chat message content and conversation history."
-        destination: OTHER
-        internal { contacts { email: "maho@example.com" } }
-        user_data { type: OTHER }
-        last_reviewed: "2026-04-27"
-      }
-      policy {
-        cookies_allowed: NO
-        setting: "User must set an API key to enable this feature."
-      }
-    )");
+const char kNoActiveTabMessage[] =
+    "There is no active page to analyze right now.";
+const char kCannotAccessPageMessage[] =
+    "Maho AI couldn't access the current page content. Try again once the page finishes loading.";
+const char kExtractionFailedMessage[] =
+    "Maho AI couldn't extract readable content from the current page.";
 
-bool IsLocalServerProvider(const std::string& provider) {
-  return provider == kMahoAiLocalServerProvider ||
-         provider == kMahoAiLegacyCustomProvider;
+bool IsPageRequiredIntent(maho_ai::mojom::ChatIntent chat_intent) {
+  switch (chat_intent) {
+    case maho_ai::mojom::ChatIntent::kAnalyzeCurrentPage:
+    case maho_ai::mojom::ChatIntent::kExplainCurrentPage:
+    case maho_ai::mojom::ChatIntent::kSummarizeCurrentPage:
+      return true;
+    case maho_ai::mojom::ChatIntent::kFreeform:
+      return false;
+  }
 }
 
-#if defined(__APPLE__)
-std::string GetMacOSAppDefaultsString(const char* key) {
-  auto key_ref = base::SysUTF8ToCFStringRef(key);
-  CFPropertyListRef value_ref =
-      CFPreferencesCopyAppValue(key_ref.get(), CFSTR("com.maho.browser"));
-
-  if (!value_ref) {
-    return std::string();
+std::string GetPageContextFailureMessage(
+    MahoAIPageHandler::PageContextResult::Status status) {
+  switch (status) {
+    case MahoAIPageHandler::PageContextResult::Status::kNoActiveTab:
+      return kNoActiveTabMessage;
+    case MahoAIPageHandler::PageContextResult::Status::kCannotAccess:
+      return kCannotAccessPageMessage;
+    case MahoAIPageHandler::PageContextResult::Status::kExtractionFailed:
+      return kExtractionFailedMessage;
+    case MahoAIPageHandler::PageContextResult::Status::kSuccess:
+      return std::string();
   }
-
-  if (CFGetTypeID(value_ref) != CFStringGetTypeID()) {
-    CFRelease(value_ref);
-    return std::string();
-  }
-
-  std::string value = base::SysCFStringRefToUTF8(
-      static_cast<CFStringRef>(value_ref));
-  CFRelease(value_ref);
-  return value;
-}
-#else
-std::string GetMacOSAppDefaultsString(const char* key) {
-  return std::string();
-}
-#endif
-
-struct LocalServerConfig {
-  std::string endpoint;
-  std::string model;
-};
-
-std::optional<LocalServerConfig> GetLocalServerConfig() {
-  const std::string provider = GetMacOSAppDefaultsString(kMahoAiProviderPref);
-  if (!IsLocalServerProvider(provider)) {
-    return std::nullopt;
-  }
-
-  std::string endpoint =
-      GetMacOSAppDefaultsString(kMahoAiLocalServerEndpointPref);
-  if (endpoint.empty()) {
-    endpoint = GetMacOSAppDefaultsString(kMahoAiCustomEndpointPref);
-  }
-  if (endpoint.empty()) {
-    endpoint = kDefaultLocalServerEndpoint;
-  }
-
-  std::string model = GetMacOSAppDefaultsString(kMahoAiLocalServerModelPref);
-  if (model.empty()) {
-    model = GetMacOSAppDefaultsString(kMahoAiCustomModelPref);
-  }
-  if (model.empty()) {
-    return std::nullopt;
-  }
-
-  return LocalServerConfig{.endpoint = std::move(endpoint),
-                           .model = std::move(model)};
 }
 
 }  // namespace
@@ -145,14 +79,18 @@ MahoAIPageHandler::MahoAIPageHandler(
       page_(std::move(page)),
       browser_(browser),
       prefs_(prefs),
-      url_loader_factory_(std::move(url_loader_factory)) {
+      llm_client_(prefs, std::move(url_loader_factory)) {
   DCHECK(prefs_);
-  DCHECK(url_loader_factory_);
 }
 
 MahoAIPageHandler::~MahoAIPageHandler() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 }
+
+MahoAIPageHandler::PageContextResult::PageContextResult() = default;
+MahoAIPageHandler::PageContextResult::~PageContextResult() = default;
+MahoAIPageHandler::PageContextResult::PageContextResult(PageContextResult&&) = default;
+MahoAIPageHandler::PageContextResult& MahoAIPageHandler::PageContextResult::operator=(PageContextResult&&) = default;
 
 // static
 void MahoAIPageHandler::RegisterProfilePrefs(PrefRegistrySimple* registry) {
@@ -161,6 +99,7 @@ void MahoAIPageHandler::RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterStringPref(kMahoAiModelPref, kDefaultModel);
 }
 
+
 void MahoAIPageHandler::SetApiKey(const std::string& key) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   prefs_->SetString(kMahoAiApiKeyPref, key);
@@ -168,22 +107,15 @@ void MahoAIPageHandler::SetApiKey(const std::string& key) {
 
 void MahoAIPageHandler::GetApiKeyStatus(GetApiKeyStatusCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  std::move(callback).Run(!prefs_->GetString(kMahoAiApiKeyPref).empty() ||
-                          GetLocalServerConfig().has_value());
+  std::move(callback).Run(llm_client_.HasConfiguredCredential());
 }
 
 void MahoAIPageHandler::ResetStreamingState() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   weak_factory_.InvalidateWeakPtrs();
-
-  if (url_loader_) {
-    url_loader_.reset();
-  }
-
-  is_streaming_ = false;
-  accumulated_response_.clear();
-  sse_buffer_.clear();
+  llm_client_.Reset();
+  received_llm_content_ = false;
   current_request_id_.clear();
 }
 
@@ -194,7 +126,8 @@ void MahoAIPageHandler::clearHistory() {
   ResetStreamingState();
 }
 
-void MahoAIPageHandler::SendMessage(const std::string& message) {
+void MahoAIPageHandler::SendMessage(maho_ai::mojom::ChatIntent chat_intent,
+                                    const std::string& message) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   double now = base::Time::Now().InSecondsFSinceUnixEpoch();
@@ -209,10 +142,7 @@ void MahoAIPageHandler::SendMessage(const std::string& message) {
     chat_history_.erase(chat_history_.begin());
   }
 
-  const std::optional<LocalServerConfig> local_server_config =
-      GetLocalServerConfig();
-  std::string api_key = prefs_->GetString(kMahoAiApiKeyPref);
-  if (api_key.empty() && !local_server_config.has_value()) {
+  if (!llm_client_.HasConfiguredCredential()) {
     auto error_msg = maho_ai::mojom::ChatMessage::New();
     error_msg->role = "assistant";
     error_msg->content =
@@ -223,32 +153,48 @@ void MahoAIPageHandler::SendMessage(const std::string& message) {
     return;
   }
 
-  GetPageContent(base::BindOnce(
-    [](base::WeakPtr<MahoAIPageHandler> handler, std::string message,
-       const std::string& title, const std::string& url,
-       const std::string& page_content) {
+  GetPageContext(base::BindOnce(
+      [](base::WeakPtr<MahoAIPageHandler> handler,
+         maho_ai::mojom::ChatIntent chat_intent, std::string message,
+         double now, PageContextResult page_context) {
         if (!handler) {
           return;
         }
 
         MahoAIPageHandler* handler_raw = handler.get();
 
-        const bool include_page_context =
-            page_content != "No active tab" &&
-            page_content != "Cannot access page content" &&
-            page_content != "Unable to extract page content" &&
-            !page_content.empty();
+        if (IsPageRequiredIntent(chat_intent) &&
+            page_context.status != PageContextResult::Status::kSuccess) {
+          auto error_msg = maho_ai::mojom::ChatMessage::New();
+          error_msg->role = "assistant";
+          error_msg->content = GetPageContextFailureMessage(page_context.status);
+          error_msg->timestamp = now + 0.001;
+          handler_raw->chat_history_.push_back(error_msg->Clone());
+          handler_raw->page_->OnStreamingComplete(std::move(error_msg));
+          return;
+        }
 
         base::DictValue event = base::DictValue()
             .Set("kind", "chat_message")
             .Set("message", message)
-            .Set("include_page_context", include_page_context);
+            .Set("include_page_context",
+                 page_context.status == PageContextResult::Status::kSuccess)
+            .Set(
+                "intent",
+                chat_intent == maho_ai::mojom::ChatIntent::kAnalyzeCurrentPage
+                    ? "analyze_current_page"
+                : chat_intent ==
+                          maho_ai::mojom::ChatIntent::kExplainCurrentPage
+                    ? "explain_current_page"
+                : chat_intent ==
+                          maho_ai::mojom::ChatIntent::kSummarizeCurrentPage
+                    ? "summarize_current_page"
+                    : "freeform");
 
         std::string event_json;
         base::JSONWriter::Write(event, &event_json);
 
         handler_raw->ResetStreamingState();
-        handler_raw->is_streaming_ = true;
 
         base::ThreadPool::PostTaskAndReplyWithResult(
             FROM_HERE, {base::MayBlock()},
@@ -257,7 +203,7 @@ void MahoAIPageHandler::SendMessage(const std::string& message) {
             base::BindOnce(&MahoAIPageHandler::OnRustEventResponse,
                            handler_raw->weak_factory_.GetWeakPtr(), message));
       },
-      weak_factory_.GetWeakPtr(), message));
+      weak_factory_.GetWeakPtr(), chat_intent, message, now));
 }
 
 // static
@@ -277,23 +223,16 @@ void MahoAIPageHandler::OnRustEventResponse(
 
   LOG(ERROR) << "Maho AI raw engine response: " << rust_response_json;
 
-  auto parsed = base::JSONReader::Read(rust_response_json,
-                                       base::JSON_PARSE_RFC);
+  auto parsed = base::JSONReader::Read(rust_response_json, base::JSON_PARSE_RFC);
   if (!parsed || !parsed->is_list()) {
-    auto error_msg = maho_ai::mojom::ChatMessage::New();
-    error_msg->role = "assistant";
-    error_msg->content = "Failed to process message through the AI engine.";
-    error_msg->timestamp = base::Time::Now().InSecondsFSinceUnixEpoch();
-    chat_history_.push_back(error_msg->Clone());
-    page_->OnStreamingComplete(std::move(error_msg));
-    is_streaming_ = false;
+    HandleLlmError("Failed to process message through the AI engine.");
     return;
   }
 
-  const base::ListValue& updates = parsed->GetList();
-  const base::DictValue* llm_request = nullptr;
-  for (const auto& update : updates) {
-    const base::DictValue* update_dict = update.GetIfDict();
+  base::ListValue& updates = parsed->GetList();
+  base::DictValue* llm_request = nullptr;
+  for (auto& update : updates) {
+    base::DictValue* update_dict = update.GetIfDict();
     if (!update_dict) {
       continue;
     }
@@ -306,13 +245,7 @@ void MahoAIPageHandler::OnRustEventResponse(
   }
 
   if (!llm_request) {
-    auto error_msg = maho_ai::mojom::ChatMessage::New();
-    error_msg->role = "assistant";
-    error_msg->content = "Unexpected response from AI engine.";
-    error_msg->timestamp = base::Time::Now().InSecondsFSinceUnixEpoch();
-    chat_history_.push_back(error_msg->Clone());
-    page_->OnStreamingComplete(std::move(error_msg));
-    is_streaming_ = false;
+    HandleLlmError("Unexpected response from AI engine.");
     return;
   }
 
@@ -321,20 +254,20 @@ void MahoAIPageHandler::OnRustEventResponse(
     current_request_id_ = *request_id;
   }
 
-  const base::ListValue* prompt_messages = llm_request->FindList("prompt");
+  base::ListValue* prompt_messages = llm_request->FindList("prompt");
   std::optional<base::Value> parsed_prompt_storage;
   if (!prompt_messages) {
-    const base::Value* prompt_value = llm_request->Find("prompt");
+    base::Value* prompt_value = llm_request->Find("prompt");
     if (prompt_value) {
-      if (const auto* prompt_value_dict = prompt_value->GetIfDict()) {
+      if (auto* prompt_value_dict = prompt_value->GetIfDict()) {
         prompt_messages = prompt_value_dict->FindList("messages");
       } else if (const std::string* prompt_json = prompt_value->GetIfString()) {
         parsed_prompt_storage = base::JSONReader::Read(*prompt_json,
                                                        base::JSON_PARSE_RFC);
         if (parsed_prompt_storage) {
-          if (const auto* prompt_list = parsed_prompt_storage->GetIfList()) {
+          if (auto* prompt_list = parsed_prompt_storage->GetIfList()) {
             prompt_messages = prompt_list;
-          } else if (const auto* parsed_prompt_dict =
+          } else if (auto* parsed_prompt_dict =
                          parsed_prompt_storage->GetIfDict()) {
             prompt_messages = parsed_prompt_dict->FindList("messages");
           }
@@ -343,210 +276,67 @@ void MahoAIPageHandler::OnRustEventResponse(
     }
   }
   if (!prompt_messages) {
-    auto error_msg = maho_ai::mojom::ChatMessage::New();
-    error_msg->role = "assistant";
-    error_msg->content = "Invalid prompt from AI engine.";
-    error_msg->timestamp = base::Time::Now().InSecondsFSinceUnixEpoch();
-    chat_history_.push_back(error_msg->Clone());
-    page_->OnStreamingComplete(std::move(error_msg));
-    is_streaming_ = false;
+    HandleLlmError("Invalid prompt from AI engine.");
     return;
   }
 
-  const std::optional<LocalServerConfig> local_server_config =
-      GetLocalServerConfig();
+  MahoAiLlmClient::CompletionRequest request;
+  request.prompt_messages = std::move(*prompt_messages);
+  received_llm_content_ = false;
 
-  const std::string endpoint = prefs_->GetString(kMahoAiEndpointPref);
-  const std::string model = prefs_->GetString(kMahoAiModelPref);
-  const std::string resolved_endpoint =
-      local_server_config.has_value() ? local_server_config->endpoint : endpoint;
-  const std::string resolved_model =
-      local_server_config.has_value() ? local_server_config->model : model;
-
-  base::DictValue request_body = base::DictValue()
-      .Set("model", resolved_model.empty() ? kDefaultModel : resolved_model)
-      .Set("stream", true)
-      .Set("messages", prompt_messages->Clone());
-
-  std::string body_json;
-  base::JSONWriter::Write(request_body, &body_json);
-
-  std::string api_key = prefs_->GetString(kMahoAiApiKeyPref);
-
-  const std::string endpoint_base =
-      resolved_endpoint.empty() ? kOpenAIEndpoint : resolved_endpoint;
-  GURL endpoint_url(endpoint_base);
-  if (endpoint_url.is_valid() && !endpoint_base.empty()) {
-    std::string request_url = endpoint_url.spec();
-    if (!base::EndsWith(request_url, "/", base::CompareCase::SENSITIVE)) {
-      request_url.push_back('/');
-    }
-    request_url.append("chat/completions");
-    endpoint_url = GURL(request_url);
-  }
-
-  auto resource_request = std::make_unique<network::ResourceRequest>();
-  resource_request->url = endpoint_url.is_valid() ? endpoint_url : GURL(kOpenAIEndpoint);
-  resource_request->method = "POST";
-  if (!api_key.empty()) {
-    resource_request->headers.SetHeader("Authorization",
-                                        "Bearer " + api_key);
-  }
-  resource_request->headers.SetHeader("Content-Type", "application/json");
-
-  url_loader_ = network::SimpleURLLoader::Create(std::move(resource_request),
-                                                 kTrafficAnnotation);
-  url_loader_->AttachStringForUpload(body_json, "application/json");
-  url_loader_->SetAllowHttpErrorResults(true);
-
-  url_loader_->DownloadToString(
-      url_loader_factory_.get(),
-      base::BindOnce(&MahoAIPageHandler::OnLlmResponseDownloaded,
+  llm_client_.StartCompletion(
+      std::move(request),
+      base::BindRepeating(&MahoAIPageHandler::OnLlmToken,
+                          weak_factory_.GetWeakPtr()),
+      base::BindOnce(&MahoAIPageHandler::FinalizeStreamingResponse,
                      weak_factory_.GetWeakPtr()),
-      network::SimpleURLLoader::kMaxBoundedStringDownloadSize);
+      base::BindOnce(&MahoAIPageHandler::HandleLlmError,
+                     weak_factory_.GetWeakPtr()));
 }
 
-void MahoAIPageHandler::OnLlmResponseDownloaded(
-    std::optional<std::string> body) {
+void MahoAIPageHandler::OnLlmToken(const std::string& token) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (body.has_value()) {
-    sse_buffer_ = std::move(*body);
-    std::string normalized_body;
-    normalized_body.reserve(sse_buffer_.size());
-    for (size_t i = 0; i < sse_buffer_.size(); ++i) {
-      if (sse_buffer_[i] == '\r') {
-        continue;
-      }
-      normalized_body.push_back(sse_buffer_[i]);
-    }
-    sse_buffer_ = std::move(normalized_body);
-    if (!sse_buffer_.empty() &&
-        !base::EndsWith(sse_buffer_, "\n\n", base::CompareCase::SENSITIVE)) {
-      sse_buffer_ += "\n\n";
-    }
-    ProcessSSEBuffer();
-  }
-
-  if (is_streaming_) {
-    FinalizeStreamingResponse();
-  }
-
-  url_loader_.reset();
+  received_llm_content_ = true;
+  page_->OnStreamingResponse(token);
 }
 
-void MahoAIPageHandler::OnDataReceived(std::string_view string_piece,
-                                        base::OnceClosure resume) {
+void MahoAIPageHandler::FinalizeStreamingResponse(
+    const std::string& full_text) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  sse_buffer_.append(string_piece);
-  ProcessSSEBuffer();
-  std::move(resume).Run();
-}
-
-void MahoAIPageHandler::OnRetry(base::OnceClosure start_retry) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  sse_buffer_.clear();
-  accumulated_response_.clear();
-  std::move(start_retry).Run();
-}
-
-void MahoAIPageHandler::ProcessSSEBuffer() {
-  // SSE events are delimited by double newlines.
-  size_t pos;
-  while ((pos = sse_buffer_.find("\n\n")) != std::string::npos) {
-    std::string event_block = sse_buffer_.substr(0, pos);
-    sse_buffer_.erase(0, pos + 2);
-
-    for (const auto& line :
-         base::SplitStringPiece(event_block, "\n",
-                                base::KEEP_WHITESPACE,
-                                base::SPLIT_WANT_NONEMPTY)) {
-      if (!base::StartsWith(line, "data:")) {
-        continue;
-      }
-
-      std::string data = std::string(line.substr(5));
-      size_t first_non_space = data.find_first_not_of(" \t");
-      if (first_non_space != std::string::npos) {
-        data = data.substr(first_non_space);
-      } else {
-        data = std::string();
-      }
-      if (data == "[DONE]") {
-        FinalizeStreamingResponse();
-        return;
-      }
-
-      auto json = base::JSONReader::Read(data, base::JSON_PARSE_RFC);
-      if (!json || !json->is_dict()) {
-        continue;
-      }
-
-      const base::ListValue* choices = json->GetDict().FindList("choices");
-      if (!choices || choices->empty()) {
-        continue;
-      }
-
-      const base::DictValue* first_choice = (*choices)[0].GetIfDict();
-      if (!first_choice) {
-        continue;
-      }
-
-      const base::DictValue* delta = first_choice->FindDict("delta");
-      if (!delta) {
-        continue;
-      }
-
-      const std::string* content = delta->FindString("content");
-      if (content && !content->empty()) {
-        accumulated_response_ += *content;
-        page_->OnStreamingResponse(*content);
-      }
-    }
-  }
-}
-
-void MahoAIPageHandler::OnComplete(bool success) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  if (!sse_buffer_.empty()) {
-    sse_buffer_ += "\n\n";
-    ProcessSSEBuffer();
-  }
-
-  if (is_streaming_) {
-    FinalizeStreamingResponse();
-  }
-
-  url_loader_.reset();
-}
-
-void MahoAIPageHandler::FinalizeStreamingResponse() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  is_streaming_ = false;
 
   auto response = maho_ai::mojom::ChatMessage::New();
   response->role = "assistant";
-  response->content = accumulated_response_.empty()
-                          ? "No response received from the AI service."
-                          : accumulated_response_;
+  response->content = full_text;
   response->timestamp = base::Time::Now().InSecondsFSinceUnixEpoch();
   chat_history_.push_back(response->Clone());
 
   page_->OnStreamingComplete(std::move(response));
 
-  if (!current_request_id_.empty() && !accumulated_response_.empty()) {
-    SendLlmResultToRust(current_request_id_, accumulated_response_);
+  if (received_llm_content_ && !current_request_id_.empty()) {
+    SendLlmResultToRust(current_request_id_, full_text);
   }
 
-  accumulated_response_.clear();
-  sse_buffer_.clear();
+  received_llm_content_ = false;
+  current_request_id_.clear();
+}
+
+void MahoAIPageHandler::HandleLlmError(const std::string& error) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  auto error_msg = maho_ai::mojom::ChatMessage::New();
+  error_msg->role = "assistant";
+  error_msg->content = error;
+  error_msg->timestamp = base::Time::Now().InSecondsFSinceUnixEpoch();
+  chat_history_.push_back(error_msg->Clone());
+  page_->OnStreamingComplete(std::move(error_msg));
+
+  received_llm_content_ = false;
   current_request_id_.clear();
 }
 
 void MahoAIPageHandler::SendLlmResultToRust(const std::string& request_id,
-                                             const std::string& full_text) {
+                                            const std::string& full_text) {
   base::DictValue event = base::DictValue()
       .Set("kind", "llm_result")
       .Set("request_id", request_id)
@@ -567,13 +357,15 @@ void MahoAIPageHandler::SendLlmResultToRust(const std::string& request_id,
           std::move(event_json)));
 }
 
-void MahoAIPageHandler::GetPageContent(GetPageContentCallback callback) {
+void MahoAIPageHandler::GetPageContext(PageContextCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   content::WebContents* active_wc =
       browser_->tab_strip_model()->GetActiveWebContents();
   if (!active_wc) {
-    std::move(callback).Run("", "", "No active tab");
+    PageContextResult result;
+    result.status = PageContextResult::Status::kNoActiveTab;
+    std::move(callback).Run(std::move(result));
     return;
   }
 
@@ -582,7 +374,11 @@ void MahoAIPageHandler::GetPageContent(GetPageContentCallback callback) {
 
   content::RenderFrameHost* rfh = active_wc->GetPrimaryMainFrame();
   if (!rfh || !rfh->IsRenderFrameLive()) {
-    std::move(callback).Run(title, url, "Cannot access page content");
+    PageContextResult result;
+    result.status = PageContextResult::Status::kCannotAccess;
+    result.title = title;
+    result.url = url;
+    std::move(callback).Run(std::move(result));
     return;
   }
 
@@ -592,27 +388,58 @@ void MahoAIPageHandler::GetPageContent(GetPageContentCallback callback) {
       u"  var text = document.body.innerText || '';"
       u"  return text.substring(0, 50000);"
       u"})()",
-      base::BindOnce(&MahoAIPageHandler::OnPageContentExtracted,
+      base::BindOnce(&MahoAIPageHandler::OnPageContextExtracted,
                      weak_factory_.GetWeakPtr(), title, url,
                      std::move(callback)),
       content::ISOLATED_WORLD_ID_CONTENT_END + 1);
 }
 
-void MahoAIPageHandler::OnPageContentExtracted(
+void MahoAIPageHandler::OnPageContextExtracted(
     const std::string& title,
     const std::string& url,
-    GetPageContentCallback callback,
+    PageContextCallback callback,
     base::Value result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  std::string text;
+  PageContextResult page_context;
+  page_context.title = title;
+  page_context.url = url;
+
   if (result.is_string()) {
-    text = result.GetString();
+    page_context.text = result.GetString();
   }
-  if (text.empty()) {
-    text = "Unable to extract page content";
+  if (page_context.text.empty()) {
+    page_context.status = PageContextResult::Status::kExtractionFailed;
+  } else {
+    page_context.status = PageContextResult::Status::kSuccess;
   }
-  std::move(callback).Run(title, url, text);
+  std::move(callback).Run(std::move(page_context));
+}
+
+void MahoAIPageHandler::GetPageContent(GetPageContentCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  GetPageContext(base::BindOnce(
+      [](GetPageContentCallback callback, PageContextResult page_context) {
+        std::string text_content;
+        switch (page_context.status) {
+          case PageContextResult::Status::kSuccess:
+            text_content = page_context.text;
+            break;
+          case PageContextResult::Status::kNoActiveTab:
+            text_content = "No active tab";
+            break;
+          case PageContextResult::Status::kCannotAccess:
+            text_content = "Cannot access page content";
+            break;
+          case PageContextResult::Status::kExtractionFailed:
+            text_content = "Unable to extract page content";
+            break;
+        }
+        std::move(callback).Run(page_context.title, page_context.url,
+                                text_content);
+      },
+      std::move(callback)));
 }
 
 void MahoAIPageHandler::GetChatHistory(GetChatHistoryCallback callback) {

@@ -1,5 +1,4 @@
-import {PageHandlerFactory, PageHandlerRemote, ChatMessage} from './maho_ai.mojom-webui.js';
-import {PageCallbackRouter} from './maho_ai.mojom-webui.js';
+import {PageHandlerFactory, PageHandlerRemote, ChatMessage, ChatIntent, PageCallbackRouter} from './maho_ai.mojom-webui.js';
 
 interface PagePreviewData {
   title: string;
@@ -221,7 +220,7 @@ async function loadPagePreview() {
   preview.style.display = 'none';
 }
 
-function sendMessage(text: string) {
+function sendMessage(intent: ChatIntent, text: string) {
   if (!text.trim() || sending) {
     return;
   }
@@ -236,7 +235,7 @@ function sendMessage(text: string) {
   appendMessage(userMsg);
 
   streamingElement = null;
-  pageHandler.sendMessage(text);
+  pageHandler.sendMessage(intent, text);
 }
 
 function createToolbarButton(
@@ -401,7 +400,7 @@ function buildUI() {
       return;
     }
 
-    sendMessage(text);
+    sendMessage(ChatIntent.kFreeform, text);
     textarea.value = '';
     textarea.style.height = 'auto';
   };
@@ -423,10 +422,13 @@ function buildUI() {
   pills.forEach((pill: HTMLButtonElement) => {
     pill.addEventListener('click', () => {
       const action = pill.dataset['action'];
+      const intent = action === 'analyze' ? ChatIntent.kAnalyzeCurrentPage :
+          action === 'explain' ? ChatIntent.kExplainCurrentPage :
+                                ChatIntent.kSummarizeCurrentPage;
       const prompt = action === 'analyze' ? 'Analyze this page' :
           action === 'explain' ? 'Explain this page' :
                                'Summarize this page';
-      sendMessage(prompt);
+      sendMessage(intent, prompt);
     });
   });
 

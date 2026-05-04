@@ -9,6 +9,7 @@
 
 namespace maho::sidebar_layout {
 
+inline constexpr int kCollapsedRailWidthDp = 40;
 inline constexpr int kDefaultRailWidthDp = 208;
 inline constexpr int kRuntimeRailWidthMinDp = 176;
 inline constexpr int kRuntimeRailWidthMaxDp = 400;

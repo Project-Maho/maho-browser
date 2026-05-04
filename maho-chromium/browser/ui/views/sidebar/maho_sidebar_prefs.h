@@ -8,17 +8,34 @@ class PrefService;
 
 namespace maho::sidebar_prefs {
 
+// Legacy pref retained for migration only.
 extern const char kSidebarVisible[];
+
+// 2-state model prefs:
+// Whether the Arc sidebar layout is enabled (controls tab strip suppression).
+extern const char kSidebarLayoutEnabled[];
+// Whether the sidebar panel is expanded (full width) vs collapsed (thin rail).
+extern const char kSidebarPanelExpanded[];
+// Persisted expanded width.
 extern const char kSidebarWidth[];
 
 int ClampSidebarWidthForLayout(int width);
 int GetSidebarWidthForLayout(int pref_width);
-// Truthful shell contract: this only answers whether the sidebar surface
-// should be shown, not whether its child views are individually visible.
+
+// Returns true when Arc layout should be active (layout-enabled).
+bool IsSidebarLayoutEnabled(const PrefService* prefs);
+// Returns true when the panel is in expanded state.
+bool IsSidebarPanelExpanded(const PrefService* prefs);
+// Toggle panel expanded/collapsed state.
+void ToggleSidebarPanelExpanded(PrefService* prefs);
+
+// Legacy compat: equivalent to IsSidebarLayoutEnabled for callers that
+// previously used ShouldShowSidebarInShell.
 bool ShouldShowSidebarInShell(const PrefService* prefs);
-void ToggleSidebarVisibilityInShell(PrefService* prefs);
 
 void RegisterProfilePrefs(PrefRegistrySimple* registry);
+// Migrate legacy kSidebarVisible to 2-state prefs. Call once at profile load.
+void MigrateFromLegacyVisiblePref(PrefService* prefs);
 
 }  // namespace maho::sidebar_prefs
 

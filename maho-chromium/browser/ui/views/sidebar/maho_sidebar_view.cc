@@ -4,14 +4,17 @@
 
 #include <memory>
 
+#include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/json/string_escape.h"
+#include "base/logging.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/tabs/tab_change_type.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "content/public/browser/web_contents.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/insets.h"
@@ -61,6 +64,18 @@ void MahoSidebarView::OnThemeChanged() {
   RefreshAll();
 }
 
+bool MahoSidebarView::IsPositionInWindowCaption(
+    const gfx::Point& point) const {
+  if (top_bar_view_ && top_bar_view_->GetVisible()) {
+    gfx::Point point_in_top_bar = point;
+    views::View::ConvertPointToTarget(this, top_bar_view_, &point_in_top_bar);
+    if (top_bar_view_->HitTestPoint(point_in_top_bar)) {
+      return top_bar_view_->IsPositionInWindowCaption(point_in_top_bar);
+    }
+  }
+  return false;
+}
+
 void MahoSidebarView::BuildUi() {
   auto* root_layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical, sidebar_layout::kRailInsets,
@@ -68,7 +83,18 @@ void MahoSidebarView::BuildUi() {
   root_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
-  auto* top_region = AddChildView(std::make_unique<views::View>());
+  normal_surface_ = AddChildView(std::make_unique<views::View>());
+  auto* normal_surface_layout = normal_surface_->SetLayoutManager(
+      std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kVertical, gfx::Insets(),
+          sidebar_layout::kSectionSpacingDp));
+  normal_surface_layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kStretch);
+  normal_surface_->SetBackground(nullptr);
+  normal_surface_->SetBorder(nullptr);
+
+  auto* top_region =
+      normal_surface_->AddChildView(std::make_unique<views::View>());
   auto* top_region_layout = top_region->SetLayoutManager(
       std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical,
                                          gfx::Insets(),
@@ -85,14 +111,33 @@ void MahoSidebarView::BuildUi() {
       top_region->AddChildView(std::make_unique<MahoSidebarSearchView>(browser_));
   favorites_view_ =
       top_region->AddChildView(std::make_unique<MahoSidebarFavoritesGridView>(browser_));
-  tab_list_view_ =
-      AddChildView(std::make_unique<MahoSidebarTabListView>(browser_));
-  footer_view_ = AddChildView(std::make_unique<MahoSidebarFooterView>(browser_));
+  tab_list_view_ = normal_surface_->AddChildView(
+      std::make_unique<MahoSidebarTabListView>(browser_));
+  footer_view_ = normal_surface_->AddChildView(
+      std::make_unique<MahoSidebarFooterView>(browser_));
   create_space_view_ =
       AddChildView(std::make_unique<MahoSidebarCreateSpaceView>(browser_));
+  create_space_view_->SetCloseCallback(
+      base::BindRepeating(&MahoSidebarView::HandleCreateSpaceClosed,
+                          weak_factory_.GetWeakPtr()));
   create_space_view_->SetVisible(false);
 
-  root_layout->SetFlexForView(tab_list_view_, 1, true);
+  normal_surface_layout->SetFlexForView(tab_list_view_, 1, true);
+  root_layout->SetFlexForView(normal_surface_, 1, true);
+  root_layout->SetFlexForView(create_space_view_, 1, true);
+}
+
+void MahoSidebarView::SetCreateMode(bool in_create_mode) {
+  if (normal_surface_) {
+    normal_surface_->SetVisible(!in_create_mode);
+  }
+  if (create_space_view_) {
+    create_space_view_->SetVisible(in_create_mode);
+  }
+}
+
+void MahoSidebarView::HandleCreateSpaceClosed() {
+  SetCreateMode(false);
 }
 
 void MahoSidebarView::ScheduleRefreshAll() {
@@ -195,6 +240,21 @@ void MahoSidebarView::OnTabChangedAt(tabs::TabInterface* tab,
 
 void MahoSidebarView::OnTabPinnedStateChanged(tabs::TabInterface* tab,
                                               int index) {
+  // Sync pin state to maho-core before refreshing UI.
+  if (tab_list_view_) {
+    content::WebContents* contents =
+        tab_strip_model()->GetWebContentsAt(index);
+    std::string core_tab_id =
+        tab_list_view_->FindCoreTabIdByWebContents(contents);
+    if (!core_tab_id.empty()) {
+      bool pinned = tab_strip_model()->IsTabPinned(index);
+      DispatchShellEvent(pinned ? "pin_tab" : "unpin_tab",
+                         {{"tab_id", core_tab_id}});
+    } else {
+      DLOG(WARNING) << "MahoSidebarView: Could not resolve core tab_id for "
+                    << "strip index " << index << " during pin state change";
+    }
+  }
   ScheduleRefreshAll();
 }
 
@@ -208,7 +268,7 @@ void MahoSidebarView::OnSpaceProfileBridgeChanged() {
 
 void MahoSidebarView::ShowCreateSpace() {
   if (create_space_view_) {
-    create_space_view_->SetVisible(true);
+    SetCreateMode(true);
     create_space_view_->RequestNameFocus();
   }
 }

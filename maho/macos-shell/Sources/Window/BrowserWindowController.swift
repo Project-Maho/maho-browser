@@ -73,6 +73,7 @@ final class BrowserWindowController: NSWindowController, CoreUpdateObserver {
         appendFrameSnapshotLog("create: after center", window: window, splitView: nil)
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
+        window.isMovableByWindowBackground = true
         if #available(macOS 11.0, *) {
             window.toolbarStyle = .unifiedCompact
         }

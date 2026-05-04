@@ -2,6 +2,7 @@
 
 #include "maho/browser/ui/views/command/maho_command_model.h"
 
+#include <algorithm>
 #include <string>
 #include <utility>
 #include <vector>
@@ -11,6 +12,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/ui/browser.h"  // nogncheck
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -20,6 +22,17 @@
 
 namespace maho {
 
+namespace {
+constexpr base::TimeDelta kDebounceDelay = base::Milliseconds(120);
+}  // namespace
+
+CommandSuggestion::CommandSuggestion() = default;
+CommandSuggestion::CommandSuggestion(const CommandSuggestion&) = default;
+CommandSuggestion::CommandSuggestion(CommandSuggestion&&) = default;
+CommandSuggestion& CommandSuggestion::operator=(const CommandSuggestion&) = default;
+CommandSuggestion& CommandSuggestion::operator=(CommandSuggestion&&) = default;
+CommandSuggestion::~CommandSuggestion() = default;
+
 MahoCommandModel::MahoCommandModel(Browser* browser) : browser_(browser) {}
 
 MahoCommandModel::~MahoCommandModel() = default;
@@ -28,11 +41,34 @@ void MahoCommandModel::Search(const std::string& query,
                               ResultsCallback callback) {
   query_ = query;
   selected_index_ = 0;
+  pending_callback_ = callback;
 
   if (query.empty()) {
+    debounce_timer_.Stop();
     results_.clear();
     callback.Run({});
     return;
+  }
+
+  debounce_timer_.Start(FROM_HERE, kDebounceDelay,
+                        base::BindOnce(&MahoCommandModel::FireSearch,
+                                       weak_factory_.GetWeakPtr()));
+}
+
+void MahoCommandModel::Cancel() {
+  debounce_timer_.Stop();
+  weak_factory_.InvalidateWeakPtrs();
+}
+
+void MahoCommandModel::FireSearch() {
+  std::string search_query = query_;
+  actions_only_ = false;
+
+  if (!search_query.empty() && search_query[0] == '>') {
+    search_query = search_query.substr(1);
+    if (!search_query.empty() && search_query[0] == ' ')
+      search_query = search_query.substr(1);
+    actions_only_ = true;
   }
 
   std::string tabs_json = BuildTabsJson(browser_->tab_strip_model());
@@ -40,21 +76,17 @@ void MahoCommandModel::Search(const std::string& query,
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE,
       {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&MahoCommandModel::SearchOnPool, query, tabs_json),
+      base::BindOnce(&MahoCommandModel::SearchOnPool, search_query, tabs_json),
       base::BindOnce(&MahoCommandModel::OnResults, weak_factory_.GetWeakPtr(),
-                     callback));
-}
-
-void MahoCommandModel::Cancel() {
-  weak_factory_.InvalidateWeakPtrs();
+                     pending_callback_));
 }
 
 // static
 std::string MahoCommandModel::BuildTabsJson(TabStripModel* model) {
-  base::Value::List tabs;
+  base::ListValue tabs;
   for (int i = 0; i < model->count(); ++i) {
     auto* wc = model->GetWebContentsAt(i);
-    base::Value::Dict tab;
+    base::DictValue tab;
     tab.Set("id", "tab_" + base::NumberToString(i));
     tab.Set("title", base::UTF16ToUTF8(wc->GetTitle()));
     tab.Set("url", wc->GetVisibleURL().spec());
@@ -164,6 +196,11 @@ CommandSuggestionType MahoCommandModel::ParseType(const std::string& kind) {
 
 void MahoCommandModel::OnResults(ResultsCallback callback,
                                  std::vector<CommandSuggestion> results) {
+  if (actions_only_) {
+    std::erase_if(results, [](const CommandSuggestion& s) {
+      return s.type != CommandSuggestionType::kAction;
+    });
+  }
   results_ = std::move(results);
   selected_index_ = results_.empty() ? -1 : 0;
   callback.Run(results_);

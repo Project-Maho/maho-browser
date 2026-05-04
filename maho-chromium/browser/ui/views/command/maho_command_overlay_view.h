@@ -52,6 +52,7 @@ class MahoCommandOverlayView : public views::View,
   void UpdateSelection(int new_index);
   void ActivateSelected();
   void Dismiss();
+  void ResizeWidgetToContents();
 
   raw_ptr<Browser> browser_;
   std::unique_ptr<MahoCommandModel> model_;

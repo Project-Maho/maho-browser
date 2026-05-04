@@ -26,7 +26,7 @@ Hybrid repo: Rust workspace plus native shells and Appium test harnesses. Backen
 | Android shell work | `android-shell/` | Gradle-based native app |
 | Regression automation | `appium-tests/` | Canonical Appium runners |
 | Test order / commands | `docs/test-matrix.md` | CI-style run sequence |
-| Chromium overlay build / E2E flow | `docs/chromium-fork-build.md` | Verified Chromium overlay setup, build, app bundle, and desktop E2E entrypoints |
+| Chromium overlay build / E2E flow | `docs/chromium-fork-build.md` | Standard Chromium overlay setup, build, app bundle, and desktop E2E entrypoints; use `out/Default` by default |
 
 ## CONVENTIONS
 - Use `bun run` for repo scripts and local source files, and `bunx` for one-off package executables or CLIs.

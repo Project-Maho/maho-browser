@@ -162,13 +162,6 @@ export const PANE_DEFINITIONS: PaneDefinition[] = [
     summary: 'Use the browser-hosted settings shell as the new landing pane, keeping the first hybrid pass grounded in rows that already write through Chromium today.',
     status: 'mixed',
     kind: 'live',
-    heroBadges: [
-      {label: 'Swift shell landing pane', tone: 'mixed'},
-      {label: 'Live via Chromium prefs', tone: 'live'},
-      {label: 'Extra Swift rows still need bridge work', tone: 'bridge'},
-    ],
-    overviewTitle: 'How this pane should work',
-    overviewCopy: 'The browser-hosted version should feel as rich as the old Swift General pane, but only a few rows are genuinely live today: homepage, startup behavior, download prompt, and search suggestions. Everything else is presented as a clearly-marked future lane.',
     groupKeys: ['general', 'search'],
   },
   {
@@ -181,12 +174,6 @@ export const PANE_DEFINITIONS: PaneDefinition[] = [
     summary: 'Quiet visual adjustments that shape how browsing feels, with the browser-hosted pane mirroring the Swift panel structure while keeping unsupported pieces clearly marked.',
     status: 'mixed',
     kind: 'live',
-    heroBadges: [
-      {label: 'Live via Chromium prefs', tone: 'live'},
-      {label: 'Shell polish needs API work', tone: 'api'},
-    ],
-    overviewTitle: 'How this pane should work',
-    overviewCopy: 'Keep the first layer grounded in the real browser-theme and font preferences, then layer in shell-specific polish only where the next API surface is clear.',
     groupKeys: ['appearance'],
   },
   {
@@ -199,12 +186,6 @@ export const PANE_DEFINITIONS: PaneDefinition[] = [
     summary: 'Core safeguards should stay visible in the browser-hosted shell, with live rows writing through existing prefs and future lanes called out explicitly.',
     status: 'mixed',
     kind: 'live',
-    heroBadges: [
-      {label: 'Live via Chromium prefs', tone: 'live'},
-      {label: 'Privacy shell still needs bridge work', tone: 'bridge'},
-    ],
-    overviewTitle: 'How this pane should work',
-    overviewCopy: 'The browser-hosted privacy pane should foreground the protections already wired through Chromium today, while keeping Maho-only and service-backed controls visibly planned instead of hidden.',
     groupKeys: ['privacy'],
   },
   {
@@ -245,12 +226,6 @@ export const PANE_DEFINITIONS: PaneDefinition[] = [
     summary: 'Keep deeper browser behavior close at hand without mixing it into everyday browsing choices.',
     status: 'mixed',
     kind: 'live',
-    heroBadges: [
-      {label: 'Live + API', tone: 'mixed'},
-      {label: 'Browser settings lane', tone: 'api'},
-    ],
-    overviewTitle: 'How this pane should work',
-    overviewCopy: 'Advanced should stay practical and browser-focused first, surfacing real performance toggles while reserving room for the heavier platform plumbing that still sits outside the WebUI bridge.',
     groupKeys: ['advanced'],
   },
   {
@@ -263,12 +238,6 @@ export const PANE_DEFINITIONS: PaneDefinition[] = [
     summary: 'Reduce interruptions while keeping the browser-hosted shell honest about which notification controls are already live.',
     status: 'mixed',
     kind: 'live',
-    heroBadges: [
-      {label: 'Live + API', tone: 'mixed'},
-      {label: 'Prompt behavior first', tone: 'live'},
-    ],
-    overviewTitle: 'How this pane should work',
-    overviewCopy: 'The browser-hosted notifications pane should start with permission prompt behavior and expand toward the fuller Swift reference only as the required service layer becomes real.',
     groupKeys: ['notifications'],
   },
   {
@@ -407,12 +376,6 @@ export const PANE_DEFINITIONS: PaneDefinition[] = [
     summary: 'The browser-hosted shell can embed the full Chromium settings page directly, while the outer pane stays consistent with the rest of Maho Settings.',
     status: 'live-embed',
     kind: 'embed',
-    heroBadges: [
-      {label: 'Browser-hosted shell', tone: 'mixed'},
-      {label: 'Embedded Chromium page', tone: 'api'},
-    ],
-    overviewTitle: 'What stays mockup-like here',
-    overviewCopy: 'The outer shell should stay consistent with the rest of Maho Settings. The embedded inner chrome://settings document remains Chromium-native by design.',
   },
 ];
 

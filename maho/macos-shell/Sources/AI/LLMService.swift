@@ -175,7 +175,10 @@ final class LLMService {
     }
 
     private func apiKey(for provider: String) -> String? {
-        APIKeyStore.shared.get(for: provider)
+        if let apiKey = APIKeyStore.shared.get(for: provider), !apiKey.isEmpty {
+            return apiKey
+        }
+        return UserDefaults.standard.string(forKey: "maho.ai.api_key")
     }
     
     var isConfigured: Bool { provider != nil || isUITesting }

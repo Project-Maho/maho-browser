@@ -10,6 +10,7 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/timer/timer.h"
 
 class Browser;
 class TabStripModel;
@@ -29,6 +30,13 @@ enum class CommandSuggestionType {
 };
 
 struct CommandSuggestion {
+  CommandSuggestion();
+  CommandSuggestion(const CommandSuggestion&);
+  CommandSuggestion(CommandSuggestion&&);
+  CommandSuggestion& operator=(const CommandSuggestion&);
+  CommandSuggestion& operator=(CommandSuggestion&&);
+  ~CommandSuggestion();
+
   CommandSuggestionType type = CommandSuggestionType::kHistory;
   std::string key;
   std::string title;
@@ -69,6 +77,7 @@ class MahoCommandModel {
       const std::string& tabs_json);
   static CommandSuggestionType ParseType(const std::string& kind);
 
+  void FireSearch();
   void OnResults(ResultsCallback callback,
                  std::vector<CommandSuggestion> results);
 
@@ -76,6 +85,9 @@ class MahoCommandModel {
   std::string query_;
   std::vector<CommandSuggestion> results_;
   int selected_index_ = 0;
+  bool actions_only_ = false;
+  ResultsCallback pending_callback_;
+  base::OneShotTimer debounce_timer_;
 
   base::WeakPtrFactory<MahoCommandModel> weak_factory_{this};
 };

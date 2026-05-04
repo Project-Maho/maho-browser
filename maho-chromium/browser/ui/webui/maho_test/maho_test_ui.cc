@@ -144,9 +144,13 @@ base::DictValue SidebarNodeToJsonDict(const maho::SidebarTreeNode& node) {
 
 std::string BuildSidebarSnapshotJson(const maho::MahoSidebarViewStateModel& state,
                                      bool sidebar_visible,
+                                     bool sidebar_layout_enabled,
+                                     bool sidebar_panel_expanded,
                                      size_t registered_space_count) {
   base::DictValue root;
   root.Set("sidebar_visible", sidebar_visible);
+  root.Set("sidebar_layout_enabled", sidebar_layout_enabled);
+  root.Set("sidebar_panel_expanded", sidebar_panel_expanded);
   root.Set("registered_space_count",
            static_cast<int>(registered_space_count));
 
@@ -928,16 +932,25 @@ std::string BuildSidebarSnapshotHtml(Profile* profile) {
   const auto state = adapter.BuildViewStateModel(browser);
   const bool sidebar_visible =
       maho::sidebar_prefs::ShouldShowSidebarInShell(profile->GetPrefs());
+  const bool sidebar_layout_enabled =
+      maho::sidebar_prefs::IsSidebarLayoutEnabled(profile->GetPrefs());
+  const bool sidebar_panel_expanded =
+      maho::sidebar_prefs::IsSidebarPanelExpanded(profile->GetPrefs());
   const auto* space_bridge = maho::MahoSpaceProfileBridge::GetInstance();
   const size_t registered_space_count =
       space_bridge ? space_bridge->GetRegisteredSpaceCount() : 0u;
-  const std::string snapshot_json =
-      BuildSidebarSnapshotJson(state, sidebar_visible, registered_space_count);
+  const std::string snapshot_json = BuildSidebarSnapshotJson(
+      state, sidebar_visible, sidebar_layout_enabled, sidebar_panel_expanded,
+      registered_space_count);
 
   html += "  <section>";
   html += "    <h2>Snapshot</h2>";
   html += "    <dl>";
   html += "      <dt>Sidebar visible</dt><dd>" + BoolText(sidebar_visible) + "</dd>";
+  html += "      <dt>Sidebar layout enabled</dt><dd>" +
+          BoolText(sidebar_layout_enabled) + "</dd>";
+  html += "      <dt>Sidebar panel expanded</dt><dd>" +
+          BoolText(sidebar_panel_expanded) + "</dd>";
   html += "      <dt>Favorites present</dt><dd>" +
           BoolText(!state.favorites.items.empty()) + " (" +
           std::to_string(state.favorites.items.size()) + " items / " +

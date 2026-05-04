@@ -47,6 +47,9 @@ class MahoSidebarSearchView : public views::View,
 
   void Update(const MahoSidebarSearchModel& model);
 
+  views::Textfield* textfield_for_testing() { return textfield_; }
+  bool is_editing_for_testing() const { return is_editing_; }
+
   // views::ContextMenuController:
   void ShowContextMenuForViewImpl(views::View* source,
                                   const gfx::Point& point,

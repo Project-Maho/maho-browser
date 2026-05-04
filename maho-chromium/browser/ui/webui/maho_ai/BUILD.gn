@@ -27,6 +27,7 @@ source_set("maho_ai") {
     "//chrome/browser/profiles:profile",
     "//chrome/browser/ui/browser_window",
     "//chrome/browser/ui/tabs:tab_strip",
+    "//maho/browser:maho_ai_client",
     "//maho/browser:maho_core_holder",
     "//maho/browser/resources/maho_ai:resources",
     "//maho/components/constants",

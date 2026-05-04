@@ -13,7 +13,6 @@ import type {LivePaneSectionDefinition} from './schema/panes.js';
 import type {
   ControlKind,
   PaneDefinition,
-  PaneStatus,
   StructuredPlaceholderRow,
   SettingMetadata,
 } from './models.js';
@@ -85,15 +84,11 @@ function createSidebar(): HTMLElement {
   const brand = document.createElement('section');
   brand.className = 'sidebar-brand-card';
 
-  const brandKicker = document.createElement('div');
-  brandKicker.className = 'sidebar-brand-kicker';
-  brandKicker.textContent = 'Hybrid direction';
-
   const brandTitle = document.createElement('h1');
   brandTitle.className = 'sidebar-title';
   brandTitle.textContent = 'Settings';
 
-  brand.append(brandKicker, brandTitle);
+  brand.appendChild(brandTitle);
 
   const nav = document.createElement('nav');
   nav.className = 'sidebar-navigation';
@@ -129,11 +124,7 @@ function createPaneButton(pane: PaneDefinition): HTMLButtonElement {
   label.className = 'sidebar-nav-button__label';
   label.textContent = pane.navTitle;
 
-  const detail = document.createElement('span');
-  detail.className = 'sidebar-nav-button__detail';
-  detail.textContent = pane.navMeta;
-
-  text.append(label, detail);
+  text.appendChild(label);
   button.append(badge, text);
   button.addEventListener('click', () => {
     if (currentPaneKey === pane.key) {
@@ -175,8 +166,6 @@ function createLivePane(pane: PaneDefinition, settings: SettingValue[]): HTMLEle
   const grouped = groupSettings(settings);
   const relevantSettings = (pane.groupKeys || [pane.key])
                                .flatMap(groupKey => grouped[groupKey] || []);
-
-  card.appendChild(createOverviewBanner(pane));
 
   const groupedCards = buildLivePaneCards(pane, relevantSettings);
   const grid = document.createElement('div');
@@ -233,65 +222,8 @@ function selectSettings(settings: SettingValue[], keys: string[]): SettingValue[
   return keys.map(key => byKey.get(key)).filter(Boolean) as SettingValue[];
 }
 
-function createOverviewBanner(pane: PaneDefinition): HTMLElement {
-  const banner = document.createElement('div');
-  banner.className = 'overview-banner';
-
-  const title = document.createElement('div');
-  title.className = 'overview-banner__title';
-  title.textContent = pane.overviewTitle || 'How this pane should work';
-
-  const copy = document.createElement('p');
-  copy.className = 'overview-banner__copy';
-  copy.textContent = pane.overviewCopy || pane.summary;
-
-  banner.append(title, copy);
-  return banner;
-}
-
-function createPaneIntroCluster(...elements: HTMLElement[]): HTMLElement {
-  const cluster = document.createElement('div');
-  cluster.className = 'pane-intro-cluster';
-  cluster.append(...elements);
-  return cluster;
-}
-
 function createPlaceholderPane(pane: PaneDefinition): HTMLElement {
-  const section = createPaneSectionShell(pane);
-  const card = section.querySelector('.preferences-card');
-  if (!card) {
-    return section;
-  }
-
-  const overview = document.createElement('div');
-  overview.className = 'pane-placeholder-banner';
-
-  const reason = document.createElement('div');
-  reason.className = 'pane-placeholder-banner__reason';
-  reason.textContent = pane.placeholderReason || 'Needs additional backend work';
-
-  const detail = document.createElement('p');
-  detail.className = 'pane-placeholder-banner__detail';
-  detail.textContent = pane.placeholderDetail || pane.summary;
-
-  overview.append(reason, detail);
-  card.appendChild(createPaneIntroCluster(overview, createOverviewBanner(pane)));
-
-  const grid = document.createElement('div');
-  grid.className = 'cards-grid';
-  grid.appendChild(createPlaceholderCard(
-      'What this pane should eventually contain',
-      'The sidebar follows the mockup now, and this placeholder keeps the information architecture visible until the corresponding service bridge is ready.',
-      pane.placeholderHighlights || [],
-      pane.navMeta.includes('service API') ? 'api' : 'bridge'));
-  grid.appendChild(createPlaceholderCard(
-      'What still blocks it',
-      pane.placeholderDetail || pane.summary,
-      [pane.placeholderReason || 'Additional backend work required'],
-      pane.navMeta.includes('service API') ? 'api' : 'bridge'));
-  card.appendChild(grid);
-
-  return section;
+  return createPaneSectionShell(pane);
 }
 
 function createBrowserPane(pane: PaneDefinition): HTMLElement {
@@ -302,19 +234,6 @@ function createBrowserPane(pane: PaneDefinition): HTMLElement {
   }
 
   card.classList.add('preferences-card--browser');
-
-  const overview = createOverviewBanner(pane);
-  overview.classList.add('overview-banner--embedded');
-  const title = overview.querySelector('.overview-banner__title');
-  if (title) {
-    title.textContent = 'Embedded Chromium distinction';
-  }
-  const copy = overview.querySelector('.overview-banner__copy');
-  if (copy) {
-    copy.textContent =
-        'The outer shell follows the mockup, while the inner embedded chrome://settings document remains Chromium-native.';
-  }
-  card.appendChild(overview);
 
   const browserShell = document.createElement('div');
   browserShell.className = 'browser-settings-shell browser-settings-shell--wide';
@@ -352,27 +271,11 @@ function createPaneSectionShell(pane: PaneDefinition): HTMLElement {
   const header = document.createElement('header');
   header.className = 'preferences-section__header';
 
-  const eyebrow = document.createElement('div');
-  eyebrow.className = 'preferences-section__eyebrow';
-  eyebrow.textContent = pane.eyebrow;
-
   const title = document.createElement('h2');
   title.className = 'preferences-section__title';
   title.textContent = pane.title;
 
-  const summary = document.createElement('p');
-  summary.className = 'preferences-section__summary';
-  summary.textContent = pane.summary;
-
-  const badges = document.createElement('div');
-  badges.className = 'preferences-section__badges';
-  const badgeDefinitions = pane.heroBadges ||
-      [{label: getStatusBadgeLabel(pane.status), tone: getStatusBadgeTone(pane.status)}];
-  for (const badgeDefinition of badgeDefinitions) {
-    badges.appendChild(createStatusBadge(badgeDefinition.label, badgeDefinition.tone));
-  }
-
-  header.append(eyebrow, title, summary, badges);
+  header.appendChild(title);
   card.appendChild(header);
   section.appendChild(card);
   return section;
@@ -383,34 +286,6 @@ function createStatusBadge(label: string, tone: 'live'|'mixed'|'bridge'|'api'): 
   badge.className = `status-badge status-badge--${tone}`;
   badge.textContent = label;
   return badge;
-}
-
-function getStatusBadgeLabel(status: PaneStatus): string {
-  switch (status) {
-    case 'live-pref':
-      return 'Live via Chromium prefs';
-    case 'mixed':
-      return 'Live + future-state';
-    case 'live-embed':
-      return 'Embedded browser page';
-    case 'placeholder':
-    default:
-      return 'Planned future-state';
-  }
-}
-
-function getStatusBadgeTone(status: PaneStatus): 'live'|'mixed'|'bridge'|'api' {
-  switch (status) {
-    case 'live-pref':
-      return 'live';
-    case 'mixed':
-      return 'mixed';
-    case 'live-embed':
-      return 'api';
-    case 'placeholder':
-    default:
-      return 'bridge';
-  }
 }
 
 function createContentCard(
@@ -545,7 +420,7 @@ function createStructuredPlaceholderRow(rowDefinition: StructuredPlaceholderRow,
 
   const controlArea = document.createElement('div');
   controlArea.className = 'setting-row__control';
-  controlArea.appendChild(createDisabledPlaceholderControl(rowDefinition));
+  controlArea.appendChild(createCapabilityStub(rowDefinition));
 
   row.append(copy, controlArea);
   return row;
@@ -558,151 +433,109 @@ function createStatusInlineBadge(label: string, tone: 'live'|'bridge'|'api'): HT
   return badge;
 }
 
-function createDisabledPlaceholderControl(rowDefinition: StructuredPlaceholderRow): HTMLElement {
-  switch (rowDefinition.control) {
+function createCapabilityStub(rowDefinition: StructuredPlaceholderRow): HTMLElement {
+  const stub = document.createElement('div');
+  stub.className = 'setting-capability-stub';
+
+  const status = document.createElement('div');
+  status.className = 'setting-capability-stub__status';
+  status.textContent = `Planned ${getControlLabel(rowDefinition.control)} surface`;
+
+  const missing = document.createElement('div');
+  missing.className = 'setting-capability-stub__missing';
+  missing.textContent = `Missing capability: ${rowDefinition.badgeLabel}`;
+
+  const summary = document.createElement('p');
+  summary.className = 'setting-capability-stub__summary';
+  summary.textContent = getCapabilitySummary(rowDefinition);
+
+  const bullets = document.createElement('ul');
+  bullets.className = 'setting-capability-stub__bullets';
+  const bulletItems = getCapabilityBullets(rowDefinition);
+  for (const bullet of bulletItems) {
+    const item = document.createElement('li');
+    item.textContent = bullet;
+    bullets.appendChild(item);
+  }
+
+  stub.append(status, missing, summary);
+  if (bulletItems.length > 0) {
+    stub.appendChild(bullets);
+  }
+  return stub;
+}
+
+function getControlLabel(control: StructuredPlaceholderRow['control']): string {
+  switch (control) {
     case 'toggle':
-      return createDisabledToggleControl(rowDefinition);
+      return 'toggle';
     case 'select':
-      return createDisabledSelectControl(rowDefinition);
+      return 'selector';
     case 'slider':
-      return createDisabledSliderControl(rowDefinition);
+      return 'range';
     case 'textarea':
-      return createDisabledTextareaControl(rowDefinition);
+      return 'multiline editor';
     case 'number':
+      return 'numeric input';
     case 'text':
+      return 'text input';
     default:
-      return createDisabledInputControl(rowDefinition);
+      return 'control';
   }
 }
 
-function createDisabledToggleControl(rowDefinition: StructuredPlaceholderRow): HTMLElement {
-  const enabled = rowDefinition.value === 'true';
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'setting-switch is-disabled';
-  button.disabled = true;
-  if (enabled) {
-    button.classList.add('is-on');
+function getCapabilitySummary(rowDefinition: StructuredPlaceholderRow): string {
+  const details: string[] = [];
+
+  if (rowDefinition.placeholder) {
+    details.push(`Hint: ${rowDefinition.placeholder}`);
   }
 
-  const track = document.createElement('span');
-  track.className = 'setting-switch__track';
-  const thumb = document.createElement('span');
-  thumb.className = 'setting-switch__thumb';
-  track.appendChild(thumb);
-
-  const status = document.createElement('span');
-  status.className = 'setting-switch__status';
-  status.textContent = enabled ? 'On' : 'Off';
-
-  button.append(track, status);
-  return button;
-}
-
-function createDisabledInputControl(rowDefinition: StructuredPlaceholderRow): HTMLElement {
-  const wrapper = document.createElement('label');
-  wrapper.className = 'setting-input-shell is-disabled';
-
-  const input = document.createElement('input');
-  input.className = 'setting-input';
-  input.type = rowDefinition.control === 'number' ? 'number' : 'text';
-  input.value = rowDefinition.value || '';
-  input.placeholder = rowDefinition.placeholder || '';
-  input.disabled = true;
-
-  wrapper.appendChild(input);
-
-  if (rowDefinition.control === 'number') {
-    const suffix = document.createElement('span');
-    suffix.className = 'setting-input-shell__suffix';
-    suffix.textContent = 'px';
-    wrapper.appendChild(suffix);
+  if (rowDefinition.value) {
+    details.push(`Planned default: ${rowDefinition.value}`);
   }
 
-  return wrapper;
-}
+  if (rowDefinition.control === 'select' && rowDefinition.options?.length) {
+    const options = rowDefinition.options.slice(0, 3).map(option => option.displayLabel || option.label);
+    details.push(`Future options: ${options.join(', ')}`);
+  }
 
-function createDisabledSelectControl(rowDefinition: StructuredPlaceholderRow): HTMLElement {
-  const options = rowDefinition.options || [];
-
-  if (rowDefinition.segmented) {
-    const segmented = document.createElement('div');
-    segmented.className = 'setting-segmented is-disabled';
-
-    for (const option of options) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'setting-segment';
-      button.textContent = option.displayLabel || option.label;
-      button.disabled = true;
-      if (option.value === rowDefinition.value) {
-        button.classList.add('is-active');
-      }
-      segmented.appendChild(button);
+  if (rowDefinition.control === 'slider') {
+    const rangeBits = [rowDefinition.min, rowDefinition.max].filter((value): value is number => typeof value === 'number');
+    if (rangeBits.length === 2) {
+      details.push(`Expected range: ${rangeBits[0]}–${rangeBits[1]}`);
     }
-
-    return segmented;
-  }
-
-  const wrapper = document.createElement('label');
-  wrapper.className = 'setting-input-shell setting-input-shell--select is-disabled';
-
-  const select = document.createElement('select');
-  select.className = 'setting-input setting-select';
-  select.disabled = true;
-
-  for (const option of options) {
-    const optionElement = document.createElement('option');
-    optionElement.value = option.value;
-    optionElement.textContent = option.label;
-    if (option.value === rowDefinition.value) {
-      optionElement.selected = true;
+    if (typeof rowDefinition.step === 'number') {
+      details.push(`Step: ${rowDefinition.step}`);
     }
-    select.appendChild(optionElement);
   }
 
-  const suffix = document.createElement('span');
-  suffix.className = 'setting-input-shell__suffix setting-input-shell__suffix--icon';
-  suffix.textContent = '▾';
-  suffix.setAttribute('aria-hidden', 'true');
+  if (details.length === 0) {
+    return 'This row is visible for future parity work, but it does not yet map to a live browser setting.';
+  }
 
-  wrapper.append(select, suffix);
-  return wrapper;
+  return details.join(' ');
 }
 
-function createDisabledSliderControl(rowDefinition: StructuredPlaceholderRow): HTMLElement {
-  const wrapper = document.createElement('div');
-  wrapper.className = 'setting-slider-shell is-disabled';
+function getCapabilityBullets(rowDefinition: StructuredPlaceholderRow): string[] {
+  const bullets: string[] = [];
 
-  const slider = document.createElement('input');
-  slider.type = 'range';
-  slider.className = 'setting-slider';
-  slider.disabled = true;
-  slider.min = String(rowDefinition.min ?? 0);
-  slider.max = String(rowDefinition.max ?? 100);
-  slider.step = String(rowDefinition.step ?? 1);
-  slider.value = rowDefinition.value || String(rowDefinition.min ?? 0);
+  bullets.push(`Intended surface: ${getControlLabel(rowDefinition.control)}`);
 
-  const value = document.createElement('span');
-  value.className = 'setting-slider__value';
-  value.textContent = `${slider.value}px`;
+  if (rowDefinition.value) {
+    bullets.push(`Planned default value: ${rowDefinition.value}`);
+  }
 
-  wrapper.append(slider, value);
-  return wrapper;
-}
+  if (rowDefinition.options?.length) {
+    const optionLabels = rowDefinition.options.slice(0, 4).map(option => option.displayLabel || option.label);
+    bullets.push(`Possible choices: ${optionLabels.join(' · ')}`);
+  }
 
-function createDisabledTextareaControl(rowDefinition: StructuredPlaceholderRow): HTMLElement {
-  const wrapper = document.createElement('div');
-  wrapper.className = 'setting-textarea-shell';
+  if (rowDefinition.placeholder) {
+    bullets.push(`Future input hint: ${rowDefinition.placeholder}`);
+  }
 
-  const textarea = document.createElement('textarea');
-  textarea.className = 'setting-textarea is-disabled';
-  textarea.disabled = true;
-  textarea.value = rowDefinition.value || '';
-  textarea.rows = 4;
-
-  wrapper.appendChild(textarea);
-  return wrapper;
+  return bullets;
 }
 
 function createSettingRow(item: SettingValue, isFirstRow: boolean): HTMLElement {

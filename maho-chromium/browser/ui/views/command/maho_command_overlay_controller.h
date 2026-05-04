@@ -5,6 +5,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/views/widget/widget_observer.h"
 
 class Browser;
@@ -25,17 +26,25 @@ class MahoCommandOverlayController : public views::WidgetObserver {
   ~MahoCommandOverlayController() override;
 
   void Toggle(views::View* anchor);
+  void Show(views::View* anchor);
   void Hide();
   bool IsVisible() const;
 
   // views::WidgetObserver:
   void OnWidgetDestroying(views::Widget* widget) override;
+  void OnWidgetBoundsChanged(views::Widget* widget,
+                             const gfx::Rect& new_bounds) override;
+  void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
 
- private:
-  void Show(views::View* anchor);
+   private:
+  gfx::Rect ComputePopupBounds() const;
+  void Reposition();
 
   raw_ptr<Browser> browser_;
   raw_ptr<views::Widget> widget_ = nullptr;
+  raw_ptr<views::View> anchor_ = nullptr;
+  raw_ptr<views::Widget> parent_widget_ = nullptr;
+  bool is_hiding_ = false;
 
   base::WeakPtrFactory<MahoCommandOverlayController> weak_factory_{this};
 };

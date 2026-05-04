@@ -1,10 +1,10 @@
 # Chromium fork build flow
 
-This document records the verified local build flow for the Chromium overlay used by Maho. Active implementation lives in the Chromium overlay repo mounted at `chromium/src/maho`, backed by the sibling repo `/Users/indo/code/project/maho-workspace/maho-chromium`.
+This document records the standard local build flow for the Chromium overlay used by Maho. Active implementation lives in the Chromium overlay repo mounted at `chromium/src/maho`, backed by the sibling repo `/Users/indo/code/project/maho-workspace/maho-chromium`.
 
 ## Purpose and scope
 
-Use this flow when you need to build the Chromium desktop app bundle or run the Chromium desktop macOS E2E harness from the local overlay checkout. It covers the current checked-in command paths and artifact locations only.
+Use this flow when you need to build the Chromium desktop app bundle or run the Chromium desktop macOS E2E harness from the local overlay checkout. Use `out/Default` as the standard build directory. Do not treat `out/Release` as the default path.
 
 ## Repo layout and working directories
 
@@ -25,7 +25,7 @@ ln -s ../../maho-chromium chromium/src/maho
 
 This local workspace already has that mount in place.
 
-## Verified build commands
+## Standard build commands
 
 1. Build the Rust prebuilt library:
 
@@ -38,23 +38,22 @@ This local workspace already has that mount in place.
 2. Build Chromium with the Maho overlay:
 
    ```bash
-   autoninja -C out/Release chrome
+   autoninja -C out/Default chrome
    ```
 
-   The local build output resolves the mac app bundle executable name to `Maho`, so this command produces `out/Release/Maho.app`.
+   The build wiring resolves the mac app bundle executable name to `Maho`, so this command produces `out/Default/Maho.app`.
 
 ## Rust prebuilt flow
 
-- `chromium/src/out/Release/args.gn` sets `branding_path_component = "maho"`.
-- The same `args.gn` notes that `maho-core` is built separately via Cargo and linked as a prebuilt `.a`.
 - `chromium/src/chrome/app/theme/maho/BRANDING` sets `PRODUCT_FULLNAME=Maho` and `MAC_BUNDLE_ID=com.maho.browser`.
 - `chromium/src/chrome/BUILD.gn` uses `output_name = chrome_product_full_name` for the mac app bundle target.
-- `chromium/src/out/Release/build.ninja` shows `chrome_app_executable` resolving to `Maho`.
+- `maho-chromium/README.md` uses `autoninja -C out/Default chrome` as the standard build command.
 - `maho-chromium/third_party/maho/BUILD.gn` links the prebuilt library via `libs = [ "maho_core" ]` and exposes the FFI headers and bridge.
+- `maho-chromium/build/scripts/e2e_selectors.py` defaults `MAHO_APP_PATH` to the `out/Default` app bundle.
 
 ## Artifact locations
 
-- Chromium app bundle: `chromium/src/out/Release/Maho.app`
+- Chromium app bundle: `chromium/src/out/Default/Maho.app`
 - Mounted overlay path used by Chromium build: `chromium/src/maho/third_party/maho/prebuilt/arm64/libmaho_core.a`
 - Sibling repo path backing the same file: `maho-chromium/third_party/maho/prebuilt/arm64/libmaho_core.a`
 - E2E artifacts: `/tmp/maho-chromium-e2e-spaces/<scenario-name>/`
@@ -72,7 +71,7 @@ python3 maho/build/scripts/e2e_chromium_sidebar.py --scenario launch_clean_profi
 python3 maho/build/scripts/e2e_chromium_sidebar.py --scenario phase2_seeded_favorites_snapshot_assert --scenario phase2_folder_sibling_reorder_blocked
 ```
 
-`MAHO_APP_PATH` defaults to the built app bundle, and `MAHO_E2E_ARTIFACT_DIR` defaults to `/tmp/maho-chromium-e2e-spaces`.
+`MAHO_APP_PATH` defaults to the built app bundle in `out/Default`, and `MAHO_E2E_ARTIFACT_DIR` defaults to `/tmp/maho-chromium-e2e-spaces`.
 
 ## Current local assumptions and limitations
 

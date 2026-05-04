@@ -71,6 +71,10 @@ class MahoSidebarFavoritesGridView : public views::View {
     return drag_over_drop_target_;
   }
 
+  views::Button* GetTileForTesting(size_t index) {
+    return index < kTileCount ? tile_views_[index].get() : nullptr;
+  }
+
  private:
   struct LayoutSpec {
     LayoutSpec();

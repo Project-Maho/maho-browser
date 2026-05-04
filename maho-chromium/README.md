@@ -24,5 +24,5 @@ Chromium overlay for Maho Browser. Brave-style chromium_src overrides.
 
 3. Build Chromium with Maho:
    ```
-   autoninja -C out/Release chrome
+   autoninja -C out/Default chrome
    ```

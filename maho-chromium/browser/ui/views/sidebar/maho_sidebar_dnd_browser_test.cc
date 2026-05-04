@@ -65,7 +65,8 @@ class MahoSidebarDnDBrowserTest : public InProcessBrowserTest {
     SetShellEventObserverForTesting(&observer_);
 
     PrefService* prefs = browser()->profile()->GetPrefs();
-    prefs->SetBoolean(sidebar_prefs::kSidebarVisible, true);
+    prefs->SetBoolean(sidebar_prefs::kSidebarLayoutEnabled, true);
+    prefs->SetBoolean(sidebar_prefs::kSidebarPanelExpanded, true);
 
     ASSERT_TRUE(ui_test_utils::NavigateToURL(
         browser(), GURL("chrome://maho-test/?seed=2")));
