@@ -3,7 +3,6 @@
 #include "maho_sidebar_footer_view.h"
 
 #include <algorithm>
-#include <array>
 #include <optional>
 #include <string>
 #include <vector>
@@ -11,6 +10,7 @@
 #include "base/json/json_writer.h"
 #include "base/values.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
 
 #include "base/functional/bind.h"
@@ -18,55 +18,83 @@
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "components/vector_icons/vector_icons.h"
 #include "content/public/common/referrer.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_action_popover_view.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
-#include "maho/browser/ui/views/space_manage/maho_space_manage_dialog.h"
-#include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/context_menu/maho_space_context_menu.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_action_popover_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_library_rail_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/base/ui_base_types.h"
+#include "ui/base/models/image_model.h"
 #include "ui/base/page_transition_types.h"
+#include "ui/base/ui_base_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/gfx/vector_icon_types.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
-#include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/label.h"
 #include "ui/menus/simple_menu_model.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/controls/scroll_view.h"
 #include "ui/views/style/typography.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/view_class_properties.h"
+#include "ui/views/view_utils.h"
 #include "url/gurl.h"
+#include "cc/paint/paint_flags.h"
+#include "cc/paint/paint_shader.h"
+#include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/gfx/canvas.h"
+#include "ui/compositor/layer.h"
 
 namespace maho {
 
 namespace {
 
+MahoSidebarView* FindSidebarViewAncestor(views::View* view) {
+  for (views::View* current = view; current; current = current->parent()) {
+    if (auto* sidebar_view = views::AsViewClass<MahoSidebarView>(current)) {
+      return sidebar_view;
+    }
+  }
+  return nullptr;
+}
+
 constexpr int kUpdatePillCornerRadius = 11;
 constexpr int kUpdateIndicatorSize = 5;
-constexpr int kFooterControlSize = 24;
-constexpr int kClusterCornerRadius = 12;
-constexpr int kClusterSpacing = 4;
-constexpr int kLibraryButtonCornerRadius = 12;
-constexpr int kSpaceIconSize = 18;
-constexpr int kSpaceIconCornerRadius = 9;
-constexpr int kSpaceTintAlpha = 24;
+constexpr int kFooterRowCornerRadius = 14;
+constexpr int kFooterControlSize = 26;
+constexpr int kFooterControlCornerRadius = 13;
+constexpr int kFooterButtonIconSize = 12;
+constexpr int kFooterRowSpacing = 5;
+constexpr int kClusterCornerRadius = 8;
+constexpr int kDotSpacing = 0;
+constexpr int kSpaceTintAlpha = 12;
+constexpr int kFadeWidth = 9;
+
+constexpr SkColor kFooterShellColor = SkColorSetRGB(0x17, 0x1B, 0x22);
+constexpr SkColor kFooterShellBorderColor = SkColorSetARGB(0x34, 0xFF, 0xFF, 0xFF);
+constexpr SkColor kFooterButtonBlue = SkColorSetRGB(0x63, 0x95, 0xFF);
+constexpr SkColor kFooterButtonIconColor = SkColorSetRGB(0xF8, 0xFB, 0xFF);
+constexpr SkColor kFooterTrackBaseColor = SkColorSetRGB(0x0C, 0x10, 0x15);
+constexpr SkColor kFooterTrackBorderColor = SkColorSetARGB(0x16, 0xFF, 0xFF, 0xFF);
 
 const gfx::Insets kFooterInsets = gfx::Insets::TLBR(2, 0, 0, 0);
 const gfx::Insets kUpdatePillInsets = gfx::Insets::TLBR(3, 10, 3, 10);
-const gfx::Insets kClusterInsets = gfx::Insets::VH(2, 5);
-
-constexpr std::array<const char16_t*, 8> kSpaceEmojiIcons = {
-    u"🏠", u"💼", u"🎨", u"🎮", u"📚", u"🎵", u"🌟", u"⚡"};
+const gfx::Insets kFooterRowInsets = gfx::Insets::VH(3, 5);
+const gfx::Insets kClusterInsets = gfx::Insets::TLBR(3, 14, 3, 14);
 
 bool ParseHexColor(const std::string& color, SkColor* out) {
   if (!out || color.size() != 7 || color[0] != '#') {
@@ -95,51 +123,94 @@ SkColor BlendTint(SkColor color, SkColor surface) {
       (SkColorGetB(color) * tint + SkColorGetB(surface) * base_alpha) / 255);
 }
 
-std::u16string GetSpaceEmojiForIndex(int index) {
-  if (index < 0) {
-    return u"✨";
-  }
-  return kSpaceEmojiIcons[index % kSpaceEmojiIcons.size()];
-}
-
-views::LabelButton* CreateIconPillButton(
+views::MdTextButton* CreateRoundActionButton(
     views::View* parent,
     views::Button::PressedCallback callback,
     const gfx::VectorIcon& icon,
     const std::u16string& tooltip) {
-  auto button = std::make_unique<views::LabelButton>(std::move(callback), u"");
-  button->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+  auto button = std::make_unique<views::MdTextButton>(std::move(callback),
+                                                      std::u16string());
+  button->SetStyle(ui::ButtonStyle::kTonal);
+  button->SetCornerRadius(kFooterControlCornerRadius);
   button->SetMinSize(gfx::Size(kFooterControlSize, kFooterControlSize));
-  button->SetRequestFocusOnPress(false);
+  button->SetMaxSize(gfx::Size(kFooterControlSize, kFooterControlSize));
   button->SetImageModel(
       views::Button::STATE_NORMAL,
-      ui::ImageModel::FromVectorIcon(icon, ui::kColorSysOnSurface,
-                                     sidebar_layout::kTopBarIconSizeDp));
+      ui::ImageModel::FromVectorIcon(icon, kFooterButtonIconColor,
+                                     kFooterButtonIconSize));
+  button->SetEnabledTextColors(kFooterButtonIconColor);
   button->SetTooltipText(tooltip);
   button->SetAccessibleName(tooltip);
-  button->SetLabelStyle(views::style::STYLE_BODY_4_MEDIUM);
-  button->SetTextColor(views::Button::STATE_NORMAL, ui::kColorSysOnSurfaceSubtle);
-  button->SetBackground(views::CreateRoundedRectBackground(
-      ui::kColorSysSurface1, kLibraryButtonCornerRadius));
-  button->SetBorder(views::CreateRoundedRectBorder(
-      1, kLibraryButtonCornerRadius, ui::kColorSysSurfaceVariant));
   return parent->AddChildView(std::move(button));
 }
 
-views::MdTextButton* CreateRoundActionButton(
-    views::View* parent,
-    views::Button::PressedCallback callback,
-    const std::u16string& text,
-    const std::u16string& tooltip) {
-  auto button = std::make_unique<views::MdTextButton>(std::move(callback), text);
-  button->SetStyle(ui::ButtonStyle::kTonal);
-  button->SetCornerRadius(kFooterControlSize / 2);
-  button->SetMinSize(gfx::Size(kFooterControlSize, kFooterControlSize));
-  button->SetMaxSize(gfx::Size(kFooterControlSize, kFooterControlSize));
-  button->SetTooltipText(tooltip);
-  button->SetAccessibleName(tooltip);
-  return parent->AddChildView(std::move(button));
-}
+class MahoSidebarFadeMaskView : public views::View {
+  METADATA_HEADER(MahoSidebarFadeMaskView, views::View)
+
+ public:
+  MahoSidebarFadeMaskView() {
+    SetCanProcessEventsWithinSubtree(false);
+  }
+
+  void SetFadeState(bool show_left, bool show_right, SkColor surface_color) {
+    if (show_left_ == show_left && show_right_ == show_right &&
+        surface_color_ == surface_color) {
+      return;
+    }
+    show_left_ = show_left;
+    show_right_ = show_right;
+    surface_color_ = surface_color;
+    SchedulePaint();
+  }
+
+  void OnPaint(gfx::Canvas* canvas) override {
+    const gfx::Rect bounds = GetContentsBounds();
+    if (bounds.IsEmpty()) {
+      return;
+    }
+
+    const SkColor4f opaque = SkColor4f::FromColor(surface_color_);
+    const SkColor4f transparent = {opaque.fR, opaque.fG, opaque.fB, 0.0f};
+
+    if (show_left_) {
+      const SkPoint points[2] = {
+          {static_cast<float>(bounds.x()), 0},
+          {static_cast<float>(bounds.x() + kFadeWidth), 0}};
+      const SkColor4f colors[2] = {opaque, transparent};
+      cc::PaintFlags flags;
+      flags.setAntiAlias(true);
+      flags.setStyle(cc::PaintFlags::kFill_Style);
+      flags.setShader(cc::PaintShader::MakeLinearGradient(
+          points, colors, nullptr, 2, SkTileMode::kClamp));
+      canvas->DrawRect(
+          gfx::Rect(bounds.x(), bounds.y(), kFadeWidth, bounds.height()),
+          flags);
+    }
+
+    if (show_right_) {
+      const int right_x = bounds.right() - kFadeWidth;
+      const SkPoint points[2] = {
+          {static_cast<float>(right_x), 0},
+          {static_cast<float>(bounds.right()), 0}};
+      const SkColor4f colors[2] = {transparent, opaque};
+      cc::PaintFlags flags;
+      flags.setAntiAlias(true);
+      flags.setStyle(cc::PaintFlags::kFill_Style);
+      flags.setShader(cc::PaintShader::MakeLinearGradient(
+          points, colors, nullptr, 2, SkTileMode::kClamp));
+      canvas->DrawRect(
+          gfx::Rect(right_x, bounds.y(), kFadeWidth, bounds.height()), flags);
+    }
+  }
+
+ private:
+  bool show_left_ = false;
+  bool show_right_ = false;
+  SkColor surface_color_ = SK_ColorWHITE;
+};
+
+BEGIN_METADATA(MahoSidebarFadeMaskView)
+END_METADATA
 
 void DispatchCreateFolderForSpace(const std::string& space_id) {
   MahoCore* core = maho::GetCore();
@@ -166,6 +237,8 @@ END_METADATA
 
 MahoSidebarFooterView::MahoSidebarFooterView(Browser* browser)
     : browser_(browser) {
+  SetAccessibleRole(ax::mojom::Role::kToolbar);
+  GetViewAccessibility().SetName(u"Sidebar footer controls");
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical, kFooterInsets, 7));
   layout->set_cross_axis_alignment(
@@ -199,47 +272,73 @@ MahoSidebarFooterView::MahoSidebarFooterView(Browser* browser)
   auto* footer_row = AddChildView(std::make_unique<views::View>());
   auto* footer_row_layout =
       footer_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
-          views::BoxLayout::Orientation::kHorizontal, gfx::Insets(),
-          kClusterSpacing));
+          views::BoxLayout::Orientation::kHorizontal, kFooterRowInsets,
+          kFooterRowSpacing));
   footer_row_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
+  footer_row->SetBackground(views::CreateRoundedRectBackground(
+      kFooterShellColor, kFooterRowCornerRadius));
+  footer_row->SetBorder(views::CreateRoundedRectBorder(
+      1, kFooterRowCornerRadius, kFooterShellBorderColor));
 
-  library_button_ = CreateIconPillButton(
+  archive_button_ = CreateRoundActionButton(
       footer_row,
-      base::BindRepeating(&MahoSidebarFooterView::OnLibraryPressed,
+      base::BindRepeating(&MahoSidebarFooterView::OnArchivePressed,
                           weak_factory_.GetWeakPtr()),
-      vector_icons::kGlobeIcon, u"Open spaces");
+      GetMahoSidebarArchiveboxIcon(), u"Toggle archive");
 
   spaces_cluster_ = footer_row->AddChildView(std::make_unique<views::View>());
   auto* cluster_layout =
       spaces_cluster_->SetLayoutManager(std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kHorizontal, kClusterInsets,
-          kClusterSpacing));
+          kDotSpacing));
   cluster_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
   footer_row_layout->SetFlexForView(spaces_cluster_, 1);
 
-  dot_container_ = spaces_cluster_->AddChildView(std::make_unique<views::View>());
+  auto scroll_view = std::make_unique<views::ScrollView>();
+  scroll_view->SetHorizontalScrollBarMode(
+      views::ScrollView::ScrollBarMode::kHiddenButEnabled);
+  scroll_view->SetVerticalScrollBarMode(
+      views::ScrollView::ScrollBarMode::kDisabled);
+  scroll_view->SetDrawOverflowIndicator(false);
+  scroll_view->SetBackgroundColor(std::nullopt);
+
+  auto dot_container_owned = std::make_unique<views::View>();
+  dot_container_ = dot_container_owned.get();
   auto* dots_layout =
       dot_container_->SetLayoutManager(std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kHorizontal,
           gfx::Insets(),
-          kClusterSpacing));
+          kDotSpacing));
   dots_layout->set_main_axis_alignment(
       views::BoxLayout::MainAxisAlignment::kCenter);
   dots_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
 
+  scroll_view->SetContents(std::move(dot_container_owned));
+
+  auto fade_mask_owned = std::make_unique<MahoSidebarFadeMaskView>();
+  fade_mask_ = fade_mask_owned.get();
+  fade_mask_->SetPaintToLayer();
+  fade_mask_->layer()->SetFillsBoundsOpaquely(false);
+
+  scroll_view_ = spaces_cluster_->AddChildView(std::move(scroll_view));
+  cluster_layout->SetFlexForView(scroll_view_, 1);
+
+  spaces_cluster_->AddChildView(std::move(fade_mask_owned));
+  fade_mask_->SetPreferredSize(gfx::Size(0, 0));
+
   plus_button_ = CreateRoundActionButton(
       footer_row,
       base::BindRepeating(&MahoSidebarFooterView::OnPlusPressed,
                           weak_factory_.GetWeakPtr()),
-      u"+", u"Create space");
+      vector_icons::kAddIcon, u"Create space");
 
-  spaces_cluster_->set_context_menu_controller(this);
   UpdateFooterChromeAppearance();
   UpdateUpdatePill(MahoSidebarFooterUpdatePillModel());
-  RebuildDots(0, -1, {}, {}, {});
+  RebuildDots(0, -1, {}, {}, {}, {});
+  SetFocusBehavior(FocusBehavior::ALWAYS);
 }
 
 MahoSidebarFooterView::~MahoSidebarFooterView() {
@@ -248,12 +347,11 @@ MahoSidebarFooterView::~MahoSidebarFooterView() {
 
 void MahoSidebarFooterView::Update(const MahoSidebarFooterModel& model) {
   UpdateUpdatePill(model.update_pill);
-  library_button_->SetEnabled(model.can_open_space_controls);
   plus_button_->SetEnabled(model.can_create_space);
   active_space_color_ = model.space_color;
   UpdateFooterChromeAppearance();
-  RebuildDots(model.space_count, model.active_space_index, model.space_icons,
-              model.space_names, model.space_colors);
+  RebuildDots(model.space_count, model.active_space_index, model.space_ids,
+              model.space_icons, model.space_names, model.space_colors);
 }
 
 void MahoSidebarFooterView::ShowContextMenuForViewImpl(
@@ -305,23 +403,17 @@ void MahoSidebarFooterView::UpdateUpdatePill(
   }
 }
 
-void MahoSidebarFooterView::OnLibraryPressed(const ui::Event& event) {
-  (void)event;
-  OpenLibrarySurface();
-}
-
 void MahoSidebarFooterView::OnPlusPressed(const ui::Event& event) {
   (void)event;
   OpenSpaceCreationSurface();
 }
 
-void MahoSidebarFooterView::OnSpaceIconPressed(int index, const ui::Event& event) {
+void MahoSidebarFooterView::OnArchivePressed(const ui::Event& event) {
   (void)event;
-  SwitchToSpaceAtIndex(index);
-}
-
-void MahoSidebarFooterView::OpenLibrarySurface() {
-  maho::MahoSpaceManageDialog::Open(browser_);
+  auto* sidebar_view = FindSidebarViewAncestor(this);
+  if (sidebar_view) {
+    sidebar_view->ToggleArchiveMode();
+  }
 }
 
 void MahoSidebarFooterView::OpenSpaceCreationSurface() {
@@ -349,8 +441,7 @@ void MahoSidebarFooterView::HandleActionPopoverAction(
 
   switch (action) {
     case MahoSidebarActionPopoverAction::kNewSpace: {
-      auto* sidebar_view = static_cast<MahoSidebarView*>(
-          parent() && parent()->parent() ? parent()->parent() : nullptr);
+      auto* sidebar_view = FindSidebarViewAncestor(this);
       if (sidebar_view) {
         sidebar_view->ShowCreateSpace();
       }
@@ -365,11 +456,18 @@ void MahoSidebarFooterView::HandleActionPopoverAction(
     }
     case MahoSidebarActionPopoverAction::kNewTab:
       if (browser_) {
-        browser_->OpenURL(content::OpenURLParams(
-            GURL("chrome://newtab"), content::Referrer(),
-            WindowOpenDisposition::NEW_FOREGROUND_TAB,
-            ui::PAGE_TRANSITION_TYPED, false),
-            base::NullCallback());
+        auto* browser_view =
+            BrowserView::GetBrowserViewForBrowser(browser_);
+        if (browser_view) {
+          for (views::View* child : browser_view->children()) {
+            auto* container =
+                views::AsViewClass<MahoSidebarContainerView>(child);
+            if (container) {
+              container->ShowCommandOverlayForNewTab();
+              break;
+            }
+          }
+        }
       }
       break;
   }
@@ -392,13 +490,11 @@ void MahoSidebarFooterView::OnWidgetDestroying(views::Widget* widget) {
 void MahoSidebarFooterView::RebuildDots(
     int space_count,
     int active_index,
+    const std::vector<std::string>& space_ids,
     const std::vector<std::string>& space_icons,
     const std::vector<std::string>& space_names,
     const std::vector<std::string>& space_colors) {
   dot_container_->RemoveAllChildViews();
-  auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
-  std::vector<std::string> space_ids = bridge ? bridge->GetSpaceIds()
-                                              : std::vector<std::string>();
   const int clamped_count = std::max(space_count, 0);
   const int visible_count = space_ids.empty()
                                 ? clamped_count
@@ -408,87 +504,247 @@ void MahoSidebarFooterView::RebuildDots(
     return;
   }
 
-  auto* layout = static_cast<views::BoxLayout*>(dot_container_->GetLayoutManager());
-  if (layout) {
-    layout->set_between_child_spacing(kClusterSpacing);
-  }
-
   for (int i = 0; i < visible_count; ++i) {
     const bool active = i == active_index;
-    std::u16string emoji;
-    if (i < static_cast<int>(space_icons.size()) && !space_icons[i].empty()) {
-      emoji = base::UTF8ToUTF16(space_icons[i]);
-    } else {
-      emoji = GetSpaceEmojiForIndex(i);
+    const std::string& sid =
+        i < static_cast<int>(space_ids.size()) ? space_ids[i] : std::string();
+    const std::string& icon =
+        i < static_cast<int>(space_icons.size()) ? space_icons[i]
+                                                  : std::string();
+    const std::string& name =
+        i < static_cast<int>(space_names.size()) ? space_names[i]
+                                                  : std::string();
+
+    SkColor dot_color = SK_ColorGRAY;
+    if (i < static_cast<int>(space_colors.size())) {
+      ParseHexColor(space_colors[i], &dot_color);
     }
-    auto button = std::make_unique<views::LabelButton>(
-        base::BindRepeating(&MahoSidebarFooterView::OnSpaceIconPressed,
-                            weak_factory_.GetWeakPtr(), i),
-        emoji);
-    button->SetHorizontalAlignment(gfx::ALIGN_CENTER);
-    SkColor fill_color = active ? ui::kColorSysSurface1 : ui::kColorSysSurface;
-    SkColor parsed_color = fill_color;
-    if (i < static_cast<int>(space_colors.size()) &&
-        ParseHexColor(space_colors[i], &parsed_color)) {
-      const auto* cp = GetColorProvider();
-      const SkColor surface = cp ? cp->GetColor(ui::kColorSysSurface3)
-                                 : SkColorSetRGB(0xF0, 0xF0, 0xF0);
-      fill_color = BlendTint(parsed_color, surface);
-    }
-    button->SetBorder(active ? views::CreateRoundedRectBorder(
-                                  1, kSpaceIconCornerRadius,
-                                  ui::kColorSysNeutralOutline)
-                             : nullptr);
-    button->SetBackground(views::CreateRoundedRectBackground(
-        fill_color,
-        kSpaceIconCornerRadius));
-    button->SetRequestFocusOnPress(false);
-    button->SetImageLabelSpacing(0);
-    button->SetMinSize(gfx::Size(kSpaceIconSize, kSpaceIconSize));
-    button->SetMaxSize(gfx::Size(kSpaceIconSize, kSpaceIconSize));
-    std::u16string space_name =
-        (i < static_cast<int>(space_names.size()) && !space_names[i].empty())
-            ? base::UTF8ToUTF16(space_names[i])
-            : u"Switch space";
-    button->SetTooltipText(space_name);
-    button->SetAccessibleName(space_name);
-    button->SetLabelStyle(views::style::STYLE_BODY_4_MEDIUM);
-    button->SetTextColor(views::Button::STATE_NORMAL, ui::kColorSysOnSurface);
-    button->SetTextColor(views::Button::STATE_HOVERED, ui::kColorSysOnSurface);
-    button->SetTextColor(views::Button::STATE_PRESSED, ui::kColorSysOnSurface);
-    dot_container_->AddChildView(std::move(button));
+
+    auto dot = std::make_unique<MahoSidebarSpaceDotView>();
+    dot->Configure(sid, name, icon, dot_color, active);
+    dot->set_delegate(this);
+    dot_container_->AddChildView(std::move(dot));
   }
+
+  selected_dot_index_ = active_index;
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(&MahoSidebarFooterView::ScrollToActiveSpace,
+                     weak_factory_.GetWeakPtr()));
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(&MahoSidebarFooterView::UpdateFadeMask,
+                     weak_factory_.GetWeakPtr()));
 }
 
 void MahoSidebarFooterView::UpdateFooterChromeAppearance() {
-  // Resolve ColorId to actual SkColor via the widget's ColorProvider.
-  const auto* cp = GetColorProvider();
-  const SkColor surface = cp ? cp->GetColor(ui::kColorSysSurface3)
-                             : SkColorSetRGB(0xF0, 0xF0, 0xF0);
-  SkColor tint = surface;
+  SkColor tint = kFooterTrackBaseColor;
   SkColor parsed = tint;
   if (!active_space_color_.empty() && ParseHexColor(active_space_color_, &parsed)) {
-    tint = BlendTint(parsed, surface);
+    tint = BlendTint(parsed, kFooterTrackBaseColor);
   }
+
   SetBackground(nullptr);
   spaces_cluster_->SetBackground(views::CreateRoundedRectBackground(
       tint, kClusterCornerRadius));
   spaces_cluster_->SetBorder(views::CreateRoundedRectBorder(
-      1, kClusterCornerRadius, ui::kColorSysSurfaceVariant));
+      1, kClusterCornerRadius, kFooterTrackBorderColor));
+
+  auto style_button = [](views::MdTextButton* button) {
+    if (!button) {
+      return;
+    }
+    button->SetBackground(views::CreateRoundedRectBackground(
+        kFooterButtonBlue, kFooterControlCornerRadius));
+    button->SetBorder(views::CreateRoundedRectBorder(
+        1, kFooterControlCornerRadius, SkColorSetARGB(0x1C, 0xFF, 0xFF, 0xFF)));
+  };
+  style_button(archive_button_);
+  style_button(plus_button_);
+
+  if (archive_button_) {
+    archive_button_->SetEnabledTextColors(kFooterButtonIconColor);
+  }
+  if (plus_button_) {
+    plus_button_->SetEnabledTextColors(kFooterButtonIconColor);
+  }
 }
 
-void MahoSidebarFooterView::SwitchToSpaceAtIndex(int index) {
+void MahoSidebarFooterView::OnThemeChanged() {
+  views::View::OnThemeChanged();
+  UpdateFooterChromeAppearance();
+  UpdateFadeMask();
+}
+
+void MahoSidebarFooterView::OnSpaceDotActivated(
+    MahoSidebarSpaceDotView* dot) {
+  if (!dot) {
+    return;
+  }
+  const auto& children = dot_container_->children();
+  for (size_t i = 0; i < children.size(); ++i) {
+    if (children[i] == dot) {
+      selected_dot_index_ = static_cast<int>(i);
+      break;
+    }
+  }
   auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
-  if (!bridge) {
+  if (bridge && !dot->space_id().empty()) {
+    bridge->SwitchToSpace(dot->space_id());
+  }
+}
+
+void MahoSidebarFooterView::OnSpaceDotContextMenu(
+    MahoSidebarSpaceDotView* dot,
+    const gfx::Point& screen_point) {
+  if (!browser_ || !dot) {
+    return;
+  }
+  MahoSpaceContextMenu context_menu(browser_, dot->space_id());
+  auto menu_model = context_menu.BuildMenuModel();
+  views::MenuRunner menu_runner(menu_model.get(),
+                                views::MenuRunner::CONTEXT_MENU);
+  menu_runner.RunMenuAt(
+      dot->GetWidget(), nullptr,
+      gfx::Rect(screen_point, gfx::Size()),
+      views::MenuAnchorPosition::kTopLeft,
+      ui::mojom::MenuSourceType::kMouse);
+}
+
+void MahoSidebarFooterView::OnSpaceDotDragStarted(
+    MahoSidebarSpaceDotView* dot,
+    const gfx::Point& press_point) {
+  (void)press_point;
+  if (!dot || !dot_container_) {
+    return;
+  }
+  const auto& children = dot_container_->children();
+  drag_source_index_ = -1;
+  for (size_t i = 0; i < children.size(); ++i) {
+    if (children[i] == dot) {
+      drag_source_index_ = static_cast<int>(i);
+      break;
+    }
+  }
+}
+
+void MahoSidebarFooterView::OnSpaceDotDragMoved(
+    MahoSidebarSpaceDotView* dot,
+    const gfx::Point& screen_point) {
+  (void)dot;
+  if (drag_source_index_ < 0 || !dot_container_) {
+    return;
+  }
+  gfx::Point local_point = screen_point;
+  views::View::ConvertPointFromScreen(dot_container_, &local_point);
+  int target = GetDropTargetIndex(local_point);
+  ShowDropIndicator(target);
+}
+
+void MahoSidebarFooterView::OnSpaceDotDragEnded(
+    MahoSidebarSpaceDotView* dot,
+    bool cancelled) {
+  (void)dot;
+  if (!cancelled && drag_source_index_ >= 0 && drop_indicator_ &&
+      dot_container_) {
+    gfx::Point indicator_center = drop_indicator_->bounds().CenterPoint();
+    views::View::ConvertPointToTarget(spaces_cluster_, dot_container_,
+                                      &indicator_center);
+    int target = GetDropTargetIndex(indicator_center);
+    if (target != drag_source_index_ && target != drag_source_index_ + 1) {
+      PerformReorder(drag_source_index_, target);
+    }
+  }
+  HideDropIndicator();
+  drag_source_index_ = -1;
+}
+
+int MahoSidebarFooterView::GetDropTargetIndex(
+    const gfx::Point& point_in_dot_container) const {
+  if (!dot_container_) {
+    return 0;
+  }
+  const auto& children = dot_container_->children();
+  const int count = static_cast<int>(children.size());
+  if (count == 0) {
+    return 0;
+  }
+
+  for (int i = 0; i < count; ++i) {
+    const gfx::Rect bounds = children[i]->bounds();
+    if (point_in_dot_container.x() < bounds.CenterPoint().x()) {
+      return i;
+    }
+  }
+  return count;
+}
+
+void MahoSidebarFooterView::ShowDropIndicator(int target_index) {
+  if (!dot_container_) {
     return;
   }
 
-  const std::vector<std::string> space_ids = bridge->GetSpaceIds();
-  if (index < 0 || index >= static_cast<int>(space_ids.size())) {
-    return;
+  constexpr int kIndicatorWidth = 2;
+  constexpr int kIndicatorHeight = 12;
+  constexpr int kIndicatorRadius = 1;
+
+  if (!drop_indicator_) {
+    auto indicator = std::make_unique<views::View>();
+    indicator->SetBackground(views::CreateRoundedRectBackground(
+        ui::kColorSysPrimary, kIndicatorRadius));
+    indicator->SetPaintToLayer();
+    indicator->layer()->SetFillsBoundsOpaquely(false);
+    drop_indicator_ = spaces_cluster_->AddChildView(std::move(indicator));
   }
 
-  bridge->SwitchToSpace(space_ids[index]);
+  const auto& children = dot_container_->children();
+  const int count = static_cast<int>(children.size());
+  int x_in_dots = 0;
+  if (target_index <= 0) {
+    x_in_dots = children.empty() ? 0
+                                 : children[0]->bounds().x() - kIndicatorWidth - 1;
+  } else if (target_index >= count) {
+    x_in_dots = children.back()->bounds().right() + 1;
+  } else {
+    const int left_edge = children[target_index - 1]->bounds().right();
+    const int right_edge = children[target_index]->bounds().x();
+    x_in_dots = (left_edge + right_edge - kIndicatorWidth) / 2;
+  }
+
+  gfx::Point cluster_origin;
+  views::View::ConvertPointToTarget(dot_container_, spaces_cluster_,
+                                    &cluster_origin);
+  const int x = x_in_dots + cluster_origin.x();
+  const int y = (spaces_cluster_->height() - kIndicatorHeight) / 2;
+  drop_indicator_->SetBoundsRect(
+      gfx::Rect(x, y, kIndicatorWidth, kIndicatorHeight));
+  drop_indicator_->SetVisible(true);
+}
+
+void MahoSidebarFooterView::HideDropIndicator() {
+  if (drop_indicator_) {
+    auto removed = spaces_cluster_->RemoveChildViewT(drop_indicator_.get());
+    drop_indicator_ = nullptr;
+  }
+}
+
+void MahoSidebarFooterView::PerformReorder(int from_index, int to_index) {
+  MahoCore* core = maho::GetCore();
+  if (!core || !dot_container_) {
+    return;
+  }
+  const auto& children = dot_container_->children();
+  if (from_index < 0 ||
+      from_index >= static_cast<int>(children.size())) {
+    return;
+  }
+  auto* dot = static_cast<MahoSidebarSpaceDotView*>(children[from_index]);
+  if (dot->space_id().empty()) {
+    return;
+  }
+  maho_core_reorder_space(core, dot->space_id().c_str(),
+                          static_cast<uintptr_t>(from_index),
+                          static_cast<uintptr_t>(to_index));
 }
 
 views::View* MahoSidebarFooterView::GetSpaceDotForTesting(int index) {
@@ -498,6 +754,108 @@ views::View* MahoSidebarFooterView::GetSpaceDotForTesting(int index) {
     return nullptr;
   }
   return dot_container_->children()[index];
+}
+
+void MahoSidebarFooterView::UpdateFadeMask() {
+  if (!fade_mask_ || !scroll_view_) {
+    return;
+  }
+
+  fade_mask_->SetBoundsRect(scroll_view_->bounds());
+
+  SkColor tint = kFooterTrackBaseColor;
+  SkColor parsed = tint;
+  if (!active_space_color_.empty() && ParseHexColor(active_space_color_, &parsed)) {
+    tint = BlendTint(parsed, kFooterTrackBaseColor);
+  }
+
+  const int scroll_x = scroll_view_->GetVisibleRect().x();
+  const int max_scroll = scroll_view_->contents()->width() -
+                         scroll_view_->GetVisibleRect().width();
+  const bool show_left = scroll_x > 2;
+  const bool show_right = max_scroll > 0 && scroll_x < max_scroll - 2;
+
+  static_cast<MahoSidebarFadeMaskView*>(fade_mask_.get())
+      ->SetFadeState(show_left, show_right, tint);
+}
+
+void MahoSidebarFooterView::ScrollToActiveSpace() {
+  if (!scroll_view_ || !dot_container_ || selected_dot_index_ < 0) {
+    return;
+  }
+
+  const auto& children = dot_container_->children();
+  if (selected_dot_index_ >= static_cast<int>(children.size())) {
+    return;
+  }
+
+  views::View* active_dot = children[selected_dot_index_];
+  const gfx::Rect dot_bounds = active_dot->bounds();
+  const gfx::Rect visible = scroll_view_->GetVisibleRect();
+
+  if (dot_bounds.x() < visible.x()) {
+    scroll_view_->ScrollToPosition(scroll_view_->horizontal_scroll_bar(),
+                                   dot_bounds.x());
+  } else if (dot_bounds.right() > visible.right()) {
+    scroll_view_->ScrollToPosition(
+        scroll_view_->horizontal_scroll_bar(),
+        dot_bounds.right() - visible.width());
+  }
+}
+
+bool MahoSidebarFooterView::OnKeyPressed(const ui::KeyEvent& event) {
+  const auto& children = dot_container_->children();
+  const int count = static_cast<int>(children.size());
+  if (count == 0) {
+    return false;
+  }
+
+  if (event.key_code() == ui::VKEY_LEFT) {
+    if (selected_dot_index_ <= 0) {
+      return true;
+    }
+    selected_dot_index_--;
+    auto* dot = static_cast<MahoSidebarSpaceDotView*>(
+        children[selected_dot_index_]);
+    auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+    if (bridge && !dot->space_id().empty()) {
+      bridge->SwitchToSpace(dot->space_id());
+    }
+    ScrollToActiveSpace();
+    UpdateFadeMask();
+    return true;
+  }
+
+  if (event.key_code() == ui::VKEY_RIGHT) {
+    if (selected_dot_index_ >= count - 1) {
+      return true;
+    }
+    selected_dot_index_++;
+    auto* dot = static_cast<MahoSidebarSpaceDotView*>(
+        children[selected_dot_index_]);
+    auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+    if (bridge && !dot->space_id().empty()) {
+      bridge->SwitchToSpace(dot->space_id());
+    }
+    ScrollToActiveSpace();
+    UpdateFadeMask();
+    return true;
+  }
+
+  if (event.key_code() == ui::VKEY_RETURN ||
+      event.key_code() == ui::VKEY_SPACE) {
+    if (selected_dot_index_ >= 0 && selected_dot_index_ < count) {
+      auto* dot = static_cast<MahoSidebarSpaceDotView*>(
+          children[selected_dot_index_]);
+      auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+      if (bridge && !dot->space_id().empty()) {
+        bridge->SwitchToSpace(dot->space_id());
+      }
+    }
+    return true;
+  }
+
+  return false;
 }
 
 }  // namespace maho
