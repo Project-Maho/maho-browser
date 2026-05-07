@@ -46,6 +46,7 @@ class MahoSidebarSearchView : public views::View,
   ~MahoSidebarSearchView() override;
 
   void Update(const MahoSidebarSearchModel& model);
+  void FocusVisibleControl();
 
   views::Textfield* textfield_for_testing() { return textfield_; }
   bool is_editing_for_testing() const { return is_editing_; }
@@ -69,11 +70,11 @@ class MahoSidebarSearchView : public views::View,
   void BeginEditing();
   void EndEditing(bool submit);
   void FocusCommandSurface();
+  void FocusCommandSurfaceWithQuery(const std::string& query);
   void SubmitText(const std::u16string& text);
   void UpdateIdleSurface();
   void UpdateSearchChrome();
   bool LooksLikeUrl(const std::string& input) const;
-  std::string NormalizeAddressInput(const std::string& input) const;
   void OnIdleButtonPressed(const ui::Event& event);
   std::u16string BuildPrimaryText() const;
   std::u16string BuildSecondaryText() const;

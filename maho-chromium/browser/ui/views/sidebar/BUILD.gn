@@ -13,19 +13,6 @@ source_set("maho_sidebar_prefs") {
   ]
 }
 
-source_set("maho_sidebar_action_popover") {
-  sources = [
-    "maho_sidebar_action_popover_view.cc",
-    "maho_sidebar_action_popover_view.h",
-  ]
-
-  deps = [
-    "//base",
-    "//ui/base",
-    "//ui/views",
-  ]
-}
-
 source_set("unit_tests") {
   testonly = true
   sources = [ "maho_sidebar_dnd_dispatch_unittest.cc" ]
