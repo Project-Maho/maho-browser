@@ -19,9 +19,9 @@ class Textfield;
 
 namespace maho {
 
-// Inline space-creation panel anchored inside the sidebar footer area.
-// Provides a name input and create/cancel controls without opening a
-// separate popup window.
+// Dedicated sidebar space-creation surface shown in place of the normal
+// sidebar content. Provides a name input and create/cancel controls without
+// opening a separate popup window.
 class MahoSidebarCreateSpaceView : public views::View,
                                    public views::TextfieldController {
   METADATA_HEADER(MahoSidebarCreateSpaceView, views::View)
@@ -33,6 +33,7 @@ class MahoSidebarCreateSpaceView : public views::View,
       delete;
   ~MahoSidebarCreateSpaceView() override;
 
+  void SetCloseCallback(base::RepeatingClosure close_callback);
   void RequestNameFocus();
 
  private:
@@ -46,6 +47,7 @@ class MahoSidebarCreateSpaceView : public views::View,
   raw_ptr<views::Textfield> name_field_ = nullptr;
   raw_ptr<views::MdTextButton> create_button_ = nullptr;
   raw_ptr<views::MdTextButton> cancel_button_ = nullptr;
+  base::RepeatingClosure close_callback_;
   base::WeakPtrFactory<MahoSidebarCreateSpaceView> weak_factory_{this};
 };
 

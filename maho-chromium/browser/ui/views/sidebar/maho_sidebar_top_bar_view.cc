@@ -39,13 +39,10 @@ namespace maho {
 
 namespace {
 
-constexpr int kControlClusterSpacingDp = 4;
-constexpr int kTopRowTrailingInsetDp = 2;
 constexpr int kTopBarBottomMarginDp = 0;
-constexpr int kTrafficLightAlignmentHeightDp = 16;
-constexpr int kTopBarClusterCornerRadiusDp = 11;
-constexpr int kTopBarClusterHorizontalInsetDp = 3;
-constexpr int kTopBarClusterVerticalInsetDp = 1;
+constexpr int kTrafficLightAlignmentHeightDp = 22;
+constexpr int kTopBarClusterHorizontalInsetDp = 0;
+constexpr int kTopBarClusterVerticalInsetDp = 0;
 
 void ApplyButtonChrome(views::ImageButton* button) {
   button->SetBackground(nullptr);
@@ -56,10 +53,8 @@ void ApplyButtonChrome(views::ImageButton* button) {
 }
 
 void StyleClusterView(views::View* cluster) {
-  cluster->SetBackground(views::CreateRoundedRectBackground(
-      ui::kColorSysSurface1, kTopBarClusterCornerRadiusDp));
-  cluster->SetBorder(views::CreateRoundedRectBorder(
-      1, kTopBarClusterCornerRadiusDp, ui::kColorSysSurfaceVariant));
+  cluster->SetBackground(nullptr);
+  cluster->SetBorder(nullptr);
 }
 
 views::ImageButton* AddControlButton(views::View* parent,
@@ -106,12 +101,9 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
           views::BoxLayout::Orientation::kHorizontal,
           gfx::Insets::VH(kTopBarClusterVerticalInsetDp,
                           kTopBarClusterHorizontalInsetDp),
-          kControlClusterSpacingDp));
+          sidebar_layout::kTopBarButtonSpacingDp));
   controls_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
-  leading_cluster_->SetProperty(
-      views::kMarginsKey,
-      gfx::Insets::TLBR(0, 0, 0, kTopRowTrailingInsetDp));
 
   sidebar_toggle_button_ = AddControlButton(
       leading_cluster_,
@@ -119,8 +111,6 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
                           weak_factory_.GetWeakPtr()),
       kDockToLeftIcon, u"Toggle Sidebar");
 
-  auto* left_spacer = AddChildView(std::make_unique<views::View>());
-  layout->SetFlexForView(left_spacer, 1);
 
   nav_cluster_ = AddChildView(std::make_unique<views::View>());
   auto* nav_layout =
@@ -143,8 +133,6 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
                           weak_factory_.GetWeakPtr()),
       vector_icons::kForwardArrowIcon, u"Forward");
 
-  auto* right_spacer = AddChildView(std::make_unique<views::View>());
-  layout->SetFlexForView(right_spacer, 1);
 
   trailing_cluster_ = AddChildView(std::make_unique<views::View>());
   auto* trailing_layout =
@@ -152,7 +140,7 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
           views::BoxLayout::Orientation::kHorizontal,
           gfx::Insets::VH(kTopBarClusterVerticalInsetDp,
                           kTopBarClusterHorizontalInsetDp),
-          kControlClusterSpacingDp));
+          sidebar_layout::kTopBarButtonSpacingDp));
   trailing_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
 
@@ -219,6 +207,22 @@ void MahoSidebarTopBarView::OnBoundsChanged(
   ApplyChromeSpacing();
 }
 
+bool MahoSidebarTopBarView::IsPositionInWindowCaption(
+    const gfx::Point& point) const {
+  for (const views::ImageButton* button :
+       {sidebar_toggle_button_.get(), back_button_.get(),
+        forward_button_.get(), reload_button_.get(), ai_button_.get()}) {
+    if (button && button->GetVisible()) {
+      gfx::Point point_in_button = point;
+      views::View::ConvertPointToTarget(this, button, &point_in_button);
+      if (button->HitTestPoint(point_in_button)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 void MahoSidebarTopBarView::ApplyChromeSpacing() {
   auto* leading_layout =
       static_cast<views::BoxLayout*>(leading_cluster_->GetLayoutManager());
@@ -227,21 +231,25 @@ void MahoSidebarTopBarView::ApplyChromeSpacing() {
   auto* trailing_layout =
       static_cast<views::BoxLayout*>(trailing_cluster_->GetLayoutManager());
 
-  leading_layout->set_between_child_spacing(kControlClusterSpacingDp);
-  nav_layout->set_between_child_spacing(kControlClusterSpacingDp);
-  trailing_layout->set_between_child_spacing(kControlClusterSpacingDp);
-  leading_cluster_->SetProperty(
-      views::kMarginsKey, gfx::Insets::TLBR(0, 0, 0, kTopRowTrailingInsetDp));
   const bool show_nav = model_.navigation_enabled;
+
+  leading_layout->set_between_child_spacing(
+      show_nav ? sidebar_layout::kTopBarCompactLeadingGapDp
+               : sidebar_layout::kTopBarButtonSpacingDp);
+  nav_layout->set_between_child_spacing(
+      sidebar_layout::kTopBarButtonSpacingDp);
+  trailing_layout->set_between_child_spacing(
+      sidebar_layout::kTopBarButtonSpacingDp);
+  leading_cluster_->SetProperty(
+      views::kMarginsKey,
+      gfx::Insets::TLBR(0, 0, 0,
+                        show_nav ? sidebar_layout::kTopBarCompactLeadingGapDp
+                                 : 0));
   nav_cluster_->SetVisible(show_nav);
   StyleClusterView(leading_cluster_);
   StyleClusterView(nav_cluster_);
   StyleClusterView(trailing_cluster_);
-  trailing_cluster_->SetProperty(
-      views::kMarginsKey,
-      gfx::Insets::TLBR(0, 0, 0,
-                        model_.navigation_enabled ? 0
-                                                  : sidebar_layout::kTopBarCompactTrailingInsetDp));
+  trailing_cluster_->SetProperty(views::kMarginsKey, gfx::Insets());
   PreferredSizeChanged();
 }
 
@@ -272,7 +280,7 @@ void MahoSidebarTopBarView::OnAiPressed(const ui::Event& event) {
 
 void MahoSidebarTopBarView::OnToggleSidebarPressed(const ui::Event& event) {
   if (browser_) {
-    sidebar_prefs::ToggleSidebarVisibilityInShell(browser_->profile()->GetPrefs());
+    sidebar_prefs::ToggleSidebarPanelExpanded(browser_->profile()->GetPrefs());
   }
 }
 

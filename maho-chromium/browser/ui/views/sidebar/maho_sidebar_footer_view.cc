@@ -350,7 +350,7 @@ void MahoSidebarFooterView::HandleActionPopoverAction(
   switch (action) {
     case MahoSidebarActionPopoverAction::kNewSpace: {
       auto* sidebar_view = static_cast<MahoSidebarView*>(
-          parent() ? parent() : nullptr);
+          parent() && parent()->parent() ? parent()->parent() : nullptr);
       if (sidebar_view) {
         sidebar_view->ShowCreateSpace();
       }
@@ -489,6 +489,15 @@ void MahoSidebarFooterView::SwitchToSpaceAtIndex(int index) {
   }
 
   bridge->SwitchToSpace(space_ids[index]);
+}
+
+views::View* MahoSidebarFooterView::GetSpaceDotForTesting(int index) {
+  if (!dot_container_ ||
+      index < 0 ||
+      index >= static_cast<int>(dot_container_->children().size())) {
+    return nullptr;
+  }
+  return dot_container_->children()[index];
 }
 
 }  // namespace maho

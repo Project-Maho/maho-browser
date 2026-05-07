@@ -117,6 +117,11 @@ MahoSidebarCreateSpaceView::MahoSidebarCreateSpaceView(Browser* browser)
 
 MahoSidebarCreateSpaceView::~MahoSidebarCreateSpaceView() = default;
 
+void MahoSidebarCreateSpaceView::SetCloseCallback(
+    base::RepeatingClosure close_callback) {
+  close_callback_ = std::move(close_callback);
+}
+
 void MahoSidebarCreateSpaceView::RequestNameFocus() {
   if (!name_field_) {
     return;
@@ -162,6 +167,10 @@ void MahoSidebarCreateSpaceView::OnCreatePressed() {
 }
 
 void MahoSidebarCreateSpaceView::OnCancelPressed() {
+  if (close_callback_) {
+    close_callback_.Run();
+    return;
+  }
   SetVisible(false);
 }
 
@@ -182,6 +191,10 @@ void MahoSidebarCreateSpaceView::OnSpaceCreated(
   }
   if (create_button_) {
     create_button_->SetEnabled(true);
+  }
+  if (close_callback_) {
+    close_callback_.Run();
+    return;
   }
   SetVisible(false);
 }

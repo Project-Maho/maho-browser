@@ -11,6 +11,8 @@
 namespace maho::sidebar_prefs {
 
 const char kSidebarVisible[] = "maho.sidebar.visible";
+const char kSidebarLayoutEnabled[] = "maho.sidebar.layout_enabled";
+const char kSidebarPanelExpanded[] = "maho.sidebar.panel_expanded";
 const char kSidebarWidth[] = "maho.sidebar.width";
 
 int ClampSidebarWidthForLayout(int width) {
@@ -25,22 +27,43 @@ int GetSidebarWidthForLayout(int pref_width) {
   return ClampSidebarWidthForLayout(pref_width);
 }
 
-bool ShouldShowSidebarInShell(const PrefService* prefs) {
-  return prefs && prefs->GetBoolean(kSidebarVisible);
+bool IsSidebarLayoutEnabled(const PrefService* prefs) {
+  return prefs && prefs->GetBoolean(kSidebarLayoutEnabled);
 }
 
-void ToggleSidebarVisibilityInShell(PrefService* prefs) {
+bool IsSidebarPanelExpanded(const PrefService* prefs) {
+  return prefs && prefs->GetBoolean(kSidebarPanelExpanded);
+}
+
+void ToggleSidebarPanelExpanded(PrefService* prefs) {
   if (!prefs) {
     return;
   }
+  prefs->SetBoolean(kSidebarPanelExpanded, !IsSidebarPanelExpanded(prefs));
+}
 
-  prefs->SetBoolean(kSidebarVisible, !ShouldShowSidebarInShell(prefs));
+bool ShouldShowSidebarInShell(const PrefService* prefs) {
+  return IsSidebarLayoutEnabled(prefs);
 }
 
 void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(kSidebarVisible, true);
+  registry->RegisterBooleanPref(kSidebarLayoutEnabled, true);
+  registry->RegisterBooleanPref(kSidebarPanelExpanded, true);
   registry->RegisterIntegerPref(kSidebarWidth,
                                 sidebar_layout::kDefaultRailWidthDp);
+}
+
+void MigrateFromLegacyVisiblePref(PrefService* prefs) {
+  if (!prefs) {
+    return;
+  }
+  if (!prefs->FindPreference(kSidebarLayoutEnabled)->IsDefaultValue()) {
+    return;
+  }
+  const bool legacy_visible = prefs->GetBoolean(kSidebarVisible);
+  prefs->SetBoolean(kSidebarLayoutEnabled, true);
+  prefs->SetBoolean(kSidebarPanelExpanded, legacy_visible);
 }
 
 }  // namespace maho::sidebar_prefs

@@ -35,6 +35,10 @@ class MahoSidebarTopBarView : public views::View {
   void Update(const MahoSidebarTopBarModel& model);
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
 
+  // Returns true if `point` (in this view's coordinates) is not over any
+  // interactive control and should be treated as window-draggable caption area.
+  bool IsPositionInWindowCaption(const gfx::Point& point) const;
+
  private:
   void ApplyChromeSpacing();
   void OnBackPressed(const ui::Event& event);

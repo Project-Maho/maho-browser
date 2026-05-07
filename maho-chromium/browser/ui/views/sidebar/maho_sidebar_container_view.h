@@ -14,6 +14,10 @@
 
 class Browser;
 
+namespace views {
+class ImageButton;
+}
+
 namespace maho {
 
 class MahoCommandOverlayController;
@@ -31,6 +35,10 @@ class MahoSidebarContainerView : public views::View {
   MahoSidebarContainerView& operator=(const MahoSidebarContainerView&) = delete;
 
   views::View* sidebar_view() { return sidebar_view_; }
+
+  views::ImageButton* rail_reopen_button_for_testing() {
+    return rail_reopen_button_;
+  }
   MahoCommandOverlayController* command_overlay_controller() {
     return command_overlay_controller_.get();
   }
@@ -38,15 +46,19 @@ class MahoSidebarContainerView : public views::View {
   void ShowCreateSpace();
   void ToggleCommandOverlay();
 
+  bool IsPositionInWindowCaption(const gfx::Point& point) const;
+
  private:
-  void OnSidebarVisibilityChanged();
+  void OnPanelExpandedChanged();
   void OnSidebarWidthChanged();
+  void ApplyPanelState();
   void ApplyPreferredWidthFromPrefs();
   void MaybePersistSidebarWidth(int width);
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
 
   raw_ptr<Browser> browser_;
   raw_ptr<views::View> sidebar_view_ = nullptr;
+  raw_ptr<views::ImageButton> rail_reopen_button_ = nullptr;
   std::unique_ptr<MahoCommandOverlayController> command_overlay_controller_;
   PrefChangeRegistrar pref_registrar_;
   base::WeakPtrFactory<MahoSidebarContainerView> weak_factory_{this};

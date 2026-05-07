@@ -48,6 +48,13 @@ class MahoSidebarFooterView : public views::View,
 
   void Update(const MahoSidebarFooterModel& model);
 
+  views::LabelButton* library_button_for_testing() { return library_button_; }
+  views::MdTextButton* plus_button_for_testing() { return plus_button_; }
+  views::View* GetSpaceDotForTesting(int index);
+  bool command_overlay_controller_visible_for_testing() const {
+    return action_popover_widget_ != nullptr;
+  }
+
   // views::ContextMenuController:
   void ShowContextMenuForViewImpl(views::View* source,
                                   const gfx::Point& point,

@@ -63,3 +63,37 @@ source_set("browser_tests") {
     "//ui/views:test_support",
   ]
 }
+
+source_set("interactive_tests") {
+  testonly = true
+  sources = [
+    "maho_sidebar_interactive_test_base.cc",
+    "maho_sidebar_interactive_test_base.h",
+    "maho_sidebar_actions_interactive_test.cc",
+    "maho_sidebar_contract_test.cc",
+    "maho_sidebar_dnd_interactive_test.cc",
+    "maho_sidebar_edge_cases_interactive_test.cc",
+    "maho_sidebar_navigation_interactive_test.cc",
+    "maho_sidebar_spaces_interactive_test.cc",
+  ]
+
+  defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+
+  deps = [
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser",
+    "//chrome/browser/ui",
+    "//chrome/test:test_support",
+    "//chrome/test:test_support_ui",
+    "//components/prefs",
+    "//content/public/browser",
+    "//content/test:test_support",
+    "//testing/gtest",
+    "//ui/base",
+    "//ui/base:test_support",
+    "//ui/events:events_base",
+    "//ui/views",
+    "//ui/views:test_support",
+  ]
+}

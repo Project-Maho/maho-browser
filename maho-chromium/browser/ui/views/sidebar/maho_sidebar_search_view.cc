@@ -284,13 +284,16 @@ void MahoSidebarSearchView::FocusCommandSurface() {
     return;
   }
   auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_);
-  if (!browser_view || !browser_view->maho_sidebar_container_) {
+  if (!browser_view) {
     return;
   }
-  auto* container = views::AsViewClass<MahoSidebarContainerView>(
-      browser_view->maho_sidebar_container_);
-  if (container) {
-    container->ToggleCommandOverlay();
+
+  for (views::View* child : browser_view->children()) {
+    auto* container = views::AsViewClass<MahoSidebarContainerView>(child);
+    if (container) {
+      container->ToggleCommandOverlay();
+      return;
+    }
   }
 }
 

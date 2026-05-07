@@ -43,6 +43,10 @@ class Textfield;
 class View;
 }  // namespace views
 
+namespace content {
+class WebContents;
+}
+
 namespace maho {
 
 class SidebarTabRowView;
@@ -92,6 +96,9 @@ class MahoSidebarTabListView : public views::View {
   SidebarTabRowView* FindTabRowByIdForTesting(const std::string& tab_id);
   SidebarFolderRowView* FindFolderRowByIdForTesting(
       const std::string& folder_id);
+  views::LabelButton* new_tab_button_for_testing() { return new_tab_button_; }
+  // Returns the maho-core tab_id for the given WebContents, or empty string.
+  std::string FindCoreTabIdByWebContents(content::WebContents* contents) const;
 
  private:
   void RebuildRows(const MahoSidebarTabListModel& model, Browser* browser);
@@ -124,6 +131,7 @@ class MahoSidebarTabListView : public views::View {
   std::map<std::string, std::u16string> local_custom_titles_;
   MahoSidebarTabListModel last_model_;
   bool has_last_model_ = false;
+  std::map<content::WebContents*, std::string> contents_to_core_id_;
   base::WeakPtrFactory<MahoSidebarTabListView> weak_factory_{this};
 };
 
@@ -196,6 +204,9 @@ class SidebarTabRowView : public views::View,
 
   const std::string& tab_id_for_testing() const { return tab_id_; }
   MahoSidebarTabSection section_for_testing() const { return section_; }
+  views::ImageButton* close_button_for_testing() { return close_button_; }
+  views::Textfield* title_field_for_testing() { return title_field_; }
+  views::LabelButton* title_button_for_testing() { return title_button_; }
 
  private:
   DropZoneForTesting ResolveDropZone(const ui::DropTargetEvent& event,
