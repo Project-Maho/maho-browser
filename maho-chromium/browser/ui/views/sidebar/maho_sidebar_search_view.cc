@@ -9,14 +9,15 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/page_navigator.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
 #include "maho/browser/ui/context_menu/maho_address_bar_context_menu.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
-#include "maho/components/constants/webui_url_constants.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/ui_base_types.h"
@@ -188,6 +189,17 @@ MahoSidebarSearchView::MahoSidebarSearchView(Browser* browser)
 
 MahoSidebarSearchView::~MahoSidebarSearchView() = default;
 
+void MahoSidebarSearchView::FocusVisibleControl() {
+  if (is_editing_ && textfield_ && textfield_->GetVisible()) {
+    textfield_->RequestFocus();
+    return;
+  }
+
+  if (idle_button_ && idle_button_->GetVisible()) {
+    idle_button_->RequestFocus();
+  }
+}
+
 void MahoSidebarSearchView::Update(const MahoSidebarSearchModel& model) {
   model_ = model;
   UpdateSearchChrome();
@@ -245,21 +257,20 @@ bool MahoSidebarSearchView::HandleKeyEvent(views::Textfield* sender,
 }
 
 void MahoSidebarSearchView::OnSearchPressed(const ui::Event& event) {
-  BeginEditing();
+  FocusCommandSurface();
 }
 
 void MahoSidebarSearchView::BeginEditing() {
-  if (!model_.has_active_tab || model_.force_placeholder_for_empty_favorites) {
-    FocusCommandSurface();
+  if (is_editing_) {
     return;
   }
 
   is_editing_ = true;
   idle_button_->SetVisible(false);
   textfield_->SetVisible(true);
-  textfield_->SetText(base::UTF8ToUTF16(model_.current_url));
+  textfield_->SetText(std::u16string());
+  UpdateSearchChrome();
   textfield_->RequestFocus();
-  textfield_->SelectAll(false);
 }
 
 void MahoSidebarSearchView::EndEditing(bool submit) {
@@ -291,7 +302,32 @@ void MahoSidebarSearchView::FocusCommandSurface() {
   for (views::View* child : browser_view->children()) {
     auto* container = views::AsViewClass<MahoSidebarContainerView>(child);
     if (container) {
-      container->ToggleCommandOverlay();
+      std::string current_url;
+      auto* active_contents =
+          browser_->tab_strip_model()->GetActiveWebContents();
+      if (active_contents) {
+        current_url = active_contents->GetVisibleURL().spec();
+      }
+      container->ShowCommandOverlayForCurrentTab(current_url);
+      return;
+    }
+  }
+}
+
+void MahoSidebarSearchView::FocusCommandSurfaceWithQuery(
+    const std::string& query) {
+  if (!browser_) {
+    return;
+  }
+  auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_);
+  if (!browser_view) {
+    return;
+  }
+
+  for (views::View* child : browser_view->children()) {
+    auto* container = views::AsViewClass<MahoSidebarContainerView>(child);
+    if (container) {
+      container->ShowCommandOverlayForSearch(query);
       return;
     }
   }
@@ -308,7 +344,16 @@ void MahoSidebarSearchView::SubmitText(const std::u16string& text) {
     return;
   }
 
-  const std::string normalized = NormalizeAddressInput(input);
+  if (!LooksLikeUrl(input)) {
+    FocusCommandSurfaceWithQuery(input);
+    return;
+  }
+
+  const std::string normalized = input.starts_with("http://") ||
+                                         input.starts_with("https://") ||
+                                         input.starts_with("chrome://")
+                                     ? input
+                                     : "https://" + input;
   GURL target_url(normalized);
   if (!target_url.is_valid()) {
     return;
@@ -443,19 +488,6 @@ bool MahoSidebarSearchView::LooksLikeUrl(const std::string& input) const {
   }
   return input.starts_with("http://") || input.starts_with("https://") ||
          input.starts_with("chrome://") || input.find('.') != std::string::npos;
-}
-
-std::string MahoSidebarSearchView::NormalizeAddressInput(
-    const std::string& input) const {
-  if (LooksLikeUrl(input)) {
-    if (input.starts_with("http://") || input.starts_with("https://") ||
-        input.starts_with("chrome://")) {
-      return input;
-    }
-    return "https://" + input;
-  }
-
-  return maho::kMahoCommandURL;
 }
 
 }  // namespace maho
