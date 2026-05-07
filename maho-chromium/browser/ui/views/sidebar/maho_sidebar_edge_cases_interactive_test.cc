@@ -2,14 +2,21 @@
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_interactive_test_base.h"
 
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "ui/base/dragdrop/drop_target_event.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/test/browser_test.h"
+#include "ui/base/clipboard/clipboard_format_type.h"
+#include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
+#include "ui/base/dragdrop/os_exchange_data.h"
+#include "ui/gfx/geometry/point.h"
+#include <string_view>
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h"
@@ -18,10 +25,34 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "ui/base/test/ui_controls.h"
 #include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/view_utils.h"
 
 namespace maho {
 namespace {
+
+ui::DropTargetEvent MakeDropEvent(const ui::OSExchangeData& data,
+                                  const gfx::Point& point = gfx::Point(5, 5)) {
+  return ui::DropTargetEvent(
+      data, gfx::PointF(point), gfx::PointF(point),
+      static_cast<int>(ui::mojom::DragOperation::kMove));
+}
+
+bool HasLabelWithText(views::View* root, std::u16string_view expected) {
+  if (!root) {
+    return false;
+  }
+  if (auto* label = views::AsViewClass<views::Label>(root); label &&
+      label->GetText() == expected) {
+    return true;
+  }
+  for (views::View* child : root->children()) {
+    if (HasLabelWithText(child, expected)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 class MahoSidebarEdgeCasesInteractiveTest
     : public MahoSidebarInteractiveTestBase {};
@@ -33,8 +64,8 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
   int initial_width = container_->width();
   ASSERT_GT(initial_width, 0);
 
-  gfx::Rect bounds = container_->GetBoundsInScreen();
-  gfx::Point edge(bounds.right(), bounds.CenterPoint().y());
+  gfx::Rect edge_bounds = container_->children().back()->GetBoundsInScreen();
+  gfx::Point edge(edge_bounds.CenterPoint());
 
   ASSERT_TRUE(ui_controls::SendMouseMove(edge.x(), edge.y()));
   base::RunLoop press_loop;
@@ -184,18 +215,139 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
                        EmptyStateFavoritesDisplay) {
+  MahoSidebarFavoritesModel empty_favorites;
+  favorites_->Update(empty_favorites);
+  ResolveViews();
+
+  EXPECT_FALSE(favorites_->GetVisible())
+      << "Empty favorites grid must be hidden at idle";
+  EXPECT_EQ(0, favorites_->GetPreferredSize().height())
+      << "Empty favorites must not reserve any height at idle";
+  EXPECT_FALSE(favorites_->is_drop_indicator_visible_for_testing())
+      << "No drop indicator should be shown when idle";
+  EXPECT_FALSE(favorites_->is_drag_reveal_active_for_testing())
+      << "Drag reveal must not be active at idle";
+  EXPECT_FALSE(HasLabelWithText(favorites_, u"Drag tabs here to pin favorites"))
+      << "Idle favorites view should not render the placeholder copy";
+
+  // Simulate a valid internal tab drag entering the favorites grid.
+  ui::OSExchangeData data;
+  SidebarDragPayload payload;
+  payload.node_kind = SidebarNodeKind::kTab;
+  payload.node_id = "fav-drag-test";
+  payload.origin = SidebarDragOrigin::kFavorites;
+  WriteMahoDragData(payload, &data);
+  EXPECT_TRUE(favorites_->CanDrop(data))
+      << "Favorites grid should still accept internal tab drags when empty";
+  ui::DropTargetEvent event = MakeDropEvent(data);
+  EXPECT_EQ(static_cast<int>(ui::mojom::DragOperation::kMove),
+            favorites_->OnDragUpdated(event));
+  EXPECT_TRUE(favorites_->GetVisible())
+      << "Empty favorites must reveal during valid drag";
+  EXPECT_TRUE(favorites_->is_drag_reveal_active_for_testing())
+      << "Drag reveal flag must be set during valid drag";
+  EXPECT_GT(favorites_->GetPreferredSize().height(), 0)
+      << "Revealed empty favorites must have positive height for drop target";
+
+  // Drag exit must collapse back to hidden.
+  favorites_->OnDragExited();
+  EXPECT_FALSE(favorites_->GetVisible())
+      << "Empty favorites must hide again after drag exit";
+  EXPECT_FALSE(favorites_->is_drag_reveal_active_for_testing())
+      << "Drag reveal must be cleared after drag exit";
+  EXPECT_EQ(0, favorites_->GetPreferredSize().height())
+      << "Empty favorites must return to zero height after drag exit";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       ParentDragForwardRevealsEmptyFavorites) {
+  MahoSidebarFavoritesModel empty_favorites;
+  favorites_->Update(empty_favorites);
+  ResolveViews();
+  ASSERT_FALSE(favorites_->GetVisible());
+
+  ui::OSExchangeData data;
+  SidebarDragPayload payload;
+  payload.node_kind = SidebarNodeKind::kTab;
+  payload.node_id = "parent-forward-test";
+  payload.origin = SidebarDragOrigin::kNormalSection;
+  WriteMahoDragData(payload, &data);
+
+  MahoSidebarView* sidebar_view = GetSidebarView();
+  ASSERT_TRUE(sidebar_view);
+
+  int formats = 0;
+  std::set<ui::ClipboardFormatType> format_types;
+  EXPECT_TRUE(sidebar_view->GetDropFormats(&formats, &format_types));
+  EXPECT_TRUE(sidebar_view->CanDrop(data));
+
+  ui::DropTargetEvent event = MakeDropEvent(data, gfx::Point(10, 10));
+  int result = sidebar_view->OnDragUpdated(event);
+  EXPECT_EQ(static_cast<int>(ui::mojom::DragOperation::kMove), result);
+  EXPECT_TRUE(favorites_->GetVisible())
+      << "Parent OnDragUpdated must reveal hidden empty favorites";
+  EXPECT_TRUE(favorites_->is_drag_reveal_active_for_testing());
+  EXPECT_GT(favorites_->GetPreferredSize().height(), 0);
+
+  sidebar_view->OnDragExited();
+  EXPECT_FALSE(favorites_->GetVisible())
+      << "Parent OnDragExited must collapse empty favorites";
+  EXPECT_FALSE(favorites_->is_drag_reveal_active_for_testing());
+  EXPECT_EQ(0, favorites_->GetPreferredSize().height());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       ParentDragForwardSkipsNonTabDrag) {
+  MahoSidebarFavoritesModel empty_favorites;
+  favorites_->Update(empty_favorites);
+  ResolveViews();
+  ASSERT_FALSE(favorites_->GetVisible());
+
+  ui::OSExchangeData data;
+  SidebarDragPayload payload;
+  payload.node_kind = SidebarNodeKind::kFolder;
+  payload.node_id = "folder-test";
+  payload.origin = SidebarDragOrigin::kNormalSection;
+  WriteMahoDragData(payload, &data);
+
+  MahoSidebarView* sidebar_view = GetSidebarView();
+  ASSERT_TRUE(sidebar_view);
+
+  ui::DropTargetEvent event = MakeDropEvent(data, gfx::Point(10, 10));
+  int result = sidebar_view->OnDragUpdated(event);
+  EXPECT_EQ(static_cast<int>(ui::mojom::DragOperation::kNone), result);
+  EXPECT_FALSE(favorites_->GetVisible())
+      << "Non-tab drag must not reveal empty favorites";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       ParentDragForwardNoopWhenFavoritesPopulated) {
+  SeedProfile(2);
+  ResolveViews();
+
   auto state = GetViewState();
   if (state.favorites.items.empty()) {
-    EXPECT_TRUE(favorites_->GetVisible())
-        << "Favorites grid should be visible even when empty";
-    EXPECT_TRUE(favorites_->is_drop_indicator_visible_for_testing() == false)
-        << "No drop indicator in empty state";
-  } else {
-    for (size_t i = 0; i < state.favorites.items.size(); ++i) {
-      views::View* tile = favorites_->GetTileForTesting(i);
-      EXPECT_TRUE(tile) << "Tile " << i << " should exist";
-    }
+    LOG(WARNING) << "Seed 2 has no favorites — skipping";
+    return;
   }
+  ASSERT_TRUE(favorites_->GetVisible());
+  bool was_reveal_active = favorites_->is_drag_reveal_active_for_testing();
+  EXPECT_FALSE(was_reveal_active);
+
+  ui::OSExchangeData data;
+  SidebarDragPayload payload;
+  payload.node_kind = SidebarNodeKind::kTab;
+  payload.node_id = "noop-test";
+  payload.origin = SidebarDragOrigin::kNormalSection;
+  WriteMahoDragData(payload, &data);
+
+  MahoSidebarView* sidebar_view = GetSidebarView();
+  ASSERT_TRUE(sidebar_view);
+
+  ui::DropTargetEvent event = MakeDropEvent(data, gfx::Point(10, 10));
+  sidebar_view->OnDragUpdated(event);
+  EXPECT_FALSE(favorites_->is_drag_reveal_active_for_testing())
+      << "RevealForDrag should be a no-op when favorites are already populated";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,

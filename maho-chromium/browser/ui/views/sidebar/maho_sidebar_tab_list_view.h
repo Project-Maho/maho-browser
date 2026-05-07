@@ -97,11 +97,18 @@ class MahoSidebarTabListView : public views::View {
   SidebarFolderRowView* FindFolderRowByIdForTesting(
       const std::string& folder_id);
   views::LabelButton* new_tab_button_for_testing() { return new_tab_button_; }
+  views::View* tab_rows_for_testing() { return tab_rows_; }
+  bool is_pinned_drop_lane_revealed_for_testing() const {
+    return pinned_drop_lane_revealed_;
+  }
   // Returns the maho-core tab_id for the given WebContents, or empty string.
   std::string FindCoreTabIdByWebContents(content::WebContents* contents) const;
 
  private:
   void RebuildRows(const MahoSidebarTabListModel& model, Browser* browser);
+  void RevealEmptyPinnedDropLane();
+  void HideEmptyPinnedDropLane();
+  void UpdatePinnedDropLaneVisibility(bool visible);
   void RebuildTreeSection(views::View* parent,
                           const std::vector<SidebarTreeNode>& nodes,
                           MahoSidebarTabSection section,
@@ -131,6 +138,8 @@ class MahoSidebarTabListView : public views::View {
   std::map<std::string, std::u16string> local_custom_titles_;
   MahoSidebarTabListModel last_model_;
   bool has_last_model_ = false;
+  bool pinned_drop_lane_revealed_ = false;
+  raw_ptr<views::View> pinned_separator_ = nullptr;
   std::map<content::WebContents*, std::string> contents_to_core_id_;
   base::WeakPtrFactory<MahoSidebarTabListView> weak_factory_{this};
 };
@@ -196,6 +205,7 @@ class SidebarTabRowView : public views::View,
     kNone,
     kBefore,
     kAfter,
+    kSplit,
   };
 
   DropZoneForTesting drop_zone_for_testing() const {

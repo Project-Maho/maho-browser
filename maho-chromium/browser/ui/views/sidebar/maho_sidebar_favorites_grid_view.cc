@@ -14,7 +14,11 @@
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tab_ui_helper.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/page_navigator.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
 #include "components/vector_icons/vector_icons.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
@@ -61,21 +65,6 @@ constexpr int kFavoriteSingleCardHeightDp = sidebar_layout::kFavoriteTileHeightD
 constexpr int kFavoriteTwoTileHeightDp = sidebar_layout::kFavoriteTileHeightDp;
 constexpr int kFavoriteEmptyStateHeightDp = 92;
 constexpr int kDragStartThresholdDp = 5;
-constexpr int kFavoriteEmptyCardCornerRadiusDp = 14;
-constexpr int kFavoriteEmptyCardBorderThicknessDp = 1;
-constexpr int kFavoriteEmptyCardTopInsetDp = 6;
-constexpr int kFavoriteEmptyBadgeSizeDp = 24;
-constexpr int kFavoriteEmptyBadgeRadiusDp = 12;
-constexpr int kFavoriteEmptyBadgeCenterYOffsetDp = 1;
-constexpr int kFavoriteEmptyCloseSizeDp = 9;
-constexpr int kFavoriteEmptyCloseInsetDp = 8;
-constexpr int kFavoriteEmptyTitleTopInsetDp = 18;
-constexpr int kFavoriteEmptyTitleHorizontalInsetDp = 14;
-constexpr int kFavoriteEmptySubtitleTopSpacingDp = 1;
-constexpr int kFavoriteEmptySubtitleBottomInsetDp = 8;
-constexpr int kFavoriteEmptyTitleMaxWidthDp = 140;
-constexpr int kFavoriteEmptyDashLengthDp = 5;
-constexpr int kFavoriteEmptyDashGapDp = 4;
 constexpr int kDropIndicatorThicknessDp = 2;
 constexpr int kDropIndicatorInsetDp = 3;
 
@@ -196,152 +185,6 @@ class FavoriteTileButton : public views::Button,
   base::RepeatingClosure drag_done_callback_;
   raw_ptr<MahoSidebarFavoritesGridView> drop_target_ = nullptr;
   std::string tab_id_;
-};
-
-views::Label* AddEmptyStateLabel(views::View* parent,
-                                 std::u16string text,
-                                 views::style::TextStyle text_style,
-                                 ui::ColorId color_id,
-                                 bool multiline) {
-  auto label = std::make_unique<views::Label>(std::move(text));
-  label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-  label->SetAutoColorReadabilityEnabled(false);
-  label->SetEnabledColor(color_id);
-  label->SetTextStyle(text_style);
-  label->SetMultiLine(multiline);
-  label->SetElideBehavior(multiline ? gfx::NO_ELIDE : gfx::ELIDE_TAIL);
-  return parent->AddChildView(std::move(label));
-}
-
-class EmptyStateCardView : public views::View {
- public:
-  EmptyStateCardView() {
-    SetPreferredSize(gfx::Size(1, kFavoriteEmptyStateHeightDp));
-    SetCanProcessEventsWithinSubtree(false);
-
-    auto* root_layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
-        views::BoxLayout::Orientation::kVertical,
-        gfx::Insets::TLBR(kFavoriteEmptyCardTopInsetDp, 0, 0, 0), 0));
-    root_layout->set_cross_axis_alignment(
-        views::BoxLayout::CrossAxisAlignment::kStretch);
-
-    card_view_ = AddChildView(std::make_unique<views::View>());
-     card_view_->SetCanProcessEventsWithinSubtree(false);
-     card_view_->SetBackground(views::CreateRoundedRectBackground(
-         ui::kColorSysSurface1, kFavoriteEmptyCardCornerRadiusDp));
-     card_view_->SetBorder(views::CreateRoundedRectBorder(
-         kFavoriteEmptyCardBorderThicknessDp, kFavoriteEmptyCardCornerRadiusDp,
-         ui::kColorSysSurfaceVariant));
-
-    auto* card_layout =
-        card_view_->SetLayoutManager(std::make_unique<views::BoxLayout>(
-            views::BoxLayout::Orientation::kVertical,
-            gfx::Insets::TLBR(kFavoriteEmptyTitleTopInsetDp,
-                              kFavoriteEmptyTitleHorizontalInsetDp,
-                              kFavoriteEmptySubtitleBottomInsetDp,
-                              kFavoriteEmptyTitleHorizontalInsetDp),
-            kFavoriteEmptySubtitleTopSpacingDp));
-    card_layout->set_cross_axis_alignment(
-        views::BoxLayout::CrossAxisAlignment::kCenter);
-    root_layout->SetFlexForView(card_view_, 1);
-
-    title_label_ = AddEmptyStateLabel(card_view_, u"Drag tabs here to pin favorites",
-                                      views::style::STYLE_BODY_4_MEDIUM,
-                                      ui::kColorSysOnSurface, false);
-    title_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
-    title_label_->SetMaximumWidthSingleLine(kFavoriteEmptyTitleMaxWidthDp);
-
-    auto* subtitle_label = AddEmptyStateLabel(
-        card_view_,
-        u"Keep the sites and apps you revisit most within easy reach.",
-        views::style::STYLE_BODY_5, ui::kColorSysOnSurfaceSubtle, true);
-    subtitle_label->SetHorizontalAlignment(gfx::ALIGN_CENTER);
-
-    badge_view_ = AddChildView(std::make_unique<views::View>());
-     badge_view_->SetCanProcessEventsWithinSubtree(false);
-     badge_view_->SetBackground(nullptr);
-      badge_view_->SetBorder(views::CreateRoundedRectBorder(
-          1, kFavoriteEmptyBadgeRadiusDp, ui::kColorSysNeutralOutline));
-    badge_view_->SetPreferredSize(
-        gfx::Size(kFavoriteEmptyBadgeSizeDp, kFavoriteEmptyBadgeSizeDp));
-    auto* badge_layout = badge_view_->SetLayoutManager(
-        std::make_unique<views::BoxLayout>(
-            views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 0));
-    badge_layout->set_main_axis_alignment(
-        views::BoxLayout::MainAxisAlignment::kCenter);
-    badge_layout->set_cross_axis_alignment(
-        views::BoxLayout::CrossAxisAlignment::kCenter);
-
-    badge_icon_ = badge_view_->AddChildView(std::make_unique<views::Label>(u"★"));
-     badge_icon_->SetAutoColorReadabilityEnabled(false);
-     badge_icon_->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
-     badge_icon_->SetTextStyle(views::style::STYLE_BODY_5);
-    badge_icon_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
-
-    close_glyph_ = AddChildView(std::make_unique<views::Label>(u"✕"));
-     close_glyph_->SetAutoColorReadabilityEnabled(false);
-     close_glyph_->SetEnabledColor(ui::kColorSysOutline);
-    close_glyph_->SetTextStyle(views::style::STYLE_BODY_5);
-    close_glyph_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
-  }
-
-  EmptyStateCardView(const EmptyStateCardView&) = delete;
-  EmptyStateCardView& operator=(const EmptyStateCardView&) = delete;
-  ~EmptyStateCardView() override = default;
-
-  void Layout(PassKey) override {
-    LayoutSuperclass<views::View>(this);
-
-    if (!card_view_) {
-      return;
-    }
-
-    const gfx::Rect card_bounds = card_view_->bounds();
-    badge_view_->SetBounds(
-        card_bounds.CenterPoint().x() - (kFavoriteEmptyBadgeSizeDp / 2),
-        card_bounds.y() - (kFavoriteEmptyBadgeSizeDp / 2) +
-            kFavoriteEmptyBadgeCenterYOffsetDp,
-        kFavoriteEmptyBadgeSizeDp, kFavoriteEmptyBadgeSizeDp);
-    close_glyph_->SetBounds(
-        card_bounds.right() - kFavoriteEmptyCloseInsetDp - kFavoriteEmptyCloseSizeDp,
-        card_bounds.y() + kFavoriteEmptyCloseInsetDp,
-        kFavoriteEmptyCloseSizeDp, kFavoriteEmptyCloseSizeDp);
-  }
-
-  void OnThemeChanged() override {
-    views::View::OnThemeChanged();
-  }
-
-  void OnPaint(gfx::Canvas* canvas) override {
-    views::View::OnPaint(canvas);
-
-    if (!card_view_ || !card_view_->GetVisible()) {
-      return;
-    }
-
-    const gfx::Rect local_card_bounds =
-        ConvertRectToTarget(card_view_, this, card_view_->GetLocalBounds());
-    gfx::RectF dash_bounds(local_card_bounds);
-    dash_bounds.Inset(gfx::InsetsF(kFavoriteEmptyCardBorderThicknessDp));
-
-    cc::PaintFlags flags;
-     flags.setStyle(cc::PaintFlags::kStroke_Style);
-     flags.setColor(GetColorProvider()->GetColor(ui::kColorSysNeutralOutline));
-    flags.setStrokeWidth(kFavoriteEmptyCardBorderThicknessDp);
-    constexpr SkScalar kDashIntervals[] = {
-        static_cast<SkScalar>(kFavoriteEmptyDashLengthDp),
-        static_cast<SkScalar>(kFavoriteEmptyDashGapDp)};
-    flags.setPathEffect(cc::PathEffect::MakeDash(kDashIntervals, 2, 0));
-    canvas->DrawRoundRect(dash_bounds, kFavoriteEmptyCardCornerRadiusDp - 1,
-                          flags);
-  }
-
- private:
-  raw_ptr<views::View> card_view_ = nullptr;
-  raw_ptr<views::View> badge_view_ = nullptr;
-  raw_ptr<views::Label> title_label_ = nullptr;
-  raw_ptr<views::Label> badge_icon_ = nullptr;
-  raw_ptr<views::Label> close_glyph_ = nullptr;
 };
 
 struct FavoriteTileSpec {
@@ -490,11 +333,6 @@ MahoSidebarFavoritesGridView::MahoSidebarFavoritesGridView(Browser* browser)
     owned_tiles_[index] = std::move(tile);
   }
 
-  auto empty_state_view = std::make_unique<EmptyStateCardView>();
-  auto* empty_raw = empty_state_view.get();
-  shell_view->AddChildView(std::unique_ptr<views::View>(empty_state_view.release()));
-  empty_state_view_ = empty_raw;
-
   RebuildGridRows(0);
   Update(MahoSidebarFavoritesModel());
 }
@@ -512,15 +350,15 @@ void MahoSidebarFavoritesGridView::OnBoundsChanged(
 
 void MahoSidebarFavoritesGridView::Update(
     const MahoSidebarFavoritesModel& model) {
-  SetVisible(true);
-
   favorite_count_ = std::min(model.items.size(), tile_views_.size());
   const bool has_items = !model.items.empty();
   const size_t visible_item_count = favorite_count_;
   RebuildGridRows(visible_item_count);
   content_view_->SetVisible(has_items);
-  empty_state_view_->SetVisible(!has_items);
   UpdateContainerOwnedPreferredHeight(visible_item_count);
+
+  // Hide the entire view when empty and no drag is revealing it.
+  SetVisible(has_items || drag_reveal_active_);
 
   if (!has_items) {
       for (size_t index = 0; index < tile_views_.size(); ++index) {
@@ -548,9 +386,24 @@ void MahoSidebarFavoritesGridView::Update(
     tile_btn->set_tab_id(tile_tab_ids_[index]);
 
     if (has_item) {
-      tile_icons_[index]->SetImage(ui::ImageModel::FromVectorIcon(
-          *specs[index].icon, ui::kColorSysOnSurface,
-          sidebar_layout::kFavoriteGlyphSizeDp));
+      ui::ImageModel fav;
+      if (browser_ && browser_->tab_strip_model()) {
+        TabStripModel* strip = browser_->tab_strip_model();
+        for (int i = 0; i < strip->count(); ++i) {
+          content::WebContents* contents = strip->GetWebContentsAt(i);
+          if (contents && contents->GetVisibleURL() == specs[index].url) {
+            auto* tab_iface = tabs::TabInterface::GetFromContents(contents);
+            if (tab_iface) {
+              fav = TabUIHelper::From(tab_iface)->GetFavicon();
+            }
+            break;
+          }
+        }
+      }
+      tile_icons_[index]->SetImage(std::move(fav));
+      tile_icons_[index]->SetImageSize(
+          gfx::Size(sidebar_layout::kFavoriteGlyphSizeDp,
+                     sidebar_layout::kFavoriteGlyphSizeDp));
        if (tile_glyph_containers_[index]) {
          tile_glyph_containers_[index]->SetBackground(
              views::CreateRoundedRectBackground(
@@ -604,7 +457,7 @@ int MahoSidebarFavoritesGridView::GetPreferredHeightForWidth(
     size_t favorite_count) {
   const size_t count = std::min(favorite_count, kTileCount);
   if (count == 0) {
-    return kFavoriteEmptyStateHeightDp;
+    return 0;
   }
 
   const LayoutSpec layout_spec = GetLayoutSpec(count, available_width);
@@ -717,7 +570,12 @@ int MahoSidebarFavoritesGridView::OnDragUpdated(
   if (!ReadMahoDragData(event.data(), payload) ||
       payload.node_kind != SidebarNodeKind::kTab) {
     drag_over_drop_target_ = false;
+    drag_reveal_active_ = false;
     SetBorder(nullptr);
+    if (favorite_count_ == 0) {
+      SetVisible(false);
+      UpdateContainerOwnedPreferredHeight(0);
+    }
     return static_cast<int>(ui::mojom::DragOperation::kNone);
   }
 
@@ -725,8 +583,16 @@ int MahoSidebarFavoritesGridView::OnDragUpdated(
   if (payload.origin != SidebarDragOrigin::kFavorites &&
       favorite_count >= kTileCount) {
     drag_over_drop_target_ = false;
+    drag_reveal_active_ = false;
     SetBorder(nullptr);
     return static_cast<int>(ui::mojom::DragOperation::kNone);
+  }
+
+  if (!drag_reveal_active_ && favorite_count_ == 0) {
+    drag_reveal_active_ = true;
+    SetVisible(true);
+    SetPreferredSize(gfx::Size(1, kFavoriteEmptyStateHeightDp));
+    PreferredSizeChanged();
   }
 
   drag_over_drop_target_ = true;
@@ -779,9 +645,35 @@ views::View::DropCallback MahoSidebarFavoritesGridView::GetDropCallback(
       target_index, favorite_count);
 }
 
+void MahoSidebarFavoritesGridView::RevealForDrag() {
+  if (drag_reveal_active_ || favorite_count_ > 0) {
+    return;
+  }
+  drag_reveal_active_ = true;
+  SetVisible(true);
+  SetPreferredSize(gfx::Size(1, kFavoriteEmptyStateHeightDp));
+  PreferredSizeChanged();
+}
+
+void MahoSidebarFavoritesGridView::CollapseFromDrag() {
+  if (!drag_reveal_active_) {
+    return;
+  }
+  drag_reveal_active_ = false;
+  drag_over_drop_target_ = false;
+  SetBorder(nullptr);
+  SetVisible(false);
+  UpdateContainerOwnedPreferredHeight(0);
+}
+
 void MahoSidebarFavoritesGridView::OnDragExited() {
   drag_over_drop_target_ = false;
   SetBorder(nullptr);
+  if (drag_reveal_active_) {
+    drag_reveal_active_ = false;
+    SetVisible(false);
+    UpdateContainerOwnedPreferredHeight(0);
+  }
 }
 
 ui::DropTargetEvent MahoSidebarFavoritesGridView::ForwardDropEventToGrid(

@@ -41,6 +41,12 @@ class MahoSidebarTopBarView : public views::View {
 
  private:
   void ApplyChromeSpacing();
+  void UpdateButtonImages();
+  void UpdateButtonState(views::ImageButton* button,
+                         bool enabled,
+                         std::string_view symbol_name,
+                         std::string_view accessibility_description,
+                         const std::u16string& tooltip);
   void OnBackPressed(const ui::Event& event);
   void OnForwardPressed(const ui::Event& event);
   void OnReloadPressed(const ui::Event& event);
@@ -51,7 +57,7 @@ class MahoSidebarTopBarView : public views::View {
   raw_ptr<views::View> traffic_light_spacer_ = nullptr;
   raw_ptr<views::View> leading_cluster_ = nullptr;
   raw_ptr<views::View> nav_cluster_ = nullptr;
-  raw_ptr<views::View> trailing_cluster_ = nullptr;
+  raw_ptr<views::View> flex_spacer_ = nullptr;
   raw_ptr<views::ImageButton> sidebar_toggle_button_ = nullptr;
   raw_ptr<views::ImageButton> back_button_ = nullptr;
   raw_ptr<views::ImageButton> forward_button_ = nullptr;

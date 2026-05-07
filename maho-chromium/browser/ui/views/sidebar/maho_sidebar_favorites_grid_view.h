@@ -58,6 +58,13 @@ class MahoSidebarFavoritesGridView : public views::View {
   DropCallback GetDropCallback(const ui::DropTargetEvent& event) override;
   void OnDragExited() override;
 
+  // Called by a visible parent (e.g. MahoSidebarView) to reveal the empty
+  // favorites grid during a valid drag so it can accept drops.
+  void RevealForDrag();
+  // Called by the parent when the drag leaves the sidebar region, collapsing
+  // the revealed-but-still-empty grid back to zero height.
+  void CollapseFromDrag();
+
   ui::DropTargetEvent ForwardDropEventToGrid(
       const ui::DropTargetEvent& event,
       const views::View* source) const;
@@ -69,6 +76,10 @@ class MahoSidebarFavoritesGridView : public views::View {
 
   bool is_drop_indicator_visible_for_testing() const {
     return drag_over_drop_target_;
+  }
+
+  bool is_drag_reveal_active_for_testing() const {
+    return drag_reveal_active_;
   }
 
   views::Button* GetTileForTesting(size_t index) {
@@ -105,7 +116,6 @@ class MahoSidebarFavoritesGridView : public views::View {
 
   raw_ptr<Browser> browser_ = nullptr;
   raw_ptr<views::View> content_view_ = nullptr;
-  raw_ptr<views::View> empty_state_view_ = nullptr;
   size_t favorite_count_ = 0;
   std::array<std::unique_ptr<views::View>, kTileCount> owned_tiles_;
   std::array<raw_ptr<views::Button>, kTileCount> tile_views_ = {};
@@ -117,6 +127,7 @@ class MahoSidebarFavoritesGridView : public views::View {
   std::vector<raw_ptr<views::View>> row_views_;
   LayoutSpec current_layout_spec_;
   bool drag_over_drop_target_ = false;
+  bool drag_reveal_active_ = false;
   base::WeakPtrFactory<MahoSidebarFavoritesGridView> weak_factory_{this};
 };
 

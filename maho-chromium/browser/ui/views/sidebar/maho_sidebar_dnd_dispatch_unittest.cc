@@ -687,5 +687,255 @@ TEST_F(SidebarDnDDispatchTest,
             std::string::npos);
 }
 
+TEST_F(SidebarDnDDispatchTest,
+       EmptyPinnedLaneIdleHiddenNoSectionTarget) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+  model.normal_tree.push_back(MakeTabNode("tab-1", 0));
+  list.Update(model, /*browser=*/nullptr);
+
+  EXPECT_FALSE(list.is_pinned_drop_lane_revealed_for_testing());
+  auto* pinned_target =
+      list.FindSectionDropTargetForTesting(MahoSidebarTabSection::kPinned);
+  ASSERT_TRUE(pinned_target);
+  EXPECT_FALSE(pinned_target->GetVisible());
+
+  auto* rows = list.tab_rows_for_testing();
+  ASSERT_TRUE(rows);
+  EXPECT_EQ(rows->children().size(), 4u);
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       EmptyPinnedLaneRevealedDuringValidInternalDrag) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+  model.normal_tree.push_back(MakeTabNode("tab-1", 0));
+  list.Update(model, /*browser=*/nullptr);
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeTabPayload("tab-1", SidebarDragOrigin::kNormalSection),
+                &data);
+  ui::DropTargetEvent event = MakeDropEvent(data);
+  list.OnDragUpdated(event);
+
+  EXPECT_TRUE(list.is_pinned_drop_lane_revealed_for_testing());
+  auto* pinned_target =
+      list.FindSectionDropTargetForTesting(MahoSidebarTabSection::kPinned);
+  ASSERT_TRUE(pinned_target);
+  EXPECT_TRUE(pinned_target->GetVisible());
+
+  auto* rows = list.tab_rows_for_testing();
+  ASSERT_TRUE(rows);
+  EXPECT_EQ(rows->children().size(), 4u);
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       EmptyPinnedLaneRevealedTargetSurvivesAndDispatchesPinAfterReveal) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+  model.normal_tree.push_back(MakeTabNode("tab-1", 0));
+  list.Update(model, /*browser=*/nullptr);
+
+  SidebarDragPayload payload = MakeTabPayload(
+      "source-tab", SidebarDragOrigin::kNormalSection);
+  payload.source_parent_folder_id = "folder-1";
+  payload.source_folder_child_index = 0;
+  ui::OSExchangeData data;
+  WriteDropData(payload, &data);
+  ui::DropTargetEvent event = MakeDropEvent(data);
+  list.OnDragUpdated(event);
+
+  EXPECT_TRUE(list.is_pinned_drop_lane_revealed_for_testing());
+  auto* pinned_target =
+      list.FindSectionDropTargetForTesting(MahoSidebarTabSection::kPinned);
+  ASSERT_TRUE(pinned_target);
+  EXPECT_TRUE(pinned_target->GetVisible());
+
+  auto callback = GetSectionDropCallbackForTesting(MahoSidebarTabSection::kPinned,
+                                                   event);
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
+  ASSERT_EQ(observer_.events.size(), 2u);
+  EXPECT_EQ(observer_.events[0].kind, "move_tab_to_root");
+  EXPECT_NE(observer_.events[0].json.find("\"folder_id\":\"folder-1\""),
+            std::string::npos);
+  EXPECT_EQ(observer_.events[1].kind, "pin_tab");
+  EXPECT_NE(observer_.events[1].json.find("\"tab_id\":\"source-tab\""),
+            std::string::npos);
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       EmptyPinnedLaneHidesAfterDragExit) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+  model.normal_tree.push_back(MakeTabNode("tab-1", 0));
+  list.Update(model, /*browser=*/nullptr);
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeTabPayload("tab-1", SidebarDragOrigin::kNormalSection),
+                &data);
+  ui::DropTargetEvent event = MakeDropEvent(data);
+  list.OnDragUpdated(event);
+  ASSERT_TRUE(list.is_pinned_drop_lane_revealed_for_testing());
+
+  list.OnDragExited();
+
+  EXPECT_FALSE(list.is_pinned_drop_lane_revealed_for_testing());
+  auto* pinned_target =
+      list.FindSectionDropTargetForTesting(MahoSidebarTabSection::kPinned);
+  ASSERT_TRUE(pinned_target);
+  EXPECT_FALSE(pinned_target->GetVisible());
+  EXPECT_EQ(list.tab_rows_for_testing()->children().size(), 4u);
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       EmptyPinnedLaneNotRevealedForFavoriteDrag) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+  model.normal_tree.push_back(MakeTabNode("tab-1", 0));
+  list.Update(model, /*browser=*/nullptr);
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeTabPayload("fav-1", SidebarDragOrigin::kFavorites), &data);
+  ui::DropTargetEvent event = MakeDropEvent(data);
+  list.OnDragUpdated(event);
+
+  EXPECT_FALSE(list.is_pinned_drop_lane_revealed_for_testing());
+  auto* pinned_target =
+      list.FindSectionDropTargetForTesting(MahoSidebarTabSection::kPinned);
+  ASSERT_TRUE(pinned_target);
+  EXPECT_FALSE(pinned_target->GetVisible());
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       EmptyPinnedLaneNotRevealedForExternalUrlDrag) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+  model.normal_tree.push_back(MakeTabNode("tab-1", 0));
+  list.Update(model, /*browser=*/nullptr);
+
+  ui::OSExchangeData data;
+  data.SetURL(GURL("https://example.com"), u"Example");
+  ui::DropTargetEvent event = MakeDropEvent(data);
+  list.OnDragUpdated(event);
+
+  EXPECT_FALSE(list.is_pinned_drop_lane_revealed_for_testing());
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       NonEmptyPinnedNotAffectedByRevealLogic) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+  SidebarTreeNode pinned = MakeTabNode("pinned-1", 0);
+  pinned.is_pinned = true;
+  model.pinned_tree.push_back(pinned);
+  model.normal_tree.push_back(MakeTabNode("tab-1", 1));
+  list.Update(model, /*browser=*/nullptr);
+
+  EXPECT_NE(list.FindSectionDropTargetForTesting(MahoSidebarTabSection::kPinned),
+            nullptr);
+  EXPECT_EQ(list.tab_rows_for_testing()->children().size(), 4u);
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeTabPayload("tab-1", SidebarDragOrigin::kNormalSection),
+                &data);
+  ui::DropTargetEvent event = MakeDropEvent(data);
+  list.OnDragUpdated(event);
+  EXPECT_FALSE(list.is_pinned_drop_lane_revealed_for_testing());
+
+  list.OnDragExited();
+  auto* pinned_target =
+      list.FindSectionDropTargetForTesting(MahoSidebarTabSection::kPinned);
+  ASSERT_NE(pinned_target, nullptr);
+  EXPECT_TRUE(pinned_target->GetVisible());
+  EXPECT_EQ(list.tab_rows_for_testing()->children().size(), 4u);
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       RevealedEmptyPinnedSectionHasNonZeroHeight) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+  model.normal_tree.push_back(MakeTabNode("tab-1", 0));
+  list.Update(model, /*browser=*/nullptr);
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeTabPayload("tab-1", SidebarDragOrigin::kNormalSection),
+                &data);
+  ui::DropTargetEvent event = MakeDropEvent(data);
+  list.OnDragUpdated(event);
+
+  auto* pinned_target =
+      list.FindSectionDropTargetForTesting(MahoSidebarTabSection::kPinned);
+  ASSERT_NE(pinned_target, nullptr);
+  EXPECT_GT(pinned_target->GetPreferredSize().height(), 0)
+      << "Revealed empty pinned section must have non-zero height for drop targeting";
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       UpdateResetsRevealedPinnedDropLane) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+  model.normal_tree.push_back(MakeTabNode("tab-1", 0));
+  list.Update(model, /*browser=*/nullptr);
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeTabPayload("tab-1", SidebarDragOrigin::kNormalSection),
+                &data);
+  ui::DropTargetEvent event = MakeDropEvent(data);
+  list.OnDragUpdated(event);
+  ASSERT_TRUE(list.is_pinned_drop_lane_revealed_for_testing());
+
+  list.Update(model, /*browser=*/nullptr);
+
+  EXPECT_FALSE(list.is_pinned_drop_lane_revealed_for_testing())
+      << "Update() must clear the transient reveal flag";
+  auto* pinned_target =
+      list.FindSectionDropTargetForTesting(MahoSidebarTabSection::kPinned);
+  ASSERT_TRUE(pinned_target)
+      << "Empty pinned section must still exist after Update()";
+  EXPECT_FALSE(pinned_target->GetVisible())
+      << "Empty pinned section must be hidden at idle after Update()";
+  EXPECT_EQ(list.tab_rows_for_testing()->children().size(), 4u);
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       UpdateWithNewPinnedContentClearsRevealFlag) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+  model.normal_tree.push_back(MakeTabNode("tab-1", 0));
+  list.Update(model, /*browser=*/nullptr);
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeTabPayload("tab-1", SidebarDragOrigin::kNormalSection),
+                &data);
+  ui::DropTargetEvent event = MakeDropEvent(data);
+  list.OnDragUpdated(event);
+  ASSERT_TRUE(list.is_pinned_drop_lane_revealed_for_testing());
+
+  SidebarTreeNode pinned = MakeTabNode("pinned-1", 0);
+  pinned.is_pinned = true;
+  model.pinned_tree.push_back(pinned);
+  list.Update(model, /*browser=*/nullptr);
+
+  EXPECT_FALSE(list.is_pinned_drop_lane_revealed_for_testing())
+      << "Reveal flag must be cleared even when new pinned content arrives";
+  EXPECT_NE(list.FindSectionDropTargetForTesting(MahoSidebarTabSection::kPinned),
+            nullptr)
+      << "Pinned section should be visible because it now has content";
+  EXPECT_EQ(list.tab_rows_for_testing()->children().size(), 4u);
+}
+
 }  // namespace
 }  // namespace maho

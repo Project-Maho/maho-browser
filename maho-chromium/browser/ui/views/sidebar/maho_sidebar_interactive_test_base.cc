@@ -3,6 +3,8 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_interactive_test_base.h"
 
 #include "base/strings/stringprintf.h"
+#include "base/test/run_until.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -18,6 +20,23 @@
 #include "ui/views/view_utils.h"
 
 namespace maho {
+
+RecordingShellEventObserver::RecordingShellEventObserver() = default;
+RecordingShellEventObserver::~RecordingShellEventObserver() = default;
+
+void RecordingShellEventObserver::OnShellEventDispatched(
+    const std::string& kind,
+    const std::string& event_json) {
+  events_.push_back({kind, event_json});
+}
+
+bool RecordingShellEventObserver::HasEvent(const std::string& kind) const {
+  for (const auto& e : events_) {
+    if (e.kind == kind)
+      return true;
+  }
+  return false;
+}
 
 MahoSidebarInteractiveTestBase::MahoSidebarInteractiveTestBase() = default;
 MahoSidebarInteractiveTestBase::~MahoSidebarInteractiveTestBase() = default;
@@ -109,6 +128,20 @@ void MahoSidebarInteractiveTestBase::SeedProfile(int seed_number) {
   GURL seed_url(
       base::StringPrintf("chrome://maho-test/?seed=%d", seed_number));
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), seed_url));
+  ResolveViews();
+
+  if (seed_number == 0) {
+    return;
+  }
+
+  ASSERT_TRUE(base::test::RunUntil([this]() {
+    ResolveViews();
+    const MahoSidebarViewStateModel state = GetViewState();
+    return !state.tab_list.pinned_tree.empty() ||
+           !state.tab_list.normal_tree.empty() ||
+           !state.tab_list.pinned_tabs.empty() || !state.tab_list.tabs.empty();
+  }));
+
   ResolveViews();
 }
 
