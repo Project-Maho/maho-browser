@@ -92,6 +92,7 @@ class MahoSidebarFooterView : public views::View,
                    const std::vector<std::string>& space_names,
                    const std::vector<std::string>& space_colors);
   void UpdateFooterChromeAppearance();
+  void UpdateDotSelectionState();
   void UpdateFadeMask();
   void ScrollToActiveSpace();
 
@@ -115,6 +116,8 @@ class MahoSidebarFooterView : public views::View,
   raw_ptr<views::View> update_pill_ = nullptr;
   raw_ptr<views::View> update_pill_indicator_ = nullptr;
   raw_ptr<views::Label> update_pill_label_ = nullptr;
+  raw_ptr<views::View> footer_separator_ = nullptr;
+  raw_ptr<views::View> footer_region_ = nullptr;
   raw_ptr<views::View> spaces_cluster_ = nullptr;
   raw_ptr<views::View> dot_container_ = nullptr;
   raw_ptr<views::ScrollView> scroll_view_ = nullptr;

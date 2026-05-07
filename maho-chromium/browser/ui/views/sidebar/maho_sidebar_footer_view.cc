@@ -74,27 +74,27 @@ MahoSidebarView* FindSidebarViewAncestor(views::View* view) {
 
 constexpr int kUpdatePillCornerRadius = 11;
 constexpr int kUpdateIndicatorSize = 5;
-constexpr int kFooterRowCornerRadius = 14;
-constexpr int kFooterControlSize = 26;
-constexpr int kFooterControlCornerRadius = 13;
-constexpr int kFooterButtonIconSize = 12;
-constexpr int kFooterRowSpacing = 5;
-constexpr int kClusterCornerRadius = 8;
-constexpr int kDotSpacing = 0;
+constexpr int kFooterRowHeight = 28;
+constexpr int kFooterControlSize = 24;
+constexpr int kFooterControlCornerRadius = 12;
+constexpr int kFooterButtonIconSize = 11;
+constexpr int kFooterRowSpacing = 0;
+constexpr int kDotSpacing = 4;
 constexpr int kSpaceTintAlpha = 12;
-constexpr int kFadeWidth = 9;
+constexpr int kFadeWidth = 8;
+constexpr int kDotTrackHeight = 10;
+constexpr int kDotTrackCornerRadius = 5;
 
-constexpr SkColor kFooterShellColor = SkColorSetRGB(0x17, 0x1B, 0x22);
-constexpr SkColor kFooterShellBorderColor = SkColorSetARGB(0x34, 0xFF, 0xFF, 0xFF);
-constexpr SkColor kFooterButtonBlue = SkColorSetRGB(0x63, 0x95, 0xFF);
-constexpr SkColor kFooterButtonIconColor = SkColorSetRGB(0xF8, 0xFB, 0xFF);
-constexpr SkColor kFooterTrackBaseColor = SkColorSetRGB(0x0C, 0x10, 0x15);
-constexpr SkColor kFooterTrackBorderColor = SkColorSetARGB(0x16, 0xFF, 0xFF, 0xFF);
+constexpr SkColor kFooterButtonIconColor = SkColorSetRGB(0xB4, 0xBC, 0xC8);
+constexpr SkColor kFooterTrackBaseColor = SkColorSetRGB(0x1C, 0x21, 0x28);
+constexpr SkColor kFooterSeparatorColor = SkColorSetARGB(0x2B, 0xFF, 0xFF, 0xFF);
+constexpr float kFooterButtonEnabledOpacity = 0.78f;
+constexpr float kFooterButtonDisabledOpacity = 0.34f;
 
-const gfx::Insets kFooterInsets = gfx::Insets::TLBR(2, 0, 0, 0);
+const gfx::Insets kFooterInsets = gfx::Insets::TLBR(0, 0, 0, 0);
 const gfx::Insets kUpdatePillInsets = gfx::Insets::TLBR(3, 10, 3, 10);
-const gfx::Insets kFooterRowInsets = gfx::Insets::VH(3, 5);
-const gfx::Insets kClusterInsets = gfx::Insets::TLBR(3, 14, 3, 14);
+const gfx::Insets kFooterRowInsets = gfx::Insets::TLBR(3, 8, 1, 8);
+const gfx::Insets kClusterInsets = gfx::Insets::TLBR(0, 10, 0, 10);
 
 bool ParseHexColor(const std::string& color, SkColor* out) {
   if (!out || color.size() != 7 || color[0] != '#') {
@@ -130,7 +130,7 @@ views::MdTextButton* CreateRoundActionButton(
     const std::u16string& tooltip) {
   auto button = std::make_unique<views::MdTextButton>(std::move(callback),
                                                       std::u16string());
-  button->SetStyle(ui::ButtonStyle::kTonal);
+  button->SetStyle(ui::ButtonStyle::kText);
   button->SetCornerRadius(kFooterControlCornerRadius);
   button->SetMinSize(gfx::Size(kFooterControlSize, kFooterControlSize));
   button->SetMaxSize(gfx::Size(kFooterControlSize, kFooterControlSize));
@@ -141,6 +141,8 @@ views::MdTextButton* CreateRoundActionButton(
   button->SetEnabledTextColors(kFooterButtonIconColor);
   button->SetTooltipText(tooltip);
   button->SetAccessibleName(tooltip);
+  button->SetBorder(views::CreateEmptyBorder(gfx::Insets()));
+  button->SetBackground(nullptr);
   return parent->AddChildView(std::move(button));
 }
 
@@ -240,7 +242,7 @@ MahoSidebarFooterView::MahoSidebarFooterView(Browser* browser)
   SetAccessibleRole(ax::mojom::Role::kToolbar);
   GetViewAccessibility().SetName(u"Sidebar footer controls");
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::Orientation::kVertical, kFooterInsets, 7));
+      views::BoxLayout::Orientation::kVertical, kFooterInsets, 4));
   layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
@@ -269,32 +271,38 @@ MahoSidebarFooterView::MahoSidebarFooterView(Browser* browser)
   update_pill_label_->SetTextStyle(views::style::STYLE_BODY_5);
   update_pill_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
 
-  auto* footer_row = AddChildView(std::make_unique<views::View>());
+  footer_separator_ = AddChildView(std::make_unique<views::View>());
+  footer_separator_->SetPreferredSize(gfx::Size(0, 1));
+  footer_separator_->SetBackground(
+      views::CreateSolidBackground(kFooterSeparatorColor));
+  footer_separator_->SetBorder(nullptr);
+
+  footer_region_ = AddChildView(std::make_unique<views::View>());
   auto* footer_row_layout =
-      footer_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
+      footer_region_->SetLayoutManager(std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kHorizontal, kFooterRowInsets,
           kFooterRowSpacing));
   footer_row_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
-  footer_row->SetBackground(views::CreateRoundedRectBackground(
-      kFooterShellColor, kFooterRowCornerRadius));
-  footer_row->SetBorder(views::CreateRoundedRectBorder(
-      1, kFooterRowCornerRadius, kFooterShellBorderColor));
+  footer_region_->SetPreferredSize(gfx::Size(0, kFooterRowHeight));
+  footer_region_->SetBackground(nullptr);
+  footer_region_->SetBorder(nullptr);
 
   archive_button_ = CreateRoundActionButton(
-      footer_row,
+      footer_region_,
       base::BindRepeating(&MahoSidebarFooterView::OnArchivePressed,
                           weak_factory_.GetWeakPtr()),
       GetMahoSidebarArchiveboxIcon(), u"Toggle archive");
 
-  spaces_cluster_ = footer_row->AddChildView(std::make_unique<views::View>());
+  spaces_cluster_ = footer_region_->AddChildView(std::make_unique<views::View>());
   auto* cluster_layout =
       spaces_cluster_->SetLayoutManager(std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kHorizontal, kClusterInsets,
           kDotSpacing));
   cluster_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
-  footer_row_layout->SetFlexForView(spaces_cluster_, 1);
+  footer_row_layout->SetFlexForView(spaces_cluster_, 1, true);
+  spaces_cluster_->SetPreferredSize(gfx::Size(0, kDotTrackHeight));
 
   auto scroll_view = std::make_unique<views::ScrollView>();
   scroll_view->SetHorizontalScrollBarMode(
@@ -303,6 +311,8 @@ MahoSidebarFooterView::MahoSidebarFooterView(Browser* browser)
       views::ScrollView::ScrollBarMode::kDisabled);
   scroll_view->SetDrawOverflowIndicator(false);
   scroll_view->SetBackgroundColor(std::nullopt);
+  scroll_view->ClipHeightTo(0, kDotTrackHeight);
+  scroll_view->SetProperty(views::kMarginsKey, gfx::Insets());
 
   auto dot_container_owned = std::make_unique<views::View>();
   dot_container_ = dot_container_owned.get();
@@ -315,6 +325,7 @@ MahoSidebarFooterView::MahoSidebarFooterView(Browser* browser)
       views::BoxLayout::MainAxisAlignment::kCenter);
   dots_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
+  dot_container_->SetProperty(views::kMarginsKey, gfx::Insets());
 
   scroll_view->SetContents(std::move(dot_container_owned));
 
@@ -330,7 +341,7 @@ MahoSidebarFooterView::MahoSidebarFooterView(Browser* browser)
   fade_mask_->SetPreferredSize(gfx::Size(0, 0));
 
   plus_button_ = CreateRoundActionButton(
-      footer_row,
+      footer_region_,
       base::BindRepeating(&MahoSidebarFooterView::OnPlusPressed,
                           weak_factory_.GetWeakPtr()),
       vector_icons::kAddIcon, u"Create space");
@@ -497,10 +508,11 @@ void MahoSidebarFooterView::RebuildDots(
   dot_container_->RemoveAllChildViews();
   const int clamped_count = std::max(space_count, 0);
   const int visible_count = space_ids.empty()
-                                ? clamped_count
-                                : std::min(clamped_count,
-                                           static_cast<int>(space_ids.size()));
+                                 ? clamped_count
+                                 : std::min(clamped_count,
+                                            static_cast<int>(space_ids.size()));
   if (visible_count == 0) {
+    selected_dot_index_ = -1;
     return;
   }
 
@@ -527,6 +539,7 @@ void MahoSidebarFooterView::RebuildDots(
   }
 
   selected_dot_index_ = active_index;
+  UpdateDotSelectionState();
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(&MahoSidebarFooterView::ScrollToActiveSpace,
@@ -545,19 +558,29 @@ void MahoSidebarFooterView::UpdateFooterChromeAppearance() {
   }
 
   SetBackground(nullptr);
+  if (footer_separator_) {
+    footer_separator_->SetBackground(
+        views::CreateSolidBackground(kFooterSeparatorColor));
+  }
+  if (footer_region_) {
+    footer_region_->SetBackground(nullptr);
+    footer_region_->SetBorder(nullptr);
+  }
   spaces_cluster_->SetBackground(views::CreateRoundedRectBackground(
-      tint, kClusterCornerRadius));
-  spaces_cluster_->SetBorder(views::CreateRoundedRectBorder(
-      1, kClusterCornerRadius, kFooterTrackBorderColor));
+      tint, kDotTrackCornerRadius));
+  spaces_cluster_->SetBorder(nullptr);
 
   auto style_button = [](views::MdTextButton* button) {
     if (!button) {
       return;
     }
-    button->SetBackground(views::CreateRoundedRectBackground(
-        kFooterButtonBlue, kFooterControlCornerRadius));
-    button->SetBorder(views::CreateRoundedRectBorder(
-        1, kFooterControlCornerRadius, SkColorSetARGB(0x1C, 0xFF, 0xFF, 0xFF)));
+    button->SetBgColorOverrideDeprecated(SK_ColorTRANSPARENT);
+    button->SetBackground(nullptr);
+    button->SetBorder(views::CreateEmptyBorder(gfx::Insets()));
+    button->SetPaintToLayer();
+    button->layer()->SetFillsBoundsOpaquely(false);
+    button->layer()->SetOpacity(button->GetEnabled() ? kFooterButtonEnabledOpacity
+                                                     : kFooterButtonDisabledOpacity);
   };
   style_button(archive_button_);
   style_button(plus_button_);
@@ -567,6 +590,21 @@ void MahoSidebarFooterView::UpdateFooterChromeAppearance() {
   }
   if (plus_button_) {
     plus_button_->SetEnabledTextColors(kFooterButtonIconColor);
+  }
+}
+
+void MahoSidebarFooterView::UpdateDotSelectionState() {
+  if (!dot_container_) {
+    return;
+  }
+
+  const auto& children = dot_container_->children();
+  for (size_t i = 0; i < children.size(); ++i) {
+    auto* dot = views::AsViewClass<MahoSidebarSpaceDotView>(children[i]);
+    if (!dot) {
+      continue;
+    }
+    dot->SetSelected(static_cast<int>(i) == selected_dot_index_);
   }
 }
 
@@ -588,6 +626,7 @@ void MahoSidebarFooterView::OnSpaceDotActivated(
       break;
     }
   }
+  UpdateDotSelectionState();
   auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
   if (bridge && !dot->space_id().empty()) {
     bridge->SwitchToSpace(dot->space_id());
@@ -685,7 +724,7 @@ void MahoSidebarFooterView::ShowDropIndicator(int target_index) {
   }
 
   constexpr int kIndicatorWidth = 2;
-  constexpr int kIndicatorHeight = 12;
+  constexpr int kIndicatorHeight = 10;
   constexpr int kIndicatorRadius = 1;
 
   if (!drop_indicator_) {
@@ -815,6 +854,7 @@ bool MahoSidebarFooterView::OnKeyPressed(const ui::KeyEvent& event) {
       return true;
     }
     selected_dot_index_--;
+    UpdateDotSelectionState();
     auto* dot = static_cast<MahoSidebarSpaceDotView*>(
         children[selected_dot_index_]);
     auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
@@ -831,6 +871,7 @@ bool MahoSidebarFooterView::OnKeyPressed(const ui::KeyEvent& event) {
       return true;
     }
     selected_dot_index_++;
+    UpdateDotSelectionState();
     auto* dot = static_cast<MahoSidebarSpaceDotView*>(
         children[selected_dot_index_]);
     auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();

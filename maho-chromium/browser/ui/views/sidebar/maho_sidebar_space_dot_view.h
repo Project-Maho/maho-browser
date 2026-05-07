@@ -72,12 +72,12 @@ class MahoSidebarSpaceDotView : public views::View {
   void OnMouseCaptureLost() override;
 
  private:
-  static constexpr int kViewSize = 15;
-  static constexpr int kIndicatorSize = 11;
-  static constexpr float kDotSizeDefault = 2.0f;
-  static constexpr float kDotSizeSelected = 2.4f;
-  static constexpr float kDotSizeHoveredNoIcon = 2.9f;
-  static constexpr float kDotSizeActive = 3.8f;
+  static constexpr int kViewSize = 14;
+  static constexpr int kIndicatorSize = 8;
+  static constexpr float kDotSizeDefault = 3.0f;
+  static constexpr float kDotSizeSelected = 3.5f;
+  static constexpr float kDotSizeHoveredNoIcon = 4.0f;
+  static constexpr float kDotSizeActive = 4.5f;
   static constexpr float kDragStartThreshold = 4.0f;
 
   float GetCurrentDotSize() const;
