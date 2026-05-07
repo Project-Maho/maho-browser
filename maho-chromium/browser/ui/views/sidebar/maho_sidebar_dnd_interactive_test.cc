@@ -3,6 +3,7 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_interactive_test_base.h"
 
 #include "chrome/browser/ui/browser.h"
+#include "content/public/test/browser_test.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"

@@ -1,32 +1,30 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
-#include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.h"
+#include "maho_sidebar_top_bar_view.h"
 
 #include <memory>
+#include <string_view>
 
 #include "base/functional/bind.h"
-#include "chrome/app/vector_icons/vector_icons.h"
+#include "base/functional/callback_helpers.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
-#include "components/omnibox/browser/vector_icons.h"
-#include "components/vector_icons/vector_icons.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/common/referrer.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/base/models/image_model.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/background.h"
+#include "maho-chromium/browser/ui/views/sidebar/maho_sidebar_top_bar_mac_sf_symbol_helper.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/image_button.h"
@@ -40,9 +38,10 @@ namespace maho {
 namespace {
 
 constexpr int kTopBarBottomMarginDp = 0;
-constexpr int kTrafficLightAlignmentHeightDp = 22;
 constexpr int kTopBarClusterHorizontalInsetDp = 0;
 constexpr int kTopBarClusterVerticalInsetDp = 0;
+constexpr float kTopBarNavTintAlpha = 0.68f;
+constexpr float kTopBarDisabledAlpha = 0.4f;
 
 void ApplyButtonChrome(views::ImageButton* button) {
   button->SetBackground(nullptr);
@@ -50,6 +49,7 @@ void ApplyButtonChrome(views::ImageButton* button) {
   button->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
   button->SetImageVerticalAlignment(views::ImageButton::ALIGN_MIDDLE);
   button->SetInstallFocusRingOnFocus(false);
+  button->SetRequestFocusOnPress(false);
 }
 
 void StyleClusterView(views::View* cluster) {
@@ -57,18 +57,29 @@ void StyleClusterView(views::View* cluster) {
   cluster->SetBorder(nullptr);
 }
 
+ui::ColorId GetTopBarButtonColor(bool enabled) {
+  return enabled ? ui::kColorSysOnSurface : ui::kColorSysOnSurfaceSubtle;
+}
+
 views::ImageButton* AddControlButton(views::View* parent,
                                      views::Button::PressedCallback callback,
-                                     const gfx::VectorIcon& icon,
-                                     const std::u16string& tooltip) {
-  auto button = views::CreateVectorImageButtonWithNativeTheme(
-      std::move(callback), icon, sidebar_layout::kTopBarIconSizeDp,
-      ui::kColorSysOnSurfaceSubtle, ui::kColorSysOnSurface,
-      ui::kColorSysOnSurface);
+                                     std::string_view symbol_name,
+                                     std::string_view accessibility_description,
+                                     const std::u16string& tooltip,
+                                     bool enabled = true) {
+  auto button = views::CreateVectorImageButton(std::move(callback));
+  button->SetImageModel(
+      views::Button::STATE_NORMAL,
+      CreateSidebarTopBarMacSFSymbol(symbol_name, accessibility_description,
+                                     sidebar_layout::kTopBarIconSizeDp,
+                                     GetTopBarButtonColor(enabled),
+                                     enabled ? kTopBarNavTintAlpha
+                                             : kTopBarDisabledAlpha));
   button->SetTooltipText(tooltip);
   button->SetAccessibleName(tooltip);
   button->SetPreferredSize(gfx::Size(sidebar_layout::kTopBarButtonSizeDp,
                                      sidebar_layout::kTopBarButtonSizeDp));
+  button->SetEnabled(enabled);
   views::InstallCircleHighlightPathGenerator(button.get());
   ApplyButtonChrome(button.get());
   return parent->AddChildView(std::move(button));
@@ -83,7 +94,11 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
     : browser_(browser) {
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kHorizontal,
-      sidebar_layout::kTopBarInsets, 0));
+      gfx::Insets::TLBR(sidebar_layout::kTopBarInsets.top(),
+                        sidebar_layout::kTopBarInsets.left(),
+                        sidebar_layout::kTopBarInsets.bottom(),
+                        sidebar_layout::kTopBarInsets.right()),
+      0));
   layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
 
@@ -93,24 +108,26 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
   traffic_light_spacer_ = AddChildView(std::make_unique<views::View>());
   traffic_light_spacer_->SetPreferredSize(gfx::Size(
       sidebar_layout::kTrafficLightAlignmentWidthDp,
-      kTrafficLightAlignmentHeightDp));
+      sidebar_layout::kTopBarTrafficLightAlignmentHeightDp));
 
   leading_cluster_ = AddChildView(std::make_unique<views::View>());
-  auto* controls_layout =
+  auto* leading_layout =
       leading_cluster_->SetLayoutManager(std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kHorizontal,
           gfx::Insets::VH(kTopBarClusterVerticalInsetDp,
                           kTopBarClusterHorizontalInsetDp),
           sidebar_layout::kTopBarButtonSpacingDp));
-  controls_layout->set_cross_axis_alignment(
+  leading_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
 
   sidebar_toggle_button_ = AddControlButton(
       leading_cluster_,
       base::BindRepeating(&MahoSidebarTopBarView::OnToggleSidebarPressed,
                           weak_factory_.GetWeakPtr()),
-      kDockToLeftIcon, u"Toggle Sidebar");
+      "sidebar.left", "Toggle Sidebar", u"Toggle Sidebar");
 
+  flex_spacer_ = AddChildView(std::make_unique<views::View>());
+  layout->SetFlexForView(flex_spacer_, 1);
 
   nav_cluster_ = AddChildView(std::make_unique<views::View>());
   auto* nav_layout =
@@ -126,38 +143,25 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
       nav_cluster_,
       base::BindRepeating(&MahoSidebarTopBarView::OnBackPressed,
                           weak_factory_.GetWeakPtr()),
-      vector_icons::kArrowBackChromeRefreshIcon, u"Back");
+      "chevron.left", "Back", u"Back");
   forward_button_ = AddControlButton(
       nav_cluster_,
       base::BindRepeating(&MahoSidebarTopBarView::OnForwardPressed,
                           weak_factory_.GetWeakPtr()),
-      vector_icons::kForwardArrowIcon, u"Forward");
-
-
-  trailing_cluster_ = AddChildView(std::make_unique<views::View>());
-  auto* trailing_layout =
-      trailing_cluster_->SetLayoutManager(std::make_unique<views::BoxLayout>(
-          views::BoxLayout::Orientation::kHorizontal,
-          gfx::Insets::VH(kTopBarClusterVerticalInsetDp,
-                          kTopBarClusterHorizontalInsetDp),
-          sidebar_layout::kTopBarButtonSpacingDp));
-  trailing_layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kCenter);
-
+      "chevron.right", "Forward", u"Forward");
   reload_button_ = AddControlButton(
-      trailing_cluster_,
+      nav_cluster_,
       base::BindRepeating(&MahoSidebarTopBarView::OnReloadPressed,
                           weak_factory_.GetWeakPtr()),
-      vector_icons::kReloadIcon, u"Reload");
+      "arrow.clockwise", "Reload", u"Reload");
   ai_button_ = AddControlButton(
-      trailing_cluster_,
+      nav_cluster_,
       base::BindRepeating(&MahoSidebarTopBarView::OnAiPressed,
                           weak_factory_.GetWeakPtr()),
-      omnibox::kSparkIcon, u"AI Panel");
+      "sparkles", "AI Panel", u"AI Panel");
 
   StyleClusterView(leading_cluster_);
   StyleClusterView(nav_cluster_);
-  StyleClusterView(trailing_cluster_);
 
   ApplyChromeSpacing();
 }
@@ -167,38 +171,7 @@ MahoSidebarTopBarView::~MahoSidebarTopBarView() = default;
 void MahoSidebarTopBarView::Update(const MahoSidebarTopBarModel& model) {
   model_ = model;
   ApplyChromeSpacing();
-  back_button_->SetEnabled(model.navigation_enabled && model.can_go_back);
-  forward_button_->SetEnabled(model.navigation_enabled && model.can_go_forward);
-  reload_button_->SetEnabled(model.navigation_enabled && model.can_reload);
-  reload_button_->SetTooltipText(model.is_loading ? u"Stop" : u"Reload");
-  reload_button_->SetAccessibleName(model.is_loading ? u"Stop" : u"Reload");
-  reload_button_->SetImageModel(
-      views::Button::STATE_NORMAL,
-      ui::ImageModel::FromVectorIcon(
-          model.is_loading ? vector_icons::kCloseChromeRefreshIcon
-                           : vector_icons::kReloadIcon,
-          ui::kColorSysOnSurfaceSubtle,
-          sidebar_layout::kTopBarIconSizeDp));
-  sidebar_toggle_button_->SetImageModel(
-      views::Button::STATE_NORMAL,
-      ui::ImageModel::FromVectorIcon(kDockToLeftIcon,
-                                     ui::kColorSysOnSurfaceSubtle,
-                                     sidebar_layout::kTopBarIconSizeDp));
-  back_button_->SetImageModel(
-      views::Button::STATE_NORMAL,
-      ui::ImageModel::FromVectorIcon(
-          vector_icons::kArrowBackChromeRefreshIcon,
-          ui::kColorSysOnSurfaceSubtle, sidebar_layout::kTopBarIconSizeDp));
-  forward_button_->SetImageModel(
-      views::Button::STATE_NORMAL,
-      ui::ImageModel::FromVectorIcon(vector_icons::kForwardArrowIcon,
-                                     ui::kColorSysOnSurfaceSubtle,
-                                     sidebar_layout::kTopBarIconSizeDp));
-  ai_button_->SetImageModel(
-      views::Button::STATE_NORMAL,
-      ui::ImageModel::FromVectorIcon(omnibox::kSparkIcon,
-                                     ui::kColorSysOnSurfaceSubtle,
-                                     sidebar_layout::kTopBarIconSizeDp));
+  UpdateButtonImages();
 }
 
 void MahoSidebarTopBarView::OnBoundsChanged(
@@ -228,29 +201,64 @@ void MahoSidebarTopBarView::ApplyChromeSpacing() {
       static_cast<views::BoxLayout*>(leading_cluster_->GetLayoutManager());
   auto* nav_layout =
       static_cast<views::BoxLayout*>(nav_cluster_->GetLayoutManager());
-  auto* trailing_layout =
-      static_cast<views::BoxLayout*>(trailing_cluster_->GetLayoutManager());
 
   const bool show_nav = model_.navigation_enabled;
 
   leading_layout->set_between_child_spacing(
       show_nav ? sidebar_layout::kTopBarCompactLeadingGapDp
                : sidebar_layout::kTopBarButtonSpacingDp);
-  nav_layout->set_between_child_spacing(
-      sidebar_layout::kTopBarButtonSpacingDp);
-  trailing_layout->set_between_child_spacing(
-      sidebar_layout::kTopBarButtonSpacingDp);
+  nav_layout->set_between_child_spacing(sidebar_layout::kTopBarButtonSpacingDp);
+
+  leading_cluster_->SetVisible(show_nav);
   leading_cluster_->SetProperty(
       views::kMarginsKey,
       gfx::Insets::TLBR(0, 0, 0,
-                        show_nav ? sidebar_layout::kTopBarCompactLeadingGapDp
-                                 : 0));
+                         show_nav ? sidebar_layout::kTopBarCompactLeadingGapDp
+                                  : 0));
+  flex_spacer_->SetVisible(show_nav);
   nav_cluster_->SetVisible(show_nav);
+
   StyleClusterView(leading_cluster_);
   StyleClusterView(nav_cluster_);
-  StyleClusterView(trailing_cluster_);
-  trailing_cluster_->SetProperty(views::kMarginsKey, gfx::Insets());
   PreferredSizeChanged();
+}
+
+void MahoSidebarTopBarView::UpdateButtonImages() {
+  UpdateButtonState(sidebar_toggle_button_, true, "sidebar.left",
+                    "Toggle Sidebar", u"Toggle Sidebar");
+  UpdateButtonState(back_button_, model_.navigation_enabled && model_.can_go_back,
+                    "chevron.left", "Back", u"Back");
+  UpdateButtonState(forward_button_,
+                    model_.navigation_enabled && model_.can_go_forward,
+                    "chevron.right", "Forward", u"Forward");
+  UpdateButtonState(reload_button_,
+                    model_.navigation_enabled && model_.can_reload,
+                    model_.is_loading ? "xmark" : "arrow.clockwise",
+                    model_.is_loading ? "Stop" : "Reload",
+                    model_.is_loading ? u"Stop" : u"Reload");
+  UpdateButtonState(ai_button_, true, "sparkles", "AI Panel", u"AI Panel");
+}
+
+void MahoSidebarTopBarView::UpdateButtonState(
+    views::ImageButton* button,
+    bool enabled,
+    std::string_view symbol_name,
+    std::string_view accessibility_description,
+    const std::u16string& tooltip) {
+  if (!button) {
+    return;
+  }
+
+  button->SetEnabled(enabled);
+  button->SetTooltipText(tooltip);
+  button->SetAccessibleName(tooltip);
+  button->SetImageModel(
+      views::Button::STATE_NORMAL,
+      CreateSidebarTopBarMacSFSymbol(symbol_name, accessibility_description,
+                                     sidebar_layout::kTopBarIconSizeDp,
+                                     GetTopBarButtonColor(enabled),
+                                     enabled ? kTopBarNavTintAlpha
+                                             : kTopBarDisabledAlpha));
 }
 
 void MahoSidebarTopBarView::OnBackPressed(const ui::Event& event) {

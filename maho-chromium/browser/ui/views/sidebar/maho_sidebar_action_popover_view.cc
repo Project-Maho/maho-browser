@@ -4,36 +4,144 @@
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "base/location.h"
+#include "base/task/sequenced_task_runner.h"
+#include "components/vector_icons/vector_icons.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
-#include "ui/views/controls/button/button.h"
-#include "ui/views/controls/button/label_button.h"
+#include "ui/views/controls/image_view.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/layout/fill_layout.h"
 #include "ui/views/style/typography.h"
+#include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 
 namespace maho {
 
 namespace {
 
-constexpr int kBubbleCornerRadius = 18;
-constexpr int kBubbleRowSpacing = 6;
-constexpr int kBubbleRowCornerRadius = 12;
-constexpr int kBubbleRowMinWidth = 270;
-constexpr int kBubbleRowMinHeight = 54;
+constexpr int kCardCornerRadius = 16;
+constexpr int kCardPadding = 8;
+constexpr int kRowSpacing = 2;
+constexpr int kRowWidth = 256;
+constexpr int kRowHeight = 48;
+constexpr int kRowCornerRadius = 10;
+constexpr int kIconTileSize = 28;
+constexpr int kIconTileCornerRadius = 8;
+constexpr int kIconSize = 16;
+constexpr int kRowHorizontalPadding = 10;
+constexpr int kIconLabelSpacing = 10;
+constexpr int kLabelVerticalSpacing = 1;
 
-const gfx::Insets kBubbleContentsInsets = gfx::Insets::TLBR(10, 10, 10, 10);
+class ActionRow : public views::View {
+  METADATA_HEADER(ActionRow, views::View)
 
-std::u16string ComposeRowText(const std::u16string& title,
-                              const std::u16string& subtitle) {
-  return title + u"\n" + subtitle;
-}
+ public:
+  ActionRow(const gfx::VectorIcon& icon,
+            const std::u16string& title,
+            const std::u16string& subtitle,
+            int index,
+            base::RepeatingCallback<void(int)> hover_callback,
+            base::RepeatingCallback<void(int)> click_callback)
+      : index_(index),
+        hover_callback_(std::move(hover_callback)),
+        click_callback_(std::move(click_callback)) {
+    SetPreferredSize(gfx::Size(kRowWidth, kRowHeight));
+
+    SetLayoutManager(std::make_unique<views::FillLayout>());
+
+    selection_background_ = AddChildView(std::make_unique<views::View>());
+    selection_background_->SetVisible(false);
+    selection_background_->SetBackground(
+        views::CreateRoundedRectBackground(ui::kColorSysSurfaceVariant,
+                                           kRowCornerRadius));
+
+    auto* content_row = AddChildView(std::make_unique<views::View>());
+    auto* row_layout =
+        content_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
+            views::BoxLayout::Orientation::kHorizontal,
+            gfx::Insets::VH(0, kRowHorizontalPadding), kIconLabelSpacing));
+    row_layout->set_cross_axis_alignment(
+        views::BoxLayout::CrossAxisAlignment::kCenter);
+
+    auto* icon_tile = content_row->AddChildView(std::make_unique<views::View>());
+    icon_tile->SetPreferredSize(gfx::Size(kIconTileSize, kIconTileSize));
+    icon_tile->SetBackground(views::CreateRoundedRectBackground(
+        ui::kColorSysSurface3, kIconTileCornerRadius));
+    icon_tile->SetLayoutManager(std::make_unique<views::FillLayout>());
+
+    auto icon_image = std::make_unique<views::ImageView>();
+    icon_image->SetImage(ui::ImageModel::FromVectorIcon(
+        icon, ui::kColorSysOnSurface, kIconSize));
+    icon_image->SetPreferredSize(gfx::Size(kIconSize, kIconSize));
+    icon_image->SetHorizontalAlignment(views::ImageView::Alignment::kCenter);
+    icon_image->SetVerticalAlignment(views::ImageView::Alignment::kCenter);
+    icon_tile->AddChildView(std::move(icon_image));
+
+    auto* label_column =
+        content_row->AddChildView(std::make_unique<views::View>());
+    auto* label_layout =
+        label_column->SetLayoutManager(std::make_unique<views::BoxLayout>(
+            views::BoxLayout::Orientation::kVertical, gfx::Insets(),
+            kLabelVerticalSpacing));
+    label_layout->set_cross_axis_alignment(
+        views::BoxLayout::CrossAxisAlignment::kStart);
+    label_layout->set_main_axis_alignment(
+        views::BoxLayout::MainAxisAlignment::kCenter);
+    row_layout->SetFlexForView(label_column, 1);
+
+    auto title_label = std::make_unique<views::Label>(
+        title, views::style::CONTEXT_LABEL, views::style::STYLE_BODY_3_MEDIUM);
+    title_label->SetAutoColorReadabilityEnabled(false);
+    title_label->SetEnabledColor(ui::kColorSysOnSurface);
+    title_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+    label_column->AddChildView(std::move(title_label));
+
+    auto subtitle_label = std::make_unique<views::Label>(
+        subtitle, views::style::CONTEXT_LABEL, views::style::STYLE_BODY_5);
+    subtitle_label->SetAutoColorReadabilityEnabled(false);
+    subtitle_label->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
+    subtitle_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+    label_column->AddChildView(std::move(subtitle_label));
+
+    GetViewAccessibility().SetRole(ax::mojom::Role::kButton);
+    SetAccessibleName(title + u". " + subtitle);
+  }
+
+  void SetHighlighted(bool highlighted) {
+    selection_background_->SetVisible(highlighted);
+  }
+
+  void OnMouseEntered(const ui::MouseEvent& event) override {
+    hover_callback_.Run(index_);
+  }
+
+  bool OnMousePressed(const ui::MouseEvent& event) override {
+    if (event.IsOnlyLeftMouseButton()) {
+      click_callback_.Run(index_);
+      return true;
+    }
+    return false;
+  }
+
+ private:
+  int index_;
+  base::RepeatingCallback<void(int)> hover_callback_;
+  base::RepeatingCallback<void(int)> click_callback_;
+  raw_ptr<views::View> selection_background_ = nullptr;
+};
+
+BEGIN_METADATA(ActionRow)
+END_METADATA
 
 }  // namespace
 
@@ -44,27 +152,35 @@ MahoSidebarActionPopoverView::MahoSidebarActionPopoverView(
     ActionCallback action_callback)
     : action_callback_(std::move(action_callback)) {
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::Orientation::kVertical, kBubbleContentsInsets,
-      kBubbleRowSpacing));
+      views::BoxLayout::Orientation::kVertical,
+      gfx::Insets(kCardPadding), kRowSpacing));
   layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kStretch);
+      views::BoxLayout::CrossAxisAlignment::kCenter);
 
   SetBackground(views::CreateRoundedRectBackground(ui::kColorSysSurface2,
-                                                   kBubbleCornerRadius));
-  SetBorder(views::CreateRoundedRectBorder(1, kBubbleCornerRadius,
+                                                   kCardCornerRadius));
+  SetBorder(views::CreateRoundedRectBorder(1, kCardCornerRadius,
                                            ui::kColorSysNeutralOutline));
 
-  AddActionButton(MahoSidebarActionPopoverAction::kNewSpace, u"New Space",
-                  u"Create a fresh workspace");
-  AddActionButton(MahoSidebarActionPopoverAction::kNewFolder, u"New Folder",
-                  u"Organize tabs in the current space");
-  AddActionButton(MahoSidebarActionPopoverAction::kNewTab, u"New Tab",
-                  u"Open a page in the current space");
+  GetViewAccessibility().SetRole(ax::mojom::Role::kDialog);
+  SetAccessibleName(u"Sidebar actions");
+  SetFocusBehavior(FocusBehavior::ALWAYS);
+
+  AddActionRow(MahoSidebarActionPopoverAction::kNewSpace,
+               vector_icons::kSelectWindowChromeRefreshIcon,
+               u"New Space", u"Create a fresh workspace");
+  AddActionRow(MahoSidebarActionPopoverAction::kNewFolder,
+               vector_icons::kFolderChromeRefreshIcon,
+               u"New Folder", u"Organize tabs in the current space");
+  AddActionRow(MahoSidebarActionPopoverAction::kNewTab,
+               vector_icons::kAddIcon,
+               u"New Tab", u"Open a page in the current space");
+
+  UpdateHighlightState();
 }
 
 MahoSidebarActionPopoverView::~MahoSidebarActionPopoverView() = default;
 
-// static
 views::Widget* MahoSidebarActionPopoverView::Show(
     views::View* anchor_view,
     ActionCallback action_callback) {
@@ -76,49 +192,108 @@ views::Widget* MahoSidebarActionPopoverView::Show(
       anchor_view, views::BubbleBorder::BOTTOM_RIGHT);
   delegate->SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
   delegate->set_margins(gfx::Insets());
-  delegate->SetContentsView(std::make_unique<MahoSidebarActionPopoverView>(
-      std::move(action_callback)));
 
-  views::Widget* widget = views::BubbleDialogDelegate::CreateBubble(
-      std::move(delegate));
+  auto contents = std::make_unique<MahoSidebarActionPopoverView>(
+      std::move(action_callback));
+  auto* contents_ptr = contents.get();
+  delegate->SetContentsView(std::move(contents));
+
+  views::Widget* widget =
+      views::BubbleDialogDelegate::CreateBubble(std::move(delegate));
   if (widget) {
     widget->Show();
+    contents_ptr->RequestFocus();
   }
   return widget;
 }
 
-void MahoSidebarActionPopoverView::AddActionButton(
-    MahoSidebarActionPopoverAction action,
-    const std::u16string& title,
-    const std::u16string& subtitle) {
-  auto button = std::make_unique<views::LabelButton>(
-      base::BindRepeating(&MahoSidebarActionPopoverView::OnActionPressed,
-                          base::Unretained(this), action),
-      ComposeRowText(title, subtitle));
-  button->SetRequestFocusOnPress(false);
-  button->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-  button->SetMinSize(gfx::Size(kBubbleRowMinWidth, kBubbleRowMinHeight));
-  button->SetLabelStyle(views::style::STYLE_BODY_4_MEDIUM);
-  button->SetTextColor(views::Button::STATE_NORMAL, ui::kColorSysOnSurface);
-  button->SetTextColor(views::Button::STATE_HOVERED, ui::kColorSysOnSurface);
-  button->SetTextColor(views::Button::STATE_PRESSED, ui::kColorSysOnSurface);
-  button->SetBackground(views::CreateRoundedRectBackground(
-      ui::kColorSysSurface3, kBubbleRowCornerRadius));
-  button->SetBorder(views::CreateRoundedRectBorder(
-      1, kBubbleRowCornerRadius, ui::kColorSysNeutralOutline));
-  button->SetImageLabelSpacing(0);
-  button->SetTooltipText(title + u" — " + subtitle);
-  button->SetAccessibleName(title + u". " + subtitle);
-  AddChildView(std::move(button));
+bool MahoSidebarActionPopoverView::OnKeyPressed(const ui::KeyEvent& event) {
+  const int count = static_cast<int>(action_rows_.size());
+  if (count == 0) {
+    return false;
+  }
+
+  switch (event.key_code()) {
+    case ui::VKEY_DOWN:
+      highlighted_index_ = std::min(highlighted_index_ + 1, count - 1);
+      UpdateHighlightState();
+      return true;
+    case ui::VKEY_UP:
+      highlighted_index_ = std::max(highlighted_index_ - 1, 0);
+      UpdateHighlightState();
+      return true;
+    case ui::VKEY_TAB:
+      if (event.IsShiftDown()) {
+        highlighted_index_ =
+            (highlighted_index_ - 1 + count) % count;
+      } else {
+        highlighted_index_ = (highlighted_index_ + 1) % count;
+      }
+      UpdateHighlightState();
+      return true;
+    case ui::VKEY_RETURN:
+    case ui::VKEY_SPACE:
+      ActivateHighlightedRow();
+      return true;
+    case ui::VKEY_ESCAPE:
+      if (GetWidget()) {
+        GetWidget()->Close();
+      }
+      return true;
+    default:
+      return false;
+  }
 }
 
-void MahoSidebarActionPopoverView::OnActionPressed(
+void MahoSidebarActionPopoverView::AddActionRow(
     MahoSidebarActionPopoverAction action,
-    const ui::Event& event) {
-  (void)event;
-  if (action_callback_) {
-    action_callback_.Run(action);
+    const gfx::VectorIcon& icon,
+    const std::u16string& title,
+    const std::u16string& subtitle) {
+  int index = static_cast<int>(action_rows_.size());
+  auto* row = AddChildView(std::make_unique<ActionRow>(
+      icon, title, subtitle, index,
+      base::BindRepeating(&MahoSidebarActionPopoverView::OnRowHovered,
+                          base::Unretained(this)),
+      base::BindRepeating(&MahoSidebarActionPopoverView::OnRowClicked,
+                          base::Unretained(this))));
+  action_rows_.push_back(row);
+  action_types_.push_back(action);
+}
+
+void MahoSidebarActionPopoverView::OnRowHovered(int index) {
+  highlighted_index_ = index;
+  UpdateHighlightState();
+}
+
+void MahoSidebarActionPopoverView::OnRowClicked(int index) {
+  highlighted_index_ = index;
+  ActivateHighlightedRow();
+}
+
+void MahoSidebarActionPopoverView::UpdateHighlightState() {
+  for (int i = 0; i < static_cast<int>(action_rows_.size()); ++i) {
+    static_cast<ActionRow*>(action_rows_[i].get())
+        ->SetHighlighted(i == highlighted_index_);
   }
+}
+
+void MahoSidebarActionPopoverView::ActivateHighlightedRow() {
+  if (highlighted_index_ < 0 ||
+      highlighted_index_ >= static_cast<int>(action_types_.size()) ||
+      !action_callback_) {
+    return;
+  }
+
+  const auto action = action_types_[highlighted_index_];
+  const ActionCallback action_callback = action_callback_;
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](ActionCallback callback, MahoSidebarActionPopoverAction action) {
+            callback.Run(action);
+          },
+          action_callback, action));
 }
 
 }  // namespace maho

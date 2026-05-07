@@ -3,6 +3,7 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_interactive_test_base.h"
 
 #include "chrome/browser/ui/browser.h"
+#include "content/public/test/browser_test.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
@@ -28,25 +29,43 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   int initial_count = static_cast<int>(state.tab_list.normal_tree.size());
   ASSERT_GE(initial_count, 2);
 
-  std::string target_tab_id;
+  const SidebarTreeNode* target_node = nullptr;
+  SidebarTabRowView* target_row = nullptr;
   for (const auto& node : state.tab_list.normal_tree) {
-    if (node.kind == SidebarNodeKind::kTab && !node.is_active) {
-      target_tab_id = node.tab_id;
-      break;
+    if (node.kind != SidebarNodeKind::kTab || node.is_active ||
+        node.tab_strip_index < 0 || node.tab_id.empty()) {
+      continue;
     }
+    if (!browser()->tab_strip_model()->ContainsIndex(node.tab_strip_index)) {
+      continue;
+    }
+
+    auto* row = tab_list_->FindTabRowByIdForTesting(node.tab_id);
+    if (!row || !row->GetVisible()) {
+      continue;
+    }
+
+    target_node = &node;
+    target_row = row;
+    break;
   }
-  ASSERT_FALSE(target_tab_id.empty());
+  ASSERT_TRUE(target_node);
+  ASSERT_TRUE(target_row);
 
-  auto* tab_row = tab_list_->FindTabRowByIdForTesting(target_tab_id);
-  ASSERT_TRUE(tab_row);
-
-  const gfx::Point center = tab_row->GetBoundsInScreen().CenterPoint();
+  const gfx::Point center = target_row->GetBoundsInScreen().CenterPoint();
   ASSERT_TRUE(ui_controls::SendMouseMove(center.x(), center.y()));
   base::RunLoop rclick_loop;
   ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
       ui_controls::RIGHT, ui_controls::DOWN | ui_controls::UP,
       rclick_loop.QuitClosure()));
   rclick_loop.Run();
+  base::RunLoop().RunUntilIdle();
+
+  base::RunLoop down_loop;
+  ASSERT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
+      browser()->window()->GetNativeWindow(), ui::VKEY_DOWN,
+      false, false, false, false, down_loop.QuitClosure()));
+  down_loop.Run();
   base::RunLoop().RunUntilIdle();
 
   base::RunLoop key_loop;
@@ -60,7 +79,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   auto new_state = GetViewState();
   bool tab_still_exists = false;
   for (const auto& node : new_state.tab_list.normal_tree) {
-    if (node.kind == SidebarNodeKind::kTab && node.tab_id == target_tab_id) {
+    if (node.kind == SidebarNodeKind::kTab && node.tab_id == target_node->tab_id) {
       tab_still_exists = true;
       break;
     }
@@ -97,11 +116,13 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   rclick_loop.Run();
   base::RunLoop().RunUntilIdle();
 
-  base::RunLoop down_loop;
-  ASSERT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
-      browser()->window()->GetNativeWindow(), ui::VKEY_DOWN,
-      false, false, false, false, down_loop.QuitClosure()));
-  down_loop.Run();
+  for (int i = 0; i < 7; ++i) {
+    base::RunLoop down_loop;
+    ASSERT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
+        browser()->window()->GetNativeWindow(), ui::VKEY_DOWN,
+        false, false, false, false, down_loop.QuitClosure()));
+    down_loop.Run();
+  }
 
   base::RunLoop enter_loop;
   ASSERT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
