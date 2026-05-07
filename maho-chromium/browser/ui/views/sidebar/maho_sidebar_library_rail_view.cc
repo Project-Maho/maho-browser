@@ -36,7 +36,7 @@ namespace maho {
 
 namespace {
 
-constexpr int kRailWidthDp = 68;
+constexpr int kRailWidthDp = 64;
 constexpr int kRailTopInsetDp = 12;
 constexpr int kRailSideInsetDp = 3;
 constexpr int kRailBottomInsetDp = 10;
@@ -282,13 +282,13 @@ class MahoSidebarLibraryRailItemButton : public views::Button {
                                        : GetRailItemForegroundColor(selected_);
     if (enabled && selected_) {
       tile_->SetBackground(views::CreateRoundedRectBackground(
-          hovered ? ui::kColorSysSurface4 : ui::kColorSysSurface3,
+          hovered ? ui::kColorSysSurface3 : ui::kColorSysSurface2,
           kRailTileCornerRadiusDp));
       tile_->SetBorder(views::CreateRoundedRectBorder(
           1, kRailTileCornerRadiusDp, ui::kColorSysSurfaceVariant));
     } else if (hovered) {
       tile_->SetBackground(views::CreateRoundedRectBackground(
-          ui::kColorSysSurface2, kRailTileCornerRadiusDp));
+          ui::kColorSysSurface1, kRailTileCornerRadiusDp));
       tile_->SetBorder(views::CreateRoundedRectBorder(
           1, kRailTileCornerRadiusDp, ui::kColorSysSurfaceVariant));
     } else {
@@ -326,7 +326,7 @@ MahoSidebarLibraryRailView::MahoSidebarLibraryRailView() {
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
   SetPreferredSize(gfx::Size(kRailWidthDp, 0));
-  SetBackground(views::CreateSolidBackground(ui::kColorSysSurface2));
+  SetBackground(views::CreateSolidBackground(ui::kColorSysSurface));
 
   item_container_ = AddChildView(std::make_unique<views::View>());
   auto* item_layout = item_container_->SetLayoutManager(
@@ -408,7 +408,7 @@ void MahoSidebarLibraryRailView::SetBackCallback(
 
 void MahoSidebarLibraryRailView::OnThemeChanged() {
   views::View::OnThemeChanged();
-  SetBackground(views::CreateSolidBackground(ui::kColorSysSurface2));
+  SetBackground(views::CreateSolidBackground(ui::kColorSysSurface));
   UpdateSelection();
   UpdateBackButtonAppearance();
 }

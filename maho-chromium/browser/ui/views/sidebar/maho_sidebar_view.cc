@@ -93,7 +93,7 @@ void MahoSidebarView::OnThemeChanged() {
       1, sidebar_layout::kRailCornerRadiusDp, ui::kColorSysSurfaceVariant));
   if (library_divider_) {
     library_divider_->SetBackground(
-        views::CreateSolidBackground(ui::kColorSeparator));
+        views::CreateSolidBackground(ui::kColorSysSurfaceVariant));
   }
   RefreshAll();
 }
@@ -207,7 +207,7 @@ void MahoSidebarView::BuildUi() {
   library_divider_->SetPreferredSize(
       gfx::Size(kLibraryDividerThicknessDp, 0));
   library_divider_->SetBackground(
-      views::CreateSolidBackground(ui::kColorSeparator));
+      views::CreateSolidBackground(ui::kColorSysSurfaceVariant));
   library_divider_->SetBorder(nullptr);
 
   library_content_host_ =
@@ -325,8 +325,15 @@ void MahoSidebarView::RestoreLastFocusedBodyView() {
 }
 
 bool MahoSidebarView::CanRestoreFocusToView(const views::View* view) const {
-  if (!view || !view->GetVisible() || !view->GetEnabled() ||
-      !IsDescendantOfView(view, this)) {
+  if (!view) {
+    return false;
+  }
+
+  if (!view->GetVisible() || !view->GetEnabled()) {
+    return false;
+  }
+
+  if (!IsDescendantOfView(view, this)) {
     return false;
   }
 
