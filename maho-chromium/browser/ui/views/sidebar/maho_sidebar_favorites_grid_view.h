@@ -113,9 +113,12 @@ class MahoSidebarFavoritesGridView : public views::View {
                                         size_t favorite_count);
   void RebuildGridRows(size_t favorite_count);
   void UpdateContainerOwnedPreferredHeight(size_t favorite_count);
+  void UpdateEmptyStateHighlight(bool highlighted);
 
   raw_ptr<Browser> browser_ = nullptr;
   raw_ptr<views::View> content_view_ = nullptr;
+  raw_ptr<views::View> empty_state_view_ = nullptr;
+  raw_ptr<views::View> empty_state_card_ = nullptr;
   size_t favorite_count_ = 0;
   std::array<std::unique_ptr<views::View>, kTileCount> owned_tiles_;
   std::array<raw_ptr<views::Button>, kTileCount> tile_views_ = {};

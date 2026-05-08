@@ -58,15 +58,137 @@ namespace maho {
 
 namespace {
 
-constexpr int kFavoriteSectionSpacingDp = 4;
+constexpr int kFavoriteSectionSpacingDp = 6;
 constexpr int kFavoriteShellContentSpacingDp = 0;
 constexpr int kFavoriteTileContentSpacingDp = 0;
 constexpr int kFavoriteSingleCardHeightDp = sidebar_layout::kFavoriteTileHeightDp;
 constexpr int kFavoriteTwoTileHeightDp = sidebar_layout::kFavoriteTileHeightDp;
-constexpr int kFavoriteEmptyStateHeightDp = 92;
+constexpr int kFavoriteEmptyStateHeightDp = 106;
+constexpr int kFavoriteEmptyBadgeSizeDp = 24;
+constexpr int kFavoriteEmptyCardCornerRadiusDp = 14;
+constexpr int kFavoriteEmptyCardTopInsetDp = 12;
+constexpr int kFavoriteEmptyCardSideInsetDp = 18;
+constexpr int kFavoriteEmptyTitleTopInsetDp = 18;
+constexpr int kFavoriteEmptyTitleDescriptionSpacingDp = 6;
+constexpr int kFavoriteEmptyCloseSizeDp = 12;
+constexpr int kFavoriteEmptyCloseInsetDp = 14;
 constexpr int kDragStartThresholdDp = 5;
 constexpr int kDropIndicatorThicknessDp = 2;
 constexpr int kDropIndicatorInsetDp = 3;
+
+class EmptyFavoritesPlaceholderView : public views::View {
+ public:
+  EmptyFavoritesPlaceholderView() {
+    SetPreferredSize(gfx::Size(1, kFavoriteEmptyStateHeightDp));
+
+    card_background_ = AddChildView(std::make_unique<views::View>());
+    card_background_->SetCanProcessEventsWithinSubtree(false);
+
+    badge_ = AddChildView(std::make_unique<views::View>());
+    badge_->SetPreferredSize(
+        gfx::Size(kFavoriteEmptyBadgeSizeDp, kFavoriteEmptyBadgeSizeDp));
+    auto* badge_layout = badge_->SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 0));
+    badge_layout->set_main_axis_alignment(
+        views::BoxLayout::MainAxisAlignment::kCenter);
+    badge_layout->set_cross_axis_alignment(
+        views::BoxLayout::CrossAxisAlignment::kCenter);
+
+    badge_label_ = badge_->AddChildView(
+        std::make_unique<views::Label>(std::u16string(u"✦")));
+    badge_label_->SetAutoColorReadabilityEnabled(false);
+    badge_label_->SetTextStyle(views::style::STYLE_BODY_5);
+
+    close_label_ = AddChildView(
+        std::make_unique<views::Label>(std::u16string(u"×")));
+    close_label_->SetAutoColorReadabilityEnabled(false);
+    close_label_->SetTextStyle(views::style::STYLE_BODY_5);
+    close_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+
+    title_label_ = AddChildView(std::make_unique<views::Label>(
+        std::u16string(u"Drag to add Favorites")));
+    title_label_->SetAutoColorReadabilityEnabled(false);
+    title_label_->SetEnabledColor(ui::kColorSysOnSurface);
+    title_label_->SetTextStyle(views::style::STYLE_BODY_4_MEDIUM);
+    title_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+
+    description_label_ = AddChildView(std::make_unique<views::Label>(
+        std::u16string(u"Favorites keep your most used sites\nand apps close")));
+    description_label_->SetAutoColorReadabilityEnabled(false);
+    description_label_->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
+    description_label_->SetTextStyle(views::style::STYLE_BODY_5);
+    description_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+    description_label_->SetMultiLine(true);
+
+    UpdateAppearance();
+  }
+
+  void Layout() override {
+    const gfx::Rect bounds = GetContentsBounds();
+    const int badge_x = bounds.x() + (bounds.width() - kFavoriteEmptyBadgeSizeDp) / 2;
+    badge_->SetBounds(badge_x, 0, kFavoriteEmptyBadgeSizeDp,
+                      kFavoriteEmptyBadgeSizeDp);
+
+    const int card_top = kFavoriteEmptyBadgeSizeDp / 2;
+    const gfx::Rect card_bounds(bounds.x(), card_top, bounds.width(),
+                                std::max(0, bounds.height() - card_top));
+    card_background_->SetBoundsRect(card_bounds);
+
+    close_label_->SetBounds(card_bounds.right() - kFavoriteEmptyCloseInsetDp -
+                                kFavoriteEmptyCloseSizeDp,
+                            card_bounds.y() + kFavoriteEmptyCloseInsetDp,
+                            kFavoriteEmptyCloseSizeDp, kFavoriteEmptyCloseSizeDp);
+
+    const int content_width =
+        std::max(0, card_bounds.width() - (kFavoriteEmptyCardSideInsetDp * 2));
+    const gfx::Size title_size = title_label_->GetPreferredSize();
+    const int title_x = card_bounds.x() +
+                        std::max(0, (card_bounds.width() - title_size.width()) / 2);
+    const int title_y = card_bounds.y() + kFavoriteEmptyTitleTopInsetDp;
+    title_label_->SetBounds(title_x, title_y, title_size.width(),
+                            title_size.height());
+
+    const int description_y =
+        title_y + title_size.height() + kFavoriteEmptyTitleDescriptionSpacingDp;
+    description_label_->SetBounds(
+        card_bounds.x() + kFavoriteEmptyCardSideInsetDp, description_y,
+        content_width, description_label_->GetHeightForWidth(content_width));
+  }
+
+  void SetHighlighted(bool highlighted) {
+    if (highlighted_ == highlighted) {
+      return;
+    }
+    highlighted_ = highlighted;
+    UpdateAppearance();
+  }
+
+ private:
+  void UpdateAppearance() {
+    card_background_->SetBackground(views::CreateRoundedRectBackground(
+        ui::kColorSysSurface1, kFavoriteEmptyCardCornerRadiusDp));
+    card_background_->SetBorder(views::CreateRoundedRectBorder(
+        1, kFavoriteEmptyCardCornerRadiusDp,
+        highlighted_ ? ui::kColorSysPrimary : ui::kColorSysSurfaceVariant));
+    badge_->SetBackground(views::CreateRoundedRectBackground(
+        ui::kColorSysSurface, kFavoriteEmptyBadgeSizeDp / 2));
+    badge_->SetBorder(views::CreateRoundedRectBorder(
+        1, kFavoriteEmptyBadgeSizeDp / 2,
+        highlighted_ ? ui::kColorSysPrimary : ui::kColorSysSurfaceVariant));
+    badge_label_->SetEnabledColor(highlighted_ ? ui::kColorSysPrimary
+                                               : ui::kColorSysOnSurfaceSubtle);
+    close_label_->SetEnabledColor(highlighted_ ? ui::kColorSysPrimary
+                                               : ui::kColorSysOnSurfaceSubtle);
+  }
+
+  raw_ptr<views::View> card_background_ = nullptr;
+  raw_ptr<views::View> badge_ = nullptr;
+  raw_ptr<views::Label> badge_label_ = nullptr;
+  raw_ptr<views::Label> close_label_ = nullptr;
+  raw_ptr<views::Label> title_label_ = nullptr;
+  raw_ptr<views::Label> description_label_ = nullptr;
+  bool highlighted_ = false;
+};
 
 class FavoriteTileButton : public views::Button,
                           public views::DragController {
@@ -282,6 +404,18 @@ MahoSidebarFavoritesGridView::MahoSidebarFavoritesGridView(Browser* browser)
   content_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
+  empty_state_view_ = shell_view->AddChildView(std::make_unique<views::View>());
+  auto* empty_layout = empty_state_view_->SetLayoutManager(
+      std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical,
+                                         gfx::Insets::TLBR(kFavoriteEmptyCardTopInsetDp,
+                                                           0, 0, 0),
+                                         0));
+  empty_layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kStretch);
+  auto empty_state_card = std::make_unique<EmptyFavoritesPlaceholderView>();
+  empty_state_card_ = empty_state_card.get();
+  empty_state_view_->AddChildView(std::move(empty_state_card));
+
   for (size_t index = 0; index < tile_views_.size(); ++index) {
     auto tile = std::make_unique<FavoriteTileButton>(
         base::BindRepeating(&MahoSidebarFavoritesGridView::OnTilePressed,
@@ -355,17 +489,19 @@ void MahoSidebarFavoritesGridView::Update(
   const size_t visible_item_count = favorite_count_;
   RebuildGridRows(visible_item_count);
   content_view_->SetVisible(has_items);
+  empty_state_view_->SetVisible(!has_items);
   UpdateContainerOwnedPreferredHeight(visible_item_count);
 
-  // Hide the entire view when empty and no drag is revealing it.
-  SetVisible(has_items || drag_reveal_active_);
+  SetVisible(true);
+  UpdateEmptyStateHighlight(!has_items && drag_over_drop_target_);
 
   if (!has_items) {
-      for (size_t index = 0; index < tile_views_.size(); ++index) {
-        tile_views_[index]->SetVisible(false);
-        tile_urls_[index] = GURL();
-        tile_tab_ids_[index].clear();
-      }
+    SetBorder(nullptr);
+    for (size_t index = 0; index < tile_views_.size(); ++index) {
+      tile_views_[index]->SetVisible(false);
+      tile_urls_[index] = GURL();
+      tile_tab_ids_[index].clear();
+    }
     return;
   }
 
@@ -457,7 +593,7 @@ int MahoSidebarFavoritesGridView::GetPreferredHeightForWidth(
     size_t favorite_count) {
   const size_t count = std::min(favorite_count, kTileCount);
   if (count == 0) {
-    return 0;
+    return kFavoriteEmptyStateHeightDp + kFavoriteEmptyCardTopInsetDp;
   }
 
   const LayoutSpec layout_spec = GetLayoutSpec(count, available_width);
@@ -481,6 +617,14 @@ void MahoSidebarFavoritesGridView::UpdateContainerOwnedPreferredHeight(
   SetPreferredSize(gfx::Size(
       1, GetPreferredHeightForWidth(width(), favorite_count)));
   PreferredSizeChanged();
+}
+
+void MahoSidebarFavoritesGridView::UpdateEmptyStateHighlight(bool highlighted) {
+  if (!empty_state_card_) {
+    return;
+  }
+  static_cast<EmptyFavoritesPlaceholderView*>(empty_state_card_.get())
+      ->SetHighlighted(highlighted);
 }
 
 void MahoSidebarFavoritesGridView::RebuildGridRows(size_t favorite_count) {
@@ -572,10 +716,8 @@ int MahoSidebarFavoritesGridView::OnDragUpdated(
     drag_over_drop_target_ = false;
     drag_reveal_active_ = false;
     SetBorder(nullptr);
-    if (favorite_count_ == 0) {
-      SetVisible(false);
-      UpdateContainerOwnedPreferredHeight(0);
-    }
+    UpdateEmptyStateHighlight(false);
+    UpdateContainerOwnedPreferredHeight(favorite_count_);
     return static_cast<int>(ui::mojom::DragOperation::kNone);
   }
 
@@ -585,21 +727,28 @@ int MahoSidebarFavoritesGridView::OnDragUpdated(
     drag_over_drop_target_ = false;
     drag_reveal_active_ = false;
     SetBorder(nullptr);
+    UpdateEmptyStateHighlight(false);
     return static_cast<int>(ui::mojom::DragOperation::kNone);
   }
 
   if (!drag_reveal_active_ && favorite_count_ == 0) {
     drag_reveal_active_ = true;
     SetVisible(true);
-    SetPreferredSize(gfx::Size(1, kFavoriteEmptyStateHeightDp));
+    SetPreferredSize(
+        gfx::Size(1, kFavoriteEmptyStateHeightDp + kFavoriteEmptyCardTopInsetDp));
     PreferredSizeChanged();
   }
 
   drag_over_drop_target_ = true;
-  SetBorder(views::CreateSolidSidedBorder(
-      gfx::Insets::TLBR(kDropIndicatorThicknessDp, kDropIndicatorInsetDp,
-                        kDropIndicatorThicknessDp, kDropIndicatorInsetDp),
-      ui::kColorSysPrimary));
+  if (favorite_count_ == 0) {
+    SetBorder(nullptr);
+    UpdateEmptyStateHighlight(true);
+  } else {
+    SetBorder(views::CreateSolidSidedBorder(
+        gfx::Insets::TLBR(kDropIndicatorThicknessDp, kDropIndicatorInsetDp,
+                          kDropIndicatorThicknessDp, kDropIndicatorInsetDp),
+        ui::kColorSysPrimary));
+  }
 
   return static_cast<int>(ui::mojom::DragOperation::kMove);
 }
@@ -651,7 +800,8 @@ void MahoSidebarFavoritesGridView::RevealForDrag() {
   }
   drag_reveal_active_ = true;
   SetVisible(true);
-  SetPreferredSize(gfx::Size(1, kFavoriteEmptyStateHeightDp));
+  SetPreferredSize(
+      gfx::Size(1, kFavoriteEmptyStateHeightDp + kFavoriteEmptyCardTopInsetDp));
   PreferredSizeChanged();
 }
 
@@ -662,16 +812,16 @@ void MahoSidebarFavoritesGridView::CollapseFromDrag() {
   drag_reveal_active_ = false;
   drag_over_drop_target_ = false;
   SetBorder(nullptr);
-  SetVisible(false);
+  UpdateEmptyStateHighlight(false);
   UpdateContainerOwnedPreferredHeight(0);
 }
 
 void MahoSidebarFavoritesGridView::OnDragExited() {
   drag_over_drop_target_ = false;
   SetBorder(nullptr);
+  UpdateEmptyStateHighlight(false);
   if (drag_reveal_active_) {
     drag_reveal_active_ = false;
-    SetVisible(false);
     UpdateContainerOwnedPreferredHeight(0);
   }
 }
