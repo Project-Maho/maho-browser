@@ -76,13 +76,13 @@
 namespace maho {
 
 constexpr int kRowSpacingDp = 2;
-constexpr int kRowHeightDp = 26;
+constexpr int kRowHeightDp = 25;
 constexpr int kRowCornerRadiusDp = 9;
 constexpr int kRowIconSizeDp = 16;
 constexpr int kRowIconTextSpacingDp = 6;
 constexpr int kRowTrailingSpacingDp = 0;
 constexpr int kCloseButtonSizeDp = 16;
-constexpr int kSectionSpacingDp = 5;
+constexpr int kSectionSpacingDp = 4;
 constexpr int kFolderIndentDp = 13;
 constexpr int kFolderRowHeightDp = 26;
 constexpr int kSectionSeparatorHeightDp = 8;
@@ -95,9 +95,9 @@ constexpr int kDropIndicatorOutlineThicknessDp = 1;
 constexpr int kDropIndicatorInsetDp = 4;
 
 const gfx::Insets kRootInsets = gfx::Insets::TLBR(0, 0, 0, 0);
-const gfx::Insets kInlineRowInsets = gfx::Insets::TLBR(0, 9, 0, 8);
-const gfx::Insets kPlaceholderInsets = gfx::Insets::TLBR(6, 9, 6, 9);
-const gfx::Insets kNewTabRowMargins = gfx::Insets::TLBR(0, 0, 0, 0);
+const gfx::Insets kInlineRowInsets = gfx::Insets::TLBR(0, 10, 0, 8);
+const gfx::Insets kPlaceholderInsets = gfx::Insets::TLBR(1, 12, 0, 9);
+const gfx::Insets kNewTabRowMargins = gfx::Insets::TLBR(1, 0, 0, 0);
 const gfx::Insets kSectionInsets = gfx::Insets::TLBR(0, 0, 0, 0);
 
 ui::DropTargetEvent ForwardDropTargetEventToView(const ui::DropTargetEvent& event,
@@ -436,7 +436,7 @@ views::Label* AddPlaceholderLabel(views::View* parent, std::u16string text) {
   label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   label->SetAutoColorReadabilityEnabled(false);
   label->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
-  label->SetTextStyle(views::style::STYLE_BODY_4);
+  label->SetTextStyle(views::style::STYLE_BODY_5);
   label->SetBorder(views::CreateEmptyBorder(kPlaceholderInsets));
   return parent->AddChildView(std::move(label));
 }

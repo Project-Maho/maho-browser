@@ -74,27 +74,27 @@ MahoSidebarView* FindSidebarViewAncestor(views::View* view) {
 
 constexpr int kUpdatePillCornerRadius = 11;
 constexpr int kUpdateIndicatorSize = 5;
-constexpr int kFooterRowHeight = 28;
-constexpr int kFooterControlSize = 24;
+constexpr int kFooterRowHeight = 26;
+constexpr int kFooterControlSize = 22;
 constexpr int kFooterControlCornerRadius = 12;
-constexpr int kFooterButtonIconSize = 11;
+constexpr int kFooterButtonIconSize = 10;
 constexpr int kFooterRowSpacing = 0;
 constexpr int kDotSpacing = 4;
 constexpr int kSpaceTintAlpha = 12;
 constexpr int kFadeWidth = 8;
-constexpr int kDotTrackHeight = 10;
+constexpr int kDotTrackHeight = 8;
 constexpr int kDotTrackCornerRadius = 5;
 
 constexpr SkColor kFooterButtonIconColor = SkColorSetRGB(0xB4, 0xBC, 0xC8);
 constexpr SkColor kFooterTrackBaseColor = SkColorSetRGB(0x1C, 0x21, 0x28);
-constexpr SkColor kFooterSeparatorColor = SkColorSetARGB(0x2B, 0xFF, 0xFF, 0xFF);
-constexpr float kFooterButtonEnabledOpacity = 0.78f;
-constexpr float kFooterButtonDisabledOpacity = 0.34f;
+constexpr SkColor kFooterSeparatorColor = SkColorSetARGB(0x1A, 0xFF, 0xFF, 0xFF);
+constexpr float kFooterButtonEnabledOpacity = 0.58f;
+constexpr float kFooterButtonDisabledOpacity = 0.28f;
 
 const gfx::Insets kFooterInsets = gfx::Insets::TLBR(0, 0, 0, 0);
 const gfx::Insets kUpdatePillInsets = gfx::Insets::TLBR(3, 10, 3, 10);
-const gfx::Insets kFooterRowInsets = gfx::Insets::TLBR(3, 8, 1, 8);
-const gfx::Insets kClusterInsets = gfx::Insets::TLBR(0, 10, 0, 10);
+const gfx::Insets kFooterRowInsets = gfx::Insets::TLBR(4, 8, 1, 8);
+const gfx::Insets kClusterInsets = gfx::Insets::TLBR(0, 8, 0, 8);
 
 bool ParseHexColor(const std::string& color, SkColor* out) {
   if (!out || color.size() != 7 || color[0] != '#') {
@@ -273,6 +273,8 @@ MahoSidebarFooterView::MahoSidebarFooterView(Browser* browser)
 
   footer_separator_ = AddChildView(std::make_unique<views::View>());
   footer_separator_->SetPreferredSize(gfx::Size(0, 1));
+  footer_separator_->SetProperty(views::kMarginsKey,
+                                 gfx::Insets::TLBR(0, 8, 0, 8));
   footer_separator_->SetBackground(
       views::CreateSolidBackground(kFooterSeparatorColor));
   footer_separator_->SetBorder(nullptr);
