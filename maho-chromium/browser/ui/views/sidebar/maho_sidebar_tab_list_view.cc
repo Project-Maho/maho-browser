@@ -1,6 +1,6 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
-#include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
+#include "maho_sidebar_tab_list_view.h"
 
 #include <functional>
 #include <memory>
@@ -11,27 +11,33 @@
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/logging.h"
 #include "base/pickle.h"
 #include "base/strings/string_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/values.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/common/referrer.h"
 #include "chrome/browser/ui/tab_ui_helper.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
+#include "chrome/browser/ui/tabs/split_tab_metrics.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/web_contents.h"
 #include "components/tabs/public/tab_interface.h"
+#include "components/split_tabs/split_tab_visual_data.h"
 #include "maho/browser/ui/context_menu/maho_tab_context_menu.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
@@ -58,6 +64,7 @@
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/layout/box_layout_view.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/view_utils.h"
@@ -198,6 +205,8 @@ class SidebarDropForwardingView : public views::View {
 };
 
 class SidebarSeparatorRow : public views::View {
+  METADATA_HEADER(SidebarSeparatorRow, views::View)
+
  public:
    SidebarSeparatorRow() {
      SetPreferredSize(gfx::Size(1, kSectionSeparatorHeightDp));
@@ -307,6 +316,10 @@ class SidebarSectionDropTarget : public views::View {
   void OnDragExited() override {
     drag_over_drop_target_ = false;
     UpdateAppearance();
+  }
+
+  void SetMinDropTargetHeight(int height_dp) {
+    SetPreferredSize(gfx::Size(0, height_dp));
   }
 
   bool is_drop_indicator_visible_for_testing() const {
@@ -475,6 +488,8 @@ BEGIN_METADATA(SidebarTabRowView)
 END_METADATA
 BEGIN_METADATA(SidebarFolderRowView)
 END_METADATA
+BEGIN_METADATA(SidebarSeparatorRow)
+END_METADATA
 
 namespace {
 
@@ -534,6 +549,7 @@ std::string SerializeDragPayload(const SidebarDragPayload& payload) {
       .Set("node_id", payload.node_id)
       .Set("origin", static_cast<int>(payload.origin))
       .Set("space_id", payload.space_id)
+      .Set("tab_strip_index", payload.tab_strip_index)
       .Set("source_parent_folder_id", payload.source_parent_folder_id)
       .Set("source_folder_child_index", payload.source_folder_child_index);
   std::string json;
@@ -558,6 +574,10 @@ bool DeserializeDragPayload(const std::string& data, SidebarDragPayload& out) {
   if (origin.has_value()) out.origin = static_cast<SidebarDragOrigin>(*origin);
   const std::string* sid = dict.FindString("space_id");
   if (sid) out.space_id = *sid;
+  std::optional<int> tab_strip_index = dict.FindInt("tab_strip_index");
+  if (tab_strip_index.has_value()) {
+    out.tab_strip_index = *tab_strip_index;
+  }
   const std::string* source_parent_folder_id =
       dict.FindString("source_parent_folder_id");
   if (source_parent_folder_id) {
@@ -764,7 +784,8 @@ void SidebarTabRowView::ShowContextMenuForViewImpl(
   if (is_editing_title_) {
     EndTitleEditing(false);
   }
-  if (!browser_) {
+  TabStripModel* tab_strip_model = browser_ ? browser_->tab_strip_model() : nullptr;
+  if (!tab_strip_model || !tab_strip_model->ContainsIndex(tab_index_)) {
     return;
   }
 
@@ -827,14 +848,35 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
                        : DropZoneForTesting::kBefore;
   return base::BindOnce(
       [](Browser* browser, GURL url, std::string tab_id,
-         MahoSidebarTabSection section, std::string space_id,
-         std::string target_parent_folder_id, int target_folder_child_index,
-         DropZoneForTesting drop_zone, const ui::DropTargetEvent& event,
-         ui::mojom::DragOperation& output_drag_op,
-         std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner) {
+          MahoSidebarTabSection section, std::string space_id,
+          std::string target_parent_folder_id, int target_folder_child_index,
+          int target_tab_strip_index, DropZoneForTesting drop_zone,
+          const ui::DropTargetEvent& event,
+          ui::mojom::DragOperation& output_drag_op,
+          std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner) {
         SidebarDragPayload payload;
         if (ReadMahoDragData(event.data(), payload)) {
           output_drag_op = ui::mojom::DragOperation::kMove;
+          if (drop_zone == DropZoneForTesting::kSplit &&
+              payload.node_kind == SidebarNodeKind::kTab &&
+              !payload.node_id.empty() && target_tab_strip_index >= 0 &&
+              payload.tab_strip_index >= 0 &&
+              target_tab_strip_index != payload.tab_strip_index) {
+            TabStripModel* model = browser ? browser->tab_strip_model() : nullptr;
+            if (model &&
+                model->ContainsIndex(payload.tab_strip_index) &&
+                model->ContainsIndex(target_tab_strip_index) &&
+                !model->GetSplitForTab(payload.tab_strip_index).has_value() &&
+                !model->GetSplitForTab(target_tab_strip_index).has_value()) {
+              split_tabs::SplitTabVisualData visual_data(
+                  split_tabs::SplitTabLayout::kVertical, 0.5);
+              model->AddToNewSplit(
+                  {payload.tab_strip_index, target_tab_strip_index},
+                  visual_data,
+                  split_tabs::SplitTabCreatedSource::kDragAndDropTab);
+            }
+            return;
+          }
           if (payload.node_kind == SidebarNodeKind::kTab &&
               !payload.node_id.empty() && !tab_id.empty() &&
               payload.node_id != tab_id) {
@@ -899,7 +941,7 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
                          base::NullCallback());
       },
       browser_, drop_url_, tab_id_, section_, space_id_,
-      source_parent_folder_id_, folder_child_index_, drop_zone);
+      source_parent_folder_id_, folder_child_index_, tab_index_, drop_zone);
 }
 
 void SidebarTabRowView::OnDragExited() {
@@ -964,6 +1006,7 @@ void SidebarTabRowView::WriteDragDataForView(views::View* sender,
   payload.origin = pinned_ ? SidebarDragOrigin::kPinnedSection
                            : SidebarDragOrigin::kNormalSection;
   payload.space_id = space_id_;
+  payload.tab_strip_index = tab_index_;
   payload.source_parent_folder_id = source_parent_folder_id_;
   payload.source_folder_child_index = folder_child_index_;
   WriteMahoDragData(payload, data);
@@ -1036,6 +1079,14 @@ SidebarTabRowView::DropZoneForTesting SidebarTabRowView::ResolveDropZone(
     return DropZoneForTesting::kNone;
   }
 
+  const int row_height = std::max(height(), 1);
+  const int y = event.location().y();
+  const int third = row_height / 3;
+
+  if (y >= third && y < row_height - third && tab_index_ >= 0) {
+    return DropZoneForTesting::kSplit;
+  }
+
   const bool same_folder_drop = !source_parent_folder_id_.empty() &&
                                 payload.source_parent_folder_id ==
                                     source_parent_folder_id_ &&
@@ -1045,10 +1096,9 @@ SidebarTabRowView::DropZoneForTesting SidebarTabRowView::ResolveDropZone(
     return DropZoneForTesting::kBefore;
   }
 
-  const int row_height = std::max(height(), 1);
   const int midpoint = std::max(row_height / 2, 1);
-  return event.location().y() < midpoint ? DropZoneForTesting::kBefore
-                                         : DropZoneForTesting::kAfter;
+  return y < midpoint ? DropZoneForTesting::kBefore
+                      : DropZoneForTesting::kAfter;
 }
 
 // --- SidebarFolderRowView ---
@@ -1418,41 +1468,90 @@ void MahoSidebarTabListView::Update(const MahoSidebarTabListModel& model,
                                     Browser* browser) {
   browser_ = browser;
   active_space_id_ = model.active_space_id;
+  pinned_drop_lane_revealed_ = false;
   PruneLocalTitleCache(model);
-  last_model_ = model;
-  has_last_model_ = true;
+
+  const TabStripModel* strip = browser ? browser->tab_strip_model() : nullptr;
+  const bool live_tab_strip_is_empty = !strip || strip->empty();
+
+  auto model_has_tab_ids = [](const MahoSidebarTabListModel& candidate) {
+    auto has_tree_tab_id = [&](const auto& self,
+                               const std::vector<SidebarTreeNode>& nodes) -> bool {
+      for (const auto& node : nodes) {
+        if (node.kind == SidebarNodeKind::kTab && !node.tab_id.empty()) {
+          return true;
+        }
+        if (!node.children.empty() && self(self, node.children)) {
+          return true;
+        }
+      }
+      return false;
+    };
+    if (has_tree_tab_id(has_tree_tab_id, candidate.pinned_tree) ||
+        has_tree_tab_id(has_tree_tab_id, candidate.normal_tree)) {
+      return true;
+    }
+    for (const auto& row : candidate.pinned_tabs) {
+      if (!row.tab_id.empty()) {
+        return true;
+      }
+    }
+    for (const auto& row : candidate.tabs) {
+      if (!row.tab_id.empty()) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  if (live_tab_strip_is_empty || model_has_tab_ids(model)) {
+    last_model_ = model;
+    has_last_model_ = true;
+  }
 
   // Rebuild stable WebContents* → core tab_id map for observer lookups.
-  contents_to_core_id_.clear();
-  if (browser) {
-    TabStripModel* strip = browser->tab_strip_model();
-    auto populate = [&](const std::vector<SidebarTreeNode>& nodes) {
+  std::map<content::WebContents*, std::string> next_contents_to_core_id;
+  if (strip) {
+    auto map_row = [&](int tab_strip_index, const std::string& tab_id) {
+      if (tab_strip_index < 0 || tab_id.empty() ||
+          !strip->ContainsIndex(tab_strip_index)) {
+        return;
+      }
+      content::WebContents* wc = strip->GetWebContentsAt(tab_strip_index);
+      if (wc) {
+        next_contents_to_core_id[wc] = tab_id;
+      }
+    };
+    auto collect_tree = [&](const auto& self,
+                            const std::vector<SidebarTreeNode>& nodes) -> void {
       for (const auto& node : nodes) {
-        if (node.kind == SidebarNodeKind::kTab &&
-            node.tab_strip_index >= 0 && !node.tab_id.empty() &&
-            strip->ContainsIndex(node.tab_strip_index)) {
-          content::WebContents* wc =
-              strip->GetWebContentsAt(node.tab_strip_index);
-          if (wc) {
-            contents_to_core_id_[wc] = node.tab_id;
-          }
+        if (node.kind == SidebarNodeKind::kTab) {
+          map_row(node.tab_strip_index, node.tab_id);
         }
-        for (const auto& child : node.children) {
-          if (child.kind == SidebarNodeKind::kTab &&
-              child.tab_strip_index >= 0 && !child.tab_id.empty() &&
-              strip->ContainsIndex(child.tab_strip_index)) {
-            content::WebContents* wc =
-                strip->GetWebContentsAt(child.tab_strip_index);
-            if (wc) {
-              contents_to_core_id_[wc] = child.tab_id;
-            }
-          }
+        if (!node.children.empty()) {
+          self(self, node.children);
         }
       }
     };
-    populate(model.pinned_tree);
-    populate(model.normal_tree);
+    collect_tree(collect_tree, model.pinned_tree);
+    collect_tree(collect_tree, model.normal_tree);
+    for (const auto& row : model.pinned_tabs) {
+      map_row(row.index, row.tab_id);
+    }
+    for (const auto& row : model.tabs) {
+      map_row(row.index, row.tab_id);
+    }
   }
+
+  if (!next_contents_to_core_id.empty() || live_tab_strip_is_empty) {
+    contents_to_core_id_ = std::move(next_contents_to_core_id);
+  }
+
+  LOG(INFO) << "MahoPinnedDebug Update: pinned_tree=" << model.pinned_tree.size()
+            << " normal_tree=" << model.normal_tree.size()
+            << " pinned_tabs=" << model.pinned_tabs.size()
+            << " normal_tabs=" << model.tabs.size()
+            << " contents_to_core_id_size=" << contents_to_core_id_.size();
 
   RebuildRows(model, browser);
 }
@@ -1475,6 +1574,15 @@ bool MahoSidebarTabListView::CanDrop(const ui::OSExchangeData& data) {
 }
 
 int MahoSidebarTabListView::OnDragUpdated(const ui::DropTargetEvent& event) {
+  SidebarDragPayload payload;
+  if (ReadMahoDragData(event.data(), payload)) {
+    // Only reveal for internal tab/folder drags (not external URLs/favorites
+    // without a valid internal origin).
+    if (payload.origin == SidebarDragOrigin::kPinnedSection ||
+        payload.origin == SidebarDragOrigin::kNormalSection) {
+      RevealEmptyPinnedDropLane();
+    }
+  }
   return static_cast<int>(ui::mojom::DragOperation::kCopy);
 }
 
@@ -1510,19 +1618,65 @@ views::View::DropCallback MahoSidebarTabListView::GetDropCallback(
       browser_);
 }
 
-void MahoSidebarTabListView::OnDragExited() {}
+void MahoSidebarTabListView::OnDragExited() {
+  HideEmptyPinnedDropLane();
+}
+
+void MahoSidebarTabListView::RevealEmptyPinnedDropLane() {
+  if (pinned_drop_lane_revealed_) {
+    return;
+  }
+  if (!has_last_model_) {
+    return;
+  }
+  const bool pinned_already_has_content =
+      !last_model_.pinned_tree.empty() || !last_model_.pinned_tabs.empty();
+  if (pinned_already_has_content) {
+    return;
+  }
+  pinned_drop_lane_revealed_ = true;
+  UpdatePinnedDropLaneVisibility(true);
+}
+
+void MahoSidebarTabListView::HideEmptyPinnedDropLane() {
+  if (!pinned_drop_lane_revealed_) {
+    return;
+  }
+  pinned_drop_lane_revealed_ = false;
+  UpdatePinnedDropLaneVisibility(false);
+}
+
+void MahoSidebarTabListView::UpdatePinnedDropLaneVisibility(bool visible) {
+  if (pinned_section_target_) {
+    auto* drop_target = static_cast<SidebarSectionDropTarget*>(pinned_section_target_);
+    drop_target->SetMinDropTargetHeight(visible ? kRowHeightDp : 0);
+    pinned_section_target_->SetVisible(visible);
+  }
+  if (pinned_separator_) {
+    pinned_separator_->SetVisible(visible);
+  }
+}
 
 void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
                                          Browser* browser) {
   tab_rows_->RemoveAllChildViews();
   pinned_section_target_ = nullptr;
   normal_section_target_ = nullptr;
+  pinned_separator_ = nullptr;
 
-  const bool has_tree = !active_space_id_.empty() ||
-                        !model.pinned_tree.empty() || !model.normal_tree.empty();
+  const bool has_tree = !model.pinned_tree.empty() ||
+                        !model.normal_tree.empty();
   const bool has_flat = !model.pinned_tabs.empty() || !model.tabs.empty();
 
+  LOG(INFO) << "MahoPinnedDebug RebuildRows: active_space_id='" << active_space_id_
+            << "' has_tree=" << has_tree << " has_flat=" << has_flat
+            << " pinned_tree=" << model.pinned_tree.size()
+            << " normal_tree=" << model.normal_tree.size()
+            << " pinned_tabs=" << model.pinned_tabs.size()
+            << " normal_tabs=" << model.tabs.size();
+
   if (!has_tree && !has_flat) {
+    LOG(INFO) << "MahoPinnedDebug RebuildRows: no-tabs early_return=1";
     new_tab_button_ = AddInlineRow(
         tab_rows_, u"+ New Tab",
         base::BindRepeating(&MahoSidebarTabListView::OpenNewTab,
@@ -1535,81 +1689,94 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
   if (has_tree) {
     RebuildTreeSection(tab_rows_, model.pinned_tree,
                        MahoSidebarTabSection::kPinned, browser);
+    auto separator = std::make_unique<SidebarSeparatorRow>();
+    pinned_separator_ = tab_rows_->AddChildView(std::move(separator));
+    const bool pinned_visible = !model.pinned_tree.empty() ||
+                                pinned_drop_lane_revealed_;
+    auto* pinned_drop_target =
+        static_cast<SidebarSectionDropTarget*>(pinned_section_target_);
+    pinned_drop_target->SetMinDropTargetHeight(
+        pinned_visible ? kRowHeightDp : 0);
+    pinned_section_target_->SetVisible(pinned_visible);
+    pinned_separator_->SetVisible(pinned_visible);
     new_tab_button_ = AddInlineRow(
         tab_rows_, u"+ New Tab",
         base::BindRepeating(&MahoSidebarTabListView::OpenNewTab,
                             weak_factory_.GetWeakPtr()),
         false, true);
-    if (!model.normal_tree.empty()) {
-      tab_rows_->AddChildView(
-          std::unique_ptr<views::View>(std::make_unique<SidebarSeparatorRow>()
-                                           .release()));
-    }
     RebuildTreeSection(tab_rows_, model.normal_tree,
                        MahoSidebarTabSection::kNormal, browser);
   } else {
     // Fallback flat rendering when no core tree available.
-    if (!model.pinned_tabs.empty()) {
-      auto* section = AddSectionContainer(tab_rows_, true, MahoSidebarTabSection::kPinned);
-      auto* rows_container = section->AddChildView(
-          std::unique_ptr<views::View>(
-              std::make_unique<SidebarDropForwardingView>(section).release()));
-      auto* rows_layout = rows_container->SetLayoutManager(
-          std::make_unique<views::BoxLayout>(
-              views::BoxLayout::Orientation::kVertical, gfx::Insets(), kRowSpacingDp));
-      rows_layout->set_cross_axis_alignment(
-          views::BoxLayout::CrossAxisAlignment::kStretch);
-      for (const auto& row : model.pinned_tabs) {
-        SidebarTreeNode node;
-        node.kind = SidebarNodeKind::kTab;
-        node.tab_id = row.tab_id;
-        node.tab_strip_index = row.index;
-        node.is_active = row.is_active;
-        node.is_pinned = row.is_pinned;
-        node.is_loading = row.is_loading;
-        node.is_audible = row.is_audible;
-        node.is_muted = row.is_muted;
-        node.title = row.title;
-        node.host = row.host;
-        content::WebContents* contents =
-            browser && browser->tab_strip_model()
-                ? browser->tab_strip_model()->GetWebContentsAt(row.index)
-                : nullptr;
-        tabs::TabInterface* tab_iface =
-            contents ? tabs::TabInterface::GetFromContents(contents) : nullptr;
-        TabUIHelper* tab_ui =
-            tab_iface ? TabUIHelper::From(tab_iface) : nullptr;
-        ui::ImageModel fav = tab_ui ? tab_ui->GetFavicon() : ui::ImageModel();
-        rows_container->AddChildView(std::make_unique<SidebarTabRowView>(
-            node, std::move(fav), browser, MahoSidebarTabSection::kPinned,
-            active_space_id_, ResolveTabDisplayText(node),
-            base::BindRepeating(&MahoSidebarTabListView::ActivateTab,
-                                weak_factory_.GetWeakPtr(), row.index),
-            base::BindRepeating(&MahoSidebarTabListView::CloseTab,
-                                weak_factory_.GetWeakPtr(), row.index),
-            base::BindRepeating(&MahoSidebarTabListView::CommitTabTitleChange,
-                                weak_factory_.GetWeakPtr())));
-      }
+    const bool flat_pinned_visible = !model.pinned_tabs.empty() ||
+                                     pinned_drop_lane_revealed_;
+    auto* section =
+        AddSectionContainer(tab_rows_, true, MahoSidebarTabSection::kPinned);
+    pinned_section_target_ = section;
+    auto* rows_container = section->AddChildView(
+        std::unique_ptr<views::View>(
+            std::make_unique<SidebarDropForwardingView>(section).release()));
+    auto* rows_layout = rows_container->SetLayoutManager(
+        std::make_unique<views::BoxLayout>(
+            views::BoxLayout::Orientation::kVertical, gfx::Insets(),
+            kRowSpacingDp));
+    rows_layout->set_cross_axis_alignment(
+        views::BoxLayout::CrossAxisAlignment::kStretch);
+    for (const auto& row : model.pinned_tabs) {
+      SidebarTreeNode node;
+      node.kind = SidebarNodeKind::kTab;
+      node.tab_id = row.tab_id;
+      node.tab_strip_index = row.index;
+      node.is_active = row.is_active;
+      node.is_pinned = row.is_pinned;
+      node.is_loading = row.is_loading;
+      node.is_audible = row.is_audible;
+      node.is_muted = row.is_muted;
+      node.title = row.title;
+      node.host = row.host;
+      content::WebContents* contents =
+          browser && browser->tab_strip_model()
+              ? browser->tab_strip_model()->GetWebContentsAt(row.index)
+              : nullptr;
+      tabs::TabInterface* tab_iface =
+          contents ? tabs::TabInterface::GetFromContents(contents) : nullptr;
+      TabUIHelper* tab_ui =
+          tab_iface ? TabUIHelper::From(tab_iface) : nullptr;
+      ui::ImageModel fav = tab_ui ? tab_ui->GetFavicon() : ui::ImageModel();
+      rows_container->AddChildView(std::make_unique<SidebarTabRowView>(
+          node, std::move(fav), browser, MahoSidebarTabSection::kPinned,
+          active_space_id_, ResolveTabDisplayText(node),
+          base::BindRepeating(&MahoSidebarTabListView::ActivateTab,
+                              weak_factory_.GetWeakPtr(), row.index),
+          base::BindRepeating(&MahoSidebarTabListView::CloseTab,
+                              weak_factory_.GetWeakPtr(), row.index),
+          base::BindRepeating(&MahoSidebarTabListView::CommitTabTitleChange,
+                              weak_factory_.GetWeakPtr())));
     }
+    auto* drop_target = static_cast<SidebarSectionDropTarget*>(section);
+    drop_target->SetMinDropTargetHeight(
+        flat_pinned_visible ? kRowHeightDp : 0);
+    auto separator = std::make_unique<SidebarSeparatorRow>();
+    pinned_separator_ = tab_rows_->AddChildView(std::move(separator));
+    section->SetVisible(flat_pinned_visible);
+    pinned_separator_->SetVisible(flat_pinned_visible);
     new_tab_button_ = AddInlineRow(
         tab_rows_, u"+ New Tab",
         base::BindRepeating(&MahoSidebarTabListView::OpenNewTab,
                             weak_factory_.GetWeakPtr()),
         false, true);
     if (!model.tabs.empty()) {
-      tab_rows_->AddChildView(
-          std::unique_ptr<views::View>(std::make_unique<SidebarSeparatorRow>()
-                                           .release()));
-    }
-    if (!model.tabs.empty()) {
-      auto* section = AddSectionContainer(tab_rows_, false, MahoSidebarTabSection::kNormal);
-      auto* rows_container = section->AddChildView(
+      auto* normal_section = AddSectionContainer(tab_rows_, false,
+                                          MahoSidebarTabSection::kNormal);
+      normal_section_target_ = normal_section;
+      auto* normal_rows_container = normal_section->AddChildView(
           std::unique_ptr<views::View>(
-              std::make_unique<SidebarDropForwardingView>(section).release()));
-      auto* rows_layout = rows_container->SetLayoutManager(
+              std::make_unique<SidebarDropForwardingView>(normal_section).release()));
+      auto* normal_rows_layout = normal_rows_container->SetLayoutManager(
           std::make_unique<views::BoxLayout>(
-              views::BoxLayout::Orientation::kVertical, gfx::Insets(), kRowSpacingDp));
-      rows_layout->set_cross_axis_alignment(
+              views::BoxLayout::Orientation::kVertical, gfx::Insets(),
+              kRowSpacingDp));
+      normal_rows_layout->set_cross_axis_alignment(
           views::BoxLayout::CrossAxisAlignment::kStretch);
       for (const auto& row : model.tabs) {
         SidebarTreeNode node;
@@ -1632,7 +1799,7 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
         TabUIHelper* tab_ui =
             tab_iface ? TabUIHelper::From(tab_iface) : nullptr;
         ui::ImageModel fav = tab_ui ? tab_ui->GetFavicon() : ui::ImageModel();
-        rows_container->AddChildView(std::make_unique<SidebarTabRowView>(
+        normal_rows_container->AddChildView(std::make_unique<SidebarTabRowView>(
             node, std::move(fav), browser, MahoSidebarTabSection::kNormal,
             active_space_id_, ResolveTabDisplayText(node),
             base::BindRepeating(&MahoSidebarTabListView::ActivateTab,
@@ -1644,7 +1811,6 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
       }
     }
   }
-
 }
 
 void MahoSidebarTabListView::RebuildTreeSection(
@@ -1673,6 +1839,10 @@ void MahoSidebarTabListView::RebuildTreeSection(
 
   if (!nodes.empty()) {
     RebuildTreeNodes(rows_container, nodes, section, browser);
+  } else {
+    auto* drop_target =
+        static_cast<SidebarSectionDropTarget*>(section_container);
+    drop_target->SetMinDropTargetHeight(kRowHeightDp);
   }
 }
 
@@ -1706,6 +1876,15 @@ void MahoSidebarTabListView::RebuildTreeNodes(
       if (node.is_expanded && !node.children.empty()) {
         RebuildTreeNodes(parent, node.children, section, browser);
       }
+    } else if (node.kind == SidebarNodeKind::kSplitGroup) {
+      auto split_container = std::make_unique<views::BoxLayoutView>();
+      split_container->SetOrientation(views::LayoutOrientation::kVertical);
+      split_container->SetInsideBorderInsets(gfx::Insets::TLBR(0, 4, 0, 0));
+      split_container->SetBorder(views::CreateSolidSidedBorder(
+          gfx::Insets::TLBR(0, 2, 0, 0),
+          SkColorSetA(SK_ColorGRAY, 0x60)));
+      auto* container_ptr = parent->AddChildView(std::move(split_container));
+      RebuildTreeNodes(container_ptr, node.children, section, browser);
     } else {
       content::WebContents* contents = nullptr;
       tabs::TabInterface* tab_iface = nullptr;
@@ -1768,8 +1947,23 @@ void MahoSidebarTabListView::CloseTab(int tab_index) {
 }
 
 void MahoSidebarTabListView::OpenNewTab(const ui::Event& event) {
-  if (browser_) {
-    chrome::NewTab(browser_);
+  if (!browser_) {
+    return;
+  }
+
+  // Open the command palette in new-tab mode. The tab is only created once the
+  // user enters a URL; dismissing without input creates no tab.
+  auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_);
+  if (!browser_view) {
+    return;
+  }
+  for (views::View* child : browser_view->children()) {
+    auto* container =
+        views::AsViewClass<MahoSidebarContainerView>(child);
+    if (container) {
+      container->ShowCommandOverlayForNewTab();
+      return;
+    }
   }
 }
 
@@ -1853,7 +2047,57 @@ std::string MahoSidebarTabListView::FindCoreTabIdByWebContents(
   }
   auto it = contents_to_core_id_.find(contents);
   if (it != contents_to_core_id_.end()) {
-    return it->second;
+    TabStripModel* strip = browser_ ? browser_->tab_strip_model() : nullptr;
+    if (strip && strip->GetIndexOfWebContents(contents) >= 0) {
+      return it->second;
+    }
+  }
+
+  TabStripModel* strip = browser_ ? browser_->tab_strip_model() : nullptr;
+  if (!strip) {
+    return std::string();
+  }
+  const int tab_strip_index = strip->GetIndexOfWebContents(contents);
+  if (tab_strip_index < 0) {
+    return std::string();
+  }
+
+  auto find_tree_tab_id = [&](const auto& self,
+                              const std::vector<SidebarTreeNode>& nodes)
+      -> std::string {
+    for (const auto& node : nodes) {
+      if (node.kind == SidebarNodeKind::kTab &&
+          node.tab_strip_index == tab_strip_index && !node.tab_id.empty()) {
+        return node.tab_id;
+      }
+      if (!node.children.empty()) {
+        std::string child_match = self(self, node.children);
+        if (!child_match.empty()) {
+          return child_match;
+        }
+      }
+    }
+    return std::string();
+  };
+
+  std::string tab_id = find_tree_tab_id(find_tree_tab_id, last_model_.pinned_tree);
+  if (!tab_id.empty()) {
+    return tab_id;
+  }
+  tab_id = find_tree_tab_id(find_tree_tab_id, last_model_.normal_tree);
+  if (!tab_id.empty()) {
+    return tab_id;
+  }
+
+  for (const auto& row : last_model_.pinned_tabs) {
+    if (row.index == tab_strip_index && !row.tab_id.empty()) {
+      return row.tab_id;
+    }
+  }
+  for (const auto& row : last_model_.tabs) {
+    if (row.index == tab_strip_index && !row.tab_id.empty()) {
+      return row.tab_id;
+    }
   }
   return std::string();
 }

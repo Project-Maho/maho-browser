@@ -2,13 +2,55 @@
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_interactive_test_base.h"
 
+#include "content/public/test/browser_test.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
+#include "ui/views/controls/button/label_button.h"
 #include "ui/base/test/ui_controls.h"
+#include "ui/views/controls/label.h"
 
 namespace maho {
 namespace {
+
+bool IsInlineRowButton(views::View* view, std::u16string expected_text) {
+  auto* button = views::AsViewClass<views::LabelButton>(view);
+  return button && button->GetText() == expected_text;
+}
+
+bool IsPlaceholderLabel(views::View* view, std::u16string expected_text) {
+  auto* label = views::AsViewClass<views::Label>(view);
+  return label && label->GetText() == expected_text;
+}
+
+void ExpectEmptyPinnedSectionLayout(views::View* rows) {
+  ASSERT_TRUE(rows);
+  ASSERT_EQ(4u, rows->children().size())
+      << "Idle empty-pinned layout should keep the hidden pinned section and separator in the view tree, plus + New Tab and the normal section";
+
+  EXPECT_FALSE(rows->children()[0]->GetVisible())
+      << "Pinned section should be hidden when empty";
+  EXPECT_FALSE(rows->children()[1]->GetVisible())
+      << "Pinned separator should be hidden when empty";
+  EXPECT_TRUE(IsInlineRowButton(rows->children()[2], u"+ New Tab"))
+      << "+ New Tab should follow the pinned section and separator";
+  EXPECT_TRUE(rows->children()[2]->GetVisible())
+      << "+ New Tab should remain visible";
+  EXPECT_TRUE(rows->children()[3]->GetVisible())
+      << "Normal section should remain visible after + New Tab";
+  EXPECT_FALSE(rows->children()[3]->children().empty())
+      << "Normal section should contain the normal rows";
+}
+
+void ExpectNoTabsRows(views::View* rows) {
+  ASSERT_TRUE(rows);
+  ASSERT_EQ(2u, rows->children().size())
+      << "No-tabs layout should omit the separator and normal section";
+  EXPECT_TRUE(IsInlineRowButton(rows->children()[0], u"+ New Tab"))
+      << "+ New Tab should be first when no tabs are open";
+  EXPECT_TRUE(IsPlaceholderLabel(rows->children()[1], u"No tabs open"))
+      << "Placeholder should follow + New Tab in no-tabs layout";
+}
 
 class MahoSidebarContractTest : public MahoSidebarInteractiveTestBase {};
 
@@ -249,6 +291,47 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, LargeTabCountRenders) {
       << "Tab list should remain visible with many tabs";
   EXPECT_GT(tab_list_->GetPreferredSize().height(), 0)
       << "Tab list should have non-zero preferred height";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                        SidebarRowOrderTreeLayoutKeepsEmptyPinnedSectionContainer) {
+  SeedProfile(2);
+
+  auto state = GetViewState();
+  ASSERT_FALSE(state.tab_list.active_space_id.empty())
+      << "Seed 2 should use tree layout";
+
+  MahoSidebarTabListModel empty_pinned_tree = state.tab_list;
+  empty_pinned_tree.pinned_tree.clear();
+
+  tab_list_->Update(empty_pinned_tree, browser());
+  ExpectEmptyPinnedSectionLayout(tab_list_->tab_rows_for_testing());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                        SidebarRowOrderFlatFallbackPlacesSeparatorAboveNewTab) {
+  SeedProfile(0);
+
+  auto state = GetViewState();
+  ASSERT_FALSE(state.tab_list.pinned_tabs.empty() && state.tab_list.tabs.empty())
+      << "Seed 0 should provide flat rows to validate the fallback layout";
+
+  MahoSidebarTabListModel flat_model = state.tab_list;
+  flat_model.active_space_id = "test-space";
+  flat_model.pinned_tabs.clear();
+  flat_model.pinned_tree.clear();
+  flat_model.normal_tree.clear();
+
+  tab_list_->Update(flat_model, browser());
+  ExpectEmptyPinnedSectionLayout(tab_list_->tab_rows_for_testing());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                        SidebarRowOrderNoTabsKeepsPlaceholderWithoutSeparator) {
+  MahoSidebarTabListModel empty_model;
+  tab_list_->Update(empty_model, browser());
+
+  ExpectNoTabsRows(tab_list_->tab_rows_for_testing());
 }
 
 }  // namespace

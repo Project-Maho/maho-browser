@@ -10,12 +10,14 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/json/string_escape.h"
+#include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/tab_ui_helper.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "components/split_tabs/split_tab_id.h"
 #include "content/public/browser/web_contents.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
@@ -37,6 +39,7 @@ struct FooterSpaceState {
   std::vector<std::string> space_icons;
   std::vector<std::string> space_names;
   std::vector<std::string> space_colors;
+  std::vector<std::string> space_ids;
   bool has_core_state = false;
 };
 
@@ -110,6 +113,7 @@ FooterSpaceState GetCoreFooterSpaceState() {
     state.space_icons.push_back(icon ? *icon : std::string());
     state.space_names.push_back(name ? *name : std::string());
     state.space_colors.push_back(color ? *color : std::string());
+    state.space_ids.push_back(id ? *id : std::string());
     if (id && *id == active_id) {
       state.active_space_index = index;
       state.active_space_color = color ? *color : std::string();
@@ -136,10 +140,6 @@ bool HasSafeNavigationContext(Browser* browser) {
 
 bool ShouldShowSearchPlaceholderAddress(const GURL& url) {
   if (url.is_empty() || !url.is_valid()) {
-    return true;
-  }
-
-  if (url == GURL(maho::kMahoCommandURL)) {
     return true;
   }
 
@@ -217,8 +217,8 @@ std::optional<base::Value> CallCoreFfi(
 }
 
 // Build a URL-to-tab-strip-index map for linking core tab IDs to browser tabs.
-std::map<std::string, int> BuildUrlToIndexMap(TabStripModel* model) {
-  std::map<std::string, int> result;
+std::map<std::string, std::vector<int>> BuildUrlToIndexMap(TabStripModel* model) {
+  std::map<std::string, std::vector<int>> result;
   if (!model) {
     return result;
   }
@@ -229,7 +229,7 @@ std::map<std::string, int> BuildUrlToIndexMap(TabStripModel* model) {
     }
     const GURL& url = GetVisibleOrCommittedUrl(contents);
     if (url.is_valid()) {
-      result[url.spec()] = i;
+      result[url.spec()].push_back(i);
     }
   }
   return result;
@@ -237,7 +237,7 @@ std::map<std::string, int> BuildUrlToIndexMap(TabStripModel* model) {
 
 SidebarTreeNode TabNodeFromCoreJson(const base::DictValue& dict,
                                     TabStripModel* model,
-                                    const std::map<std::string, int>& url_index,
+                                    std::map<std::string, std::vector<int>>& url_index,
                                     bool is_pinned,
                                     int depth) {
   SidebarTreeNode node;
@@ -264,8 +264,12 @@ SidebarTreeNode TabNodeFromCoreJson(const base::DictValue& dict,
   if (url) {
     node.host = base::UTF8ToUTF16(GURL(*url).host());
     auto it = url_index.find(*url);
-    if (it != url_index.end()) {
-      node.tab_strip_index = it->second;
+    if (it != url_index.end() && !it->second.empty()) {
+      node.tab_strip_index = it->second.front();
+      it->second.erase(it->second.begin());
+      if (it->second.empty()) {
+        url_index.erase(it);
+      }
       if (model && model->ContainsIndex(node.tab_strip_index)) {
         content::WebContents* contents =
             model->GetWebContentsAt(node.tab_strip_index);
@@ -377,12 +381,67 @@ SidebarTreeNode BuildFolderNode(
   return node;
 }
 
+void GroupSplitTabs(std::vector<SidebarTreeNode>& nodes,
+                    TabStripModel* model) {
+  for (auto& node : nodes) {
+    if (!node.children.empty()) {
+      GroupSplitTabs(node.children, model);
+    }
+  }
+
+  std::map<split_tabs::SplitTabId, std::vector<size_t>> split_groups;
+  for (size_t i = 0; i < nodes.size(); ++i) {
+    const auto& node = nodes[i];
+    if (node.kind != SidebarNodeKind::kTab || node.tab_strip_index < 0) {
+      continue;
+    }
+    auto split_id = model->GetSplitForTab(node.tab_strip_index);
+    if (split_id.has_value()) {
+      split_groups[split_id.value()].push_back(i);
+    }
+  }
+
+  std::set<size_t> consumed_indices;
+  std::vector<SidebarTreeNode> regrouped;
+  for (size_t i = 0; i < nodes.size(); ++i) {
+    if (consumed_indices.count(i)) {
+      continue;
+    }
+    auto& node = nodes[i];
+    if (node.kind == SidebarNodeKind::kTab && node.tab_strip_index >= 0) {
+      auto split_id = model->GetSplitForTab(node.tab_strip_index);
+      if (split_id.has_value()) {
+        auto it = split_groups.find(split_id.value());
+        if (it != split_groups.end() && it->second.size() == 2) {
+          SidebarTreeNode group;
+          group.kind = SidebarNodeKind::kSplitGroup;
+          group.split_id = split_id.value().ToString();
+          group.split_ratio = 0.5;
+          // TODO(maho): Read orientation/ratio from SplitTabVisualData
+          // once upstream exposes GetVisualDataForSplit.
+          group.split_orientation = "vertical";
+          group.depth = node.depth;
+          for (size_t idx : it->second) {
+            nodes[idx].is_in_split = true;
+            group.children.push_back(std::move(nodes[idx]));
+            consumed_indices.insert(idx);
+          }
+          regrouped.push_back(std::move(group));
+          continue;
+        }
+      }
+    }
+    regrouped.push_back(std::move(node));
+  }
+  nodes = std::move(regrouped);
+}
+
 void BuildTreeSection(
     const std::string& space_id_json,
     char* (*tab_ffi)(MahoCore*, const char*),
     bool is_pinned,
     TabStripModel* model,
-    const std::map<std::string, int>& url_index,
+    std::map<std::string, std::vector<int>>& url_index,
     const std::vector<FolderInfo>& all_folders,
     std::vector<SidebarTreeNode>& out_tree,
     std::vector<MahoSidebarTabRowModel>& out_flat) {
@@ -447,6 +506,10 @@ void BuildTreeSection(
     if (tabs_in_folders.count(tab_node.tab_id) == 0) {
       out_tree.push_back(tab_node);
     }
+  }
+
+  if (model) {
+    GroupSplitTabs(out_tree, model);
   }
 }
 
@@ -651,6 +714,8 @@ MahoSidebarTabListModel MahoSidebarStateAdapter::BuildTabListModel(
 
   auto url_index = BuildUrlToIndexMap(tab_strip_model);
   auto all_folders = ParseFolders(space_id_json);
+  const bool tree_requested = !space_id_json.empty();
+  bool used_flat_fallback = false;
 
   auto build_flat_from_tab_strip = [&]() {
     if (!tab_strip_model) {
@@ -680,7 +745,7 @@ MahoSidebarTabListModel MahoSidebarStateAdapter::BuildTabListModel(
     }
   };
 
-  if (!space_id_json.empty()) {
+  if (tree_requested) {
     BuildTreeSection(space_id_json, maho_core_get_pinned_tabs, true,
                      tab_strip_model, url_index, all_folders,
                      model.pinned_tree, model.pinned_tabs);
@@ -690,11 +755,21 @@ MahoSidebarTabListModel MahoSidebarStateAdapter::BuildTabListModel(
 
     if (tab_strip_model && model.pinned_tree.empty() && model.normal_tree.empty() &&
         model.pinned_tabs.empty() && model.tabs.empty()) {
+      used_flat_fallback = true;
       build_flat_from_tab_strip();
     }
   } else {
+    used_flat_fallback = true;
     build_flat_from_tab_strip();
   }
+
+  LOG(INFO) << "MahoPinnedDebug BuildTabListModel: active_space_id='"
+            << model.active_space_id << "' tree_mode=" << tree_requested
+            << " flat_fallback=" << used_flat_fallback
+            << " pinned_tree=" << model.pinned_tree.size()
+            << " normal_tree=" << model.normal_tree.size()
+            << " pinned_tabs=" << model.pinned_tabs.size()
+            << " normal_tabs=" << model.tabs.size();
 
   return model;
 }
@@ -711,17 +786,34 @@ MahoSidebarFooterModel MahoSidebarStateAdapter::BuildFooterModel(
                                                        : bridge_space_count;
   model.status_text = space_count > 0 ? u"Spaces" : u"No spaces";
   model.space_count = static_cast<int>(space_count);
-  model.active_space_index = core_state.has_core_state
-                                 ? core_state.active_space_index
-                                 : (bridge ? bridge->GetActiveSpaceIndex()
-                                          : -1);
+  int active_space_index = core_state.has_core_state
+                               ? core_state.active_space_index
+                               : (bridge ? bridge->GetActiveSpaceIndex() : -1);
+  std::string active_space_color = core_state.has_core_state
+                                       ? core_state.active_space_color
+                                       : std::string();
+  if (bridge && !core_state.space_ids.empty()) {
+    const std::string bridge_active_space_id = bridge->GetActiveSpaceId();
+    if (!bridge_active_space_id.empty()) {
+      for (size_t i = 0; i < core_state.space_ids.size(); ++i) {
+        if (core_state.space_ids[i] == bridge_active_space_id) {
+          active_space_index = static_cast<int>(i);
+          if (i < core_state.space_colors.size()) {
+            active_space_color = core_state.space_colors[i];
+          }
+          break;
+        }
+      }
+    }
+  }
+  model.active_space_index = active_space_index;
   model.can_open_space_controls = space_count > 0;
   model.can_create_space = browser != nullptr;
-  model.space_color = core_state.has_core_state ? core_state.active_space_color
-                                                : std::string();
+  model.space_color = active_space_color;
   model.space_icons = core_state.space_icons;
   model.space_names = core_state.space_names;
   model.space_colors = core_state.space_colors;
+  model.space_ids = core_state.space_ids;
   model.update_pill.visible = false;
   model.update_pill.has_update = false;
   model.update_pill.label.clear();

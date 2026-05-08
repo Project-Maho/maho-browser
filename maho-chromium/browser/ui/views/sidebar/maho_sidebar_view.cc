@@ -20,22 +20,52 @@
 #include "ui/gfx/geometry/insets.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
+#include "ui/views/focus/focus_manager.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/layout/fill_layout.h"
+#include "ui/views/view_tracker.h"
 #include "ui/views/view_class_properties.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_create_space_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_library_rail_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_search_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_archive_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.h"
+#include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 
 namespace maho {
+
+namespace {
+
+constexpr int kLibraryDividerThicknessDp = 1;
+
+bool IsDescendantOfView(const views::View* candidate,
+                        const views::View* ancestor) {
+  if (!candidate || !ancestor) {
+    return false;
+  }
+
+  for (const views::View* current = candidate; current;
+       current = current->parent()) {
+    if (current == ancestor) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+}  // namespace
 
 BEGIN_METADATA(MahoSidebarView)
 END_METADATA
 
-MahoSidebarView::MahoSidebarView(Browser* browser) : browser_(browser) {
+MahoSidebarView::MahoSidebarView(Browser* browser)
+    : browser_(browser),
+      last_focused_body_view_tracker_(std::make_unique<views::ViewTracker>()) {
   BuildUi();
   if (auto* bridge = MahoSpaceProfileBridge::GetInstance(); bridge) {
     bridge->AddObserver(this);
@@ -61,6 +91,10 @@ void MahoSidebarView::OnThemeChanged() {
       ui::kColorSysSurface, sidebar_layout::kRailCornerRadiusDp));
   SetBorder(views::CreateRoundedRectBorder(
       1, sidebar_layout::kRailCornerRadiusDp, ui::kColorSysSurfaceVariant));
+  if (library_divider_) {
+    library_divider_->SetBackground(
+        views::CreateSolidBackground(ui::kColorSysSurfaceVariant));
+  }
   RefreshAll();
 }
 
@@ -73,6 +107,27 @@ bool MahoSidebarView::IsPositionInWindowCaption(
       return top_bar_view_->IsPositionInWindowCaption(point_in_top_bar);
     }
   }
+
+  if (current_body_mode_ == MahoSidebarBodyMode::kArchive &&
+      library_container_ && library_container_->GetVisible()) {
+    if (library_rail_view_) {
+      gfx::Point point_in_rail = point;
+      views::View::ConvertPointToTarget(this, library_rail_view_,
+                                        &point_in_rail);
+      if (library_rail_view_->HitTestPoint(point_in_rail)) {
+        return library_rail_view_->IsPositionInWindowCaption(point_in_rail);
+      }
+    }
+
+    if (archive_view_ && archive_view_->GetVisible()) {
+      gfx::Point point_in_archive = point;
+      views::View::ConvertPointToTarget(this, archive_view_, &point_in_archive);
+      if (archive_view_->HitTestPoint(point_in_archive)) {
+        return archive_view_->IsPositionInWindowCaption(point_in_archive);
+      }
+    }
+  }
+
   return false;
 }
 
@@ -83,18 +138,34 @@ void MahoSidebarView::BuildUi() {
   root_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
-  normal_surface_ = AddChildView(std::make_unique<views::View>());
-  auto* normal_surface_layout = normal_surface_->SetLayoutManager(
+  top_bar_view_ =
+      AddChildView(std::make_unique<MahoSidebarTopBarView>(browser_));
+
+  body_host_ = AddChildView(std::make_unique<views::View>());
+  auto* body_layout = body_host_->SetLayoutManager(
+      std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kVertical, gfx::Insets(), 0));
+  body_layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kStretch);
+
+  content_host_ = body_host_->AddChildView(std::make_unique<views::View>());
+  content_host_->SetLayoutManager(std::make_unique<views::FillLayout>());
+  content_host_->SetBackground(nullptr);
+  content_host_->SetBorder(nullptr);
+
+  tabs_surface_ = content_host_->AddChildView(std::make_unique<views::View>());
+  auto* normal_body_layout = tabs_surface_->SetLayoutManager(
       std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kVertical, gfx::Insets(),
           sidebar_layout::kSectionSpacingDp));
-  normal_surface_layout->set_cross_axis_alignment(
+  normal_body_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kStretch);
-  normal_surface_->SetBackground(nullptr);
-  normal_surface_->SetBorder(nullptr);
+  tabs_surface_->SetBackground(nullptr);
+  tabs_surface_->SetBorder(nullptr);
 
   auto* top_region =
-      normal_surface_->AddChildView(std::make_unique<views::View>());
+      tabs_surface_->AddChildView(std::make_unique<views::View>());
+  top_region_ = top_region;
   auto* top_region_layout = top_region->SetLayoutManager(
       std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical,
                                          gfx::Insets(),
@@ -105,39 +176,208 @@ void MahoSidebarView::BuildUi() {
   top_region->SetBorder(nullptr);
   top_region->SetProperty(views::kMarginsKey, gfx::Insets());
 
-  top_bar_view_ =
-      top_region->AddChildView(std::make_unique<MahoSidebarTopBarView>(browser_));
   search_view_ =
       top_region->AddChildView(std::make_unique<MahoSidebarSearchView>(browser_));
   favorites_view_ =
       top_region->AddChildView(std::make_unique<MahoSidebarFavoritesGridView>(browser_));
-  tab_list_view_ = normal_surface_->AddChildView(
+  tab_list_view_ = tabs_surface_->AddChildView(
       std::make_unique<MahoSidebarTabListView>(browser_));
-  footer_view_ = normal_surface_->AddChildView(
-      std::make_unique<MahoSidebarFooterView>(browser_));
+
+  library_container_ =
+      content_host_->AddChildView(std::make_unique<views::View>());
+  auto* library_layout = library_container_->SetLayoutManager(
+      std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 0));
+  library_layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kStretch);
+  library_container_->SetBackground(nullptr);
+  library_container_->SetBorder(nullptr);
+  library_container_->SetVisible(false);
+
+  library_rail_view_ = library_container_->AddChildView(
+      std::make_unique<MahoSidebarLibraryRailView>());
+  library_rail_view_->SetCategorySelectedCallback(base::BindRepeating(
+      &MahoSidebarView::HandleLibraryCategorySelected,
+      weak_factory_.GetWeakPtr()));
+  library_rail_view_->SetBackCallback(base::BindRepeating(
+      &MahoSidebarView::HandleLibraryBack, weak_factory_.GetWeakPtr()));
+
+  library_divider_ =
+      library_container_->AddChildView(std::make_unique<views::View>());
+  library_divider_->SetPreferredSize(
+      gfx::Size(kLibraryDividerThicknessDp, 0));
+  library_divider_->SetBackground(
+      views::CreateSolidBackground(ui::kColorSysSurfaceVariant));
+  library_divider_->SetBorder(nullptr);
+
+  library_content_host_ =
+      library_container_->AddChildView(std::make_unique<views::View>());
+  library_content_host_->SetLayoutManager(std::make_unique<views::FillLayout>());
+  library_content_host_->SetBackground(nullptr);
+  library_content_host_->SetBorder(nullptr);
+
+  archive_view_ = library_content_host_->AddChildView(
+      std::make_unique<MahoSidebarArchiveView>(browser_));
+  archive_view_->SetVisible(false);
+  archive_view_->SetRestoreCallback(base::BindRepeating(
+      [](base::WeakPtr<MahoSidebarView> sidebar_view,
+         const std::string& tab_id) {
+        DispatchShellEvent("restore_archived_tab", {{"tab_id", tab_id}});
+        if (sidebar_view) {
+          sidebar_view->ExitArchiveModeToTabs();
+        }
+      },
+      weak_factory_.GetWeakPtr()));
+  archive_view_->SetDeleteCallback(
+      base::BindRepeating(
+          [](const std::string& tab_id) {
+            DispatchShellEvent("delete_archived_tab", {{"tab_id", tab_id}});
+          }));
+  library_layout->SetFlexForView(library_content_host_, 1, true);
+
   create_space_view_ =
-      AddChildView(std::make_unique<MahoSidebarCreateSpaceView>(browser_));
+      content_host_->AddChildView(std::make_unique<MahoSidebarCreateSpaceView>(browser_));
   create_space_view_->SetCloseCallback(
       base::BindRepeating(&MahoSidebarView::HandleCreateSpaceClosed,
                           weak_factory_.GetWeakPtr()));
   create_space_view_->SetVisible(false);
 
-  normal_surface_layout->SetFlexForView(tab_list_view_, 1, true);
-  root_layout->SetFlexForView(normal_surface_, 1, true);
-  root_layout->SetFlexForView(create_space_view_, 1, true);
+  footer_view_ = body_host_->AddChildView(
+      std::make_unique<MahoSidebarFooterView>(browser_));
+
+  normal_body_layout->SetFlexForView(tab_list_view_, 1, true);
+  body_layout->SetFlexForView(content_host_, 1, true);
+  root_layout->SetFlexForView(body_host_, 1, true);
 }
 
-void MahoSidebarView::SetCreateMode(bool in_create_mode) {
-  if (normal_surface_) {
-    normal_surface_->SetVisible(!in_create_mode);
+void MahoSidebarView::SetBodyMode(MahoSidebarBodyMode mode) {
+  const MahoSidebarBodyMode previous_mode = current_body_mode_;
+  if (mode == MahoSidebarBodyMode::kArchive &&
+      previous_mode != MahoSidebarBodyMode::kArchive) {
+    CaptureLastFocusedBodyView();
+  }
+
+  current_body_mode_ = mode;
+  if (top_bar_view_) {
+    top_bar_view_->SetVisible(mode != MahoSidebarBodyMode::kArchive);
+  }
+  if (footer_view_) {
+    footer_view_->SetVisible(mode != MahoSidebarBodyMode::kArchive);
+  }
+  if (tabs_surface_) {
+    tabs_surface_->SetVisible(mode == MahoSidebarBodyMode::kTabs);
+  }
+  if (library_container_) {
+    library_container_->SetVisible(mode == MahoSidebarBodyMode::kArchive);
+  }
+  if (library_rail_view_ && mode == MahoSidebarBodyMode::kArchive) {
+    library_rail_view_->SetSelectedCategory(
+        MahoSidebarLibraryRailView::Category::kArchivedTabs);
+  }
+  if (archive_view_) {
+    archive_view_->SetVisible(mode == MahoSidebarBodyMode::kArchive);
+    if (mode == MahoSidebarBodyMode::kArchive) {
+      archive_view_->ResetState();
+      archive_view_->ReloadArchivedTabs();
+      archive_view_->FocusSearchField();
+    }
   }
   if (create_space_view_) {
-    create_space_view_->SetVisible(in_create_mode);
+    create_space_view_->SetVisible(mode == MahoSidebarBodyMode::kCreateSpace);
   }
+
+  if (previous_mode == MahoSidebarBodyMode::kArchive &&
+      mode == MahoSidebarBodyMode::kTabs) {
+    RestoreLastFocusedBodyView();
+  }
+}
+
+void MahoSidebarView::CaptureLastFocusedBodyView() {
+  last_focused_body_view_tracker_->SetView(nullptr);
+
+  views::FocusManager* focus_manager = GetFocusManager();
+  if (!focus_manager) {
+    return;
+  }
+
+  views::View* focused_view = focus_manager->GetFocusedView();
+  if (!focused_view || !focused_view->GetVisible()) {
+    return;
+  }
+
+  if (CanRestoreFocusToView(focused_view)) {
+    last_focused_body_view_tracker_->SetView(focused_view);
+  }
+}
+
+void MahoSidebarView::RestoreLastFocusedBodyView() {
+  views::View* last_focused_body_view = last_focused_body_view_tracker_->view();
+  if (CanRestoreFocusToView(last_focused_body_view)) {
+    last_focused_body_view->RequestFocus();
+    return;
+  }
+
+  last_focused_body_view_tracker_->SetView(nullptr);
+
+  if (search_view_ && search_view_->GetVisible()) {
+    search_view_->FocusVisibleControl();
+  }
+}
+
+bool MahoSidebarView::CanRestoreFocusToView(const views::View* view) const {
+  if (!view) {
+    return false;
+  }
+
+  if (!view->GetVisible() || !view->GetEnabled()) {
+    return false;
+  }
+
+  if (!IsDescendantOfView(view, this)) {
+    return false;
+  }
+
+  return !IsDescendantOfView(view, library_container_) &&
+         !IsDescendantOfView(view, create_space_view_);
+}
+
+void MahoSidebarView::HandleLibraryCategorySelected(
+    MahoSidebarLibraryRailView::Category category) {
+  if (!archive_view_ || !library_rail_view_) {
+    return;
+  }
+
+  if (category != MahoSidebarLibraryRailView::Category::kArchivedTabs) {
+    library_rail_view_->SetSelectedCategory(
+        MahoSidebarLibraryRailView::Category::kArchivedTabs);
+    archive_view_->SetVisible(true);
+    return;
+  }
+
+  library_rail_view_->SetSelectedCategory(category);
+  archive_view_->SetVisible(true);
+}
+
+void MahoSidebarView::HandleLibraryBack() {
+  SetBodyMode(MahoSidebarBodyMode::kTabs);
 }
 
 void MahoSidebarView::HandleCreateSpaceClosed() {
-  SetCreateMode(false);
+  SetBodyMode(MahoSidebarBodyMode::kTabs);
+}
+
+void MahoSidebarView::ToggleArchiveMode() {
+  if (current_body_mode_ == MahoSidebarBodyMode::kArchive) {
+    SetBodyMode(MahoSidebarBodyMode::kTabs);
+  } else {
+    SetBodyMode(MahoSidebarBodyMode::kArchive);
+  }
+}
+
+void MahoSidebarView::ExitArchiveModeToTabs() {
+  if (current_body_mode_ == MahoSidebarBodyMode::kArchive) {
+    SetBodyMode(MahoSidebarBodyMode::kTabs);
+  }
 }
 
 void MahoSidebarView::ScheduleRefreshAll() {
@@ -181,6 +421,9 @@ void MahoSidebarView::OnFavoritesModelReady(
 void MahoSidebarView::RefreshAll() {
   refresh_scheduled_ = false;
   ApplyViewState(state_adapter_.BuildViewStateModel(browser_));
+  if (current_body_mode_ == MahoSidebarBodyMode::kArchive && archive_view_) {
+    archive_view_->ReloadArchivedTabs();
+  }
 }
 
 void MahoSidebarView::ApplyViewState(const MahoSidebarViewStateModel& model) {
@@ -241,19 +484,26 @@ void MahoSidebarView::OnTabChangedAt(tabs::TabInterface* tab,
 void MahoSidebarView::OnTabPinnedStateChanged(tabs::TabInterface* tab,
                                               int index) {
   // Sync pin state to maho-core before refreshing UI.
+  const bool pinned = tab_strip_model() ? tab_strip_model()->IsTabPinned(index)
+                                        : false;
+  std::string core_tab_id;
+  bool sync_skipped = true;
   if (tab_list_view_) {
     content::WebContents* contents =
         tab_strip_model()->GetWebContentsAt(index);
-    std::string core_tab_id =
-        tab_list_view_->FindCoreTabIdByWebContents(contents);
+    core_tab_id = tab_list_view_->FindCoreTabIdByWebContents(contents);
+    sync_skipped = core_tab_id.empty();
     if (!core_tab_id.empty()) {
-      bool pinned = tab_strip_model()->IsTabPinned(index);
       DispatchShellEvent(pinned ? "pin_tab" : "unpin_tab",
                          {{"tab_id", core_tab_id}});
-    } else {
-      DLOG(WARNING) << "MahoSidebarView: Could not resolve core tab_id for "
-                    << "strip index " << index << " during pin state change";
     }
+  }
+  LOG(INFO) << "MahoPinnedDebug OnTabPinnedStateChanged: index=" << index
+            << " pinned=" << pinned << " core_tab_id='" << core_tab_id
+            << "' sync_skipped=" << sync_skipped;
+  if (tab_list_view_ && sync_skipped) {
+    DLOG(WARNING) << "MahoSidebarView: Could not resolve core tab_id for "
+                  << "strip index " << index << " during pin state change";
   }
   ScheduleRefreshAll();
 }
@@ -263,12 +513,64 @@ void MahoSidebarView::OnTabGroupChanged(const TabGroupChange& change) {
 }
 
 void MahoSidebarView::OnSpaceProfileBridgeChanged() {
+  if (footer_view_) {
+    UpdateFooter(state_adapter_.BuildFooterModel(browser_));
+  }
   ScheduleRefreshAll();
+}
+
+bool MahoSidebarView::GetDropFormats(
+    int* formats,
+    std::set<ui::ClipboardFormatType>* format_types) {
+  if (favorites_view_) {
+    return favorites_view_->GetDropFormats(formats, format_types);
+  }
+  return false;
+}
+
+bool MahoSidebarView::CanDrop(const ui::OSExchangeData& data) {
+  if (favorites_view_) {
+    return favorites_view_->CanDrop(data);
+  }
+  return false;
+}
+
+int MahoSidebarView::OnDragUpdated(const ui::DropTargetEvent& event) {
+  if (!favorites_view_) {
+    return static_cast<int>(ui::mojom::DragOperation::kNone);
+  }
+
+  SidebarDragPayload payload;
+  if (!ReadMahoDragData(event.data(), payload) ||
+      payload.node_kind != SidebarNodeKind::kTab) {
+    if (favorites_view_->is_drag_reveal_active_for_testing()) {
+      favorites_view_->CollapseFromDrag();
+    }
+    return static_cast<int>(ui::mojom::DragOperation::kNone);
+  }
+
+  if (!favorites_view_->GetVisible()) {
+    favorites_view_->RevealForDrag();
+  }
+
+  gfx::Point fav_location = event.location();
+  views::View::ConvertPointToTarget(this, favorites_view_, &fav_location);
+  ui::DropTargetEvent fav_event(event.data(), gfx::PointF(fav_location),
+                                event.root_location_f(),
+                                event.source_operations());
+  return favorites_view_->OnDragUpdated(fav_event);
+}
+
+void MahoSidebarView::OnDragExited() {
+  if (favorites_view_) {
+    favorites_view_->OnDragExited();
+    favorites_view_->CollapseFromDrag();
+  }
 }
 
 void MahoSidebarView::ShowCreateSpace() {
   if (create_space_view_) {
-    SetCreateMode(true);
+    SetBodyMode(MahoSidebarBodyMode::kCreateSpace);
     create_space_view_->RequestNameFocus();
   }
 }

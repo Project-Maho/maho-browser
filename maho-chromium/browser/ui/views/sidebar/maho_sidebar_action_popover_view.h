@@ -2,14 +2,14 @@
 #define MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_ACTION_POPOVER_VIEW_H_
 
 #include <string>
+#include <vector>
 
 #include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/events/event.h"
+#include "ui/gfx/vector_icon_types.h"
 #include "ui/views/view.h"
-
-namespace ui {
-class Event;
-}  // namespace ui
 
 namespace views {
 class Widget;
@@ -39,14 +39,22 @@ class MahoSidebarActionPopoverView : public views::View {
   static views::Widget* Show(views::View* anchor_view,
                              ActionCallback action_callback);
 
+  bool OnKeyPressed(const ui::KeyEvent& event) override;
+
  private:
-  void AddActionButton(MahoSidebarActionPopoverAction action,
-                       const std::u16string& title,
-                       const std::u16string& subtitle);
-  void OnActionPressed(MahoSidebarActionPopoverAction action,
-                       const ui::Event& event);
+  void AddActionRow(MahoSidebarActionPopoverAction action,
+                    const gfx::VectorIcon& icon,
+                    const std::u16string& title,
+                    const std::u16string& subtitle);
+  void OnRowHovered(int index);
+  void OnRowClicked(int index);
+  void UpdateHighlightState();
+  void ActivateHighlightedRow();
 
   ActionCallback action_callback_;
+  std::vector<raw_ptr<views::View>> action_rows_;
+  std::vector<MahoSidebarActionPopoverAction> action_types_;
+  int highlighted_index_ = 0;
 };
 
 }  // namespace maho

@@ -3,14 +3,21 @@
 #ifndef MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_VIEW_H_
 #define MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_VIEW_H_
 
+#include <memory>
+#include <set>
+
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
 #include "base/functional/callback_forward.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_library_rail_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_create_space_view.h"
+#include "ui/base/clipboard/clipboard_format_type.h"
+#include "ui/base/dragdrop/drop_target_event.h"
+#include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/views/view.h"
 
 class Browser;
@@ -20,14 +27,25 @@ namespace ui {
 class Event;
 }  // namespace ui
 
+namespace views {
+class ViewTracker;
+}  // namespace views
+
 namespace maho {
 
+class MahoSidebarArchiveView;
 class MahoSidebarCreateSpaceView;
 class MahoSidebarFavoritesGridView;
 class MahoSidebarFooterView;
 class MahoSidebarSearchView;
 class MahoSidebarTabListView;
 class MahoSidebarTopBarView;
+
+enum class MahoSidebarBodyMode {
+  kTabs,
+  kArchive,
+  kCreateSpace,
+};
 
 class MahoSidebarView : public views::View,
                         public TabStripModelObserver,
@@ -42,7 +60,15 @@ class MahoSidebarView : public views::View,
 
   void OnThemeChanged() override;
 
+  bool GetDropFormats(int* formats,
+                      std::set<ui::ClipboardFormatType>* format_types) override;
+  bool CanDrop(const ui::OSExchangeData& data) override;
+  int OnDragUpdated(const ui::DropTargetEvent& event) override;
+  void OnDragExited() override;
+
   void ShowCreateSpace();
+  void ToggleArchiveMode();
+  void ExitArchiveModeToTabs();
 
   bool IsPositionInWindowCaption(const gfx::Point& point) const;
 
@@ -55,13 +81,30 @@ class MahoSidebarView : public views::View,
   }
   MahoSidebarFooterView* footer_view_for_testing() { return footer_view_; }
   MahoSidebarSearchView* search_view_for_testing() { return search_view_; }
+  MahoSidebarTopBarView* top_bar_view_for_testing() { return top_bar_view_; }
+  views::View* tabs_surface_for_testing() { return tabs_surface_; }
+  MahoSidebarArchiveView* archive_view_for_testing() { return archive_view_; }
+  MahoSidebarLibraryRailView* library_rail_view_for_testing() {
+    return library_rail_view_;
+  }
+  MahoSidebarCreateSpaceView* create_space_view_for_testing() {
+    return create_space_view_;
+  }
   bool is_create_mode_for_testing() const {
-    return create_space_view_ && create_space_view_->GetVisible();
+    return current_body_mode_ == MahoSidebarBodyMode::kCreateSpace;
+  }
+  bool is_archive_mode_for_testing() const {
+    return current_body_mode_ == MahoSidebarBodyMode::kArchive;
   }
 
  private:
   void BuildUi();
-  void SetCreateMode(bool in_create_mode);
+  void SetBodyMode(MahoSidebarBodyMode mode);
+  void CaptureLastFocusedBodyView();
+  void RestoreLastFocusedBodyView();
+  bool CanRestoreFocusToView(const views::View* view) const;
+  void HandleLibraryCategorySelected(MahoSidebarLibraryRailView::Category category);
+  void HandleLibraryBack();
   void HandleCreateSpaceClosed();
   void ScheduleRefreshAll();
   void RefreshFavoritesAndViewState();
@@ -91,14 +134,24 @@ class MahoSidebarView : public views::View,
   void OnTabGroupChanged(const TabGroupChange& change) override;
 
   raw_ptr<Browser> browser_;
-  raw_ptr<views::View> normal_surface_ = nullptr;
+  raw_ptr<views::View> body_host_ = nullptr;
+  raw_ptr<views::View> content_host_ = nullptr;
+  raw_ptr<views::View> tabs_surface_ = nullptr;
+  raw_ptr<views::View> library_container_ = nullptr;
+  raw_ptr<views::View> library_divider_ = nullptr;
+  raw_ptr<views::View> library_content_host_ = nullptr;
+  raw_ptr<views::View> top_region_ = nullptr;
+  raw_ptr<MahoSidebarArchiveView> archive_view_ = nullptr;
+  raw_ptr<MahoSidebarLibraryRailView> library_rail_view_ = nullptr;
   raw_ptr<MahoSidebarTopBarView> top_bar_view_ = nullptr;
   raw_ptr<MahoSidebarSearchView> search_view_ = nullptr;
   raw_ptr<MahoSidebarFavoritesGridView> favorites_view_ = nullptr;
   raw_ptr<MahoSidebarTabListView> tab_list_view_ = nullptr;
   raw_ptr<MahoSidebarFooterView> footer_view_ = nullptr;
   raw_ptr<MahoSidebarCreateSpaceView> create_space_view_ = nullptr;
+  std::unique_ptr<views::ViewTracker> last_focused_body_view_tracker_;
   MahoSidebarStateAdapter state_adapter_;
+  MahoSidebarBodyMode current_body_mode_ = MahoSidebarBodyMode::kTabs;
 
   bool refresh_scheduled_ = false;
   base::WeakPtrFactory<MahoSidebarView> weak_factory_{this};

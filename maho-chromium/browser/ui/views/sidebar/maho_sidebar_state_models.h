@@ -77,6 +77,7 @@ enum class MahoSidebarTabSection {
 enum class SidebarNodeKind {
   kTab,
   kFolder,
+  kSplitGroup,
 };
 
 // A node in the sidebar tree: either a tab or a folder.
@@ -110,6 +111,9 @@ struct SidebarTreeNode {
   std::string parent_folder_id;
   int folder_child_index = -1;
 
+  // --- Tab split indicator (valid when kind == kTab) ---
+  bool is_in_split = false;
+
   // --- Folder fields (valid when kind == kFolder) ---
   std::string folder_id;  // Stable FolderId from maho-core.
   std::u16string folder_name;
@@ -117,8 +121,13 @@ struct SidebarTreeNode {
   bool folder_is_pinned = false;
   std::string parent_of_folder_id;
 
-  // --- Children (folders only) ---
+  // --- Children (folders and split groups) ---
   std::vector<SidebarTreeNode> children;
+
+  // --- Split group fields (valid when kind == kSplitGroup) ---
+  std::string split_id;
+  std::string split_orientation;
+  double split_ratio = 0.5;
 
   // Depth in tree for indentation (0 = top-level).
   int depth = 0;
@@ -197,6 +206,7 @@ struct SidebarDragPayload {
   std::string node_id;  // tab_id or folder_id
   SidebarDragOrigin origin = SidebarDragOrigin::kNormalSection;
   std::string space_id;
+  int tab_strip_index = -1;
   std::string source_parent_folder_id;
   int source_folder_child_index = -1;
 };
@@ -228,6 +238,7 @@ struct MahoSidebarFooterModel {
   std::vector<std::string> space_icons;    // emoji strings per space
   std::vector<std::string> space_names;    // display names per space
   std::vector<std::string> space_colors;   // hex colors per space
+  std::vector<std::string> space_ids;      // space IDs in display order
   bool can_open_space_controls;
   bool can_create_space;
   MahoSidebarFooterUpdatePillModel update_pill;

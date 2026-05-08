@@ -27,30 +27,20 @@ class MahoSidebarFooterView;
 // Records shell events dispatched during tests for assertion.
 class RecordingShellEventObserver : public ShellEventObserver {
  public:
-  RecordingShellEventObserver() = default;
-  ~RecordingShellEventObserver() override = default;
-
-  void OnShellEventDispatched(const std::string& kind,
-                              const std::string& event_json) override {
-    events_.push_back({kind, event_json});
-  }
-
   struct Event {
     std::string kind;
     std::string json;
   };
 
+  RecordingShellEventObserver();
+  ~RecordingShellEventObserver() override;
+
+  void OnShellEventDispatched(const std::string& kind,
+                              const std::string& event_json) override;
+
   const std::vector<Event>& events() const { return events_; }
-
   void Clear() { events_.clear(); }
-
-  bool HasEvent(const std::string& kind) const {
-    for (const auto& e : events_) {
-      if (e.kind == kind)
-        return true;
-    }
-    return false;
-  }
+  bool HasEvent(const std::string& kind) const;
 
  private:
   std::vector<Event> events_;
