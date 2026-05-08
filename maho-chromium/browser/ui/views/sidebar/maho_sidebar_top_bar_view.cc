@@ -37,9 +37,9 @@ namespace maho {
 
 namespace {
 
-constexpr int kTopBarBottomMarginDp = 0;
-constexpr int kTopBarClusterHorizontalInsetDp = 0;
-constexpr int kTopBarClusterVerticalInsetDp = 0;
+constexpr int kTopBarBottomMarginDp = 4;
+constexpr int kTopBarClusterHorizontalInsetDp = 1;
+constexpr int kTopBarClusterVerticalInsetDp = 1;
 constexpr float kTopBarNavTintAlpha = 0.68f;
 constexpr float kTopBarDisabledAlpha = 0.4f;
 
@@ -213,8 +213,8 @@ void MahoSidebarTopBarView::ApplyChromeSpacing() {
   leading_cluster_->SetProperty(
       views::kMarginsKey,
       gfx::Insets::TLBR(0, 0, 0,
-                         show_nav ? sidebar_layout::kTopBarCompactLeadingGapDp
-                                  : 0));
+                        show_nav ? sidebar_layout::kTopBarCompactLeadingGapDp + 1
+                                 : 0));
   flex_spacer_->SetVisible(show_nav);
   nav_cluster_->SetVisible(show_nav);
 

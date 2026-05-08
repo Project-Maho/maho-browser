@@ -44,17 +44,17 @@ namespace {
 constexpr int kSearchShellInsetTopDp = 0;
 constexpr int kSearchShellInsetBottomDp = 0;
 constexpr int kSearchShellInnerInsetDp = 0;
-constexpr int kSearchCardLeadingInsetDp = 10;
-constexpr int kSearchCardTrailingInsetDp = 10;
-constexpr int kSearchPillTrailingInsetDp = 10;
-constexpr int kSearchPillLeadingInsetDp = 10;
-constexpr int kSearchPillIconLabelSpacingDp = 7;
-constexpr int kSearchTextfieldHorizontalInsetDp = 10;
-constexpr int kSearchPillActionSpacingDp = 5;
+constexpr int kSearchCardLeadingInsetDp = 12;
+constexpr int kSearchCardTrailingInsetDp = 12;
+constexpr int kSearchPillTrailingInsetDp = 12;
+constexpr int kSearchPillLeadingInsetDp = 12;
+constexpr int kSearchPillIconLabelSpacingDp = 8;
+constexpr int kSearchTextfieldHorizontalInsetDp = 12;
+constexpr int kSearchPillActionSpacingDp = 4;
 constexpr int kSearchPillActionIconSizeDp = 10;
 constexpr int kSearchPillActionShellSizeDp = 16;
 constexpr int kSearchPillPrimarySecondarySpacingDp = 0;
-constexpr int kSearchPillInnerVerticalInsetDp = 4;
+constexpr int kSearchPillInnerVerticalInsetDp = 5;
 constexpr int kSearchPillSecondaryBaselineOffsetDp = -1;
 
 const gfx::VectorIcon& GetTrailingActionIcon() {
@@ -105,7 +105,7 @@ MahoSidebarSearchView::MahoSidebarSearchView(Browser* browser)
   idle_button_->set_context_menu_controller(this);
 
   auto icon_shell = std::make_unique<views::View>();
-   icon_shell->SetPreferredSize(gfx::Size(14, 14));
+  icon_shell->SetPreferredSize(gfx::Size(14, 14));
   auto* icon_layout = icon_shell->SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 0));
   icon_layout->set_main_axis_alignment(
@@ -154,8 +154,8 @@ MahoSidebarSearchView::MahoSidebarSearchView(Browser* browser)
 
   auto make_action_shell = []() {
     auto shell = std::make_unique<views::View>();
-    shell->SetPreferredSize(
-        gfx::Size(kSearchPillActionShellSizeDp, kSearchPillActionShellSizeDp));
+     shell->SetPreferredSize(
+         gfx::Size(kSearchPillActionShellSizeDp, kSearchPillActionShellSizeDp));
      auto* layout = shell->SetLayoutManager(std::make_unique<views::BoxLayout>(
          views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 0));
     layout->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kCenter);
@@ -445,6 +445,9 @@ void MahoSidebarSearchView::UpdateSearchChrome() {
                                                     : ui::kColorSysOnSurface);
   primary_label_->SetTextStyle(show_placeholder ? views::style::STYLE_BODY_5
                                                 : views::style::STYLE_BODY_4);
+  trailing_actions_view_->SetProperty(
+      views::kMarginsKey,
+      gfx::Insets::TLBR(0, show_placeholder ? 6 : 4, 0, 0));
   textfield_->SetBorder(views::CreateEmptyBorder(
       gfx::Insets::VH(0, kSearchTextfieldHorizontalInsetDp)));
   textfield_->SetPreferredSize(
