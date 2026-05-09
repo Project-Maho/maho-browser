@@ -10,6 +10,7 @@
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
+#include "ui/gfx/geometry/point.h"
 #include "url/gurl.h"
 
 namespace views {
@@ -82,6 +83,9 @@ class MahoSidebarInteractiveTestBase : public InteractiveBrowserTest {
   // DnD helpers (real mouse simulation).
   void DragViewToView(views::View* source, views::View* target);
   void DragViewToPoint(views::View* source, const gfx::Point& screen_point);
+  gfx::Point GetViewPoint(views::View* view,
+                          double x_fraction,
+                          double y_fraction);
 
   // Assertion helpers.
   void ExpectSidebarVisible(bool visible);

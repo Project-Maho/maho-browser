@@ -25,9 +25,9 @@
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/view_tracker.h"
 #include "ui/views/view_class_properties.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_create_space_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_create_space_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_library_rail_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_search_view.h"
@@ -35,6 +35,7 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_archive_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
+#include "ui/compositor/layer_tree_owner.h"
 
 namespace maho {
 
@@ -223,24 +224,33 @@ void MahoSidebarView::BuildUi() {
       [](base::WeakPtr<MahoSidebarView> sidebar_view,
          const std::string& tab_id) {
         DispatchShellEvent("restore_archived_tab", {{"tab_id", tab_id}});
-        if (sidebar_view) {
-          sidebar_view->ExitArchiveModeToTabs();
+        if (sidebar_view && sidebar_view->archive_view_) {
+          sidebar_view->archive_view_->ReloadArchivedTabs();
         }
       },
       weak_factory_.GetWeakPtr()));
-  archive_view_->SetDeleteCallback(
-      base::BindRepeating(
-          [](const std::string& tab_id) {
-            DispatchShellEvent("delete_archived_tab", {{"tab_id", tab_id}});
-          }));
+  archive_view_->SetDeleteCallback(base::BindRepeating(
+      [](base::WeakPtr<MahoSidebarView> sidebar_view,
+         const std::string& tab_id) {
+        DispatchShellEvent("delete_archived_tab", {{"tab_id", tab_id}});
+        if (sidebar_view && sidebar_view->archive_view_) {
+          sidebar_view->archive_view_->ReloadArchivedTabs();
+        }
+      },
+      weak_factory_.GetWeakPtr()));
   library_layout->SetFlexForView(library_content_host_, 1, true);
 
-  create_space_view_ =
-      content_host_->AddChildView(std::make_unique<MahoSidebarCreateSpaceView>(browser_));
-  create_space_view_->SetCloseCallback(
-      base::BindRepeating(&MahoSidebarView::HandleCreateSpaceClosed,
-                          weak_factory_.GetWeakPtr()));
+  create_space_view_ = content_host_->AddChildView(
+      std::make_unique<MahoSidebarCreateSpaceView>(browser_));
   create_space_view_->SetVisible(false);
+  create_space_view_->SetCloseCallback(base::BindRepeating(
+      [](base::WeakPtr<MahoSidebarView> sidebar_view) {
+        if (sidebar_view) {
+          sidebar_view->SetBodyMode(MahoSidebarBodyMode::kTabs);
+        }
+      },
+      weak_factory_.GetWeakPtr()));
+
 
   footer_view_ = body_host_->AddChildView(
       std::make_unique<MahoSidebarFooterView>(browser_));
@@ -263,6 +273,7 @@ void MahoSidebarView::SetBodyMode(MahoSidebarBodyMode mode) {
   }
   if (footer_view_) {
     footer_view_->SetVisible(mode != MahoSidebarBodyMode::kArchive);
+    footer_view_->RefreshPreferredSize();
   }
   if (tabs_surface_) {
     tabs_surface_->SetVisible(mode == MahoSidebarBodyMode::kTabs);
@@ -274,6 +285,12 @@ void MahoSidebarView::SetBodyMode(MahoSidebarBodyMode mode) {
     library_rail_view_->SetSelectedCategory(
         MahoSidebarLibraryRailView::Category::kArchivedTabs);
   }
+  if (create_space_view_) {
+    create_space_view_->SetVisible(mode == MahoSidebarBodyMode::kCreateSpace);
+    if (mode == MahoSidebarBodyMode::kCreateSpace) {
+      create_space_view_->PrepareForOpen();
+    }
+  }
   if (archive_view_) {
     archive_view_->SetVisible(mode == MahoSidebarBodyMode::kArchive);
     if (mode == MahoSidebarBodyMode::kArchive) {
@@ -282,8 +299,9 @@ void MahoSidebarView::SetBodyMode(MahoSidebarBodyMode mode) {
       archive_view_->FocusSearchField();
     }
   }
-  if (create_space_view_) {
-    create_space_view_->SetVisible(mode == MahoSidebarBodyMode::kCreateSpace);
+
+  if (mode == MahoSidebarBodyMode::kCreateSpace && create_space_view_) {
+    create_space_view_->RequestNameFocus();
   }
 
   if (previous_mode == MahoSidebarBodyMode::kArchive &&
@@ -355,9 +373,6 @@ void MahoSidebarView::HandleLibraryBack() {
   SetBodyMode(MahoSidebarBodyMode::kTabs);
 }
 
-void MahoSidebarView::HandleCreateSpaceClosed() {
-  SetBodyMode(MahoSidebarBodyMode::kTabs);
-}
 
 void MahoSidebarView::ToggleArchiveMode() {
   if (current_body_mode_ == MahoSidebarBodyMode::kArchive) {
@@ -373,8 +388,13 @@ void MahoSidebarView::ExitArchiveModeToTabs() {
   }
 }
 
+void MahoSidebarView::ShowCreateSpaceSurface() {
+  SetBodyMode(MahoSidebarBodyMode::kCreateSpace);
+}
+
 void MahoSidebarView::ScheduleRefreshAll() {
   if (refresh_scheduled_) {
+    LOG(ERROR) << "[MAHO_DND] ScheduleRefreshAll: SKIPPED (already scheduled)";
     return;
   }
   refresh_scheduled_ = true;
@@ -554,6 +574,24 @@ int MahoSidebarView::OnDragUpdated(const ui::DropTargetEvent& event) {
   return favorites_view_->OnDragUpdated(fav_event);
 }
 
+views::View::DropCallback MahoSidebarView::GetDropCallback(
+    const ui::DropTargetEvent& event) {
+  if (!favorites_view_) {
+    return base::BindOnce(
+        [](const ui::DropTargetEvent&, ui::mojom::DragOperation& output_drag_op,
+           std::unique_ptr<ui::LayerTreeOwner>) {
+          output_drag_op = ui::mojom::DragOperation::kNone;
+        });
+  }
+
+  gfx::Point fav_location = event.location();
+  views::View::ConvertPointToTarget(this, favorites_view_, &fav_location);
+  ui::DropTargetEvent fav_event(event.data(), gfx::PointF(fav_location),
+                                event.root_location_f(),
+                                event.source_operations());
+  return favorites_view_->GetDropCallback(fav_event);
+}
+
 void MahoSidebarView::OnDragExited() {
   if (favorites_view_) {
     favorites_view_->OnDragExited();
@@ -561,11 +599,5 @@ void MahoSidebarView::OnDragExited() {
   }
 }
 
-void MahoSidebarView::ShowCreateSpace() {
-  if (create_space_view_) {
-    SetBodyMode(MahoSidebarBodyMode::kCreateSpace);
-    create_space_view_->RequestNameFocus();
-  }
-}
 
 }  // namespace maho

@@ -36,7 +36,7 @@ namespace maho {
 
 namespace {
 
-constexpr int kRailWidthDp = 68;
+constexpr int kRailWidthDp = 64;
 constexpr int kRailTopInsetDp = 12;
 constexpr int kRailSideInsetDp = 3;
 constexpr int kRailBottomInsetDp = 10;
@@ -51,58 +51,6 @@ constexpr int kRailBackButtonSizeDp = 24;
 constexpr int kRailBackButtonLeadingInsetDp = 8;
 constexpr int kRailBackButtonCornerRadiusDp = 12;
 constexpr float kBackButtonDisabledAlpha = 0.38f;
-
-static constexpr gfx::PathElement kMediaPath[] = {
-    gfx::CANVAS_DIMENSIONS, 24,        gfx::STROKE,   1.8f,
-    gfx::MOVE_TO,           5.0f,      7.0f,          gfx::H_LINE_TO,
-    19.0f,                  gfx::V_LINE_TO, 16.0f,    gfx::H_LINE_TO,
-    5.0f,                   gfx::CLOSE, gfx::MOVE_TO, 10.0f,
-    10.0f,                  gfx::LINE_TO, 14.5f,      12.0f,
-    gfx::LINE_TO,           10.0f,     14.5f,         gfx::CLOSE,
-};
-
-static constexpr gfx::PathElement kDownloadsPath[] = {
-    gfx::CANVAS_DIMENSIONS, 24,        gfx::STROKE,   1.8f,
-    gfx::MOVE_TO,           12.0f,     4.5f,          gfx::V_LINE_TO,
-    14.0f,                  gfx::MOVE_TO, 8.5f,       10.5f,
-    gfx::LINE_TO,           12.0f,     14.0f,         gfx::LINE_TO,
-    15.5f,                  10.5f,     gfx::MOVE_TO,  6.0f,
-    18.0f,                  gfx::H_LINE_TO, 18.0f,
-};
-
-static constexpr gfx::PathElement kEaselPath[] = {
-    gfx::CANVAS_DIMENSIONS, 24,        gfx::STROKE,   1.8f,
-    gfx::MOVE_TO,           7.0f,      5.0f,          gfx::H_LINE_TO,
-    17.0f,                  gfx::V_LINE_TO, 14.0f,    gfx::H_LINE_TO,
-    7.0f,                   gfx::CLOSE, gfx::MOVE_TO, 10.0f,
-    14.0f,                  gfx::LINE_TO, 8.0f,       19.0f,
-    gfx::MOVE_TO,           14.0f,     14.0f,         gfx::LINE_TO,
-    16.0f,                  19.0f,     gfx::MOVE_TO,  12.0f,
-    14.0f,                  gfx::V_LINE_TO, 20.0f,
-};
-
-static constexpr gfx::PathElement kSpacesPath[] = {
-    gfx::CANVAS_DIMENSIONS, 24,        gfx::STROKE,   1.8f,
-    gfx::MOVE_TO,           5.0f,      5.0f,          gfx::H_LINE_TO,
-    10.0f,                  gfx::V_LINE_TO, 10.0f,    gfx::H_LINE_TO,
-    5.0f,                   gfx::CLOSE, gfx::MOVE_TO, 14.0f,
-    5.0f,                   gfx::H_LINE_TO, 19.0f,    gfx::V_LINE_TO,
-    10.0f,                  gfx::H_LINE_TO, 14.0f,    gfx::CLOSE,
-    gfx::MOVE_TO,           5.0f,      14.0f,         gfx::H_LINE_TO,
-    10.0f,                  gfx::V_LINE_TO, 19.0f,    gfx::H_LINE_TO,
-    5.0f,                   gfx::CLOSE, gfx::MOVE_TO, 14.0f,
-    14.0f,                  gfx::H_LINE_TO, 19.0f,    gfx::V_LINE_TO,
-    19.0f,                  gfx::H_LINE_TO, 14.0f,    gfx::CLOSE,
-};
-
-static constexpr gfx::PathElement kBoostsPath[] = {
-    gfx::CANVAS_DIMENSIONS, 24,        gfx::STROKE,   1.8f,
-    gfx::MOVE_TO,           13.0f,     4.0f,          gfx::LINE_TO,
-    7.0f,                   12.5f,     gfx::H_LINE_TO, 11.0f,
-    gfx::LINE_TO,           9.5f,      20.0f,         gfx::LINE_TO,
-    17.0f,                  10.0f,     gfx::H_LINE_TO, 12.8f,
-    gfx::LINE_TO,           13.0f,     4.0f,
-};
 
 static constexpr gfx::PathElement kArchiveboxPath[] = {
     gfx::CANVAS_DIMENSIONS, 24,        gfx::STROKE,
@@ -137,40 +85,13 @@ static constexpr gfx::VectorIconRep kArchiveboxRepList[] = {{kArchiveboxPath}};
 constexpr gfx::VectorIcon kArchiveboxIcon(kArchiveboxRepList, 1,
                                           kArchiveboxIconId);
 
-constexpr char kMediaIconId[] = "kSidebarLibraryRailMediaIcon";
-static constexpr gfx::VectorIconRep kMediaRepList[] = {{kMediaPath}};
-constexpr gfx::VectorIcon kMediaIcon(kMediaRepList, 1, kMediaIconId);
-
-constexpr char kDownloadsIconId[] = "kSidebarLibraryRailDownloadsIcon";
-static constexpr gfx::VectorIconRep kDownloadsRepList[] = {{kDownloadsPath}};
-constexpr gfx::VectorIcon kDownloadsIcon(kDownloadsRepList, 1,
-                                         kDownloadsIconId);
-
-constexpr char kEaselIconId[] = "kSidebarLibraryRailEaselIcon";
-static constexpr gfx::VectorIconRep kEaselRepList[] = {{kEaselPath}};
-constexpr gfx::VectorIcon kEaselIcon(kEaselRepList, 1, kEaselIconId);
-
-constexpr char kSpacesIconId[] = "kSidebarLibraryRailSpacesIcon";
-static constexpr gfx::VectorIconRep kSpacesRepList[] = {{kSpacesPath}};
-constexpr gfx::VectorIcon kSpacesIcon(kSpacesRepList, 1, kSpacesIconId);
-
-constexpr char kBoostsIconId[] = "kSidebarLibraryRailBoostsIcon";
-static constexpr gfx::VectorIconRep kBoostsRepList[] = {{kBoostsPath}};
-constexpr gfx::VectorIcon kBoostsIcon(kBoostsRepList, 1, kBoostsIconId);
-
 struct RailCategorySpec {
   MahoSidebarLibraryRailView::Category category;
   std::u16string_view title;
   raw_ptr<const gfx::VectorIcon> icon;
 };
 
-constexpr std::array<RailCategorySpec, 6> kRailCategories = {{
-    {MahoSidebarLibraryRailView::Category::kMedia, u"Media", &kMediaIcon},
-    {MahoSidebarLibraryRailView::Category::kDownloads, u"Downloads",
-     &kDownloadsIcon},
-    {MahoSidebarLibraryRailView::Category::kEasels, u"Easels", &kEaselIcon},
-    {MahoSidebarLibraryRailView::Category::kSpaces, u"Spaces", &kSpacesIcon},
-    {MahoSidebarLibraryRailView::Category::kBoosts, u"Boosts", &kBoostsIcon},
+constexpr std::array<RailCategorySpec, 1> kRailCategories = {{
     {MahoSidebarLibraryRailView::Category::kArchivedTabs, u"Archived Tabs",
      &kArchiveboxIcon},
 }};
@@ -282,13 +203,13 @@ class MahoSidebarLibraryRailItemButton : public views::Button {
                                        : GetRailItemForegroundColor(selected_);
     if (enabled && selected_) {
       tile_->SetBackground(views::CreateRoundedRectBackground(
-          hovered ? ui::kColorSysSurface4 : ui::kColorSysSurface3,
+          hovered ? ui::kColorSysSurface3 : ui::kColorSysSurface2,
           kRailTileCornerRadiusDp));
       tile_->SetBorder(views::CreateRoundedRectBorder(
           1, kRailTileCornerRadiusDp, ui::kColorSysSurfaceVariant));
     } else if (hovered) {
       tile_->SetBackground(views::CreateRoundedRectBackground(
-          ui::kColorSysSurface2, kRailTileCornerRadiusDp));
+          ui::kColorSysSurface1, kRailTileCornerRadiusDp));
       tile_->SetBorder(views::CreateRoundedRectBorder(
           1, kRailTileCornerRadiusDp, ui::kColorSysSurfaceVariant));
     } else {
@@ -326,7 +247,7 @@ MahoSidebarLibraryRailView::MahoSidebarLibraryRailView() {
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
   SetPreferredSize(gfx::Size(kRailWidthDp, 0));
-  SetBackground(views::CreateSolidBackground(ui::kColorSysSurface2));
+  SetBackground(views::CreateSolidBackground(ui::kColorSysSurface));
 
   item_container_ = AddChildView(std::make_unique<views::View>());
   auto* item_layout = item_container_->SetLayoutManager(
@@ -408,7 +329,7 @@ void MahoSidebarLibraryRailView::SetBackCallback(
 
 void MahoSidebarLibraryRailView::OnThemeChanged() {
   views::View::OnThemeChanged();
-  SetBackground(views::CreateSolidBackground(ui::kColorSysSurface2));
+  SetBackground(views::CreateSolidBackground(ui::kColorSysSurface));
   UpdateSelection();
   UpdateBackButtonAppearance();
 }

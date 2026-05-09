@@ -89,6 +89,7 @@ source_set("interactive_tests") {
     "//components/prefs",
     "//content/public/browser",
     "//content/test:test_support",
+    "//maho/browser/ui/webui/maho_space_config:maho_space_config",
     "//testing/gtest",
     "//ui/base",
     "//ui/base:test_support",

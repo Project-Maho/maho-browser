@@ -8,6 +8,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
 #include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
+#include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/page_transition_types.h"
@@ -72,11 +73,10 @@ void MahoFavoritesContextMenu::ExecuteCommand(int command_id,
       writer.WriteText(base::UTF8ToUTF16(url_.spec()));
       break;
     }
-    case IDC_MAHO_FAV_OPEN_SPLIT:
-      // TODO(maho): Wire to maho-core FFI.
-      LOG(INFO) << "MahoFavoritesContextMenu: Open in Split View "
-                << url_.spec();
+    case IDC_MAHO_FAV_OPEN_SPLIT: {
+      MahoSplitViewController(browser_).AddSplitWithURL(url_);
       break;
+    }
     case IDC_MAHO_FAV_RENAME:
       // TODO(maho): Wire to maho-core FFI.
       LOG(INFO) << "MahoFavoritesContextMenu: Rename";
@@ -100,6 +100,7 @@ bool MahoFavoritesContextMenu::IsCommandIdEnabled(int command_id) const {
     case IDC_MAHO_FAV_COPY_LINK:
       return url_.is_valid();
     case IDC_MAHO_FAV_OPEN_SPLIT:
+      return url_.is_valid();
     case IDC_MAHO_FAV_RENAME:
     case IDC_MAHO_FAV_CHANGE_ICON:
     case IDC_MAHO_FAV_MOVE_TO_SPACE:

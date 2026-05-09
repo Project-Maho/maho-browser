@@ -105,9 +105,11 @@ CreateResult CreateSpaceOnPool(const std::string& name,
   std::string color_json;
   base::JSONWriter::Write(color_dict, &color_json);
 
-  const char* pid = profile_id.empty() ? nullptr : profile_id.c_str();
+  const std::string resolved_profile_id =
+      profile_id.empty() ? std::string("Default") : profile_id;
   char* ffi_result = maho_core_create_space(core, name.c_str(),
-                                            color_json.c_str(), pid);
+                                            color_json.c_str(),
+                                            resolved_profile_id.c_str());
   if (ffi_result) {
     std::optional<base::Value> parsed =
         base::JSONReader::Read(ffi_result, base::JSON_PARSE_RFC);
@@ -119,8 +121,25 @@ CreateResult CreateSpaceOnPool(const std::string& name,
         maho_core_activate_space(core, parsed_id->c_str());
 
         if (!theme_json.empty()) {
-          maho_core_update_space_theme(core, parsed_id->c_str(),
-                                       theme_json.c_str());
+          std::optional<base::Value> theme_value =
+              base::JSONReader::Read(theme_json, base::JSON_PARSE_RFC);
+          if (!theme_value) {
+            maho_string_free(ffi_result);
+            return result;
+          }
+
+          base::DictValue changes;
+          changes.Set("spaceId", *parsed_id);
+          changes.Set("theme", std::move(*theme_value));
+          base::DictValue event;
+          event.Set("kind", "update_space_config");
+          event.Set("changes", std::move(changes));
+          std::string event_json;
+          base::JSONWriter::Write(event, &event_json);
+          char* event_result = maho_core_handle_event(core, event_json.c_str());
+          if (event_result) {
+            maho_string_free(event_result);
+          }
         }
       }
     }
@@ -167,25 +186,28 @@ void MahoSpaceCreatePageHandler::CreateSpace(
     const std::optional<std::string>& profile_id,
     const std::optional<std::string>& theme_json,
     CreateSpaceCallback callback) {
+  const std::string resolved_profile_id =
+      profile_id.value_or(std::string("Default"));
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE,
       {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
       base::BindOnce(&CreateSpaceOnPool, name, color, icon,
-                     profile_id.value_or(std::string()),
-                     theme_json.value_or(std::string())),
+                     resolved_profile_id, theme_json.value_or(std::string())),
       base::BindOnce(
           [](base::WeakPtr<MahoSpaceCreatePageHandler> weak_self,
-             CreateSpaceCallback cb, CreateResult result) {
+             CreateSpaceCallback cb, std::string profile_id,
+             CreateResult result) {
             if (weak_self && result.success) {
               auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
               bridge->RegisterSpace(result.space_id,
-                                    base::FilePath::FromASCII("Default"));
+                                    base::FilePath::FromASCII(profile_id));
               MahoSpaceThemeState::UpdateFromCore();
               ui::ColorProviderManager::Get().ResetColorProviderCache();
             }
             std::move(cb).Run(result.success);
           },
-          weak_factory_.GetWeakPtr(), std::move(callback)));
+          weak_factory_.GetWeakPtr(), std::move(callback),
+          resolved_profile_id));
 }
 
 void MahoSpaceCreatePageHandler::CloseDialog() {

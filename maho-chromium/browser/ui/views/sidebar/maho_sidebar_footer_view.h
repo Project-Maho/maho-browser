@@ -50,6 +50,7 @@ class MahoSidebarFooterView : public views::View,
   ~MahoSidebarFooterView() override;
 
   void Update(const MahoSidebarFooterModel& model);
+  void RefreshPreferredSize();
 
   views::MdTextButton* plus_button_for_testing() { return plus_button_; }
   views::MdTextButton* archive_button_for_testing() { return archive_button_; }
@@ -92,6 +93,7 @@ class MahoSidebarFooterView : public views::View,
                    const std::vector<std::string>& space_names,
                    const std::vector<std::string>& space_colors);
   void UpdateFooterChromeAppearance();
+  void UpdateDotSelectionState();
   void UpdateFadeMask();
   void ScrollToActiveSpace();
 
@@ -115,6 +117,8 @@ class MahoSidebarFooterView : public views::View,
   raw_ptr<views::View> update_pill_ = nullptr;
   raw_ptr<views::View> update_pill_indicator_ = nullptr;
   raw_ptr<views::Label> update_pill_label_ = nullptr;
+  raw_ptr<views::View> footer_separator_ = nullptr;
+  raw_ptr<views::View> footer_region_ = nullptr;
   raw_ptr<views::View> spaces_cluster_ = nullptr;
   raw_ptr<views::View> dot_container_ = nullptr;
   raw_ptr<views::ScrollView> scroll_view_ = nullptr;
@@ -122,6 +126,7 @@ class MahoSidebarFooterView : public views::View,
   raw_ptr<views::MdTextButton> plus_button_ = nullptr;
   raw_ptr<views::MdTextButton> archive_button_ = nullptr;
   raw_ptr<views::Widget> action_popover_widget_ = nullptr;
+  bool open_create_space_after_popover_close_ = false;
   std::string active_space_color_;
   int selected_dot_index_ = -1;
   raw_ptr<views::View> drop_indicator_ = nullptr;

@@ -6,27 +6,37 @@
 #include <utility>
 #include <vector>
 
+#include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"  // nogncheck
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/ui/theme/maho_space_theme_io.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "ui/shell_dialogs/selected_file_info.h"
+#include "ui/shell_dialogs/select_file_dialog.h"
 #include "ui/color/color_provider_manager.h"
 #include "url/gurl.h"
+
+namespace {
+
+}  // namespace
 
 MahoSidebarPageHandler::MahoSidebarPageHandler(
     mojo::PendingReceiver<maho_sidebar::mojom::PageHandler> receiver,
@@ -277,6 +287,32 @@ void MahoSidebarPageHandler::DeleteSpace(const std::string& space_id) {
                      weak_factory_.GetWeakPtr()));
 }
 
+void MahoSidebarPageHandler::CreateFolder(const std::string& space_id) {
+  base::ThreadPool::PostTaskAndReply(
+      FROM_HERE,
+      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
+      base::BindOnce(
+          [](const std::string& space_id) {
+            MahoCore* core = maho::GetCore();
+            if (!core) {
+              return;
+            }
+
+            base::DictValue event;
+            event.Set("kind", "create_folder");
+            event.Set("space_id", space_id);
+            std::string event_json;
+            base::JSONWriter::Write(event, &event_json);
+            char* result = maho_core_handle_event(core, event_json.c_str());
+            if (result) {
+              maho_string_free(result);
+            }
+          },
+          space_id),
+      base::BindOnce(&MahoSidebarPageHandler::OnSpaceMutated,
+                     weak_factory_.GetWeakPtr()));
+}
+
 // static
 void MahoSidebarPageHandler::RenameSpaceOnPool(const std::string& space_id,
                                                 const std::string& new_name) {
@@ -332,23 +368,7 @@ void MahoSidebarPageHandler::UpdateSpaceThemeOnPool(
   if (!core) {
     return;
   }
-  std::optional<base::Value> theme_value =
-      base::JSONReader::Read(theme_json, base::JSON_PARSE_RFC);
-  if (!theme_value) {
-    return;
-  }
-  base::DictValue changes;
-  changes.Set("spaceId", space_id);
-  changes.Set("theme", std::move(*theme_value));
-  base::DictValue event;
-  event.Set("kind", "update_space_config");
-  event.Set("changes", std::move(changes));
-  std::string event_json;
-  base::JSONWriter::Write(event, &event_json);
-  char* result = maho_core_handle_event(core, event_json.c_str());
-  if (result) {
-    maho_string_free(result);
-  }
+  maho_theme::ApplyThemeJsonToSpace(core, space_id, theme_json);
 }
 
 // static
@@ -538,6 +558,18 @@ void MahoSidebarPageHandler::AssignProfileToSpace(
                      space_id, profile_id),
       base::BindOnce(&MahoSidebarPageHandler::OnSpaceMutated,
                      weak_factory_.GetWeakPtr()));
+}
+
+void MahoSidebarPageHandler::ExportTheme(const std::string& space_id) {
+  pending_space_id_ = space_id;
+  pending_file_op_ = PendingFileOp::kExportTheme;
+  ShowExportThemeDialog();
+}
+
+void MahoSidebarPageHandler::ImportTheme(const std::string& space_id) {
+  pending_space_id_ = space_id;
+  pending_file_op_ = PendingFileOp::kImportTheme;
+  ShowImportThemeDialog();
 }
 
 // static
@@ -777,6 +809,100 @@ void MahoSidebarPageHandler::FetchThemeStore(FetchThemeStoreCallback callback) {
       base::BindOnce(&MahoSidebarPageHandler::OnThemeStoreFetched,
                      weak_factory_.GetWeakPtr(), std::move(callback)),
       1024 * 1024);
+}
+
+void MahoSidebarPageHandler::ShowExportThemeDialog() {
+  if (!browser_) {
+    return;
+  }
+
+  select_file_dialog_ = ui::SelectFileDialog::Create(this, nullptr);
+  ui::SelectFileDialog::FileTypeInfo file_type_info;
+  file_type_info.extensions.push_back({FILE_PATH_LITERAL("mahotheme")});
+  file_type_info.extensions.push_back({FILE_PATH_LITERAL("json")});
+  file_type_info.extension_description_overrides.push_back(
+      u"Maho Theme (.mahotheme)");
+  file_type_info.extension_description_overrides.push_back(u"JSON (.json)");
+
+  base::FilePath default_path(FILE_PATH_LITERAL("space-theme.mahotheme"));
+  select_file_dialog_->SelectFile(
+      ui::SelectFileDialog::SELECT_SAVEAS_FILE, u"Export Theme", default_path,
+      &file_type_info, 1, FILE_PATH_LITERAL("mahotheme"),
+      browser_->window()->GetNativeWindow());
+}
+
+void MahoSidebarPageHandler::ShowImportThemeDialog() {
+  if (!browser_) {
+    return;
+  }
+
+  select_file_dialog_ = ui::SelectFileDialog::Create(this, nullptr);
+  ui::SelectFileDialog::FileTypeInfo file_type_info;
+  file_type_info.extensions.push_back(
+      {FILE_PATH_LITERAL("mahotheme"), FILE_PATH_LITERAL("json")});
+  file_type_info.extension_description_overrides.push_back(
+      u"Maho Theme / JSON");
+
+  select_file_dialog_->SelectFile(
+      ui::SelectFileDialog::SELECT_OPEN_FILE, u"Import Theme",
+      base::FilePath(), &file_type_info, 1, FILE_PATH_LITERAL("mahotheme"),
+      browser_->window()->GetNativeWindow());
+}
+
+void MahoSidebarPageHandler::FileSelected(const ui::SelectedFileInfo& file,
+                                          int index) {
+  const base::FilePath path = file.path();
+  const PendingFileOp op = pending_file_op_;
+  const std::string space_id = pending_space_id_;
+  pending_file_op_ = PendingFileOp::kNone;
+  pending_space_id_.clear();
+  select_file_dialog_.reset();
+
+  if (op == PendingFileOp::kExportTheme) {
+    base::ThreadPool::PostTask(
+        FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
+        base::BindOnce(
+            [](const std::string& space_id, const base::FilePath& path) {
+              MahoCore* core = maho::GetCore();
+              if (!core) {
+                return;
+              }
+              if (!maho_theme::ExportSpaceThemeToFile(core, space_id, path)) {
+                LOG(WARNING) << "ExportTheme: failed to write file";
+              }
+            },
+            space_id, path));
+    return;
+  }
+
+  if (op == PendingFileOp::kImportTheme) {
+    base::ThreadPool::PostTaskAndReplyWithResult(
+        FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
+        base::BindOnce(&maho_theme::ReadValidatedThemeJson, path),
+        base::BindOnce(
+            [](base::WeakPtr<MahoSidebarPageHandler> weak_self,
+               const std::string& space_id,
+               std::optional<std::string> validated_json) {
+              if (!weak_self || !validated_json) {
+                return;
+              }
+              MahoCore* core = maho::GetCore();
+              if (!core || !maho_theme::ApplyThemeJsonToSpace(
+                                core, space_id, *validated_json)) {
+                return;
+              }
+              MahoSpaceThemeState::UpdateFromCore();
+              ui::ColorProviderManager::Get().ResetColorProviderCache();
+              weak_self->OnSpaceMutated();
+            },
+            weak_factory_.GetWeakPtr(), space_id));
+  }
+}
+
+void MahoSidebarPageHandler::FileSelectionCanceled() {
+  pending_file_op_ = PendingFileOp::kNone;
+  pending_space_id_.clear();
+  select_file_dialog_.reset();
 }
 
 void MahoSidebarPageHandler::OnSpaceMutated() {

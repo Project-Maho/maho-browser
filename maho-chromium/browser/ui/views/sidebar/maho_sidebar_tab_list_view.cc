@@ -76,13 +76,13 @@
 namespace maho {
 
 constexpr int kRowSpacingDp = 2;
-constexpr int kRowHeightDp = 26;
+constexpr int kRowHeightDp = 25;
 constexpr int kRowCornerRadiusDp = 9;
 constexpr int kRowIconSizeDp = 16;
 constexpr int kRowIconTextSpacingDp = 6;
 constexpr int kRowTrailingSpacingDp = 0;
 constexpr int kCloseButtonSizeDp = 16;
-constexpr int kSectionSpacingDp = 5;
+constexpr int kSectionSpacingDp = 4;
 constexpr int kFolderIndentDp = 13;
 constexpr int kFolderRowHeightDp = 26;
 constexpr int kSectionSeparatorHeightDp = 8;
@@ -92,12 +92,11 @@ constexpr int kChevronSizeDp = 12;
 constexpr int kDragStartThresholdDp = 5;
 constexpr int kDropIndicatorThicknessDp = 3;
 constexpr int kDropIndicatorOutlineThicknessDp = 1;
-constexpr int kDropIndicatorInsetDp = 4;
 
 const gfx::Insets kRootInsets = gfx::Insets::TLBR(0, 0, 0, 0);
-const gfx::Insets kInlineRowInsets = gfx::Insets::TLBR(0, 9, 0, 8);
-const gfx::Insets kPlaceholderInsets = gfx::Insets::TLBR(6, 9, 6, 9);
-const gfx::Insets kNewTabRowMargins = gfx::Insets::TLBR(0, 0, 0, 0);
+const gfx::Insets kInlineRowInsets = gfx::Insets::TLBR(0, 10, 0, 8);
+const gfx::Insets kPlaceholderInsets = gfx::Insets::TLBR(1, 12, 0, 9);
+const gfx::Insets kNewTabRowMargins = gfx::Insets::TLBR(1, 0, 0, 0);
 const gfx::Insets kSectionInsets = gfx::Insets::TLBR(0, 0, 0, 0);
 
 ui::DropTargetEvent ForwardDropTargetEventToView(const ui::DropTargetEvent& event,
@@ -354,6 +353,215 @@ views::View* AddSectionContainer(views::View* parent, bool emphasized,
   return raw;
 }
 
+namespace {
+
+base::DictValue MakeRootItem(SidebarNodeKind kind, const std::string& id);
+base::DictValue MakeInsertionPointBefore(SidebarNodeKind target_kind,
+                                         const std::string& target_id);
+base::DictValue MakeInsertionPointAppend();
+void DispatchReorderRootItem(const std::string& space_id,
+                             SidebarNodeKind item_kind,
+                             const std::string& item_id,
+                             base::DictValue insertion_point);
+
+}  // namespace
+
+class SidebarInsertionLaneView : public views::View {
+  METADATA_HEADER(SidebarInsertionLaneView, views::View)
+
+ public:
+  SidebarInsertionLaneView(std::string space_id,
+                           std::string item_id,
+                           SidebarNodeKind target_kind,
+                           std::string target_id,
+                           bool append = false,
+                           std::string target_parent_folder_id = std::string(),
+                           int target_folder_child_index = -1)
+      : space_id_(std::move(space_id)),
+        item_id_(std::move(item_id)),
+        target_kind_(target_kind),
+        target_id_(std::move(target_id)),
+        append_(append),
+        target_parent_folder_id_(std::move(target_parent_folder_id)),
+        target_folder_child_index_(target_folder_child_index) {
+    SetPreferredSize(gfx::Size(0, kDropIndicatorThicknessDp + 4));
+  }
+
+  SidebarInsertionLaneView(const SidebarInsertionLaneView&) = delete;
+  SidebarInsertionLaneView& operator=(const SidebarInsertionLaneView&) = delete;
+  ~SidebarInsertionLaneView() override = default;
+
+  const std::string& target_id_for_testing() const { return target_id_; }
+  SidebarNodeKind target_kind_for_testing() const { return target_kind_; }
+  bool append_for_testing() const { return append_; }
+
+  bool GetDropFormats(int* formats,
+                      std::set<ui::ClipboardFormatType>* format_types) override {
+    format_types->insert(GetMahoDragFormatType());
+    return true;
+  }
+
+  bool CanDrop(const ui::OSExchangeData& data) override {
+    SidebarDragPayload payload;
+    return ReadMahoDragData(data, payload) &&
+           (payload.node_kind == SidebarNodeKind::kTab ||
+            payload.node_kind == SidebarNodeKind::kFolder);
+  }
+
+  int OnDragUpdated(const ui::DropTargetEvent& event) override {
+    SidebarDragPayload payload;
+    if (!ReadMahoDragData(event.data(), payload) || payload.node_id == item_id_) {
+      drag_over_drop_target_ = false;
+      UpdateAppearance();
+      return static_cast<int>(ui::mojom::DragOperation::kNone);
+    }
+    drag_over_drop_target_ = true;
+    UpdateAppearance();
+    return static_cast<int>(ui::mojom::DragOperation::kMove);
+  }
+
+  DropCallback GetDropCallback(const ui::DropTargetEvent& event) override {
+    return base::BindOnce(
+        [](std::string space_id, std::string item_id,
+           SidebarNodeKind target_kind, std::string target_id, bool append,
+           std::string target_parent_folder_id, int target_folder_child_index,
+           const ui::DropTargetEvent& event,
+           ui::mojom::DragOperation& output_drag_op,
+           std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner) {
+          SidebarDragPayload payload;
+          if (!ReadMahoDragData(event.data(), payload) || payload.node_id == item_id) {
+            output_drag_op = ui::mojom::DragOperation::kNone;
+            return;
+          }
+          output_drag_op = ui::mojom::DragOperation::kNone;
+          if (payload.node_kind == SidebarNodeKind::kTab) {
+            if (target_kind == SidebarNodeKind::kTab) {
+              if (!target_parent_folder_id.empty() &&
+                  payload.source_parent_folder_id == target_parent_folder_id) {
+                output_drag_op = ui::mojom::DragOperation::kMove;
+                DispatchShellEventEx("reorder_tab_in_folder", {
+                    ShellEventField("space_id", space_id),
+                    ShellEventField("folder_id", target_parent_folder_id),
+                    ShellEventField("tab_id", payload.node_id),
+                    ShellEventField("to", target_folder_child_index)});
+              } else if (payload.source_parent_folder_id.empty()) {
+                output_drag_op = ui::mojom::DragOperation::kMove;
+                DispatchReorderRootItem(space_id, SidebarNodeKind::kTab,
+                                       payload.node_id,
+                                       append ? MakeInsertionPointAppend()
+                                              : MakeInsertionPointBefore(
+                                                    SidebarNodeKind::kTab,
+                                                    target_id));
+              } else {
+                output_drag_op = ui::mojom::DragOperation::kMove;
+                DispatchReorderRootItem(space_id, SidebarNodeKind::kTab,
+                                       payload.node_id,
+                                       append ? MakeInsertionPointAppend()
+                                              : MakeInsertionPointBefore(
+                                                    SidebarNodeKind::kTab,
+                                                    target_id));
+              }
+              return;
+            }
+            if (target_kind == SidebarNodeKind::kFolder) {
+              if (append) {
+                output_drag_op = ui::mojom::DragOperation::kMove;
+                if (payload.source_parent_folder_id.empty()) {
+                  DispatchReorderRootItem(space_id, SidebarNodeKind::kTab,
+                                         payload.node_id,
+                                         MakeInsertionPointAppend());
+                } else {
+                  DispatchShellEvent("move_tab_to_root", {
+                      {"space_id", space_id},
+                      {"folder_id", payload.source_parent_folder_id},
+                      {"tab_id", payload.node_id}});
+                  DispatchReorderRootItem(space_id, SidebarNodeKind::kTab,
+                                         payload.node_id,
+                                         MakeInsertionPointAppend());
+                }
+              } else if (payload.source_parent_folder_id.empty()) {
+                output_drag_op = ui::mojom::DragOperation::kMove;
+                DispatchReorderRootItem(space_id, SidebarNodeKind::kTab,
+                                       payload.node_id,
+                                       MakeInsertionPointBefore(
+                                           SidebarNodeKind::kFolder, target_id));
+              } else {
+                output_drag_op = ui::mojom::DragOperation::kMove;
+                DispatchShellEvent("move_tab_to_root", {
+                    {"space_id", space_id},
+                    {"folder_id", payload.source_parent_folder_id},
+                    {"tab_id", payload.node_id}});
+                DispatchReorderRootItem(space_id, SidebarNodeKind::kTab,
+                                       payload.node_id,
+                                       MakeInsertionPointBefore(
+                                           SidebarNodeKind::kFolder, target_id));
+              }
+              return;
+            }
+          } else if (payload.node_kind == SidebarNodeKind::kFolder) {
+            output_drag_op = ui::mojom::DragOperation::kMove;
+            if (target_kind == SidebarNodeKind::kTab) {
+              DispatchReorderRootItem(space_id, SidebarNodeKind::kFolder,
+                                     payload.node_id,
+                                     append ? MakeInsertionPointAppend()
+                                            : MakeInsertionPointBefore(
+                                                  SidebarNodeKind::kTab,
+                                                  target_id));
+              return;
+            }
+            if (target_kind == SidebarNodeKind::kFolder) {
+              if (append) {
+                std::vector<std::pair<std::string, std::string>> fields = {
+                    {"space_id", space_id},
+                    {"folder_id", payload.node_id}};
+                if (!payload.source_parent_folder_id.empty()) {
+                  fields.push_back({"parent_folder_id",
+                                    payload.source_parent_folder_id});
+                }
+                DispatchShellEvent("reorder_folder", fields);
+              } else {
+                if (!payload.source_parent_folder_id.empty()) {
+                  DispatchShellEvent("reorder_folder", {
+                      {"space_id", space_id},
+                      {"folder_id", payload.node_id},
+                      {"parent_folder_id", payload.source_parent_folder_id},
+                      {"before_folder_id", target_id}});
+                } else {
+                  DispatchShellEvent("reorder_folder", {
+                      {"space_id", space_id},
+                      {"folder_id", payload.node_id},
+                      {"before_folder_id", target_id}});
+                }
+              }
+            }
+          }
+        },
+        space_id_, item_id_, target_kind_, target_id_, append_,
+        target_parent_folder_id_, target_folder_child_index_);
+  }
+
+  void OnDragExited() override {
+    drag_over_drop_target_ = false;
+    UpdateAppearance();
+  }
+
+ private:
+  void UpdateAppearance() {
+    SetBackground(drag_over_drop_target_
+                      ? views::CreateSolidBackground(ui::kColorSysPrimary)
+                      : nullptr);
+  }
+
+  const std::string space_id_;
+  const std::string item_id_;
+  const SidebarNodeKind target_kind_;
+  const std::string target_id_;
+  const bool append_;
+  const std::string target_parent_folder_id_;
+  const int target_folder_child_index_;
+  bool drag_over_drop_target_ = false;
+};
+
 class SidebarInlineRow : public views::LabelButton {
 
  public:
@@ -436,7 +644,7 @@ views::Label* AddPlaceholderLabel(views::View* parent, std::u16string text) {
   label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   label->SetAutoColorReadabilityEnabled(false);
   label->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
-  label->SetTextStyle(views::style::STYLE_BODY_4);
+  label->SetTextStyle(views::style::STYLE_BODY_5);
   label->SetBorder(views::CreateEmptyBorder(kPlaceholderInsets));
   return parent->AddChildView(std::move(label));
 }
@@ -490,6 +698,8 @@ BEGIN_METADATA(SidebarFolderRowView)
 END_METADATA
 BEGIN_METADATA(SidebarSeparatorRow)
 END_METADATA
+BEGIN_METADATA(SidebarInsertionLaneView)
+END_METADATA
 
 namespace {
 
@@ -532,6 +742,28 @@ SidebarFolderRowView* MahoSidebarTabListView::FindFolderRowByIdForTesting(
       tab_rows_,
       [&folder_id](SidebarFolderRowView* row) {
         return row->folder_id_for_testing() == folder_id;
+      });
+}
+
+views::View* MahoSidebarTabListView::FindInsertionLaneBeforeTabByIdForTesting(
+    const std::string& tab_id) {
+  return RecursiveFindView<SidebarInsertionLaneView>(
+      tab_rows_, [&tab_id](SidebarInsertionLaneView* lane) {
+        return lane && lane->GetVisible() &&
+               lane->target_kind_for_testing() == SidebarNodeKind::kTab &&
+               lane->target_id_for_testing() == tab_id &&
+               !lane->append_for_testing();
+      });
+}
+
+views::View* MahoSidebarTabListView::FindInsertionLaneBeforeFolderByIdForTesting(
+    const std::string& folder_id) {
+  return RecursiveFindView<SidebarInsertionLaneView>(
+      tab_rows_, [&folder_id](SidebarInsertionLaneView* lane) {
+        return lane && lane->GetVisible() &&
+               lane->target_kind_for_testing() == SidebarNodeKind::kFolder &&
+               lane->target_id_for_testing() == folder_id &&
+               !lane->append_for_testing();
       });
 }
 
@@ -612,6 +844,42 @@ bool ReadMahoDragData(const ui::OSExchangeData& data,
   }
   return DeserializeDragPayload(serialized, out);
 }
+
+namespace {
+
+base::DictValue MakeRootItem(SidebarNodeKind kind, const std::string& id) {
+  base::DictValue item;
+  item.Set("kind", kind == SidebarNodeKind::kTab ? "tab" : "folder");
+  item.Set("id", id);
+  return item;
+}
+
+base::DictValue MakeInsertionPointBefore(SidebarNodeKind target_kind,
+                                         const std::string& target_id) {
+  base::DictValue point;
+  point.Set("kind", "before");
+  point.Set("target", MakeRootItem(target_kind, target_id));
+  return point;
+}
+
+base::DictValue MakeInsertionPointAppend() {
+  base::DictValue point;
+  point.Set("kind", "append");
+  return point;
+}
+
+void DispatchReorderRootItem(const std::string& space_id,
+                             SidebarNodeKind item_kind,
+                             const std::string& item_id,
+                             base::DictValue insertion_point) {
+  base::DictValue dict;
+  dict.Set("space_id", space_id);
+  dict.Set("item", MakeRootItem(item_kind, item_id));
+  dict.Set("insertion_point", std::move(insertion_point));
+  DispatchShellEventDict("reorder_root_item", std::move(dict));
+}
+
+}  // namespace
 
 // --- SidebarTabRowView ---
 
@@ -824,15 +1092,17 @@ bool SidebarTabRowView::CanDrop(const ui::OSExchangeData& data) {
 
 int SidebarTabRowView::OnDragUpdated(const ui::DropTargetEvent& event) {
   SidebarDragPayload payload;
-  if (ReadMahoDragData(event.data(), payload)) {
-    active_drop_zone_ = ResolveDropZone(event, payload);
-    if (active_drop_zone_ == DropZoneForTesting::kNone) {
-      drag_over_drop_target_ = false;
-      UpdateAppearance();
-      return static_cast<int>(ui::mojom::DragOperation::kNone);
-    }
-  } else {
-    active_drop_zone_ = DropZoneForTesting::kBefore;
+  if (!ReadMahoDragData(event.data(), payload)) {
+    active_drop_zone_ = DropZoneForTesting::kNone;
+    drag_over_drop_target_ = false;
+    UpdateAppearance();
+    return static_cast<int>(ui::mojom::DragOperation::kNone);
+  }
+  active_drop_zone_ = ResolveDropZone(event, payload);
+  if (active_drop_zone_ == DropZoneForTesting::kNone) {
+    drag_over_drop_target_ = false;
+    UpdateAppearance();
+    return static_cast<int>(ui::mojom::DragOperation::kNone);
   }
   drag_over_drop_target_ = true;
   UpdateAppearance();
@@ -845,100 +1115,103 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
   const bool has_drag_payload = ReadMahoDragData(event.data(), drag_payload);
   const DropZoneForTesting drop_zone =
       has_drag_payload ? ResolveDropZone(event, drag_payload)
-                       : DropZoneForTesting::kBefore;
+                       : DropZoneForTesting::kNone;
   return base::BindOnce(
       [](Browser* browser, GURL url, std::string tab_id,
           MahoSidebarTabSection section, std::string space_id,
-          std::string target_parent_folder_id, int target_folder_child_index,
+          std::string source_parent_folder_id, int folder_child_index,
           int target_tab_strip_index, DropZoneForTesting drop_zone,
           const ui::DropTargetEvent& event,
           ui::mojom::DragOperation& output_drag_op,
           std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner) {
         SidebarDragPayload payload;
-        if (ReadMahoDragData(event.data(), payload)) {
-          output_drag_op = ui::mojom::DragOperation::kMove;
-          if (drop_zone == DropZoneForTesting::kSplit &&
-              payload.node_kind == SidebarNodeKind::kTab &&
-              !payload.node_id.empty() && target_tab_strip_index >= 0 &&
-              payload.tab_strip_index >= 0 &&
-              target_tab_strip_index != payload.tab_strip_index) {
-            TabStripModel* model = browser ? browser->tab_strip_model() : nullptr;
-            if (model &&
-                model->ContainsIndex(payload.tab_strip_index) &&
-                model->ContainsIndex(target_tab_strip_index) &&
-                !model->GetSplitForTab(payload.tab_strip_index).has_value() &&
-                !model->GetSplitForTab(target_tab_strip_index).has_value()) {
-              split_tabs::SplitTabVisualData visual_data(
-                  split_tabs::SplitTabLayout::kVertical, 0.5);
-              model->AddToNewSplit(
-                  {payload.tab_strip_index, target_tab_strip_index},
-                  visual_data,
-                  split_tabs::SplitTabCreatedSource::kDragAndDropTab);
-            }
-            return;
-          }
-          if (payload.node_kind == SidebarNodeKind::kTab &&
-              !payload.node_id.empty() && !tab_id.empty() &&
-              payload.node_id != tab_id) {
-            if (payload.origin == SidebarDragOrigin::kFavorites) {
-              DispatchShellEvent("unfavorite_tab",
-                                {{"tab_id", payload.node_id}});
-            }
-            const bool same_folder_drop =
-                !target_parent_folder_id.empty() &&
-                payload.source_parent_folder_id == target_parent_folder_id &&
-                payload.source_folder_child_index >= 0 &&
-                target_folder_child_index >= 0;
-            if (same_folder_drop) {
-              const bool is_no_op_before =
-                  drop_zone == DropZoneForTesting::kBefore &&
-                  payload.source_folder_child_index ==
-                      target_folder_child_index - 1;
-              const bool is_no_op_after =
-                  drop_zone == DropZoneForTesting::kAfter &&
-                  payload.source_folder_child_index ==
-                      target_folder_child_index + 1;
-              if (is_no_op_before || is_no_op_after) {
-                output_drag_op = ui::mojom::DragOperation::kNone;
-                return;
-              }
-
-              int to = target_folder_child_index;
-              if (drop_zone == DropZoneForTesting::kAfter) {
-                to = target_folder_child_index + 1;
-              }
-              if (payload.source_folder_child_index < target_folder_child_index) {
-                to -= 1;
-              }
-              DispatchShellEventEx("reorder_tab_in_folder", {
-                  ShellEventField("space_id", space_id),
-                  ShellEventField("folder_id", target_parent_folder_id),
-                  ShellEventField("tab_id", payload.node_id),
-                  ShellEventField("to", to)});
-            } else if (!payload.source_parent_folder_id.empty()) {
-              DispatchShellEvent("move_tab_to_root", {
-                  {"space_id", space_id},
-                  {"folder_id", payload.source_parent_folder_id},
-                  {"tab_id", payload.node_id},
-                  {"before_tab_id", tab_id}});
-            } else {
-              DispatchShellEvent("reorder_tab", {
-                  {"tab_id", payload.node_id},
-                  {"before_tab_id", tab_id}});
-            }
-          }
-          return;
-        }
-        if (!browser || !url.is_valid()) {
+        if (!ReadMahoDragData(event.data(), payload)) {
           output_drag_op = ui::mojom::DragOperation::kNone;
           return;
         }
-        output_drag_op = ui::mojom::DragOperation::kCopy;
-        browser->OpenURL(content::OpenURLParams(
-                             url, content::Referrer(),
-                             WindowOpenDisposition::CURRENT_TAB,
-                             ui::PAGE_TRANSITION_LINK, false),
-                         base::NullCallback());
+        output_drag_op = ui::mojom::DragOperation::kNone;
+
+        if (drop_zone == DropZoneForTesting::kSplit &&
+            payload.node_kind == SidebarNodeKind::kTab &&
+            !payload.node_id.empty() && target_tab_strip_index >= 0 &&
+            payload.tab_strip_index >= 0 &&
+            target_tab_strip_index != payload.tab_strip_index) {
+          output_drag_op = ui::mojom::DragOperation::kMove;
+          TabStripModel* model = browser ? browser->tab_strip_model() : nullptr;
+          if (model && model->ContainsIndex(payload.tab_strip_index) &&
+              model->ContainsIndex(target_tab_strip_index) &&
+              !model->GetSplitForTab(payload.tab_strip_index).has_value() &&
+              !model->GetSplitForTab(target_tab_strip_index).has_value()) {
+            split_tabs::SplitTabVisualData visual_data(
+                split_tabs::SplitTabLayout::kVertical, 0.5);
+            model->ActivateTabAt(
+                target_tab_strip_index,
+                TabStripUserGestureDetails(
+                    TabStripUserGestureDetails::GestureType::kOther));
+            model->AddToNewSplit(
+                {payload.tab_strip_index}, visual_data,
+                split_tabs::SplitTabCreatedSource::kDragAndDropTab);
+          }
+          return;
+        }
+
+        if (payload.node_kind == SidebarNodeKind::kTab &&
+            !payload.node_id.empty() && !tab_id.empty() &&
+            payload.node_id != tab_id) {
+          if (payload.origin == SidebarDragOrigin::kFavorites) {
+            DispatchShellEvent("unfavorite_tab",
+                              {{"tab_id", payload.node_id}});
+          }
+          if (!source_parent_folder_id.empty() &&
+              !payload.source_parent_folder_id.empty() &&
+              payload.source_parent_folder_id == source_parent_folder_id) {
+            const bool is_same_folder_neighbor =
+                payload.source_folder_child_index == folder_child_index - 1;
+            if (is_same_folder_neighbor) {
+              output_drag_op = ui::mojom::DragOperation::kNone;
+              return;
+            }
+          }
+          if (!payload.source_parent_folder_id.empty() &&
+              drop_zone == DropZoneForTesting::kBefore) {
+            output_drag_op = ui::mojom::DragOperation::kMove;
+            DispatchShellEvent("move_tab_to_root", {
+                {"space_id", space_id},
+                {"folder_id", payload.source_parent_folder_id},
+                {"tab_id", payload.node_id},
+                {"before_tab_id", tab_id}});
+            return;
+          }
+          if (drop_zone == DropZoneForTesting::kBefore) {
+            if (!source_parent_folder_id.empty()) {
+              DispatchShellEvent("move_tab_to_root", {
+                  {"space_id", space_id},
+                  {"folder_id", source_parent_folder_id},
+                  {"tab_id", payload.node_id},
+                  {"before_tab_id", tab_id}});
+            } else {
+              DispatchReorderRootItem(space_id, SidebarNodeKind::kTab,
+                                     payload.node_id,
+                                     MakeInsertionPointBefore(
+                                         SidebarNodeKind::kTab, tab_id));
+            }
+          }
+          return;
+        }
+
+        if (payload.node_kind == SidebarNodeKind::kFolder &&
+            !payload.node_id.empty() && !tab_id.empty()) {
+          if (drop_zone == DropZoneForTesting::kBefore) {
+            DispatchReorderRootItem(space_id, SidebarNodeKind::kFolder,
+                                   payload.node_id,
+                                   MakeInsertionPointBefore(
+                                       SidebarNodeKind::kTab, tab_id));
+          } else if (drop_zone == DropZoneForTesting::kAfter) {
+            DispatchReorderRootItem(space_id, SidebarNodeKind::kFolder,
+                                   payload.node_id,
+                                   MakeInsertionPointAppend());
+          }
+        }
       },
       browser_, drop_url_, tab_id_, section_, space_id_,
       source_parent_folder_id_, folder_child_index_, tab_index_, drop_zone);
@@ -1031,14 +1304,8 @@ void SidebarTabRowView::UpdateAppearance() {
   if (drag_over_drop_target_) {
     SetBackground(views::CreateRoundedRectBackground(ui::kColorSysSurface4,
                                                      kRowCornerRadiusDp));
-    SetBorder(views::CreateSolidSidedBorder(
-        active_drop_zone_ == DropZoneForTesting::kAfter
-            ? gfx::Insets::TLBR(0, kDropIndicatorInsetDp,
-                                kDropIndicatorThicknessDp,
-                                kDropIndicatorInsetDp)
-            : gfx::Insets::TLBR(kDropIndicatorThicknessDp,
-                                kDropIndicatorInsetDp, 0,
-                                kDropIndicatorInsetDp),
+    SetBorder(views::CreateRoundedRectBorder(
+        kDropIndicatorOutlineThicknessDp, kRowCornerRadiusDp,
         ui::kColorSysPrimary));
   } else if (active_) {
     SetBackground(views::CreateRoundedRectBackground(
@@ -1074,8 +1341,7 @@ void SidebarTabRowView::UpdateAppearance() {
 SidebarTabRowView::DropZoneForTesting SidebarTabRowView::ResolveDropZone(
     const ui::DropTargetEvent& event,
     const SidebarDragPayload& payload) const {
-  if (payload.node_kind != SidebarNodeKind::kTab || payload.node_id.empty() ||
-      payload.node_id == tab_id_) {
+  if (payload.node_id.empty() || payload.node_id == tab_id_) {
     return DropZoneForTesting::kNone;
   }
 
@@ -1083,22 +1349,16 @@ SidebarTabRowView::DropZoneForTesting SidebarTabRowView::ResolveDropZone(
   const int y = event.location().y();
   const int third = row_height / 3;
 
-  if (y >= third && y < row_height - third && tab_index_ >= 0) {
-    return DropZoneForTesting::kSplit;
+  if (payload.node_kind == SidebarNodeKind::kTab) {
+    if (y < third) {
+      return DropZoneForTesting::kBefore;
+    }
+    if (y >= third && y < row_height - third && tab_index_ >= 0) {
+      return DropZoneForTesting::kSplit;
+    }
   }
 
-  const bool same_folder_drop = !source_parent_folder_id_.empty() &&
-                                payload.source_parent_folder_id ==
-                                    source_parent_folder_id_ &&
-                                payload.source_folder_child_index >= 0 &&
-                                folder_child_index_ >= 0;
-  if (!same_folder_drop) {
-    return DropZoneForTesting::kBefore;
-  }
-
-  const int midpoint = std::max(row_height / 2, 1);
-  return y < midpoint ? DropZoneForTesting::kBefore
-                      : DropZoneForTesting::kAfter;
+  return DropZoneForTesting::kNone;
 }
 
 // --- SidebarFolderRowView ---
@@ -1113,7 +1373,6 @@ SidebarFolderRowView::SidebarFolderRowView(
     : folder_id_(node.folder_id),
       space_id_(std::move(active_space_id)),
       folder_is_pinned_(node.folder_is_pinned),
-      depth_(node.depth),
       next_sibling_folder_id_(std::move(next_sibling_folder_id)),
       parent_folder_id_(std::move(parent_folder_id)),
       is_expanded_(node.is_expanded) {
@@ -1246,76 +1505,28 @@ views::View::DropCallback SidebarFolderRowView::GetDropCallback(
           output_drag_op = ui::mojom::DragOperation::kNone;
           return;
         }
+        if (payload.node_id == folder_id) {
+          output_drag_op = ui::mojom::DragOperation::kNone;
+          return;
+        }
         output_drag_op = ui::mojom::DragOperation::kMove;
         if (payload.node_kind == SidebarNodeKind::kTab) {
           if (payload.origin == SidebarDragOrigin::kFavorites) {
             DispatchShellEvent("unfavorite_tab", {{"tab_id", payload.node_id}});
           }
-          DispatchShellEvent("move_tab_to_folder", {
-              {"space_id", space_id},
-              {"folder_id", folder_id},
-              {"tab_id", payload.node_id}});
+          if (drop_zone == DropZoneForTesting::kInto) {
+            DispatchShellEvent("move_tab_to_folder", {
+                {"space_id", space_id},
+                {"folder_id", folder_id},
+                {"tab_id", payload.node_id}});
+          }
         } else if (payload.node_kind == SidebarNodeKind::kFolder) {
-          const bool dragging_self = payload.node_id == folder_id;
-          const bool is_root_folder_target = parent_folder_id.empty();
-
-          if (!dragging_self && drop_zone == DropZoneForTesting::kBefore) {
-            if (is_root_folder_target) {
-              DispatchShellEvent("reorder_folder", {
-                  {"space_id", space_id},
-                  {"folder_id", payload.node_id},
-                  {"before_folder_id", folder_id}});
-              return;
-            }
-
-            if (!payload.source_parent_folder_id.empty() &&
-                payload.source_parent_folder_id == parent_folder_id) {
-              DispatchShellEvent("reorder_folder", {
-                  {"space_id", space_id},
-                  {"folder_id", payload.node_id},
-                  {"parent_folder_id", parent_folder_id},
-                  {"before_folder_id", folder_id}});
-              return;
-            }
+          if (drop_zone == DropZoneForTesting::kInto) {
+            DispatchShellEvent("move_folder_into_folder", {
+                {"space_id", space_id},
+                {"folder_id", payload.node_id},
+                {"target_folder_id", folder_id}});
           }
-
-          if (!dragging_self && drop_zone == DropZoneForTesting::kAfter) {
-            if (is_root_folder_target) {
-              std::vector<std::pair<std::string, std::string>> fields = {
-                  {"space_id", space_id},
-                  {"folder_id", payload.node_id}};
-              if (!next_sibling_folder_id.empty() &&
-                  next_sibling_folder_id != payload.node_id) {
-                fields.push_back({"before_folder_id", next_sibling_folder_id});
-              }
-              DispatchShellEvent("reorder_folder", fields);
-              return;
-            }
-
-            if (!payload.source_parent_folder_id.empty() &&
-                payload.source_parent_folder_id == parent_folder_id) {
-              std::vector<std::pair<std::string, std::string>> fields = {
-                  {"space_id", space_id},
-                  {"folder_id", payload.node_id},
-                  {"parent_folder_id", parent_folder_id}};
-              if (!next_sibling_folder_id.empty() &&
-                  next_sibling_folder_id != payload.node_id) {
-                fields.push_back({"before_folder_id", next_sibling_folder_id});
-              }
-              DispatchShellEvent("reorder_folder", fields);
-              return;
-            }
-          }
-
-          if (dragging_self) {
-            output_drag_op = ui::mojom::DragOperation::kNone;
-            return;
-          }
-
-          DispatchShellEvent("move_folder_into_folder", {
-              {"space_id", space_id},
-              {"folder_id", payload.node_id},
-              {"target_folder_id", folder_id}});
         }
       },
       folder_id_, space_id_, static_cast<Browser*>(nullptr), drop_zone,
@@ -1337,6 +1548,7 @@ void SidebarFolderRowView::WriteDragDataForView(views::View* sender,
   payload.origin = folder_is_pinned_ ? SidebarDragOrigin::kPinnedSection
                                      : SidebarDragOrigin::kNormalSection;
   payload.space_id = space_id_;
+  payload.source_parent_folder_id = parent_folder_id_;
   WriteMahoDragData(payload, data);
   data->provider().SetDragImage(CreateSidebarDragImage(sender),
                                 press_pt.OffsetFromOrigin());
@@ -1365,8 +1577,7 @@ void SidebarFolderRowView::UpdateAppearance() {
   }
   if (folder_icon_) {
     folder_icon_->SetImage(ui::ImageModel::FromVectorIcon(
-        vector_icons::kFolderChromeRefreshIcon,
-        ui::kColorSysPrimary,
+        vector_icons::kFolderChromeRefreshIcon, ui::kColorSysPrimary,
         kFolderGlyphSizeDp));
   }
   if (label_button_) {
@@ -1383,19 +1594,9 @@ void SidebarFolderRowView::UpdateAppearance() {
   if (show_drop_target) {
     SetBackground(views::CreateRoundedRectBackground(ui::kColorSysSurface4,
                                                      kRowCornerRadiusDp));
-    SetBorder(active_drop_zone_ == DropZoneForTesting::kInto
-                  ? views::CreateRoundedRectBorder(
-                        kDropIndicatorOutlineThicknessDp,
-                        kRowCornerRadiusDp, ui::kColorSysPrimary)
-                  : views::CreateSolidSidedBorder(
-                        active_drop_zone_ == DropZoneForTesting::kAfter
-                            ? gfx::Insets::TLBR(0, kDropIndicatorInsetDp,
-                                                kDropIndicatorThicknessDp,
-                                                kDropIndicatorInsetDp)
-                            : gfx::Insets::TLBR(kDropIndicatorThicknessDp,
-                                                kDropIndicatorInsetDp, 0,
-                                                kDropIndicatorInsetDp),
-                        ui::kColorSysPrimary));
+    SetBorder(views::CreateRoundedRectBorder(
+        kDropIndicatorOutlineThicknessDp, kRowCornerRadiusDp,
+        ui::kColorSysPrimary));
     return;
   }
   SetBackground(hovered ? views::CreateRoundedRectBackground(
@@ -1407,31 +1608,16 @@ void SidebarFolderRowView::UpdateAppearance() {
 SidebarFolderRowView::DropZoneForTesting SidebarFolderRowView::ResolveDropZone(
     const ui::DropTargetEvent& event,
     const SidebarDragPayload& payload) const {
-  if (payload.node_kind != SidebarNodeKind::kFolder) {
-    return DropZoneForTesting::kInto;
-  }
-
   if (payload.node_id.empty() || payload.node_id == folder_id_) {
     return DropZoneForTesting::kNone;
   }
 
-  const bool is_root_folder_target = depth_ == 0;
-  if (!is_root_folder_target && parent_folder_id_.empty()) {
+  if (payload.node_kind == SidebarNodeKind::kTab ||
+      payload.node_kind == SidebarNodeKind::kFolder) {
     return DropZoneForTesting::kInto;
   }
 
-  const int row_height = std::max(height(), 1);
-  const int top_threshold = std::max(row_height / 4, 1);
-  const int bottom_threshold = std::max((row_height * 3) / 4, top_threshold);
-  const int y = event.location().y();
-
-  if (y < top_threshold) {
-    return DropZoneForTesting::kBefore;
-  }
-  if (y >= bottom_threshold) {
-    return DropZoneForTesting::kAfter;
-  }
-  return DropZoneForTesting::kInto;
+  return DropZoneForTesting::kNone;
 }
 
 // --- MahoSidebarTabListView ---
@@ -1589,7 +1775,7 @@ int MahoSidebarTabListView::OnDragUpdated(const ui::DropTargetEvent& event) {
 views::View::DropCallback MahoSidebarTabListView::GetDropCallback(
     const ui::DropTargetEvent& event) {
   return base::BindOnce(
-      [](Browser* browser,
+      [](Browser* browser, std::string space_id,
          const ui::DropTargetEvent& event,
          ui::mojom::DragOperation& output_drag_op,
          std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner) {
@@ -1599,6 +1785,23 @@ views::View::DropCallback MahoSidebarTabListView::GetDropCallback(
           if (payload.origin == SidebarDragOrigin::kFavorites &&
               payload.node_kind == SidebarNodeKind::kTab) {
             DispatchShellEvent("unfavorite_tab", {{"tab_id", payload.node_id}});
+          }
+          if (payload.node_kind == SidebarNodeKind::kTab &&
+              !payload.node_id.empty()) {
+            if (!payload.source_parent_folder_id.empty()) {
+              DispatchShellEvent("move_tab_to_root", {
+                  {"space_id", space_id},
+                  {"folder_id", payload.source_parent_folder_id},
+                  {"tab_id", payload.node_id}});
+            }
+            DispatchReorderRootItem(space_id, SidebarNodeKind::kTab,
+                                   payload.node_id,
+                                   MakeInsertionPointAppend());
+          } else if (payload.node_kind == SidebarNodeKind::kFolder &&
+                     !payload.node_id.empty()) {
+            DispatchReorderRootItem(space_id, SidebarNodeKind::kFolder,
+                                   payload.node_id,
+                                   MakeInsertionPointAppend());
           }
           return;
         }
@@ -1615,7 +1818,7 @@ views::View::DropCallback MahoSidebarTabListView::GetDropCallback(
                              ui::PAGE_TRANSITION_LINK, false),
                          base::NullCallback());
       },
-      browser_);
+      browser_, active_space_id_);
 }
 
 void MahoSidebarTabListView::OnDragExited() {
@@ -1695,8 +1898,9 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
                                 pinned_drop_lane_revealed_;
     auto* pinned_drop_target =
         static_cast<SidebarSectionDropTarget*>(pinned_section_target_);
-    pinned_drop_target->SetMinDropTargetHeight(
-        pinned_visible ? kRowHeightDp : 0);
+    if (model.pinned_tree.empty()) {
+      pinned_drop_target->SetMinDropTargetHeight(kRowHeightDp);
+    }
     pinned_section_target_->SetVisible(pinned_visible);
     pinned_separator_->SetVisible(pinned_visible);
     new_tab_button_ = AddInlineRow(
@@ -1838,7 +2042,7 @@ void MahoSidebarTabListView::RebuildTreeSection(
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
   if (!nodes.empty()) {
-    RebuildTreeNodes(rows_container, nodes, section, browser);
+    RebuildTreeNodes(rows_container, nodes, section, browser, std::string());
   } else {
     auto* drop_target =
         static_cast<SidebarSectionDropTarget*>(section_container);
@@ -1850,7 +2054,8 @@ void MahoSidebarTabListView::RebuildTreeNodes(
     views::View* parent,
     const std::vector<SidebarTreeNode>& nodes,
     MahoSidebarTabSection section,
-    Browser* browser) {
+    Browser* browser,
+    const std::string& parent_folder_id) {
   for (size_t index = 0; index < nodes.size(); ++index) {
     const auto& node = nodes[index];
     if (node.kind == SidebarNodeKind::kFolder) {
@@ -1867,6 +2072,9 @@ void MahoSidebarTabListView::RebuildTreeNodes(
         }
       }
 
+      parent->AddChildView(std::make_unique<SidebarInsertionLaneView>(
+          active_space_id_, node.folder_id, SidebarNodeKind::kFolder,
+          node.folder_id));
       parent->AddChildView(std::make_unique<SidebarFolderRowView>(
           node, section, active_space_id_,
           base::BindRepeating(&MahoSidebarTabListView::ToggleFolderExpanded,
@@ -1874,7 +2082,16 @@ void MahoSidebarTabListView::RebuildTreeNodes(
           next_sibling_folder_id, sibling_parent_folder_id));
 
       if (node.is_expanded && !node.children.empty()) {
-        RebuildTreeNodes(parent, node.children, section, browser);
+        RebuildTreeNodes(parent, node.children, section, browser,
+                         node.folder_id);
+      }
+
+      if (index + 1 == nodes.size()) {
+        parent->AddChildView(std::make_unique<SidebarInsertionLaneView>(
+            active_space_id_, node.folder_id, SidebarNodeKind::kFolder,
+            next_sibling_folder_id.empty() ? node.folder_id
+                                           : next_sibling_folder_id,
+            /*append=*/true));
       }
     } else if (node.kind == SidebarNodeKind::kSplitGroup) {
       auto split_container = std::make_unique<views::BoxLayoutView>();
@@ -1884,7 +2101,8 @@ void MahoSidebarTabListView::RebuildTreeNodes(
           gfx::Insets::TLBR(0, 2, 0, 0),
           SkColorSetA(SK_ColorGRAY, 0x60)));
       auto* container_ptr = parent->AddChildView(std::move(split_container));
-      RebuildTreeNodes(container_ptr, node.children, section, browser);
+      RebuildTreeNodes(container_ptr, node.children, section, browser,
+                       parent_folder_id);
     } else {
       content::WebContents* contents = nullptr;
       tabs::TabInterface* tab_iface = nullptr;
@@ -1899,6 +2117,9 @@ void MahoSidebarTabListView::RebuildTreeNodes(
           tab_iface ? TabUIHelper::From(tab_iface) : nullptr;
       ui::ImageModel fav = tab_ui ? tab_ui->GetFavicon() : ui::ImageModel();
 
+      parent->AddChildView(std::make_unique<SidebarInsertionLaneView>(
+          active_space_id_, node.tab_id, SidebarNodeKind::kTab, node.tab_id,
+          /*append=*/false, parent_folder_id, static_cast<int>(index)));
       auto* row_view = parent->AddChildView(std::make_unique<SidebarTabRowView>(
           node, std::move(fav), browser, section, active_space_id_,
           ResolveTabDisplayText(node),
@@ -1911,6 +2132,12 @@ void MahoSidebarTabListView::RebuildTreeNodes(
           base::BindRepeating(&MahoSidebarTabListView::CommitTabTitleChange,
                               weak_factory_.GetWeakPtr())));
       row_view->SetTooltipText(GetNodeTooltipText(node));
+
+      if (index + 1 == nodes.size()) {
+        parent->AddChildView(std::make_unique<SidebarInsertionLaneView>(
+            active_space_id_, node.tab_id, SidebarNodeKind::kTab, node.tab_id,
+            /*append=*/true, parent_folder_id, static_cast<int>(index + 1)));
+      }
     }
   }
 }

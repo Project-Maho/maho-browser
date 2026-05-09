@@ -1,0 +1,21 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+source_set("shields") {
+  sources = [
+    "maho_shield_bubble_view.cc",
+    "maho_shield_bubble_view.h",
+  ]
+  deps = [
+    "//maho/browser:maho_core_holder",
+    "//maho/browser/net",
+    "//maho/third_party/maho:maho_bridge",
+    "//base",
+    "//chrome/browser/ui",
+    "//content/public/browser",
+    "//ui/base",
+    "//ui/color",
+    "//ui/gfx",
+    "//ui/views",
+    "//url",
+  ]
+}

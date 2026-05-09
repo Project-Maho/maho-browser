@@ -6,25 +6,25 @@
 #include <string_view>
 
 #include "base/functional/bind.h"
-#include "base/functional/callback_helpers.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
+#include "maho-chromium/browser/ui/views/sidebar/maho_sidebar_top_bar_mac_sf_symbol_helper.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/components/constants/webui_url_constants.h"
-#include "content/public/browser/page_navigator.h"
-#include "content/public/common/referrer.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/models/image_model.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/background.h"
-#include "maho-chromium/browser/ui/views/sidebar/maho_sidebar_top_bar_mac_sf_symbol_helper.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/image_button.h"
@@ -283,7 +283,18 @@ void MahoSidebarTopBarView::OnAiPressed(const ui::Event& event) {
   if (!browser_) {
     return;
   }
-  browser_->GetFeatures().side_panel_ui()->Show(SidePanelEntryId::kMahoAiPanel);
+
+  auto* side_panel_ui = browser_->GetFeatures().side_panel_ui();
+  if (side_panel_ui->GetCurrentEntryId(SidePanelType::kContent) ==
+      SidePanelEntryId::kMahoAiPanel) {
+    side_panel_ui->Close(SidePanelType::kContent,
+                         SidePanelEntryHideReason::kSidePanelClosed,
+                         /*suppress_animations=*/true);
+    return;
+  }
+
+  side_panel_ui->Show(SidePanelEntryKey(SidePanelEntryId::kMahoAiPanel),
+                      SidePanelOpenTrigger::kToolbarButton);
 }
 
 void MahoSidebarTopBarView::OnToggleSidebarPressed(const ui::Event& event) {

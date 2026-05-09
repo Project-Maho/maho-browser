@@ -2,11 +2,13 @@
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_interactive_test_base.h"
 
+#include "base/test/run_until.h"
 #include "chrome/browser/ui/browser.h"
 #include "content/public/test/browser_test.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
+#include "maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_search_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
@@ -227,6 +229,130 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
 
   EXPECT_FALSE(search->is_editing_for_testing())
       << "ESC should exit search editing mode";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                        HoverRevealsUtilityIconAndClickOpensUtilityPanel) {
+  SeedProfile(2);
+
+  MahoSidebarSearchView* search = sidebar_->search_view_for_testing();
+  ASSERT_TRUE(search);
+
+  auto* icon = search->utility_icon_for_testing();
+  ASSERT_TRUE(icon);
+  auto* idle_button = search->idle_button_for_testing();
+  ASSERT_TRUE(idle_button);
+  auto* hover_utility_slot = search->utility_icon_slot_for_testing();
+  ASSERT_TRUE(hover_utility_slot);
+  EXPECT_FALSE(icon->GetVisible());
+  EXPECT_FALSE(icon->IsHoverVisibleForTesting());
+  EXPECT_FALSE(icon->IsPanelOpenForTesting());
+  EXPECT_FALSE(hover_utility_slot->GetVisible())
+      << "Baseline pill state should not expose an empty utility slot";
+
+  const gfx::Rect idle_bounds_before_hover = idle_button->GetBoundsInScreen();
+
+  const gfx::Point idle_center = idle_button->GetBoundsInScreen().CenterPoint();
+  ASSERT_TRUE(ui_controls::SendMouseMove(idle_center.x(), idle_center.y()));
+  ASSERT_TRUE(base::test::RunUntil([&]() { return icon->GetVisible(); }));
+  EXPECT_TRUE(icon->IsHoverVisibleForTesting())
+      << "Hovering the sidebar pill should reveal the utility icon";
+  EXPECT_TRUE(hover_utility_slot->GetVisible())
+      << "Utility slot visibility should follow the actual hover affordance";
+
+  const gfx::Rect idle_bounds_after_hover = idle_button->GetBoundsInScreen();
+  const gfx::Rect icon_bounds = icon->GetBoundsInScreen();
+  EXPECT_EQ(idle_bounds_before_hover.size(), idle_bounds_after_hover.size())
+      << "Hover-only utility affordance should not resize the pill";
+  EXPECT_EQ(hover_utility_slot, icon->parent())
+      << "Utility affordance should live in the dedicated far-right slot";
+  EXPECT_EQ(idle_button, hover_utility_slot->parent())
+      << "Utility affordance should be attached to the idle pill surface";
+  EXPECT_GE(hover_utility_slot->GetBoundsInScreen().right(),
+            idle_bounds_after_hover.right() - 10)
+      << "Utility slot should occupy the far-right edge once the baseline icon is removed";
+  EXPECT_GE(icon_bounds.right(), idle_bounds_after_hover.right() - 10)
+      << "Utility affordance should sit at the far-right edge of the pill";
+
+  const gfx::Point icon_center = icon->GetBoundsInScreen().CenterPoint();
+  ASSERT_TRUE(ui_controls::SendMouseMove(icon_center.x(), icon_center.y()));
+  base::RunLoop click_loop;
+  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
+      ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
+      click_loop.QuitClosure()));
+  click_loop.Run();
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(base::test::RunUntil([&]() { return icon->IsPanelOpenForTesting(); }));
+  EXPECT_TRUE(icon->GetVisible())
+      << "Utility icon should remain visible while its panel is open";
+  EXPECT_TRUE(icon->IsHoverVisibleForTesting())
+      << "Panel opening should not immediately hide hover visibility";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       EditingAndPlaceholderSuppressUtilityIcon) {
+  SeedProfile(2);
+
+  MahoSidebarSearchView* search = sidebar_->search_view_for_testing();
+  ASSERT_TRUE(search);
+
+  auto* icon = search->utility_icon_for_testing();
+  ASSERT_TRUE(icon);
+  auto* idle_button = search->idle_button_for_testing();
+  ASSERT_TRUE(idle_button);
+  auto* utility_slot = search->utility_icon_slot_for_testing();
+  ASSERT_TRUE(utility_slot);
+
+  const gfx::Point idle_center = idle_button->GetBoundsInScreen().CenterPoint();
+  ASSERT_TRUE(ui_controls::SendMouseMove(idle_center.x(), idle_center.y()));
+  ASSERT_TRUE(base::test::RunUntil([&]() { return icon->GetVisible(); }));
+  EXPECT_TRUE(icon->IsHoverVisibleForTesting());
+
+  ASSERT_TRUE(ui_controls::SendMouseMove(idle_center.x(), idle_center.y()));
+  base::RunLoop edit_loop;
+  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
+      ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
+      edit_loop.QuitClosure()));
+  edit_loop.Run();
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return search->is_editing_for_testing() && !icon->GetVisible();
+  }));
+  EXPECT_FALSE(utility_slot->GetVisible())
+      << "Editing should suppress the utility slot together with the icon";
+  EXPECT_FALSE(icon->IsHoverVisibleForTesting())
+      << "Editing should clear hover visibility for the utility icon";
+  EXPECT_FALSE(icon->IsPanelOpenForTesting());
+
+  base::RunLoop esc_loop;
+  ASSERT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
+      browser()->window()->GetNativeWindow(), ui::VKEY_ESCAPE,
+      false, false, false, false, esc_loop.QuitClosure()));
+  esc_loop.Run();
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(base::test::RunUntil([&]() { return !search->is_editing_for_testing(); }));
+
+  MahoSidebarSearchModel placeholder_model = GetViewState().search;
+  placeholder_model.display_mode = MahoSidebarAddressDisplayMode::kSearchPlaceholder;
+  placeholder_model.force_placeholder_for_empty_favorites = true;
+  search->Update(placeholder_model);
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(base::test::RunUntil([&]() { return !icon->GetVisible(); }));
+  EXPECT_FALSE(utility_slot->GetVisible())
+      << "Placeholder mode should keep the utility slot hidden";
+  EXPECT_FALSE(icon->IsHoverVisibleForTesting())
+      << "Placeholder mode should suppress the hover-revealed utility icon";
+
+  ASSERT_TRUE(ui_controls::SendMouseMove(idle_center.x(), idle_center.y()));
+  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(icon->GetVisible())
+      << "Placeholder mode should keep the utility affordance hidden even on hover";
+  EXPECT_FALSE(icon->IsHoverVisibleForTesting())
+      << "Placeholder mode should continue suppressing hover visibility";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,

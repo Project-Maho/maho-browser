@@ -4,32 +4,31 @@ import {
   PageHandlerFactory,
   PageHandlerRemote,
 } from './maho_space_config.mojom-webui.js';
-import type {ProfileInfo, SpaceInfo} from './maho_space_config.mojom-webui.js';
+import type {SpaceInfo} from './maho_space_config.mojom-webui.js';
+import {
+  SPACE_THEME_COLOR_PRESETS,
+  cssToHex,
+  computeHarmonyColors,
+  hsbToCss,
+  hsbToCssAlpha,
+} from '//resources/maho_common/maho_theme_utils.js';
+import type {ColorHarmony, SpaceColor, SpaceThemeData} from '//resources/maho_common/maho_theme_utils.js';
 
-interface ColorPreset {
-  title: string;
-  h: number;
-  s: number;
-  b: number;
-}
+const COLOR_PRESETS = SPACE_THEME_COLOR_PRESETS;
 
-const COLOR_PRESETS: ColorPreset[] = [
-  {title: 'Cream', h: 0.10, s: 0.15, b: 0.95},
-  {title: 'Pink', h: 0.92, s: 0.80, b: 0.90},
-  {title: 'Purple', h: 0.75, s: 0.80, b: 0.90},
-  {title: 'Red', h: 0.00, s: 0.80, b: 0.90},
-  {title: 'Orange', h: 0.08, s: 0.80, b: 0.90},
-  {title: 'Yellow', h: 0.15, s: 0.80, b: 0.90},
-  {title: 'Green', h: 0.35, s: 0.80, b: 0.90},
-  {title: 'Blue', h: 0.58, s: 0.80, b: 0.90},
-  {title: 'Indigo', h: 0.62, s: 0.30, b: 0.55},
-];
+type ThemeMode = 'solid'|'zen'|'gradient';
 
 const DEFAULT_COLOR_INDEX = 7;
 
 let handler: PageHandlerRemote;
 let currentSpace: SpaceInfo | null = null;
 let selectedColorIndex = DEFAULT_COLOR_INDEX;
+let mode: ThemeMode = 'solid';
+let grain = 0;
+let brightnessVal = 90;
+let harmony: ColorHarmony = 'single_analogous';
+let opacity = 1;
+let initialThemeJson = '';
 let spaceName = '';
 let spaceIcon = '⊞';
 let saving = false;
@@ -43,35 +42,15 @@ interface DomRefs {
   headerIcon: HTMLElement;
   colorDot: HTMLElement;
   palette: HTMLElement;
+  modeTabs: HTMLElement;
+  grainSlider: HTMLInputElement;
+  brightnessSlider: HTMLInputElement;
+  harmonyRow: HTMLElement;
+  opacitySlider: HTMLInputElement;
+  gradientGroup: HTMLElement;
 }
 
 let dom: DomRefs;
-
-function hsbToCss(h: number, s: number, b: number): string {
-  const l = b * (1 - s / 2);
-  const sl = l === 0 || l === 1 ? 0 : (b - l) / Math.min(l, 1 - l);
-  const hDeg = Math.round(h * 360);
-  const sPct = Math.round(sl * 100);
-  const lPct = Math.round(l * 100);
-  return `hsl(${hDeg}, ${sPct}%, ${lPct}%)`;
-}
-
-function cssToHex(cssColor: string): string {
-  const d = document.createElement('div');
-  d.style.color = cssColor;
-  document.body.appendChild(d);
-  const rgb = getComputedStyle(d).color;
-  document.body.removeChild(d);
-  const m = rgb.match(/(\d+)/g);
-  if (!m) {
-    return '#000000';
-  }
-  return '#' +
-      m.slice(0, 3)
-          .map((n: string) => parseInt(n, 10).toString(16).padStart(2, '0'))
-          .join('')
-          .toUpperCase();
-}
 
 function hexToClosestPresetIndex(hex: string): number {
   const d = document.createElement('div');
@@ -83,15 +62,19 @@ function hexToClosestPresetIndex(hex: string): number {
   if (!m) {
     return DEFAULT_COLOR_INDEX;
   }
-  const r = parseInt(m[0], 10) / 255;
-  const g = parseInt(m[1], 10) / 255;
-  const bv = parseInt(m[2], 10) / 255;
+  const [rStr, gStr, bStr] = m;
+  if (!rStr || !gStr || !bStr) {
+    return DEFAULT_COLOR_INDEX;
+  }
+  const r = parseInt(rStr, 10) / 255;
+  const g = parseInt(gStr, 10) / 255;
+  const bv = parseInt(bStr, 10) / 255;
 
   let bestIndex = 0;
   let bestDist = Infinity;
   for (let i = 0; i < COLOR_PRESETS.length; i++) {
-    const preset = COLOR_PRESETS[i];
-    const css = hsbToCss(preset.h, preset.s, preset.b);
+    const preset = COLOR_PRESETS[i]!;
+    const css = hsbToCss(preset.hue, preset.saturation, preset.brightness);
     const d2 = document.createElement('div');
     d2.style.color = css;
     document.body.appendChild(d2);
@@ -101,9 +84,13 @@ function hexToClosestPresetIndex(hex: string): number {
     if (!m2) {
       continue;
     }
-    const pr = parseInt(m2[0], 10) / 255;
-    const pg = parseInt(m2[1], 10) / 255;
-    const pb = parseInt(m2[2], 10) / 255;
+    const [prStr, pgStr, pbStr] = m2;
+    if (!prStr || !pgStr || !pbStr) {
+      continue;
+    }
+    const pr = parseInt(prStr, 10) / 255;
+    const pg = parseInt(pgStr, 10) / 255;
+    const pb = parseInt(pbStr, 10) / 255;
     const dist = (r - pr) ** 2 + (g - pg) ** 2 + (bv - pb) ** 2;
     if (dist < bestDist) {
       bestDist = dist;
@@ -131,7 +118,7 @@ function getColorHex(): string {
   if (!c) {
     return '#5F8BFF';
   }
-  return cssToHex(hsbToCss(c.h, c.s, c.b));
+  return cssToHex(hsbToCss(c.hue, c.saturation, brightnessVal / 100));
 }
 
 function buildThemeJson(): string {
@@ -139,15 +126,26 @@ function buildThemeJson(): string {
   if (!c) {
     return '';
   }
-  return JSON.stringify({
-    type: 'solid',
-    color: {
-      hue: c.h,
-      saturation: c.s,
-      brightness: c.b,
-      grain: 0,
-    },
-  });
+  const bAdj = brightnessVal / 100;
+  const spaceColor: SpaceColor = {
+    hue: c.hue,
+    saturation: c.saturation,
+    brightness: bAdj,
+    grain: grain / 100,
+  };
+  let theme: SpaceThemeData;
+  if (mode === 'gradient') {
+    theme = {
+      type: 'gradient',
+      gradientColors: computeHarmonyColors(spaceColor, harmony),
+      harmony,
+      opacity,
+      texture: grain / 100,
+    };
+  } else {
+    theme = {type: 'solid', color: spaceColor};
+  }
+  return JSON.stringify(theme);
 }
 
 function updateColorUI(): void {
@@ -155,12 +153,20 @@ function updateColorUI(): void {
   if (!c) {
     return;
   }
-  const color = hsbToCss(c.h, c.s, c.b);
+  const color = hsbToCss(c.hue, c.saturation, brightnessVal / 100);
   dom.colorDot.style.background = color;
-  dom.headerIcon.style.background = hsbToCss(c.h, c.s * 0.4, c.b * 0.85) + '38';
+  dom.headerIcon.style.background =
+      hsbToCssAlpha(c.hue, c.saturation * 0.4, (brightnessVal / 100) * 0.85, 0.22);
 
   dom.palette.querySelectorAll('.scfg-color-swatch').forEach((s, i) => {
     s.classList.toggle('active', i === selectedColorIndex);
+  });
+  dom.modeTabs.querySelectorAll('.scfg-mode-tab').forEach((t) => {
+    t.classList.toggle('active', t.getAttribute('data-mode') === mode);
+  });
+  dom.gradientGroup.classList.toggle('is-hidden', mode !== 'gradient');
+  dom.harmonyRow.querySelectorAll('.scfg-harmony-btn').forEach((t) => {
+    t.classList.toggle('active', t.getAttribute('data-harmony') === harmony);
   });
 }
 
@@ -171,7 +177,7 @@ function buildPalette(): void {
     if (i === selectedColorIndex) {
       swatch.classList.add('active');
     }
-    swatch.style.background = hsbToCss(c.h, c.s, c.b);
+    swatch.style.background = hsbToCss(c.hue, c.saturation, c.brightness);
     swatch.addEventListener('click', () => {
       selectedColorIndex = i;
       updateColorUI();
@@ -237,6 +243,122 @@ function buildUI(): void {
 
   colorRow.append(colorInner, palette);
 
+  const modeRow = el('div', 'scfg-card-row');
+  const modeInner = el('div', 'scfg-icon-row');
+  const modeIcon = el('div', 'scfg-icon-row-icon', '◌');
+  const modeText = el('div', 'scfg-icon-row-text');
+  const modeTitle = el('div', 'scfg-icon-row-title', 'Mode');
+  const modeDesc = el('div', 'scfg-icon-row-desc', 'Solid, Zen, or gradient');
+  modeText.append(modeTitle, modeDesc);
+  const modeTabs = el('div', 'scfg-mode-tabs');
+  dom.modeTabs = modeTabs;
+  const modes: {id: ThemeMode; label: string}[] = [
+    {id: 'solid', label: 'Solid'},
+    {id: 'zen', label: 'Zen'},
+    {id: 'gradient', label: 'Gradient'},
+  ];
+  for (const m of modes) {
+    const tab = el('button', 'scfg-mode-tab', m.label);
+    tab.type = 'button';
+    tab.dataset['mode'] = m.id;
+    if (m.id === mode) {
+      tab.classList.add('active');
+    }
+    tab.addEventListener('click', () => {
+      mode = m.id;
+      updateColorUI();
+    });
+    modeTabs.appendChild(tab);
+  }
+  modeInner.append(modeIcon, modeText, modeTabs);
+  modeRow.appendChild(modeInner);
+
+  const grainRow = el('div', 'scfg-card-row');
+  const grainInner = el('div', 'scfg-icon-row');
+  const grainIcon = el('div', 'scfg-icon-row-icon', '◌');
+  const grainText = el('div', 'scfg-icon-row-text');
+  const grainTitle = el('div', 'scfg-icon-row-title', 'Grain');
+  const grainDesc = el('div', 'scfg-icon-row-desc', 'Texture for solid and gradient themes');
+  grainText.append(grainTitle, grainDesc);
+  const grainSlider = el('input', 'scfg-slider-input');
+  grainSlider.type = 'range';
+  grainSlider.min = '0';
+  grainSlider.max = '100';
+  grainSlider.value = String(grain);
+  grainSlider.addEventListener('input', () => {
+    grain = parseInt(grainSlider.value, 10);
+  });
+  dom.grainSlider = grainSlider;
+  grainInner.append(grainIcon, grainText, grainSlider);
+  grainRow.appendChild(grainInner);
+
+  const brightnessRow = el('div', 'scfg-card-row');
+  const brightnessInner = el('div', 'scfg-icon-row');
+  const brightnessIcon = el('div', 'scfg-icon-row-icon', '☼');
+  const brightnessText = el('div', 'scfg-icon-row-text');
+  const brightnessTitle = el('div', 'scfg-icon-row-title', 'Brightness');
+  const brightnessDesc = el('div', 'scfg-icon-row-desc', 'Adjust the selected color tone');
+  brightnessText.append(brightnessTitle, brightnessDesc);
+  const brightnessSlider = el('input', 'scfg-slider-input');
+  brightnessSlider.type = 'range';
+  brightnessSlider.min = '15';
+  brightnessSlider.max = '100';
+  brightnessSlider.value = String(brightnessVal);
+  brightnessSlider.addEventListener('input', () => {
+    brightnessVal = parseInt(brightnessSlider.value, 10);
+    updateColorUI();
+  });
+  dom.brightnessSlider = brightnessSlider;
+  brightnessInner.append(brightnessIcon, brightnessText, brightnessSlider);
+  brightnessRow.appendChild(brightnessInner);
+
+  const gradientGroup = el('div', 'scfg-gradient-only is-hidden');
+  dom.gradientGroup = gradientGroup;
+  const harmonyRow = el('div', 'scfg-harmony-row');
+  dom.harmonyRow = harmonyRow;
+  const harmonyButtons: {id: ColorHarmony; label: string}[] = [
+    {id: 'complementary', label: 'Comp'},
+    {id: 'single_analogous', label: 'Analog'},
+    {id: 'split_complementary', label: 'Split'},
+    {id: 'triadic', label: 'Triad'},
+    {id: 'custom', label: 'Custom'},
+  ];
+  for (const h of harmonyButtons) {
+    const button = el('button', 'scfg-harmony-btn', h.label);
+    button.type = 'button';
+    button.dataset['harmony'] = h.id;
+    if (h.id === harmony) {
+      button.classList.add('active');
+    }
+    button.addEventListener('click', () => {
+      harmony = h.id;
+      updateColorUI();
+    });
+    harmonyRow.appendChild(button);
+  }
+
+  const opacityRow = el('div', 'scfg-card-row');
+  const opacityInner = el('div', 'scfg-icon-row');
+  const opacityIcon = el('div', 'scfg-icon-row-icon', '◍');
+  const opacityText = el('div', 'scfg-icon-row-text');
+  const opacityTitle = el('div', 'scfg-icon-row-title', 'Opacity');
+  const opacityDesc = el('div', 'scfg-icon-row-desc', 'Blend strength for gradient themes');
+  opacityText.append(opacityTitle, opacityDesc);
+  const opacitySlider = el('input', 'scfg-slider-input');
+  opacitySlider.type = 'range';
+  opacitySlider.min = '0';
+  opacitySlider.max = '1';
+  opacitySlider.step = '0.01';
+  opacitySlider.value = String(opacity);
+  opacitySlider.addEventListener('input', () => {
+    opacity = parseFloat(opacitySlider.value);
+  });
+  dom.opacitySlider = opacitySlider;
+  opacityInner.append(opacityIcon, opacityText, opacitySlider);
+  opacityRow.appendChild(opacityInner);
+
+  gradientGroup.append(harmonyRow, opacityRow);
+
   const profileRow = el('div', 'scfg-card-row');
   const profileInner = el('div', 'scfg-icon-row');
   const profileIcon = el('div', 'scfg-icon-row-icon', '👤');
@@ -265,7 +387,9 @@ function buildUI(): void {
   dom.saveBtn = saveBtn;
   actions.append(cancelBtn, saveBtn);
 
-  root.append(header, nameRow, iconRow, colorRow, profileRow, spacer, actions);
+  root.append(
+      header, nameRow, iconRow, colorRow, modeRow, grainRow, brightnessRow,
+      gradientGroup, profileRow, spacer, actions);
 }
 
 async function handleSave(): Promise<void> {
@@ -278,7 +402,9 @@ async function handleSave(): Promise<void> {
 
   const nameChanged = spaceName !== currentSpace.name;
   const iconChanged = spaceIcon !== currentSpace.icon;
-  const colorChanged = getColorHex() !== currentSpace.color;
+  const currentThemeJson = buildThemeJson();
+  const colorChanged = getColorHex() !== currentSpace.color ||
+      currentThemeJson !== initialThemeJson;
   const profileChanged =
       (dom.profileSelect.value || null) !== (currentSpace.profileId || null);
 
@@ -299,7 +425,14 @@ async function handleSave(): Promise<void> {
   }
 
   if (promises.length > 0) {
-    await Promise.all(promises);
+    const results = await Promise.all(promises);
+    const allSucceeded = results.every((r) => r.success);
+    if (!allSucceeded) {
+      saving = false;
+      dom.saveBtn.disabled = false;
+      dom.saveBtn.textContent = 'Save';
+      return;
+    }
   }
 
   handler.closeDialog();
@@ -377,8 +510,62 @@ async function initialize(): Promise<void> {
   spaceName = info.name;
   spaceIcon = info.icon || '⊞';
 
-  if (info.color) {
+  const themeSource =
+      (info as SpaceInfo & {themeJson?: string; theme?: string}).themeJson ||
+      (info as SpaceInfo & {themeJson?: string; theme?: string}).theme || '';
+  if (themeSource) {
+    try {
+      const theme = JSON.parse(themeSource) as SpaceThemeData;
+      if (theme.type === 'gradient') {
+        mode = 'gradient';
+        harmony = theme.harmony;
+        opacity = theme.opacity;
+        grain = Math.round(theme.texture * 100);
+        const primary =
+            theme.gradientColors.find((color: {isPrimary: boolean}) => color.isPrimary) ||
+            theme.gradientColors[0];
+        if (primary) {
+          brightnessVal = Math.round(primary.brightness * 100);
+          selectedColorIndex = hexToClosestPresetIndex(
+              cssToHex(hsbToCss(primary.hue, primary.saturation, primary.brightness)));
+        }
+        initialThemeJson = themeSource;
+      } else {
+        mode = 'solid';
+        brightnessVal = Math.round(theme.color.brightness * 100);
+        grain = Math.round(theme.color.grain * 100);
+        selectedColorIndex = hexToClosestPresetIndex(
+            cssToHex(hsbToCss(
+                theme.color.hue, theme.color.saturation, theme.color.brightness)));
+        initialThemeJson = themeSource;
+      }
+    } catch {
+      if (info.color) {
+        selectedColorIndex = hexToClosestPresetIndex(info.color);
+        brightnessVal = Math.round(COLOR_PRESETS[selectedColorIndex]!.brightness * 100);
+        initialThemeJson = JSON.stringify({
+          type: 'solid',
+          color: {
+            hue: COLOR_PRESETS[selectedColorIndex]!.hue,
+            saturation: COLOR_PRESETS[selectedColorIndex]!.saturation,
+            brightness: brightnessVal / 100,
+            grain: 0,
+          },
+        });
+      }
+    }
+  } else if (info.color) {
     selectedColorIndex = hexToClosestPresetIndex(info.color);
+    brightnessVal = Math.round(COLOR_PRESETS[selectedColorIndex]!.brightness * 100);
+    initialThemeJson = JSON.stringify({
+      type: 'solid',
+      color: {
+        hue: COLOR_PRESETS[selectedColorIndex]!.hue,
+        saturation: COLOR_PRESETS[selectedColorIndex]!.saturation,
+        brightness: brightnessVal / 100,
+        grain: 0,
+      },
+    });
   }
 
   buildUI();

@@ -20,6 +20,7 @@
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
+#include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/menus/simple_menu_model.h"
@@ -31,6 +32,10 @@ MahoTabContextMenu::~MahoTabContextMenu() = default;
 
 std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
   auto model = std::make_unique<ui::SimpleMenuModel>(this);
+  const TabStripModel* tab_strip_model =
+      browser_ ? browser_->tab_strip_model() : nullptr;
+  const bool has_valid_tab_index =
+      tab_strip_model && tab_index_ >= 0 && tab_index_ < tab_strip_model->count();
 
   model->AddItem(IDC_MAHO_TAB_CLOSE, u"Close Tab");
   model->AddItem(IDC_MAHO_TAB_CLOSE_OTHERS, u"Close Other Tabs");
@@ -40,15 +45,16 @@ std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
   model->AddSeparator(ui::NORMAL_SEPARATOR);
 
   model->AddItem(IDC_MAHO_TAB_DUPLICATE, u"Duplicate Tab");
+  model->AddItem(IDC_MAHO_TAB_OPEN_SPLIT, u"Open in Split View");
 
-  if (browser_->tab_strip_model()->IsTabPinned(tab_index_)) {
+  if (has_valid_tab_index && tab_strip_model->IsTabPinned(tab_index_)) {
     model->AddItem(IDC_MAHO_TAB_UNPIN, u"Unpin Tab");
   } else {
     model->AddItem(IDC_MAHO_TAB_PIN, u"Pin Tab");
   }
 
   content::WebContents* contents =
-      browser_->tab_strip_model()->GetWebContentsAt(tab_index_);
+      has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_) : nullptr;
   if (contents && contents->IsAudioMuted()) {
     model->AddItem(IDC_MAHO_TAB_UNMUTE, u"Unmute Tab");
   } else {
@@ -131,14 +137,25 @@ std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
 }
 
 void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
+  TabStripModel* tab_strip_model =
+      browser_ ? browser_->tab_strip_model() : nullptr;
+  const bool has_valid_tab_index =
+      tab_strip_model && tab_index_ >= 0 && tab_index_ < tab_strip_model->count();
+
   switch (command_id) {
     case IDC_MAHO_TAB_CLOSE:
-      browser_->tab_strip_model()->CloseWebContentsAt(
+      if (!has_valid_tab_index) {
+        break;
+      }
+      tab_strip_model->CloseWebContentsAt(
           tab_index_,
           TabCloseTypes::CLOSE_USER_GESTURE |
               TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
       break;
     case IDC_MAHO_TAB_CLOSE_OTHERS: {
+      if (!has_valid_tab_index) {
+        break;
+      }
       TabStripModel* tab_strip = browser_->tab_strip_model();
       for (int i = tab_strip->count() - 1; i >= 0; --i) {
         if (i != tab_index_) {
@@ -153,6 +170,9 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
       break;
     }
     case IDC_MAHO_TAB_CLOSE_RIGHT: {
+      if (!has_valid_tab_index) {
+        break;
+      }
       TabStripModel* tab_strip = browser_->tab_strip_model();
       for (int i = tab_strip->count() - 1; i > tab_index_; --i) {
         tab_strip->CloseWebContentsAt(
@@ -162,6 +182,9 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
       break;
     }
     case IDC_MAHO_TAB_CLOSE_LEFT: {
+      if (!has_valid_tab_index) {
+        break;
+      }
       TabStripModel* tab_strip = browser_->tab_strip_model();
       for (int i = tab_index_ - 1; i >= 0; --i) {
         tab_strip->CloseWebContentsAt(
@@ -172,18 +195,28 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
       break;
     }
     case IDC_MAHO_TAB_DUPLICATE:
-      browser_->tab_strip_model()->ActivateTabAt(tab_index_);
+      if (!has_valid_tab_index) {
+        break;
+      }
+      tab_strip_model->ActivateTabAt(tab_index_);
       chrome::DuplicateTab(browser_);
       break;
     case IDC_MAHO_TAB_PIN:
-      browser_->tab_strip_model()->SetTabPinned(tab_index_, true);
+      if (!has_valid_tab_index) {
+        break;
+      }
+      tab_strip_model->SetTabPinned(tab_index_, true);
       break;
     case IDC_MAHO_TAB_UNPIN:
-      browser_->tab_strip_model()->SetTabPinned(tab_index_, false);
+      if (!has_valid_tab_index) {
+        break;
+      }
+      tab_strip_model->SetTabPinned(tab_index_, false);
       break;
     case IDC_MAHO_TAB_MUTE: {
       content::WebContents* contents =
-          browser_->tab_strip_model()->GetWebContentsAt(tab_index_);
+          has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_)
+                              : nullptr;
       if (contents) {
         contents->SetAudioMuted(true);
       }
@@ -191,7 +224,8 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
     }
     case IDC_MAHO_TAB_UNMUTE: {
       content::WebContents* contents =
-          browser_->tab_strip_model()->GetWebContentsAt(tab_index_);
+          has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_)
+                              : nullptr;
       if (contents) {
         contents->SetAudioMuted(false);
       }
@@ -199,7 +233,8 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
     }
     case IDC_MAHO_TAB_COPY_URL: {
       content::WebContents* contents =
-          browser_->tab_strip_model()->GetWebContentsAt(tab_index_);
+          has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_)
+                              : nullptr;
       if (contents) {
         ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
         writer.WriteText(
@@ -209,7 +244,8 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
     }
     case IDC_MAHO_TAB_RELOAD: {
       content::WebContents* contents =
-          browser_->tab_strip_model()->GetWebContentsAt(tab_index_);
+          has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_)
+                              : nullptr;
       if (contents) {
         contents->GetController().Reload(content::ReloadType::NORMAL, true);
       }
@@ -224,9 +260,22 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
       LOG(INFO) << "MahoTabContextMenu: Remove from Favorites";
       break;
     case IDC_MAHO_TAB_FREEZE:
+      if (!has_valid_tab_index) {
+        break;
+      }
       // TODO(maho): Wire to tab lifecycle/discard API.
       LOG(INFO) << "MahoTabContextMenu: Freeze Tab " << tab_index_;
       break;
+    case IDC_MAHO_TAB_OPEN_SPLIT: {
+      content::WebContents* contents =
+          has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_)
+                              : nullptr;
+      if (contents) {
+        MahoSplitViewController(browser_).AddSplitWithURL(
+            contents->GetVisibleURL());
+      }
+      break;
+    }
     case IDC_MAHO_TAB_UNFREEZE:
       // TODO(maho): Wire to tab lifecycle/discard API.
       LOG(INFO) << "MahoTabContextMenu: Unfreeze Tab " << tab_index_;
@@ -239,7 +288,8 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
           std::string section = IsMoveToSpacePinned(command_id) ? "pinned"
                                                                  : "today";
           content::WebContents* contents =
-              browser_->tab_strip_model()->GetWebContentsAt(tab_index_);
+              has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_)
+                                  : nullptr;
           if (contents) {
             std::string target_space_id = entry.id;
             int tab_index = tab_index_;
@@ -272,6 +322,11 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
 }
 
 bool MahoTabContextMenu::IsCommandIdEnabled(int command_id) const {
+  const TabStripModel* tab_strip_model =
+      browser_ ? browser_->tab_strip_model() : nullptr;
+  const bool has_valid_tab_index =
+      tab_strip_model && tab_index_ >= 0 && tab_index_ < tab_strip_model->count();
+
   switch (command_id) {
     case IDC_MAHO_TAB_CLOSE:
     case IDC_MAHO_TAB_DUPLICATE:
@@ -281,15 +336,18 @@ bool MahoTabContextMenu::IsCommandIdEnabled(int command_id) const {
     case IDC_MAHO_TAB_UNMUTE:
     case IDC_MAHO_TAB_COPY_URL:
     case IDC_MAHO_TAB_RELOAD:
-      return true;
+      return has_valid_tab_index;
     case IDC_MAHO_TAB_CLOSE_OTHERS:
-      return browser_->tab_strip_model()->count() > 1;
+      return has_valid_tab_index && tab_strip_model->count() > 1;
     case IDC_MAHO_TAB_CLOSE_RIGHT:
-      return tab_index_ < browser_->tab_strip_model()->count() - 1;
+      return has_valid_tab_index &&
+             tab_index_ < tab_strip_model->count() - 1;
     case IDC_MAHO_TAB_CLOSE_LEFT:
-      return tab_index_ > 0;
+      return has_valid_tab_index && tab_index_ > 0;
     case IDC_MAHO_TAB_ADD_FAVORITE:
       return true;
+    case IDC_MAHO_TAB_OPEN_SPLIT:
+      return has_valid_tab_index;
     case IDC_MAHO_TAB_REMOVE_FAVORITE:
     case IDC_MAHO_TAB_FREEZE:
     case IDC_MAHO_TAB_UNFREEZE:

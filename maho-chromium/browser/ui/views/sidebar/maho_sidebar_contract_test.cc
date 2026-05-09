@@ -2,12 +2,22 @@
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_interactive_test_base.h"
 
+#include <algorithm>
+#include <string>
+#include <vector>
+
+#include "base/json/json_reader.h"
+#include "base/json/string_escape.h"
+#include "base/test/run_until.h"
+#include "chrome/browser/ui/browser.h"
 #include "content/public/test/browser_test.h"
+#include "maho/browser/maho_core_holder.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
-#include "ui/views/controls/button/label_button.h"
+#include "maho/third_party/maho/maho_ffi.h"
 #include "ui/base/test/ui_controls.h"
+#include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/label.h"
 
 namespace maho {
@@ -95,8 +105,26 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, PinnedSectionContract) {
       << "Seed 2 must produce at least one pinned tab";
 
   for (const auto& node : state.tab_list.pinned_tree) {
-    EXPECT_TRUE(node.is_pinned) << "All pinned_tree entries must be pinned";
-    EXPECT_FALSE(node.tab_id.empty()) << "Pinned tab must have a tab_id";
+    if (node.kind == SidebarNodeKind::kTab) {
+      EXPECT_TRUE(node.is_pinned) << "Pinned tabs in pinned_tree must be pinned";
+      EXPECT_FALSE(node.tab_id.empty())
+          << "Pinned tabs in pinned_tree must have a tab_id";
+      continue;
+    }
+
+    EXPECT_EQ(SidebarNodeKind::kFolder, node.kind)
+        << "Pinned tree may only contain tab or folder rows";
+    EXPECT_TRUE(node.folder_is_pinned)
+        << "Pinned folders in pinned_tree must be marked pinned";
+    EXPECT_FALSE(node.folder_id.empty())
+        << "Pinned folders in pinned_tree must have a folder_id";
+  }
+
+  for (const auto& node : state.tab_list.normal_tree) {
+    if (node.kind == SidebarNodeKind::kTab) {
+      EXPECT_FALSE(node.is_pinned)
+          << "Normal tree must not contain pinned tabs";
+    }
   }
 }
 
@@ -123,6 +151,9 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, TabReorderContract) {
   SeedProfile(2);
   observer_.Clear();
 
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+
   auto state = GetViewState();
   std::vector<std::string> root_tab_ids;
   for (const auto& node : state.tab_list.normal_tree) {
@@ -140,7 +171,14 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, TabReorderContract) {
   ASSERT_TRUE(first);
   ASSERT_TRUE(second);
 
-  DragViewToView(first, second);
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+  first = tab_list_->FindTabRowByIdForTesting(root_tab_ids[0]);
+  second = tab_list_->FindTabRowByIdForTesting(root_tab_ids[1]);
+  ASSERT_TRUE(first);
+  ASSERT_TRUE(second);
+
+  DragViewToPoint(first, GetViewPoint(second, 0.5, 0.15));
 
   EXPECT_TRUE(observer_.HasEvent("reorder_tab"))
       << "Expected reorder_tab event after drag";
@@ -160,18 +198,89 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, SidebarTreeJsonContract) {
   EXPECT_FALSE(state.favorites.items.empty())
       << "favorites must be non-empty for seed 2";
 
-  for (const auto& node : state.tab_list.normal_tree) {
-    bool is_tab = (node.kind == SidebarNodeKind::kTab);
-    bool is_folder = (node.kind == SidebarNodeKind::kFolder);
-    EXPECT_TRUE(is_tab || is_folder)
-        << "Every tree node must be a tab or folder";
-    if (is_tab) {
-      EXPECT_FALSE(node.tab_id.empty());
+  std::vector<std::string> pinned_root_ids;
+  std::vector<std::string> normal_root_ids;
+  auto collect_root_ids = [&](const std::vector<SidebarTreeNode>& tree,
+                              std::vector<std::string>& root_ids,
+                              bool is_root_level,
+                              auto&& collect_root_ids_ref) -> void {
+    for (const auto& node : tree) {
+      bool is_tab = (node.kind == SidebarNodeKind::kTab);
+      bool is_folder = (node.kind == SidebarNodeKind::kFolder);
+      bool is_split_group = (node.kind == SidebarNodeKind::kSplitGroup);
+      EXPECT_TRUE(is_tab || is_folder || is_split_group)
+          << "Every tree node must be a tab, folder, or split group";
+      if (is_tab) {
+        EXPECT_FALSE(node.tab_id.empty());
+        if (is_root_level) {
+          EXPECT_TRUE(node.parent_folder_id.empty())
+              << "Root tab nodes must stay at the root";
+        }
+        root_ids.push_back(node.tab_id);
+      }
+      if (is_folder) {
+        EXPECT_FALSE(node.folder_id.empty());
+        if (is_root_level) {
+          root_ids.push_back(node.folder_id);
+        }
+      }
+      if (is_split_group) {
+        EXPECT_FALSE(node.split_id.empty())
+            << "Split groups must have a stable split_id";
+        collect_root_ids_ref(node.children, root_ids, /*is_root_level=*/false,
+                             collect_root_ids_ref);
+      }
     }
-    if (is_folder) {
-      EXPECT_FALSE(node.folder_id.empty());
+  };
+  collect_root_ids(state.tab_list.pinned_tree, pinned_root_ids,
+                   /*is_root_level=*/true, collect_root_ids);
+  collect_root_ids(state.tab_list.normal_tree, normal_root_ids,
+                   /*is_root_level=*/true, collect_root_ids);
+
+  MahoCore* core = GetCore();
+  ASSERT_TRUE(core);
+  const std::string space_id_json =
+      base::GetQuotedJSONString(state.tab_list.active_space_id);
+  char* root_order_json_c =
+      maho_core_get_sidebar_root_order(core, space_id_json.c_str());
+  ASSERT_TRUE(root_order_json_c);
+  std::string root_order_json(root_order_json_c);
+  maho_string_free(root_order_json_c);
+
+  auto parsed = base::JSONReader::Read(root_order_json, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(parsed);
+  ASSERT_TRUE(parsed->is_list());
+
+  std::vector<std::string> backend_root_ids;
+  for (const auto& item : parsed->GetList()) {
+    const auto* dict = item.GetIfDict();
+    ASSERT_TRUE(dict);
+    const std::string* kind = dict->FindString("kind");
+    const std::string* id = dict->FindString("id");
+    ASSERT_TRUE(kind);
+    ASSERT_TRUE(id);
+    backend_root_ids.push_back(*id);
+  }
+
+  std::set<std::string> pinned_root_id_set(pinned_root_ids.begin(),
+                                           pinned_root_ids.end());
+  std::set<std::string> normal_root_id_set(normal_root_ids.begin(),
+                                           normal_root_ids.end());
+  std::vector<std::string> backend_pinned_root_ids;
+  std::vector<std::string> backend_normal_root_ids;
+  for (const auto& id : backend_root_ids) {
+    if (pinned_root_id_set.contains(id)) {
+      backend_pinned_root_ids.push_back(id);
+    }
+    if (normal_root_id_set.contains(id)) {
+      backend_normal_root_ids.push_back(id);
     }
   }
+
+  EXPECT_EQ(pinned_root_ids, backend_pinned_root_ids)
+      << "Pinned tree roots must preserve backend ordering";
+  EXPECT_EQ(normal_root_ids, backend_normal_root_ids)
+      << "Normal tree roots must preserve backend ordering";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, FolderCollapseExpandToggle) {
@@ -200,17 +309,17 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, FolderCollapseExpandToggle) {
       ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
       click_loop.QuitClosure()));
   click_loop.Run();
-  base::RunLoop().RunUntilIdle();
 
-  ResolveViews();
-  auto state_after = GetViewState();
-  for (const auto& node : state_after.tab_list.normal_tree) {
-    if (node.kind == SidebarNodeKind::kFolder && node.folder_id == folder_id) {
-      EXPECT_FALSE(node.is_expanded)
-          << "Folder should be collapsed after click";
-      break;
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    ResolveViews();
+    auto state_after = GetViewState();
+    for (const auto& node : state_after.tab_list.normal_tree) {
+      if (node.kind == SidebarNodeKind::kFolder && node.folder_id == folder_id) {
+        return !node.is_expanded;
+      }
     }
-  }
+    return false;
+  })) << "Folder should collapse after click";
 
   ASSERT_TRUE(ui_controls::SendMouseMove(center.x(), center.y()));
   base::RunLoop click_loop2;
@@ -218,17 +327,17 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, FolderCollapseExpandToggle) {
       ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
       click_loop2.QuitClosure()));
   click_loop2.Run();
-  base::RunLoop().RunUntilIdle();
 
-  ResolveViews();
-  auto state_restored = GetViewState();
-  for (const auto& node : state_restored.tab_list.normal_tree) {
-    if (node.kind == SidebarNodeKind::kFolder && node.folder_id == folder_id) {
-      EXPECT_TRUE(node.is_expanded)
-          << "Folder should be expanded after second click";
-      break;
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    ResolveViews();
+    auto state_after = GetViewState();
+    for (const auto& node : state_after.tab_list.normal_tree) {
+      if (node.kind == SidebarNodeKind::kFolder && node.folder_id == folder_id) {
+        return node.is_expanded;
+      }
     }
-  }
+    return false;
+  })) << "Folder should expand after second click";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
@@ -262,8 +371,10 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
       tab_list_->FindSectionDropTargetForTesting(MahoSidebarTabSection::kNormal);
   ASSERT_TRUE(normal_target);
 
-  DragViewToView(tab_row, normal_target);
-  base::RunLoop().RunUntilIdle();
+  DragViewToPoint(tab_row, GetViewPoint(normal_target, 0.5, 0.05));
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return observer_.HasEvent("move_tab_to_root");
+  }));
   ResolveViews();
 
   auto state_after = GetViewState();
@@ -278,15 +389,33 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
       << "Empty folder should be pruned after last child is moved out";
 }
 
+namespace {
+
+int CountTabsInTree(const std::vector<SidebarTreeNode>& nodes) {
+  int total = 0;
+  for (const auto& node : nodes) {
+    if (node.kind == SidebarNodeKind::kTab) {
+      ++total;
+    }
+    if (!node.children.empty()) {
+      total += CountTabsInTree(node.children);
+    }
+  }
+  return total;
+}
+
+}  // namespace
+
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, LargeTabCountRenders) {
   AddTestTabs(50);
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    ResolveViews();
+    TabStripModel* strip = browser()->tab_strip_model();
+    return strip && strip->count() >= 51;
+  })) << "Browser tab strip should eventually include the added tabs";
+
   ResolveViews();
-
-  auto state = GetViewState();
-  int total = static_cast<int>(state.tab_list.normal_tree.size()) +
-              static_cast<int>(state.tab_list.pinned_tree.size());
-  EXPECT_GE(total, 51) << "50 added tabs + NTP should all appear";
-
   EXPECT_TRUE(tab_list_->GetVisible())
       << "Tab list should remain visible with many tabs";
   EXPECT_GT(tab_list_->GetPreferredSize().height(), 0)

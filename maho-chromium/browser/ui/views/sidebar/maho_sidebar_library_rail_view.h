@@ -33,11 +33,6 @@ class MahoSidebarLibraryRailView : public views::View {
 
  public:
   enum class Category {
-    kMedia,
-    kDownloads,
-    kEasels,
-    kSpaces,
-    kBoosts,
     kArchivedTabs,
   };
 
