@@ -7,10 +7,27 @@ import platform
 import shutil
 import subprocess
 import sys
+import importlib.util
 
 _SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
-MAHO_ROOT = os.path.normpath(os.path.join(_SCRIPT_DIR, '..', '..', '..', 'maho'))
-MAHO_CHROMIUM_ROOT = os.path.normpath(os.path.join(_SCRIPT_DIR, '..', '..'))
+_MAHO_SCRIPTS_DIR = os.path.normpath(os.path.join(_SCRIPT_DIR, '..', '..', '..', 'maho', 'scripts'))
+
+
+def load_build_lock():
+    module_path = os.path.join(_MAHO_SCRIPTS_DIR, 'build_lock.py')
+    spec = importlib.util.spec_from_file_location('maho_build_lock', module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f'Unable to load build lock helper: {module_path}')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.build_lock
+
+
+build_lock = load_build_lock()
+
+WORKSPACE_ROOT = os.path.normpath(os.path.join(_SCRIPT_DIR, '..', '..', '..'))
+MAHO_ROOT = os.path.join(WORKSPACE_ROOT, 'maho')
+MAHO_CHROMIUM_ROOT = os.path.join(WORKSPACE_ROOT, 'maho-chromium')
 PREBUILT_DIR = os.path.join(MAHO_CHROMIUM_ROOT, 'third_party', 'maho', 'prebuilt')
 
 
@@ -53,22 +70,25 @@ def main():
     output_dir = os.path.join(PREBUILT_DIR, cpu_dir)
     os.makedirs(output_dir, exist_ok=True)
 
-    print(f'Building maho-core for {rust_target}...')
-    subprocess.run(
-        ['cargo', 'build', '--release', '--target', rust_target, '-p', 'maho-ffi'],
-        cwd=MAHO_ROOT,
-        check=True,
-    )
+    with build_lock():
+        print(f'Building maho-core for {rust_target}...')
+        subprocess.run(
+            ['cargo', 'build', '--release', '--target', rust_target, '-p', 'maho-ffi'],
+            cwd=MAHO_ROOT,
+            check=True,
+        )
 
-    src_lib = os.path.join(MAHO_ROOT, 'target', rust_target, 'release', lib_name)
-    dst_lib = os.path.join(output_dir, lib_name)
+        src_lib = os.path.join(MAHO_ROOT, 'target', rust_target, 'release', lib_name)
+        dst_lib = os.path.join(output_dir, lib_name)
 
-    if not os.path.exists(src_lib):
-        sys.exit(f'Build artifact not found: {src_lib}')
+        if not os.path.exists(src_lib):
+            sys.exit(f'Build artifact not found: {src_lib}')
 
-    shutil.copy2(src_lib, dst_lib)
-    print(f'Copied {src_lib} -> {dst_lib}')
-    print(f'Size: {os.path.getsize(dst_lib) / 1024 / 1024:.1f} MB')
+        shutil.copy2(src_lib, dst_lib)
+        if sys.platform == 'darwin':
+            subprocess.run(['ranlib', '-c', dst_lib], check=True)
+        print(f'Copied {src_lib} -> {dst_lib}')
+        print(f'Size: {os.path.getsize(dst_lib) / 1024 / 1024:.1f} MB')
 
 
 if __name__ == '__main__':
