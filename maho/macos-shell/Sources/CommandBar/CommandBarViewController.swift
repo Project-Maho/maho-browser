@@ -1003,7 +1003,8 @@ final class CommandBarViewController: NSViewController {
     private func executeSuggestion(_ suggestion: SuggestionViewModel) {
         switch suggestion.kind {
         case .tab:
-            CoreUpdateDispatcher.shared.sendAndDispatch(.activateTab(tabId: TabId(suggestion.key)))
+            let tabId = suggestion.key.hasPrefix("tab:") ? String(suggestion.key.dropFirst(4)) : suggestion.key
+            CoreUpdateDispatcher.shared.sendAndDispatch(.activateTab(tabId: TabId(tabId)))
         default:
             if let destination = SuggestionDestinationResolver.resolve(
                 kind: suggestion.kind,
@@ -1014,7 +1015,7 @@ final class CommandBarViewController: NSViewController {
             ) {
                 submitText(destination)
             } else if let idx = suggestions.firstIndex(where: { $0.key == suggestion.key }) {
-                CoreUpdateDispatcher.shared.sendAndDispatch(.commandBarSelect(index: idx))
+                CoreUpdateDispatcher.shared.sendAndDispatch(.commandBarSelect(index: idx, key: suggestion.key))
             }
         }
     }

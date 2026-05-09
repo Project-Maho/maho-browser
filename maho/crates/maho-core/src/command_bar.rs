@@ -1,6 +1,8 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use base64::Engine;
+use maho_types::common::{ImageData, ImageFormat};
 use maho_types::search_engine::{SearchEngine, SearchEngineViewModel};
 use maho_types::traits::shell_renderer::{SearchContext, SuggestionType, SuggestionViewModel};
 
@@ -17,7 +19,7 @@ fn now_millis() -> u64 {
 struct HistoryEntry {
     url: String,
     title: String,
-    #[allow(dead_code)]
+    icon: Option<ImageData>,
     visited_at: u64,
 }
 
@@ -139,6 +141,47 @@ impl Default for CommandBarEngine {
 }
 
 impl CommandBarEngine {
+    fn icon_for_url(ctx: &SearchContext, url: &str) -> Option<ImageData> {
+        ctx.tabs
+            .iter()
+            .find(|tab| tab.url == url)
+            .and_then(|tab| tab.favicon.clone())
+            .or_else(|| {
+                ctx.archived_tabs
+                    .iter()
+                    .find(|tab| tab.url == url)
+                    .and_then(|tab| tab.favicon.clone())
+            })
+            .or_else(|| {
+                ctx.closed_tabs
+                    .iter()
+                    .find(|tab| tab.url == url)
+                    .and_then(|tab| tab.favicon.clone())
+            })
+    }
+
+    pub fn bookmark_icon_from_data_url(favicon: &str) -> Option<ImageData> {
+        let (prefix, encoded) = favicon.split_once(',')?;
+        let format = if prefix.contains("image/png") {
+            ImageFormat::Png
+        } else if prefix.contains("image/jpeg") || prefix.contains("image/jpg") {
+            ImageFormat::Jpeg
+        } else if prefix.contains("image/webp") {
+            ImageFormat::Webp
+        } else {
+            return None;
+        };
+
+        let engine = base64::engine::general_purpose::STANDARD;
+        let data = engine.decode(encoded.trim()).ok()?;
+        Some(ImageData {
+            data,
+            width: 0,
+            height: 0,
+            format,
+        })
+    }
+
     pub fn new() -> Self {
         let mut engine = Self {
             history: Vec::new(),
@@ -211,11 +254,12 @@ impl CommandBarEngine {
         }
     }
 
-    pub fn add_history_entry(&mut self, url: String, title: String) {
+    pub fn add_history_entry(&mut self, url: String, title: String, icon: Option<ImageData>) {
         let combined_text = format!("{} {}", title, url);
         self.history.push(HistoryEntry {
             url,
             title,
+            icon,
             visited_at: now_millis(),
         });
         if self.history.len() > MAX_HISTORY_ENTRIES {
@@ -275,6 +319,7 @@ impl CommandBarEngine {
                     icon: None,
                     relevance_score: 3.0,
                     match_ranges: None,
+                    shortcut: None,
                 },
                 score: 3.0,
             });
@@ -292,6 +337,7 @@ impl CommandBarEngine {
                     icon: None,
                     relevance_score: 2.8,
                     match_ranges: None,
+                    shortcut: None,
                 },
                 score: 2.8,
             });
@@ -314,6 +360,7 @@ impl CommandBarEngine {
                     icon: None,
                     relevance_score: 2.0,
                     match_ranges: None,
+                    shortcut: None,
                 },
                 score: 2.0,
             });
@@ -337,6 +384,7 @@ impl CommandBarEngine {
                             &match_result.matched_indices,
                             tab.title.len(),
                         )),
+                        shortcut: None,
                     },
                     score: match_result.score,
                 });
@@ -350,8 +398,8 @@ impl CommandBarEngine {
             if match_result.is_match {
                 results.push(SearchResult {
                     suggestion: SuggestionViewModel {
-                        kind: SuggestionType::Bookmark,
-                        key: format!("space:{}", space.id),
+                        kind: SuggestionType::Action,
+                        key: format!("action:open_space:{}", space.id),
                         title: space.name.clone(),
                         subtitle: Some(format!("Space with {} tabs", space.tab_count)),
                         execution_payload: None,
@@ -361,6 +409,32 @@ impl CommandBarEngine {
                             &match_result.matched_indices,
                             space.name.len(),
                         )),
+                        shortcut: None,
+                    },
+                    score: match_result.score,
+                });
+            }
+        }
+
+        // Search folders
+        for folder in &ctx.folders {
+            let target = folder.name.to_lowercase();
+            let match_result = Self::fuzzy_match(&lower_query, &target);
+            if match_result.is_match {
+                results.push(SearchResult {
+                    suggestion: SuggestionViewModel {
+                        kind: SuggestionType::Folder,
+                        key: format!("folder:{}", folder.id),
+                        title: folder.name.clone(),
+                        subtitle: Some(format!("{} tabs", folder.tab_count)),
+                        execution_payload: Some(folder.id.to_string()),
+                        icon: None,
+                        relevance_score: match_result.score,
+                        match_ranges: Some(indices_to_ranges(
+                            &match_result.matched_indices,
+                            folder.name.len(),
+                        )),
+                        shortcut: None,
                     },
                     score: match_result.score,
                 });
@@ -385,62 +459,74 @@ impl CommandBarEngine {
                             &match_result.matched_indices,
                             tab.title.len(),
                         )),
+                        shortcut: None,
                     },
                     score: match_result.score - 0.2,
                 });
             }
         }
 
-        // Search bookmarks
-        for (id, title, url) in &ctx.bookmarks {
-            let target = format!("{} {}", title, url).to_lowercase();
-            let match_result = Self::fuzzy_match(&lower_query, &target);
-            if match_result.is_match {
-                results.push(SearchResult {
-                    suggestion: SuggestionViewModel {
-                        kind: SuggestionType::Bookmark,
-                        key: format!("bookmark:{}", id),
-                        title: title.clone(),
-                        subtitle: Some(url.clone()),
-                        execution_payload: Some(url.clone()),
-                        icon: None,
-                        relevance_score: match_result.score,
-                        match_ranges: Some(indices_to_ranges(
-                            &match_result.matched_indices,
-                            title.len(),
-                        )),
-                    },
-                    score: match_result.score,
-                });
+        if !ctx.is_incognito {
+            // Search bookmarks
+            for (id, title, url) in &ctx.bookmarks {
+                let target = format!("{} {}", title, url).to_lowercase();
+                let match_result = Self::fuzzy_match(&lower_query, &target);
+                if match_result.is_match {
+                    let icon = ctx
+                        .bookmark_favicons
+                        .iter()
+                        .find(|(bookmark_id, _)| bookmark_id == id)
+                        .map(|(_, icon)| icon.clone());
+                    results.push(SearchResult {
+                        suggestion: SuggestionViewModel {
+                            kind: SuggestionType::Bookmark,
+                            key: format!("bookmark:{}", id),
+                            title: title.clone(),
+                            subtitle: Some(url.clone()),
+                            execution_payload: Some(url.clone()),
+                            icon,
+                            relevance_score: match_result.score,
+                            match_ranges: Some(indices_to_ranges(
+                                &match_result.matched_indices,
+                                title.len(),
+                            )),
+                            shortcut: None,
+                        },
+                        score: match_result.score,
+                    });
+                }
             }
         }
 
-        // Search recently closed tabs
-        let mut closed_count = 0;
-        for tab in &ctx.closed_tabs {
-            if closed_count >= 3 {
-                break;
-            }
-            let target = format!("{} {}", tab.title, tab.url).to_lowercase();
-            let match_result = Self::fuzzy_match(&lower_query, &target);
-            if match_result.is_match {
-                results.push(SearchResult {
-                    suggestion: SuggestionViewModel {
-                        kind: SuggestionType::ClosedTab,
-                        key: format!("closed:{}", tab.url),
-                        title: tab.title.clone(),
-                        subtitle: Some(tab.url.clone()),
-                        execution_payload: Some(tab.url.clone()),
-                        icon: tab.favicon.clone(),
-                        relevance_score: match_result.score - 0.1,
-                        match_ranges: Some(indices_to_ranges(
-                            &match_result.matched_indices,
-                            tab.title.len(),
-                        )),
-                    },
-                    score: match_result.score - 0.1,
-                });
-                closed_count += 1;
+        if !ctx.is_incognito {
+            // Search recently closed tabs
+            let mut closed_count = 0;
+            for tab in &ctx.closed_tabs {
+                if closed_count >= 3 {
+                    break;
+                }
+                let target = format!("{} {}", tab.title, tab.url).to_lowercase();
+                let match_result = Self::fuzzy_match(&lower_query, &target);
+                if match_result.is_match {
+                    results.push(SearchResult {
+                        suggestion: SuggestionViewModel {
+                            kind: SuggestionType::ClosedTab,
+                            key: format!("closed:{}", tab.url),
+                            title: tab.title.clone(),
+                            subtitle: Some(tab.url.clone()),
+                            execution_payload: Some(tab.url.clone()),
+                            icon: tab.favicon.clone(),
+                            relevance_score: match_result.score - 0.1,
+                            match_ranges: Some(indices_to_ranges(
+                                &match_result.matched_indices,
+                                tab.title.len(),
+                            )),
+                            shortcut: None,
+                        },
+                        score: match_result.score - 0.1,
+                    });
+                    closed_count += 1;
+                }
             }
         }
 
@@ -462,6 +548,7 @@ impl CommandBarEngine {
                             &match_result.matched_indices,
                             name.len(),
                         )),
+                        shortcut: None,
                     },
                     score: match_result.score - 0.3,
                 });
@@ -486,6 +573,7 @@ impl CommandBarEngine {
                             &match_result.matched_indices,
                             action.label.len(),
                         )),
+                        shortcut: None,
                     },
                     score: match_result.score,
                 });
@@ -493,10 +581,37 @@ impl CommandBarEngine {
         }
 
         // Search history with trigram index optimization
-        let candidates = self.trigram_index.borrow_mut().query_candidates(query);
-        if let Some(indices) = candidates {
-            for idx in indices {
-                if let Some(entry) = self.history.get(idx) {
+        if !ctx.is_incognito {
+            let candidates = self.trigram_index.borrow_mut().query_candidates(query);
+            if let Some(indices) = candidates {
+                for idx in indices {
+                    if let Some(entry) = self.history.get(idx) {
+                        let target = format!("{} {}", entry.title, entry.url).to_lowercase();
+                        let match_result = Self::fuzzy_match(&lower_query, &target);
+                        if match_result.is_match {
+                            results.push(SearchResult {
+                                suggestion: SuggestionViewModel {
+                                    kind: SuggestionType::History,
+                                    key: format!("history:{}", entry.url),
+                                    title: entry.title.clone(),
+                                    subtitle: Some(entry.url.clone()),
+                                    execution_payload: Some(entry.url.clone()),
+                                    icon: entry.icon.clone().or_else(|| Self::icon_for_url(ctx, &entry.url)),
+                                    relevance_score: match_result.score,
+                                    match_ranges: Some(indices_to_ranges(
+                                        &match_result.matched_indices,
+                                        entry.title.len(),
+                                    )),
+                                    shortcut: None,
+                                },
+                                score: match_result.score + Self::recency_boost(entry.visited_at),
+                            });
+                        }
+                    }
+                }
+            } else {
+                // Fall back to full scan for queries shorter than 3 characters
+                for entry in &self.history {
                     let target = format!("{} {}", entry.title, entry.url).to_lowercase();
                     let match_result = Self::fuzzy_match(&lower_query, &target);
                     if match_result.is_match {
@@ -507,59 +622,19 @@ impl CommandBarEngine {
                                 title: entry.title.clone(),
                                 subtitle: Some(entry.url.clone()),
                                 execution_payload: Some(entry.url.clone()),
-                                icon: None,
+                                icon: entry.icon.clone().or_else(|| Self::icon_for_url(ctx, &entry.url)),
                                 relevance_score: match_result.score,
                                 match_ranges: Some(indices_to_ranges(
                                     &match_result.matched_indices,
                                     entry.title.len(),
                                 )),
+                                shortcut: None,
                             },
                             score: match_result.score + Self::recency_boost(entry.visited_at),
                         });
                     }
                 }
             }
-        } else {
-            // Fall back to full scan for queries shorter than 3 characters
-            for entry in &self.history {
-                let target = format!("{} {}", entry.title, entry.url).to_lowercase();
-                let match_result = Self::fuzzy_match(&lower_query, &target);
-                if match_result.is_match {
-                    results.push(SearchResult {
-                        suggestion: SuggestionViewModel {
-                            kind: SuggestionType::History,
-                            key: format!("history:{}", entry.url),
-                            title: entry.title.clone(),
-                            subtitle: Some(entry.url.clone()),
-                            execution_payload: Some(entry.url.clone()),
-                            icon: None,
-                            relevance_score: match_result.score,
-                            match_ranges: Some(indices_to_ranges(
-                                &match_result.matched_indices,
-                                entry.title.len(),
-                            )),
-                        },
-                        score: match_result.score + Self::recency_boost(entry.visited_at),
-                    });
-                }
-            }
-        }
-
-        if let Some(engine) = self.get_default_search_engine() {
-            let search_url = self.get_search_url(query);
-            results.push(SearchResult {
-                suggestion: SuggestionViewModel {
-                    kind: SuggestionType::Navigation,
-                    key: format!("search:{}", query),
-                    title: format!("Search {} for \"{}\"", engine.name, query),
-                    subtitle: Some(search_url.clone()),
-                    execution_payload: Some(search_url),
-                    icon: None,
-                    relevance_score: 0.1,
-                    match_ranges: None,
-                },
-                score: 0.1,
-            });
         }
 
         // Deduplicate results by key
@@ -583,6 +658,7 @@ impl CommandBarEngine {
                     "normal" => match result.suggestion.kind {
                         SuggestionType::Action => 0.5,
                         SuggestionType::Tab => 0.3,
+                        SuggestionType::Folder => 0.2,
                         _ => 0.0,
                     },
                     "addressBar" => match result.suggestion.kind {
@@ -644,6 +720,7 @@ impl CommandBarEngine {
                             &match_result.matched_indices,
                             action.label.len(),
                         )),
+                        shortcut: None,
                     },
                     score: match_result.score,
                 });

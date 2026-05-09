@@ -6,12 +6,15 @@ source_set("maho_command_overlay") {
     "maho_command_action_handler.h",
     "maho_command_model.cc",
     "maho_command_model.h",
+    "maho_command_sparkle_geometry.h",
     "maho_command_overlay_controller.cc",
     "maho_command_overlay_controller.h",
     "maho_command_overlay_view.cc",
     "maho_command_overlay_view.h",
     "maho_command_result_row_view.cc",
     "maho_command_result_row_view.h",
+    "maho_shortcut_interceptor.cc",
+    "maho_shortcut_interceptor.h",
   ]
 
   deps = [
@@ -25,9 +28,16 @@ source_set("maho_command_overlay") {
     "//chrome/browser/ui/tabs:tab_strip",
     "//content/public/browser",
     "//maho/browser:maho_core_holder",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",
+    # split_view dep intentionally omitted: adding it creates a dependency
+    # cycle (command → split_view → chrome/browser/ui → command). The header
+    # is reachable through transitive deps. Track cleanup in the split_view
+    # target itself (break its dep on //chrome/browser/ui).
+    # "//maho/browser/ui/views/split_view:maho_split_view",
     "//maho/components/constants",
     "//maho/third_party/maho:maho_ffi_headers",
     "//skia",
+    "//third_party/blink/public/common",
     "//ui/base",
     "//ui/color",
     "//ui/compositor",

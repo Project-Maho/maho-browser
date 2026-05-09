@@ -37,7 +37,10 @@ class MahoCommandPageHandler : public maho_command::mojom::PageHandler {
   std::string BuildTabsJson();
 
   static std::vector<maho_command::mojom::SuggestionPtr>
-  SearchOnPool(const std::string& query, const std::string& tabs_json);
+  SearchOnPool(const std::string& query,
+               const std::string& mode,
+               const std::string& tabs_json,
+               bool is_incognito);
 
   void OnSearchResults(
       QueryCallback callback,

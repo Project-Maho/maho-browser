@@ -14,6 +14,7 @@
 #include "base/task/thread_pool.h"
 #include "base/values.h"
 #include "chrome/browser/devtools/devtools_window.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"  // nogncheck
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_navigator.h"
@@ -102,7 +103,9 @@ std::string MahoCommandPageHandler::BuildTabsJson() {
 // static
 std::vector<maho_command::mojom::SuggestionPtr>
 MahoCommandPageHandler::SearchOnPool(const std::string& query,
-                                     const std::string& tabs_json) {
+                                     const std::string& mode,
+                                     const std::string& tabs_json,
+                                     bool is_incognito) {
   std::vector<maho_command::mojom::SuggestionPtr> results;
 
   MahoCore* core = maho::GetCore();
@@ -110,7 +113,8 @@ MahoCommandPageHandler::SearchOnPool(const std::string& query,
     return results;
 
   char* json = maho_core_command_bar_search(core, query.c_str(),
-                                            tabs_json.c_str());
+                                            mode.c_str(), tabs_json.c_str(),
+                                            is_incognito);
   if (!json)
     return results;
 
@@ -183,11 +187,14 @@ void MahoCommandPageHandler::Query(const std::string& input,
   }
 
   std::string tabs_json = BuildTabsJson();
+  const std::string mode = "normal";
+  const bool is_incognito = browser_->profile()->IsOffTheRecord();
 
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE,
       {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&MahoCommandPageHandler::SearchOnPool, input, tabs_json),
+      base::BindOnce(&MahoCommandPageHandler::SearchOnPool, input, mode,
+                     tabs_json, is_incognito),
       base::BindOnce(&MahoCommandPageHandler::OnSearchResults,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }

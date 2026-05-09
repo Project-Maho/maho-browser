@@ -26,8 +26,8 @@ object BridgeCommandBar {
     fun query(text: String, mode: String?): List<CoreUpdate> =
         MahoBridge.sendEvent(ShellEvent.CommandBarQuery(text = text, mode = mode))
 
-    fun selectItem(index: Int): List<CoreUpdate> =
-        MahoBridge.sendEvent(ShellEvent.CommandBarSelect(index = index))
+    fun selectItem(index: Int, key: String): List<CoreUpdate> =
+        MahoBridge.sendEvent(ShellEvent.CommandBarSelect(index = index, key = key))
 
     fun performAction(action: dev.maho.browser.models.QuickAction): List<CoreUpdate> =
         MahoBridge.sendEvent(ShellEvent.CommandBarAction(action = action))
