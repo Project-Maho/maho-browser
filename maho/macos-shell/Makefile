@@ -23,7 +23,7 @@ SWIFT_FLAGS := -import-objc-header $(BRIDGING_HEADER) -I$(HEADER_DIR) -O -whole-
 all: app
 
 rust:
-	cd .. && cargo build --release -p maho-ffi
+	python3 ../scripts/build_lock.py -- cargo build --release -p maho-ffi --manifest-path ../Cargo.toml
 
 $(FFI_LIB): rust
 
