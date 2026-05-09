@@ -91,10 +91,10 @@ maho-chromium/
 
 ## COMMANDS
 ```bash
-# Canonical build (from the overlay repo root)
+# Canonical build from the overlay repo root
 python3 build/scripts/build_maho.py
 
-# Chromium-only rebuild (from chromium/src/)
+# Optional Chromium-only rebuild from chromium/src/
 autoninja -C out/Default chrome
 
 # Build maho-core prebuilt

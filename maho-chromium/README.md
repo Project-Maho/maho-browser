@@ -2,7 +2,7 @@
 
 Chromium overlay for Maho Browser. Brave-style chromium_src overrides.
 
-The canonical Chromium build entrypoint is the lock-backed wrapper at `python3 build/scripts/build_maho.py`, which builds the Rust prebuilt and then runs Chromium in one command. Raw `autoninja -C out/Default chrome` still works for narrower rebuilds, but it is no longer the recommended default flow.
+The canonical Chromium build entrypoint is the lock-backed wrapper at `python3 build/scripts/build_maho.py` from the overlay repo root. It builds the Rust prebuilt and then runs Chromium in one command. Use raw `autoninja -C out/Default chrome` only for narrower rebuilds.
 
 ## Structure
 
@@ -25,7 +25,7 @@ The canonical Chromium build entrypoint is the lock-backed wrapper at `python3 b
     ```
     This acquires the shared workspace `.build.lock` once, builds the Rust prebuilt if needed, and then runs `autoninja -C out/Default chrome` from `chromium/src` with `depot_tools` prepended to `PATH`.
 
-3. For Chromium-only rebuilds:
+3. Optional, for Chromium-only rebuilds:
     ```
     autoninja -C out/Default chrome
     ```
