@@ -2,7 +2,7 @@
   "name": "maho",
   "private": true,
   "scripts": {
-    "typecheck": "cargo check --workspace --all-targets",
-    "test": "cargo test --workspace --all-targets"
+    "typecheck": "python3 scripts/build_lock.py -- cargo check --workspace --all-targets",
+    "test": "python3 scripts/build_lock.py -- cargo test --workspace --all-targets"
   }
 }
