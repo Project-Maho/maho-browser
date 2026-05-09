@@ -31,6 +31,7 @@ Hybrid repo: Rust workspace plus native shells and Appium test harnesses. Backen
 ## CONVENTIONS
 - Use `bun run` for repo scripts and local source files, and `bunx` for one-off package executables or CLIs.
 - Rust workspace commands at repo root: `bun run test` and `bun run typecheck` proxy to Cargo.
+- These shared-artifact entrypoints use the workspace root `.build.lock`, so `bun run test`, `bun run typecheck`, and the cargo-backed shell build leaf commands in `maho/macos-shell/Makefile` and `maho/ios-shell/Makefile` may wait and print `Waiting for build lock: ...`.
 - Shells are platform-separated; do not assume shared UI code across macOS/iOS/Android.
 - Appium tests are repo-local and separate from product code.
 - Existing subtree AGENTS.md files take precedence over this root guide.
@@ -56,6 +57,26 @@ cd relay && cargo test
 cd relay && cargo clippy -- -D warnings
 cd relay && cargo build --release
 ```
+
+## CHROMIUM BUILD
+
+Use the Chromium overlay from `chromium/src`.
+
+Standard build:
+
+```bash
+autoninja -C out/Default chrome
+```
+
+This produces `chromium/src/out/Default/Maho.app`.
+
+If `autoninja` is not on PATH, use the local `depot_tools` directory inline:
+
+```bash
+PATH="/Users/indo/code/project/maho-workspace/chromium/src/third_party/depot_tools:$PATH" autoninja -C out/Default chrome
+```
+
+For narrower rebuilds, use `chrome_framework_shared_library` or `chrome_app`.
 
 ## NOTES
 - `macos-shell/AGENTS.md` already contains the most specific shell rules.
