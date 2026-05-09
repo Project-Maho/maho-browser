@@ -309,6 +309,34 @@ struct FolderInfo {
   std::string parent_folder_id;
 };
 
+struct RootItemInfo {
+  std::string kind;
+  std::string id;
+};
+
+std::vector<RootItemInfo> ParseRootOrder(const std::string& space_id_json) {
+  std::vector<RootItemInfo> root_items;
+  auto parsed = CallCoreFfi(maho_core_get_sidebar_root_order, space_id_json);
+  if (!parsed || !parsed->is_list()) {
+    return root_items;
+  }
+
+  for (const auto& item : parsed->GetList()) {
+    const auto* dict = item.GetIfDict();
+    if (!dict) {
+      continue;
+    }
+    const std::string* kind = dict->FindString("kind");
+    const std::string* id = dict->FindString("id");
+    if (!kind || !id) {
+      continue;
+    }
+    root_items.push_back(RootItemInfo{*kind, *id});
+  }
+
+  return root_items;
+}
+
 std::vector<FolderInfo> ParseFolders(const std::string& space_id_json) {
   std::vector<FolderInfo> folders;
   auto parsed = CallCoreFfi(maho_core_get_folder_view_models, space_id_json);
@@ -480,7 +508,7 @@ void BuildTreeSection(
   }
 
   std::set<std::string> tabs_in_folders;
-  std::vector<const FolderInfo*> section_folders;
+  std::map<std::string, const FolderInfo*> folders_by_id;
   std::map<std::string, std::vector<const FolderInfo*>> children_map;
 
   for (const auto& fi : all_folders) {
@@ -490,22 +518,36 @@ void BuildTreeSection(
     for (const auto& tid : fi.tab_ids) {
       tabs_in_folders.insert(tid);
     }
-    if (fi.parent_folder_id.empty()) {
-      section_folders.push_back(&fi);
-    } else {
+    folders_by_id.emplace(fi.id, &fi);
+    if (!fi.parent_folder_id.empty()) {
       children_map[fi.parent_folder_id].push_back(&fi);
     }
   }
 
-  for (const auto& fi : section_folders) {
-    out_tree.push_back(
-        BuildFolderNode(*fi, tab_nodes_by_id, children_map, 0));
+  const std::vector<RootItemInfo> root_order = ParseRootOrder(space_id_json);
+  for (const auto& root_item : root_order) {
+    if (root_item.kind == "tab") {
+      if (tabs_in_folders.count(root_item.id) != 0) {
+        continue;
+      }
+      auto tab_it = tab_nodes_by_id.find(root_item.id);
+      if (tab_it != tab_nodes_by_id.end()) {
+        out_tree.push_back(tab_it->second);
+      }
+      continue;
+    }
+
+    if (root_item.kind == "folder") {
+      auto folder_it = folders_by_id.find(root_item.id);
+      if (folder_it != folders_by_id.end()) {
+        out_tree.push_back(
+            BuildFolderNode(*folder_it->second, tab_nodes_by_id, children_map, 0));
+      }
+    }
   }
 
-  for (const auto& tab_node : all_tab_nodes) {
-    if (tabs_in_folders.count(tab_node.tab_id) == 0) {
-      out_tree.push_back(tab_node);
-    }
+  if (model) {
+    GroupSplitTabs(out_tree, model);
   }
 
   if (model) {
@@ -562,6 +604,28 @@ void DispatchShellEventEx(
   }
   std::string json;
   base::JSONWriter::Write(event, &json);
+  if (kind == "reorder_favorite") {
+    LOG(ERROR) << "[MAHO_DND] DispatchShellEventEx: kind=" << kind
+               << " json=" << json << " core=" << (maho::GetCore() ? "OK" : "NULL");
+  }
+  if (g_shell_event_observer_for_testing) {
+    g_shell_event_observer_for_testing->OnShellEventDispatched(kind, json);
+  }
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return;
+  }
+  maho::core::HandleEvent(core, json.c_str());
+  if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
+    bridge->NotifyChanged();
+  }
+}
+
+void DispatchShellEventDict(const std::string& kind,
+                            base::DictValue dict) {
+  dict.Set("kind", kind);
+  std::string json;
+  base::JSONWriter::Write(dict, &json);
   if (g_shell_event_observer_for_testing) {
     g_shell_event_observer_for_testing->OnShellEventDispatched(kind, json);
   }

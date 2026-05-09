@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
@@ -17,11 +18,14 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "ui/shell_dialogs/select_file_dialog.h"
+#include "ui/shell_dialogs/select_file_policy.h"
 
 class Browser;
 
 class MahoSidebarPageHandler : public maho_sidebar::mojom::PageHandler,
-                               public TabStripModelObserver {
+                               public TabStripModelObserver,
+                               public ui::SelectFileDialog::Listener {
  public:
   MahoSidebarPageHandler(
       mojo::PendingReceiver<maho_sidebar::mojom::PageHandler> receiver,
@@ -45,6 +49,7 @@ class MahoSidebarPageHandler : public maho_sidebar::mojom::PageHandler,
                    const std::optional<std::string>& profile_id,
                    int32_t insert_after_index) override;
   void DeleteSpace(const std::string& space_id) override;
+  void CreateFolder(const std::string& space_id) override;
   void RenameSpace(const std::string& space_id,
                    const std::string& new_name) override;
   void RecolorSpace(const std::string& space_id,
@@ -58,6 +63,8 @@ class MahoSidebarPageHandler : public maho_sidebar::mojom::PageHandler,
   void GetProfiles(GetProfilesCallback callback) override;
   void AssignProfileToSpace(const std::string& space_id,
                             const std::string& profile_id) override;
+  void ExportTheme(const std::string& space_id) override;
+  void ImportTheme(const std::string& space_id) override;
   void GetATCRules(GetATCRulesCallback callback) override;
   void AddATCRule(const std::string& url_pattern,
                   const std::string& target_space_id,
@@ -75,7 +82,17 @@ class MahoSidebarPageHandler : public maho_sidebar::mojom::PageHandler,
       const TabStripModelChange& change,
       const TabStripSelectionChange& selection) override;
 
+  // ui::SelectFileDialog::Listener:
+  void FileSelected(const ui::SelectedFileInfo& file, int index) override;
+  void FileSelectionCanceled() override;
+
  private:
+  enum class PendingFileOp {
+    kNone,
+    kExportTheme,
+    kImportTheme,
+  };
+
   std::vector<maho_sidebar::mojom::TabInfoPtr> BuildTabsList();
   void SendTabsUpdate();
   void SendSpacesUpdate();
@@ -91,6 +108,7 @@ class MahoSidebarPageHandler : public maho_sidebar::mojom::PageHandler,
                                        const std::string& profile_id,
                                        int32_t insert_after_index);
   static void DeleteSpaceOnPool(const std::string& space_id);
+  static void CreateFolderOnPool(const std::string& space_id);
   static void RenameSpaceOnPool(const std::string& space_id,
                                 const std::string& new_name);
   static void RecolorSpaceOnPool(const std::string& space_id,
@@ -128,10 +146,15 @@ class MahoSidebarPageHandler : public maho_sidebar::mojom::PageHandler,
       maho_sidebar::mojom::ATCRulePtr rule);
   void OnThemeStoreFetched(FetchThemeStoreCallback callback,
                            std::optional<std::string> body);
+  void ShowExportThemeDialog();
+  void ShowImportThemeDialog();
 
   mojo::Receiver<maho_sidebar::mojom::PageHandler> receiver_;
   mojo::Remote<maho_sidebar::mojom::Page> page_;
   raw_ptr<Browser> browser_;
+  std::string pending_space_id_;
+  PendingFileOp pending_file_op_ = PendingFileOp::kNone;
+  scoped_refptr<ui::SelectFileDialog> select_file_dialog_;
   std::unique_ptr<network::SimpleURLLoader> theme_store_loader_;
   std::string cached_theme_store_json_;
   base::TimeTicks last_theme_store_fetch_;

@@ -317,7 +317,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
 
   auto* rail_button = sidebar->library_rail_view_for_testing()
                           ->button_for_category_for_testing(
-                              MahoSidebarLibraryRailView::Category::kMedia);
+                              MahoSidebarLibraryRailView::Category::kArchivedTabs);
   ASSERT_TRUE(rail_button);
   views::test::ButtonTestApi(rail_button).NotifyClick(ui::test::TestEvent());
   base::RunLoop().RunUntilIdle();
@@ -400,6 +400,42 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
 
   EXPECT_FALSE(sidebar->is_archive_mode_for_testing());
   EXPECT_EQ(archive_button, sidebar->GetFocusManager()->GetFocusedView());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
+                       ArchiveReturnKeepsFooterAndTabsVisible) {
+  ResolveViews();
+
+  auto* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+  auto* footer = GetFooterView();
+  ASSERT_TRUE(footer);
+  auto* archive_button = footer->archive_button_for_testing();
+  ASSERT_TRUE(archive_button);
+
+  views::test::ButtonTestApi(archive_button).NotifyClick(ui::test::TestEvent());
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(sidebar->is_archive_mode_for_testing());
+  ASSERT_TRUE(sidebar->library_rail_view_for_testing());
+  auto* back_button =
+      sidebar->library_rail_view_for_testing()->back_button_for_testing();
+  ASSERT_TRUE(back_button);
+
+  views::test::ButtonTestApi(back_button).NotifyClick(ui::test::TestEvent());
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+
+  sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+
+  EXPECT_FALSE(sidebar->is_archive_mode_for_testing());
+  ASSERT_TRUE(GetFooterView());
+  EXPECT_TRUE(GetFooterView()->GetVisible());
+  EXPECT_GT(GetFooterView()->GetBoundsInScreen().height(), 0);
+  ASSERT_TRUE(GetTabListView());
+  EXPECT_TRUE(GetTabListView()->GetVisible());
+  EXPECT_GT(GetTabListView()->GetBoundsInScreen().height(), 0);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,

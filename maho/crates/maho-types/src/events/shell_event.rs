@@ -2,8 +2,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::autofill::{AutofillAddress, AutofillPayment};
 use crate::boost::BoostUpdate;
-use crate::common::{ImageData, MemoryPressureLevel, Orientation, Size, Url, UrlPattern};
-use crate::identifiers::{BoostId, FolderId, NoteId, PaneId, ProfileId, SpaceId, TabId};
+use crate::chat::{ChatRequestContext, ChatRequestMode, PageContext};
+use crate::common::{ImageData, MemoryPressureLevel, Size, Url, UrlPattern};
+use crate::identifiers::{BoostId, FolderId, NoteId, ProfileId, SpaceId, TabId};
 use crate::settings::SettingsUpdate;
 use crate::space::{SpaceColor, SpaceConfigUpdate};
 
@@ -83,6 +84,11 @@ pub enum ShellEvent {
         url: Option<Url>,
         parent_id: Option<TabId>,
     },
+    CreateSplit {
+        tab_ids: Vec<TabId>,
+        orientation: crate::common::Orientation,
+    },
+    ClearSplitView,
     CloseTab {
         tab_id: TabId,
     },
@@ -266,6 +272,13 @@ pub enum ShellEvent {
         folder_id: FolderId,
     },
 
+    // Root ordering (unified mixed-item contract)
+    ReorderRootItem {
+        space_id: SpaceId,
+        item: crate::space::RootItem,
+        insertion_point: crate::space::RootInsertionPoint,
+    },
+
     // Command bar (5)
     CommandBarOpened,
     CommandBarClosed,
@@ -276,6 +289,7 @@ pub enum ShellEvent {
     },
     CommandBarSelect {
         index: usize,
+        key: String,
     },
     CommandBarAction {
         action: QuickAction,
@@ -305,19 +319,6 @@ pub enum ShellEvent {
     SetNotificationFilter {
         origin: String,
         allowed: bool,
-    },
-
-    // Split view (3)
-    CreateSplit {
-        tab_ids: Vec<TabId>,
-        orientation: Orientation,
-    },
-    RemoveSplit {
-        pane_id: PaneId,
-    },
-    ResizeSplit {
-        pane_id: PaneId,
-        ratio: f64,
     },
 
     // Boosts (4)
@@ -630,11 +631,13 @@ pub enum ShellEvent {
     ApplyTidyTabs {
         space_id: SpaceId,
     },
+    ChatRequestModeChanged {
+        mode: ChatRequestMode,
+    },
     ChatMessage {
         message: String,
-        include_page_context: bool,
         #[serde(default)]
-        tools_enabled: Option<bool>,
+        context: ChatRequestContext,
     },
     ToolPermissionResponse {
         call_id: String,
@@ -649,7 +652,8 @@ pub enum ShellEvent {
     UseSkill {
         skill_id: String,
         user_input: String,
-        page_context: Option<String>,
+        #[serde(default)]
+        page_context: Option<PageContext>,
     },
 }
 
@@ -669,6 +673,7 @@ impl ShellEvent {
         matches!(
             self,
             Self::CreateTab { .. }
+                | Self::CreateSplit { .. }
                 | Self::CloseTab { .. }
                 | Self::ActivateTab { .. }
                 | Self::DuplicateTab { .. }
@@ -725,6 +730,7 @@ impl ShellEvent {
                 | Self::ToggleFolderExpanded { .. }
                 | Self::PinFolder { .. }
                 | Self::UnpinFolder { .. }
+                | Self::ReorderRootItem { .. }
         )
     }
 

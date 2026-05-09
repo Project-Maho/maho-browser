@@ -3,9 +3,19 @@
 
 class Browser;
 
+namespace views {
+class Widget;
+}  // namespace views
+
+namespace maho {
+class MahoSidebarCreateSpaceView;
+}  // namespace maho
+
 class MahoSpaceCreateDialog {
  public:
   static void Open(Browser* parent_browser);
+  static views::Widget* GetWidgetForTesting();
+  static maho::MahoSidebarCreateSpaceView* GetCreateSpaceViewForTesting();
 
  private:
   MahoSpaceCreateDialog() = delete;

@@ -56,7 +56,7 @@ enum ShellEvent: Codable {
     case commandBarOpened
     case commandBarClosed
     case commandBarQuery(text: String, mode: String?)
-    case commandBarSelect(index: Int)
+    case commandBarSelect(index: Int, key: String)
     case commandBarAction(action: QuickAction)
     case saveSearch(query: String)
     case addSearchEngine(engine: SearchEngineModel)
@@ -458,8 +458,9 @@ enum ShellEvent: Codable {
         case .commandBarQuery(let text, let mode):
             try container.encode(text, forKey: DynamicCodingKey(stringValue: "text")!)
             try container.encodeIfPresent(mode, forKey: DynamicCodingKey(stringValue: "mode")!)
-        case .commandBarSelect(let index):
+        case .commandBarSelect(let index, let key):
             try container.encode(index, forKey: DynamicCodingKey(stringValue: "index")!)
+            try container.encode(key, forKey: DynamicCodingKey(stringValue: "key")!)
         case .commandBarAction(let action):
             try container.encode(action, forKey: DynamicCodingKey(stringValue: "action")!)
         case .saveSearch(let query):
@@ -823,7 +824,9 @@ enum ShellEvent: Codable {
                 text: try container.decode(String.self, forKey: DynamicCodingKey(stringValue: "text")!),
                 mode: try container.decodeIfPresent(String.self, forKey: DynamicCodingKey(stringValue: "mode")!))
         case "command_bar_select":
-            self = .commandBarSelect(index: try container.decode(Int.self, forKey: DynamicCodingKey(stringValue: "index")!))
+            self = .commandBarSelect(
+                index: try container.decode(Int.self, forKey: DynamicCodingKey(stringValue: "index")!),
+                key: try container.decode(String.self, forKey: DynamicCodingKey(stringValue: "key")!))
         case "command_bar_action":
             self = .commandBarAction(action: try container.decode(QuickAction.self, forKey: DynamicCodingKey(stringValue: "action")!))
         case "save_search":

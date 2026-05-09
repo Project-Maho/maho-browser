@@ -7,6 +7,21 @@ source_set("maho_core_holder") {
   ]
 }
 
+source_set("maho_password_provider") {
+  sources = [
+    "passwords/maho_password_provider_utils.cc",
+    "passwords/maho_password_provider_utils.h",
+  ]
+  public_deps = [
+    "//base",
+  ]
+  deps = [
+    ":maho_core_holder",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//maho/third_party/maho:maho_core_prebuilt",
+  ]
+}
+
 source_set("maho_ai_client") {
   sources = [
     "ai/maho_ai_llm_client.cc",
@@ -17,6 +32,97 @@ source_set("maho_ai_client") {
     "//components/prefs",
     "//net",
     "//services/network/public/cpp",
+    "//url",
+  ]
+}
+
+source_set("maho_opencode_runtime_service") {
+  sources = [
+    "ai/maho_opencode_runtime_service.cc",
+    "ai/maho_opencode_runtime_service.h",
+  ]
+  public_deps = [
+    "//base",
+  ]
+  deps = [
+    "//net",
+    "//services/network/public/cpp",
+    "//services/network/public/mojom",
+    "//url",
+  ]
+}
+
+source_set("maho_ai_runtime_adapter") {
+  sources = [
+    "ai/maho_ai_runtime_adapter.cc",
+    "ai/maho_ai_runtime_adapter.h",
+    "ai/maho_opencode_adapter.cc",
+    "ai/maho_opencode_adapter.h",
+    "ai/maho_ai_runtime_router.cc",
+    "ai/maho_ai_runtime_router.h",
+  ]
+  public_deps = [
+    "//base",
+    "//components/prefs",
+  ]
+  deps = [
+    ":maho_browser_ai_tools",
+    ":maho_opencode_runtime_service",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//content/public/browser",
+    "//maho/browser/ui/webui/maho_ai:mojo_bindings",
+    "//net",
+    "//services/network/public/cpp",
+    "//url",
+  ]
+}
+
+source_set("maho_prompt_utils") {
+  sources = [
+    "ai/maho_extract_prompt_messages.cc",
+    "ai/maho_extract_prompt_messages.h",
+  ]
+  deps = [
+    "//base",
+  ]
+}
+
+source_set("maho_chat_orchestration") {
+  sources = [
+    "ai/maho_chat_orchestration_service.cc",
+    "ai/maho_chat_orchestration_service.h",
+  ]
+  public_deps = [
+    ":maho_ai_client",
+    ":maho_browser_ai_tools",
+    ":maho_prompt_utils",
+    "//base",
+  ]
+  deps = [
+    ":maho_core_holder",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//content/public/browser",
+    "//maho/browser/ui/webui/maho_ai:mojo_bindings",
+    "//maho/third_party/maho:maho_bridge",
+    "//services/network/public/cpp",
+    "//url",
+  ]
+}
+
+source_set("maho_browser_ai_tools") {
+  sources = [
+    "ai/maho_ai_page_context_extractor.cc",
+    "ai/maho_ai_page_context_extractor.h",
+    "ai/maho_browser_tool_executor.cc",
+    "ai/maho_browser_tool_executor.h",
+    "ai/maho_browser_tool_registry.cc",
+    "ai/maho_browser_tool_registry.h",
+  ]
+  deps = [
+    "//base",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//content/public/browser",
     "//url",
   ]
 }
@@ -38,8 +144,6 @@ source_set("maho_context_menus") {
     "ui/views/sidebar/maho_sidebar_drag_util.h",
     "ui/views/sidebar/maho_sidebar_action_popover_view.cc",
     "ui/views/sidebar/maho_sidebar_action_popover_view.h",
-    "ui/views/space_manage/maho_space_manage_dialog.cc",
-    "ui/views/space_manage/maho_space_manage_dialog.h",
   ]
   deps = [
     "//base",
@@ -50,8 +154,11 @@ source_set("maho_context_menus") {
     "//content/public/browser",
     "//maho/browser:maho_core_holder",
     "//maho/browser:maho_space_profile_bridge",
+    # TODO(nicolo): Re-enable when split_view is wired up.
+    # "//maho/browser/ui/views/split_view:maho_split_view",
     "//maho/components/constants",
     "//maho/third_party/maho:maho_ffi_headers",
+    "//maho/browser:maho_theme_support",
     "//net",
     "//ui/base",
     "//ui/compositor",
@@ -62,6 +169,83 @@ source_set("maho_context_menus") {
     "//ui/shell_dialogs",
     "//ui/views",
     "//url",
+  ]
+}
+
+source_set("maho_location_bar_views") {
+  sources = [
+    "ui/views/location_bar/maho_location_bar_utility_icon_view.cc",
+    "ui/views/location_bar/maho_location_bar_utility_icon_view.h",
+    "ui/views/location_bar/maho_location_bar_utility_panel_provider.cc",
+    "ui/views/location_bar/maho_location_bar_utility_panel_provider.h",
+    "ui/views/location_bar/maho_location_bar_utility_panel_view.cc",
+    "ui/views/location_bar/maho_location_bar_utility_panel_view.h",
+  ]
+  deps = [
+    ":maho_core_holder",
+    "//base",
+    "//chrome/browser/content_settings:content_settings_factory",
+    "//chrome/browser/page_info",
+    "//chrome/browser/permissions",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui/location_bar",
+    "//chrome/browser/ui/toolbar",
+    "//components/content_settings/core/browser",
+    "//components/content_settings/core/common",
+    "//components/omnibox/browser",
+    "//components/permissions",
+    "//components/security_state/core",
+    "//components/vector_icons",
+    "//content/public/browser",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//ui/base",
+    "//ui/color",
+    "//ui/gfx",
+    "//ui/views",
+  ]
+}
+
+source_set("maho_location_bar_views_unittests") {
+  testonly = true
+  sources = [
+    "ui/views/location_bar/maho_location_bar_utility_panel_provider_unittest.cc",
+  ]
+  deps = [
+    ":maho_location_bar_views",
+    "//base",
+    "//chrome/browser/content_settings:content_settings_factory",
+    "//chrome/browser/permissions",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui/location_bar",
+    "//components/content_settings/core/common",
+    "//components/permissions",
+    "//components/security_state/core",
+    "//content/public/browser",
+    "//testing/gtest",
+    "//url",
+  ]
+}
+
+source_set("maho_location_bar_views_interactive_tests") {
+  testonly = true
+  defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+  sources = [
+    "ui/views/location_bar/maho_location_bar_utility_icon_view_interactive_uitest.cc",
+  ]
+  deps = [
+    ":maho_location_bar_views",
+    "//base/test:test_support",
+    "//chrome/browser/ui/views/frame",
+    "//chrome/browser/ui/views/location_bar",
+    "//chrome/browser/ui/views/page_info",
+    "//chrome/browser/ui/views/toolbar",
+    "//chrome/test:test_support",
+    "//chrome/test:test_support_ui",
+    "//content/test:test_support",
+    "//testing/gtest",
+    "//ui/base:test_support",
+    "//ui/views:test_support",
   ]
 }
 
@@ -92,12 +276,14 @@ if (is_linux) {
   # Linux Little Arc plumbing is intentionally stubbed for now.
 }
 
-source_set("maho_ui_stubs") {
+source_set("maho_theme_support") {
   sources = [
     "ui/theme/maho_color_mixer.cc",
     "ui/theme/maho_color_mixer.h",
     "ui/theme/maho_space_theme_state.cc",
     "ui/theme/maho_space_theme_state.h",
+    "ui/theme/maho_space_theme_io.cc",
+    "ui/theme/maho_space_theme_io.h",
     "ui/theme/maho_theme_helper.cc",
     "ui/theme/maho_theme_helper.h",
     "ui/downloads/maho_download_theme.cc",
@@ -108,16 +294,25 @@ source_set("maho_ui_stubs") {
     "ui/reader/maho_reader_theme.h",
     "ui/permissions/maho_permission_theme.cc",
     "ui/permissions/maho_permission_theme.h",
-    "ui/site_control/maho_page_info_ui.cc",
-    "ui/site_control/maho_page_info_ui.h",
     "ui/notifications/maho_notification_overlay.cc",
     "ui/notifications/maho_notification_overlay.h",
     "ui/tab_preview/maho_tab_preview_controller.cc",
     "ui/tab_preview/maho_tab_preview_controller.h",
   ]
   deps = [
+    ":maho_core_holder",
     "//base",
+    "//chrome/browser/ui/color:color_headers",
+    "//content/public/browser",
+    "//maho/browser/net",
+    "//maho/third_party/maho:maho_bridge",
     "//ui/color",
+  ]
+}
+
+source_set("maho_ui_stubs") {
+  deps = [
+    ":maho_theme_support",
   ]
 }
 
@@ -129,6 +324,7 @@ source_set("maho_link_preview") {
   ]
   deps = [
     ":maho_core_holder",
+    ":maho_prompt_utils",
     "//base",
     "//chrome/browser/profiles:profile",
     "//components/prefs",
@@ -162,10 +358,15 @@ source_set("maho_browser_main_extra_parts") {
   ]
   deps = [
     ":maho_core_holder",
-    ":maho_ui_stubs",
+    ":maho_opencode_runtime_service",
+    ":maho_theme_support",
     "//base",
     "//chrome/browser:main_extra_parts",
+    "//chrome/browser/net",
+    "//chrome/browser/profiles:profile",
+    "//components/prefs",
     "//maho/third_party/maho:maho_bridge",
+    "//services/network/public/cpp",
     "//ui/color",
   ]
 }

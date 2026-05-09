@@ -17,12 +17,6 @@
 #include "maho/third_party/maho/maho_ffi.h"
 #include "ui/color/color_provider_manager.h"
 
-extern "C" {
-void maho_core_update_space_theme(MahoCore* ptr,
-                                  const char* space_id,
-                                  const char* theme_json);
-}
-
 namespace {
 
 maho_space_config::mojom::SpaceInfoPtr LoadSpaceOnPool(
@@ -67,9 +61,8 @@ maho_space_config::mojom::SpaceInfoPtr LoadSpaceOnPool(
     const std::string* color = dict->FindString("color");
     info->color = color ? *color : std::string();
 
-    const std::string* theme = dict->FindString("theme_json");
-    if (theme && !theme->empty()) {
-      info->theme_json = *theme;
+    if (const std::string* theme_json = dict->FindString("theme_json")) {
+      info->theme_json = *theme_json;
     }
 
     const std::string* pid = dict->FindString("profile_id");
@@ -142,7 +135,7 @@ bool RecolorSpaceOnPool(const std::string& space_id,
     return false;
   }
 
-  base::Value::Dict color_dict;
+  base::DictValue color_dict;
   color_dict.Set("color", color_hex);
   std::string color_json;
   base::JSONWriter::Write(color_dict, &color_json);
@@ -150,7 +143,24 @@ bool RecolorSpaceOnPool(const std::string& space_id,
   maho_core_recolor_space(core, space_id.c_str(), color_json.c_str());
 
   if (!theme_json.empty()) {
-    maho_core_update_space_theme(core, space_id.c_str(), theme_json.c_str());
+    std::optional<base::Value> theme_value =
+        base::JSONReader::Read(theme_json, base::JSON_PARSE_RFC);
+    if (!theme_value) {
+      return false;
+    }
+
+    base::DictValue changes;
+    changes.Set("spaceId", space_id);
+    changes.Set("theme", std::move(*theme_value));
+    base::DictValue event;
+    event.Set("kind", "update_space_config");
+    event.Set("changes", std::move(changes));
+    std::string event_json;
+    base::JSONWriter::Write(event, &event_json);
+    char* result = maho_core_handle_event(core, event_json.c_str());
+    if (result) {
+      maho_string_free(result);
+    }
   }
 
   return true;
@@ -181,12 +191,16 @@ void MahoSpaceConfigPageHandler::GetSpaceInfo(GetSpaceInfoCallback callback) {
       {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
       base::BindOnce(&LoadSpaceOnPool, space_id_),
       base::BindOnce(
-          [](maho_space_config::mojom::InitialFocus focus,
+          [](base::WeakPtr<MahoSpaceConfigPageHandler> weak_self,
+             maho_space_config::mojom::InitialFocus focus,
              GetSpaceInfoCallback cb,
              maho_space_config::mojom::SpaceInfoPtr info) {
+            if (weak_self && weak_self->cached_theme_json_.has_value() && info) {
+              info->theme_json = weak_self->cached_theme_json_;
+            }
             std::move(cb).Run(std::move(info), focus);
           },
-          focus, std::move(callback)));
+          weak_factory_.GetWeakPtr(), focus, std::move(callback)));
 }
 
 void MahoSpaceConfigPageHandler::GetProfiles(GetProfilesCallback callback) {
@@ -251,7 +265,7 @@ void MahoSpaceConfigPageHandler::UpdateIcon(
                       ? *existing_color
                       : "#5F8BFF";
 
-              base::Value::Dict color_dict;
+              base::DictValue color_dict;
               color_dict.Set("color", current_color);
               color_dict.Set("icon", icon);
               std::string color_json;
@@ -270,21 +284,24 @@ void MahoSpaceConfigPageHandler::UpdateColor(
     const std::string& color_hex,
     const std::optional<std::string>& theme_json,
     UpdateColorCallback callback) {
+  const std::string theme_json_value = theme_json.value_or(std::string());
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE,
       {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
       base::BindOnce(&RecolorSpaceOnPool, space_id_, color_hex,
-                     theme_json.value_or(std::string())),
+                     theme_json_value),
       base::BindOnce(
           [](base::WeakPtr<MahoSpaceConfigPageHandler> weak_self,
-             UpdateColorCallback cb, bool success) {
+             UpdateColorCallback cb, std::string theme_json_value,
+             bool success) {
             if (weak_self && success) {
+              weak_self->cached_theme_json_ = std::move(theme_json_value);
               MahoSpaceThemeState::UpdateFromCore();
               ui::ColorProviderManager::Get().ResetColorProviderCache();
             }
             std::move(cb).Run(success);
           },
-          weak_factory_.GetWeakPtr(), std::move(callback)));
+          weak_factory_.GetWeakPtr(), std::move(callback), theme_json_value));
 }
 
 void MahoSpaceConfigPageHandler::UpdateProfile(

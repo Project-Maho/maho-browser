@@ -13,8 +13,9 @@ build_webui("build") {
   ts_files = [
     "app.ts",
     "models.ts",
-    "schema/setting_schema.ts",
+    "schema/domains.ts",
     "schema/panes.ts",
+    "schema/setting_schema.ts",
   ]
 
   ts_deps = [ "//ui/webui/resources/mojo:build_ts" ]

@@ -78,12 +78,15 @@ fn handle_event_invalid_json_returns_null() {
 }
 
 #[test]
-fn get_tab_view_models_empty() {
+fn get_tab_view_models_returns_seeded_first_run_tabs() {
     let ptr = maho_ffi::maho_core_new();
     let result = unsafe { maho_ffi::maho_core_get_tab_view_models(ptr) };
     assert!(!result.is_null());
     let json = unsafe { CStr::from_ptr(result) }.to_str().unwrap();
-    assert_eq!(json, "[]");
+    let tabs: Vec<Value> = serde_json::from_str(json).unwrap();
+    assert_eq!(tabs.len(), 2);
+    assert!(tabs.iter().any(|tab| tab.get("isPinned") == Some(&Value::Bool(true))));
+    assert!(tabs.iter().any(|tab| tab.get("isFavorite") == Some(&Value::Bool(true))));
     unsafe { maho_ffi::maho_string_free(result) };
     unsafe { maho_ffi::maho_core_free(ptr) };
 }

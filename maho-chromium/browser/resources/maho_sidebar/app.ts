@@ -6,8 +6,22 @@ import {
 } from './maho_sidebar.mojom-webui.js';
 import {PageCallbackRouter} from './maho_sidebar.mojom-webui.js';
 import type {ATCRule, ProfileInfo} from './maho_sidebar.mojom-webui.js';
+import {
+  SIDEBAR_THEME_COLOR_PRESETS as PRESET_COLORS,
+  computeHarmonyColors,
+  hexToHsb,
+  hsbToHex,
+  hsbToRgb,
+  normalizeHue,
+} from '//resources/maho_common/maho_theme_utils.js';
+import type {
+  ColorHarmony,
+  SpaceColor,
+  SpaceThemeData,
+} from '//resources/maho_common/maho_theme_utils.js';
 
-type WizardMode = 'create'|'change-icon'|'edit-theme'|'theme-store';
+type WizardMode =
+    'create'|'change-icon'|'edit-theme'|'theme-store'|'manage-spaces';
 type WizardStep = 'icon'|'details';
 
 interface SidebarTypeEnvelope {
@@ -20,7 +34,10 @@ interface Elements {
   body: HTMLElement;
   strip: HTMLElement;
   stripRail: HTMLElement;
+  tabPanel: HTMLElement;
   tabList: HTMLElement;
+  managePanel: HTMLElement;
+  sidebarTitle: HTMLElement;
   contextMenuLayer: HTMLElement;
 }
 
@@ -30,37 +47,6 @@ interface EmojiOption {
   keywords: string[];
 }
 
-interface SpaceColor {
-  hue: number;
-  saturation: number;
-  brightness: number;
-  grain: number;
-}
-
-interface ThemeColor {
-  hue: number;
-  saturation: number;
-  brightness: number;
-  isCustom: boolean;
-  isPrimary: boolean;
-}
-
-type ColorHarmony = 'complementary'|'single_analogous'|'split_complementary'|'analogous'|'triadic'|'custom';
-
-interface SolidTheme {
-  type: 'solid';
-  color: SpaceColor;
-}
-
-interface GradientTheme {
-  type: 'gradient';
-  gradientColors: ThemeColor[];
-  harmony: ColorHarmony;
-  opacity: number;
-  texture: number;
-}
-
-type SpaceThemeData = SolidTheme|GradientTheme;
 
 interface ThemeStoreEntry {
   id: string;
@@ -164,16 +150,6 @@ const COLOR_OPTIONS = [
   '#E66BCB',
 ];
 
-const PRESET_COLORS: {title: string; color: SpaceColor}[] = [
-  {title: 'Coral', color: {hue: 0.0, saturation: 0.62, brightness: 0.95, grain: 0}},
-  {title: 'Orange', color: {hue: 0.07, saturation: 0.60, brightness: 0.95, grain: 0}},
-  {title: 'Gold', color: {hue: 0.12, saturation: 0.68, brightness: 0.97, grain: 0}},
-  {title: 'Green', color: {hue: 0.38, saturation: 0.52, brightness: 0.77, grain: 0}},
-  {title: 'Cyan', color: {hue: 0.52, saturation: 0.60, brightness: 0.85, grain: 0}},
-  {title: 'Blue', color: {hue: 0.62, saturation: 0.63, brightness: 1.0, grain: 0}},
-  {title: 'Purple', color: {hue: 0.72, saturation: 0.52, brightness: 0.96, grain: 0}},
-  {title: 'Pink', color: {hue: 0.90, saturation: 0.58, brightness: 0.90, grain: 0}},
-];
 
 const CREATE_QUERY_PARAM = 'create';
 const SWIPE_DEBOUNCE_MS = 300;
@@ -188,6 +164,7 @@ let createSpaceOnLoad =
 let spaces: SpaceInfo[] = [];
 let visibleSpaces: SpaceInfo[] = [];
 let tabs: TabInfo[] = [];
+let profiles: ProfileInfo[] = [];
 let previousActiveSpaceId: string|null = null;
 let wizardState: WizardState|null = null;
 let contextMenuState: ContextMenuState|null = null;
@@ -199,7 +176,7 @@ let lastSwipeAt = 0;
 let enteringSpaceIds = new Set<string>();
 let themeEditorState: {
   currentColor: SpaceColor;
-  isGradientMode: boolean;
+  previewMode: 'solid'|'zen'|'gradient';
   harmony: ColorHarmony;
   opacity: number;
   selectedPresetIndex: number;
@@ -238,6 +215,10 @@ function initialize() {
     updateSpaces(nextSpaces);
   });
 
+  callbackRouter.profilesChanged.addListener((nextProfiles: ProfileInfo[]) => {
+    profiles = nextProfiles;
+  });
+
   callbackRouter.spaceThemeChanged.addListener((spaceId: string, color: string) => {
     const nextSpaces = spaces.map((space) => {
       if (space.id !== spaceId) {
@@ -260,6 +241,10 @@ function initialize() {
     tabs = nextTabs;
     renderTabs();
   });
+
+  void pageHandler.getProfiles().then(({profiles: nextProfiles}: {profiles: ProfileInfo[]}) => {
+    profiles = nextProfiles;
+  });
 }
 
 function createShell(app: HTMLElement): Elements {
@@ -272,6 +257,7 @@ function createShell(app: HTMLElement): Elements {
   const strip = document.createElement('aside');
   strip.className = 'space-strip';
   strip.setAttribute('aria-label', 'Spaces');
+  strip.setAttribute('data-maho-identifier', 'sidebarSpacesStrip');
 
   const stripRail = document.createElement('div');
   stripRail.className = 'space-strip-rail';
@@ -279,18 +265,26 @@ function createShell(app: HTMLElement): Elements {
   const tabPanel = document.createElement('section');
   tabPanel.className = 'tab-panel';
 
+  const sidebarTitle = document.createElement('div');
+  sidebarTitle.className = 'sidebar-title';
+
   const tabList = document.createElement('div');
   tabList.className = 'tab-list';
+
+  const managePanel = document.createElement('section');
+  managePanel.className = 'manage-spaces-panel';
+  managePanel.setAttribute('data-maho-identifier', 'sidebar.manageSpaces.panel');
+  managePanel.setAttribute('aria-label', 'Manage Spaces');
 
   const contextMenuLayer = document.createElement('div');
   contextMenuLayer.className = 'space-context-menu-layer';
 
   strip.appendChild(stripRail);
-  tabPanel.appendChild(tabList);
+  tabPanel.append(sidebarTitle, tabList, managePanel);
   body.append(strip, tabPanel);
   app.append(header, body, contextMenuLayer);
 
-  return {app, body, strip, stripRail, tabList, contextMenuLayer};
+  return {app, body, strip, stripRail, tabPanel, tabList, managePanel, sidebarTitle, contextMenuLayer};
 }
 
 function createHeader(): HTMLElement {
@@ -306,6 +300,7 @@ function createHeader(): HTMLElement {
 
   const title = document.createElement('h2');
   title.textContent = 'Tabs';
+  title.setAttribute('data-maho-identifier', 'sidebarTitle');
 
   heading.append(eyebrow, title);
 
@@ -315,6 +310,7 @@ function createHeader(): HTMLElement {
   collapseBtn.textContent = '‹';
   collapseBtn.title = 'Collapse sidebar';
   collapseBtn.setAttribute('aria-label', 'Collapse sidebar');
+  collapseBtn.setAttribute('data-maho-identifier', 'sidebarCollapseButton');
   collapseBtn.addEventListener('click', toggleCollapse);
 
   header.append(heading, collapseBtn);
@@ -417,6 +413,9 @@ function updateSpaces(nextSpaces: SpaceInfo[], animateTabs = true) {
       !spaces.some((space) => space.id === currentWizardState.targetSpaceId)) {
     wizardState = null;
   }
+  if (wizardState?.mode === 'manage-spaces' && spaces.length === 0) {
+    wizardState = null;
+  }
 
   renderSpaceStrip();
 }
@@ -440,6 +439,7 @@ function buildVisibleSpaces(
 
 function renderSpaceStrip() {
   elements.stripRail.replaceChildren();
+  renderSidebarBody();
 
   if (dragState && dragState.indicatorIndex <= 0) {
     elements.stripRail.appendChild(createDropIndicator());
@@ -489,6 +489,7 @@ function renderSpaceStrip() {
   renderContextMenu();
 }
 
+
 function createSpaceButton(space: SpaceInfo, index: number): HTMLElement {
   const button = document.createElement('button');
   button.type = 'button';
@@ -502,6 +503,8 @@ function createSpaceButton(space: SpaceInfo, index: number): HTMLElement {
   button.style.setProperty(
       '--space-accent-muted', withAlpha(normalizeSpaceColor(space.color), '22'));
   button.setAttribute('aria-label', `${space.name}, ${getSpaceTabCount(space)} tabs`);
+  button.setAttribute('data-maho-identifier', `sidebarSpaceButton-${space.id}`);
+  button.setAttribute('data-maho-space-id', space.id);
   button.setAttribute('aria-current', space.active ? 'true' : 'false');
 
   button.addEventListener('click', () => {
@@ -529,6 +532,8 @@ function createRenameField(space: SpaceInfo): HTMLElement {
   input.className = 'space-rename-input';
   input.value = renameValue;
   input.setAttribute('aria-label', `Rename ${space.name}`);
+  input.setAttribute('data-maho-identifier', `sidebarSpaceRenameField-${space.id}`);
+  input.setAttribute('data-maho-space-id', space.id);
 
   const focusToken = ++renameFocusToken;
   window.setTimeout(() => {
@@ -583,6 +588,7 @@ function createAddButton(): HTMLElement {
   button.textContent = '+';
   button.title = 'Create space';
   button.setAttribute('aria-label', 'Create space');
+  button.setAttribute('data-maho-identifier', 'sidebarCreateSpaceButton');
   button.addEventListener('click', triggerCreateSpace);
   button.addEventListener('dragover', (event) => {
     if (!dragState) {
@@ -596,10 +602,180 @@ function createAddButton(): HTMLElement {
   return button;
 }
 
+function renderSidebarBody() {
+  const showingManageSpaces = wizardState?.mode === 'manage-spaces';
+  elements.sidebarTitle.classList.toggle('is-hidden', showingManageSpaces);
+  elements.tabList.classList.toggle('is-hidden', showingManageSpaces);
+  elements.managePanel.classList.toggle('is-hidden', !showingManageSpaces);
+  if (showingManageSpaces) {
+    renderManageSpacesPanel();
+    return;
+  }
+  elements.managePanel.replaceChildren();
+  renderTabs();
+}
+
 function createDropIndicator(): HTMLElement {
   const indicator = document.createElement('div');
   indicator.className = 'space-drop-indicator';
   return indicator;
+}
+
+function createManageSpacesPanelShell(): HTMLElement {
+  const panel = document.createElement('div');
+  panel.className = 'manage-spaces-panel__shell';
+  panel.setAttribute('data-maho-identifier', 'sidebar.manageSpaces.shell');
+  return panel;
+}
+
+function renderManageSpacesPanel() {
+  elements.managePanel.replaceChildren();
+
+  const shell = createManageSpacesPanelShell();
+
+  const header = document.createElement('div');
+  header.className = 'manage-spaces-panel__header';
+
+  const title = document.createElement('div');
+  title.className = 'manage-spaces-panel__title';
+  title.textContent = 'Manage Spaces';
+
+  const actions = document.createElement('div');
+  actions.className = 'manage-spaces-panel__header-actions';
+
+  const backButton = document.createElement('button');
+  backButton.type = 'button';
+  backButton.className = 'manage-spaces-panel__back';
+  backButton.textContent = 'Back';
+  backButton.setAttribute('aria-label', 'Return to sidebar tabs');
+  backButton.setAttribute('data-maho-identifier', 'sidebar.manageSpaces.back');
+  backButton.addEventListener('click', () => {
+    closeWizard();
+  });
+
+  const createButton = document.createElement('button');
+  createButton.type = 'button';
+  createButton.className = 'manage-spaces-panel__create';
+  createButton.textContent = 'Create';
+  createButton.setAttribute('aria-label', 'Create space from manage panel');
+  createButton.setAttribute('data-maho-identifier', 'sidebar.manageSpaces.create');
+  createButton.addEventListener('click', () => {
+    triggerCreateSpace();
+  });
+
+  actions.append(backButton, createButton);
+  header.append(title, actions);
+  shell.appendChild(header);
+
+  if (spaces.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'manage-spaces-panel__empty';
+    empty.textContent = 'No spaces available.';
+    empty.setAttribute('data-maho-identifier', 'sidebar.manageSpaces.emptyState');
+    shell.appendChild(empty);
+  } else {
+    const list = document.createElement('div');
+    list.className = 'manage-spaces-panel__list';
+    list.setAttribute('data-maho-identifier', 'sidebar.manageSpaces.list');
+
+    spaces.forEach((space) => {
+      list.appendChild(createManageSpacesRow(space));
+    });
+    shell.appendChild(list);
+  }
+
+  elements.managePanel.appendChild(shell);
+}
+
+function createManageSpacesRow(space: SpaceInfo): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'manage-spaces-row';
+  row.setAttribute('data-maho-identifier', `sidebar.manageSpaces.row.${space.id}`);
+  row.setAttribute('data-maho-space-id', space.id);
+
+  const color = normalizeSpaceColor(space.color);
+  row.style.setProperty('--space-accent', color);
+  row.style.setProperty('--space-accent-muted', withAlpha(color, '22'));
+
+  const icon = document.createElement('div');
+  icon.className = 'manage-spaces-row__icon';
+  icon.textContent = getSpaceDisplayIcon(space);
+
+  const body = document.createElement('div');
+  body.className = 'manage-spaces-row__body';
+
+  const name = document.createElement('div');
+  name.className = 'manage-spaces-row__name';
+  name.textContent = space.name;
+
+  const meta = document.createElement('div');
+  meta.className = 'manage-spaces-row__meta';
+  const profileName = getProfileName(getCurrentProfileId(space));
+  meta.textContent = `${profileName} · ${getSpaceTabCount(space)} tabs`;
+
+  body.append(name, meta);
+
+  const actions = document.createElement('div');
+  actions.className = 'manage-spaces-row__actions';
+
+  const editButton = document.createElement('button');
+  editButton.type = 'button';
+  editButton.className = 'manage-spaces-row__action';
+  editButton.textContent = 'Edit';
+  editButton.setAttribute('aria-label', `Edit ${space.name}`);
+  editButton.setAttribute('data-maho-identifier', `sidebar.manageSpaces.edit.${space.id}`);
+  editButton.addEventListener('click', () => {
+    closeWizard();
+    closeContextMenu();
+    openInlineRename(space.id);
+  });
+
+  const deleteButton = document.createElement('button');
+  deleteButton.type = 'button';
+  deleteButton.className = 'manage-spaces-row__action is-danger';
+  deleteButton.textContent = 'Delete';
+  deleteButton.setAttribute('aria-label', `Delete ${space.name}`);
+  deleteButton.setAttribute('data-maho-identifier', `sidebar.manageSpaces.delete.${space.id}`);
+  deleteButton.addEventListener('click', () => {
+    openManageDeleteConfirm(space.id);
+  });
+
+  actions.append(editButton, deleteButton);
+  row.append(icon, body, actions);
+  return row;
+}
+
+function openManageDeleteConfirm(spaceId: string) {
+  const space = spaces.find((item) => item.id === spaceId);
+  if (!space) {
+    return;
+  }
+  contextMenuState = {
+    spaceId,
+    x: 24,
+    y: 24,
+    confirmDelete: true,
+  };
+    renderManageSpacesPanel();
+    renderContextMenu();
+}
+
+function getProfileName(profileId: string): string {
+  const profile = profiles.find((item) => item.id === profileId);
+  return profile?.name || (profileId === 'default' ? 'Default profile' : profileId);
+}
+
+function getCurrentProfileId(space: SpaceInfo): string {
+  const compat = space as SpaceInfoCompat;
+  return compat.profileId || compat.profile_id || 'default';
+}
+
+function saturationToCanvasY(saturation: number): number {
+  return 1 - Math.min(1, Math.max(0, saturation));
+}
+
+function canvasYToSaturation(normalizedY: number): number {
+  return 1 - Math.min(1, Math.max(0, normalizedY));
 }
 
 function createWizardPanel(): HTMLElement|null {
@@ -610,6 +786,7 @@ function createWizardPanel(): HTMLElement|null {
   const panel = document.createElement('section');
   panel.className = 'space-wizard';
   panel.setAttribute('aria-label', getWizardTitle());
+  panel.setAttribute('data-maho-identifier', 'sidebarWizardPanel');
 
   const header = document.createElement('div');
   header.className = 'space-wizard__header';
@@ -618,6 +795,9 @@ function createWizardPanel(): HTMLElement|null {
   title.className = 'space-wizard__title';
   title.textContent = getWizardTitle();
 
+  const headerActions = document.createElement('div');
+  headerActions.className = 'space-wizard__header-actions';
+
   const closeButton = document.createElement('button');
   closeButton.type = 'button';
   closeButton.className = 'space-wizard__close';
@@ -625,7 +805,8 @@ function createWizardPanel(): HTMLElement|null {
   closeButton.setAttribute('aria-label', 'Close panel');
   closeButton.addEventListener('click', closeWizard);
 
-  header.append(title, closeButton);
+  headerActions.appendChild(closeButton);
+  header.append(title, headerActions);
   panel.appendChild(header);
 
   if (wizardState.mode === 'create') {
@@ -661,6 +842,7 @@ function createEmojiPicker(): HTMLElement {
   searchField.placeholder = 'Search emoji';
   searchField.value = wizardState?.search || '';
   searchField.setAttribute('aria-label', 'Search emoji');
+  searchField.setAttribute('data-maho-identifier', 'sidebarEmojiSearchField');
   searchField.addEventListener('input', () => {
     if (!wizardState) {
       return;
@@ -679,6 +861,8 @@ function createEmojiPicker(): HTMLElement {
     button.className = 'emoji-grid__item';
     button.textContent = option.emoji;
     button.setAttribute('aria-label', `Select ${option.label}`);
+  button.setAttribute('data-maho-identifier', `sidebarEmojiOptionButton-${option.emoji}`);
+  button.setAttribute('data-maho-emoji', option.emoji);
     if (wizardState?.selectedIcon === option.emoji) {
       button.classList.add('is-selected');
     }
@@ -738,6 +922,7 @@ function createCreateDetailsPanel(): HTMLElement {
   nameInput.placeholder = 'Space name';
   nameInput.value = wizardState?.name || '';
   nameInput.setAttribute('aria-label', 'Space name');
+  nameInput.setAttribute('data-maho-identifier', 'sidebarCreateSpaceNameField');
   nameInput.addEventListener('input', () => {
     if (!wizardState) {
       return;
@@ -799,13 +984,17 @@ function createCreateDetailsPanel(): HTMLElement {
 function createThemeEditorPanel(): HTMLElement {
   const section = document.createElement('div');
   section.className = 'space-wizard__content theme-editor';
-
-  const initialColor = hexToHsb(wizardState?.selectedColor || '') ||
-      {...PRESET_COLORS[0]!.color};
-  const initialPresetIndex = PRESET_COLORS.findIndex(({color}) => {
-    return Math.abs(color.hue - initialColor.hue) < 0.01 &&
-        Math.abs(color.saturation - initialColor.saturation) < 0.03 &&
-        Math.abs(color.brightness - initialColor.brightness) < 0.03;
+  const initialPreset = PRESET_COLORS[0]!;
+  const initialColor: SpaceColor = hexToHsb(wizardState?.selectedColor || '') || {
+    hue: initialPreset.hue,
+    saturation: initialPreset.saturation,
+    brightness: initialPreset.brightness,
+    grain: 0,
+  };
+  const initialPresetIndex = PRESET_COLORS.findIndex((preset) => {
+    return Math.abs(preset.hue - initialColor.hue) < 0.01 &&
+        Math.abs(preset.saturation - initialColor.saturation) < 0.03 &&
+        Math.abs(preset.brightness - initialColor.brightness) < 0.03;
   });
 
   themeEditorState = {
@@ -815,7 +1004,7 @@ function createThemeEditorPanel(): HTMLElement {
       brightness: Math.min(1, Math.max(0, initialColor.brightness)),
       grain: initialColor.grain,
     },
-    isGradientMode: false,
+    previewMode: 'zen',
     harmony: 'single_analogous',
     opacity: 1,
     selectedPresetIndex: initialPresetIndex,
@@ -827,13 +1016,59 @@ function createThemeEditorPanel(): HTMLElement {
     },
   };
 
+  const modeMeta: Array<{id: 'solid'|'zen'|'gradient'; label: string; icon: string; identifier: string}> = [
+    {id: 'solid', label: 'Solid', icon: '●', identifier: 'space.theme.mode.0'},
+    {id: 'zen', label: 'Zen', icon: '◌', identifier: 'space.theme.mode.1'},
+    {id: 'gradient', label: 'Gradient', icon: '✦', identifier: 'space.theme.mode.2'},
+  ];
+
+  const modeSection = document.createElement('div');
+  modeSection.className = 'theme-mode-section';
+  const modeHeader = document.createElement('div');
+  modeHeader.className = 'theme-section-header';
+  const modeHeaderCopy = document.createElement('div');
+  modeHeaderCopy.className = 'theme-section-copy';
+  const modeHeaderTitle = document.createElement('div');
+  modeHeaderTitle.className = 'theme-section-title';
+  modeHeaderTitle.textContent = 'Theme mode';
+  const modeHeaderCaption = document.createElement('div');
+  modeHeaderCaption.className = 'theme-section-caption';
+  modeHeaderCaption.textContent = 'Choose a focused field, a soft zen field, or a richer gradient stage.';
+  modeHeaderCopy.append(modeHeaderTitle, modeHeaderCaption);
+  const modeBadge = document.createElement('div');
+  modeBadge.className = 'theme-mode-badge';
+  modeBadge.textContent = 'Preview';
+  modeHeader.append(modeHeaderCopy, modeBadge);
+
+  const modeRow = document.createElement('div');
+  modeRow.className = 'theme-mode-row';
+
   const canvasWrapper = document.createElement('div');
   canvasWrapper.className = 'theme-canvas-wrapper';
+
+  const canvasFrame = document.createElement('div');
+  canvasFrame.className = 'theme-canvas-frame';
+  const canvasFrameTop = document.createElement('div');
+  canvasFrameTop.className = 'theme-canvas-frame-top';
+  const canvasFrameMeta = document.createElement('div');
+  canvasFrameMeta.className = 'theme-canvas-frame-meta';
+  const canvasFrameLabel = document.createElement('span');
+  canvasFrameLabel.className = 'theme-canvas-frame-label';
+  canvasFrameLabel.textContent = 'Live preview';
+  const canvasFrameCaption = document.createElement('span');
+  canvasFrameCaption.className = 'theme-canvas-frame-caption';
+  canvasFrameCaption.textContent = 'Sidebar stage';
+  canvasFrameMeta.append(canvasFrameLabel, canvasFrameCaption);
+  canvasFrameTop.append(canvasFrameMeta, modeRow);
+
+  const canvasStage = document.createElement('div');
+  canvasStage.className = 'theme-canvas-stage';
 
   const canvas = document.createElement('canvas');
   canvas.width = 280;
   canvas.height = 200;
   canvas.setAttribute('aria-label', 'Theme color canvas');
+  canvas.setAttribute('data-maho-identifier', 'space.theme.creatorPreview');
   themeEditorState.canvas = canvas;
   const resizeObserver = new ResizeObserver((entries) => {
     for (const entry of entries) {
@@ -871,7 +1106,7 @@ function createThemeEditorPanel(): HTMLElement {
 
   const instruction = document.createElement('div');
   instruction.className = 'theme-instruction';
-  instruction.textContent = 'Tap to pick a color for this space';
+  instruction.textContent = 'Tap the field, then refine mode, grain, and harmony.';
 
   const brightnessRow = document.createElement('div');
   brightnessRow.className = 'theme-brightness-row';
@@ -881,12 +1116,14 @@ function createThemeEditorPanel(): HTMLElement {
   brightnessDown.className = 'theme-brightness-btn';
   brightnessDown.textContent = '−';
   brightnessDown.setAttribute('aria-label', 'Decrease brightness');
+  brightnessDown.setAttribute('data-maho-identifier', 'space.theme.luminosity.minus');
 
   const brightnessUp = document.createElement('button');
   brightnessUp.type = 'button';
   brightnessUp.className = 'theme-brightness-btn';
   brightnessUp.textContent = '+';
   brightnessUp.setAttribute('aria-label', 'Increase brightness');
+  brightnessUp.setAttribute('data-maho-identifier', 'space.theme.luminosity.plus');
 
   brightnessRow.append(brightnessDown, brightnessUp);
 
@@ -896,23 +1133,61 @@ function createThemeEditorPanel(): HTMLElement {
   hexInput.spellcheck = false;
   hexInput.maxLength = 7;
   hexInput.setAttribute('aria-label', 'Theme hex color');
+  hexInput.setAttribute('data-maho-identifier', 'space.theme.hexInput');
+
+  const swatchRail = document.createElement('div');
+  swatchRail.className = 'theme-swatch-rail';
+  const swatchTitle = document.createElement('span');
+  swatchTitle.className = 'theme-swatch-rail-title';
+  swatchTitle.textContent = 'Swatches';
+  const swatchCaption = document.createElement('span');
+  swatchCaption.className = 'theme-swatch-rail-caption';
+  swatchCaption.textContent = 'Cycle or tap';
+  const swatchHeader = document.createElement('div');
+  swatchHeader.className = 'theme-swatch-rail-header';
+  swatchHeader.append(swatchTitle, swatchCaption);
 
   const swatchRow = document.createElement('div');
   swatchRow.className = 'theme-swatch-row';
+  const chevronLeft = document.createElement('button');
+  chevronLeft.type = 'button';
+  chevronLeft.className = 'theme-swatch-chevron';
+  chevronLeft.textContent = '‹';
+  chevronLeft.setAttribute('aria-label', 'Previous swatch');
+  chevronLeft.setAttribute('data-maho-identifier', 'space.theme.chevron.left');
+  const swatchTrack = document.createElement('div');
+  swatchTrack.className = 'theme-swatch-track';
+  const chevronRight = document.createElement('button');
+  chevronRight.type = 'button';
+  chevronRight.className = 'theme-swatch-chevron';
+  chevronRight.textContent = '›';
+  chevronRight.setAttribute('aria-label', 'Next swatch');
+  chevronRight.setAttribute('data-maho-identifier', 'space.theme.chevron.right');
+  swatchRow.append(chevronLeft, swatchTrack, chevronRight);
+  swatchRail.append(swatchHeader, swatchRow);
 
-  const gradientToggle = document.createElement('button');
-  gradientToggle.type = 'button';
-  gradientToggle.className = 'theme-gradient-toggle';
-  gradientToggle.textContent = 'Gradient';
-  gradientToggle.setAttribute('aria-pressed', 'false');
-
-  overlay.append(iconCircle, name, tabsCount, instruction, brightnessRow, hexInput, swatchRow,
-      gradientToggle);
-  canvasWrapper.append(canvas, overlay);
+  overlay.append(iconCircle, name, tabsCount, instruction, brightnessRow, hexInput, swatchRail);
+  canvasStage.append(canvas, overlay);
+  canvasFrame.append(canvasFrameTop, canvasStage);
+  canvasWrapper.appendChild(canvasFrame);
 
   const controls = document.createElement('div');
   controls.className = 'theme-controls';
 
+  const primaryControls = document.createElement('div');
+  primaryControls.className = 'theme-controls-primary';
+
+  const grainCard = document.createElement('div');
+  grainCard.className = 'theme-control-card';
+  const grainHeader = document.createElement('div');
+  grainHeader.className = 'theme-control-card-header';
+  const grainTitle = document.createElement('div');
+  grainTitle.className = 'theme-control-card-title';
+  grainTitle.textContent = 'Texture';
+  const grainCaption = document.createElement('div');
+  grainCaption.className = 'theme-control-card-caption';
+  grainCaption.textContent = 'Dial in grain for a more tactile stage.';
+  grainHeader.append(grainTitle, grainCaption);
   const grainRow = document.createElement('div');
   grainRow.className = 'theme-control-row';
   const grainLabel = document.createElement('div');
@@ -925,13 +1200,27 @@ function createThemeEditorPanel(): HTMLElement {
   grainSlider.max = '1';
   grainSlider.step = '0.01';
   grainSlider.value = String(themeEditorState.currentColor.grain);
+  grainSlider.setAttribute('data-maho-identifier', 'space.theme.grainDial');
   grainRow.append(grainLabel, grainSlider);
+  grainCard.append(grainHeader, grainRow);
+
+  const densityCard = document.createElement('div');
+  densityCard.className = 'theme-control-card';
+  const densityHeader = document.createElement('div');
+  densityHeader.className = 'theme-control-card-header';
+  const densityTitle = document.createElement('div');
+  densityTitle.className = 'theme-control-card-title';
+  densityTitle.textContent = 'Blend';
+  const densityCaption = document.createElement('div');
+  densityCaption.className = 'theme-control-card-caption';
+  densityCaption.textContent = 'Control opacity and hue relationships.';
+  densityHeader.append(densityTitle, densityCaption);
 
   const gradientGroup = document.createElement('div');
   gradientGroup.className = 'theme-gradient-only is-hidden';
 
   const harmonyControl = document.createElement('div');
-  harmonyControl.className = 'theme-control-row';
+  harmonyControl.className = 'theme-control-row theme-control-row--stacked';
   const harmonyLabel = document.createElement('div');
   harmonyLabel.className = 'theme-control-label';
   harmonyLabel.textContent = 'Harmony';
@@ -951,10 +1240,13 @@ function createThemeEditorPanel(): HTMLElement {
   opacitySlider.max = '1';
   opacitySlider.step = '0.01';
   opacitySlider.value = String(themeEditorState.opacity);
+  opacitySlider.setAttribute('data-maho-identifier', 'space.theme.opacitySlider');
   opacityRow.append(opacityLabel, opacitySlider);
   gradientGroup.append(harmonyControl, opacityRow);
+  densityCard.append(densityHeader, gradientGroup);
 
-  controls.append(grainRow, gradientGroup);
+  primaryControls.append(grainCard, densityCard);
+  controls.appendChild(primaryControls);
 
   const browseThemesButton = document.createElement('button');
   browseThemesButton.type = 'button';
@@ -981,7 +1273,7 @@ function createThemeEditorPanel(): HTMLElement {
   applyButton.textContent = 'Apply Theme';
   applyButton.addEventListener('click', () => {
     if (wizardState?.targetSpaceId && themeEditorState) {
-      const theme: SpaceThemeData = themeEditorState.isGradientMode ? {
+      const theme: SpaceThemeData = themeEditorState.previewMode === 'gradient' ? {
         type: 'gradient',
         gradientColors: computeHarmonyColors(
             themeEditorState.currentColor, themeEditorState.harmony),
@@ -1000,13 +1292,23 @@ function createThemeEditorPanel(): HTMLElement {
   });
 
   actions.append(cancelButton, applyButton);
-  section.append(canvasWrapper, controls, browseThemesButton, actions);
+  section.append(modeSection, canvasWrapper, controls, browseThemesButton, actions);
+  modeSection.append(modeHeader, modeRow);
 
   const updateInstruction = () => {
     if (!themeEditorState) {
       return;
     }
     instruction.classList.toggle('is-hidden', !themeEditorState.instructionVisible);
+  };
+
+  const updateModeButtons = () => {
+    if (!themeEditorState) {
+      return;
+    }
+    modeRow.querySelectorAll<HTMLButtonElement>('.theme-mode-chip').forEach((button) => {
+      button.classList.toggle('is-selected', button.dataset['mode'] === themeEditorState?.previewMode);
+    });
   };
 
   const updateThemePreview = () => {
@@ -1023,13 +1325,13 @@ function createThemeEditorPanel(): HTMLElement {
     if (wizardState) {
       wizardState.selectedColor = hex;
     }
-    swatchRow.querySelectorAll('.theme-swatch').forEach((node, index) => {
+    swatchTrack.querySelectorAll('.theme-swatch').forEach((node, index) => {
       node.classList.toggle('is-selected', index === themeEditorState?.selectedPresetIndex);
     });
-    gradientToggle.classList.toggle('is-active', themeEditorState.isGradientMode);
-    gradientToggle.setAttribute('aria-pressed', String(themeEditorState.isGradientMode));
-    gradientGroup.classList.toggle('is-hidden', !themeEditorState.isGradientMode);
-    grainRow.classList.toggle('is-hidden', themeEditorState.isGradientMode);
+    section.classList.toggle('is-gradient-mode', themeEditorState.previewMode === 'gradient');
+    gradientGroup.classList.toggle('is-hidden', themeEditorState.previewMode !== 'gradient');
+    grainCard.classList.toggle('is-hidden', false);
+    updateModeButtons();
     updateInstruction();
     redrawThemeCanvas();
   };
@@ -1138,27 +1440,72 @@ function createThemeEditorPanel(): HTMLElement {
     applyColorSelection({...color, grain: themeEditorState.currentColor.grain}, -1);
   });
 
-  PRESET_COLORS.forEach(({title, color}, index) => {
-    const swatch = document.createElement('button');
-    swatch.type = 'button';
-    swatch.className = 'theme-swatch';
-    swatch.title = title;
-    swatch.setAttribute('aria-label', title);
-    swatch.style.backgroundColor = hsbToHex(color.hue, color.saturation, color.brightness);
-    swatch.addEventListener('click', () => {
-      setInteractionState();
-      applyColorSelection({...color, grain: themeEditorState?.currentColor.grain || 0}, index);
-    });
-    swatchRow.appendChild(swatch);
-  });
-
-  gradientToggle.addEventListener('click', () => {
+  const cyclePreset = (direction: number) => {
     if (!themeEditorState) {
       return;
     }
+    const currentIndex = themeEditorState.selectedPresetIndex >= 0 ?
+        themeEditorState.selectedPresetIndex : initialPresetIndex >= 0 ? initialPresetIndex : 0;
+    const nextIndex = (currentIndex + direction + PRESET_COLORS.length) % PRESET_COLORS.length;
+    const preset = PRESET_COLORS[nextIndex];
+    if (!preset) {
+      return;
+    }
     setInteractionState();
-    themeEditorState.isGradientMode = !themeEditorState.isGradientMode;
-    updateThemePreview();
+    applyColorSelection({
+      hue: preset.hue,
+      saturation: preset.saturation,
+      brightness: preset.brightness,
+      grain: themeEditorState.currentColor.grain,
+    }, nextIndex);
+  };
+
+  chevronLeft.addEventListener('click', () => cyclePreset(-1));
+  chevronRight.addEventListener('click', () => cyclePreset(1));
+
+  PRESET_COLORS.forEach((preset, index) => {
+    const swatch = document.createElement('button');
+    swatch.type = 'button';
+    swatch.className = 'theme-swatch';
+    swatch.title = preset.title;
+    swatch.setAttribute('aria-label', preset.title);
+    swatch.setAttribute('data-maho-identifier', `space.theme.swatch.${index}`);
+    swatch.setAttribute('data-maho-preset-title', preset.title);
+    swatch.style.backgroundColor = hsbToHex(preset.hue, preset.saturation, preset.brightness);
+    swatch.addEventListener('click', () => {
+      setInteractionState();
+      applyColorSelection({
+        hue: preset.hue,
+        saturation: preset.saturation,
+        brightness: preset.brightness,
+        grain: themeEditorState?.currentColor.grain || 0,
+      }, index);
+    });
+    swatchTrack.appendChild(swatch);
+  });
+
+  modeMeta.forEach(({id, label, icon, identifier}) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'theme-mode-chip';
+    button.dataset['mode'] = id;
+    button.setAttribute('data-maho-identifier', identifier);
+    const iconNode = document.createElement('span');
+    iconNode.className = 'theme-mode-chip__icon';
+    iconNode.textContent = icon;
+    const labelNode = document.createElement('span');
+    labelNode.className = 'theme-mode-chip__label';
+    labelNode.textContent = label;
+    button.append(iconNode, labelNode);
+    button.addEventListener('click', () => {
+      if (!themeEditorState) {
+        return;
+      }
+      setInteractionState();
+      themeEditorState.previewMode = id;
+      updateThemePreview();
+    });
+    modeRow.appendChild(button);
   });
 
   const harmonyOptions: Array<{label: string; value: ColorHarmony}> = [
@@ -1216,6 +1563,7 @@ function createThemeEditorPanel(): HTMLElement {
 function createThemeStorePanel(): HTMLElement {
   const section = document.createElement('div');
   section.className = 'space-wizard__content theme-store-panel';
+  section.setAttribute('data-maho-identifier', 'sidebar.themeStore.panel');
 
   const header = document.createElement('div');
   header.className = 'theme-store-header';
@@ -1225,6 +1573,7 @@ function createThemeStorePanel(): HTMLElement {
   backButton.className = 'theme-store-back';
   backButton.textContent = '←';
   backButton.setAttribute('aria-label', 'Back to theme editor');
+  backButton.setAttribute('data-maho-identifier', 'sidebarThemeStoreBackButton');
   backButton.addEventListener('click', showThemeEditorPanel);
 
   const title = document.createElement('h3');
@@ -1235,11 +1584,13 @@ function createThemeStorePanel(): HTMLElement {
   refreshButton.className = 'theme-store-refresh';
   refreshButton.textContent = 'Refresh';
   refreshButton.setAttribute('aria-label', 'Refresh themes');
+  refreshButton.setAttribute('data-maho-identifier', 'sidebar.themeStore.refresh');
 
   header.append(backButton, title, refreshButton);
 
   const content = document.createElement('div');
   content.className = 'theme-store-list';
+  content.setAttribute('data-maho-identifier', 'sidebar.themeStore.table');
 
   section.append(header, content);
 
@@ -1247,6 +1598,11 @@ function createThemeStorePanel(): HTMLElement {
     content.replaceChildren();
     const status = document.createElement('div');
     status.className = 'theme-store-status';
+    if (message === 'Loading themes…') {
+      status.setAttribute('data-maho-identifier', 'sidebar.themeStore.loading');
+    } else if (message === 'No themes available') {
+      status.setAttribute('data-maho-identifier', 'sidebar.themeStore.emptyState');
+    }
     status.textContent = message;
     if (canRetry) {
       const retryButton = document.createElement('button');
@@ -1281,6 +1637,7 @@ function createThemeStorePanel(): HTMLElement {
     installButton.type = 'button';
     installButton.className = 'theme-store-card-install';
     installButton.textContent = 'Install';
+    installButton.setAttribute('data-maho-identifier', `sidebar.themeStore.install-${entry.id}`);
 
     cardHeader.append(name, installButton);
 
@@ -1400,6 +1757,7 @@ function showThemeEditorPanel() {
   content.replaceWith(createThemeEditorPanel());
 }
 
+
 function redrawThemeCanvas() {
   if (!themeEditorState?.canvas) {
     return;
@@ -1429,7 +1787,20 @@ function redrawThemeCanvas() {
   }
   ctx.putImageData(image, 0, 0);
 
-  if (themeEditorState.isGradientMode) {
+  if (themeEditorState.previewMode === 'zen') {
+    const zenGlow = ctx.createRadialGradient(
+        width * 0.28, height * 0.24, width * 0.06,
+        width * 0.52, height * 0.56, width * 0.78);
+    zenGlow.addColorStop(0, 'rgba(255, 255, 255, 0.22)');
+    zenGlow.addColorStop(0.28, 'rgba(255, 255, 255, 0.08)');
+    zenGlow.addColorStop(1, 'rgba(0, 0, 0, 0.22)');
+    ctx.save();
+    ctx.fillStyle = zenGlow;
+    ctx.fillRect(0, 0, width, height);
+    ctx.restore();
+  }
+
+  if (themeEditorState.previewMode === 'gradient') {
     const gradientColors = computeHarmonyColors(
         themeEditorState.currentColor, themeEditorState.harmony);
     const gradient = ctx.createLinearGradient(0, 0, width, height);
@@ -1454,6 +1825,13 @@ function redrawThemeCanvas() {
       ctx.fill();
     }
   }
+  ctx.restore();
+
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 10]);
+  ctx.strokeRect(14, 14, Math.max(0, width - 28), Math.max(0, height - 28));
   ctx.restore();
 
   if (themeEditorState.currentColor.grain > 0) {
@@ -1496,106 +1874,6 @@ function redrawThemeCanvas() {
   }
 }
 
-function computeHarmonyColors(color: SpaceColor, harmony: ColorHarmony): ThemeColor[] {
-  const primary: ThemeColor = {
-    hue: normalizeHue(color.hue),
-    saturation: color.saturation,
-    brightness: color.brightness,
-    isCustom: harmony === 'custom',
-    isPrimary: true,
-  };
-  const buildColor = (hueOffset: number): ThemeColor => ({
-    hue: normalizeHue(color.hue + hueOffset),
-    saturation: color.saturation,
-    brightness: color.brightness,
-    isCustom: false,
-    isPrimary: false,
-  });
-
-  // Offsets match Swift SpaceColorPreviewView harmony calculations.
-  switch (harmony) {
-    case 'complementary':
-      return [primary, buildColor(0.5)];
-    case 'single_analogous':
-      // Swift: 310° = -50° on the color wheel.
-      return [primary, buildColor(310 / 360)];
-    case 'split_complementary':
-      return [primary, buildColor(0.417), buildColor(0.583)];
-    case 'analogous':
-      // Swift: ±50° offsets. Sidebar maps "Analog" button here for
-      // 3-color gradient parity with the native shell.
-      return [primary, buildColor(-50 / 360), buildColor(50 / 360)];
-    case 'triadic':
-      return [primary, buildColor(0.333), buildColor(0.667)];
-    case 'custom':
-      return [primary];
-  }
-}
-
-function normalizeHue(hue: number): number {
-  return hue - Math.floor(hue);
-}
-
-function canvasYToSaturation(normalizedY: number): number {
-  const clampedY = Math.min(1, Math.max(0, normalizedY));
-  return 0.2 + (1 - clampedY) * 0.8;
-}
-
-function saturationToCanvasY(saturation: number): number {
-  const clampedSaturation = Math.min(1, Math.max(0.2, saturation));
-  return 1 - ((clampedSaturation - 0.2) / 0.8);
-}
-
-function hsbToRgb(h: number, s: number, b: number): [number, number, number] {
-  if (s <= 0) {
-    return [b * 255, b * 255, b * 255];
-  }
-  const hWrapped = h - Math.floor(h);
-  const h6 = hWrapped * 6;
-  const sector = Math.floor(h6) % 6;
-  const f = h6 - Math.floor(h6);
-  const p = b * (1 - s);
-  const q = b * (1 - s * f);
-  const t = b * (1 - s * (1 - f));
-  const pairs: [number, number, number][] = [
-    [b, t, p], [q, b, p], [p, b, t], [p, q, b], [t, p, b], [b, p, q],
-  ];
-  const [r, g, bb] = pairs[sector]!;
-  return [r * 255, g * 255, bb * 255];
-}
-
-function hexToHsb(hex: string): SpaceColor|null {
-  const match = hex.match(/^#?([0-9a-fA-F]{6})$/);
-  if (!match) {
-    return null;
-  }
-  const r = parseInt(match[1]!.substring(0, 2), 16) / 255;
-  const g = parseInt(match[1]!.substring(2, 4), 16) / 255;
-  const b = parseInt(match[1]!.substring(4, 6), 16) / 255;
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const delta = max - min;
-  let h = 0;
-  if (delta > 0) {
-    if (max === r) {
-      h = ((g - b) / delta + 6) % 6 / 6;
-    } else if (max === g) {
-      h = ((b - r) / delta + 2) / 6;
-    } else {
-      h = ((r - g) / delta + 4) / 6;
-    }
-  }
-  const s = max > 0 ? delta / max : 0;
-  return {hue: h, saturation: s, brightness: max, grain: 0};
-}
-
-function hsbToHex(h: number, s: number, b: number): string {
-  const [r, g, bb] = hsbToRgb(h, s, b);
-  const toHex = (value: number) => {
-    return Math.round(Math.min(255, Math.max(0, value))).toString(16).padStart(2, '0');
-  };
-  return `#${toHex(r)}${toHex(g)}${toHex(bb)}`;
-}
 
 function createColorPalette(
     selectedColor: string, onSelect: (color: string) => void): HTMLElement {
@@ -1637,8 +1915,14 @@ function renderContextMenu() {
   menu.style.top = `${contextMenuState.y}px`;
   menu.setAttribute('role', 'menu');
   menu.setAttribute('aria-label', `${space.name} options`);
+  menu.setAttribute('data-maho-identifier', 'sidebar.spaceContextMenu');
+  menu.setAttribute('data-maho-space-id', space.id);
 
   menu.append(
+      createContextMenuButton('Manage Spaces', () => {
+        closeContextMenu();
+        openManageSpacesPanel();
+      }),
       createContextMenuButton('Rename Space', () => {
         closeContextMenu();
         openInlineRename(space.id);
@@ -1651,12 +1935,22 @@ function renderContextMenu() {
         closeContextMenu();
         openThemeEditor(space);
       }),
+      createContextMenuButton('Export Theme', () => {
+        closeContextMenu();
+        void pageHandler.exportTheme(space.id);
+      }),
+      createContextMenuButton('Import Theme', () => {
+        closeContextMenu();
+        void pageHandler.importTheme(space.id);
+      }),
       createContextSeparator(),
   );
 
   if (contextMenuState.confirmDelete) {
     const confirmation = document.createElement('div');
     confirmation.className = 'space-context-menu__confirm';
+    confirmation.setAttribute('data-maho-identifier', 'sidebar.spaceDeleteConfirmation');
+    confirmation.setAttribute('data-maho-space-id', space.id);
 
     const copy = document.createElement('div');
     copy.className = 'space-context-menu__confirm-copy';
@@ -1669,6 +1963,7 @@ function renderContextMenu() {
     cancelButton.type = 'button';
     cancelButton.className = 'space-context-menu__ghost';
     cancelButton.textContent = 'Cancel';
+    cancelButton.setAttribute('data-maho-identifier', 'sidebar.spaceDelete.cancel');
     cancelButton.addEventListener('click', () => {
       if (!contextMenuState) {
         return;
@@ -1681,6 +1976,7 @@ function renderContextMenu() {
     confirmButton.type = 'button';
     confirmButton.className = 'space-context-menu__danger';
     confirmButton.textContent = 'Delete';
+    confirmButton.setAttribute('data-maho-identifier', 'sidebar.spaceDelete.confirm');
     confirmButton.addEventListener('click', () => {
       closeContextMenu();
       closeWizard();
@@ -1714,6 +2010,23 @@ function createContextMenuButton(
   }
   button.textContent = label;
   button.setAttribute('role', 'menuitem');
+  if (label === 'Manage Spaces') {
+    button.setAttribute('data-maho-identifier', 'sidebar.spaceContextMenu.manageSpaces');
+  } else if (label === 'Rename Space') {
+    button.setAttribute('data-maho-identifier', 'sidebar.spaceContextMenu.rename');
+  } else if (label === 'Change Icon') {
+    button.setAttribute('data-maho-identifier', 'sidebar.spaceContextMenu.changeIcon');
+  } else if (label === 'Edit Theme') {
+    button.setAttribute('data-maho-identifier', 'sidebar.spaceContextMenu.editTheme');
+  } else if (label === 'Export Theme') {
+    button.setAttribute('data-maho-identifier', 'space.contextMenu.exportTheme');
+  } else if (label === 'Import Theme') {
+    button.setAttribute('data-maho-identifier', 'space.contextMenu.importTheme');
+  } else if (isDanger) {
+    button.setAttribute('data-maho-identifier', 'sidebar.spaceContextMenu.delete');
+  } else {
+    button.setAttribute('data-maho-identifier', `sidebar.spaceContextMenu.${label.replace(/\s+/g, '')}`);
+  }
   button.addEventListener('click', onClick);
   return button;
 }
@@ -1722,6 +2035,7 @@ function createContextSeparator(): HTMLElement {
   const separator = document.createElement('div');
   separator.className = 'space-context-menu__separator';
   separator.setAttribute('role', 'separator');
+  separator.setAttribute('data-maho-identifier', 'sidebar.spaceContextMenu.separator');
   return separator;
 }
 
@@ -1773,6 +2087,8 @@ function createTabItem(tab: TabInfo): HTMLElement {
   closeBtn.className = 'close-btn';
   closeBtn.textContent = '×';
   closeBtn.setAttribute('aria-label', `Close ${tab.title}`);
+  closeBtn.setAttribute('data-maho-identifier', 'sidebarTabCloseButton');
+  closeBtn.setAttribute('data-maho-tab-id', String(tab.tabId));
   closeBtn.addEventListener('click', (event) => {
     event.stopPropagation();
     void pageHandler.closeTab(tab.tabId);
@@ -1807,6 +2123,10 @@ function handleGlobalKeyDown(event: KeyboardEvent) {
     }
     if (contextMenuState) {
       closeContextMenu();
+      return;
+    }
+    if (wizardState?.mode === 'manage-spaces') {
+      closeWizard();
       return;
     }
     if (wizardState) {
@@ -1848,6 +2168,7 @@ function handleDocumentPointerDown(event: PointerEvent) {
 
   const insideMenu = Boolean(target.closest('.space-context-menu'));
   const insideWizard = Boolean(target.closest('.space-wizard'));
+  const insideManagePanel = Boolean(target.closest('.manage-spaces-panel'));
   const onSpaceTrigger = Boolean(
       target.closest('.space-icon') || target.closest('.space-add-btn'));
   const insideRename = Boolean(target.closest('.space-rename-shell'));
@@ -1856,7 +2177,11 @@ function handleDocumentPointerDown(event: PointerEvent) {
     closeContextMenu();
   }
 
-  if (!insideWizard && !onSpaceTrigger && !insideMenu && wizardState) {
+  if (!insideWizard && !insideManagePanel && !onSpaceTrigger && !insideMenu && wizardState) {
+    closeWizard();
+  }
+
+  if (!insideManagePanel && wizardState?.mode === 'manage-spaces' && !insideMenu && !insideWizard && !onSpaceTrigger) {
     closeWizard();
   }
 
@@ -1978,6 +2303,24 @@ function triggerCreateSpace() {
   renderSpaceStrip();
 }
 
+function openManageSpacesPanel() {
+  themeEditorState = null;
+  cachedNoiseData = null;
+  wizardState = {
+    mode: 'manage-spaces',
+    step: 'details',
+    targetSpaceId: null,
+    selectedIcon: getActiveSpace()?.icon || EMOJI_OPTIONS[0]?.emoji || '✨',
+    selectedColor: normalizeSpaceColor(getActiveSpace()?.color || COLOR_OPTIONS[0] || '#F16063'),
+    name: '',
+    search: '',
+    insertAfterIndex: getActiveSpaceIndex(),
+  };
+  renameSpaceId = null;
+  renameValue = '';
+  renderSpaceStrip();
+}
+
 function submitCreateSpace() {
   if (!wizardState || wizardState.mode !== 'create') {
     return;
@@ -2049,6 +2392,8 @@ function openThemeEditor(space: SpaceInfo) {
   };
   renameSpaceId = null;
   renameValue = '';
+  themeEditorState = null;
+  cachedNoiseData = null;
   renderSpaceStrip();
 }
 

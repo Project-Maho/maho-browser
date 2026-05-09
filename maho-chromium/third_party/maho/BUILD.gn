@@ -18,18 +18,27 @@ source_set("maho_bridge") {
     "maho_bridge.cc",
     "maho_bridge.h",
   ]
-  public_deps = [ ":maho_ffi_headers" ]
-  deps = [ ":maho_core_prebuilt" ]
+  public_deps = [
+    ":maho_core_prebuilt",
+    ":maho_ffi_headers",
+  ]
+  deps = [
+    "//base",
+  ]
 }
 
 # Prebuilt Rust static library
 config("maho_core_prebuilt_config") {
   if (target_cpu == "arm64") {
     lib_dirs = [ "prebuilt/arm64" ]
+    inputs = [ "prebuilt/arm64/libmaho_ffi.a" ]
   } else if (target_cpu == "x64") {
     lib_dirs = [ "prebuilt/x64" ]
+    inputs = [ "prebuilt/x64/libmaho_ffi.a" ]
   }
-  libs = [ "maho_core" ]
+  libs = [
+    "maho_ffi",
+  ]
 
   # Rust std dependencies needed when linking a Rust static lib
   if (is_mac) {
@@ -45,6 +54,6 @@ config("maho_core_prebuilt_config") {
   }
 }
 
-group("maho_core_prebuilt") {
-  all_dependent_configs = [ ":maho_core_prebuilt_config" ]
+source_set("maho_core_prebuilt") {
+  public_configs = [ ":maho_core_prebuilt_config" ]
 }

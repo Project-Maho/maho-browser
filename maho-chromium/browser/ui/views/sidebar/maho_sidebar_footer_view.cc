@@ -22,7 +22,6 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "components/vector_icons/vector_icons.h"
-#include "content/public/common/referrer.h"
 #include "maho/browser/ui/context_menu/maho_space_context_menu.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_action_popover_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
@@ -33,9 +32,7 @@
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
-#include "ui/base/page_transition_types.h"
 #include "ui/base/ui_base_types.h"
-#include "ui/base/window_open_disposition.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
@@ -74,7 +71,7 @@ MahoSidebarView* FindSidebarViewAncestor(views::View* view) {
 
 constexpr int kUpdatePillCornerRadius = 11;
 constexpr int kUpdateIndicatorSize = 5;
-constexpr int kFooterRowHeight = 26;
+constexpr int kFooterRowHeight = 27;
 constexpr int kFooterControlSize = 22;
 constexpr int kFooterControlCornerRadius = 12;
 constexpr int kFooterButtonIconSize = 10;
@@ -82,18 +79,19 @@ constexpr int kFooterRowSpacing = 0;
 constexpr int kDotSpacing = 4;
 constexpr int kSpaceTintAlpha = 12;
 constexpr int kFadeWidth = 8;
-constexpr int kDotTrackHeight = 8;
-constexpr int kDotTrackCornerRadius = 5;
+constexpr int kDotTrackHeight = 9;
+constexpr int kDotTrackCornerRadius = 6;
 
 constexpr SkColor kFooterButtonIconColor = SkColorSetRGB(0xB4, 0xBC, 0xC8);
 constexpr SkColor kFooterTrackBaseColor = SkColorSetRGB(0x1C, 0x21, 0x28);
-constexpr SkColor kFooterSeparatorColor = SkColorSetARGB(0x1A, 0xFF, 0xFF, 0xFF);
+constexpr SkColor kFooterSeparatorColor =
+    SkColorSetARGB(0x1A, 0xFF, 0xFF, 0xFF);
 constexpr float kFooterButtonEnabledOpacity = 0.58f;
 constexpr float kFooterButtonDisabledOpacity = 0.28f;
 
 const gfx::Insets kFooterInsets = gfx::Insets::TLBR(0, 0, 0, 0);
 const gfx::Insets kUpdatePillInsets = gfx::Insets::TLBR(3, 10, 3, 10);
-const gfx::Insets kFooterRowInsets = gfx::Insets::TLBR(4, 8, 1, 8);
+const gfx::Insets kFooterRowInsets = gfx::Insets::TLBR(4, 8, 2, 8);
 const gfx::Insets kClusterInsets = gfx::Insets::TLBR(0, 8, 0, 8);
 
 bool ParseHexColor(const std::string& color, SkColor* out) {
@@ -358,6 +356,10 @@ MahoSidebarFooterView::~MahoSidebarFooterView() {
   CloseActionPopover();
 }
 
+void MahoSidebarFooterView::RefreshPreferredSize() {
+  PreferredSizeChanged();
+}
+
 void MahoSidebarFooterView::Update(const MahoSidebarFooterModel& model) {
   UpdateUpdatePill(model.update_pill);
   plus_button_->SetEnabled(model.can_create_space);
@@ -456,7 +458,7 @@ void MahoSidebarFooterView::HandleActionPopoverAction(
     case MahoSidebarActionPopoverAction::kNewSpace: {
       auto* sidebar_view = FindSidebarViewAncestor(this);
       if (sidebar_view) {
-        sidebar_view->ShowCreateSpace();
+        sidebar_view->ShowCreateSpaceSurface();
       }
       break;
     }
@@ -488,15 +490,15 @@ void MahoSidebarFooterView::HandleActionPopoverAction(
 
 void MahoSidebarFooterView::CloseActionPopover() {
   if (action_popover_widget_) {
-    action_popover_widget_->RemoveObserver(this);
-    action_popover_widget_->Close();
-    action_popover_widget_ = nullptr;
+    action_popover_widget_->CloseNow();
   }
 }
 
 void MahoSidebarFooterView::OnWidgetDestroying(views::Widget* widget) {
   if (widget == action_popover_widget_) {
+    action_popover_widget_->RemoveObserver(this);
     action_popover_widget_ = nullptr;
+    open_create_space_after_popover_close_ = false;
   }
 }
 
@@ -510,9 +512,9 @@ void MahoSidebarFooterView::RebuildDots(
   dot_container_->RemoveAllChildViews();
   const int clamped_count = std::max(space_count, 0);
   const int visible_count = space_ids.empty()
-                                 ? clamped_count
-                                 : std::min(clamped_count,
-                                            static_cast<int>(space_ids.size()));
+                                ? clamped_count
+                                : std::min(clamped_count,
+                                           static_cast<int>(space_ids.size()));
   if (visible_count == 0) {
     selected_dot_index_ = -1;
     return;
@@ -581,8 +583,9 @@ void MahoSidebarFooterView::UpdateFooterChromeAppearance() {
     button->SetBorder(views::CreateEmptyBorder(gfx::Insets()));
     button->SetPaintToLayer();
     button->layer()->SetFillsBoundsOpaquely(false);
-    button->layer()->SetOpacity(button->GetEnabled() ? kFooterButtonEnabledOpacity
-                                                     : kFooterButtonDisabledOpacity);
+    button->layer()->SetOpacity(button->GetEnabled()
+                                    ? kFooterButtonEnabledOpacity
+                                    : kFooterButtonDisabledOpacity);
   };
   style_button(archive_button_);
   style_button(plus_button_);

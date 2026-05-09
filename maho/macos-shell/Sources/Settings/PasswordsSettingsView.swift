@@ -2,6 +2,7 @@ import AppKit
 
 final class PasswordsSettingsViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate, CoreUpdateObserver {
 
+    private let passwordsEnabledSwitch = NSSwitch()
     private let providerPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private var searchField = NSSearchField()
     private var tableView = NSTableView()
@@ -15,11 +16,15 @@ final class PasswordsSettingsViewController: NSViewController, NSTableViewDataSo
     private static let compactEmptyStateHeight: CGFloat = 54
 
     override func loadView() {
+        passwordsEnabledSwitch.target = self
+        passwordsEnabledSwitch.action = #selector(passwordsEnabledChanged(_:))
+
         providerPopup.removeAllItems()
-        providerPopup.addItems(withTitles: ["Maho Built-in", "System (Keychain, 1Password, etc.)", "Disabled"])
+        providerPopup.addItems(withTitles: ["Chromium", "1Password", "Bitwarden"])
         providerPopup.target = self
         providerPopup.action = #selector(providerChanged(_:))
 
+        let passwordsEnabledRow = makeSettingsLabeledRow("Passwords Enabled:", passwordsEnabledSwitch)
         let providerRow = makeSettingsLabeledRow("Password Provider:", providerPopup)
 
         searchField.placeholderString = "Search passwords..."
@@ -71,7 +76,7 @@ final class PasswordsSettingsViewController: NSViewController, NSTableViewDataSo
         self.passwordsSectionView = passwordsSectionView
 
         view = SettingsPaneHostView(sections: [
-            .plain([providerRow]),
+            .plain([passwordsEnabledRow, providerRow]),
             .managedTable(passwordsSectionView)
         ])
 
@@ -84,15 +89,16 @@ final class PasswordsSettingsViewController: NSViewController, NSTableViewDataSo
         CoreUpdateDispatcher.shared.sendAndDispatch(.searchPasswords(query: ""))
 
         if let settings = MahoBridge.shared.getSettings() {
+            passwordsEnabledSwitch.state = settings.autofill.passwordsEnabled ? .on : .off
             switch settings.autofill.passwordProvider {
-            case .builtin:
+            case .chromium:
                 providerPopup.selectItem(at: 0)
-            case .system:
+            case .onepassword:
                 providerPopup.selectItem(at: 1)
-            case .disabled:
+            case .bitwarden:
                 providerPopup.selectItem(at: 2)
             }
-            updateProviderState(settings.autofill.passwordProvider)
+            updateProviderState(passwordsEnabled: settings.autofill.passwordsEnabled, provider: settings.autofill.passwordProvider)
         }
     }
 
@@ -107,15 +113,16 @@ final class PasswordsSettingsViewController: NSViewController, NSTableViewDataSo
             tableView.reloadData()
             updateTableHeight()
         case .settingsChanged(let settings):
+            passwordsEnabledSwitch.state = settings.autofill.passwordsEnabled ? .on : .off
             switch settings.autofill.passwordProvider {
-            case .builtin:
+            case .chromium:
                 providerPopup.selectItem(at: 0)
-            case .system:
+            case .onepassword:
                 providerPopup.selectItem(at: 1)
-            case .disabled:
+            case .bitwarden:
                 providerPopup.selectItem(at: 2)
             }
-            updateProviderState(settings.autofill.passwordProvider)
+            updateProviderState(passwordsEnabled: settings.autofill.passwordsEnabled, provider: settings.autofill.passwordProvider)
         case .passwordDeleted:
             CoreUpdateDispatcher.shared.sendAndDispatch(.searchPasswords(query: searchField.stringValue))
         default:
@@ -123,23 +130,50 @@ final class PasswordsSettingsViewController: NSViewController, NSTableViewDataSo
         }
     }
 
+    @objc private func passwordsEnabledChanged(_ sender: NSSwitch) {
+        let update = SettingsUpdate(
+            general: nil, appearance: nil, privacy: nil, reader: nil,
+            keyboardShortcuts: nil, perSiteSettings: nil, toolbarItems: nil, max: nil,
+            autofill: AutofillSettingsUpdate(
+                addressesEnabled: nil,
+                paymentsEnabled: nil,
+                passwordsEnabled: sender.state == .on,
+                passwordProvider: nil
+            ),
+            advanced: nil, notifications: nil
+        )
+        CoreUpdateDispatcher.shared.sendAndDispatch(.updateSettings(changes: update))
+
+        updateProviderState(passwordsEnabled: sender.state == .on, provider: MahoBridge.shared.getSettings()?.autofill.passwordProvider ?? .chromium)
+    }
+
     @objc private func providerChanged(_ sender: NSPopUpButton) {
         let provider: PasswordAutofillProvider
         switch sender.indexOfSelectedItem {
         case 0:
-            provider = .builtin
+            provider = .chromium
         case 1:
-            provider = .system
+            provider = .onepassword
         case 2:
-            provider = .disabled
+            provider = .bitwarden
         default:
-            provider = .builtin
+            provider = .chromium
         }
 
-        let currentProvider = MahoBridge.shared.getSettings()?.autofill.passwordProvider ?? .builtin
+        let currentSettings = MahoBridge.shared.getSettings()?.autofill
+        let currentProvider = currentSettings?.passwordProvider ?? .chromium
+        let passwordsEnabled = currentSettings?.passwordsEnabled ?? true
 
-        if currentProvider == .builtin && provider != .builtin && !passwords.isEmpty {
-            let providerName = provider == .system ? "system" : "disabled"
+        if currentProvider == .chromium && provider != .chromium && !passwords.isEmpty {
+            let providerName: String
+            switch provider {
+            case .chromium:
+                providerName = "Chromium"
+            case .onepassword:
+                providerName = "1Password"
+            case .bitwarden:
+                providerName = "Bitwarden"
+            }
             let alert = NSAlert()
             alert.messageText = "Switch Password Provider?"
             alert.informativeText = "Your \(passwords.count) saved password(s) in Maho will not be available through the \(providerName) provider. Consider exporting them first."
@@ -153,11 +187,11 @@ final class PasswordsSettingsViewController: NSViewController, NSTableViewDataSo
                 exportPasswords(sender)
             } else if response == .alertThirdButtonReturn {
                 switch currentProvider {
-                case .builtin:
+                case .chromium:
                     sender.selectItem(at: 0)
-                case .system:
+                case .onepassword:
                     sender.selectItem(at: 1)
-                case .disabled:
+                case .bitwarden:
                     sender.selectItem(at: 2)
                 }
                 return
@@ -170,13 +204,14 @@ final class PasswordsSettingsViewController: NSViewController, NSTableViewDataSo
             autofill: AutofillSettingsUpdate(
                 addressesEnabled: nil,
                 paymentsEnabled: nil,
+                passwordsEnabled: passwordsEnabled,
                 passwordProvider: provider
             ),
             advanced: nil, notifications: nil
         )
         CoreUpdateDispatcher.shared.sendAndDispatch(.updateSettings(changes: update))
 
-        updateProviderState(provider)
+        updateProviderState(passwordsEnabled: passwordsEnabled, provider: provider)
     }
 
     @objc private func exportPasswords(_ sender: NSButton) {
@@ -215,13 +250,17 @@ final class PasswordsSettingsViewController: NSViewController, NSTableViewDataSo
         }
     }
 
-    private func updateProviderState(_ provider: PasswordAutofillProvider) {
-        let isBuiltin = provider == .builtin
-        searchField.isEnabled = isBuiltin
-        tableView.alphaValue = isBuiltin ? 1.0 : 0.4
-        addButton.isEnabled = isBuiltin
-        deleteButton.isEnabled = isBuiltin
-        passwordsSectionView?.setManagedTableShellAlpha(isBuiltin ? 1.0 : 0.4)
+    private func updateProviderState(passwordsEnabled: Bool, provider: PasswordAutofillProvider) {
+        let isChromium = provider == .chromium
+        let isInteractive = passwordsEnabled && isChromium
+        passwordsEnabledSwitch.state = passwordsEnabled ? .on : .off
+        providerPopup.isEnabled = passwordsEnabled
+        searchField.isEnabled = isInteractive
+        tableView.alphaValue = isInteractive ? 1.0 : 0.4
+        addButton.isEnabled = isInteractive
+        deleteButton.isEnabled = isInteractive
+        exportButton.isEnabled = isInteractive
+        passwordsSectionView?.setManagedTableShellAlpha(isInteractive ? 1.0 : 0.4)
         updateTableHeight()
     }
 

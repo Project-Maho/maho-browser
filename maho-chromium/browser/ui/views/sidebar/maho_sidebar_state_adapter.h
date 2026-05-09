@@ -5,6 +5,7 @@
 
 #include <string>
 
+#include "base/values.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 
 class Browser;
@@ -45,6 +46,10 @@ struct ShellEventField {
 };
 void DispatchShellEventEx(const std::string& kind,
                           const std::vector<ShellEventField>& fields);
+
+// Variant for events with nested JSON structure (e.g. ReorderRootItem).
+void DispatchShellEventDict(const std::string& kind,
+                            base::DictValue dict);
 
 class MahoSidebarStateAdapter {
  public:

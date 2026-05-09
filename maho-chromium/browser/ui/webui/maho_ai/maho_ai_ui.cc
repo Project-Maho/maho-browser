@@ -25,7 +25,9 @@
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/common/url_constants.h"
+#include "components/prefs/pref_service.h"
 #include "maho/browser/ui/webui/maho_ai/maho_ai_page_handler.h"
+#include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "ui/webui/webui_util.h"
 
@@ -43,6 +45,15 @@ MahoAIUI::MahoAIUI(content::WebUI* web_ui)
     : TopChromeWebUIController(web_ui) {
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       Profile::FromWebUI(web_ui), maho::kMahoAIHost);
+  PrefService* prefs = Profile::FromWebUI(web_ui)->GetPrefs();
+  source->AddBoolean("isMahoAiThinMode",
+                     prefs->GetBoolean(maho::ai_prefs::kUiThinModeEnabled));
+  const std::string pending_initial_query =
+      prefs->GetString(maho::ai_prefs::kPendingInitialQuery);
+  source->AddString("pendingAiQuery", pending_initial_query);
+  if (!pending_initial_query.empty()) {
+    prefs->SetString(maho::ai_prefs::kPendingInitialQuery, std::string());
+  }
   webui::SetupWebUIDataSource(source, kMahoAiResources,
                               IDR_MAHO_AI_MAHO_AI_HTML);
 }
@@ -96,6 +107,10 @@ void MahoAIUI::RedirectTabHostedNavigationToSidePanel() {
                 browser->tab_strip_model()->GetIndexOfWebContents(web_contents);
             if (current_index != expected_index ||
                 current_index == TabStripModel::kNoTab) {
+              return;
+            }
+
+            if (browser->tab_strip_model()->count() <= 1) {
               return;
             }
 

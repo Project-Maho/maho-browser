@@ -2,11 +2,13 @@
 
 #include "maho/browser/net/maho_ad_block_throttle.h"
 
-#include "maho/browser/maho_core_holder.h"
-#include "maho/third_party/maho/maho_bridge.h"
+#include "content/public/browser/browser_thread.h"
 #include "net/base/net_errors.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
+#include "url/gurl.h"
+#include "maho/browser/maho_core_holder.h"
+#include "maho/third_party/maho/maho_bridge.h"
 
 namespace {
 
@@ -38,11 +40,13 @@ const char* MapRequestDestination(
 
 }  // namespace
 
-MahoAdBlockThrottle::MahoAdBlockThrottle() = default;
+MahoAdBlockThrottle::MahoAdBlockThrottle(base::RepeatingClosure on_blocked)
+    : on_blocked_(std::move(on_blocked)) {}
 MahoAdBlockThrottle::~MahoAdBlockThrottle() = default;
 
 void MahoAdBlockThrottle::WillStartRequest(network::ResourceRequest* request,
                                            bool* defer) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   MahoCore* core = maho::GetCore();
   if (!core) {
     return;
@@ -55,8 +59,31 @@ void MahoAdBlockThrottle::WillStartRequest(network::ResourceRequest* request,
           : "";
   const char* type = MapRequestDestination(request->destination);
 
-  if (maho::core::ShouldBlockRequest(core, url.c_str(), source.c_str(),
-                                     type)) {
-    delegate_->CancelWithError(net::ERR_BLOCKED_BY_CLIENT);
+  auto result =
+      maho::core::CheckRequest(core, url.c_str(), source.c_str(), type);
+
+  if (!result.redirect.empty()) {
+    request->url = GURL(result.redirect);
+    if (on_blocked_) {
+      on_blocked_.Run();
+    }
+    return;
+  }
+
+  if (!result.rewritten_url.empty()) {
+    request->url = GURL(result.rewritten_url);
+    if (on_blocked_) {
+      on_blocked_.Run();
+    }
+    return;
+  }
+
+  if (result.blocked) {
+    if (delegate_) {
+      delegate_->CancelWithError(net::ERR_BLOCKED_BY_CLIENT);
+    }
+    if (on_blocked_) {
+      on_blocked_.Run();
+    }
   }
 }

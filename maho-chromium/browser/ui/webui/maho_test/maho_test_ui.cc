@@ -13,8 +13,8 @@
 
 #include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/run_loop.h"
 #include "base/task/thread_pool.h"
-#include "base/threading/platform_thread.h"
 
 #include "base/memory/ref_counted_memory.h"
 #include "base/json/json_reader.h"
@@ -307,10 +307,10 @@ void SeedLevel2(Profile* profile) {
   static constexpr SeedTab kFavoriteSeedTabs[] = {
       {"https://github.com/maho-browser", true, true, nullptr},
       {"https://docs.maho.dev/getting-started", true, false, "Research"},
-      {"https://example.com/news", false, true, nullptr},
-      {"https://example.com/shop", false, true, nullptr},
+      {"https://example.com/news", false, true, "Planning"},
+      {"https://example.com/shop", false, true, "Planning"},
       {"https://example.com/blog", false, false, "Work"},
-      {"https://example.com/about", false, false, "Work"},
+      {"https://example.com/about", false, false, "Planning"},
   };
   static constexpr SeedTab kSupportSeedTabs[] = {
       {"https://github.com/maho-browser", true, false, nullptr},
@@ -520,15 +520,14 @@ void SeedLevel2(Profile* profile) {
   };
 
   auto find_tab_id_by_url_with_retry = [&](const std::string& target_url) {
-    constexpr int kMaxAttempts = 50;
-    constexpr int kRetryDelayMs = 50;
+    constexpr int kMaxAttempts = 12;
     for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
       std::string tab_id = find_tab_id_by_url(target_url);
       if (!tab_id.empty()) {
         return tab_id;
       }
       if (attempt + 1 < kMaxAttempts) {
-        base::PlatformThread::Sleep(base::Milliseconds(kRetryDelayMs));
+        base::RunLoop().RunUntilIdle();
       }
     }
     return std::string();
@@ -748,6 +747,10 @@ void SeedLevel2(Profile* profile) {
   DispatchShellEventEx("create_folder", {
       ShellEventField("space_id", active_space_id),
       ShellEventField("name", std::string("Work")),
+      ShellEventField("is_pinned", false)});
+  DispatchShellEventEx("create_folder", {
+      ShellEventField("space_id", active_space_id),
+      ShellEventField("name", std::string("Planning")),
       ShellEventField("is_pinned", false)});
   DispatchShellEventEx("create_folder", {
       ShellEventField("space_id", active_space_id),
@@ -1110,7 +1113,7 @@ std::string BuildSidebarSnapshotHtml(Profile* profile) {
   html += "      <dt>Folder reorder (DnD)</dt><dd class=\"ok\">SUPPORTED — reorder_folder via before_folder_id and nested parent_folder_id semantics</dd>";
   html += "      <dt>Tab out of folder (DnD)</dt><dd class=\"ok\">SUPPORTED — move_tab_to_root via atomic folder-child root return</dd>";
   html += "      <dt>Spaces</dt><dd class=\"ok\">SUPPORTED — display, seed registers spaces</dd>";
-  html += "      <dt>Tab-on-tab split</dt><dd>BLOCKED — requires split-view architecture work</dd>";
+  html += "      <dt>Tab-on-tab split</dt><dd class=\"ok\">SUPPORTED — tab on tab body routes to split view, AX proof is still the weakest part</dd>";
   html += "    </dl>";
   html += "  </section>";
 

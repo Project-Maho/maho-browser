@@ -76,8 +76,6 @@ pub struct AppearanceSettings {
     #[serde(default)]
     pub sidebar_collapsed: bool,
     #[serde(default)]
-    pub custom_chrome_css: Option<String>,
-    #[serde(default)]
     pub custom_icon_path: Option<String>,
 }
 
@@ -300,8 +298,6 @@ pub struct AppearanceSettingsUpdate {
     pub window_transparency: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sidebar_collapsed: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub custom_chrome_css: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub custom_icon_path: Option<Option<String>>,
 }

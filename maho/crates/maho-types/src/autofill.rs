@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+use crate::passwords::PasswordProviderKind;
+
+pub use crate::passwords::PasswordProviderKind as PasswordAutofillProvider;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AutofillAddress {
@@ -23,22 +27,19 @@ pub struct AutofillPayment {
     pub expiry: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum PasswordAutofillProvider {
-    #[default]
-    Builtin,
-    System,
-    Disabled,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AutofillSettings {
     pub addresses_enabled: bool,
     pub payments_enabled: bool,
+    #[serde(default = "default_true")]
+    pub passwords_enabled: bool,
     #[serde(default)]
     pub password_provider: PasswordAutofillProvider,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AutofillSettings {
@@ -46,7 +47,8 @@ impl Default for AutofillSettings {
         Self {
             addresses_enabled: true,
             payments_enabled: true,
-            password_provider: PasswordAutofillProvider::default(),
+            passwords_enabled: true,
+            password_provider: PasswordProviderKind::default(),
         }
     }
 }
@@ -58,6 +60,8 @@ pub struct AutofillSettingsUpdate {
     pub addresses_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payments_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passwords_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub password_provider: Option<PasswordAutofillProvider>,
 }

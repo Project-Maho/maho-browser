@@ -14,16 +14,30 @@
 class Browser;
 
 namespace views {
+class Button;
 class Label;
 class MdTextButton;
 class Textfield;
+class Widget;
 }  // namespace views
 
 namespace maho {
 
-// Dedicated sidebar space-creation surface shown in place of the normal
-// sidebar content. Provides a name input and create/cancel controls without
-// opening a separate popup window.
+enum class MahoSidebarCreateSpaceThemeMode {
+  kSolid,
+  kZen,
+};
+
+struct MahoSidebarCreateSpaceThemeSelection {
+  int preset_index = 7;
+  int brightness = 90;
+  int grain = 0;
+  MahoSidebarCreateSpaceThemeMode mode =
+      MahoSidebarCreateSpaceThemeMode::kZen;
+};
+
+// Reusable native create-space form content, hosted inline inside the sidebar
+// and exercised directly by sidebar interactive tests.
 class MahoSidebarCreateSpaceView : public views::View,
                                    public views::TextfieldController {
   METADATA_HEADER(MahoSidebarCreateSpaceView, views::View)
@@ -38,25 +52,37 @@ class MahoSidebarCreateSpaceView : public views::View,
   void OnThemeChanged() override;
 
   void SetCloseCallback(base::RepeatingClosure close_callback);
+  void PrepareForOpen();
   void RequestNameFocus();
 
   // Test-only accessors/seams for interactive browser tests.
   views::Textfield* name_field_for_testing() { return name_field_; }
   views::MdTextButton* create_button_for_testing() { return create_button_; }
   views::Label* error_label_for_testing() { return error_label_; }
+  views::Button* theme_button_for_testing() { return theme_button_; }
+  views::Label* theme_summary_label_for_testing() {
+    return theme_summary_label_;
+  }
   void SetNameForTesting(const std::u16string& text);
   void CompleteCreateSpaceForTesting(bool success,
                                      const std::string& new_space_id);
+  static views::Widget* GetThemePickerWidgetForTesting();
+  static void SetThemePickerSelectionForTesting(
+      const MahoSidebarCreateSpaceThemeSelection& selection);
+  static bool AcceptThemePickerDialogForTesting();
 
  private:
   void ContentsChanged(views::Textfield* sender,
                        const std::u16string& new_contents) override;
   bool HandleKeyEvent(views::Textfield* sender,
                       const ui::KeyEvent& event) override;
+  void ResetFormState();
+  void UpdateThemeSummary();
   void UpdateCreateButtonState();
   void OnCreatePressed();
   void OnCancelPressed();
-  void OnColorSwatchPressed(int index);
+  void OnThemePressed();
+  void ApplyThemeSelection(const MahoSidebarCreateSpaceThemeSelection& selection);
   void OnSpaceCreated(bool success, const std::string& new_space_id);
 
   raw_ptr<Browser> browser_;
@@ -64,8 +90,10 @@ class MahoSidebarCreateSpaceView : public views::View,
   raw_ptr<views::MdTextButton> create_button_ = nullptr;
   raw_ptr<views::Label> error_label_ = nullptr;
   raw_ptr<views::MdTextButton> cancel_button_ = nullptr;
-  raw_ptr<views::View> swatch_row_ = nullptr;
-  int selected_color_index_ = 7;
+  raw_ptr<views::Button> theme_button_ = nullptr;
+  raw_ptr<views::Label> theme_summary_label_ = nullptr;
+  raw_ptr<views::View> theme_preview_dot_ = nullptr;
+  MahoSidebarCreateSpaceThemeSelection theme_selection_;
   base::RepeatingClosure close_callback_;
   base::WeakPtrFactory<MahoSidebarCreateSpaceView> weak_factory_{this};
 };

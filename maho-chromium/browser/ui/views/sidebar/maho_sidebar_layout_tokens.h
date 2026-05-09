@@ -10,15 +10,15 @@
 namespace maho::sidebar_layout {
 
 inline constexpr int kCollapsedRailWidthDp = 40;
-inline constexpr int kDefaultRailWidthDp = 272;
-inline constexpr int kRuntimeRailWidthMinDp = 252;
+inline constexpr int kDefaultRailWidthDp = 224;
+inline constexpr int kRuntimeRailWidthMinDp = 176;
 inline constexpr int kRuntimeRailWidthMaxDp = 400;
 inline constexpr int kLegacyRailWidthResetThresholdDp = 80;
 inline constexpr int kCompactNavigationThresholdDp = 208;
 inline constexpr int kRailCornerRadiusDp = 18;
 inline constexpr int kSectionCornerRadiusDp = 12;
-inline constexpr int kSectionSpacingDp = 6;
-inline constexpr int kTopRegionSpacingDp = 8;
+inline constexpr int kSectionSpacingDp = 5;
+inline constexpr int kTopRegionSpacingDp = 6;
 // Width reserved for macOS native traffic-light buttons (close/min/zoom).
 // Derived from upstream BrowserFrameViewMac::GetCaptionButtonBounds():
 //   pre-macOS 26: RectF(20, 11, 54, 16) → right edge x=74
@@ -35,8 +35,8 @@ inline constexpr int kTopBarCompactNavSpacingDp = 4;
 inline constexpr int kTopBarCompactTrailingInsetDp = 3;
 inline constexpr int kSearchPillHeightDp = 38;
 inline constexpr int kSearchPillCornerRadiusDp = 16;
-inline constexpr int kSearchPillCompactHeightDp = 34;
-inline constexpr int kSearchPillCompactCornerRadiusDp = 17;
+inline constexpr int kSearchPillCompactHeightDp = 30;
+inline constexpr int kSearchPillCompactCornerRadiusDp = 15;
 inline constexpr int kSearchPillIconSizeDp = 14;
 inline constexpr std::size_t kMahoSidebarFavoriteSlotCount = 10;
 inline constexpr int kFavoritesColumns = 3;
@@ -54,7 +54,7 @@ inline constexpr int kSidebarHideDelayMs = 300;      // Delay before hide on mou
 inline const gfx::Insets kRailInsets = gfx::Insets::TLBR(8, 8, 8, 8);
 inline const gfx::Insets kSectionInsets = gfx::Insets::TLBR(2, 0, 2, 0);
 inline const gfx::Insets kRowInsets = gfx::Insets::TLBR(2, 5, 2, 5);
-inline const gfx::Insets kTopBarInsets = gfx::Insets::TLBR(1, 1, 0, 1);
+inline const gfx::Insets kTopBarInsets = gfx::Insets::TLBR(0, 1, 0, 0);
 inline const gfx::Insets kSearchPillInsets = gfx::Insets::TLBR(0, 2, 0, 2);
 inline const gfx::Insets kFavoriteTileInsets = gfx::Insets::TLBR(6, 4, 6, 4);
 

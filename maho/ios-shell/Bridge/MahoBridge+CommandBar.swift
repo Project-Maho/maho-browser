@@ -12,8 +12,8 @@ extension MahoBridge {
 
     /// Selects a command bar item by index.
     @discardableResult
-    func commandBarSelectItem(index: Int) -> [CoreUpdate] {
-        handleEvent(.commandBarSelect(index: index))
+    func commandBarSelectItem(index: Int, key: String) -> [CoreUpdate] {
+        handleEvent(.commandBarSelect(index: index, key: key))
     }
 
     /// Executes a quick action from the command bar.

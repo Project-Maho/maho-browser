@@ -81,7 +81,6 @@ impl SettingsManager {
                 show_tab_bar: true,
                 window_transparency: false,
                 sidebar_collapsed: false,
-                custom_chrome_css: None,
                 custom_icon_path: None,
             },
             privacy: PrivacySettings {
@@ -169,9 +168,6 @@ impl SettingsManager {
             if let Some(sidebar_collapsed) = appearance.sidebar_collapsed {
                 self.settings.appearance.sidebar_collapsed = sidebar_collapsed;
             }
-            if let Some(custom_chrome_css) = appearance.custom_chrome_css {
-                self.settings.appearance.custom_chrome_css = custom_chrome_css;
-            }
             if let Some(custom_icon_path) = appearance.custom_icon_path {
                 self.settings.appearance.custom_icon_path = custom_icon_path;
             }
@@ -257,6 +253,9 @@ impl SettingsManager {
             }
             if let Some(payments_enabled) = autofill.payments_enabled {
                 self.settings.autofill.payments_enabled = payments_enabled;
+            }
+            if let Some(passwords_enabled) = autofill.passwords_enabled {
+                self.settings.autofill.passwords_enabled = passwords_enabled;
             }
             if let Some(password_provider) = autofill.password_provider {
                 self.settings.autofill.password_provider = password_provider;

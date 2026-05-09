@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::DateTime;
 use crate::folder::Folder;
-use crate::identifiers::{ProfileId, SpaceId, TabId};
+use crate::identifiers::{FolderId, ProfileId, SpaceId, TabId};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -88,6 +88,24 @@ pub struct SpaceColor {
 
 pub type SpaceIcon = String;
 
+/// Identifies a root-level sidebar item (tab or folder) for unified ordering.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "id", rename_all = "snake_case")]
+pub enum RootItem {
+    Tab(TabId),
+    Folder(FolderId),
+}
+
+/// Specifies where to insert a root item in the unified root order.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RootInsertionPoint {
+    /// Insert before the specified root item (tab or folder).
+    Before { target: RootItem },
+    /// Append after the last root item.
+    Append,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ActiveSpaceModel {
@@ -135,6 +153,8 @@ pub struct Space {
     pub icon: Option<SpaceIcon>,
     pub tab_order: Vec<TabId>,
     pub folders: Vec<Folder>,
+    #[serde(default)]
+    pub root_order: Vec<RootItem>,
     pub atc_rules: Vec<ATCRule>,
     pub is_active: bool,
     pub created_at: DateTime,

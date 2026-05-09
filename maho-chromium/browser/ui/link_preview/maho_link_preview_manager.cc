@@ -18,6 +18,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/isolated_world_ids.h"
+#include "maho/browser/ai/maho_extract_prompt_messages.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/ui/link_preview/link_hover_script_string.h"
 #include "maho/third_party/maho/maho_bridge.h"
@@ -208,19 +209,42 @@ void MahoLinkPreviewManager::OnRustEventResponse(
 
   auto parsed =
       base::JSONReader::Read(rust_response_json, base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_dict()) {
+  if (!parsed) {
     ShowBubble(u"Failed to process link preview.", pending_anchor_rect_);
     return;
   }
 
-  const base::DictValue* llm_request =
-      parsed->GetDict().FindDict("RequestLlmCompletion");
+  const base::DictValue* llm_request = nullptr;
+
+  if (parsed->is_dict()) {
+    llm_request = parsed->GetDict().FindDict("RequestLlmCompletion");
+    if (!llm_request) {
+      llm_request = parsed->GetDict().FindDict("request_llm_completion");
+    }
+    if (!llm_request) {
+      const std::string* kind = parsed->GetDict().FindString("kind");
+      if (kind && *kind == "request_llm_completion") {
+        llm_request = &parsed->GetDict();
+      }
+    }
+  } else if (parsed->is_list()) {
+    for (const auto& item : parsed->GetList()) {
+      const base::DictValue* d = item.GetIfDict();
+      if (!d) continue;
+      const std::string* kind = d->FindString("kind");
+      if (kind && *kind == "request_llm_completion") {
+        llm_request = d;
+        break;
+      }
+    }
+  }
+
   if (!llm_request) {
     ShowBubble(u"Unexpected response from AI engine.", pending_anchor_rect_);
     return;
   }
 
-  const base::ListValue* prompt_messages = llm_request->FindList("prompt");
+  auto prompt_messages = maho::ai::ExtractPromptMessages(*llm_request);
   if (!prompt_messages) {
     ShowBubble(u"Invalid prompt from AI engine.", pending_anchor_rect_);
     return;
@@ -229,7 +253,7 @@ void MahoLinkPreviewManager::OnRustEventResponse(
   base::DictValue request_body = base::DictValue()
       .Set("model", "gpt-4o-mini")
       .Set("stream", false)
-      .Set("messages", prompt_messages->Clone());
+      .Set("messages", base::Value(std::move(*prompt_messages)));
 
   std::string body_json;
   base::JSONWriter::Write(request_body, &body_json);

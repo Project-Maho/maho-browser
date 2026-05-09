@@ -1,8 +1,9 @@
 use maho_types::boost::BoostUpdate;
-use maho_types::common::{MemoryPressureLevel, Orientation, Url, UrlPattern};
+use maho_types::common::{MemoryPressureLevel, Url, UrlPattern};
+use maho_types::chat::ChatRequestContext;
 use maho_types::events::core_update::{CoreUpdate, FolderUpdate, MemoryAction};
 use maho_types::events::shell_event::{QuickAction, ShellEvent};
-use maho_types::identifiers::{BoostId, FolderId, NoteId, PaneId, ProfileId, SpaceId, TabId};
+use maho_types::identifiers::{BoostId, FolderId, NoteId, ProfileId, SpaceId, TabId};
 use maho_types::settings::{Settings, SettingsUpdate};
 use maho_types::space::{Space, SpaceColor};
 use maho_types::tab::Tab;
@@ -106,6 +107,12 @@ pub trait SpaceManagerInterface {
         &self,
         space_id: &SpaceId,
     ) -> Vec<maho_types::traits::shell_renderer::FolderViewModel>;
+    fn reorder_root_item(
+        &mut self,
+        space_id: &SpaceId,
+        item: &maho_types::space::RootItem,
+        insertion_point: &maho_types::space::RootInsertionPoint,
+    );
     fn set_last_active_tab(&mut self, space_id: &SpaceId, tab_id: Option<TabId>);
     fn get_last_active_tab(&self, space_id: &SpaceId) -> Option<&TabId>;
 }
@@ -131,17 +138,6 @@ pub trait NoteManagerInterface {
         -> maho_types::note::Note;
     fn update_note(&mut self, note_id: &NoteId, content: String);
     fn delete_note(&mut self, note_id: &NoteId) -> Option<maho_types::note::Note>;
-}
-
-pub trait SplitViewInterface {
-    fn create_split(
-        &mut self,
-        tab_ids: Vec<TabId>,
-        orientation: Orientation,
-    ) -> maho_types::split_view::SplitViewConfig;
-    fn remove_split(&mut self, pane_id: &PaneId)
-        -> Option<maho_types::split_view::SplitViewConfig>;
-    fn resize_split(&mut self, pane_id: &PaneId, ratio: f64);
 }
 
 pub trait SettingsInterface {
@@ -181,8 +177,7 @@ pub trait LLMManagerInterface {
     fn request_chat_completion(
         &mut self,
         message: &str,
-        include_page_context: bool,
-        page_context: Option<&str>,
+        context: &ChatRequestContext,
     ) -> CoreUpdate;
 }
 
@@ -222,7 +217,6 @@ impl EventDispatcher {
         cmd_bar: &dyn CommandBarInterface,
         _boost_mgr: &mut dyn BoostManagerInterface,
         _note_mgr: &mut dyn NoteManagerInterface,
-        split_mgr: &mut dyn SplitViewInterface,
         _settings_mgr: &mut dyn SettingsInterface,
         content_blocker: &mut dyn ContentBlockerInterface,
         notification_mgr: &mut dyn NotificationManagerInterface,
@@ -239,6 +233,8 @@ impl EventDispatcher {
             ShellEvent::GoForward { .. } => vec![],
             ShellEvent::Reload { .. } => vec![],
             ShellEvent::Stop { .. } => vec![],
+            ShellEvent::ClearSplitView => vec![],
+            ShellEvent::CreateSplit { .. } => vec![],
 
             // Tab management
             ShellEvent::CreateTab {
@@ -267,6 +263,7 @@ impl EventDispatcher {
                     vec![]
                 }
             }
+            ShellEvent::ChatRequestModeChanged { .. } => vec![],
             ShellEvent::ActivateTab { tab_id } => {
                 if let Some(tab) = tab_mgr.get_tab(&tab_id) {
                     let sid = tab.space_id.clone();
@@ -456,7 +453,12 @@ impl EventDispatcher {
                 vec![]
             }
             ShellEvent::DeleteArchivedTab { tab_id } => {
-                tab_mgr.delete_archived_tab(&tab_id);
+                let space_id = tab_mgr.get_tab(&tab_id).map(|t| t.space_id.clone());
+                if tab_mgr.delete_archived_tab(&tab_id) {
+                    if let Some(space_id) = space_id {
+                        space_mgr.remove_tab_from_space(&space_id, &tab_id);
+                    }
+                }
                 vec![]
             }
             ShellEvent::ResetPinnedTab { .. } => vec![],
@@ -720,6 +722,17 @@ impl EventDispatcher {
                 space_mgr.reorder_folder(&space_id, &folder_id, parent_folder_id.as_ref(), before_folder_id.as_ref());
                 vec![CoreUpdate::FolderOrderChanged { space_id }]
             }
+            ShellEvent::ReorderRootItem {
+                space_id,
+                item,
+                insertion_point,
+            } => {
+                space_mgr.reorder_root_item(&space_id, &item, &insertion_point);
+                vec![CoreUpdate::TabOrderChanged {
+                    space_id,
+                    order: vec![],
+                }]
+            }
 
             // Command bar
             ShellEvent::CommandBarOpened => vec![],
@@ -777,30 +790,49 @@ impl EventDispatcher {
                 QuickAction::ScrollToTop => vec![],
                 QuickAction::ScrollToBottom => vec![],
                 QuickAction::ClearBrowsingData => vec![],
-                _ => vec![],
+                // Shell-handled actions (no core state change needed)
+                QuickAction::NewTab
+                | QuickAction::NewSpace
+                | QuickAction::CloseTab
+                | QuickAction::CloseOtherTabs
+                | QuickAction::CloseAllTabs
+                | QuickAction::DuplicateTab
+                | QuickAction::PinTab
+                | QuickAction::UnpinTab
+                | QuickAction::MuteTab
+                | QuickAction::UnmuteTab
+                | QuickAction::MuteAllTabs
+                | QuickAction::FreezeTab
+                | QuickAction::UnfreezeTab
+                | QuickAction::ReloadTab
+                | QuickAction::HardReload
+                | QuickAction::CopyUrl
+                | QuickAction::ClearHistory
+                | QuickAction::ClearCookies
+                | QuickAction::OpenSettings
+                | QuickAction::OpenDownloads
+                | QuickAction::OpenBookmarks
+                | QuickAction::OpenHistory
+                | QuickAction::ToggleBoost
+                | QuickAction::ToggleSidebar
+                | QuickAction::ToggleContentBlocker
+                | QuickAction::NewFolder
+                | QuickAction::RestoreLastClosed
+                | QuickAction::ToggleFullScreen
+                | QuickAction::ZoomIn
+                | QuickAction::ZoomOut
+                | QuickAction::ResetZoom
+                | QuickAction::FindInPage
+                | QuickAction::PrintPage
+                | QuickAction::ViewSource
+                | QuickAction::ToggleDevTools
+                | QuickAction::Custom { .. } => vec![],
             },
 
             ShellEvent::SaveSearch { .. } => vec![],
             ShellEvent::AddSearchEngine { .. } => vec![],
             ShellEvent::RemoveSearchEngine { .. } => vec![],
             ShellEvent::SetDefaultSearchEngine { .. } => vec![],
-
-            // Split view
-            ShellEvent::CreateSplit {
-                tab_ids,
-                orientation,
-            } => {
-                split_mgr.create_split(tab_ids, orientation);
-                vec![]
-            }
-            ShellEvent::RemoveSplit { pane_id } => {
-                split_mgr.remove_split(&pane_id);
-                vec![]
-            }
-            ShellEvent::ResizeSplit { pane_id, ratio } => {
-                split_mgr.resize_split(&pane_id, ratio);
-                vec![]
-            }
 
             // Boosts
             ShellEvent::CreateBoost { .. }
@@ -1066,7 +1098,6 @@ impl EventDispatcher {
 use crate::boost_manager::BoostManager;
 use crate::note_manager::NoteManager;
 use crate::settings_manager::SettingsManager;
-use crate::split_view_manager::SplitViewManager;
 
 impl BoostManagerInterface for BoostManager {
     fn create_boost(&mut self, url_pattern: UrlPattern) -> maho_types::boost::Boost {
@@ -1096,25 +1127,6 @@ impl NoteManagerInterface for NoteManager {
     }
     fn delete_note(&mut self, note_id: &NoteId) -> Option<maho_types::note::Note> {
         self.delete_note(note_id)
-    }
-}
-
-impl SplitViewInterface for SplitViewManager {
-    fn create_split(
-        &mut self,
-        tab_ids: Vec<TabId>,
-        orientation: Orientation,
-    ) -> maho_types::split_view::SplitViewConfig {
-        self.create_split(tab_ids, orientation)
-    }
-    fn remove_split(
-        &mut self,
-        pane_id: &PaneId,
-    ) -> Option<maho_types::split_view::SplitViewConfig> {
-        self.remove_split(pane_id)
-    }
-    fn resize_split(&mut self, pane_id: &PaneId, ratio: f64) {
-        self.resize_split(pane_id, ratio);
     }
 }
 
@@ -1209,9 +1221,8 @@ impl LLMManagerInterface for LLMManager {
     fn request_chat_completion(
         &mut self,
         message: &str,
-        include_page_context: bool,
-        page_context: Option<&str>,
+        context: &ChatRequestContext,
     ) -> CoreUpdate {
-        LLMManager::request_chat_completion(self, message, include_page_context, page_context, None)
+        LLMManager::request_chat_completion(self, message, context)
     }
 }

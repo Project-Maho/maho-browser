@@ -12,7 +12,15 @@ build_webui("build") {
 
   ts_files = [ "app.ts" ]
 
-  ts_deps = [ "//ui/webui/resources/mojo:build_ts" ]
+  ts_deps = [
+    "//maho/browser/resources/maho_common:build_ts",
+    "//ui/webui/resources/mojo:build_ts",
+  ]
+  ts_path_mappings = [
+    "//resources/maho_common/*|" +
+        rebase_path("$root_gen_dir/maho/browser/resources/maho_common/tsc/*",
+                    target_gen_dir),
+  ]
 
   webui_context_type = "trusted"
 

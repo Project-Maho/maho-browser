@@ -1,9 +1,7 @@
-// Copyright 2026 Maho Browser. All rights reserved.
-
 #ifndef MAHO_BROWSER_UI_WEBUI_MAHO_AI_MAHO_AI_PAGE_HANDLER_H_
 #define MAHO_BROWSER_UI_WEBUI_MAHO_AI_MAHO_AI_PAGE_HANDLER_H_
 
-#include <optional>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -13,7 +11,9 @@
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/values.h"
-#include "maho/browser/ai/maho_ai_llm_client.h"
+#include "maho/browser/ai/maho_ai_page_context_extractor.h"
+#include "maho/browser/ai/maho_ai_runtime_adapter.h"
+#include "maho/browser/ai/maho_ai_runtime_router.h"
 #include "maho/browser/ui/webui/maho_ai/maho_ai.mojom.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -42,7 +42,7 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
 
   static void RegisterProfilePrefs(PrefRegistrySimple* registry);
 
-  // maho_ai::mojom::PageHandler:
+  // maho_ai::mojom::PageHandler — legacy chat methods:
   void SendMessage(maho_ai::mojom::ChatIntent chat_intent,
                    const std::string& message) override;
   void GetPageContent(GetPageContentCallback callback) override;
@@ -51,45 +51,56 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   void SetApiKey(const std::string& key) override;
   void GetApiKeyStatus(GetApiKeyStatusCallback callback) override;
 
-  struct PageContextResult {
-    enum class Status {
-      kSuccess,
-      kNoActiveTab,
-      kCannotAccess,
-      kExtractionFailed,
-    };
-
-    PageContextResult();
-    ~PageContextResult();
-    PageContextResult(PageContextResult&&);
-    PageContextResult& operator=(PageContextResult&&);
-
-    Status status = Status::kExtractionFailed;
-    std::string title;
-    std::string url;
-    std::string text;
-  };
+  // maho_ai::mojom::PageHandler — session-oriented methods:
+  void GetConnectionState(GetConnectionStateCallback callback) override;
+  void GetSessionList(GetSessionListCallback callback) override;
+  void StartSession(const std::optional<std::string>& initial_prompt,
+                    StartSessionCallback callback) override;
+  void ResumeSession(const std::string& session_id,
+                     ResumeSessionCallback callback) override;
+  void GetSessionHistory(const std::string& session_id,
+                         uint32_t offset,
+                         uint32_t limit,
+                         GetSessionHistoryCallback callback) override;
+  void SubmitPrompt(const std::string& session_id,
+                    const std::string& prompt) override;
+  void CancelTurn(const std::string& session_id) override;
+  void RespondToApproval(const std::string& session_id,
+                         const std::string& approval_id,
+                         bool approved) override;
+  void ClosePanel() override;
 
  private:
-  static std::string HandleEventOnBackground(const std::string& event_json);
+  // Translates internal runtime events into Mojo and pushes them to the Page
+  // remote. Also maintains chat history for the simple chat UI.
+  void OnRuntimeEvent(MahoAiRuntimeEvent event);
 
-  void OnRustEventResponse(const std::string& user_message,
-                           const std::string& rust_response_json);
-  void SendLlmResultToRust(const std::string& request_id,
-                           const std::string& full_text);
-  void OnLlmToken(const std::string& token);
-  void FinalizeStreamingResponse(const std::string& full_text);
-  void HandleLlmError(const std::string& error);
-  void ResetStreamingState();
+  // Builds a Mojo RuntimeEvent from an internal event struct.
+  maho_ai::mojom::RuntimeEventPtr ToMojoEvent(
+      const MahoAiRuntimeEvent& event);
 
-  using PageContextCallback =
-      base::OnceCallback<void(PageContextResult page_context)>;
+  // Creates a SessionInfo for the current active session.
+  maho_ai::mojom::SessionInfoPtr MakeActiveSessionInfo() const;
 
-  void GetPageContext(PageContextCallback callback);
-  void OnPageContextExtracted(const std::string& title,
-                              const std::string& url,
-                              PageContextCallback callback,
-                              base::Value result);
+  // Emits OnConnectionStateChanged to the page if state actually changed.
+  void MaybeEmitConnectionStateChanged();
+
+  // Maps last_runtime_state_ + IsAvailable() to the truthful enum value.
+  maho_ai::mojom::RuntimeConnectionState ResolveConnectionState() const;
+
+  // Emits OnSessionUpdated to the page with current session metadata.
+  void EmitSessionUpdated();
+
+  // Updates the session status and emits appropriate events.
+  void SetSessionStatus(maho_ai::mojom::SessionStatus status);
+
+  void PersistSessionList();
+  void LoadPersistedSessions();
+  void PersistEventLog(const std::string& session_id);
+  std::vector<maho_ai::mojom::RuntimeEventPtr> LoadPersistedEventLog(
+      const std::string& session_id);
+  void ClearPersistedEventLog(const std::string& session_id);
+  void UpdateSessionTitle(const std::string& text);
 
   SEQUENCE_CHECKER(sequence_checker_);
 
@@ -97,11 +108,25 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   mojo::Remote<maho_ai::mojom::Page> page_;
   raw_ptr<Browser> browser_;
   raw_ptr<PrefService> prefs_;
-  MahoAiLlmClient llm_client_;
+  MahoAiRuntimeRouter runtime_router_;
+  MahoAiPageContextExtractor page_context_extractor_;
   std::vector<maho_ai::mojom::ChatMessagePtr> chat_history_;
 
-  std::string current_request_id_;
-  bool received_llm_content_ = false;
+  // Session state for the new contract.
+  std::string active_session_id_;
+  std::string session_title_;
+  std::string runtime_session_id_;
+  std::string last_runtime_state_;
+  maho_ai::mojom::SessionStatus session_status_ =
+      maho_ai::mojom::SessionStatus::kCreated;
+  maho_ai::mojom::RuntimeConnectionState last_emitted_connection_state_ =
+      maho_ai::mojom::RuntimeConnectionState::kDisconnected;
+  double session_created_at_ = 0;
+  double session_updated_at_ = 0;
+  uint64_t event_sequence_ = 0;
+  uint32_t tool_call_count_ = 0;
+  std::vector<maho_ai::mojom::RuntimeEventPtr> session_event_log_;
+  std::vector<maho_ai::mojom::SessionInfoPtr> persisted_sessions_;
 
   base::WeakPtrFactory<MahoAIPageHandler> weak_factory_{this};
 };

@@ -117,29 +117,17 @@ enum RowCommand { kRowRestore = 100, kRowDelete = 101 };
 
 constexpr int kSearchFieldHeight = 32;
 constexpr int kSearchFieldCornerRadius = 16;
-constexpr int kSearchFieldHorizontalInset = 6;
-constexpr int kSearchFieldIconSpacing = 4;
+constexpr int kSearchFieldHorizontalInset = 12;
+constexpr int kSearchFieldIconSpacing = 8;
 constexpr int kSearchFieldIconSize = 14;
-constexpr int kSearchFieldPreferredWidth = 84;
-constexpr int kFilterButtonMinWidth = 88;
-constexpr int kHeaderHorizontalPadding = 3;
-constexpr int kHeaderVerticalPaddingTop = 8;
-constexpr int kHeaderVerticalPaddingBottom = 10;
-constexpr int kHeaderControlSpacing = 4;
 constexpr int kRowHeight = 48;
 constexpr int kRowCornerRadius = 8;
 constexpr int kSectionSpacing = 14;
 constexpr int kSectionHeaderSpacing = 7;
 constexpr int kRowSpacing = 6;
-constexpr int kContentPadding = 8;
-constexpr int kArchivePanelCornerRadius = 18;
-constexpr int kEmptyStateCardHeight = 156;
-constexpr int kEmptyStateHorizontalInset = 20;
-constexpr int kEmptyStateCardInnerInset = 18;
-constexpr int kEmptyStateIconShellSize = 28;
-constexpr int kEmptyStateIconSize = 14;
+constexpr int kContentPadding = 6;
 
-const gfx::Insets kArchiveInsets = gfx::Insets::TLBR(0, 2, 0, 2);
+const gfx::Insets kArchiveInsets = gfx::Insets::TLBR(0, 8, 0, 8);
 const gfx::Insets kRowInsets = gfx::Insets::TLBR(0, 12, 0, 12);
 
 base::Time ParseArchivedAt(const std::string& date_str) {
@@ -553,7 +541,7 @@ class ArchiveEmptyStateView : public views::View {
 
     auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical,
-        gfx::Insets::VH(0, kEmptyStateHorizontalInset), 0));
+        gfx::Insets::VH(0, 16), 0));
     layout->set_main_axis_alignment(
         views::BoxLayout::MainAxisAlignment::kCenter);
     layout->set_cross_axis_alignment(
@@ -561,63 +549,41 @@ class ArchiveEmptyStateView : public views::View {
 
     auto* card = AddChildView(std::make_unique<views::View>());
     card->GetViewAccessibility().SetIsIgnored(true);
-    card->SetPreferredSize(gfx::Size(0, kEmptyStateCardHeight));
+    card->SetPreferredSize(gfx::Size(0, 100));
     card->SetBackground(
-        views::CreateRoundedRectBackground(ui::kColorSysSurface2,
-                                           kArchivePanelCornerRadius));
+        views::CreateRoundedRectBackground(ui::kColorSysSurface2, 16));
     card->SetBorder(
-        views::CreateRoundedRectBorder(1, kArchivePanelCornerRadius,
-                                       ui::kColorSysSurfaceVariant));
+        views::CreateRoundedRectBorder(1, 16, ui::kColorSysSurfaceVariant));
     auto* card_layout = card->SetLayoutManager(
         std::make_unique<views::BoxLayout>(
             views::BoxLayout::Orientation::kVertical,
-            gfx::Insets::VH(kEmptyStateCardInnerInset,
-                            kEmptyStateCardInnerInset),
-            8));
+            gfx::Insets::VH(16, 16), 4));
     card_layout->set_main_axis_alignment(
         views::BoxLayout::MainAxisAlignment::kCenter);
     card_layout->set_cross_axis_alignment(
         views::BoxLayout::CrossAxisAlignment::kCenter);
 
-    auto* icon_shell = card->AddChildView(std::make_unique<views::View>());
-    icon_shell->GetViewAccessibility().SetIsIgnored(true);
-    icon_shell->SetPreferredSize(
-        gfx::Size(kEmptyStateIconShellSize, kEmptyStateIconShellSize));
-    icon_shell->SetBackground(views::CreateRoundedRectBackground(
-        ui::kColorSysSurface3, kEmptyStateIconShellSize / 2));
-    auto* icon_shell_layout = icon_shell->SetLayoutManager(
-        std::make_unique<views::BoxLayout>(
-            views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 0));
-    icon_shell_layout->set_main_axis_alignment(
-        views::BoxLayout::MainAxisAlignment::kCenter);
-    icon_shell_layout->set_cross_axis_alignment(
-        views::BoxLayout::CrossAxisAlignment::kCenter);
-
-    auto* icon_view = icon_shell->AddChildView(
+    auto* icon_view = card->AddChildView(
         std::make_unique<views::ImageView>());
     icon_view->GetViewAccessibility().SetIsIgnored(true);
-    icon_view->SetPreferredSize(
-        gfx::Size(kEmptyStateIconSize, kEmptyStateIconSize));
+    icon_view->SetPreferredSize(gfx::Size(13, 13));
     icon_view->SetImage(ui::ImageModel::FromVectorIcon(
-        GetMahoSidebarArchiveboxIcon(), ui::kColorSysOnSurfaceSubtle,
-        kEmptyStateIconSize));
+        GetMahoSidebarArchiveboxIcon(), ui::kColorSysOnSurfaceSubtle, 13));
 
     title_label_ = card->AddChildView(
-        std::make_unique<views::Label>(u"Nothing in the archive yet"));
+        std::make_unique<views::Label>(u"No archived tabs yet"));
     title_label_->GetViewAccessibility().SetIsIgnored(true);
-    title_label_->SetTextStyle(views::style::STYLE_BODY_4_MEDIUM);
-    title_label_->SetEnabledColor(ui::kColorSysOnSurface);
-    title_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+    title_label_->SetTextStyle(views::style::STYLE_BODY_5_MEDIUM);
+    title_label_->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
 
     subtitle_label_ = card->AddChildView(
-        std::make_unique<views::Label>(
-            u"Archived tabs you set aside will collect here."));
+        std::make_unique<views::Label>(u""));
     subtitle_label_->GetViewAccessibility().SetIsIgnored(true);
     subtitle_label_->SetTextStyle(views::style::STYLE_BODY_5);
     subtitle_label_->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
-    subtitle_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
     subtitle_label_->SetMultiLine(true);
-    subtitle_label_->SizeToFit(240);
+    subtitle_label_->SizeToFit(220);
+    subtitle_label_->SetVisible(false);
   }
 
   ArchiveEmptyStateView(const ArchiveEmptyStateView&) = delete;
@@ -628,14 +594,13 @@ class ArchiveEmptyStateView : public views::View {
     if (has_archived_tabs && has_active_filters) {
       title_label_->SetText(u"No matching tabs");
       subtitle_label_->SetText(
-          u"Try a broader search or switch the time filter.");
+          u"Clear the search or adjust the filter.");
+      subtitle_label_->SetVisible(true);
       GetViewAccessibility().SetName(u"Archive empty state, no matching tabs");
     } else {
-      title_label_->SetText(u"Nothing in the archive yet");
-      subtitle_label_->SetText(
-          u"Archived tabs you set aside will collect here.");
-      GetViewAccessibility().SetName(
-          u"Archive empty state, no archived tabs yet");
+      title_label_->SetText(u"No archived tabs yet");
+      subtitle_label_->SetVisible(false);
+      GetViewAccessibility().SetName(u"Archive empty state, no archived tabs yet");
     }
   }
 
@@ -687,17 +652,13 @@ void MahoSidebarArchiveView::BuildUi() {
   // --- Header surface (rounded card with search field) ---
   header_surface_ = AddChildView(std::make_unique<views::View>());
   header_surface_->SetBackground(views::CreateRoundedRectBackground(
-      ui::kColorSysSurface1, kArchivePanelCornerRadius));
+      ui::kColorSysSurface1, 18));
   header_surface_->SetBorder(views::CreateRoundedRectBorder(
-      1, kArchivePanelCornerRadius, ui::kColorSysSurfaceVariant));
+      1, 18, ui::kColorSysSurfaceVariant));
   auto* header_layout = header_surface_->SetLayoutManager(
       std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kHorizontal,
-          gfx::Insets::TLBR(kHeaderVerticalPaddingTop,
-                            kHeaderHorizontalPadding,
-                            kHeaderVerticalPaddingBottom,
-                            kHeaderHorizontalPadding),
-          kHeaderControlSpacing));
+          gfx::Insets::TLBR(8, 8, 10, 8), 8));
   header_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
 
@@ -706,10 +667,9 @@ void MahoSidebarArchiveView::BuildUi() {
 
   search_shell_ = header_surface_->AddChildView(
       std::make_unique<SearchFieldShellView>(search_field_));
-  search_shell_->SetPreferredSize(
-      gfx::Size(kSearchFieldPreferredWidth, kSearchFieldHeight));
+  search_shell_->SetPreferredSize(gfx::Size(0, kSearchFieldHeight));
   search_shell_->SetBackground(views::CreateRoundedRectBackground(
-      ui::kColorSysSurface2, kSearchFieldCornerRadius));
+      ui::kColorSysSurface, kSearchFieldCornerRadius));
   search_shell_->SetBorder(views::CreateRoundedRectBorder(
       1, kSearchFieldCornerRadius, ui::kColorSysSurfaceVariant));
   auto* search_layout = search_shell_->SetLayoutManager(
@@ -748,8 +708,7 @@ void MahoSidebarArchiveView::BuildUi() {
       views::Button::STATE_NORMAL,
       ui::ImageModel::FromVectorIcon(vector_icons::kFilterIcon,
                                      ui::kColorSysOnSurfaceSubtle, 14));
-  filter_button_->SetPreferredSize(
-      gfx::Size(kFilterButtonMinWidth, kSearchFieldHeight));
+  filter_button_->SetPreferredSize(gfx::Size(96, 32));
   filter_button_->SetBorder(views::CreateRoundedRectBorder(
       1, 16, ui::kColorSysSurfaceVariant));
   filter_button_->SetAccessibleName(u"Filter archived tabs");
@@ -759,9 +718,7 @@ void MahoSidebarArchiveView::BuildUi() {
   body_container_ = AddChildView(std::make_unique<views::View>());
   body_container_->SetLayoutManager(std::make_unique<views::FillLayout>());
   body_container_->SetBackground(views::CreateRoundedRectBackground(
-      ui::kColorSysSurface1, kArchivePanelCornerRadius));
-  body_container_->SetBorder(views::CreateRoundedRectBorder(
-      1, kArchivePanelCornerRadius, ui::kColorSysSurfaceVariant));
+      ui::kColorSysSurface1, 18));
   root_layout->SetFlexForView(body_container_, 1, true);
 
   scroll_view_ = body_container_->AddChildView(

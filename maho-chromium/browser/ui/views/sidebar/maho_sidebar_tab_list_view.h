@@ -96,6 +96,10 @@ class MahoSidebarTabListView : public views::View {
   SidebarTabRowView* FindTabRowByIdForTesting(const std::string& tab_id);
   SidebarFolderRowView* FindFolderRowByIdForTesting(
       const std::string& folder_id);
+  views::View* FindInsertionLaneBeforeTabByIdForTesting(
+      const std::string& tab_id);
+  views::View* FindInsertionLaneBeforeFolderByIdForTesting(
+      const std::string& folder_id);
   views::LabelButton* new_tab_button_for_testing() { return new_tab_button_; }
   views::View* tab_rows_for_testing() { return tab_rows_; }
   bool is_pinned_drop_lane_revealed_for_testing() const {
@@ -116,7 +120,8 @@ class MahoSidebarTabListView : public views::View {
   void RebuildTreeNodes(views::View* parent,
                         const std::vector<SidebarTreeNode>& nodes,
                         MahoSidebarTabSection section,
-                        Browser* browser);
+                        Browser* browser,
+                        const std::string& parent_folder_id);
   std::u16string GetNodeDisplayText(const SidebarTreeNode& node) const;
   std::u16string GetNodeTooltipText(const SidebarTreeNode& node) const;
   void ActivateTab(int tab_index);
@@ -315,7 +320,6 @@ class SidebarFolderRowView : public views::View,
   const std::string folder_id_;
   const std::string space_id_;
   const bool folder_is_pinned_;
-  const int depth_;
   const std::string next_sibling_folder_id_;
   const std::string parent_folder_id_;
   const bool is_expanded_;

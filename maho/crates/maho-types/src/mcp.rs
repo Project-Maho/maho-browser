@@ -1,6 +1,16 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolDescriptor {
+    pub name: String,
+    pub description: String,
+    pub parameters_schema: serde_json::Value,
+    pub permission_tier: ToolPermissionTier,
+    pub handler_type: ToolHandlerType,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolPermissionTier {
     AutoApprove,
@@ -15,14 +25,17 @@ pub enum ToolHandlerType {
     External,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolDefinition {
-    pub name: String,
-    pub description: String,
-    pub parameters_schema: serde_json::Value,
-    pub permission_tier: ToolPermissionTier,
-    pub handler_type: ToolHandlerType,
+impl ToolDescriptor {
+    pub fn to_openai_function(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters_schema,
+            }
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,15 +54,4 @@ pub struct ToolResult {
     pub content: String,
 }
 
-impl ToolDefinition {
-    pub fn to_openai_function(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "function",
-            "function": {
-                "name": self.name,
-                "description": self.description,
-                "parameters": self.parameters_schema,
-            }
-        })
-    }
-}
+pub type ToolDefinition = ToolDescriptor;

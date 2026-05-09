@@ -29,7 +29,6 @@ pub mod sharing_manager;
 pub mod shortcut_manager;
 pub mod skills_manager;
 pub mod space_manager;
-pub mod split_view_manager;
 pub mod sync_crypto;
 pub mod sync_manager;
 pub mod sync_models;

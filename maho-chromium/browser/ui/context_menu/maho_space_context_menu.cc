@@ -5,7 +5,6 @@
 #include <optional>
 #include <string>
 
-#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
@@ -13,18 +12,22 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
 #include "base/values.h"
+#include "ui/shell_dialogs/selected_file_info.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "content/public/browser/browser_thread.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
-#include "maho/browser/ui/views/space_manage/maho_space_manage_dialog.h"
+#include "maho/browser/ui/theme/maho_space_theme_io.h"
+#include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "net/base/url_util.h"
 #include "url/gurl.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
+#include "ui/color/color_provider_manager.h"
 #include "ui/menus/simple_menu_model.h"
 
 namespace {
@@ -130,40 +133,6 @@ std::string GetSpaceName(MahoCore* core, const std::string& space_id) {
   return kDefaultSpaceName;
 }
 
-const base::DictValue* GetSpaceViewModel(MahoCore* core,
-                                         const std::string& space_id) {
-  if (!core) {
-    return nullptr;
-  }
-
-  char* json_str = maho_core_get_space_view_models(core);
-  if (!json_str) {
-    return nullptr;
-  }
-
-  std::string json(json_str);
-  maho_string_free(json_str);
-
-  std::optional<base::Value> parsed =
-      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_list()) {
-    return nullptr;
-  }
-
-  for (const auto& item : parsed->GetList()) {
-    const auto* dict = item.GetIfDict();
-    if (!dict) {
-      continue;
-    }
-    const std::string* id = dict->FindString("id");
-    if (id && *id == space_id) {
-      return dict;
-    }
-  }
-
-  return nullptr;
-}
-
 void CreateFolderOnPool(const std::string& space_id) {
   MahoCore* core = maho::GetCore();
   if (!core) {
@@ -257,7 +226,6 @@ std::unique_ptr<ui::SimpleMenuModel> MahoSpaceContextMenu::BuildMenuModel() {
   model->AddSeparator(ui::NORMAL_SEPARATOR);
   model->AddItem(IDC_MAHO_SPACE_NEW_FOLDER, u"New Folder");
   model->AddSeparator(ui::NORMAL_SEPARATOR);
-  model->AddItem(IDC_MAHO_SPACE_MANAGE, u"Manage Spaces");
   model->AddItem(IDC_MAHO_SPACE_SHARE, u"Share Space");
   model->AddItem(IDC_MAHO_SPACE_EXPORT_THEME, u"Export Theme…");
   model->AddItem(IDC_MAHO_SPACE_IMPORT_THEME, u"Import Theme…");
@@ -342,11 +310,6 @@ void MahoSpaceContextMenu::ExportTheme() {
     return;
   }
 
-  const base::DictValue* vm = GetSpaceViewModel(core, space_id_);
-  if (!vm || !vm->Find("theme")) {
-    return;
-  }
-
   pending_file_op_ = PendingFileOp::kExportTheme;
   select_file_dialog_ = ui::SelectFileDialog::Create(this, nullptr);
 
@@ -384,11 +347,46 @@ void MahoSpaceContextMenu::ImportTheme() {
 }
 
 void MahoSpaceContextMenu::FileSelected(const ui::SelectedFileInfo& file,
-                                        int index) {
-  (void)file;
-  (void)index;
-
+                                         int index) {
+  const base::FilePath path = file.path();
+  const PendingFileOp op = pending_file_op_;
+  const std::string space_id = space_id_;
   pending_file_op_ = PendingFileOp::kNone;
+
+  if (op == PendingFileOp::kExportTheme) {
+    base::ThreadPool::PostTask(
+        FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
+        base::BindOnce(
+            [](const std::string& space_id, const base::FilePath& path) {
+              MahoCore* core = maho::GetCore();
+              if (!core || !maho_theme::ExportSpaceThemeToFile(core, space_id, path)) {
+                LOG(WARNING) << "ExportTheme: failed to write file";
+              }
+            },
+            space_id, path));
+  } else if (op == PendingFileOp::kImportTheme) {
+    base::ThreadPool::PostTaskAndReplyWithResult(
+        FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
+        base::BindOnce(&maho_theme::ReadValidatedThemeJson, path),
+        base::BindOnce(
+            [](const std::string& space_id,
+               std::optional<std::string> validated_json) {
+               if (!validated_json) {
+                 return;
+               }
+               MahoCore* core = maho::GetCore();
+               if (!core) {
+                 return;
+               }
+               if (!maho_theme::ApplyThemeJsonToSpace(core, space_id,
+                                                     *validated_json)) {
+                 return;
+               }
+               MahoSpaceThemeState::UpdateFromCore();
+               ui::ColorProviderManager::Get().ResetColorProviderCache();
+            },
+            space_id));
+  }
 }
 
 void MahoSpaceContextMenu::FileSelectionCanceled() {
@@ -414,9 +412,6 @@ void MahoSpaceContextMenu::ExecuteCommand(int command_id, int event_flags) {
       base::ThreadPool::PostTask(
           FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
           base::BindOnce(&CreateFolderOnPool, space_id_));
-      break;
-    case IDC_MAHO_SPACE_MANAGE:
-      maho::MahoSpaceManageDialog::Open(browser_);
       break;
     case IDC_MAHO_SPACE_SHARE:
       ShareSpace();

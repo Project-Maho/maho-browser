@@ -305,8 +305,10 @@ final class AutofillHandler: NSObject, WKScriptMessageHandler, CoreUpdateObserve
 
         switch fieldType {
         case "password":
+            guard settings.autofill.passwordsEnabled else { return }
+
             switch settings.autofill.passwordProvider {
-            case .builtin:
+            case .chromium:
                 var userInfo = body
                 userInfo["domain"] = domain
                 userInfo["webView"] = webView as Any
@@ -315,7 +317,7 @@ final class AutofillHandler: NSObject, WKScriptMessageHandler, CoreUpdateObserve
                     object: nil,
                     userInfo: userInfo
                 )
-            case .system:
+            case .onepassword, .bitwarden:
                 var userInfo = body
                 userInfo["domain"] = domain
                 userInfo["webView"] = webView as Any
@@ -324,8 +326,6 @@ final class AutofillHandler: NSObject, WKScriptMessageHandler, CoreUpdateObserve
                     object: nil,
                     userInfo: userInfo
                 )
-            case .disabled:
-                break
             }
 
         case "payment":

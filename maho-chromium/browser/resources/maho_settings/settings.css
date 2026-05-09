@@ -115,31 +115,31 @@ maho-settings-app {
 
 .preferences-shell {
   display: grid;
-  gap: 14px;
+  gap: 0;
   min-height: 100vh;
-  padding: 28px;
-  place-items: center;
+  padding: 0;
+  place-items: stretch;
 }
 
 .preferences-window {
   background: var(--maho-settings-bg-elevated);
-  border: 1px solid var(--maho-settings-border);
-  border-radius: var(--maho-settings-window-radius);
-  box-shadow: var(--maho-settings-shadow);
-  max-width: 1040px;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  max-width: none;
   overflow: hidden;
-  width: min(100%, 1040px);
+  width: 100%;
 }
 
 .preferences-workspace {
   display: grid;
   grid-template-columns: var(--maho-settings-sidebar-width) minmax(0, 1fr);
-  min-height: min(94vh, 980px);
+  min-height: 100vh;
 }
 
 .preferences-sidebar {
-  background: #1a1e2a;
-  border-right: 1px solid rgba(255, 255, 255, 0.055);
+  background: var(--maho-settings-bg-strong);
+  border-right: 1px solid var(--maho-settings-border);
   min-height: 100%;
   padding: 12px 8px 14px;
 }
@@ -191,6 +191,20 @@ maho-settings-app {
   flex-direction: column;
   gap: 2px;
   padding-bottom: 10px;
+}
+
+.sidebar-domain-label {
+  color: var(--maho-settings-text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  margin-top: 12px;
+  padding: 4px 10px 2px;
+  text-transform: uppercase;
+}
+
+.sidebar-domain-label:first-child {
+  margin-top: 0;
 }
 
 .sidebar-nav-button {
@@ -300,68 +314,21 @@ maho-settings-app {
   padding: 0 2px;
 }
 
-.preferences-section__badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.status-badge {
-  align-items: center;
-  border-radius: var(--maho-settings-radius-pill);
-  display: inline-flex;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 5px 9px;
-}
-
-.status-badge--live {
-  background: var(--maho-settings-success-surface);
-  color: var(--maho-settings-success);
-}
-
-.status-badge--mixed {
-  background: var(--maho-settings-accent-soft);
-  color: var(--maho-settings-accent-strong);
-}
-
-.status-badge--bridge {
-  background: rgba(195, 157, 255, 0.12);
-  color: #c39dff;
-}
-
-.status-badge--api {
-  background: rgba(130, 180, 255, 0.12);
-  color: #82b4ff;
-}
-
-.pane-placeholder-banner {
-  background: rgba(255, 255, 255, 0.035);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 16px;
-  display: grid;
-  gap: 8px;
-  margin-bottom: 0;
-  padding: 12px 14px;
-}
-
-.pane-placeholder-banner__reason {
-  color: var(--maho-settings-text-primary);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.pane-placeholder-banner__detail,
-.content-card__copy,
-.placeholder-list__item {
+.content-card__copy {
   color: var(--maho-settings-text-secondary);
   font-size: 13px;
   line-height: 1.5;
   margin: 0;
 }
 
+.passwords-provider-card {
+  display: grid;
+  gap: var(--maho-settings-space-2);
+  margin-top: var(--maho-settings-space-2);
+}
+
 .content-card {
-  background: rgba(31, 35, 48, 0.92);
+  background: var(--maho-settings-bg-elevated);
   border: 1px solid var(--maho-settings-border);
   border-radius: 18px;
   overflow: hidden;
@@ -372,19 +339,15 @@ maho-settings-app {
   grid-column: span 2;
 }
 
-.content-card--placeholder {
-  background: rgba(255, 255, 255, 0.028);
-}
-
-.content-card--placeholder .content-card__copy {
-  max-width: 46ch;
-}
-
 .content-card__header {
   align-items: flex-start;
   display: flex;
   gap: 10px;
   justify-content: space-between;
+}
+
+.content-card__header--spaced {
+  margin-top: var(--maho-settings-space-4);
 }
 
 .content-card__title-group {
@@ -401,13 +364,6 @@ maho-settings-app {
   margin: 0;
 }
 
-.placeholder-list {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-  padding: 10px 0 0 18px;
-}
-
 .preferences-section__title {
   font-size: 31px;
   font-weight: 700;
@@ -419,35 +375,6 @@ maho-settings-app {
   color: var(--maho-settings-text-secondary);
   font-size: 15px;
   line-height: 1.6;
-  margin: 0;
-}
-
-.overview-banner {
-  background: rgba(255, 255, 255, 0.024);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 16px;
-  display: grid;
-  gap: 7px;
-  margin-bottom: 14px;
-  padding: 11px 14px;
-}
-
-.overview-banner--embedded {
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.overview-banner__title {
-  color: var(--maho-settings-text-muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-}
-
-.overview-banner__copy {
-  color: var(--maho-settings-text-secondary);
-  font-size: 13px;
-  line-height: 1.5;
   margin: 0;
 }
 
@@ -470,16 +397,11 @@ maho-settings-app {
 .setting-row {
   align-items: center;
   background: transparent;
-  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  border-top: 1px solid var(--maho-settings-border);
   display: grid;
   gap: 16px;
   grid-template-columns: minmax(0, 1fr) minmax(270px, 344px);
   padding: 12px 0;
-}
-
-.content-card--placeholder .setting-row {
-  gap: 12px;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
 }
 
 .setting-row--first {
@@ -508,33 +430,6 @@ maho-settings-app {
   max-width: 58ch;
 }
 
-.content-card--placeholder .setting-row__description {
-  max-width: none;
-}
-
-.setting-inline-badge {
-  align-items: center;
-  background: var(--maho-settings-success-surface);
-  border-radius: var(--maho-settings-radius-pill);
-  color: var(--maho-settings-success);
-  display: inline-flex;
-  font-size: 11px;
-  font-weight: 600;
-  margin-left: 8px;
-  padding: 4px 8px;
-  vertical-align: middle;
-}
-
-.setting-inline-badge--api {
-  background: rgba(130, 180, 255, 0.14);
-  color: #82b4ff;
-}
-
-.setting-inline-badge--bridge {
-  background: rgba(195, 157, 255, 0.14);
-  color: #c39dff;
-}
-
 .setting-row__control {
   align-items: center;
   display: flex;
@@ -542,48 +437,31 @@ maho-settings-app {
   width: 100%;
 }
 
-.setting-capability-stub {
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 14px;
-  display: grid;
-  gap: 8px;
-  padding: 12px 14px;
+.setting-row__control--stacked {
+  align-items: stretch;
+  flex-direction: column;
+  gap: var(--maho-settings-space-2);
+}
+
+.setting-control-stack,
+.setting-actions {
+  display: flex;
+  gap: var(--maho-settings-space-2);
   width: 100%;
 }
 
-.setting-capability-stub__status {
-  color: var(--maho-settings-text-primary);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
+.setting-control-stack {
+  flex-direction: column;
 }
 
-.setting-capability-stub__missing {
-  color: #82b4ff;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+.setting-actions {
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
-.setting-capability-stub__summary {
-  color: var(--maho-settings-text-secondary);
-  font-size: 12.5px;
-  line-height: 1.5;
-  margin: 0;
-}
-
-.setting-capability-stub__bullets {
-  color: var(--maho-settings-text-muted);
-  display: grid;
-  gap: 6px;
-  margin: 0;
-  padding-left: 18px;
-}
-
-.setting-capability-stub__bullets li {
-  line-height: 1.45;
+.setting-actions .setting-switch {
+  width: auto;
 }
 
 .setting-switch {
@@ -802,6 +680,10 @@ maho-settings-app {
   width: 100%;
 }
 
+.browser-settings-webview--borderless {
+  border: 0;
+}
+
 /* ── Color Swatch Control ── */
 .setting-color-swatches {
   display: flex;
@@ -917,19 +799,7 @@ maho-settings-app {
   box-shadow: 0 0 0 1px rgba(145, 169, 255, 0.3);
 }
 
-.content-card--placeholder .preferences-card__rows {
-  margin-top: 14px;
-}
-
 @media (max-width: 1080px) {
-  .preferences-shell {
-    padding: var(--maho-settings-space-4);
-  }
-
-  .preferences-window {
-    width: 100%;
-  }
-
   .preferences-workspace {
     grid-template-columns: 68px minmax(0, 1fr);
   }
@@ -972,10 +842,22 @@ maho-settings-app {
     white-space: nowrap;
     width: 1px;
   }
+
+  .sidebar-domain-label {
+    border: 0;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    padding: 0;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
+  }
 }
 
 @media (max-width: 720px) {
-  .preferences-window,
   .preferences-card {
     border-radius: var(--maho-settings-radius-md);
   }
@@ -993,6 +875,10 @@ maho-settings-app {
   }
 
   .setting-row__control {
+    justify-content: flex-start;
+  }
+
+  .setting-actions {
     justify-content: flex-start;
   }
 

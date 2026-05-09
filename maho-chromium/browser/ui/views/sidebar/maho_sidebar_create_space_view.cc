@@ -2,7 +2,11 @@
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_create_space_view.h"
 
+#include <algorithm>
 #include <array>
+#include <iomanip>
+#include <optional>
+#include <sstream>
 #include <string>
 
 #include "base/functional/bind.h"
@@ -13,11 +17,15 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
 #include "base/values.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/ui/theme/maho_space_theme_io.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/color/color_id.h"
@@ -26,27 +34,32 @@
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
+#include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/view_class_properties.h"
+#include "ui/views/window/dialog_delegate.h"
+#include "ui/views/widget/widget.h"
 
 namespace maho {
 
 namespace {
 
 constexpr int kCreatePanelCornerRadius = 18;
-constexpr int kHeroBadgeSize = 44;
+constexpr int kHeroBadgeSize = 48;
 constexpr int kHeroBadgeCornerRadius = 14;
-constexpr int kCardCornerRadius = 16;
+constexpr int kCardCornerRadius = 18;
 constexpr int kInputCornerRadius = 12;
-constexpr int kInputHeight = 40;
-constexpr int kSectionGlyphSize = 30;
+constexpr int kInputHeight = 44;
+constexpr int kSectionGlyphSize = 32;
 constexpr int kSectionGlyphCornerRadius = 11;
 constexpr int kBottomDotSize = 6;
 constexpr int kBottomDotCornerRadius = 3;
+constexpr int kThemePreviewDotSize = 14;
+constexpr int kThemePreviewDotCornerRadius = 7;
 constexpr char kDefaultProfileId[] = "Default";
 
 struct ColorPreset {
@@ -67,21 +80,95 @@ constexpr auto kColorPresets = std::to_array<ColorPreset>({
     {0.62, 0.30, 0.55},
 });
 
-constexpr int kSwatchSize = 22;
+constexpr int kSwatchSize = 24;
 constexpr int kSwatchCornerRadius = 11;
-constexpr int kSwatchSpacing = 6;
+constexpr int kSwatchSpacing = 8;
+constexpr int kThemeDialogWidth = 420;
 
 struct CreateResult {
   bool success = false;
   std::string space_id;
 };
 
-const gfx::Insets kCreateSurfaceInsets = gfx::Insets::TLBR(12, 2, 2, 2);
-const gfx::Insets kContentInsets = gfx::Insets::TLBR(10, 12, 10, 12);
+views::Widget* g_theme_picker_widget = nullptr;
+
+class MahoCreateSpaceThemePickerDialogView;
+MahoCreateSpaceThemePickerDialogView* g_theme_picker_dialog_view = nullptr;
+
+const gfx::Insets kCreateSurfaceInsets = gfx::Insets();
+const gfx::Insets kContentInsets = gfx::Insets::TLBR(24, 24, 20, 24);
 const gfx::Insets kHeroBadgeInsets = gfx::Insets::VH(0, 14);
-const gfx::Insets kCardInsets = gfx::Insets::TLBR(12, 12, 12, 12);
+const gfx::Insets kCardInsets = gfx::Insets::TLBR(14, 14, 14, 14);
 const gfx::Insets kInputInsets = gfx::Insets::VH(0, 12);
-const gfx::Insets kBottomRegionInsets = gfx::Insets::TLBR(8, 0, 2, 0);
+const gfx::Insets kBottomRegionInsets = gfx::Insets::TLBR(14, 0, 0, 0);
+
+MahoSidebarCreateSpaceThemeSelection DefaultThemeSelection() {
+  return MahoSidebarCreateSpaceThemeSelection();
+}
+
+const ColorPreset& GetColorPresetForSelection(
+    const MahoSidebarCreateSpaceThemeSelection& selection) {
+  const int max_index = static_cast<int>(std::size(kColorPresets) - 1);
+  const int clamped_index = std::clamp(selection.preset_index, 0, max_index);
+  return kColorPresets[clamped_index];
+}
+
+int ClampBrightness(int brightness) {
+  return std::clamp(brightness, 15, 100);
+}
+
+int ClampGrain(int grain) {
+  return std::clamp(grain, 0, 100);
+}
+
+SkColor BuildSkColorForSelection(
+    const MahoSidebarCreateSpaceThemeSelection& selection) {
+  const ColorPreset& preset = GetColorPresetForSelection(selection);
+  SkScalar hsv[3] = {
+      static_cast<SkScalar>(preset.hue * 360.0),
+      static_cast<SkScalar>(preset.saturation),
+      static_cast<SkScalar>(ClampBrightness(selection.brightness) / 100.0)};
+  return SkHSVToColor(hsv);
+}
+
+std::string BuildColorHexForSelection(
+    const MahoSidebarCreateSpaceThemeSelection& selection) {
+  const SkColor color = BuildSkColorForSelection(selection);
+  std::ostringstream stream;
+  stream << '#'
+         << std::uppercase << std::hex << std::setfill('0')
+         << std::setw(2) << static_cast<int>(SkColorGetR(color))
+         << std::setw(2) << static_cast<int>(SkColorGetG(color))
+         << std::setw(2) << static_cast<int>(SkColorGetB(color));
+  return stream.str();
+}
+
+std::string BuildThemeJsonForSelection(
+    const MahoSidebarCreateSpaceThemeSelection& selection) {
+  const ColorPreset& preset = GetColorPresetForSelection(selection);
+  base::DictValue color_dict;
+  color_dict.Set("hue", preset.hue);
+  color_dict.Set("saturation", preset.saturation);
+  color_dict.Set("brightness", ClampBrightness(selection.brightness) / 100.0);
+  color_dict.Set("grain", ClampGrain(selection.grain) / 100.0);
+
+  base::DictValue theme_dict;
+  theme_dict.Set("type", "solid");
+  theme_dict.Set("color", std::move(color_dict));
+
+  std::string theme_json;
+  base::JSONWriter::Write(theme_dict, &theme_json);
+  return theme_json;
+}
+
+std::u16string BuildThemeSummaryForSelection(
+    const MahoSidebarCreateSpaceThemeSelection& selection) {
+  const std::u16string mode_label =
+      selection.mode == MahoSidebarCreateSpaceThemeMode::kSolid ? u"Solid"
+                                                                : u"Zen";
+  return mode_label + u" · " +
+         base::UTF8ToUTF16(BuildColorHexForSelection(selection));
+}
 
 views::Label* AddLabel(views::View* parent,
                        const std::u16string& text,
@@ -150,7 +237,8 @@ views::View* CreateInfoCard(views::View* parent,
 }
 
 CreateResult CreateSpaceOnPool(const std::string& name,
-                               ColorPreset color) {
+                               const MahoSidebarCreateSpaceThemeSelection&
+                                   theme_selection) {
   CreateResult result;
   MahoCore* core = maho::GetCore();
   if (!core) {
@@ -158,10 +246,7 @@ CreateResult CreateSpaceOnPool(const std::string& name,
   }
 
   base::DictValue color_dict;
-  color_dict.Set("hue", color.hue);
-  color_dict.Set("saturation", color.saturation);
-  color_dict.Set("brightness", color.brightness);
-  color_dict.Set("grain", 0.0);
+  color_dict.Set("color", BuildColorHexForSelection(theme_selection));
   std::string color_json;
   base::JSONWriter::Write(color_dict, &color_json);
 
@@ -175,12 +260,347 @@ CreateResult CreateSpaceOnPool(const std::string& name,
       const std::string* parsed_id = parsed->GetDict().FindString("id");
       if (parsed_id) {
         result.space_id = *parsed_id;
+        const std::string theme_json = BuildThemeJsonForSelection(theme_selection);
+        if (!theme_json.empty()) {
+          maho_theme::ApplyThemeJsonToSpace(core, result.space_id, theme_json);
+        }
         result.success = true;
       }
     }
     maho_string_free(ffi_result);
   }
   return result;
+}
+
+class MahoCreateSpaceThemePickerDialogView : public views::DialogDelegateView {
+ public:
+  using ThemeChosenCallback =
+      base::OnceCallback<void(MahoSidebarCreateSpaceThemeSelection)>;
+
+  MahoCreateSpaceThemePickerDialogView(
+      MahoSidebarCreateSpaceThemeSelection selection,
+      ThemeChosenCallback chosen_callback)
+      : selection_(selection), chosen_callback_(std::move(chosen_callback)) {
+    SetButtons(static_cast<int>(ui::mojom::DialogButton::kOk) |
+               static_cast<int>(ui::mojom::DialogButton::kCancel));
+    SetModalType(ui::mojom::ModalType::kWindow);
+    SetDefaultButton(static_cast<int>(ui::mojom::DialogButton::kOk));
+    SetButtonLabel(ui::mojom::DialogButton::kOk, u"Apply Theme");
+    SetButtonLabel(ui::mojom::DialogButton::kCancel, u"Cancel");
+    set_fixed_width(kThemeDialogWidth);
+
+    auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kVertical, gfx::Insets(16), 12));
+    layout->set_cross_axis_alignment(
+        views::BoxLayout::CrossAxisAlignment::kStretch);
+
+    auto* preview_card = AddChildView(std::make_unique<views::View>());
+    auto* preview_layout = preview_card->SetLayoutManager(
+        std::make_unique<views::BoxLayout>(
+            views::BoxLayout::Orientation::kVertical,
+            gfx::Insets::TLBR(16, 16, 16, 16), 8));
+    preview_layout->set_cross_axis_alignment(
+        views::BoxLayout::CrossAxisAlignment::kStretch);
+    preview_card->SetBackground(views::CreateRoundedRectBackground(
+        ui::kColorSysSurface1, kCardCornerRadius));
+    preview_card->SetBorder(views::CreateRoundedRectBorder(
+        1, kCardCornerRadius, ui::kColorSysSurfaceVariant));
+
+    preview_view_ = preview_card->AddChildView(std::make_unique<views::View>());
+    preview_view_->SetPreferredSize(gfx::Size(0, 120));
+    preview_view_->SetBorder(views::CreateRoundedRectBorder(
+        1, kCardCornerRadius, ui::kColorSysSurfaceVariant));
+
+    preview_title_label_ = AddLabel(preview_card, u"", views::style::STYLE_BODY_3_MEDIUM,
+                                    ui::kColorSysOnSurface);
+    preview_hex_label_ = AddLabel(preview_card, u"", views::style::STYLE_BODY_5,
+                                  ui::kColorSysOnSurfaceSubtle);
+
+    auto* mode_row = AddChildView(std::make_unique<views::View>());
+    auto* mode_layout = mode_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 8));
+    mode_layout->set_cross_axis_alignment(
+        views::BoxLayout::CrossAxisAlignment::kCenter);
+    solid_mode_button_ = mode_row->AddChildView(std::make_unique<views::MdTextButton>(
+        base::BindRepeating(
+            [](base::WeakPtr<MahoCreateSpaceThemePickerDialogView> view) {
+              if (!view) {
+                return;
+              }
+              view->selection_.mode = MahoSidebarCreateSpaceThemeMode::kSolid;
+              view->UpdateUi();
+            },
+            weak_factory_.GetWeakPtr()),
+        u"Solid"));
+    zen_mode_button_ = mode_row->AddChildView(std::make_unique<views::MdTextButton>(
+        base::BindRepeating(
+            [](base::WeakPtr<MahoCreateSpaceThemePickerDialogView> view) {
+              if (!view) {
+                return;
+              }
+              view->selection_.mode = MahoSidebarCreateSpaceThemeMode::kZen;
+              view->UpdateUi();
+            },
+            weak_factory_.GetWeakPtr()),
+        u"Zen"));
+
+    auto* swatch_card = AddChildView(std::make_unique<views::View>());
+    auto* swatch_card_layout = swatch_card->SetLayoutManager(
+        std::make_unique<views::BoxLayout>(
+            views::BoxLayout::Orientation::kVertical,
+            gfx::Insets::TLBR(14, 14, 14, 14), 10));
+    swatch_card_layout->set_cross_axis_alignment(
+        views::BoxLayout::CrossAxisAlignment::kStretch);
+    swatch_card->SetBackground(views::CreateRoundedRectBackground(
+        ui::kColorSysSurface1, kCardCornerRadius));
+    swatch_card->SetBorder(views::CreateRoundedRectBorder(
+        1, kCardCornerRadius, ui::kColorSysSurfaceVariant));
+
+    AddLabel(swatch_card, u"Color", views::style::STYLE_BODY_3_MEDIUM,
+             ui::kColorSysOnSurface);
+    swatch_row_ = swatch_card->AddChildView(std::make_unique<views::View>());
+    auto* swatch_layout = swatch_row_->SetLayoutManager(
+        std::make_unique<views::BoxLayout>(
+            views::BoxLayout::Orientation::kHorizontal, gfx::Insets(),
+            kSwatchSpacing));
+    swatch_layout->set_main_axis_alignment(
+        views::BoxLayout::MainAxisAlignment::kCenter);
+
+    for (int i = 0; i < static_cast<int>(std::size(kColorPresets)); ++i) {
+      const auto& preset = kColorPresets[i];
+      SkScalar hsv[3] = {
+          static_cast<SkScalar>(preset.hue * 360.0),
+          static_cast<SkScalar>(preset.saturation),
+          static_cast<SkScalar>(preset.brightness)};
+      auto button = std::make_unique<views::MdTextButton>(
+          base::BindRepeating(
+              [](base::WeakPtr<MahoCreateSpaceThemePickerDialogView> view,
+                 int index) {
+                if (!view) {
+                  return;
+                }
+                view->selection_.preset_index = index;
+                view->UpdateUi();
+              },
+              weak_factory_.GetWeakPtr(), i),
+          u"");
+      button->SetPreferredSize(gfx::Size(kSwatchSize, kSwatchSize));
+      button->SetCornerRadius(kSwatchCornerRadius);
+      button->SetAccessibleName(u"Theme color " + base::NumberToString16(i + 1));
+      button->SetBgColorOverrideDeprecated(SkHSVToColor(hsv));
+      button->SetMinSize(gfx::Size(kSwatchSize, kSwatchSize));
+      button->SetMaxSize(gfx::Size(kSwatchSize, kSwatchSize));
+      swatch_row_->AddChildView(std::move(button));
+    }
+
+    auto* brightness_card = AddChildView(std::make_unique<views::View>());
+    auto* brightness_layout = brightness_card->SetLayoutManager(
+        std::make_unique<views::BoxLayout>(
+            views::BoxLayout::Orientation::kHorizontal,
+            gfx::Insets::TLBR(14, 14, 14, 14), 10));
+    brightness_layout->set_cross_axis_alignment(
+        views::BoxLayout::CrossAxisAlignment::kCenter);
+    brightness_card->SetBackground(views::CreateRoundedRectBackground(
+        ui::kColorSysSurface1, kCardCornerRadius));
+    brightness_card->SetBorder(views::CreateRoundedRectBorder(
+        1, kCardCornerRadius, ui::kColorSysSurfaceVariant));
+    AddLabel(brightness_card, u"Brightness", views::style::STYLE_BODY_3_MEDIUM,
+             ui::kColorSysOnSurface);
+    brightness_minus_button_ = brightness_card->AddChildView(
+        std::make_unique<views::MdTextButton>(
+            base::BindRepeating(
+                [](base::WeakPtr<MahoCreateSpaceThemePickerDialogView> view) {
+                  if (!view) {
+                    return;
+                  }
+                  view->selection_.brightness =
+                      ClampBrightness(view->selection_.brightness - 5);
+                  view->UpdateUi();
+                },
+                weak_factory_.GetWeakPtr()),
+            u"−"));
+    brightness_value_label_ = AddLabel(brightness_card, u"", views::style::STYLE_BODY_4_MEDIUM,
+                                       ui::kColorSysOnSurface);
+    brightness_layout->SetFlexForView(brightness_value_label_, 1);
+    brightness_plus_button_ = brightness_card->AddChildView(
+        std::make_unique<views::MdTextButton>(
+            base::BindRepeating(
+                [](base::WeakPtr<MahoCreateSpaceThemePickerDialogView> view) {
+                  if (!view) {
+                    return;
+                  }
+                  view->selection_.brightness =
+                      ClampBrightness(view->selection_.brightness + 5);
+                  view->UpdateUi();
+                },
+                weak_factory_.GetWeakPtr()),
+            u"+"));
+
+    auto* grain_card = AddChildView(std::make_unique<views::View>());
+    auto* grain_layout = grain_card->SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kHorizontal,
+        gfx::Insets::TLBR(14, 14, 14, 14), 10));
+    grain_layout->set_cross_axis_alignment(
+        views::BoxLayout::CrossAxisAlignment::kCenter);
+    grain_card->SetBackground(views::CreateRoundedRectBackground(
+        ui::kColorSysSurface1, kCardCornerRadius));
+    grain_card->SetBorder(views::CreateRoundedRectBorder(
+        1, kCardCornerRadius, ui::kColorSysSurfaceVariant));
+    AddLabel(grain_card, u"Grain", views::style::STYLE_BODY_3_MEDIUM,
+             ui::kColorSysOnSurface);
+    grain_minus_button_ = grain_card->AddChildView(std::make_unique<views::MdTextButton>(
+        base::BindRepeating(
+            [](base::WeakPtr<MahoCreateSpaceThemePickerDialogView> view) {
+              if (!view) {
+                return;
+              }
+              view->selection_.grain = ClampGrain(view->selection_.grain - 5);
+              view->UpdateUi();
+            },
+            weak_factory_.GetWeakPtr()),
+        u"−"));
+    grain_value_label_ = AddLabel(grain_card, u"", views::style::STYLE_BODY_4_MEDIUM,
+                                  ui::kColorSysOnSurface);
+    grain_layout->SetFlexForView(grain_value_label_, 1);
+    grain_plus_button_ = grain_card->AddChildView(std::make_unique<views::MdTextButton>(
+        base::BindRepeating(
+            [](base::WeakPtr<MahoCreateSpaceThemePickerDialogView> view) {
+              if (!view) {
+                return;
+              }
+              view->selection_.grain = ClampGrain(view->selection_.grain + 5);
+              view->UpdateUi();
+            },
+            weak_factory_.GetWeakPtr()),
+        u"+"));
+
+    UpdateUi();
+  }
+
+  MahoCreateSpaceThemePickerDialogView(
+      const MahoCreateSpaceThemePickerDialogView&) = delete;
+  MahoCreateSpaceThemePickerDialogView& operator=(
+      const MahoCreateSpaceThemePickerDialogView&) = delete;
+
+  std::u16string GetWindowTitle() const override { return u"Choose a theme"; }
+
+  bool Accept() override {
+    if (chosen_callback_) {
+      std::move(chosen_callback_).Run(selection_);
+    }
+    return true;
+  }
+
+  bool Cancel() override { return true; }
+
+  void WindowClosing() override {
+    g_theme_picker_widget = nullptr;
+    g_theme_picker_dialog_view = nullptr;
+  }
+
+  void SetThemeSelectionForTesting(
+      const MahoSidebarCreateSpaceThemeSelection& selection) {
+    selection_ = selection;
+    UpdateUi();
+  }
+
+  ~MahoCreateSpaceThemePickerDialogView() override = default;
+
+ private:
+  void UpdateUi() {
+    selection_.brightness = ClampBrightness(selection_.brightness);
+    selection_.grain = ClampGrain(selection_.grain);
+
+    if (preview_view_) {
+      preview_view_->SetBackground(views::CreateRoundedRectBackground(
+          BuildSkColorForSelection(selection_), kCardCornerRadius));
+    }
+    if (preview_title_label_) {
+      preview_title_label_->SetText(
+          selection_.mode == MahoSidebarCreateSpaceThemeMode::kSolid
+              ? u"Solid preview"
+              : u"Zen preview");
+    }
+    if (preview_hex_label_) {
+      preview_hex_label_->SetText(base::UTF8ToUTF16(BuildColorHexForSelection(selection_)) +
+                                  u" · Grain " +
+                                  base::NumberToString16(selection_.grain) + u"%");
+    }
+    if (solid_mode_button_) {
+      solid_mode_button_->SetStyle(
+          selection_.mode == MahoSidebarCreateSpaceThemeMode::kSolid
+              ? ui::ButtonStyle::kProminent
+              : ui::ButtonStyle::kText);
+    }
+    if (zen_mode_button_) {
+      zen_mode_button_->SetStyle(
+          selection_.mode == MahoSidebarCreateSpaceThemeMode::kZen
+              ? ui::ButtonStyle::kProminent
+              : ui::ButtonStyle::kText);
+    }
+    if (brightness_value_label_) {
+      brightness_value_label_->SetText(
+          base::NumberToString16(selection_.brightness) + u"%");
+    }
+    if (grain_value_label_) {
+      grain_value_label_->SetText(base::NumberToString16(selection_.grain) +
+                                  u"%");
+    }
+    if (swatch_row_) {
+      int swatch_index = 0;
+      for (views::View* child : swatch_row_->children()) {
+        child->SetBorder(swatch_index == selection_.preset_index
+                             ? views::CreateRoundedRectBorder(
+                                   2, kSwatchCornerRadius, SK_ColorWHITE)
+                             : nullptr);
+        ++swatch_index;
+      }
+      swatch_row_->InvalidateLayout();
+    }
+  }
+
+  MahoSidebarCreateSpaceThemeSelection selection_;
+  ThemeChosenCallback chosen_callback_;
+  raw_ptr<views::View> preview_view_ = nullptr;
+  raw_ptr<views::Label> preview_title_label_ = nullptr;
+  raw_ptr<views::Label> preview_hex_label_ = nullptr;
+  raw_ptr<views::View> swatch_row_ = nullptr;
+  raw_ptr<views::MdTextButton> solid_mode_button_ = nullptr;
+  raw_ptr<views::MdTextButton> zen_mode_button_ = nullptr;
+  raw_ptr<views::MdTextButton> brightness_minus_button_ = nullptr;
+  raw_ptr<views::MdTextButton> brightness_plus_button_ = nullptr;
+  raw_ptr<views::Label> brightness_value_label_ = nullptr;
+  raw_ptr<views::MdTextButton> grain_minus_button_ = nullptr;
+  raw_ptr<views::MdTextButton> grain_plus_button_ = nullptr;
+  raw_ptr<views::Label> grain_value_label_ = nullptr;
+  base::WeakPtrFactory<MahoCreateSpaceThemePickerDialogView> weak_factory_{this};
+};
+
+void ShowThemePickerDialog(
+    Browser* browser,
+    const MahoSidebarCreateSpaceThemeSelection& initial_selection,
+    MahoCreateSpaceThemePickerDialogView::ThemeChosenCallback chosen_callback) {
+  if (!browser || !browser->window()) {
+    return;
+  }
+
+  if (g_theme_picker_widget) {
+    g_theme_picker_widget->CloseNow();
+  }
+
+  auto dialog = std::make_unique<MahoCreateSpaceThemePickerDialogView>(
+      initial_selection, std::move(chosen_callback));
+  auto* weak_dialog = dialog.get();
+  views::Widget* widget = weak_dialog->CreateDialogWidget(
+      std::move(dialog), browser->window()->GetNativeWindow(), nullptr);
+  if (!widget) {
+    return;
+  }
+
+  g_theme_picker_dialog_view = weak_dialog;
+  g_theme_picker_widget = widget;
+  widget->Show();
+  widget->Activate();
 }
 
 }  // namespace
@@ -230,13 +650,13 @@ MahoSidebarCreateSpaceView::MahoSidebarCreateSpaceView(Browser* browser)
   auto* title_label = AddLabel(hero, u"Create a new space",
                                views::style::STYLE_HEADLINE_4,
                                ui::kColorSysOnSurface, true);
-  title_label->SetMaximumWidth(260);
+  title_label->SetMaximumWidth(360);
 
   auto* subtitle_label = AddLabel(
       hero,
       u"Set up a focused home for tabs, notes, and future personalizations.",
       views::style::STYLE_BODY_5, ui::kColorSysOnSurfaceSubtle, true);
-  subtitle_label->SetMaximumWidth(260);
+  subtitle_label->SetMaximumWidth(360);
 
   auto* card_stack = content->AddChildView(std::make_unique<views::View>());
   auto* card_stack_layout = card_stack->SetLayoutManager(
@@ -289,69 +709,45 @@ MahoSidebarCreateSpaceView::MahoSidebarCreateSpaceView(Browser* browser)
   CreateInfoCard(card_stack, u"☺", u"Profile",
                  u"Default profile selected for this space.");
 
-  auto* theme_card = card_stack->AddChildView(std::make_unique<views::View>());
-  auto* theme_card_layout = theme_card->SetLayoutManager(
-      std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical,
+  theme_button_ = card_stack->AddChildView(std::make_unique<views::Button>(
+      base::BindRepeating(&MahoSidebarCreateSpaceView::OnThemePressed,
+                          weak_factory_.GetWeakPtr())));
+  auto* theme_card_layout = theme_button_->SetLayoutManager(
+      std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal,
                                          kCardInsets, 10));
   theme_card_layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kStretch);
-  theme_card->SetBackground(
+      views::BoxLayout::CrossAxisAlignment::kCenter);
+  theme_button_->SetAccessibleName(u"Choose theme");
+  theme_button_->SetBackground(
       views::CreateRoundedRectBackground(ui::kColorSysSurface1, kCardCornerRadius));
-  theme_card->SetBorder(views::CreateRoundedRectBorder(
+  theme_button_->SetBorder(views::CreateRoundedRectBorder(
       1, kCardCornerRadius, ui::kColorSysSurfaceVariant));
 
-  auto* theme_header = theme_card->AddChildView(std::make_unique<views::View>());
-  auto* theme_header_layout = theme_header->SetLayoutManager(
-      std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal,
-                                         gfx::Insets(), 10));
-  theme_header_layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kCenter);
-  CreateGlyphBadge(theme_header, u"◐");
+  CreateGlyphBadge(theme_button_, u"◐");
 
   auto* theme_header_text =
-      theme_header->AddChildView(std::make_unique<views::View>());
+      theme_button_->AddChildView(std::make_unique<views::View>());
   auto* theme_header_text_layout = theme_header_text->SetLayoutManager(
       std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical,
                                          gfx::Insets(), 2));
   theme_header_text_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kStretch);
-  theme_header_layout->SetFlexForView(theme_header_text, 1);
+  theme_card_layout->SetFlexForView(theme_header_text, 1);
   AddLabel(theme_header_text, u"Theme", views::style::STYLE_BODY_3_MEDIUM,
            ui::kColorSysOnSurface);
-  AddLabel(theme_header_text, u"Pick a color for your new space",
-           views::style::STYLE_BODY_5, ui::kColorSysOnSurfaceSubtle, true);
+  theme_summary_label_ = AddLabel(theme_header_text, u"",
+                                  views::style::STYLE_BODY_5,
+                                  ui::kColorSysOnSurfaceSubtle, true);
 
-  swatch_row_ = theme_card->AddChildView(std::make_unique<views::View>());
-  auto* swatch_layout = swatch_row_->SetLayoutManager(
-      std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal,
-                                         gfx::Insets(), kSwatchSpacing));
-  swatch_layout->set_main_axis_alignment(
-      views::BoxLayout::MainAxisAlignment::kCenter);
+  theme_preview_dot_ =
+      theme_button_->AddChildView(std::make_unique<views::View>());
+  theme_preview_dot_->SetPreferredSize(
+      gfx::Size(kThemePreviewDotSize, kThemePreviewDotSize));
 
-  for (int i = 0; i < static_cast<int>(std::size(kColorPresets)); ++i) {
-    const auto& preset = kColorPresets[i];
-    SkScalar hsv[3] = {
-        static_cast<SkScalar>(preset.hue * 360.0),
-        static_cast<SkScalar>(preset.saturation),
-        static_cast<SkScalar>(preset.brightness)};
-    SkColor swatch_color = SkHSVToColor(hsv);
-
-    auto button = std::make_unique<views::MdTextButton>(
-        base::BindRepeating(&MahoSidebarCreateSpaceView::OnColorSwatchPressed,
-                            weak_factory_.GetWeakPtr(), i),
-        u"");
-    button->SetAccessibleName(u"Theme color " + base::NumberToString16(i + 1));
-    button->SetPreferredSize(gfx::Size(kSwatchSize, kSwatchSize));
-    button->SetCornerRadius(kSwatchCornerRadius);
-    button->SetBgColorOverrideDeprecated(swatch_color);
-    button->SetMinSize(gfx::Size(kSwatchSize, kSwatchSize));
-    button->SetMaxSize(gfx::Size(kSwatchSize, kSwatchSize));
-    if (i == selected_color_index_) {
-      button->SetBorder(views::CreateRoundedRectBorder(
-          2, kSwatchCornerRadius, SK_ColorWHITE));
-    }
-    swatch_row_->AddChildView(std::move(button));
-  }
+  auto* trailing = AddLabel(theme_button_, u"›",
+                            views::style::STYLE_BODY_3_MEDIUM,
+                            ui::kColorSysOnSurfaceSubtle);
+  trailing->SetHorizontalAlignment(gfx::ALIGN_CENTER);
 
   auto* spacer = content->AddChildView(std::make_unique<views::View>());
   content_layout->SetFlexForView(spacer, 1, true);
@@ -369,8 +765,8 @@ MahoSidebarCreateSpaceView::MahoSidebarCreateSpaceView(Browser* browser)
                               weak_factory_.GetWeakPtr()),
           u"Create Space"));
   create_button_->SetStyle(ui::ButtonStyle::kProminent);
-  create_button_->SetCornerRadius(14);
-  create_button_->SetMinSize(gfx::Size(0, 42));
+  create_button_->SetCornerRadius(16);
+  create_button_->SetMinSize(gfx::Size(0, 46));
   create_button_->SetAccessibleName(u"Create Space");
 
   error_label_ = AddLabel(bottom_region, u"", views::style::STYLE_BODY_5,
@@ -406,7 +802,7 @@ MahoSidebarCreateSpaceView::MahoSidebarCreateSpaceView(Browser* browser)
         kBottomDotCornerRadius));
   }
 
-  UpdateCreateButtonState();
+  ResetFormState();
 }
 
 MahoSidebarCreateSpaceView::~MahoSidebarCreateSpaceView() = default;
@@ -432,6 +828,10 @@ void MahoSidebarCreateSpaceView::OnThemeChanged() {
 void MahoSidebarCreateSpaceView::SetCloseCallback(
     base::RepeatingClosure close_callback) {
   close_callback_ = std::move(close_callback);
+}
+
+void MahoSidebarCreateSpaceView::PrepareForOpen() {
+  ResetFormState();
 }
 
 void MahoSidebarCreateSpaceView::RequestNameFocus() {
@@ -472,6 +872,29 @@ bool MahoSidebarCreateSpaceView::HandleKeyEvent(views::Textfield* sender,
   }
 }
 
+void MahoSidebarCreateSpaceView::ResetFormState() {
+  theme_selection_ = DefaultThemeSelection();
+  if (name_field_) {
+    name_field_->SetText(u"");
+  }
+  if (error_label_) {
+    error_label_->SetVisible(false);
+  }
+  UpdateThemeSummary();
+  UpdateCreateButtonState();
+}
+
+void MahoSidebarCreateSpaceView::UpdateThemeSummary() {
+  if (theme_summary_label_) {
+    theme_summary_label_->SetText(BuildThemeSummaryForSelection(theme_selection_));
+  }
+  if (theme_preview_dot_) {
+    theme_preview_dot_->SetBackground(views::CreateRoundedRectBackground(
+        BuildSkColorForSelection(theme_selection_),
+        kThemePreviewDotCornerRadius));
+  }
+}
+
 void MahoSidebarCreateSpaceView::UpdateCreateButtonState() {
   if (!create_button_ || !name_field_) {
     return;
@@ -500,7 +923,7 @@ void MahoSidebarCreateSpaceView::OnCreatePressed() {
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
       base::BindOnce(&CreateSpaceOnPool, base::UTF16ToUTF8(trimmed_name),
-                     kColorPresets[selected_color_index_]),
+                     theme_selection_),
       base::BindOnce(
           [](base::WeakPtr<MahoSidebarCreateSpaceView> view,
              CreateResult result) {
@@ -511,27 +934,30 @@ void MahoSidebarCreateSpaceView::OnCreatePressed() {
           weak_factory_.GetWeakPtr()));
 }
 
-void MahoSidebarCreateSpaceView::OnColorSwatchPressed(int index) {
-  selected_color_index_ = index;
-  if (!swatch_row_) {
+void MahoSidebarCreateSpaceView::OnThemePressed() {
+  if (!browser_) {
     return;
   }
-  int i = 0;
-  for (views::View* child : swatch_row_->children()) {
-    if (i == selected_color_index_) {
-      child->SetBorder(views::CreateRoundedRectBorder(
-          2, kSwatchCornerRadius, SK_ColorWHITE));
-    } else {
-      child->SetBorder(nullptr);
-    }
-    ++i;
-  }
-  swatch_row_->InvalidateLayout();
+
+  ShowThemePickerDialog(
+      browser_, theme_selection_,
+      base::BindOnce(
+          [](base::WeakPtr<MahoSidebarCreateSpaceView> view,
+             MahoSidebarCreateSpaceThemeSelection selection) {
+            if (view) {
+              view->ApplyThemeSelection(selection);
+            }
+          },
+          weak_factory_.GetWeakPtr()));
 }
 
 void MahoSidebarCreateSpaceView::OnCancelPressed() {
   if (close_callback_) {
     close_callback_.Run();
+    return;
+  }
+  if (GetWidget()) {
+    GetWidget()->Close();
     return;
   }
   SetVisible(false);
@@ -549,6 +975,37 @@ void MahoSidebarCreateSpaceView::CompleteCreateSpaceForTesting(
     bool success,
     const std::string& new_space_id) {
   OnSpaceCreated(success, new_space_id);
+}
+
+// static
+views::Widget* MahoSidebarCreateSpaceView::GetThemePickerWidgetForTesting() {
+  return g_theme_picker_widget;
+}
+
+// static
+void MahoSidebarCreateSpaceView::SetThemePickerSelectionForTesting(
+    const MahoSidebarCreateSpaceThemeSelection& selection) {
+  if (g_theme_picker_dialog_view) {
+    g_theme_picker_dialog_view->SetThemeSelectionForTesting(selection);
+  }
+}
+
+// static
+bool MahoSidebarCreateSpaceView::AcceptThemePickerDialogForTesting() {
+  if (!g_theme_picker_dialog_view || !g_theme_picker_widget) {
+    return false;
+  }
+  if (!g_theme_picker_dialog_view->Accept()) {
+    return false;
+  }
+  g_theme_picker_widget->Close();
+  return true;
+}
+
+void MahoSidebarCreateSpaceView::ApplyThemeSelection(
+    const MahoSidebarCreateSpaceThemeSelection& selection) {
+  theme_selection_ = selection;
+  UpdateThemeSummary();
 }
 
 void MahoSidebarCreateSpaceView::OnSpaceCreated(bool success,
@@ -571,12 +1028,7 @@ void MahoSidebarCreateSpaceView::OnSpaceCreated(bool success,
   MahoSpaceThemeState::UpdateFromCore();
   ui::ColorProviderManager::Get().ResetColorProviderCache();
 
-  if (name_field_) {
-    name_field_->SetText(u"");
-  }
-  if (create_button_) {
-    UpdateCreateButtonState();
-  }
+  ResetFormState();
   if (close_callback_) {
     close_callback_.Run();
     return;

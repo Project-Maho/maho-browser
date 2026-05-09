@@ -95,29 +95,7 @@ Examples:
 Do not confuse these. AX stabilization does not fix missing product wiring, and AX weakness does not imply the Views layer is missing the path.
 ---
 
-## 4. Current capability matrix
-
-### Legend
-
-- **Core:** `maho-core` event/state support exists.
-- **Chromium Views:** native sidebar Views wiring exists.
-- **AX E2E:** current macOS AX harness can sometimes exercise it, but may not prove it cleanly.
-- **Status:** overall current state.
-
-| Interaction | Core | Chromium Views | AX E2E | Status |
-| --- | --- | --- | --- | --- |
-| Root tab reorder | Yes | Yes | Weak / can be hard to prove from current AX runs | Product wired, AX verification remains weak |
-| Folder sibling reorder at root | Yes | Yes | Weak / currently better proven by unit dispatch than AX runs | Product wired, AX verification remains weak |
-| Tab: pinned ↔ normal | Yes | Yes | Weak / no-op observed in current harness runs | Product wired, verification weak |
-| Folder: pinned ↔ normal | Yes | Yes | No reliable AX path | Product wired, verification weak |
-| Tab ↔ favorites | Yes | Yes | Favorite reorder no-op observed in current harness; support-contract exists | Product wired, runtime behavior still needs stronger verification |
-| Tab → folder | Yes | Yes | Folder AX blocked | Product wired |
-| Folder → folder | Yes | Yes | Folder AX blocked | Product wired |
-| Folder reorder inside folder | Yes | Yes | Weak / currently better proven by unit dispatch than AX runs | Product wired, AX verification remains weak |
-| Tab reorder inside folder | Yes | Yes | Weak / currently better proven by unit dispatch than AX runs | Product wired, AX verification remains weak |
-| Tab out of folder to root | Yes | Yes | Weak / current AX runs do not fully prove it | Product wired, AX verification remains weak |
-
----
+## 4. Current capability matrix\n\n### Legend\n\n- **Core:** `maho-core` event and state support exists.\n- **Chromium Views:** native sidebar Views wiring exists.\n- **AX E2E:** current macOS AX harness can sometimes exercise it, but may not prove it cleanly.\n- **Status:** overall current state.\n\n### 4.1 Finalized lane/body DnD contract\n\nThe current sidebar DnD model is lane and body based, not row hover based. The finalized interaction contract is:\n\n- default before and after lanes reorder only;\n- tab on tab body routes to split view;\n- tab on folder body moves into that folder;\n- folder on folder body moves into that folder;\n- folder on tab body is invalid and a no-op;\n- mixed root ordering is supported through the unified root-order contract;\n- append-after-last is explicit and tested.\n\n### 4.2 Current capability matrix\n\n| Interaction | Core | Chromium Views | AX E2E | Status |\n| --- | --- | --- | --- | --- |\n| Root tab reorder | Yes | Yes | Weak, can be hard to prove from current AX runs | Product wired, mixed root ordering uses the unified root-order contract |\n| Folder sibling reorder at root | Yes | Yes | Weak, currently better proven by unit dispatch than AX runs | Product wired, append-after-last is explicit and tested |\n| Tab: pinned ↔ normal | Yes | Yes | Weak, no-op observed in current harness runs | Product wired, verification is still weak |\n| Folder: pinned ↔ normal | Yes | Yes | No reliable AX path | Product wired, verification is still weak |\n| Tab ↔ favorites | Yes | Yes | Favorite reorder no-op observed in current harness, support-contract exists | Product wired, runtime behavior still needs stronger verification |\n| Tab -> folder | Yes | Yes | Folder AX is weak | Product wired |\n| Folder -> folder | Yes | Yes | Folder AX is weak | Product wired |\n| Folder reorder inside folder | Yes | Yes | Weak, currently better proven by unit dispatch than AX runs | Product wired, AX verification remains weak |\n| Tab reorder inside folder | Yes | Yes | Weak, currently better proven by unit dispatch than AX runs | Product wired, AX verification remains weak |\n| Tab out of folder to root | Yes | Yes | Weak, current AX runs do not fully prove it | Product wired, AX verification remains weak |\n\n---
 
 ## 5. Evidence by interaction class
 

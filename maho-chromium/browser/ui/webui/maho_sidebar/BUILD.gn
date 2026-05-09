@@ -24,9 +24,11 @@ source_set("maho_sidebar") {
   deps = [
     "//chrome/browser/profiles:profile",
     "//chrome/browser/ui/tabs:tab_strip",
+    "//maho/browser:maho_theme_support",
     "//maho/browser/resources/maho_sidebar:resources",
     "//maho/components/constants",
     "//mojo/public/cpp/bindings",
+    "//ui/shell_dialogs",
     "//ui/webui",
     "//url",
   ]

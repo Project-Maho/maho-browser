@@ -2,6 +2,8 @@
 
 Chromium overlay for Maho Browser. Brave-style chromium_src overrides.
 
+The canonical Chromium build entrypoint is the lock-backed wrapper at `python3 build/scripts/build_maho.py`, which builds the Rust prebuilt and then runs Chromium in one command. Raw `autoninja -C out/Default chrome` still works for narrower rebuilds, but it is no longer the recommended default flow.
+
 ## Structure
 
 - `chromium_src/` — Upstream Chromium file overrides (#define + #include pattern)
@@ -17,12 +19,13 @@ Chromium overlay for Maho Browser. Brave-style chromium_src overrides.
    ln -s ../../maho-chromium chromium/src/maho
    ```
 
-2. Build maho-core:
-   ```
-   python3 maho/build/scripts/build_maho_core.py
-   ```
+2. Build Chromium and the Rust prebuilt together:
+    ```
+    python3 build/scripts/build_maho.py
+    ```
+    This acquires the shared workspace `.build.lock` once, builds the Rust prebuilt if needed, and then runs `autoninja -C out/Default chrome` from `chromium/src` with `depot_tools` prepended to `PATH`.
 
-3. Build Chromium with Maho:
-   ```
-   autoninja -C out/Default chrome
-   ```
+3. For Chromium-only rebuilds:
+    ```
+    autoninja -C out/Default chrome
+    ```

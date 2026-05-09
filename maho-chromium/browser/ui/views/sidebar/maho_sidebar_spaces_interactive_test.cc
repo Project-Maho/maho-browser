@@ -3,6 +3,7 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_interactive_test_base.h"
 
 #include "base/run_loop.h"
+#include "base/test/run_until.h"
 #include "content/public/test/browser_test.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -11,13 +12,14 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_create_space_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_space_dot_view.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/test/ui_controls.h"
 #include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/gfx/native_widget_types.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/view_utils.h"
+#include "ui/views/widget/widget.h"
 
 namespace maho {
 namespace {
@@ -46,9 +48,10 @@ class MahoSidebarSpacesInteractiveTest
     : public MahoSidebarInteractiveTestBase {
  protected:
   void OpenCreateSpaceSurface();
+  MahoSidebarCreateSpaceView* GetCreateSpaceView();
 };
 
-void TypeTextIntoWindow(const auto& window, std::u16string_view text) {
+void TypeTextIntoWindow(gfx::NativeWindow window, std::u16string_view text) {
   for (char16_t ch : text) {
     ui::KeyboardCode key_code = ui::VKEY_UNKNOWN;
     if (ch == u' ') {
@@ -103,6 +106,18 @@ void MahoSidebarSpacesInteractiveTest::OpenCreateSpaceSurface() {
       row_click_loop.QuitClosure()));
   row_click_loop.Run();
   base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(base::test::RunUntil([this] {
+    MahoSidebarView* sidebar = GetSidebarView();
+    return sidebar && sidebar->is_create_space_mode_for_testing() &&
+           sidebar->create_space_view_for_testing() &&
+           sidebar->create_space_view_for_testing()->GetVisible();
+  }));
+}
+
+MahoSidebarCreateSpaceView* MahoSidebarSpacesInteractiveTest::GetCreateSpaceView() {
+  MahoSidebarView* sidebar = GetSidebarView();
+  return sidebar ? sidebar->create_space_view_for_testing() : nullptr;
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
@@ -136,22 +151,80 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
-                       CreateSpaceOpensConfigSurface) {
+                       CreateSpaceOpensInlineSidebarSurface) {
   OpenCreateSpaceSurface();
 
   MahoSidebarView* sidebar = GetSidebarView();
   ASSERT_TRUE(sidebar);
-
-  EXPECT_TRUE(sidebar->is_create_mode_for_testing())
-      << "Expected create space view to be visible after clicking plus button";
-  ASSERT_TRUE(sidebar->top_bar_view_for_testing());
   ASSERT_TRUE(sidebar->tabs_surface_for_testing());
-  ASSERT_TRUE(sidebar->footer_view_for_testing());
   ASSERT_TRUE(sidebar->create_space_view_for_testing());
-  EXPECT_TRUE(sidebar->top_bar_view_for_testing()->GetVisible());
+  EXPECT_TRUE(sidebar->is_create_space_mode_for_testing());
+  EXPECT_TRUE(sidebar->create_space_view_for_testing()->GetVisible())
+      << "Expected inline sidebar create-space surface after clicking New Space";
   EXPECT_FALSE(sidebar->tabs_surface_for_testing()->GetVisible());
-  EXPECT_TRUE(sidebar->footer_view_for_testing()->GetVisible());
-  EXPECT_TRUE(sidebar->create_space_view_for_testing()->GetVisible());
+  ASSERT_TRUE(sidebar->top_bar_view_for_testing());
+  EXPECT_TRUE(sidebar->top_bar_view_for_testing()->GetVisible());
+  ASSERT_TRUE(GetFooterView());
+  EXPECT_TRUE(GetFooterView()->GetVisible());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
+                       CreateSpaceThemeRowOpensNativeThemeDialog) {
+  OpenCreateSpaceSurface();
+
+  auto* create_view = GetCreateSpaceView();
+  ASSERT_TRUE(create_view);
+  ASSERT_TRUE(create_view->theme_button_for_testing());
+
+  const gfx::Point theme_center =
+      create_view->theme_button_for_testing()->GetBoundsInScreen().CenterPoint();
+  ASSERT_TRUE(ui_controls::SendMouseMove(theme_center.x(), theme_center.y()));
+  base::RunLoop click_loop;
+  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
+      ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
+      click_loop.QuitClosure()));
+  click_loop.Run();
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(base::test::RunUntil([] {
+    views::Widget* widget =
+        MahoSidebarCreateSpaceView::GetThemePickerWidgetForTesting();
+    return widget && widget->IsVisible();
+  }));
+  EXPECT_TRUE(create_view->GetVisible())
+      << "Opening the native theme picker should keep the sidebar create form mounted";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
+                       CreateSpaceEscapeReturnsToTabs) {
+  OpenCreateSpaceSurface();
+
+  MahoSidebarView* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+  ASSERT_TRUE(sidebar->tabs_surface_for_testing());
+  ASSERT_TRUE(GetCreateSpaceView());
+  ASSERT_TRUE(GetCreateSpaceView()->name_field_for_testing());
+
+  base::RunLoop esc_loop;
+  ASSERT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
+      browser()->window()->GetNativeWindow(), ui::VKEY_ESCAPE, false, false,
+      false, false, esc_loop.QuitClosure()));
+  esc_loop.Run();
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+
+  sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+
+  EXPECT_TRUE(base::test::RunUntil([this] {
+    MahoSidebarView* sidebar = GetSidebarView();
+    return sidebar && !sidebar->is_create_space_mode_for_testing();
+  }));
+  EXPECT_TRUE(sidebar->tabs_surface_for_testing()->GetVisible());
+  ASSERT_TRUE(GetFooterView());
+  EXPECT_TRUE(GetFooterView()->GetVisible());
+  EXPECT_GT(GetFooterView()->GetBoundsInScreen().height(), 0);
+  EXPECT_GT(sidebar->tabs_surface_for_testing()->GetBoundsInScreen().height(), 0);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
@@ -161,13 +234,41 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
   ASSERT_TRUE(bridge);
   const size_t registered_before = bridge->GetRegisteredSpaceCount();
   const std::string active_space_before = GetActiveSpaceId();
+  const std::string footer_color_before = GetViewState().footer.space_color;
 
   OpenCreateSpaceSurface();
 
   MahoSidebarView* sidebar = GetSidebarView();
   ASSERT_TRUE(sidebar);
-  auto* create_view = sidebar->create_space_view_for_testing();
+  auto* create_view = GetCreateSpaceView();
   ASSERT_TRUE(create_view);
+
+  const gfx::Point theme_center =
+      create_view->theme_button_for_testing()->GetBoundsInScreen().CenterPoint();
+  ASSERT_TRUE(ui_controls::SendMouseMove(theme_center.x(), theme_center.y()));
+  base::RunLoop theme_click_loop;
+  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
+      ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
+      theme_click_loop.QuitClosure()));
+  theme_click_loop.Run();
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(base::test::RunUntil([] {
+    return MahoSidebarCreateSpaceView::GetThemePickerWidgetForTesting() !=
+           nullptr;
+  }));
+  MahoSidebarCreateSpaceThemeSelection selected_theme;
+  selected_theme.preset_index = 2;
+  selected_theme.brightness = 55;
+  selected_theme.grain = 25;
+  selected_theme.mode = MahoSidebarCreateSpaceThemeMode::kSolid;
+  MahoSidebarCreateSpaceView::SetThemePickerSelectionForTesting(selected_theme);
+  ASSERT_TRUE(MahoSidebarCreateSpaceView::AcceptThemePickerDialogForTesting());
+  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(create_view->theme_summary_label_for_testing());
+  const std::u16string theme_summary =
+      create_view->theme_summary_label_for_testing()->GetText();
+  EXPECT_EQ(0u, theme_summary.rfind(u"Solid · #", 0));
 
   auto* name_field = create_view->name_field_for_testing();
   ASSERT_TRUE(name_field);
@@ -190,11 +291,17 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
 
   ResolveViews();
 
-  EXPECT_FALSE(sidebar->is_create_mode_for_testing());
+  EXPECT_TRUE(base::test::RunUntil([this] {
+    MahoSidebarView* sidebar = GetSidebarView();
+    return sidebar && !sidebar->is_create_space_mode_for_testing();
+  }));
   EXPECT_GT(bridge->GetRegisteredSpaceCount(), registered_before);
   EXPECT_TRUE(sidebar->tabs_surface_for_testing()->GetVisible());
   EXPECT_NE(active_space_before, GetActiveSpaceId())
       << "Creating a space should switch the footer to the new active space";
+  EXPECT_FALSE(GetViewState().footer.space_color.empty());
+  EXPECT_NE(footer_color_before, GetViewState().footer.space_color)
+      << "Creating with a chosen theme should update the active space color";
   ASSERT_TRUE(GetFooterView()->GetSpaceDotForTesting(1))
       << "Footer should show the newly created second space immediately";
 }
@@ -205,7 +312,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
 
   MahoSidebarView* sidebar = GetSidebarView();
   ASSERT_TRUE(sidebar);
-  auto* create_view = sidebar->create_space_view_for_testing();
+  auto* create_view = GetCreateSpaceView();
   ASSERT_TRUE(create_view);
 
   auto* name_field = create_view->name_field_for_testing();
@@ -217,8 +324,9 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
   create_view->CompleteCreateSpaceForTesting(false, std::string());
   base::RunLoop().RunUntilIdle();
 
-  EXPECT_TRUE(sidebar->is_create_mode_for_testing())
-      << "Failure should keep the create surface open";
+  ASSERT_TRUE(GetCreateSpaceView());
+  EXPECT_TRUE(GetCreateSpaceView()->GetVisible())
+      << "Failure should keep the inline create surface open";
   ASSERT_TRUE(create_view->error_label_for_testing());
   EXPECT_TRUE(create_view->error_label_for_testing()->GetVisible());
   EXPECT_FALSE(create_view->error_label_for_testing()->GetText().empty());

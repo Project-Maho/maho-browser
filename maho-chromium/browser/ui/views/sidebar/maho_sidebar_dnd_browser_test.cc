@@ -1,6 +1,7 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -118,6 +119,15 @@ class MahoSidebarDnDBrowserTest : public InProcessBrowserTest {
 
   SidebarTabRowView* FindLiveTabRow(const std::string& tab_id) {
     return tab_list_->FindTabRowByIdForTesting(tab_id);
+  }
+
+  views::View* FindLiveTabInsertionLaneBeforeTab(const std::string& tab_id) {
+    return tab_list_->FindInsertionLaneBeforeTabByIdForTesting(tab_id);
+  }
+
+  views::View* FindLiveTabInsertionLaneBeforeFolder(
+      const std::string& folder_id) {
+    return tab_list_->FindInsertionLaneBeforeFolderByIdForTesting(folder_id);
   }
 
   SidebarFolderRowView* FindLiveFolderRow(const std::string& folder_id) {
@@ -297,29 +307,29 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest, LiveRootTabReorder) {
     GTEST_SKIP() << "Need at least 2 root normal tabs";
   }
 
-  SidebarTabRowView* target_row = FindLiveTabRow(pair->target_id);
-  ASSERT_TRUE(target_row)
-      << "Live row for target tab " << pair->target_id << " not found";
-  EXPECT_EQ(target_row->tab_id_for_testing(), pair->target_id);
+  views::View* target_lane = FindLiveTabInsertionLaneBeforeTab(pair->source_id);
+  ASSERT_TRUE(target_lane)
+      << "Live insertion lane for target tab " << pair->source_id
+      << " not found";
 
   observer_.Clear();
-  auto payload = MakeTabPayload(pair->source_id,
+  auto payload = MakeTabPayload(pair->target_id,
                                 SidebarDragOrigin::kNormalSection);
-  PerformSyntheticDrop(target_row, payload);
+  PerformSyntheticDrop(target_lane, payload);
 
   ASSERT_FALSE(observer_.events.empty()) << "Should dispatch a shell event";
-  EXPECT_EQ(observer_.events[0].kind, "reorder_tab");
+  EXPECT_EQ(observer_.events[0].kind, "reorder_root_item");
 
   auto post = GetState();
-  bool source_still_in_normal = false;
+  std::vector<std::string> root_tabs;
   for (const auto& n : post.tab_list.normal_tree) {
-    if (n.kind == SidebarNodeKind::kTab && n.tab_id == pair->source_id) {
-      source_still_in_normal = true;
-      break;
+    if (n.kind == SidebarNodeKind::kTab && n.parent_folder_id.empty()) {
+      root_tabs.push_back(n.tab_id);
     }
   }
-  EXPECT_TRUE(source_still_in_normal)
-      << "Source tab should remain in normal tree after reorder";
+  ASSERT_GE(root_tabs.size(), 2u);
+  EXPECT_EQ(root_tabs[0], pair->target_id);
+  EXPECT_EQ(root_tabs[1], pair->source_id);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest, LiveTabToPinnedSection) {
@@ -397,15 +407,13 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest, LiveRootFolderReorder) {
     GTEST_SKIP() << "Need at least 2 root folders";
   }
 
-  SidebarFolderRowView* target_row = FindLiveFolderRow(folder_ids[1]);
-  ASSERT_TRUE(target_row)
-      << "Live folder row for " << folder_ids[1] << " not found";
-  EXPECT_EQ(target_row->folder_id_for_testing(), folder_ids[1]);
-  target_row->SetBoundsRect(gfx::Rect(0, 0, 220, 40));
+  views::View* target_lane = FindLiveTabInsertionLaneBeforeFolder(folder_ids[1]);
+  ASSERT_TRUE(target_lane)
+      << "Live insertion lane for folder " << folder_ids[1] << " not found";
 
   observer_.Clear();
   auto payload = MakeFolderPayload(folder_ids[0]);
-  PerformSyntheticDrop(target_row, payload, gfx::Point(5, 2));
+  PerformSyntheticDrop(target_lane, payload);
 
   ASSERT_FALSE(observer_.events.empty());
   EXPECT_EQ(observer_.events[0].kind, "reorder_folder");
@@ -459,32 +467,119 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest, LiveTabOutOfFolderToRoot) {
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
-                        LiveSameFolderTabReorder) {
+                       LiveSameFolderTabReorder) {
   auto state = GetState();
   auto folder_info = FindFolderWithTwoChildTabs(state.tab_list.normal_tree);
   if (!folder_info) {
     GTEST_SKIP() << "Need a folder with at least 2 child tabs";
   }
 
-  SidebarTabRowView* target_row = FindLiveTabRow(folder_info->tab2_id);
-  if (!target_row) {
-    GTEST_SKIP() << "Live row for child tab " << folder_info->tab2_id
-                 << " not found";
+  views::View* target_lane =
+      FindLiveTabInsertionLaneBeforeTab(folder_info->tab2_id);
+  if (!target_lane) {
+    GTEST_SKIP() << "Live insertion lane for child tab "
+                 << folder_info->tab2_id << " not found";
   }
-  EXPECT_EQ(target_row->tab_id_for_testing(), folder_info->tab2_id);
-  target_row->SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
   observer_.Clear();
   auto payload = MakeFolderChildTabPayload(
       folder_info->tab1_id, folder_info->folder_id, folder_info->tab1_index);
-  PerformSyntheticDrop(target_row, payload, gfx::Point(5, 35));
+  PerformSyntheticDrop(target_lane, payload);
 
   ASSERT_FALSE(observer_.events.empty());
-  bool is_folder_reorder = observer_.events[0].kind == "reorder_tab_in_folder";
-  bool is_move_to_root = observer_.events[0].kind == "move_tab_to_root";
-  EXPECT_TRUE(is_folder_reorder || is_move_to_root)
-      << "Expected reorder_tab_in_folder or move_tab_to_root, got: "
-      << observer_.events[0].kind;
+  EXPECT_EQ(observer_.events[0].kind, "reorder_tab_in_folder")
+      << "Same-folder child tab drops should stay within the folder";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest, LiveTabBodySplitCreatesSplit) {
+  auto state = GetState();
+  std::string source_id;
+  std::string target_id;
+  int source_index = -1;
+  int target_index = -1;
+  for (const auto& node : state.tab_list.normal_tree) {
+    if (node.kind != SidebarNodeKind::kTab ||
+        !node.parent_folder_id.empty() || node.tab_strip_index < 0) {
+      continue;
+    }
+    if (source_id.empty()) {
+      source_id = node.tab_id;
+      source_index = node.tab_strip_index;
+    } else {
+      target_id = node.tab_id;
+      target_index = node.tab_strip_index;
+      break;
+    }
+  }
+  if (source_id.empty() || target_id.empty()) {
+    GTEST_SKIP() << "Need 2 root normal tabs with live tab-strip indices";
+  }
+
+  SidebarTabRowView* target_row = FindLiveTabRow(target_id);
+  ASSERT_TRUE(target_row) << "Live row for target tab " << target_id
+                          << " not found";
+  EXPECT_EQ(target_row->tab_id_for_testing(), target_id);
+  target_row->SetBoundsRect(gfx::Rect(0, 0, 220, 40));
+
+  Browser* browser = this->browser();
+  ASSERT_TRUE(browser);
+  TabStripModel* tab_strip_model = browser->tab_strip_model();
+  ASSERT_TRUE(tab_strip_model);
+  ASSERT_TRUE(tab_strip_model->ContainsIndex(source_index));
+  ASSERT_TRUE(tab_strip_model->ContainsIndex(target_index));
+  ASSERT_FALSE(tab_strip_model->GetSplitForTab(source_index).has_value());
+  ASSERT_FALSE(tab_strip_model->GetSplitForTab(target_index).has_value());
+
+  observer_.Clear();
+  auto payload = MakeTabPayload(source_id, SidebarDragOrigin::kNormalSection);
+  payload.tab_strip_index = source_index;
+  PerformSyntheticDrop(target_row, payload, gfx::Point(5, 20));
+
+  ASSERT_TRUE(tab_strip_model->GetSplitForTab(source_index).has_value());
+  ASSERT_TRUE(tab_strip_model->GetSplitForTab(target_index).has_value());
+  EXPECT_EQ(*tab_strip_model->GetSplitForTab(source_index),
+            *tab_strip_model->GetSplitForTab(target_index))
+      << "Tab-on-tab body drops should create a split";
+  EXPECT_TRUE(observer_.events.empty())
+      << "Tab-on-tab body split should not dispatch a shell move event";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest, LiveFolderBodyDropRejected) {
+  auto state = GetState();
+  std::string folder_id;
+  for (const auto& node : state.tab_list.normal_tree) {
+    if (node.kind == SidebarNodeKind::kFolder) {
+      folder_id = node.folder_id;
+      break;
+    }
+  }
+  if (folder_id.empty()) {
+    GTEST_SKIP() << "Need at least 1 root folder";
+  }
+
+  std::string tab_id;
+  for (const auto& node : state.tab_list.normal_tree) {
+    if (node.kind == SidebarNodeKind::kTab && node.parent_folder_id.empty()) {
+      tab_id = node.tab_id;
+      break;
+    }
+  }
+  if (tab_id.empty()) {
+    GTEST_SKIP() << "Need at least 1 root tab as body target";
+  }
+
+  SidebarTabRowView* target_row = FindLiveTabRow(tab_id);
+  ASSERT_TRUE(target_row) << "Live row for " << tab_id << " not found";
+  EXPECT_EQ(target_row->tab_id_for_testing(), tab_id);
+  target_row->SetBoundsRect(gfx::Rect(0, 0, 220, 40));
+
+  observer_.Clear();
+  auto payload = MakeFolderPayload(folder_id);
+  PerformSyntheticDrop(target_row, payload, gfx::Point(5, 20));
+
+  EXPECT_TRUE(observer_.events.empty());
+  EXPECT_EQ(last_drop_result_, ui::mojom::DragOperation::kNone)
+      << "Folder-on-tab body drops should be rejected";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,

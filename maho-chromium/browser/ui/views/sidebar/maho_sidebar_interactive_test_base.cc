@@ -2,6 +2,7 @@
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_interactive_test_base.h"
 
+#include "base/json/string_escape.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/run_until.h"
 #include "chrome/browser/profiles/profile.h"
@@ -10,6 +11,7 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test_utils.h"
+#include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h"
@@ -17,6 +19,7 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "ui/base/test/ui_controls.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/views/view_utils.h"
 
 namespace maho {
@@ -100,10 +103,30 @@ MahoSidebarContainerView* MahoSidebarInteractiveTestBase::GetContainerView() {
 
 MahoSidebarViewStateModel MahoSidebarInteractiveTestBase::GetViewState() {
   MahoSidebarStateAdapter adapter;
-  return adapter.BuildViewStateModel(browser());
+  MahoSidebarViewStateModel state = adapter.BuildViewStateModel(browser());
+  if (!state.tab_list.active_space_id.empty()) {
+    const std::string active_space_id_json =
+        base::GetQuotedJSONString(state.tab_list.active_space_id);
+    state.favorites =
+        MahoSidebarStateAdapter::BuildFavoritesModelForSpaceIdJson(
+            active_space_id_json);
+    if (state.favorites.items.empty()) {
+      (void)base::test::RunUntil([&]() {
+        state.favorites =
+            MahoSidebarStateAdapter::BuildFavoritesModelForSpaceIdJson(
+                active_space_id_json);
+        return !state.favorites.items.empty();
+      });
+    }
+  }
+  return state;
 }
 
 std::string MahoSidebarInteractiveTestBase::GetActiveSpaceId() {
+  auto* bridge = MahoSpaceProfileBridge::GetInstance();
+  if (bridge) {
+    return bridge->GetActiveSpaceId();
+  }
   return GetViewState().tab_list.active_space_id;
 }
 
@@ -203,6 +226,21 @@ void MahoSidebarInteractiveTestBase::DragViewToPoint(
   ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
       ui_controls::LEFT, ui_controls::UP, release_loop.QuitClosure()));
   release_loop.Run();
+}
+
+gfx::Point MahoSidebarInteractiveTestBase::GetViewPoint(
+    views::View* view,
+    double x_fraction,
+    double y_fraction) {
+  CHECK(view);
+  CHECK_GE(x_fraction, 0.0);
+  CHECK_LE(x_fraction, 1.0);
+  CHECK_GE(y_fraction, 0.0);
+  CHECK_LE(y_fraction, 1.0);
+
+  const gfx::Rect bounds = view->GetBoundsInScreen();
+  return gfx::Point(bounds.x() + static_cast<int>(bounds.width() * x_fraction),
+                    bounds.y() + static_cast<int>(bounds.height() * y_fraction));
 }
 
 void MahoSidebarInteractiveTestBase::ExpectSidebarVisible(bool visible) {

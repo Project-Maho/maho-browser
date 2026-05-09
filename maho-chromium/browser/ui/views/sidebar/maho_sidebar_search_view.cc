@@ -16,6 +16,9 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
 #include "maho/browser/ui/context_menu/maho_address_bar_context_menu.h"
+#include "maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h"
+#include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_provider.h"
+#include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -23,6 +26,7 @@
 #include "ui/base/ui_base_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/color/color_id.h"
+#include "ui/events/event.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/background.h"
@@ -44,22 +48,50 @@ namespace {
 constexpr int kSearchShellInsetTopDp = 0;
 constexpr int kSearchShellInsetBottomDp = 0;
 constexpr int kSearchShellInnerInsetDp = 0;
-constexpr int kSearchCardLeadingInsetDp = 12;
-constexpr int kSearchCardTrailingInsetDp = 12;
-constexpr int kSearchPillTrailingInsetDp = 12;
-constexpr int kSearchPillLeadingInsetDp = 12;
+constexpr int kSearchCardLeadingInsetDp = 13;
+constexpr int kSearchCardTrailingInsetDp = 13;
+constexpr int kSearchPillTrailingInsetDp = 13;
+constexpr int kSearchPillLeadingInsetDp = 13;
 constexpr int kSearchPillIconLabelSpacingDp = 8;
-constexpr int kSearchTextfieldHorizontalInsetDp = 12;
-constexpr int kSearchPillActionSpacingDp = 4;
-constexpr int kSearchPillActionIconSizeDp = 10;
-constexpr int kSearchPillActionShellSizeDp = 16;
+constexpr int kSearchTextfieldHorizontalInsetDp = 13;
+constexpr int kSearchPillActionShellWidthDp = 24;
+constexpr int kSearchPillActionShellHeightDp = 20;
+constexpr int kSearchPillUtilitySlotSpacingDp = 0;
 constexpr int kSearchPillPrimarySecondarySpacingDp = 0;
 constexpr int kSearchPillInnerVerticalInsetDp = 5;
 constexpr int kSearchPillSecondaryBaselineOffsetDp = -1;
 
-const gfx::VectorIcon& GetTrailingActionIcon() {
-  return vector_icons::kSearchChromeRefreshIcon;
-}
+class SidebarSearchIdleButton : public views::LabelButton {
+ public:
+  SidebarSearchIdleButton(views::Button::PressedCallback callback,
+                          const std::u16string& text,
+                          base::RepeatingCallback<void(bool)> hover_callback)
+      : views::LabelButton(std::move(callback), text),
+        hover_callback_(std::move(hover_callback)) {
+    SetNotifyEnterExitOnChild(true);
+  }
+
+  SidebarSearchIdleButton(const SidebarSearchIdleButton&) = delete;
+  SidebarSearchIdleButton& operator=(const SidebarSearchIdleButton&) = delete;
+  ~SidebarSearchIdleButton() override = default;
+
+  void OnMouseEntered(const ui::MouseEvent& event) override {
+    views::LabelButton::OnMouseEntered(event);
+    if (hover_callback_) {
+      hover_callback_.Run(true);
+    }
+  }
+
+  void OnMouseExited(const ui::MouseEvent& event) override {
+    views::LabelButton::OnMouseExited(event);
+    if (hover_callback_) {
+      hover_callback_.Run(false);
+    }
+  }
+
+ private:
+  base::RepeatingCallback<void(bool)> hover_callback_;
+};
 
 }  // namespace
 
@@ -86,26 +118,33 @@ MahoSidebarSearchView::MahoSidebarSearchView(Browser* browser)
   search_shell_->SetBackground(nullptr);
   search_shell_->SetBorder(nullptr);
 
-  auto idle_button = std::make_unique<views::LabelButton>(
+  std::unique_ptr<views::LabelButton> idle_button =
+      std::make_unique<SidebarSearchIdleButton>(
       base::BindRepeating(&MahoSidebarSearchView::OnIdleButtonPressed,
                           weak_factory_.GetWeakPtr()),
-      std::u16string());
+      std::u16string(),
+      base::BindRepeating(&MahoSidebarSearchView::OnIdleButtonHoverChanged,
+                          weak_factory_.GetWeakPtr()));
+  auto* idle_button_raw =
+      static_cast<SidebarSearchIdleButton*>(idle_button.get());
   idle_button->SetAccessibleName(u"Search or Enter URL...");
   idle_button->SetTooltipText(u"Search or Enter URL...");
-  idle_button->SetRequestFocusOnPress(false);
-  idle_button->SetPreferredSize(
+  idle_button_raw->SetRequestFocusOnPress(false);
+  idle_button_raw->SetPreferredSize(
       gfx::Size(1, sidebar_layout::kSearchPillHeightDp));
-  auto* idle_layout = idle_button->SetLayoutManager(std::make_unique<views::BoxLayout>(
+  auto* idle_layout = idle_button_raw->SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kHorizontal, gfx::Insets(),
       kSearchPillIconLabelSpacingDp));
   idle_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
-  auto* idle_button_raw = idle_button.get();
-  idle_button_ = search_shell_->AddChildView(std::move(idle_button));
+  idle_layout->set_main_axis_alignment(
+      views::BoxLayout::MainAxisAlignment::kStart);
+  idle_button_ = static_cast<views::LabelButton*>(
+      search_shell_->AddChildView(std::move(idle_button)));
   idle_button_->set_context_menu_controller(this);
 
   auto icon_shell = std::make_unique<views::View>();
-  icon_shell->SetPreferredSize(gfx::Size(14, 14));
+   icon_shell->SetPreferredSize(gfx::Size(14, 14));
   auto* icon_layout = icon_shell->SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 0));
   icon_layout->set_main_axis_alignment(
@@ -143,35 +182,30 @@ MahoSidebarSearchView::MahoSidebarSearchView(Browser* browser)
   secondary_label_->SetBorder(views::CreateEmptyBorder(
       gfx::Insets::TLBR(kSearchPillSecondaryBaselineOffsetDp, 0, 0, 0)));
 
-  auto trailing_actions = std::make_unique<views::View>();
-  auto* trailing_actions_layout = trailing_actions->SetLayoutManager(
-      std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal,
-                                         gfx::Insets(),
-                                         kSearchPillActionSpacingDp));
-  trailing_actions_layout->set_cross_axis_alignment(
+  auto utility_icon_slot = std::make_unique<views::View>();
+  auto* utility_slot_layout = utility_icon_slot->SetLayoutManager(
+      std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 0));
+  utility_slot_layout->set_main_axis_alignment(
+      views::BoxLayout::MainAxisAlignment::kCenter);
+  utility_slot_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
-  trailing_actions_view_ = idle_button_raw->AddChildView(std::move(trailing_actions));
+  utility_icon_slot_ = idle_button_raw->AddChildView(std::move(utility_icon_slot));
+  utility_icon_slot_->SetProperty(
+      views::kMarginsKey,
+      gfx::Insets::TLBR(0, kSearchPillUtilitySlotSpacingDp, 0, 0));
 
-  auto make_action_shell = []() {
-    auto shell = std::make_unique<views::View>();
-     shell->SetPreferredSize(
-         gfx::Size(kSearchPillActionShellSizeDp, kSearchPillActionShellSizeDp));
-     auto* layout = shell->SetLayoutManager(std::make_unique<views::BoxLayout>(
-         views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 0));
-    layout->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kCenter);
-    layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
-    return shell;
-  };
-
-  auto primary_action_shell = make_action_shell();
-  action_icon_primary_ =
-      primary_action_shell->AddChildView(std::make_unique<views::ImageView>());
-  trailing_actions_view_->AddChildView(std::move(primary_action_shell));
-
-  auto secondary_action_shell = make_action_shell();
-  action_icon_secondary_ =
-      secondary_action_shell->AddChildView(std::make_unique<views::ImageView>());
-  trailing_actions_view_->AddChildView(std::move(secondary_action_shell));
+  utility_icon_ = utility_icon_slot_->AddChildView(
+      std::make_unique<MahoLocationBarUtilityIconView>(base::BindRepeating(
+          [](base::WeakPtr<MahoSidebarSearchView> view) -> views::Widget* {
+            return view ? view->ShowUtilityPanel() : nullptr;
+          },
+          weak_factory_.GetWeakPtr())));
+  utility_icon_->SetPreferredSize(gfx::Size(kSearchPillActionShellWidthDp,
+                                            kSearchPillActionShellHeightDp));
+  utility_icon_->SetHoverVisible(false);
+  idle_layout->SetFlexForView(text_stack_raw, 1);
+  idle_layout->SetFlexForView(utility_icon_slot_, 0);
 
   auto textfield = std::make_unique<views::Textfield>();
   textfield->SetVisible(false);
@@ -256,6 +290,16 @@ bool MahoSidebarSearchView::HandleKeyEvent(views::Textfield* sender,
   }
 }
 
+void MahoSidebarSearchView::OnWidgetDestroyed(views::Widget* widget) {
+  if (widget != utility_panel_widget_) {
+    return;
+  }
+
+  utility_panel_widget_observation_.Reset();
+  utility_panel_widget_ = nullptr;
+  UpdateUtilityAffordanceVisibility();
+}
+
 void MahoSidebarSearchView::OnSearchPressed(const ui::Event& event) {
   FocusCommandSurface();
 }
@@ -265,6 +309,8 @@ void MahoSidebarSearchView::BeginEditing() {
     return;
   }
 
+  CloseUtilityPanel();
+  OnIdleButtonHoverChanged(false);
   is_editing_ = true;
   idle_button_->SetVisible(false);
   textfield_->SetVisible(true);
@@ -370,6 +416,66 @@ void MahoSidebarSearchView::OnIdleButtonPressed(const ui::Event& event) {
   OnSearchPressed(event);
 }
 
+void MahoSidebarSearchView::OnIdleButtonHoverChanged(bool hover_visible) {
+  if (!utility_icon_) {
+    return;
+  }
+
+  utility_icon_->SetHoverVisible(CanShowUtilityAffordance() && hover_visible);
+  UpdateUtilityAffordanceVisibility();
+}
+
+views::Widget* MahoSidebarSearchView::ShowUtilityPanel() {
+  if (!browser_ || !utility_icon_) {
+    return nullptr;
+  }
+
+  MahoLocationBarUtilityPanelModel model =
+      BuildMahoLocationBarUtilityPanelModelForBrowser(browser_);
+  SetUtilityPanelWidget(
+      MahoLocationBarUtilityPanelView::Show(utility_icon_, std::move(model)));
+  return utility_panel_widget_;
+}
+
+void MahoSidebarSearchView::SetUtilityPanelWidget(views::Widget* widget) {
+  if (utility_panel_widget_ == widget) {
+    UpdateUtilityAffordanceVisibility();
+    return;
+  }
+
+  if (utility_panel_widget_) {
+    utility_panel_widget_observation_.Reset();
+  }
+
+  utility_panel_widget_ = widget;
+  if (utility_panel_widget_) {
+    utility_panel_widget_observation_.Observe(utility_panel_widget_);
+  }
+  UpdateUtilityAffordanceVisibility();
+}
+
+void MahoSidebarSearchView::CloseUtilityPanel() {
+  if (utility_panel_widget_) {
+    utility_panel_widget_->Close();
+  }
+}
+
+bool MahoSidebarSearchView::CanShowUtilityAffordance() const {
+  const bool show_placeholder =
+      model_.force_placeholder_for_empty_favorites ||
+      model_.display_mode == MahoSidebarAddressDisplayMode::kSearchPlaceholder;
+  return !is_editing_ && model_.has_active_tab && !show_placeholder;
+}
+
+void MahoSidebarSearchView::UpdateUtilityAffordanceVisibility() {
+  if (!utility_icon_ || !utility_icon_slot_) {
+    return;
+  }
+
+  utility_icon_slot_->SetVisible(CanShowUtilityAffordance() &&
+                                 utility_icon_->GetVisible());
+}
+
 void MahoSidebarSearchView::UpdateIdleSurface() {
   const std::u16string primary_text = BuildPrimaryText();
   const std::u16string secondary_text = BuildSecondaryText();
@@ -383,12 +489,14 @@ void MahoSidebarSearchView::UpdateIdleSurface() {
   secondary_label_->SetText(secondary_text);
   secondary_label_->SetVisible(!secondary_text.empty());
   leading_icon_shell_->SetVisible(true);
-  trailing_actions_view_->SetVisible(has_active_tab && !show_placeholder);
-  if (action_icon_primary_ && action_icon_primary_->parent()) {
-    action_icon_primary_->parent()->SetVisible(has_active_tab && !show_placeholder);
-  }
-  if (action_icon_secondary_ && action_icon_secondary_->parent()) {
-    action_icon_secondary_->parent()->SetVisible(has_active_tab && !show_placeholder);
+  if (utility_icon_) {
+    const bool utility_available = CanShowUtilityAffordance();
+    if (!utility_available) {
+      CloseUtilityPanel();
+      utility_icon_->SetHoverVisible(false);
+    }
+    utility_icon_->SetEnabled(utility_available);
+    UpdateUtilityAffordanceVisibility();
   }
   leading_icon_->SetImage(ui::ImageModel::FromVectorIcon(
       show_placeholder ? vector_icons::kSearchIcon
@@ -398,12 +506,6 @@ void MahoSidebarSearchView::UpdateIdleSurface() {
                        : (has_active_tab ? ui::kColorSysOnSurface
                                           : ui::kColorSysOnSurfaceSubtle),
       show_placeholder ? 11 : 10));
-  action_icon_primary_->SetImage(ui::ImageModel::FromVectorIcon(
-      vector_icons::kGlobeIcon, ui::kColorSysOnSurfaceSubtle,
-      kSearchPillActionIconSizeDp));
-  action_icon_secondary_->SetImage(ui::ImageModel::FromVectorIcon(
-      GetTrailingActionIcon(), ui::kColorSysOnSurfaceSubtle,
-      kSearchPillActionIconSizeDp));
 }
 
 void MahoSidebarSearchView::UpdateSearchChrome() {
@@ -435,19 +537,17 @@ void MahoSidebarSearchView::UpdateSearchChrome() {
   leading_icon_shell_->SetPreferredSize(show_placeholder ? gfx::Size(11, 11)
                                                          : gfx::Size(14, 14));
   leading_icon_shell_->SetBackground(nullptr);
-  if (action_icon_primary_ && action_icon_primary_->parent()) {
-    action_icon_primary_->parent()->SetBackground(nullptr);
+  if (utility_icon_slot_) {
+    utility_icon_slot_->SetBackground(nullptr);
+    utility_icon_slot_->SetBorder(nullptr);
   }
-  if (action_icon_secondary_ && action_icon_secondary_->parent()) {
-    action_icon_secondary_->parent()->SetBackground(nullptr);
+  if (utility_icon_) {
+    utility_icon_->SetBackground(nullptr);
   }
   primary_label_->SetEnabledColor(show_placeholder ? ui::kColorSysOnSurfaceSubtle
                                                     : ui::kColorSysOnSurface);
   primary_label_->SetTextStyle(show_placeholder ? views::style::STYLE_BODY_5
                                                 : views::style::STYLE_BODY_4);
-  trailing_actions_view_->SetProperty(
-      views::kMarginsKey,
-      gfx::Insets::TLBR(0, show_placeholder ? 6 : 4, 0, 0));
   textfield_->SetBorder(views::CreateEmptyBorder(
       gfx::Insets::VH(0, kSearchTextfieldHorizontalInsetDp)));
   textfield_->SetPreferredSize(

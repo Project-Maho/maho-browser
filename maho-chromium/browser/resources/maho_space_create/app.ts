@@ -4,58 +4,18 @@ import {
   PageHandlerRemote,
 } from './maho_space_create.mojom-webui.js';
 import type {ProfileInfo} from './maho_space_create.mojom-webui.js';
+import {
+  SPACE_THEME_COLOR_PRESETS,
+  cssToHex,
+  hsbToCss,
+  hsbToCssAlpha,
+} from '//resources/maho_common/maho_theme_utils.js';
+import type {SpaceColor, SpaceThemeData} from
+    '//resources/maho_common/maho_theme_utils.js';
 
-type ThemeMode = 'solid'|'zen'|'gradient';
-type ColorHarmony = 'complementary';
+type ThemeMode = 'solid'|'zen';
 
-interface SpaceColor {
-  hue: number;
-  saturation: number;
-  brightness: number;
-  grain: number;
-}
-
-interface ThemeColor {
-  hue: number;
-  saturation: number;
-  brightness: number;
-  isCustom: boolean;
-  isPrimary: boolean;
-}
-
-interface SolidTheme {
-  type: 'solid';
-  color: SpaceColor;
-}
-
-interface GradientTheme {
-  type: 'gradient';
-  gradientColors: ThemeColor[];
-  harmony: ColorHarmony;
-  opacity: number;
-  texture: number;
-}
-
-type SpaceThemeData = SolidTheme|GradientTheme;
-
-interface ColorPreset {
-  title: string;
-  h: number;
-  s: number;
-  b: number;
-}
-
-const COLOR_PRESETS: ColorPreset[] = [
-  {title: 'Cream', h: 0.10, s: 0.15, b: 0.95},
-  {title: 'Pink', h: 0.92, s: 0.80, b: 0.90},
-  {title: 'Purple', h: 0.75, s: 0.80, b: 0.90},
-  {title: 'Red', h: 0.00, s: 0.80, b: 0.90},
-  {title: 'Orange', h: 0.08, s: 0.80, b: 0.90},
-  {title: 'Yellow', h: 0.15, s: 0.80, b: 0.90},
-  {title: 'Green', h: 0.35, s: 0.80, b: 0.90},
-  {title: 'Blue', h: 0.58, s: 0.80, b: 0.90},
-  {title: 'Indigo', h: 0.62, s: 0.30, b: 0.55},
-];
+const COLOR_PRESETS = SPACE_THEME_COLOR_PRESETS;
 
 const DEFAULT_COLOR_INDEX = 7;
 const DEFAULT_MODE: ThemeMode = 'zen';
@@ -65,9 +25,11 @@ let handler: PageHandlerRemote;
 let profiles: ProfileInfo[] = [];
 let selectedColorIndex = DEFAULT_COLOR_INDEX;
 let mode: ThemeMode = DEFAULT_MODE;
+let selectedVisualMode = 'zen';
 let grain = 0;
 let brightness = 90;
 let spaceName = '';
+let themeEditorEngaged = false;
 
 interface DomRefs {
   root: HTMLElement;
@@ -79,7 +41,6 @@ interface DomRefs {
   previewCanvas: HTMLElement;
   previewLabel: HTMLElement;
   previewNoise: HTMLElement;
-  gradientOverlay: HTMLElement;
   themeDot: HTMLElement;
   themeDesc: HTMLElement;
   palette: HTMLElement;
@@ -89,44 +50,6 @@ interface DomRefs {
 }
 
 let dom: DomRefs;
-
-function hsbToHsl(
-    h: number, s: number, b: number):
-    {h: number; s: number; l: number} {
-  const l = b * (1 - s / 2);
-  const sl = l === 0 || l === 1 ? 0 : (b - l) / Math.min(l, 1 - l);
-  return {
-    h: Math.round(h * 360),
-    s: Math.round(sl * 100),
-    l: Math.round(l * 100),
-  };
-}
-
-function hsbToCss(h: number, s: number, b: number): string {
-  const hsl = hsbToHsl(h, s, b);
-  return `hsl(${hsl.h}, ${hsl.s}%, ${hsl.l}%)`;
-}
-
-function cssToHex(cssColor: string): string {
-  const d = document.createElement('div');
-  d.style.color = cssColor;
-  document.body.appendChild(d);
-  const rgb = getComputedStyle(d).color;
-  document.body.removeChild(d);
-  const m = rgb.match(/(\d+)/g);
-  if (!m) {
-    return '#000000';
-  }
-  return '#' +
-      m.slice(0, 3)
-          .map((n: string) => parseInt(n, 10).toString(16).padStart(2, '0'))
-          .join('')
-          .toUpperCase();
-}
-
-function normalizeHue(hue: number): number {
-  return hue - Math.floor(hue);
-}
 
 function el<K extends keyof HTMLElementTagNameMap>(
     tag: K, className?: string,
@@ -141,6 +64,11 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return e;
 }
 
+function setThemeEditorEngaged(engaged = true): void {
+  themeEditorEngaged = engaged;
+  dom.root.classList.toggle('is-theme-editor-engaged', themeEditorEngaged);
+}
+
 function buildLeftPanel(): HTMLElement {
   const panel = el('div', 'sc-left');
 
@@ -151,7 +79,6 @@ function buildLeftPanel(): HTMLElement {
   dom.illustration = illust;
   dom.illustrationOrb = orb;
 
-  const eyebrow = el('div', 'sc-eyebrow', 'New Space');
   const title = el('div', 'sc-title', 'Create a Space');
   const subtitle = el('div', 'sc-subtitle',
       'Separate your tabs with calm, focused themes built for ' +
@@ -160,6 +87,7 @@ function buildLeftPanel(): HTMLElement {
   const nameRow = el('div', 'sc-card-row');
   const nameLabel = el('div', 'sc-card-row-label', 'Space name');
   const nameInput = el('input', 'sc-name-input');
+  nameInput.setAttribute('data-maho-identifier', 'space.create.name');
   nameInput.type = 'text';
   nameInput.placeholder = 'Enter a name';
   nameInput.autofocus = true;
@@ -194,7 +122,7 @@ function buildLeftPanel(): HTMLElement {
   const themeIconRow = el('div', 'sc-icon-row');
   const themeIcon = el('div', 'sc-icon-row-icon', '✦');
   const themeText = el('div', 'sc-icon-row-text');
-  const themeTitle = el('div', 'sc-icon-row-title', 'Theme studio');
+  const themeTitle = el('div', 'sc-icon-row-title', 'Choose a Theme');
   const themeDesc = el('div', 'sc-icon-row-desc', 'Solid · ready to customize');
   dom.themeDesc = themeDesc;
   themeText.append(themeTitle, themeDesc);
@@ -214,7 +142,7 @@ function buildLeftPanel(): HTMLElement {
   cancelBtn.addEventListener('click', handleCancel);
 
   panel.append(
-      illust, eyebrow, title, subtitle,
+      illust, title, subtitle,
       nameRow, profileRow, themeRow,
       spacer, createBtn, cancelBtn);
 
@@ -223,72 +151,176 @@ function buildLeftPanel(): HTMLElement {
 
 function buildRightPanel(): HTMLElement {
   const panel = el('div', 'sc-right');
+  const shell = el('div', 'sc-right-shell');
 
-  const canvas = el('div', 'sc-preview-canvas');
-  const gradientOverlay = el('div', 'sc-gradient-overlay');
-  const noise = el('div', 'sc-preview-noise');
-  const label = el('div', 'sc-preview-label', 'Space');
-  dom.previewCanvas = canvas;
-  dom.previewLabel = label;
-  dom.previewNoise = noise;
-  dom.gradientOverlay = gradientOverlay;
-  canvas.append(gradientOverlay, noise, label);
-
-  const controls = el('div', 'sc-preview-controls');
-
-  const palette = el('div', 'sc-color-palette');
-  dom.palette = palette;
-
-  const modeTabs = el('div', 'sc-mode-tabs');
+  const topCluster = el('div', 'sc-right-top-cluster');
+  const topHalo = el('div', 'sc-right-top-halo');
+  const modeTabs = el('div', 'sc-mode-tabs sc-right-top-chips');
   dom.modeTabs = modeTabs;
-  const modes: {id: ThemeMode; label: string}[] = [
-    {id: 'solid', label: 'Solid'},
-    {id: 'zen', label: 'Zen'},
-    {id: 'gradient', label: 'Gradient'},
+  const modes: Array<{
+    id: ThemeMode;
+    visualId: string;
+    icon: string;
+    hookIndex: number;
+  }> = [
+    {id: 'solid', visualId: 'solid', icon: '✦', hookIndex: 0},
+    {id: 'zen', visualId: 'zen', icon: '◌', hookIndex: 1},
+    {id: 'solid', visualId: 'solid-accent', icon: '◒', hookIndex: 2},
   ];
   for (const m of modes) {
-    const tab = el('button', 'sc-mode-tab', m.label);
+    const tab = el('button', 'sc-mode-tab');
+    tab.type = 'button';
     tab.dataset['mode'] = m.id;
-    if (m.id === mode) {
+    tab.dataset['visualMode'] = m.visualId;
+    tab.setAttribute('data-maho-identifier', `space.theme.mode.${m.hookIndex}`);
+    tab.setAttribute('aria-label', m.id);
+    const tabIcon = el('span', 'sc-mode-tab-icon', m.icon);
+    tab.append(tabIcon);
+    if (m.visualId === selectedVisualMode) {
       tab.classList.add('active');
     }
     tab.addEventListener('click', () => {
       mode = m.id;
+      selectedVisualMode = m.visualId;
+      setThemeEditorEngaged();
       updatePreview();
     });
     modeTabs.appendChild(tab);
   }
+  topHalo.appendChild(modeTabs);
+  topCluster.appendChild(topHalo);
 
-  const grainRow = el('div', 'sc-slider-row');
-  const grainLabel = el('span', 'sc-slider-label', 'Grain');
-  const grainSlider = el('input');
-  grainSlider.type = 'range';
-  grainSlider.min = '0';
-  grainSlider.max = '100';
-  grainSlider.value = String(grain);
-  grainSlider.addEventListener('input', () => {
-    grain = parseInt(grainSlider.value, 10);
+  const stage = el('div', 'sc-preview-stage sc-right-canvas-shell');
+  const frame = el('div', 'sc-preview-frame');
+  const canvas = el('div', 'sc-preview-canvas');
+  canvas.setAttribute('data-maho-identifier', 'space.theme.creatorPreview');
+  const stageDots = el('div', 'sc-stage-dots');
+  const stageGlow = el('div', 'sc-stage-glow');
+  const noise = el('div', 'sc-preview-noise');
+  const instruction = el(
+      'div', 'sc-preview-instruction', 'Choose a theme for your Space');
+  const label = el('div', 'sc-preview-label', 'Space');
+  const badge = el('div', 'sc-preview-badge', 'New theme');
+  dom.previewCanvas = canvas;
+  dom.previewLabel = label;
+  dom.previewNoise = noise;
+  canvas.append(stageGlow, stageDots, noise, instruction, badge, label);
+  frame.appendChild(canvas);
+  stage.appendChild(frame);
+
+  const controls = el('div', 'sc-preview-controls sc-right-layout');
+
+  const swatchPanel = el('div', 'sc-swatch-panel sc-right-swatch-rail');
+  const swatchRow = el('div', 'sc-swatch-row');
+  const chevronLeft = el('button', 'sc-swatch-chevron', '‹');
+  chevronLeft.type = 'button';
+  chevronLeft.setAttribute('data-maho-identifier', 'space.theme.chevron.left');
+  chevronLeft.addEventListener('click', () => {
+    selectedColorIndex = (selectedColorIndex - 1 + COLOR_PRESETS.length) % COLOR_PRESETS.length;
+    brightness = Math.round(COLOR_PRESETS[selectedColorIndex]!.brightness * 100);
+    dom.brightnessSlider.value = String(brightness);
+    setThemeEditorEngaged();
     updatePreview();
   });
-  dom.grainSlider = grainSlider;
-  grainRow.append(grainLabel, grainSlider);
+  const palette = el('div', 'sc-color-palette');
+  dom.palette = palette;
+  const chevronRight = el('button', 'sc-swatch-chevron', '›');
+  chevronRight.type = 'button';
+  chevronRight.setAttribute('data-maho-identifier', 'space.theme.chevron.right');
+  chevronRight.addEventListener('click', () => {
+    selectedColorIndex = (selectedColorIndex + 1) % COLOR_PRESETS.length;
+    brightness = Math.round(COLOR_PRESETS[selectedColorIndex]!.brightness * 100);
+    dom.brightnessSlider.value = String(brightness);
+    setThemeEditorEngaged();
+    updatePreview();
+  });
+  swatchRow.append(chevronLeft, palette, chevronRight);
+  swatchPanel.appendChild(swatchRow);
 
-  const brightnessRow = el('div', 'sc-slider-row');
-  const brightnessLabel = el('span', 'sc-slider-label', 'Brightness');
-  const brightnessSlider = el('input');
+  const midControls = el('div', 'sc-right-mid-controls');
+  const brightnessTrackShell = el('div', 'sc-luminosity-track-shell');
+  const brightnessMinus = el('button', 'sc-luminosity-btn', '−');
+  brightnessMinus.type = 'button';
+  brightnessMinus.setAttribute('data-maho-identifier', 'space.theme.luminosity.minus');
+  brightnessMinus.addEventListener('click', () => {
+    brightness = Math.max(15, brightness - 5);
+    brightnessSlider.value = String(brightness);
+    setThemeEditorEngaged();
+    updatePreview();
+  });
+  const brightnessSlider = el('input', 'sc-luminosity-range');
   brightnessSlider.type = 'range';
   brightnessSlider.min = '15';
   brightnessSlider.max = '100';
   brightnessSlider.value = String(brightness);
   brightnessSlider.addEventListener('input', () => {
     brightness = parseInt(brightnessSlider.value, 10);
+    setThemeEditorEngaged();
     updatePreview();
   });
   dom.brightnessSlider = brightnessSlider;
-  brightnessRow.append(brightnessLabel, brightnessSlider);
+  const brightnessPlus = el('button', 'sc-luminosity-btn', '+');
+  brightnessPlus.type = 'button';
+  brightnessPlus.setAttribute('data-maho-identifier', 'space.theme.luminosity.plus');
+  brightnessPlus.addEventListener('click', () => {
+    brightness = Math.min(100, brightness + 5);
+    brightnessSlider.value = String(brightness);
+    setThemeEditorEngaged();
+    updatePreview();
+  });
+  brightnessTrackShell.appendChild(brightnessSlider);
+  midControls.append(brightnessMinus, brightnessTrackShell, brightnessPlus);
 
-  controls.append(palette, modeTabs, grainRow, brightnessRow);
-  panel.append(canvas, controls);
+  const bottomControls = el('div', 'sc-right-bottom-controls');
+
+  const waveShell = el('div', 'sc-wave-shell');
+  waveShell.setAttribute('aria-hidden', 'true');
+  const waveSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  waveSvg.setAttribute('class', 'sc-wave-svg');
+  waveSvg.setAttribute('viewBox', '0 0 260 92');
+  waveSvg.setAttribute('preserveAspectRatio', 'none');
+  const wavePathBack = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  wavePathBack.setAttribute(
+      'd',
+      'M4 62 C22 30, 40 30, 58 62 S94 94, 122 52 S164 16, 194 48 S230 84, 256 40');
+  wavePathBack.setAttribute('class', 'sc-wave-path sc-wave-path-back');
+  const wavePathFront = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  wavePathFront.setAttribute(
+      'd',
+      'M4 54 C20 82, 50 82, 70 48 S112 12, 140 46 S182 86, 214 56 S238 22, 256 34');
+  wavePathFront.setAttribute('class', 'sc-wave-path sc-wave-path-front');
+  waveSvg.append(wavePathBack, wavePathFront);
+  waveShell.appendChild(waveSvg);
+
+  const dialShell = el('div', 'sc-dial-shell');
+  const dialRings = el('div', 'sc-dial-rings');
+  dialRings.setAttribute('aria-hidden', 'true');
+  dialRings.append(
+      el('span', 'sc-dial-ring sc-dial-ring-outer'),
+      el('span', 'sc-dial-ring sc-dial-ring-middle'),
+      el('span', 'sc-dial-ring sc-dial-ring-inner'));
+  const dialCore = el('div', 'sc-dial-core');
+  dialCore.setAttribute('aria-hidden', 'true');
+  const grainSlider = el('input', 'sc-grain-hook');
+  grainSlider.type = 'range';
+  grainSlider.min = '0';
+  grainSlider.max = '100';
+  grainSlider.value = String(grain);
+  grainSlider.setAttribute('data-maho-identifier', 'space.theme.grainDial');
+  grainSlider.setAttribute('aria-label', 'grain');
+  grainSlider.addEventListener('input', () => {
+    grain = parseInt(grainSlider.value, 10);
+    setThemeEditorEngaged();
+    updatePreview();
+  });
+  dom.grainSlider = grainSlider;
+  dialShell.append(dialRings, dialCore, grainSlider);
+
+  bottomControls.append(waveShell, dialShell);
+
+  controls.append(topCluster, stage, midControls, swatchPanel, bottomControls);
+  shell.appendChild(controls);
+  panel.appendChild(shell);
 
   return panel;
 }
@@ -296,19 +328,23 @@ function buildRightPanel(): HTMLElement {
 function buildPalette(): void {
   dom.palette.textContent = '';
   COLOR_PRESETS.forEach((c, i) => {
-    const swatch = el('div', 'sc-color-swatch');
+    const swatch = el('button', 'sc-color-swatch');
+    swatch.type = 'button';
     if (i === selectedColorIndex) {
       swatch.classList.add('active');
     }
-    swatch.style.background = hsbToCss(c.h, c.s, c.b);
+    swatch.style.background = hsbToCss(c.hue, c.saturation, c.brightness);
+    swatch.setAttribute('data-maho-identifier', `space.theme.swatch.${i}`);
     swatch.addEventListener('click', () => {
       selectedColorIndex = i;
-      brightness = Math.round(c.b * 100);
+      brightness = Math.round(c.brightness * 100);
       dom.brightnessSlider.value = String(brightness);
+      setThemeEditorEngaged();
       updatePreview();
     });
     dom.palette.appendChild(swatch);
   });
+
 }
 
 function updatePreview(): void {
@@ -318,42 +354,27 @@ function updatePreview(): void {
   }
 
   const bAdj = brightness / 100;
-  const color = hsbToCss(c.h, c.s, bAdj);
-  const colorDark = hsbToCss(c.h, c.s, bAdj * 0.6);
-  const colorMid = hsbToCss(c.h, c.s * 0.7, bAdj * 0.8);
+  const color = hsbToCss(c.hue, c.saturation, bAdj);
+  const colorDark = hsbToCss(c.hue, c.saturation, bAdj * 0.6);
 
   if (mode === 'solid') {
     dom.previewCanvas.style.background = color;
-    dom.gradientOverlay.style.opacity = '0';
-  } else if (mode === 'zen') {
+  } else {
     dom.previewCanvas.style.background =
         `radial-gradient(ellipse at 30% 40%, ${color} 0%, ${colorDark} 100%)`;
-    dom.gradientOverlay.style.opacity = '0';
-  } else {
-    dom.previewCanvas.style.background = color;
-    const comp = hsbToCss(
-        normalizeHue(c.h + 0.5), c.s * 0.8, bAdj * 0.85);
-    dom.gradientOverlay.style.background =
-        `linear-gradient(135deg, ${color} 0%, ${comp} 50%, ${colorMid} 100%)`;
-    dom.gradientOverlay.style.opacity = '1';
   }
 
   dom.previewNoise.style.opacity = String(grain / 200);
 
   dom.themeDot.style.background = color;
   dom.illustration.style.background =
-      hsbToCss(c.h, c.s * 0.3, bAdj * 0.85) + '28';
+      hsbToCssAlpha(c.hue, c.saturation * 0.3, bAdj * 0.85, 0.16);
   dom.illustrationOrb.style.background =
-      hsbToCss(c.h, c.s * 0.4, bAdj * 0.85) + '38';
+      hsbToCssAlpha(c.hue, c.saturation * 0.4, bAdj * 0.85, 0.22);
 
-  const modeLabel =
-      mode === 'solid' ? 'Solid' : mode === 'zen' ? 'Zen' : 'Gradient';
-  if (mode === 'gradient') {
-    dom.themeDesc.textContent = 'Gradient · 2 tones · Complementary';
-  } else {
-    const hex = cssToHex(color);
-    dom.themeDesc.textContent = `${modeLabel} · ${hex}`;
-  }
+  const modeLabel = mode === 'solid' ? 'Solid' : 'Zen';
+  const hex = cssToHex(color);
+  dom.themeDesc.textContent = `${modeLabel} · ${hex}`;
 
   dom.palette.querySelectorAll('.sc-color-swatch').forEach((s, i) => {
     s.classList.toggle('active', i === selectedColorIndex);
@@ -362,7 +383,8 @@ function updatePreview(): void {
   dom.modeTabs.querySelectorAll('.sc-mode-tab').forEach(
       (t: Element) => {
         const btn = t as HTMLButtonElement;
-        btn.classList.toggle('active', btn.dataset['mode'] === mode);
+        btn.classList.toggle(
+            'active', btn.dataset['visualMode'] === selectedVisualMode);
       });
 }
 
@@ -374,38 +396,13 @@ function buildThemeJson(): string {
 
   const bAdj = brightness / 100;
   const spaceColor: SpaceColor = {
-    hue: c.h,
-    saturation: c.s,
+    hue: c.hue,
+    saturation: c.saturation,
     brightness: bAdj,
     grain: grain / 100,
   };
 
-  let theme: SpaceThemeData;
-  if (mode === 'gradient') {
-    const primary: ThemeColor = {
-      hue: normalizeHue(c.h),
-      saturation: c.s,
-      brightness: bAdj,
-      isCustom: false,
-      isPrimary: true,
-    };
-    const secondary: ThemeColor = {
-      hue: normalizeHue(c.h + 0.5),
-      saturation: c.s,
-      brightness: bAdj,
-      isCustom: false,
-      isPrimary: false,
-    };
-    theme = {
-      type: 'gradient',
-      gradientColors: [primary, secondary],
-      harmony: 'complementary',
-      opacity: 0.8,
-      texture: grain / 100,
-    };
-  } else {
-    theme = {type: 'solid', color: spaceColor};
-  }
+  const theme: SpaceThemeData = {type: 'solid', color: spaceColor};
   return JSON.stringify(theme);
 }
 
@@ -414,7 +411,7 @@ function getColorHex(): string {
   if (!c) {
     return '#5F8BFF';
   }
-  return cssToHex(hsbToCss(c.h, c.s, brightness / 100));
+  return cssToHex(hsbToCss(c.hue, c.saturation, brightness / 100));
 }
 
 async function handleCreate(): Promise<void> {
@@ -484,6 +481,7 @@ function initialize(): void {
   root.appendChild(buildRightPanel());
 
   buildPalette();
+  setThemeEditorEngaged(false);
   updatePreview();
 
   void loadProfiles();

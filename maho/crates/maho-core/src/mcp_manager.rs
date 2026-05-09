@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use maho_types::events::core_update::CoreUpdate;
+use maho_types::events::core_update::{CoreUpdate, LLMRequestContext};
 use maho_types::mcp::{ToolCall, ToolDefinition, ToolHandlerType, ToolPermissionTier, ToolResult};
 
 const MAX_TOOL_ROUNDS: u8 = 5;
@@ -287,7 +287,13 @@ impl McpManager {
                 request_id: request_id.to_string(),
                 request_type: maho_types::events::core_update::LLMRequestType::ChatCompletion,
                 prompt: messages_json,
-                context: serde_json::json!({ "tool_continuation": true }),
+                context: LLMRequestContext::Chat {
+                    chat: maho_types::chat::ChatRequestContext {
+                        request_mode: maho_types::chat::ChatRequestMode::ToolAssistedTask,
+                        page_context: None,
+                        tools: None,
+                    },
+                },
             });
         }
 
@@ -335,7 +341,13 @@ impl McpManager {
             request_id: pending.original_request_id,
             request_type: maho_types::events::core_update::LLMRequestType::ChatCompletion,
             prompt: messages_json,
-            context: serde_json::json!({ "tool_continuation": true }),
+            context: LLMRequestContext::Chat {
+                chat: maho_types::chat::ChatRequestContext {
+                    request_mode: maho_types::chat::ChatRequestMode::ToolAssistedTask,
+                    page_context: None,
+                    tools: None,
+                },
+            },
         }]
     }
 
@@ -422,7 +434,13 @@ impl McpManager {
                     request_id: pending.original_request_id,
                     request_type: maho_types::events::core_update::LLMRequestType::ChatCompletion,
                     prompt: messages_json,
-                    context: serde_json::json!({ "tool_continuation": true }),
+                    context: LLMRequestContext::Chat {
+                        chat: maho_types::chat::ChatRequestContext {
+                            request_mode: maho_types::chat::ChatRequestMode::ToolAssistedTask,
+                            page_context: None,
+                            tools: None,
+                        },
+                    },
                 }];
             }
         }

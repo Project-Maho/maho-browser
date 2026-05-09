@@ -69,6 +69,9 @@ interface PageHandler {
   // Deletes the space with the given ID.
   DeleteSpace(string space_id);
 
+  // Creates a new folder in the given space.
+  CreateFolder(string space_id);
+
   // Renames the space.
   RenameSpace(string space_id, string new_name);
 
@@ -89,6 +92,12 @@ interface PageHandler {
 
   // Assigns a profile to a space.
   AssignProfileToSpace(string space_id, string profile_id);
+
+  // Opens a save dialog and exports the space theme.
+  ExportTheme(string space_id);
+
+  // Opens an open dialog and imports a space theme.
+  ImportTheme(string space_id);
 
   // ATC rule CRUD.
   GetATCRules() => (array<ATCRule> rules);

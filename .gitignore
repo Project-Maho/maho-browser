@@ -2,6 +2,7 @@
 chromium/
 
 # Build artifacts
+.build.lock
 maho/target/
 maho-chromium/third_party/maho/prebuilt/
 

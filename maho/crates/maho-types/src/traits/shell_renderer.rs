@@ -121,6 +121,7 @@ pub enum SuggestionType {
     UnitConversion,
     ArchivedTab,
     ClosedTab,
+    Folder,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -136,6 +137,8 @@ pub struct SuggestionViewModel {
     pub relevance_score: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub match_ranges: Option<Vec<(usize, usize)>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shortcut: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -143,10 +146,14 @@ pub struct SuggestionViewModel {
 pub struct SearchContext {
     pub tabs: Vec<TabViewModel>,
     pub spaces: Vec<SpaceViewModel>,
+    pub folders: Vec<FolderViewModel>,
     pub archived_tabs: Vec<TabViewModel>,
     pub bookmarks: Vec<(String, String, String)>,
+    #[serde(default)]
+    pub bookmark_favicons: Vec<(String, ImageData)>,
     pub closed_tabs: Vec<TabViewModel>,
     pub extensions: Vec<(String, String)>,
+    pub is_incognito: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

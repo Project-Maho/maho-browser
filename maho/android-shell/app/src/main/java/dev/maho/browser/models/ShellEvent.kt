@@ -271,7 +271,7 @@ sealed class ShellEvent {
     ) : ShellEvent()
 
     @Serializable @SerialName("command_bar_select")
-    data class CommandBarSelect(val index: Int) : ShellEvent()
+    data class CommandBarSelect(val index: Int, val key: String) : ShellEvent()
 
     @Serializable @SerialName("command_bar_action")
     data class CommandBarAction(val action: QuickAction) : ShellEvent()

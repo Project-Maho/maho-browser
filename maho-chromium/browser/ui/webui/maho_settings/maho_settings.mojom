@@ -7,21 +7,236 @@ struct SettingValue {
   string value;
 };
 
-// Used by the WebUI page to bootstrap bidirectional communication.
+struct ProfileInfo {
+  string id;
+  string name;
+  bool is_default;
+  bool is_active;
+  array<string> space_ids;
+};
+
+struct ATCRule {
+  string id;
+  string url_pattern;
+  string target_space_id;
+  bool enabled;
+};
+
+struct AISettings {
+  bool has_api_key;
+  string endpoint;
+  string model;
+  bool opencode_runtime_enabled;
+  string approval_policy;
+  bool session_persistence_enabled;
+  string runtime_endpoint;
+  string runtime_model;
+};
+
+struct ShortcutBinding {
+  string action;
+  string label;
+  string key_combo;
+  bool is_default;
+  bool enabled;
+};
+
+struct SyncStatus {
+  bool is_syncing;
+  string relay_url;
+  string room_id;
+  string status_label;
+  string error_message;
+  int64 last_sync_timestamp;
+};
+
+struct SyncDeviceInfo {
+  string id;
+  string name;
+  string device_type;
+  bool is_online;
+};
+
+struct SyncKeyInfo {
+  string sync_key;
+  string room_id;
+  string recovery_phrase;
+};
+
+enum PasswordProviderKind {
+  kMahoNative,
+  kBitwarden,
+  kOnePassword,
+};
+
+struct PasswordProviderCapabilities {
+  bool can_list_saved_passwords;
+  bool can_search_saved_passwords;
+  bool can_add_saved_passwords;
+  bool can_delete_saved_passwords;
+  bool can_edit_saved_passwords;
+  bool can_reveal_passwords;
+};
+
+struct PasswordProviderStatus {
+  PasswordProviderKind provider;
+  string display_name;
+  string description;
+  bool is_available;
+  bool is_enabled;
+  PasswordProviderCapabilities capabilities;
+};
+
+struct SavedPassword {
+  string id;
+  string domain;
+  string username;
+  string created_at;
+  string? last_used;
+  string? password;
+};
+
+struct ThemeStoreEntry {
+  string id;
+  string name;
+  string author;
+  string description;
+  string preview_url;
+  string theme_json;
+  array<string> tags;
+};
+
+struct SpaceBasicInfo {
+  string id;
+  string name;
+};
+
+struct AutofillAddress {
+  string id;
+  string name;
+  string address_line1;
+  string address_line2;
+  string city;
+  string state;
+  string postal_code;
+  string country;
+  string phone;
+  string email;
+};
+
+struct AutofillPayment {
+  string id;
+  string card_network;
+  string last_four;
+  string expiration;
+  string cardholder_name;
+};
+
+struct FilterListInfo {
+  string id;
+  string name;
+  string url;
+  bool enabled;
+  uint32 rule_count;
+};
+
+struct ContentBlockerStats {
+  uint32 total_rule_count;
+  uint32 filter_list_count;
+};
+
+struct InstalledExtension {
+  string id;
+  string name;
+  string version;
+  string description;
+  bool enabled;
+};
+
 interface PageHandlerFactory {
-  // The WebUI calls this method when the page is first initialized.
   CreatePageHandler(pending_remote<Page> page,
                     pending_receiver<PageHandler> handler);
 };
 
-// Browser-side handler for requests from WebUI page.
 interface PageHandler {
   GetSettings() => (array<SettingValue> settings);
   SetSetting(string key, string value) => (bool success);
+
+  GetProfiles() => (array<ProfileInfo> profiles);
+  CreateProfile(string name) => (ProfileInfo? profile);
+  DeleteProfile(string profile_id) => (bool success);
+  SwitchProfile(string profile_id) => (bool success);
+
+  GetATCRules() => (array<ATCRule> rules);
+  AddATCRule(string url_pattern, string target_space_id) => (ATCRule? rule);
+  RemoveATCRule(string rule_id);
+  ToggleATCRule(string rule_id, bool enabled);
+
+  GetAISettings() => (AISettings settings);
+  SetAIApiKey(string key);
+  SetAIEndpoint(string endpoint);
+  SetAIModel(string model);
+  SetAIApprovalPolicy(string policy);
+  SetAISessionPersistence(bool enabled);
+  SetAIRuntimeEndpoint(string endpoint);
+  SetAIRuntimeModel(string model);
+
+  GetShortcuts() => (array<ShortcutBinding> shortcuts);
+  SetShortcut(string action, string key_combo) => (bool success);
+  ResetShortcut(string action);
+  ResetAllShortcuts();
+  ToggleShortcut(string action, bool enabled);
+
+  GetSyncStatus() => (SyncStatus status);
+  GetSyncDevices() => (array<SyncDeviceInfo> devices);
+  GenerateSyncKey() => (SyncKeyInfo key_info);
+  StartSync(string sync_key) => (SyncStatus status);
+  JoinSync(string recovery_phrase) => (SyncStatus status);
+  StopSync();
+
+  FetchThemeStore() => (array<ThemeStoreEntry> themes, bool success);
+  ApplyThemeToSpace(string space_id, string theme_json) => (bool success);
+  GetSpaces() => (array<SpaceBasicInfo> spaces);
+
+  GetPasswordProviderStatus() => (PasswordProviderStatus status);
+  GetSavedPasswords() => (array<SavedPassword> passwords);
+  SearchPasswords(string query) => (array<SavedPassword> passwords);
+  AddPassword(string domain, string username, string password) => (bool success);
+  UpdatePasswordUsername(string password_id, string username) => (bool success);
+  DeletePassword(string password_id) => (bool success);
+
+  GetAutofillAddresses() => (array<AutofillAddress> addresses);
+  AddAutofillAddress(string id,
+                     string name,
+                     string address_line1,
+                     string address_line2,
+                     string city,
+                     string state,
+                     string postal_code,
+                     string country,
+                     string phone,
+                     string email) => (AutofillAddress? address);
+  DeleteAutofillAddress(string id) => (bool success);
+  GetAutofillPayments() => (array<AutofillPayment> payments);
+  AddAutofillPayment(string id,
+                     string card_network,
+                     string last_four,
+                     string expiration,
+                     string cardholder_name) => (AutofillPayment? payment);
+  DeleteAutofillPayment(string id) => (bool success);
+
+  GetFilterLists() => (array<FilterListInfo> lists);
+  AddFilterList(string id, string name, string url) => (bool success);
+  ToggleFilterList(string id, bool enabled);
+  RemoveFilterList(string id);
+  RebuildContentRules() => (ContentBlockerStats stats);
+  GetContentBlockerStats() => (ContentBlockerStats stats);
+
+  GetInstalledExtensions() => (array<InstalledExtension> extensions);
+  ToggleExtension(string id) => (bool enabled);
+  RemoveExtension(string id) => (bool success);
 };
 
-// WebUI-side interface for browser-to-page push updates.
 interface Page {
-  // Called when settings change.
   SettingsChanged(array<SettingValue> settings);
 };

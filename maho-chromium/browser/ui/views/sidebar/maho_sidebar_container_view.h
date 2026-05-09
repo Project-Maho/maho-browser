@@ -3,7 +3,6 @@
 #ifndef MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_CONTAINER_VIEW_H_
 #define MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_CONTAINER_VIEW_H_
 
-#include <memory>
 #include <string>
 
 #include "base/memory/raw_ptr.h"
@@ -13,6 +12,7 @@
 #include "ui/gfx/animation/animation_delegate.h"
 #include "ui/gfx/animation/slide_animation.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/views/controls/resize_area_delegate.h"
 #include "ui/views/view.h"
 #include "ui/views/view_utils.h"
 
@@ -20,9 +20,8 @@ class Browser;
 
 namespace maho {
 
-class MahoCommandOverlayController;
-
 class MahoSidebarContainerView : public views::View,
+                                  public views::ResizeAreaDelegate,
                                   public gfx::AnimationDelegate {
   METADATA_HEADER(MahoSidebarContainerView, views::View)
 
@@ -36,13 +35,6 @@ class MahoSidebarContainerView : public views::View,
   MahoSidebarContainerView& operator=(const MahoSidebarContainerView&) = delete;
 
   views::View* sidebar_view() { return sidebar_view_; }
-
-  MahoCommandOverlayController* command_overlay_controller() {
-    return command_overlay_controller_.get();
-  }
-
-  void ShowCreateSpace();
-  void ToggleCommandOverlay();
   void ShowCommandOverlayForCurrentTab(const std::string& current_url);
   void ShowCommandOverlayForNewTab();
   void ShowCommandOverlayForSearch(const std::string& initial_query);
@@ -61,8 +53,12 @@ class MahoSidebarContainerView : public views::View,
   void UpdateResizeHandleBounds();
 
   // views::View:
+  void Layout(PassKey) override;
   void OnMouseEntered(const ui::MouseEvent& event) override;
   void OnMouseExited(const ui::MouseEvent& event) override;
+
+  // views::ResizeAreaDelegate:
+  void OnResize(int resize_amount, bool done_resizing) override;
 
   // gfx::AnimationDelegate:
   void AnimationProgressed(const gfx::Animation* animation) override;
@@ -85,7 +81,6 @@ class MahoSidebarContainerView : public views::View,
   raw_ptr<Browser> browser_;
   raw_ptr<views::View> sidebar_view_ = nullptr;
   raw_ptr<views::View> resize_handle_view_ = nullptr;
-  std::unique_ptr<MahoCommandOverlayController> command_overlay_controller_;
   PrefChangeRegistrar pref_registrar_;
 
   gfx::SlideAnimation reveal_animation_;
@@ -95,8 +90,7 @@ class MahoSidebarContainerView : public views::View,
   bool suppress_hover_reveal_ = false;
   bool was_panel_expanded_ = false;
   bool is_resizing_ = false;
-  int resize_drag_start_x_ = 0;
-  int resize_drag_start_width_ = 0;
+  int resize_drag_start_width_ = -1;
 
   base::WeakPtrFactory<MahoSidebarContainerView> weak_factory_{this};
 };

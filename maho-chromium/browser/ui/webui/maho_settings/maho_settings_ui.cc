@@ -28,10 +28,10 @@ MahoSettingsUI::MahoSettingsUI(content::WebUI* web_ui)
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       Profile::FromWebUI(web_ui), maho::kMahoSettingsHost);
   webui::SetupWebUIDataSource(source, kMahoSettingsResources,
-                              IDR_MAHO_SETTINGS_SETTINGS_HTML);
+                               IDR_MAHO_SETTINGS_SETTINGS_HTML);
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::ChildSrc,
-      "child-src 'self' chrome://settings;");
+      "child-src 'self' chrome://settings chrome://settings/passwords;");
 }
 
 MahoSettingsUI::~MahoSettingsUI() = default;

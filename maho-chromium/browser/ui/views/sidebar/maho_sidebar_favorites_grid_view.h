@@ -58,11 +58,11 @@ class MahoSidebarFavoritesGridView : public views::View {
   DropCallback GetDropCallback(const ui::DropTargetEvent& event) override;
   void OnDragExited() override;
 
-  // Called by a visible parent (e.g. MahoSidebarView) to reveal the empty
-  // favorites grid during a valid drag so it can accept drops.
+  // Called by a visible parent (e.g. MahoSidebarView) to ensure the empty
+  // favorites surface is shown during a valid drag so it can accept drops.
   void RevealForDrag();
-  // Called by the parent when the drag leaves the sidebar region, collapsing
-  // the revealed-but-still-empty grid back to zero height.
+  // Called by the parent when the drag leaves the sidebar region, clearing any
+  // temporary drag-highlight state.
   void CollapseFromDrag();
 
   ui::DropTargetEvent ForwardDropEventToGrid(
@@ -131,6 +131,21 @@ class MahoSidebarFavoritesGridView : public views::View {
   LayoutSpec current_layout_spec_;
   bool drag_over_drop_target_ = false;
   bool drag_reveal_active_ = false;
+
+  // --- Animation infrastructure ---
+  std::array<gfx::Rect, kTileCount> snapshot_bounds_ = {};
+  std::array<std::string, kTileCount> snapshot_tab_ids_ = {};
+  int current_drag_preview_index_ = -1;
+
+  // Animation helpers
+  void SnapshotCurrentBounds();
+  void AnimateReorder();
+  void AnimateInsertion(size_t tile_index);
+  void AnimateRemoval(size_t tile_index, base::OnceClosure on_complete);
+  void AnimateDragPreview(int preview_index, const std::string& dragged_tab_id);
+  void CancelAnimations();
+  int FindSnapshotIndexForTabId(const std::string& tab_id) const;
+
   base::WeakPtrFactory<MahoSidebarFavoritesGridView> weak_factory_{this};
 };
 

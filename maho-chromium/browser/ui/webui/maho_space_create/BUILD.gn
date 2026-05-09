@@ -23,7 +23,7 @@ source_set("maho_space_create") {
     "//chrome/browser/profiles:profile",
     "//maho/browser:maho_core_holder",
     "//maho/browser:maho_space_profile_bridge",
-    "//maho/browser:maho_ui_stubs",
+    "//maho/browser:maho_theme_support",
     "//maho/browser/resources/maho_space_create:resources",
     "//maho/components/constants",
     "//maho/third_party/maho:maho_core_prebuilt",

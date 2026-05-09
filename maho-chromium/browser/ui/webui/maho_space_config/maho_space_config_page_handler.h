@@ -53,6 +53,7 @@ class MahoSpaceConfigPageHandler
   raw_ptr<content::WebContents> web_contents_;
   std::string space_id_;
   maho_space_config::mojom::InitialFocus initial_focus_;
+  std::optional<std::string> cached_theme_json_;
   base::WeakPtrFactory<MahoSpaceConfigPageHandler> weak_factory_{this};
 };
 

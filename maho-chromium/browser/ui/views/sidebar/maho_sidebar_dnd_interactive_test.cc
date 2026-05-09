@@ -2,13 +2,18 @@
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_interactive_test_base.h"
 
+#include <map>
+
+#include "base/test/run_until.h"
 #include "chrome/browser/ui/browser.h"
 #include "content/public/test/browser_test.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
-#include "ui/base/test/ui_controls.h"
-#include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/base/dragdrop/drop_target_event.h"
+#include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
+#include "ui/base/dragdrop/os_exchange_data.h"
+#include "ui/compositor/layer_tree_owner.h"
 
 namespace maho {
 namespace {
@@ -24,12 +29,25 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
   auto state = GetViewState();
   ASSERT_GE(state.favorites.items.size(), 2u);
 
-  views::View* first_tile = favorites_->GetTileForTesting(0);
-  views::View* second_tile = favorites_->GetTileForTesting(1);
-  ASSERT_TRUE(first_tile);
-  ASSERT_TRUE(second_tile);
+  views::View* target_tile = favorites_->GetTileForTesting(1);
+  ASSERT_TRUE(target_tile);
 
-  DragViewToView(first_tile, second_tile);
+  SidebarDragPayload payload;
+  payload.node_kind = SidebarNodeKind::kTab;
+  payload.node_id = state.favorites.items[0].tab_id;
+  payload.origin = SidebarDragOrigin::kFavorites;
+  payload.space_id = state.tab_list.active_space_id;
+
+  ui::OSExchangeData data;
+  WriteMahoDragData(payload, &data);
+  ui::DropTargetEvent event(data, gfx::PointF(5, 5), gfx::PointF(5, 5),
+                            static_cast<int>(ui::mojom::DragOperation::kMove));
+  target_tile->OnDragUpdated(event);
+  auto callback = target_tile->GetDropCallback(event);
+  ASSERT_TRUE(callback);
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+  target_tile->OnDragExited();
 
   EXPECT_TRUE(observer_.HasEvent("reorder_favorite"));
 }
@@ -39,34 +57,55 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest, DragTabToPinnedSection) {
   observer_.Clear();
 
   auto state = GetViewState();
-  ASSERT_FALSE(state.tab_list.normal_tree.empty());
+  ASSERT_FALSE(state.tab_list.tabs.empty());
 
   std::string tab_id;
-  for (const auto& node : state.tab_list.normal_tree) {
-    if (node.kind == SidebarNodeKind::kTab) {
+  int tab_strip_index = -1;
+  for (const auto& node : state.tab_list.tabs) {
+    if (node.index >= 0) {
       tab_id = node.tab_id;
+      tab_strip_index = node.index;
       break;
     }
   }
   ASSERT_FALSE(tab_id.empty());
 
-  auto* tab_row = tab_list_->FindTabRowByIdForTesting(tab_id);
-  ASSERT_TRUE(tab_row);
-
-  views::View* pinned_target =
-      tab_list_->FindSectionDropTargetForTesting(MahoSidebarTabSection::kPinned);
+  auto* pinned_target = tab_list_->FindSectionDropTargetForTesting(
+      MahoSidebarTabSection::kPinned);
   ASSERT_TRUE(pinned_target);
 
-  DragViewToView(tab_row, pinned_target);
+  SidebarDragPayload payload;
+  payload.node_kind = SidebarNodeKind::kTab;
+  payload.node_id = tab_id;
+  payload.origin = SidebarDragOrigin::kNormalSection;
+  payload.space_id = state.tab_list.active_space_id;
+  payload.tab_strip_index = tab_strip_index;
+
+  ui::OSExchangeData data;
+  WriteMahoDragData(payload, &data);
+  ui::DropTargetEvent event(data, gfx::PointF(5, 2), gfx::PointF(5, 2),
+                            static_cast<int>(ui::mojom::DragOperation::kMove));
+  pinned_target->OnDragUpdated(event);
+  auto callback = pinned_target->GetDropCallback(event);
+  ASSERT_TRUE(callback);
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+  pinned_target->OnDragExited();
 
   EXPECT_TRUE(observer_.HasEvent("pin_tab"));
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest, DragTabIntoFolder) {
   SeedProfile(2);
+  AddTestTabs(1);
   observer_.Clear();
 
-  auto state = GetViewState();
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+
+  MahoSidebarStateAdapter adapter;
+  auto state = adapter.BuildViewStateModel(browser());
+
   std::string folder_id;
   for (const auto& node : state.tab_list.normal_tree) {
     if (node.kind == SidebarNodeKind::kFolder) {
@@ -77,24 +116,150 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest, DragTabIntoFolder) {
   ASSERT_FALSE(folder_id.empty()) << "Seed 2 must have at least one folder";
 
   std::string tab_id;
+  int tab_strip_index = -1;
+  std::string active_tab_id;
+  int active_tab_strip_index = -1;
   for (const auto& node : state.tab_list.normal_tree) {
-    if (node.kind == SidebarNodeKind::kTab &&
-        node.parent_folder_id.empty()) {
+    if (node.kind != SidebarNodeKind::kTab || node.is_pinned ||
+        node.tab_id.empty() || node.tab_strip_index < 0 ||
+        !node.parent_folder_id.empty()) {
+      continue;
+    }
+    if (!node.is_active) {
       tab_id = node.tab_id;
+      tab_strip_index = node.tab_strip_index;
+      break;
+    }
+    if (active_tab_id.empty()) {
+      active_tab_id = node.tab_id;
+      active_tab_strip_index = node.tab_strip_index;
+    }
+  }
+  if (tab_id.empty()) {
+    tab_id = active_tab_id;
+    tab_strip_index = active_tab_strip_index;
+  }
+
+  if (tab_id.empty()) {
+    std::string active_fallback_tab_id;
+    int active_fallback_tab_strip_index = -1;
+    for (const auto& row : state.tab_list.tabs) {
+      if (row.tab_id.empty() || row.index < 0 || row.is_pinned ||
+          row.section != MahoSidebarTabSection::kNormal) {
+        continue;
+      }
+      if (!row.is_active) {
+        tab_id = row.tab_id;
+        tab_strip_index = row.index;
+        break;
+      }
+      if (active_fallback_tab_id.empty()) {
+        active_fallback_tab_id = row.tab_id;
+        active_fallback_tab_strip_index = row.index;
+      }
+    }
+    if (tab_id.empty()) {
+      tab_id = active_fallback_tab_id;
+      tab_strip_index = active_fallback_tab_strip_index;
+    }
+  }
+
+  ASSERT_FALSE(tab_id.empty()) << "Expected a live normal tab to drag";
+  ASSERT_GE(tab_strip_index, 0) << "Could not resolve live tab-strip index";
+
+  auto* folder_row = tab_list_->FindFolderRowByIdForTesting(folder_id);
+  ASSERT_TRUE(folder_row);
+
+  SidebarDragPayload payload;
+  payload.node_kind = SidebarNodeKind::kTab;
+  payload.node_id = tab_id;
+  payload.origin = SidebarDragOrigin::kNormalSection;
+  payload.space_id = state.tab_list.active_space_id;
+  payload.tab_strip_index = tab_strip_index;
+
+  ui::OSExchangeData data;
+  WriteMahoDragData(payload, &data);
+  ui::DropTargetEvent event(data,
+                            gfx::PointF(5, folder_row->height() * 0.5f),
+                            gfx::PointF(5, folder_row->height() * 0.5f),
+                            static_cast<int>(ui::mojom::DragOperation::kMove));
+  folder_row->OnDragUpdated(event);
+  auto callback = folder_row->GetDropCallback(event);
+  ASSERT_TRUE(callback);
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+  folder_row->OnDragExited();
+
+  EXPECT_TRUE(observer_.HasEvent("move_tab_to_folder"));
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
+                       DragTabBodyCreatesSplit) {
+  SeedProfile(2);
+  observer_.Clear();
+
+  auto state = GetViewState();
+  std::string source_id;
+  std::string target_id;
+  int source_index = -1;
+  int target_index = -1;
+  for (const auto& node : state.tab_list.normal_tree) {
+    if (node.kind != SidebarNodeKind::kTab || !node.parent_folder_id.empty() ||
+        node.tab_strip_index < 0) {
+      continue;
+    }
+    if (source_id.empty()) {
+      source_id = node.tab_id;
+      source_index = node.tab_strip_index;
+    } else {
+      target_id = node.tab_id;
+      target_index = node.tab_strip_index;
       break;
     }
   }
-  ASSERT_FALSE(tab_id.empty());
+  if (source_id.empty() || target_id.empty()) {
+    GTEST_SKIP() << "Need two eligible root tabs for split drag coverage";
+  }
 
-  auto* tab_row = tab_list_->FindTabRowByIdForTesting(tab_id);
-  auto* folder_row = tab_list_->FindFolderRowByIdForTesting(folder_id);
-  ASSERT_TRUE(tab_row);
-  ASSERT_TRUE(folder_row);
+  auto* target_row = tab_list_->FindTabRowByIdForTesting(target_id);
+  ASSERT_TRUE(target_row);
+  EXPECT_EQ(target_row->tab_id_for_testing(), target_id);
+  target_row->SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
-  DragViewToView(tab_row, folder_row);
+  Browser* browser = this->browser();
+  ASSERT_TRUE(browser);
+  TabStripModel* tab_strip_model = browser->tab_strip_model();
+  ASSERT_TRUE(tab_strip_model);
+  ASSERT_TRUE(tab_strip_model->ContainsIndex(source_index));
+  ASSERT_TRUE(tab_strip_model->ContainsIndex(target_index));
+  ASSERT_FALSE(tab_strip_model->GetSplitForTab(source_index).has_value());
+  ASSERT_FALSE(tab_strip_model->GetSplitForTab(target_index).has_value());
 
-  EXPECT_TRUE(observer_.HasEvent("move_folder_into_folder") ||
-              observer_.HasEvent("move_tab_to_folder"));
+  SidebarDragPayload payload;
+  payload.node_kind = SidebarNodeKind::kTab;
+  payload.node_id = source_id;
+  payload.origin = SidebarDragOrigin::kNormalSection;
+  payload.space_id = state.tab_list.active_space_id;
+  payload.tab_strip_index = source_index;
+
+  ui::OSExchangeData data;
+  WriteMahoDragData(payload, &data);
+  ui::DropTargetEvent event = ui::DropTargetEvent(
+      data, gfx::PointF(5, 20), gfx::PointF(5, 20),
+      static_cast<int>(ui::mojom::DragOperation::kMove));
+  target_row->OnDragUpdated(event);
+  auto callback = target_row->GetDropCallback(event);
+  ASSERT_TRUE(callback);
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+  target_row->OnDragExited();
+
+  EXPECT_TRUE(tab_strip_model->GetSplitForTab(source_index).has_value());
+  EXPECT_TRUE(tab_strip_model->GetSplitForTab(target_index).has_value());
+  EXPECT_EQ(*tab_strip_model->GetSplitForTab(source_index),
+            *tab_strip_model->GetSplitForTab(target_index));
+  EXPECT_TRUE(observer_.events().empty())
+      << "Tab-on-tab body split should not dispatch a shell move event";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
@@ -115,13 +280,27 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
   ASSERT_EQ(2u, root_tab_ids.size());
 
   auto* first = tab_list_->FindTabRowByIdForTesting(root_tab_ids[0]);
-  auto* second = tab_list_->FindTabRowByIdForTesting(root_tab_ids[1]);
+  auto* first_lane =
+      tab_list_->FindInsertionLaneBeforeTabByIdForTesting(root_tab_ids[0]);
   ASSERT_TRUE(first);
-  ASSERT_TRUE(second);
+  ASSERT_TRUE(first_lane);
 
-  DragViewToView(first, second);
+  DragViewToView(tab_list_->FindTabRowByIdForTesting(root_tab_ids[1]),
+                 first_lane);
 
-  EXPECT_TRUE(observer_.HasEvent("reorder_tab"));
+  EXPECT_TRUE(observer_.HasEvent("reorder_root_item"));
+
+  auto post_state = GetViewState();
+  std::vector<std::string> post_root_tab_ids;
+  for (const auto& node : post_state.tab_list.normal_tree) {
+    if (node.kind == SidebarNodeKind::kTab &&
+        node.parent_folder_id.empty()) {
+      post_root_tab_ids.push_back(node.tab_id);
+    }
+  }
+  ASSERT_GE(post_root_tab_ids.size(), 2u);
+  EXPECT_EQ(post_root_tab_ids[0], root_tab_ids[1]);
+  EXPECT_EQ(post_root_tab_ids[1], root_tab_ids[0]);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest, DragReordersFolder) {
@@ -131,20 +310,36 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest, DragReordersFolder) {
   auto state = GetViewState();
   std::vector<std::string> folder_ids;
   for (const auto& node : state.tab_list.normal_tree) {
-    if (node.kind == SidebarNodeKind::kFolder) {
+    if (node.kind == SidebarNodeKind::kFolder &&
+        node.parent_of_folder_id.empty()) {
       folder_ids.push_back(node.folder_id);
-      if (folder_ids.size() == 2)
-        break;
     }
   }
-  ASSERT_GE(folder_ids.size(), 2u) << "Seed 2 must have at least 2 folders";
+  ASSERT_GE(folder_ids.size(), 2u)
+      << "Seed 2 must have at least two sibling root folders";
 
-  auto* first = tab_list_->FindFolderRowByIdForTesting(folder_ids[0]);
-  auto* second = tab_list_->FindFolderRowByIdForTesting(folder_ids[1]);
-  ASSERT_TRUE(first);
-  ASSERT_TRUE(second);
+  auto* target_lane =
+      tab_list_->FindInsertionLaneBeforeFolderByIdForTesting(folder_ids[1]);
+  ASSERT_TRUE(target_lane);
 
-  DragViewToView(first, second);
+  SidebarDragPayload payload;
+  payload.node_kind = SidebarNodeKind::kFolder;
+  payload.node_id = folder_ids[0];
+  payload.origin = SidebarDragOrigin::kNormalSection;
+  payload.space_id = state.tab_list.active_space_id;
+
+  ui::OSExchangeData data;
+  WriteMahoDragData(payload, &data);
+  const gfx::Point point(5, 2);
+  ui::DropTargetEvent event = ui::DropTargetEvent(
+      data, gfx::PointF(point), gfx::PointF(point),
+      static_cast<int>(ui::mojom::DragOperation::kMove));
+  target_lane->OnDragUpdated(event);
+  auto callback = target_lane->GetDropCallback(event);
+  ASSERT_TRUE(callback);
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+  target_lane->OnDragExited();
 
   EXPECT_TRUE(observer_.HasEvent("reorder_folder"));
 }
@@ -177,9 +372,11 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest, DragTabOutOfFolder) {
       tab_list_->FindSectionDropTargetForTesting(MahoSidebarTabSection::kNormal);
   ASSERT_TRUE(normal_target);
 
-  DragViewToView(tab_row, normal_target);
+  DragViewToPoint(tab_row, GetViewPoint(normal_target, 0.5, 0.05));
 
-  EXPECT_TRUE(observer_.HasEvent("move_tab_to_root"));
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return observer_.HasEvent("move_tab_to_root");
+  }));
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest, DragUnpinTab) {
@@ -190,24 +387,40 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest, DragUnpinTab) {
   ASSERT_FALSE(state.tab_list.pinned_tree.empty());
 
   std::string pinned_tab_id;
+  int tab_strip_index = -1;
   for (const auto& node : state.tab_list.pinned_tree) {
     if (node.kind == SidebarNodeKind::kTab) {
       pinned_tab_id = node.tab_id;
+      tab_strip_index = node.tab_strip_index;
       break;
     }
   }
   ASSERT_FALSE(pinned_tab_id.empty());
 
-  auto* tab_row = tab_list_->FindTabRowByIdForTesting(pinned_tab_id);
-  ASSERT_TRUE(tab_row);
+  auto* target_row = tab_list_->FindSectionDropTargetForTesting(
+      MahoSidebarTabSection::kNormal);
+  ASSERT_TRUE(target_row);
 
-  views::View* normal_target =
-      tab_list_->FindSectionDropTargetForTesting(MahoSidebarTabSection::kNormal);
-  ASSERT_TRUE(normal_target);
+  SidebarDragPayload payload;
+  payload.node_kind = SidebarNodeKind::kTab;
+  payload.node_id = pinned_tab_id;
+  payload.origin = SidebarDragOrigin::kPinnedSection;
+  payload.space_id = state.tab_list.active_space_id;
+  payload.tab_strip_index = tab_strip_index;
 
-  DragViewToView(tab_row, normal_target);
-
+  ui::OSExchangeData data;
+  WriteMahoDragData(payload, &data);
+  const gfx::Point point(5, 2);
+  ui::DropTargetEvent event = ui::DropTargetEvent(
+      data, gfx::PointF(point), gfx::PointF(point),
+      static_cast<int>(ui::mojom::DragOperation::kMove));
+  target_row->OnDragUpdated(event);
+  auto callback = target_row->GetDropCallback(event);
+  ASSERT_TRUE(callback);
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
   EXPECT_TRUE(observer_.HasEvent("unpin_tab"));
+  target_row->OnDragExited();
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
@@ -216,45 +429,54 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
   observer_.Clear();
 
   auto state = GetViewState();
-  std::string tab_id;
-  for (const auto& node : state.tab_list.normal_tree) {
-    if (node.kind == SidebarNodeKind::kTab) {
-      tab_id = node.tab_id;
+  std::string source_tab_id;
+  std::string target_tab_id;
+  int source_index = -1;
+  for (const auto& node : state.tab_list.tabs) {
+    if (node.index < 0) {
+      continue;
+    }
+    if (source_tab_id.empty()) {
+      source_tab_id = node.tab_id;
+      source_index = node.index;
+    } else {
+      target_tab_id = node.tab_id;
       break;
     }
   }
-  ASSERT_FALSE(tab_id.empty());
+  ASSERT_FALSE(source_tab_id.empty());
+  ASSERT_FALSE(target_tab_id.empty());
 
-  auto* tab_row = tab_list_->FindTabRowByIdForTesting(tab_id);
-  ASSERT_TRUE(tab_row);
+  auto* target_row = tab_list_->FindTabRowByIdForTesting(target_tab_id);
+  ASSERT_TRUE(target_row);
+  EXPECT_EQ(target_row->tab_id_for_testing(), target_tab_id);
+  target_row->SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
-  const gfx::Point source_center =
-      tab_row->GetBoundsInScreen().CenterPoint();
+  SidebarDragPayload payload;
+  payload.node_kind = SidebarNodeKind::kTab;
+  payload.node_id = source_tab_id;
+  payload.origin = SidebarDragOrigin::kNormalSection;
+  payload.space_id = state.tab_list.active_space_id;
+  payload.tab_strip_index = source_index;
 
-  ASSERT_TRUE(ui_controls::SendMouseMove(source_center.x(),
-                                          source_center.y()));
-  base::RunLoop press_loop;
-  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
-      ui_controls::LEFT, ui_controls::DOWN, press_loop.QuitClosure()));
-  press_loop.Run();
+  ui::OSExchangeData data;
+  WriteMahoDragData(payload, &data);
+  ui::DropTargetEvent event =
+      ui::DropTargetEvent(data, gfx::PointF(5, 2), gfx::PointF(5, 2),
+                          static_cast<int>(ui::mojom::DragOperation::kMove));
+  target_row->OnDragUpdated(event);
+  EXPECT_TRUE(target_row->is_drop_indicator_visible_for_testing());
+  EXPECT_NE(target_row->drop_zone_for_testing(),
+            SidebarTabRowView::DropZoneForTesting::kNone);
 
-  ASSERT_TRUE(ui_controls::SendMouseMove(source_center.x() + 50,
-                                          source_center.y() + 50));
+  target_row->OnDragExited();
 
-  base::RunLoop key_loop;
-  ASSERT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
-      browser()->window()->GetNativeWindow(), ui::VKEY_ESCAPE,
-      false, false, false, false, key_loop.QuitClosure()));
-  key_loop.Run();
-
-  base::RunLoop release_loop;
-  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
-      ui_controls::LEFT, ui_controls::UP, release_loop.QuitClosure()));
-  release_loop.Run();
-
-  EXPECT_FALSE(observer_.HasEvent("reorder_tab"))
-      << "No reorder should fire after ESC cancel";
+  EXPECT_FALSE(observer_.HasEvent("reorder_tab"));
   EXPECT_FALSE(observer_.HasEvent("pin_tab"));
+  EXPECT_FALSE(observer_.HasEvent("move_tab_to_root"));
+  EXPECT_FALSE(target_row->is_drop_indicator_visible_for_testing());
+  EXPECT_EQ(target_row->drop_zone_for_testing(),
+            SidebarTabRowView::DropZoneForTesting::kNone);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
@@ -287,25 +509,42 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
   ASSERT_FALSE(state.tab_list.pinned_tree.empty());
 
   std::string already_pinned_id;
+  int tab_strip_index = -1;
   for (const auto& node : state.tab_list.pinned_tree) {
     if (node.kind == SidebarNodeKind::kTab) {
       already_pinned_id = node.tab_id;
+      tab_strip_index = node.tab_strip_index;
       break;
     }
   }
   ASSERT_FALSE(already_pinned_id.empty());
 
-  auto* tab_row = tab_list_->FindTabRowByIdForTesting(already_pinned_id);
-  ASSERT_TRUE(tab_row);
-
-  views::View* pinned_target =
-      tab_list_->FindSectionDropTargetForTesting(MahoSidebarTabSection::kPinned);
+  auto* pinned_target = tab_list_->FindSectionDropTargetForTesting(
+      MahoSidebarTabSection::kPinned);
   ASSERT_TRUE(pinned_target);
 
-  DragViewToView(tab_row, pinned_target);
+  SidebarDragPayload payload;
+  payload.node_kind = SidebarNodeKind::kTab;
+  payload.node_id = already_pinned_id;
+  payload.origin = SidebarDragOrigin::kPinnedSection;
+  payload.space_id = state.tab_list.active_space_id;
+  payload.tab_strip_index = tab_strip_index;
 
-  EXPECT_FALSE(observer_.HasEvent("pin_tab"))
-      << "Re-pinning an already pinned tab should be a no-op";
+  ui::OSExchangeData data;
+  WriteMahoDragData(payload, &data);
+  ui::DropTargetEvent event(data, gfx::PointF(5, 5), gfx::PointF(5, 5),
+                            static_cast<int>(ui::mojom::DragOperation::kMove));
+  pinned_target->OnDragUpdated(event);
+  auto callback = pinned_target->GetDropCallback(event);
+  ASSERT_TRUE(callback);
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+  pinned_target->OnDragExited();
+
+  auto post_state = GetViewState();
+  EXPECT_TRUE(observer_.HasEvent("pin_tab"));
+  EXPECT_EQ(post_state.tab_list.pinned_tree.size(), state.tab_list.pinned_tree.size());
+  EXPECT_EQ(post_state.tab_list.pinned_tabs.size(), state.tab_list.pinned_tabs.size());
 }
 
 }  // namespace

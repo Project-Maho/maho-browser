@@ -4,7 +4,6 @@
 
 #include <cmath>
 
-#include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "cc/paint/paint_flags.h"
 #include "ui/accessibility/ax_enums.mojom.h"
@@ -24,14 +23,6 @@
 #include "ui/views/layout/fill_layout.h"
 
 namespace maho {
-
-namespace {
-
-constexpr SkColor kActiveDotColor = SkColorSetRGB(0xA5, 0x73, 0xF1);
-constexpr SkColor kInactiveDotColor = SkColorSetRGB(0x56, 0x5C, 0x68);
-constexpr SkColor kHoveredDotColor = SkColorSetRGB(0x74, 0x7B, 0x88);
-
-}  // namespace
 
 BEGIN_METADATA(MahoSidebarSpaceDotView)
 END_METADATA
@@ -77,7 +68,6 @@ void MahoSidebarSpaceDotView::Configure(const std::string& space_id,
   icon_ = icon;
   dot_color_ = color;
   is_active_ = is_active;
-  is_selected_ = is_active;
   has_icon_ = !icon.empty();
 
   SetTooltipText(base::UTF8ToUTF16(name));
@@ -124,20 +114,28 @@ void MahoSidebarSpaceDotView::OnPaint(gfx::Canvas* canvas) {
   const float radius = dot_size / 2.0f;
   const gfx::PointF center(kViewSize / 2.0f, kViewSize / 2.0f);
 
-  SkColor fill = kInactiveDotColor;
-  if (is_active_) {
-    fill = kActiveDotColor;
-  } else if (is_hovered_ || is_selected_) {
-    fill = kHoveredDotColor;
-  }
-  const int alpha = is_active_ ? static_cast<int>(dot_opacity_ * 232)
-                               : static_cast<int>(dot_opacity_ * 156);
+  const auto* cp = GetColorProvider();
+  const SkColor fill = is_active_
+                           ? SkColorSetRGB(0xE8, 0xEF, 0xFB)
+                           : (cp ? cp->GetColor(ui::kColorSysOnSurfaceSubtle)
+                                 : SkColorSetRGB(0xA2, 0xA8, 0xB6));
+  const int alpha = is_active_ ? static_cast<int>(dot_opacity_ * 212)
+                               : static_cast<int>(dot_opacity_ * 72);
 
   cc::PaintFlags flags;
   flags.setAntiAlias(true);
   flags.setStyle(cc::PaintFlags::kFill_Style);
   flags.setColor(SkColorSetA(fill, alpha));
   canvas->DrawCircle(center, radius, flags);
+
+  if (is_active_) {
+    cc::PaintFlags halo_flags;
+    halo_flags.setAntiAlias(true);
+    halo_flags.setStyle(cc::PaintFlags::kStroke_Style);
+    halo_flags.setStrokeWidth(1.0f);
+    halo_flags.setColor(SkColorSetARGB(0x12, 0xFF, 0xFF, 0xFF));
+    canvas->DrawCircle(center, radius + 0.8f, halo_flags);
+  }
 }
 
 void MahoSidebarSpaceDotView::OnMouseEntered(const ui::MouseEvent& event) {
@@ -229,7 +227,7 @@ float MahoSidebarSpaceDotView::GetCurrentDotSize() const {
 }
 
 void MahoSidebarSpaceDotView::UpdateAppearance() {
-  const bool show_icon = is_hovered_ && has_icon_ && !is_active_;
+  const bool show_icon = is_hovered_ && has_icon_;
   const float target_icon_opacity = show_icon ? 1.0f : 0.0f;
 
   dot_opacity_ = show_icon ? 0.0f : 1.0f;
@@ -239,11 +237,6 @@ void MahoSidebarSpaceDotView::UpdateAppearance() {
       .SetDuration(base::Milliseconds(160))
       .SetOpacity(icon_label_->layer(), target_icon_opacity,
                   gfx::Tween::EASE_IN_OUT);
-
-  if (!show_icon) {
-    SetTooltipText(base::UTF8ToUTF16(name_));
-    SetAccessibleName(base::UTF8ToUTF16(name_));
-  }
 
   SchedulePaint();
 }

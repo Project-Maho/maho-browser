@@ -6,14 +6,21 @@
 #include "base/logging.h"
 #include "base/values.h"
 #include "base/functional/bind.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/net/system_network_context_manager.h"
+#include "chrome/browser/profiles/profile.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "maho/browser/ai/maho_opencode_runtime_service.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/theme/maho_color_mixer.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
+#include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "ui/color/color_provider_manager.h"
 
 MahoBrowserMainExtraParts::MahoBrowserMainExtraParts() = default;
@@ -114,7 +121,30 @@ void MahoBrowserMainExtraParts::PostEarlyInitialization() {
       base::BindRepeating(&AddMahoColorMixers));
 }
 
+void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
+                                                 bool is_initial_profile) {
+  if (!is_initial_profile) {
+    return;
+  }
+
+  auto service = std::make_unique<MahoOpenCodeRuntimeService>();
+  MahoOpenCodeRuntimeService::SetInstance(std::move(service));
+
+  std::string custom_endpoint =
+      profile->GetPrefs()->GetString(maho::ai_prefs::kRuntimeEndpoint);
+
+  auto* system_network =
+      g_browser_process->system_network_context_manager();
+  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory =
+      system_network->GetSharedURLLoaderFactory();
+
+  MahoOpenCodeRuntimeService::GetInstance()->Start(
+      custom_endpoint, std::move(url_loader_factory));
+}
+
 void MahoBrowserMainExtraParts::PostMainMessageLoopRun() {
+  MahoOpenCodeRuntimeService::ResetInstance();
+
   if (core_) {
     MahoSpaceThemeState::Clear();
     maho::SetCore(nullptr);

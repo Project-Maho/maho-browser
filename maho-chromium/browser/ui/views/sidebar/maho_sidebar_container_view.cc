@@ -4,9 +4,9 @@
 
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "components/prefs/pref_service.h"
 #include "base/time/time.h"
-#include "maho/browser/ui/views/command/maho_command_overlay_controller.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
@@ -15,12 +15,15 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/animation/tween.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/views/controls/resize_area.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/view_class_properties.h"
 
 namespace maho {
 
 namespace {
+
+constexpr int kResizeHandleWidthDp = 6;
 
 constexpr base::TimeDelta kHoverRevealSuppressionDuration =
     base::Milliseconds(250);
@@ -51,6 +54,7 @@ MahoSidebarContainerView::MahoSidebarContainerView(Browser* browser)
   reveal_animation_.SetTweenType(gfx::Tween::EASE_OUT);
 
   sidebar_view_ = AddChildView(std::make_unique<MahoSidebarView>(browser));
+  resize_handle_view_ = AddChildView(std::make_unique<views::ResizeArea>(this));
 
   PrefService* prefs = browser->profile()->GetPrefs();
   was_panel_expanded_ = sidebar_prefs::IsSidebarPanelExpanded(prefs);
@@ -67,62 +71,96 @@ MahoSidebarContainerView::MahoSidebarContainerView(Browser* browser)
   ApplyPanelState();
   UpdateResizeHandleBounds();
 
-  command_overlay_controller_ =
-      std::make_unique<MahoCommandOverlayController>(browser);
 }
 
 MahoSidebarContainerView::~MahoSidebarContainerView() = default;
 
-void MahoSidebarContainerView::ShowCreateSpace() {
-  auto* sidebar = static_cast<MahoSidebarView*>(sidebar_view_.get());
-  if (sidebar) {
-    sidebar->ShowCreateSpace();
-  }
-}
-
-void MahoSidebarContainerView::ToggleCommandOverlay() {
-  if (command_overlay_controller_) {
-    command_overlay_controller_->Toggle(this);
-  }
-}
 
 void MahoSidebarContainerView::ShowCommandOverlayForCurrentTab(
     const std::string& current_url) {
   (void)current_url;
-  if (command_overlay_controller_) {
-    if (command_overlay_controller_->IsVisible()) {
-      command_overlay_controller_->Hide();
-      return;
+  if (browser_) {
+    if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_)) {
+      browser_view->ShowMahoCommandOverlayForCurrentTab();
     }
-    command_overlay_controller_->Show(this);
   }
 }
 
 void MahoSidebarContainerView::ShowCommandOverlayForNewTab() {
-  if (command_overlay_controller_) {
-    if (command_overlay_controller_->IsVisible()) {
-      command_overlay_controller_->Hide();
-      return;
+  if (browser_) {
+    if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_)) {
+      browser_view->ShowMahoCommandOverlayForNewTab();
     }
-    command_overlay_controller_->Show(this);
   }
 }
 
 void MahoSidebarContainerView::ShowCommandOverlayForSearch(
     const std::string& initial_query) {
   (void)initial_query;
-  if (command_overlay_controller_) {
-    if (command_overlay_controller_->IsVisible()) {
-      command_overlay_controller_->Hide();
-      return;
+  if (browser_) {
+    if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_)) {
+      browser_view->ShowMahoCommandOverlayForSearch(initial_query);
     }
-    command_overlay_controller_->Show(this);
   }
+}
+
+void MahoSidebarContainerView::Layout(PassKey) {
+  LayoutSuperclass<views::View>(this);
+  UpdateResizeHandleBounds();
 }
 
 void MahoSidebarContainerView::UpdateResizeHandleBounds() {
   if (!resize_handle_view_) {
     return;
+  }
+  const gfx::Rect bounds = GetContentsBounds();
+  resize_handle_view_->SetBoundsRect(
+      gfx::Rect(bounds.right() - kResizeHandleWidthDp, bounds.y(),
+                 kResizeHandleWidthDp, bounds.height()));
+  resize_handle_view_->SetVisible(IsResizeDragEnabled());
+}
+
+bool MahoSidebarContainerView::IsResizeDragEnabled() const {
+  return !IsAutoHideMode();
+}
+
+bool MahoSidebarContainerView::IsResizeDragging() const {
+  return is_resizing_;
+}
+
+void MahoSidebarContainerView::BeginResizeDrag(
+    const ui::MouseEvent& event) {
+  is_resizing_ = true;
+  resize_drag_start_width_ = width();
+}
+
+void MahoSidebarContainerView::UpdateResizeDrag(
+    const ui::MouseEvent& event) {}
+
+void MahoSidebarContainerView::EndResizeDrag() {
+  is_resizing_ = false;
+  MaybePersistSidebarWidth(width());
+}
+
+void MahoSidebarContainerView::OnResize(int resize_amount,
+                                         bool done_resizing) {
+  if (resize_drag_start_width_ < 0) {
+    resize_drag_start_width_ = width();
+  }
+
+  const int new_width = resize_drag_start_width_ + resize_amount;
+  const int clamped = sidebar_prefs::ClampSidebarWidthForLayout(new_width);
+
+  PrefService* prefs = browser_->profile()->GetPrefs();
+  if (prefs->GetInteger(sidebar_prefs::kSidebarWidth) != clamped) {
+    prefs->SetInteger(sidebar_prefs::kSidebarWidth, clamped);
+  }
+
+  if (done_resizing) {
+    resize_drag_start_width_ = -1;
+    is_resizing_ = false;
+  } else {
+    is_resizing_ = true;
   }
 }
 
@@ -226,6 +264,15 @@ void MahoSidebarContainerView::OnBoundsChanged(
 
 bool MahoSidebarContainerView::IsPositionInWindowCaption(
     const gfx::Point& point) const {
+  if (resize_handle_view_ && resize_handle_view_->GetVisible()) {
+    gfx::Point point_in_handle = point;
+    views::View::ConvertPointToTarget(this, resize_handle_view_,
+                                      &point_in_handle);
+    if (resize_handle_view_->HitTestPoint(point_in_handle)) {
+      return false;
+    }
+  }
+
   if (sidebar_view_ && sidebar_view_->GetVisible()) {
     gfx::Point point_in_sidebar = point;
     views::View::ConvertPointToTarget(this, sidebar_view_, &point_in_sidebar);
