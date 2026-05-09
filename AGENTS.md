@@ -37,7 +37,7 @@ maho-workspace/
 | WebUI resources (TS) | `maho-chromium/browser/resources/` | Per-feature app.ts + HTML |
 | Upstream overrides | `maho-chromium/chromium_src/` | Brave-style #define + #include |
 | Sync relay server | `maho/relay/` | Standalone workspace; do NOT add to root Cargo.toml |
-| Build Chromium | `chromium/src/out/Default/` | `autoninja -C out/Default chrome` → `Maho.app` |
+| Build Chromium | `chromium/src/out/Default/` | Canonical: `python3 maho-chromium/build/scripts/build_maho.py` from repo root. Optional: `autoninja -C out/Default chrome` for narrower rebuilds. |
 | Build maho-core lib | `maho-chromium/build/scripts/build_maho_core.py` | Produces prebuilt static lib |
 | Regression tests | `maho/appium-tests/` | Appium runners |
 | Native shells (ref) | `maho/macos-shell/`, `maho/ios-shell/` | Reference only; active work in Chromium fork |
@@ -65,9 +65,10 @@ cd maho && bun run typecheck          # cargo check --workspace
 cd maho && bun run test               # cargo test --workspace
 
 # Chromium build
-autoninja -C chromium/src/out/Default chrome    # → Maho.app
-# If autoninja not on PATH:
-PATH="chromium/src/third_party/depot_tools:$PATH" autoninja -C chromium/src/out/Default chrome
+python3 maho-chromium/build/scripts/build_maho.py    # canonical repo-root build
+
+# Chromium-only rebuilds, from chromium/src
+autoninja -C out/Default chrome
 
 # Build maho-core static lib for Chromium
 python3 maho-chromium/build/scripts/build_maho_core.py

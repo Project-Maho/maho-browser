@@ -4,7 +4,7 @@ This document records the standard local build flow for the Chromium overlay use
 
 ## Purpose and scope
 
-Use this flow when you need to build the Chromium desktop app bundle or run the Chromium desktop macOS E2E harness from the local overlay checkout. Use `out/Default` as the standard build directory. Do not treat `out/Release` as the default path. The canonical one-command build path is the lock-backed wrapper in `maho-chromium/build/scripts/build_maho.py`; direct `autoninja -C out/Default chrome` remains available for narrower rebuilds, but it is no longer the recommended default.
+Use this flow when you need to build the Chromium desktop app bundle or run the Chromium desktop macOS E2E harness from the local overlay checkout. Use `out/Default` as the standard build directory. Do not treat `out/Release` as the default path. The canonical one-command build path is `python3 maho-chromium/build/scripts/build_maho.py` from the workspace root. Direct `autoninja -C out/Default chrome` stays available for narrower Chromium-only rebuilds.
 
 ## Repo layout and working directories
 
@@ -13,7 +13,7 @@ Use this flow when you need to build the Chromium desktop app bundle or run the 
 - Rust workspace root for `maho-core`: `/Users/indo/code/project/maho-workspace/maho`
 - The overlay is mounted into Chromium as `chromium/src/maho`
 
-Run the Chromium overlay build and E2E commands from `chromium/src`.
+Run the build wrapper from the workspace root. Run the E2E commands from `chromium/src`.
 
 ### Overlay mount setup
 
@@ -27,15 +27,15 @@ This local workspace already has that mount in place.
 
 ## Standard build commands
 
-1. Build the Rust prebuilt library and Chromium app together:
+1. Build the Rust prebuilt library and Chromium app together from the workspace root:
 
    ```bash
-   python3 maho/build/scripts/build_maho.py
+   python3 maho-chromium/build/scripts/build_maho.py
    ```
 
    This entrypoint acquires the shared `.build.lock` once, runs the Rust prebuilt build if requested, then runs `autoninja -C out/Default chrome` from `chromium/src` with `depot_tools` on `PATH`.
 
-2. For a Chromium-only rebuild, run:
+2. For a Chromium-only rebuild from `chromium/src`, run:
 
    ```bash
    autoninja -C out/Default chrome

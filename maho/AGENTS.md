@@ -26,7 +26,7 @@ Hybrid repo: Rust workspace plus native shells and Appium test harnesses. Backen
 | Android shell work | `android-shell/` | Gradle-based native app |
 | Regression automation | `appium-tests/` | Canonical Appium runners |
 | Test order / commands | `docs/test-matrix.md` | CI-style run sequence |
-| Chromium overlay build / E2E flow | `docs/chromium-fork-build.md` | Standard Chromium overlay setup, build, app bundle, and desktop E2E entrypoints; use `out/Default` by default |
+| Chromium overlay build / E2E flow | `docs/chromium-fork-build.md` | Standard Chromium overlay setup, build, app bundle, and desktop E2E entrypoints; canonical build wrapper is `python3 maho-chromium/build/scripts/build_maho.py` from the workspace root |
 
 ## CONVENTIONS
 - Use `bun run` for repo scripts and local source files, and `bunx` for one-off package executables or CLIs.
@@ -62,21 +62,21 @@ cd relay && cargo build --release
 
 Use the Chromium overlay from `chromium/src`.
 
-Standard build:
+Standard build from the workspace root:
+
+```bash
+python3 maho-chromium/build/scripts/build_maho.py
+```
+
+This produces `chromium/src/out/Default/Maho.app`.
+
+If you only need a narrower Chromium rebuild from `chromium/src`, use:
 
 ```bash
 autoninja -C out/Default chrome
 ```
 
-This produces `chromium/src/out/Default/Maho.app`.
-
-If `autoninja` is not on PATH, use the local `depot_tools` directory inline:
-
-```bash
-PATH="/Users/indo/code/project/maho-workspace/chromium/src/third_party/depot_tools:$PATH" autoninja -C out/Default chrome
-```
-
-For narrower rebuilds, use `chrome_framework_shared_library` or `chrome_app`.
+For targeted rebuilds, use `chrome_framework_shared_library` or `chrome_app`.
 
 ## NOTES
 - `macos-shell/AGENTS.md` already contains the most specific shell rules.
