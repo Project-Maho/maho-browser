@@ -203,28 +203,30 @@ struct MaxSettingsUpdate: Codable, Equatable {
 // MARK: - Autofill Settings
 
 enum PasswordAutofillProvider: String, Codable, Equatable {
-    case builtin
-    case system
-    case disabled
+    case chromium
+    case onepassword
+    case bitwarden
 }
 
 struct AutofillSettings: Codable, Equatable {
     var addressesEnabled: Bool = true
     var paymentsEnabled: Bool = true
-    var passwordProvider: PasswordAutofillProvider = .builtin
+    var passwordsEnabled: Bool = true
+    var passwordProvider: PasswordAutofillProvider = .chromium
 
     private enum CodingKeys: String, CodingKey {
-        case addressesEnabled, paymentsEnabled, passwordProvider
+        case addressesEnabled, paymentsEnabled, passwordsEnabled, passwordProvider
     }
 }
 
 struct AutofillSettingsUpdate: Codable, Equatable {
     var addressesEnabled: Bool? = nil
     var paymentsEnabled: Bool? = nil
+    var passwordsEnabled: Bool? = nil
     var passwordProvider: PasswordAutofillProvider? = nil
 
     private enum CodingKeys: String, CodingKey {
-        case addressesEnabled, paymentsEnabled, passwordProvider
+        case addressesEnabled, paymentsEnabled, passwordsEnabled, passwordProvider
     }
 }
 

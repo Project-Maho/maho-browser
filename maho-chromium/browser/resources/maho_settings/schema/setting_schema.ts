@@ -26,6 +26,23 @@ export const ACCENT_COLORS: AccentColor[] = [
   {r: 255, g: 149, b: 0, label: 'Orange'},
 ];
 
+export const ARCHIVE_TIMEOUT_OPTIONS = [
+  {value: '-1', label: 'Off'},
+  {value: '12', label: '12 hours'},
+  {value: '24', label: '24 hours'},
+  {value: '168', label: '7 days'},
+  {value: '720', label: '30 days'},
+  {value: '1440', label: '60 days'},
+  {value: '2160', label: '90 days'},
+];
+
+export const TODAY_TAB_TIMEOUT_OPTIONS = [
+  {value: '6', label: '6 hours'},
+  {value: '12', label: '12 hours'},
+  {value: '24', label: '24 hours'},
+  {value: '48', label: '48 hours'},
+];
+
 export const SETTING_DEFINITIONS: SettingDefinition[] = [
   {
     key: 'general.homepage',
@@ -139,15 +156,6 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
     },
   },
   {
-    key: 'appearance.custom_chrome_css',
-    metadata: {
-      label: 'Custom chrome CSS',
-      description: 'Apply custom CSS rules to browser chrome surfaces. Changes take effect on reload.',
-      control: 'textarea',
-      placeholder: '/* e.g. --toolbar-bg: #1a1a2e; */',
-    },
-  },
-  {
     key: 'privacy.do_not_track',
     metadata: {
       label: 'Send “Do Not Track”',
@@ -198,6 +206,24 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
       label: 'Use quieter notification permission prompts',
       description: 'Reduce interruptions by showing less intrusive notification permission requests on supported sites.',
       control: 'toggle',
+    },
+  },
+  {
+    key: 'tabs.archive_timeout',
+    metadata: {
+      label: 'Auto-archive inactive tabs after',
+      description: 'Tabs left inactive for this long are moved to the archive automatically. Set to Off to disable auto-archiving.',
+      control: 'select',
+      options: ARCHIVE_TIMEOUT_OPTIONS,
+    },
+  },
+  {
+    key: 'tabs.today_tab_timeout',
+    metadata: {
+      label: 'Keep tabs in Today for',
+      description: 'How long recently active tabs stay in the Today section before ageing out.',
+      control: 'select',
+      options: TODAY_TAB_TIMEOUT_OPTIONS,
     },
   },
 ];

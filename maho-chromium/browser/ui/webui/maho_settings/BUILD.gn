@@ -20,12 +20,16 @@ source_set("maho_settings") {
   ]
 
   deps = [
+    "//maho/browser:maho_password_provider",
     "//chrome/browser/profiles:profile",
     "//components/content_settings/core/browser",
     "//components/prefs",
     "//components/safe_browsing/core/common",
+    "//maho/browser:maho_core_holder",
     "//maho/browser/resources/maho_settings:resources",
     "//maho/components/constants",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
     "//mojo/public/cpp/bindings",
     "//services/network/public/mojom",
     "//ui/webui",

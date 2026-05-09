@@ -1,7 +1,14 @@
 export type ControlKind = 'text'|'number'|'toggle'|'select'|'color-swatch'|'slider'|'textarea';
-export type PaneStatus = 'live-pref'|'mixed'|'placeholder'|'live-embed';
-export type PaneKind = 'live'|'placeholder'|'embed';
-export type BadgeTone = 'live'|'mixed'|'bridge'|'api';
+
+export type PaneKind = 'live'|'hidden'|'embed';
+
+export type DomainId =
+    | 'browsing'
+    | 'look-and-feel'
+    | 'identity'
+    | 'productivity'
+    | 'protection'
+    | 'platform';
 
 export interface ControlOption {
   value: string;
@@ -33,56 +40,56 @@ export interface SettingDefinition {
   metadata: SettingMetadata;
 }
 
-export interface StructuredPlaceholderRow {
-  label: string;
-  description: string;
-  tone: 'live'|'bridge'|'api';
-  badgeLabel: string;
-  control: ControlKind;
-  segmented?: boolean;
-  value?: string;
-  options?: ControlOption[];
-  placeholder?: string;
-  min?: number;
-  max?: number;
-  step?: number;
+export type PasswordProviderKind = 'maho_native'|'bitwarden'|'onepassword';
+
+export interface PasswordProviderCapabilities {
+  canListSavedPasswords: boolean;
+  canSearchSavedPasswords: boolean;
+  canAddSavedPasswords: boolean;
+  canDeleteSavedPasswords: boolean;
+  canEditSavedPasswords: boolean;
+  canRevealPasswords: boolean;
 }
 
-export interface PaneHeroBadge {
-  label: string;
-  tone: BadgeTone;
+export interface PasswordProviderStatus {
+  provider: PasswordProviderKind;
+  displayName: string;
+  description: string;
+  isAvailable: boolean;
+  isEnabled: boolean;
+  capabilities: PasswordProviderCapabilities;
+}
+
+export interface SavedPassword {
+  id: string;
+  domain: string;
+  username: string;
+  createdAt: string;
+  lastUsed?: string | null;
+  password?: string | null;
 }
 
 export interface PaneDefinition {
   key: string;
   symbol: string;
   navTitle: string;
-  navMeta: string;
-  eyebrow: string;
   title: string;
-  summary: string;
-  status: PaneStatus;
   kind: PaneKind;
-  heroBadges?: PaneHeroBadge[];
-  overviewTitle?: string;
-  overviewCopy?: string;
+  domain: DomainId;
   groupKeys?: string[];
-  placeholderReason?: string;
-  placeholderDetail?: string;
-  placeholderHighlights?: string[];
+  embedUrl?: string;
+  contentKind?: 'settings'|'profiles'|'atc'|'ai'|'shortcuts'|'sync'|'theme-store'|'autofill'|'passwords'|'content-blocker'|'extensions';
 }
 
 export interface LiveCardDefinition {
   title: string;
   description: string;
   settingKeys: string[];
-  badgeTone: BadgeTone;
   wide?: boolean;
 }
 
-export interface StructuredPlaceholderCardDefinition {
-  title: string;
-  description: string;
-  rows: StructuredPlaceholderRow[];
-  badgeTone: 'bridge'|'api';
+export interface DomainDefinition {
+  id: DomainId;
+  label: string;
+  order: number;
 }

@@ -144,7 +144,7 @@ final class AutofillSettingsViewController: NSViewController, NSTableViewDataSou
         updateSectionState()
     }
 
-    private func sendAutofillUpdate(addressesEnabled: Bool? = nil, paymentsEnabled: Bool? = nil, passwordProvider: PasswordAutofillProvider? = nil) {
+    private func sendAutofillUpdate(addressesEnabled: Bool? = nil, paymentsEnabled: Bool? = nil, passwordsEnabled: Bool? = nil, passwordProvider: PasswordAutofillProvider? = nil) {
         let update = SettingsUpdate(
             general: nil,
             appearance: nil,
@@ -157,6 +157,7 @@ final class AutofillSettingsViewController: NSViewController, NSTableViewDataSou
             autofill: AutofillSettingsUpdate(
                 addressesEnabled: addressesEnabled,
                 paymentsEnabled: paymentsEnabled,
+                passwordsEnabled: passwordsEnabled,
                 passwordProvider: passwordProvider
             ),
             advanced: nil,
