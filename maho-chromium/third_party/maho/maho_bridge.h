@@ -18,10 +18,24 @@ void Destroy(MahoCore* core);
 std::string Version();
 
 // Content blocking
+struct BlockResult {
+  bool blocked = false;
+  std::string redirect;
+  std::string rewritten_url;
+};
+
 bool ShouldBlockRequest(MahoCore* core,
                         const char* url,
                         const char* source_url,
                         const char* request_type);
+
+BlockResult CheckRequest(MahoCore* core,
+                         const char* url,
+                         const char* source_url,
+                         const char* request_type);
+void AddSiteException(MahoCore* core, const char* origin);
+void RemoveSiteException(MahoCore* core, const char* origin);
+std::string GetSiteExceptions(MahoCore* core);
 bool SaveContentEngineCache(MahoCore* core, const char* path);
 bool LoadContentEngineCache(MahoCore* core, const char* path);
 

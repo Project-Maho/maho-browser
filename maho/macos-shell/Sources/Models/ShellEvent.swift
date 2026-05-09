@@ -226,7 +226,7 @@ enum ShellEvent: Codable, Equatable {
     case commandBarOpened
     case commandBarClosed
     case commandBarQuery(text: String, mode: String?)
-    case commandBarSelect(index: Int)
+    case commandBarSelect(index: Int, key: String)
     case commandBarAction(action: QuickAction)
     case saveSearch(query: String)
     case addSearchEngine(engine: SearchEngineModel)
@@ -401,7 +401,7 @@ enum ShellEvent: Codable, Equatable {
         case parentFolderId = "parent_folder_id"
         case targetSpaceId = "target_space_id"
         case newIndex = "new_index"
-        case text, mode, index, action, query, engine, id
+        case text, mode, index, key, action, query, engine, id
         case notificationId = "notification_id"
         case actionId = "action_id"
         case origin, allowed
@@ -649,7 +649,9 @@ enum ShellEvent: Codable, Equatable {
                 text: try container.decode(String.self, forKey: .text),
                 mode: try container.decodeIfPresent(String.self, forKey: .mode))
         case "command_bar_select":
-            self = .commandBarSelect(index: try container.decode(Int.self, forKey: .index))
+            self = .commandBarSelect(
+                index: try container.decode(Int.self, forKey: .index),
+                key: try container.decode(String.self, forKey: .key))
         case "command_bar_action":
             self = .commandBarAction(action: try container.decode(QuickAction.self, forKey: .action))
         case "save_search":
@@ -1185,9 +1187,10 @@ enum ShellEvent: Codable, Equatable {
             try container.encode("command_bar_query", forKey: .kind)
             try container.encode(text, forKey: .text)
             try container.encodeIfPresent(mode, forKey: .mode)
-        case .commandBarSelect(let index):
+        case .commandBarSelect(let index, let key):
             try container.encode("command_bar_select", forKey: .kind)
             try container.encode(index, forKey: .index)
+            try container.encode(key, forKey: .key)
         case .commandBarAction(let action):
             try container.encode("command_bar_action", forKey: .kind)
             try container.encode(action, forKey: .action)

@@ -12,9 +12,22 @@ build_webui("build") {
     "maho_ai.css",
   ]
 
-  ts_files = [ "app.ts" ]
+  ts_files = [
+    "app.ts",
+    "store.ts",
+    "types.ts",
+    "views/cards.ts",
+    "views/composer.ts",
+    "views/console_shell.ts",
+    "views/inspector.ts",
+    "views/left_rail.ts",
+    "views/timeline.ts",
+  ]
 
-  ts_deps = [ "//ui/webui/resources/mojo:build_ts" ]
+  ts_deps = [
+    "//ui/webui/resources/js:build_ts",
+    "//ui/webui/resources/mojo:build_ts",
+  ]
 
   webui_context_type = "trusted"
 

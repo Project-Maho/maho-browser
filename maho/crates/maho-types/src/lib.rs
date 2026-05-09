@@ -3,6 +3,7 @@ pub mod air_traffic;
 pub mod animation;
 pub mod autofill;
 pub mod boost;
+pub mod chat;
 pub mod css_mod;
 pub mod common;
 pub mod easel;

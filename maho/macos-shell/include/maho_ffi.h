@@ -47,6 +47,27 @@ char *maho_core_get_active_space_id(struct MahoCore *ptr);
  * `ptr` must be a valid pointer returned by `maho_core_new`.
  * Caller must free the returned string with `maho_string_free`.
  */
+char *maho_core_get_account_state(struct MahoCore *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_get_auth_state(struct MahoCore *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_sign_in(struct MahoCore *ptr, const char *event_json);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
 char *maho_core_tick(struct MahoCore *ptr);
 
 /**
@@ -95,6 +116,10 @@ char *maho_core_get_boost_view_models(struct MahoCore *ptr);
  */
 char *maho_core_get_css_mods(struct MahoCore *ptr);
 
+/**
+ * Returns the combined CSS string of all enabled mods.
+ * Caller must free with `maho_string_free`.
+ */
 char *maho_core_get_combined_css(struct MahoCore *ptr);
 
 /**
@@ -103,6 +128,21 @@ char *maho_core_get_combined_css(struct MahoCore *ptr);
  * Caller must free the returned string with `maho_string_free`.
  */
 char *maho_core_get_installed_extensions(struct MahoCore *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `query` must be a valid null-terminated C string.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_search_passwords(struct MahoCore *ptr, const char *query);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `password_id` must be a valid null-terminated C string.
+ */
+bool maho_core_delete_password(struct MahoCore *ptr, const char *password_id);
 
 /**
  * # Safety
@@ -132,6 +172,12 @@ char *maho_core_get_download_view_models(struct MahoCore *ptr);
  * Caller must free the returned string with `maho_string_free`.
  */
 char *maho_core_get_settings(struct MahoCore *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
 char *maho_core_get_settings_view_model(struct MahoCore *ptr);
 
 /**
@@ -140,13 +186,6 @@ char *maho_core_get_settings_view_model(struct MahoCore *ptr);
  * Caller must free the returned string with `maho_string_free`.
  */
 char *maho_core_get_find_bar_state(struct MahoCore *ptr);
-
-/**
- * # Safety
- * `ptr` must be a valid pointer returned by `maho_core_new`.
- * Caller must free the returned string with `maho_string_free`.
- */
-char *maho_core_get_split_view_config(struct MahoCore *ptr);
 
 /**
  * # Safety
@@ -164,7 +203,71 @@ char *maho_core_get_archived_tabs(struct MahoCore *ptr, const char *space_id_jso
  */
 char *maho_core_get_folder_view_models(struct MahoCore *ptr, const char *space_id_json);
 
+/**
+ * # Safety
+ * All pointers must be valid C strings. `ptr` must be from `maho_core_new`.
+ */
+bool maho_core_should_block_request(struct MahoCore *ptr,
+                                    const char *url,
+                                    const char *source_url,
+                                    const char *request_type);
 
+/**
+ * Returns a JSON string with the block check result:
+ * `{"blocked":bool,"redirect":string|null,"rewrittenUrl":string|null}`
+ *
+ * # Safety
+ * All pointers must be valid C strings. `ptr` must be from `maho_core_new`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_check_request(struct MahoCore *ptr,
+                              const char *url,
+                              const char *source_url,
+                              const char *request_type);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `origin` must be a valid null-terminated C string.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+void maho_core_add_site_exception(struct MahoCore *ptr, const char *origin);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `origin` must be a valid null-terminated C string.
+ */
+void maho_core_remove_site_exception(struct MahoCore *ptr, const char *origin);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_get_site_exceptions(struct MahoCore *ptr);
+
+/**
+ * Returns cosmetic filter resources for a URL as JSON.
+ * The JSON has fields: hideSelectors (string[]), injectedScript (string|null), generichide (bool).
+ *
+ * # Safety
+ * All pointers must be valid C strings. `ptr` must be from `maho_core_new`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_get_cosmetic_resources(struct MahoCore *ptr, const char *url);
+
+/**
+ * # Safety
+ * `ptr` must be from `maho_core_new`. `path` must be a valid null-terminated C string.
+ */
+bool maho_core_save_content_engine_cache(struct MahoCore *ptr, const char *path);
+
+/**
+ * # Safety
+ * `ptr` must be from `maho_core_new`. `path` must be a valid null-terminated C string.
+ */
+bool maho_core_load_content_engine_cache(struct MahoCore *ptr, const char *path);
 
 /**
  * # Safety
@@ -186,6 +289,16 @@ void maho_core_add_history_entry(struct MahoCore *ptr, const char *url, const ch
  * Caller must free the returned string with `maho_string_free`.
  */
 char *maho_core_search_history(struct MahoCore *ptr, const char *query, uintptr_t limit);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `query` must be a valid null-terminated C string.
+ * `tabs_json` must be a valid null-terminated C string containing a JSON array of
+ * `[{"id":"...", "title":"...", "url":"..."}]`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_command_bar_search(struct MahoCore *ptr, const char *query, const char *tabs_json);
 
 /**
  * # Safety
@@ -228,17 +341,14 @@ void maho_core_set_tab_parent(struct MahoCore *ptr,
                               const char *new_parent_id_ptr);
 
 /**
- * Sets or clears the custom title of a tab.
- * `title` can be null to clear the custom title.
- *
  * # Safety
  * `ptr` must be a valid pointer returned by `maho_core_new` or `maho_core_new_with_storage`.
- * `tab_id` must be a valid null-terminated C string.
- * `title` must be a valid null-terminated C string, or null to clear.
+ * `tab_id_ptr` must be a valid null-terminated C string.
+ * `title_ptr` may be null to clear the custom title.
  */
 void maho_core_set_tab_custom_title(struct MahoCore *ptr,
-                                    const char *tab_id,
-                                    const char *title);
+                                    const char *tab_id_ptr,
+                                    const char *title_ptr);
 
 /**
  * # Safety
@@ -327,22 +437,6 @@ void maho_core_remove_download(struct MahoCore *ptr, const char *download_id);
 /**
  * # Safety
  * `ptr` must be a valid pointer returned by `maho_core_new`.
- * `download_id` must be a valid null-terminated C string.
- * Caller must free the returned string with `maho_string_free`.
- */
-char *maho_core_complete_download(struct MahoCore *ptr, const char *download_id);
-
-/**
- * # Safety
- * `ptr` must be a valid pointer returned by `maho_core_new`.
- * `download_id` must be a valid null-terminated C string.
- * Caller must free the returned string with `maho_string_free`.
- */
-char *maho_core_restore_download_name(struct MahoCore *ptr, const char *download_id);
-
-/**
- * # Safety
- * `ptr` must be a valid pointer returned by `maho_core_new`.
  * `entry_id` must be a valid null-terminated C string.
  */
 void maho_core_delete_history_entry(struct MahoCore *ptr, const char *entry_id);
@@ -421,16 +515,9 @@ void maho_core_update_download_progress(struct MahoCore *ptr,
                                         const char *download_id,
                                         uint64_t received_bytes);
 
-bool maho_core_should_block_request(struct MahoCore *ptr,
-                                     const char *url,
-                                     const char *source_url,
-                                     const char *request_type);
+char *maho_core_complete_download(struct MahoCore *ptr, const char *download_id);
 
-bool maho_core_save_content_engine_cache(struct MahoCore *ptr,
-                                          const char *path);
-
-bool maho_core_load_content_engine_cache(struct MahoCore *ptr,
-                                          const char *path);
+char *maho_core_restore_download_name(struct MahoCore *ptr, const char *download_id);
 
 char *maho_core_get_filter_lists(struct MahoCore *ptr);
 
@@ -662,6 +749,8 @@ char *maho_core_set_shortcut(struct MahoCore *ptr, const char *action, const cha
 void maho_core_reset_shortcut(struct MahoCore *ptr, const char *action);
 
 void maho_core_reset_all_shortcuts(struct MahoCore *ptr);
+
+void maho_core_toggle_shortcut(struct MahoCore *ptr, const char *action, bool enabled);
 
 char *maho_core_resolve_shortcut(struct MahoCore *ptr, const char *key_combo_json);
 
@@ -1012,20 +1101,99 @@ char *maho_core_send_tab_to_device(struct MahoCore *ptr,
                                    const char *device_id,
                                    const char *tab_json);
 
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
 char *maho_core_get_easel_view_models(struct MahoCore *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `easel_id` must be a valid null-terminated C string.
+ * Caller must free the returned string with `maho_string_free`.
+ */
 char *maho_core_get_easel(struct MahoCore *ptr, const char *easel_id);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `name` must be a valid null-terminated C string.
+ * Caller must free the returned string with `maho_string_free`.
+ */
 char *maho_core_create_easel(struct MahoCore *ptr, const char *name);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `easel_id` must be a valid null-terminated C string.
+ */
 bool maho_core_delete_easel(struct MahoCore *ptr, const char *easel_id);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `easel_id` and `json` must be valid null-terminated C strings.
+ */
 bool maho_core_update_easel(struct MahoCore *ptr, const char *easel_id, const char *json);
 
-char *maho_core_create_shared_collection(struct MahoCore *ptr, const char *space_id, const char *name);
-char *maho_core_get_share_link(struct MahoCore *ptr, const char *collection_id);
-void maho_core_update_share_permissions(struct MahoCore *ptr, const char *collection_id, const char *permission);
-void maho_core_revoke_share(struct MahoCore *ptr, const char *collection_id);
-char *maho_core_get_shared_collections(struct MahoCore *ptr);
-bool maho_core_join_shared_collection(struct MahoCore *ptr, const char *share_link);
-
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
 char *maho_core_get_autofill_addresses(struct MahoCore *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
 char *maho_core_get_autofill_payments(struct MahoCore *ptr);
+
+/**
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * String parameters must be valid null-terminated UTF-8.
+ */
+char *maho_core_create_shared_collection(struct MahoCore *ptr,
+                                         const char *space_id,
+                                         const char *name);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * String parameters must be valid null-terminated UTF-8.
+ */
+char *maho_core_get_share_link(struct MahoCore *ptr, const char *collection_id);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * String parameters must be valid null-terminated UTF-8.
+ */
+void maho_core_update_share_permissions(struct MahoCore *ptr,
+                                        const char *collection_id,
+                                        const char *permission);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * String parameters must be valid null-terminated UTF-8.
+ */
+void maho_core_revoke_share(struct MahoCore *ptr, const char *collection_id);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ */
+char *maho_core_get_shared_collections(struct MahoCore *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * String parameters must be valid null-terminated UTF-8.
+ */
+bool maho_core_join_shared_collection(struct MahoCore *ptr, const char *share_link);
 
 #endif  /* MAHO_FFI_H */

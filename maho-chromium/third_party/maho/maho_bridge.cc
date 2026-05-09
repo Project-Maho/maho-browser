@@ -6,8 +6,10 @@
 #include "build/buildflag.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 
+#include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "maho_ffi.h"
 
@@ -37,6 +39,49 @@ bool ShouldBlockRequest(MahoCore* core,
                         const char* source_url,
                         const char* request_type) {
   return maho_core_should_block_request(core, url, source_url, request_type);
+}
+
+BlockResult CheckRequest(MahoCore* core,
+                         const char* url,
+                         const char* source_url,
+                         const char* request_type) {
+  BlockResult result;
+  char* json = maho_core_check_request(core, url, source_url, request_type);
+  if (!json) {
+    return result;
+  }
+  auto parsed = base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  maho_string_free(json);
+  if (!parsed || !parsed->is_dict()) {
+    return result;
+  }
+  const auto& dict = parsed->GetDict();
+  result.blocked = dict.FindBool("blocked").value_or(false);
+  if (const std::string* redirect = dict.FindString("redirect")) {
+    result.redirect = *redirect;
+  }
+  if (const std::string* rewritten = dict.FindString("rewrittenUrl")) {
+    result.rewritten_url = *rewritten;
+  }
+  return result;
+}
+
+void AddSiteException(MahoCore* core, const char* origin) {
+  maho_core_add_site_exception(core, origin);
+}
+
+void RemoveSiteException(MahoCore* core, const char* origin) {
+  maho_core_remove_site_exception(core, origin);
+}
+
+std::string GetSiteExceptions(MahoCore* core) {
+  char* result = maho_core_get_site_exceptions(core);
+  if (!result) {
+    return "[]";
+  }
+  std::string ret(result);
+  maho_string_free(result);
+  return ret;
 }
 
 bool SaveContentEngineCache(MahoCore* core, const char* path) {

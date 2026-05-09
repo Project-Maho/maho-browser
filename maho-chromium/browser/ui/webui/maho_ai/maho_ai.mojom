@@ -2,6 +2,11 @@
 
 module maho_ai.mojom;
 
+// ==========================================================================
+// Legacy chat types — kept for migration safety. The legacy PageHandler
+// methods still use these until the frontend is rewritten.
+// ==========================================================================
+
 struct ChatMessage {
   string role;
   string content;
@@ -15,6 +20,170 @@ enum ChatIntent {
   kSummarizeCurrentPage,
 };
 
+// ==========================================================================
+// Session/event-oriented types — the new contract for the OpenCode console.
+// ==========================================================================
+
+// Connection state between the browser proxy and the runtime backend.
+enum RuntimeConnectionState {
+  kDisconnected,
+  kConnecting,
+  kConnected,
+  kReconnecting,
+  kError,
+  // The runtime is connected but paused awaiting user approval for a tool call.
+  kPausedForApproval,
+  // The runtime resumed after an approval decision.
+  kResumed,
+};
+
+// The kind of runtime event delivered through the session event stream.
+enum RuntimeEventKind {
+  // Incremental text token from the assistant.
+  kAssistantToken,
+  // The assistant turn completed successfully.
+  kTurnComplete,
+  // An error occurred during the turn.
+  kError,
+  // The runtime is requesting a browser-local tool invocation.
+  kToolRequest,
+  // A tool invocation completed; result is flowing back.
+  kToolResult,
+  // The runtime is requesting user approval before proceeding.
+  kApprovalRequest,
+  // An approval decision was recorded (for history replay).
+  kApprovalResult,
+  // A user prompt was submitted (persisted for history replay).
+  kUserPrompt,
+  // Session-level status change (started, resumed, completed, cancelled).
+  kSessionStatus,
+  // Connection state changed (for UI indicators).
+  kConnectionStateChanged,
+};
+
+// Status of a tool invocation.
+enum ToolCallStatus {
+  kPending,
+  kRunning,
+  kCompleted,
+  kFailed,
+  kCancelled,
+};
+
+// Describes a tool the runtime wants the browser to execute.
+struct ToolCallInfo {
+  // Unique ID for this tool call within the session, used for result routing.
+  string call_id;
+  // Tool name (e.g. "get_page_content", "read_file").
+  string tool_name;
+  // JSON-encoded arguments from the runtime.
+  string arguments_json;
+  // Current status.
+  ToolCallStatus status;
+};
+
+// Result of a completed tool invocation.
+struct ToolResultInfo {
+  // Matches the call_id from the corresponding ToolCallInfo.
+  string call_id;
+  // Whether the tool succeeded.
+  bool success;
+  // The tool output (text or JSON-encoded structured data).
+  string output;
+  // Optional error message if success is false.
+  string? error_message;
+};
+
+// Describes an approval request from the runtime.
+struct ApprovalRequestInfo {
+  // Unique ID for this approval within the session.
+  string approval_id;
+  // Human-readable description of what needs approval.
+  string description;
+  // The tool call that triggered the approval, if any.
+  ToolCallInfo? related_tool_call;
+};
+
+// A single runtime event in the session event stream.
+struct RuntimeEvent {
+  // What kind of event this is.
+  RuntimeEventKind kind;
+
+  // Monotonically increasing sequence number within the session.
+  uint64 sequence;
+
+  // Timestamp (seconds since Unix epoch, with fractional).
+  double timestamp;
+
+  // Text payload — meaning depends on kind:
+  //   kAssistantToken: the token text
+  //   kTurnComplete: the full accumulated text
+  //   kError: the error message
+  //   kSessionStatus: status string (e.g. "started", "completed")
+  //   kConnectionStateChanged: state name
+  string? text;
+
+  // Structured payloads for specific event kinds.
+  ToolCallInfo? tool_call;
+  ToolResultInfo? tool_result;
+  ApprovalRequestInfo? approval_request;
+  ApprovalResultInfo? approval_result;
+};
+
+// Lifecycle status of a session.
+enum SessionStatus {
+  kCreated,
+  kActive,
+  // The current turn finished but the session is still live and accepts
+  // further prompts. Distinct from kCompleted which means the session ended.
+  kIdle,
+  kPausedForApproval,
+  kCompleted,
+  kCancelled,
+  kError,
+};
+
+// Result of an approval decision (for history replay / timeline cards).
+struct ApprovalResultInfo {
+  // Matches the approval_id from the corresponding ApprovalRequestInfo.
+  string approval_id;
+  // Whether the user approved.
+  bool approved;
+  // Optional explanation from the user.
+  string? reason;
+};
+
+// Lightweight session metadata for the session list.
+struct SessionInfo {
+  string session_id;
+  string? title;
+  // One-line summary of what the session accomplished (set on completion).
+  string? summary;
+  double created_at;
+  double? updated_at;
+  string adapter_name;
+  bool is_active;
+  // Whether this session is read-only (historical, not the active session).
+  // When true, SubmitPrompt/CancelTurn/RespondToApproval will be rejected.
+  bool is_read_only;
+  // Structured session lifecycle status.
+  SessionStatus status;
+  // Total number of events in this session (for progress indication).
+  uint32 event_count;
+  // Number of tool calls executed in this session.
+  uint32 tool_call_count;
+  // The runtime-owned session ID (e.g. OpenCode server session ID).
+  // Null for legacy sessions or if not yet assigned.
+  string? runtime_session_id;
+  // Last known runtime connection state for this session.
+  // "connected", "disconnected", "paused_for_approval", etc.
+  string? last_runtime_state;
+};
+
+// ==========================================================================
+// Interfaces
+// ==========================================================================
+
 // Used by the WebUI page to bootstrap bidirectional communication.
 interface PageHandlerFactory {
   CreatePageHandler(pending_remote<Page> page,
@@ -23,16 +192,66 @@ interface PageHandlerFactory {
 
 // Browser-side handler for requests from WebUI page.
 interface PageHandler {
+  // --- Legacy chat methods (kept for migration fallback) ---
   SendMessage(ChatIntent intent, string message);
   GetPageContent() => (string title, string url, string text_content);
   GetChatHistory() => (array<ChatMessage> messages);
   clearHistory();
   SetApiKey(string key);
   GetApiKeyStatus() => (bool has_key);
+
+  // --- Session-oriented methods (new contract) ---
+
+  // Get the current runtime connection state.
+  GetConnectionState() => (RuntimeConnectionState state,
+                           string active_adapter_name);
+
+  // List available sessions.
+  GetSessionList() => (array<SessionInfo> sessions);
+
+  // Start a new session. Returns the session info and begins streaming
+  // events to the Page interface via OnRuntimeEvent.
+  StartSession(string? initial_prompt) => (SessionInfo session);
+
+  // Resume/reconnect to an existing session. For the currently active session,
+  // returns live state and replay events. For historical sessions, returns
+  // read-only metadata (is_read_only=true) and persisted events; no runtime
+  // reconnection occurs and mutation methods will be silently rejected.
+  ResumeSession(string session_id) => (SessionInfo? session,
+                                        array<RuntimeEvent> replay_events);
+
+  // Fetch the event history for a session without resuming/reconnecting it.
+  // Use this for read-only history display (e.g. viewing a past session).
+  GetSessionHistory(string session_id, uint32 offset, uint32 limit)
+      => (array<RuntimeEvent> events, uint32 total_count);
+
+  // Submit a user prompt into the active session.
+  SubmitPrompt(string session_id, string prompt);
+
+  // Cancel the current turn in a session.
+  CancelTurn(string session_id);
+
+  // Respond to a tool approval request.
+  RespondToApproval(string session_id, string approval_id, bool approved);
+
+  // Close the AI side panel hosting this WebUI.
+  ClosePanel();
 };
 
 // WebUI-side interface for browser-to-page push updates.
 interface Page {
+  // --- Legacy streaming callbacks (kept for migration fallback) ---
   OnStreamingResponse(string partial_content);
   OnStreamingComplete(ChatMessage response);
+
+  // --- Session event push (new contract) ---
+
+  // A runtime event occurred in the active session.
+  OnRuntimeEvent(RuntimeEvent event);
+
+  // The runtime connection state changed.
+  OnConnectionStateChanged(RuntimeConnectionState state);
+
+  // A session's metadata was updated (title, status, etc.).
+  OnSessionUpdated(SessionInfo session);
 };

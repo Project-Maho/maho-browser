@@ -5,6 +5,29 @@ use std::path::Path;
 use std::ptr;
 
 use maho_core::maho_core::MahoCore;
+use maho_types::space::RootItem;
+use maho_types::keyboard::KeyCombo;
+use maho_types::passwords::SavedPassword;
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PasswordEntryView {
+    id: String,
+    domain: String,
+    username: String,
+    created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_used: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    password: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SidebarRootItemView {
+    kind: String,
+    id: String,
+}
 
 fn to_json_cstring<T: serde::Serialize + ?Sized>(value: &T) -> *mut c_char {
     match serde_json::to_string(value) {
@@ -13,6 +36,21 @@ fn to_json_cstring<T: serde::Serialize + ?Sized>(value: &T) -> *mut c_char {
             .unwrap_or(ptr::null_mut()),
         Err(_) => ptr::null_mut(),
     }
+}
+
+fn to_password_entries(passwords: Vec<&SavedPassword>) -> *mut c_char {
+    let views: Vec<PasswordEntryView> = passwords
+        .into_iter()
+        .map(|password| PasswordEntryView {
+            id: password.id.clone(),
+            domain: password.domain.clone(),
+            username: password.username.clone(),
+            created_at: password.created_at.clone(),
+            last_used: password.last_used.clone(),
+            password: password.password.clone(),
+        })
+        .collect();
+    to_json_cstring(&views)
 }
 
 #[no_mangle]
@@ -76,6 +114,44 @@ pub unsafe extern "C" fn maho_core_get_space_view_models(ptr: *mut MahoCore) -> 
     }
     let core = &*ptr;
     to_json_cstring(&core.get_space_view_models())
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `space_id_json` must be a valid null-terminated C string containing a SpaceId JSON.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_sidebar_root_order(
+    ptr: *mut MahoCore,
+    space_id_json: *const c_char,
+) -> *mut c_char {
+    if ptr.is_null() || space_id_json.is_null() {
+        return ptr::null_mut();
+    }
+    let core = &*ptr;
+    let json_str = match CStr::from_ptr(space_id_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let space_id = match serde_json::from_str(json_str) {
+        Ok(id) => id,
+        Err(_) => return ptr::null_mut(),
+    };
+    let root_items = core
+        .get_sidebar_root_order(&space_id)
+        .into_iter()
+        .map(|item| match item {
+            RootItem::Tab(tab_id) => SidebarRootItemView {
+                kind: "tab".to_string(),
+                id: tab_id.to_string(),
+            },
+            RootItem::Folder(folder_id) => SidebarRootItemView {
+                kind: "folder".to_string(),
+                id: folder_id.to_string(),
+            },
+        })
+        .collect::<Vec<_>>();
+    to_json_cstring(&root_items)
 }
 
 /// # Safety
@@ -303,6 +379,110 @@ pub unsafe extern "C" fn maho_core_get_installed_extensions(ptr: *mut MahoCore) 
 
 /// # Safety
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `query` must be a valid null-terminated C string.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_search_passwords(
+    ptr: *mut MahoCore,
+    query: *const c_char,
+) -> *mut c_char {
+    if ptr.is_null() || query.is_null() {
+        return ptr::null_mut();
+    }
+    let core = &*ptr;
+    let query_str = match CStr::from_ptr(query).to_str() {
+        Ok(s) => s.trim(),
+        Err(_) => return ptr::null_mut(),
+    };
+
+    if query_str.is_empty() {
+        return to_password_entries(core.list_passwords().iter().collect());
+    }
+
+    to_password_entries(core.search_passwords(query_str))
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `password_id` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_delete_password(
+    ptr: *mut MahoCore,
+    password_id: *const c_char,
+) -> bool {
+    if ptr.is_null() || password_id.is_null() {
+        return false;
+    }
+    let core = &mut *ptr;
+    let password_id = match CStr::from_ptr(password_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    core.delete_password_persisted(password_id)
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `domain` and `username` must be valid null-terminated C strings.
+/// `password` may be null.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_add_password(
+    ptr: *mut MahoCore,
+    domain: *const c_char,
+    username: *const c_char,
+    password: *const c_char,
+) -> bool {
+    if ptr.is_null() || domain.is_null() || username.is_null() {
+        return false;
+    }
+    let core = &mut *ptr;
+    let domain = match CStr::from_ptr(domain).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let username = match CStr::from_ptr(username).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let password = if password.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(password).to_str() {
+            Ok(s) if !s.is_empty() => Some(s.to_string()),
+            Ok(_) => None,
+            Err(_) => return false,
+        }
+    };
+    let _ = core.add_password_persisted(domain.to_string(), username.to_string(), password);
+    true
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `password_id` and `username` must be valid null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_update_password_username(
+    ptr: *mut MahoCore,
+    password_id: *const c_char,
+    username: *const c_char,
+) -> bool {
+    if ptr.is_null() || password_id.is_null() || username.is_null() {
+        return false;
+    }
+    let core = &mut *ptr;
+    let password_id = match CStr::from_ptr(password_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let username = match CStr::from_ptr(username).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    core.update_password_username_persisted(password_id, username.to_string())
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
 /// `url` must be a valid null-terminated C string.
 /// Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
@@ -383,18 +563,6 @@ pub unsafe extern "C" fn maho_core_get_find_bar_state(ptr: *mut MahoCore) -> *mu
 
 /// # Safety
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
-/// Caller must free the returned string with `maho_string_free`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_core_get_split_view_config(ptr: *mut MahoCore) -> *mut c_char {
-    if ptr.is_null() {
-        return ptr::null_mut();
-    }
-    let core = &*ptr;
-    to_json_cstring(&core.get_split_view_config())
-}
-
-/// # Safety
-/// `ptr` must be a valid pointer returned by `maho_core_new`.
 /// `space_id_json` must be a valid null-terminated C string containing a SpaceId JSON.
 /// Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
@@ -467,6 +635,90 @@ pub unsafe extern "C" fn maho_core_should_block_request(
         Err(_) => return false,
     };
     core.should_block_request(url_str, source_str, type_str)
+}
+
+/// Returns a JSON string with the block check result:
+/// `{"blocked":bool,"redirect":string|null,"rewrittenUrl":string|null}`
+///
+/// # Safety
+/// All pointers must be valid C strings. `ptr` must be from `maho_core_new`.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_check_request(
+    ptr: *mut MahoCore,
+    url: *const c_char,
+    source_url: *const c_char,
+    request_type: *const c_char,
+) -> *mut c_char {
+    if ptr.is_null() || url.is_null() || source_url.is_null() || request_type.is_null() {
+        return ptr::null_mut();
+    }
+    let core = &*ptr;
+    let url_str = match CStr::from_ptr(url).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let source_str = match CStr::from_ptr(source_url).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let type_str = match CStr::from_ptr(request_type).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let result = core.check_request(url_str, source_str, type_str);
+    to_json_cstring(&result)
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `origin` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_add_site_exception(
+    ptr: *mut MahoCore,
+    origin: *const c_char,
+) {
+    if ptr.is_null() || origin.is_null() {
+        return;
+    }
+    let core = &mut *ptr;
+    let origin_str = match CStr::from_ptr(origin).to_str() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    core.add_content_blocker_site_exception(origin_str);
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `origin` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_remove_site_exception(
+    ptr: *mut MahoCore,
+    origin: *const c_char,
+) {
+    if ptr.is_null() || origin.is_null() {
+        return;
+    }
+    let core = &mut *ptr;
+    let origin_str = match CStr::from_ptr(origin).to_str() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    core.remove_content_blocker_site_exception(origin_str);
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_site_exceptions(ptr: *mut MahoCore) -> *mut c_char {
+    if ptr.is_null() {
+        return ptr::null_mut();
+    }
+    let core = &*ptr;
+    let exceptions = core.get_content_blocker_site_exceptions();
+    to_json_cstring(&exceptions)
 }
 
 /// Returns cosmetic filter resources for a URL as JSON.
@@ -593,7 +845,9 @@ pub unsafe extern "C" fn maho_core_search_history(
 pub unsafe extern "C" fn maho_core_command_bar_search(
     ptr: *mut MahoCore,
     query: *const c_char,
+    mode: *const c_char,
     tabs_json: *const c_char,
+    is_incognito: bool,
 ) -> *mut c_char {
     if ptr.is_null() || query.is_null() || tabs_json.is_null() {
         return ptr::null_mut();
@@ -603,6 +857,15 @@ pub unsafe extern "C" fn maho_core_command_bar_search(
         Ok(s) => s,
         Err(_) => return ptr::null_mut(),
     };
+    let mode_owned = if mode.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(mode).to_str() {
+            Ok(s) if !s.is_empty() => Some(s.to_owned()),
+            _ => None,
+        }
+    };
+    let mode_str = mode_owned.as_deref();
     let tabs_str = match CStr::from_ptr(tabs_json).to_str() {
         Ok(s) => s,
         Err(_) => return ptr::null_mut(),
@@ -613,6 +876,9 @@ pub unsafe extern "C" fn maho_core_command_bar_search(
         id: String,
         title: String,
         url: String,
+        #[serde(default)]
+        #[serde(alias = "icon")]
+        favicon: Option<maho_types::common::ImageData>,
     }
 
     let simple_tabs: Vec<SimpleTab> = serde_json::from_str(tabs_str).unwrap_or_default();
@@ -628,7 +894,7 @@ pub unsafe extern "C" fn maho_core_command_bar_search(
                 title: t.title,
                 custom_title: None,
                 url: t.url,
-                favicon: None,
+                favicon: t.favicon.clone(),
                 is_loading: false,
                 is_pinned: false,
                 is_favorite: false,
@@ -643,7 +909,7 @@ pub unsafe extern "C" fn maho_core_command_bar_search(
         })
         .collect();
 
-    let results = core.command_bar_search_with_tabs(query_str, tabs);
+    let results = core.command_bar_search_with_tabs(query_str, mode_str, tabs, is_incognito);
     to_json_cstring(&results)
 }
 
@@ -1302,8 +1568,6 @@ pub unsafe extern "C" fn maho_core_restore_download_name(
     }
 }
 
-
-
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_get_filter_lists(ptr: *mut MahoCore) -> *mut c_char {
     if ptr.is_null() {
@@ -1344,6 +1608,36 @@ pub unsafe extern "C" fn maho_core_add_filter_list(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn maho_core_toggle_filter_list(
+    ptr: *mut MahoCore,
+    id: *const c_char,
+    enabled: bool,
+) {
+    if ptr.is_null() || id.is_null() {
+        return;
+    }
+    let core = &mut *ptr;
+    let id_str = match CStr::from_ptr(id).to_str() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    core.toggle_filter_list(id_str, enabled);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_remove_filter_list(ptr: *mut MahoCore, id: *const c_char) {
+    if ptr.is_null() || id.is_null() {
+        return;
+    }
+    let core = &mut *ptr;
+    let id_str = match CStr::from_ptr(id).to_str() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    core.remove_filter_list(id_str);
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn maho_core_update_filter_list_content(
     ptr: *mut MahoCore,
     id: *const c_char,
@@ -1380,6 +1674,38 @@ pub unsafe extern "C" fn maho_core_get_content_rule_count(ptr: *mut MahoCore) ->
     }
     let core = &*ptr;
     core.get_content_rule_count()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_toggle_extension(
+    ptr: *mut MahoCore,
+    extension_id: *const c_char,
+) -> bool {
+    if ptr.is_null() || extension_id.is_null() {
+        return false;
+    }
+    let core = &mut *ptr;
+    let id_str = match CStr::from_ptr(extension_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    core.toggle_extension(id_str).is_some()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_remove_extension(
+    ptr: *mut MahoCore,
+    extension_id: *const c_char,
+) -> bool {
+    if ptr.is_null() || extension_id.is_null() {
+        return false;
+    }
+    let core = &mut *ptr;
+    let id_str = match CStr::from_ptr(extension_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    core.remove_extension(id_str).is_some()
 }
 
 #[no_mangle]
@@ -2241,13 +2567,20 @@ pub unsafe extern "C" fn maho_core_set_shortcut(
         Ok(s) => s,
         Err(_) => return ptr::null_mut(),
     };
-    match core.set_shortcut_json(action_str, combo_str) {
-        Ok(result) => CString::new(result)
+    let key_combo: KeyCombo = match serde_json::from_str(combo_str) {
+        Ok(combo) => combo,
+        Err(_) => return ptr::null_mut(),
+    };
+    match core.set_shortcut_persisted(action_str, key_combo) {
+        Ok(()) => CString::new(r#"{"success":true}"#)
             .map(CString::into_raw)
             .unwrap_or(ptr::null_mut()),
-        Err(conflict_json) => CString::new(format!(r#"{{"error":{}}}"#, conflict_json))
-            .map(CString::into_raw)
-            .unwrap_or(ptr::null_mut()),
+        Err(conflict) => match serde_json::to_string(&conflict) {
+            Ok(conflict_json) => CString::new(format!(r#"{{"error":{}}}"#, conflict_json))
+                .map(CString::into_raw)
+                .unwrap_or(ptr::null_mut()),
+            Err(_) => ptr::null_mut(),
+        },
     }
 }
 
@@ -2258,7 +2591,7 @@ pub unsafe extern "C" fn maho_core_reset_shortcut(ptr: *mut MahoCore, action: *c
     }
     let core = &mut *ptr;
     if let Ok(s) = CStr::from_ptr(action).to_str() {
-        core.reset_shortcut(s);
+        core.reset_shortcut_persisted(s);
     }
 }
 
@@ -2268,7 +2601,22 @@ pub unsafe extern "C" fn maho_core_reset_all_shortcuts(ptr: *mut MahoCore) {
         return;
     }
     let core = &mut *ptr;
-    core.reset_all_shortcuts();
+    core.reset_all_shortcuts_persisted();
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_toggle_shortcut(
+    ptr: *mut MahoCore,
+    action: *const c_char,
+    enabled: bool,
+) {
+    if ptr.is_null() || action.is_null() {
+        return;
+    }
+    let core = &mut *ptr;
+    if let Ok(s) = CStr::from_ptr(action).to_str() {
+        core.toggle_shortcut_persisted(s, enabled);
+    }
 }
 
 #[no_mangle]
@@ -3394,6 +3742,42 @@ pub unsafe extern "C" fn maho_core_get_autofill_addresses(ptr: *mut MahoCore) ->
     to_json_cstring(core.get_autofill_addresses())
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_add_autofill_address_persisted(
+    ptr: *mut MahoCore,
+    address_json: *const c_char,
+) -> *mut c_char {
+    if ptr.is_null() || address_json.is_null() {
+        return ptr::null_mut();
+    }
+    let core = &mut *ptr;
+    let json_str = match CStr::from_ptr(address_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let address: maho_types::autofill::AutofillAddress = match serde_json::from_str(json_str) {
+        Ok(addr) => addr,
+        Err(_) => return ptr::null_mut(),
+    };
+    to_json_cstring(&core.add_autofill_address_persisted(address))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_delete_autofill_address_persisted(
+    ptr: *mut MahoCore,
+    id: *const c_char,
+) -> bool {
+    if ptr.is_null() || id.is_null() {
+        return false;
+    }
+    let core = &mut *ptr;
+    let id_str = match CStr::from_ptr(id).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    core.delete_autofill_address_persisted(id_str)
+}
+
 /// # Safety
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
 /// Caller must free the returned string with `maho_string_free`.
@@ -3404,6 +3788,42 @@ pub unsafe extern "C" fn maho_core_get_autofill_payments(ptr: *mut MahoCore) -> 
     }
     let core = &*ptr;
     to_json_cstring(core.get_autofill_payments())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_add_autofill_payment_persisted(
+    ptr: *mut MahoCore,
+    payment_json: *const c_char,
+) -> *mut c_char {
+    if ptr.is_null() || payment_json.is_null() {
+        return ptr::null_mut();
+    }
+    let core = &mut *ptr;
+    let json_str = match CStr::from_ptr(payment_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let payment: maho_types::autofill::AutofillPayment = match serde_json::from_str(json_str) {
+        Ok(payment) => payment,
+        Err(_) => return ptr::null_mut(),
+    };
+    to_json_cstring(&core.add_autofill_payment_persisted(payment))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_delete_autofill_payment_persisted(
+    ptr: *mut MahoCore,
+    id: *const c_char,
+) -> bool {
+    if ptr.is_null() || id.is_null() {
+        return false;
+    }
+    let core = &mut *ptr;
+    let id_str = match CStr::from_ptr(id).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    core.delete_autofill_payment_persisted(id_str)
 }
 
 /// `ptr` must be a valid pointer returned by `maho_core_new`.

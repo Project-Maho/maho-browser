@@ -7,6 +7,21 @@ mojom("mojo_bindings") {
   webui_module_path = "/"
 }
 
+source_set("maho_ai_prefs") {
+  sources = [
+    "maho_ai_prefs_registration.cc",
+    "maho_ai_prefs_registration.h",
+  ]
+
+  public_deps = [
+    "//components/prefs",
+  ]
+
+  deps = [
+    "//base",
+  ]
+}
+
 source_set("maho_ai") {
   sources = [
     "maho_ai_page_handler.cc",
@@ -16,6 +31,7 @@ source_set("maho_ai") {
   ]
 
   public_deps = [
+    ":maho_ai_prefs",
     ":mojo_bindings",
     "//base",
     "//components/prefs",
@@ -27,7 +43,10 @@ source_set("maho_ai") {
     "//chrome/browser/profiles:profile",
     "//chrome/browser/ui/browser_window",
     "//chrome/browser/ui/tabs:tab_strip",
-    "//maho/browser:maho_ai_client",
+    "//maho/browser:maho_ai_runtime_adapter",
+    "//maho/browser:maho_opencode_runtime_service",
+    "//maho/browser:maho_chat_orchestration",
+    "//maho/browser:maho_browser_ai_tools",
     "//maho/browser:maho_core_holder",
     "//maho/browser/resources/maho_ai:resources",
     "//maho/components/constants",

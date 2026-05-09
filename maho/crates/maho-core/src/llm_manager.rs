@@ -1,14 +1,17 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 
+use maho_types::chat::{ChatRequestContext, ChatRequestMode};
 use maho_types::common::Url;
-use maho_types::events::core_update::{CoreUpdate, LLMRequestType, TidyTabFolder};
+use maho_types::events::core_update::{
+    CoreUpdate, LLMRequestContext, LLMRequestType, TidyTabFolder,
+};
 use maho_types::identifiers::{DownloadId, SpaceId, TabId};
 
 #[derive(Debug)]
 struct LLMRequest {
     request_type: LLMRequestType,
-    context: serde_json::Value,
+    context: LLMRequestContext,
 }
 
 const MAX_CHAT_HISTORY: usize = 20;
@@ -60,7 +63,9 @@ impl LLMManager {
              - \"Amazon.com: Wireless Mouse - Electronics\" → \"Wireless Mouse\"",
             title, url
         );
-        let context = serde_json::json!({ "tab_id": tab_id.to_string() });
+        let context = LLMRequestContext::TidyTabTitle {
+            tab_id: tab_id.clone(),
+        };
         self.pending_requests.insert(
             request_id.clone(),
             LLMRequest {
@@ -97,7 +102,9 @@ impl LLMManager {
              - Return ONLY the filename, nothing else",
             filename, url, page_title
         );
-        let context = serde_json::json!({ "download_id": download_id });
+        let context = LLMRequestContext::TidyDownload {
+            download_id: DownloadId::new(download_id),
+        };
         self.pending_requests.insert(
             request_id.clone(),
             LLMRequest {
@@ -127,7 +134,9 @@ impl LLMManager {
             "Summarize this web page in 2-3 sentences. Return a JSON with \"title\" and \"summary\" fields.\n\nURL: {}",
             url
         );
-        let context = serde_json::json!({ "url": url });
+        let context = LLMRequestContext::PagePreview {
+            url: Url(url.to_string()),
+        };
         self.pending_requests.insert(
             request_id.clone(),
             LLMRequest {
@@ -169,7 +178,9 @@ impl LLMManager {
             }
         })
         .to_string();
-        let context = serde_json::json!({ "space_id": space_id.to_string() });
+        let context = LLMRequestContext::TidyTabs {
+            space_id: space_id.clone(),
+        };
         self.pending_requests.insert(
             request_id.clone(),
             LLMRequest {
@@ -188,10 +199,11 @@ impl LLMManager {
     pub fn request_chat_completion(
         &mut self,
         message: &str,
-        include_page_context: bool,
-        page_context: Option<&str>,
-        tools_schema: Option<serde_json::Value>,
+        context: &ChatRequestContext,
     ) -> CoreUpdate {
+        // Support-layer boundary: the browser now owns live chat orchestration and
+        // page-context assembly. Rust keeps the typed request payload, history, and
+        // compatibility path for LLM persistence/round-tripping.
         let request_id = self.generate_request_id();
 
         self.chat_history
@@ -200,19 +212,33 @@ impl LLMManager {
             self.chat_history.pop_front();
         }
 
+        let request_context = context.clone();
         let mut messages = Vec::new();
+        let system_prompt = match request_context.request_mode {
+            ChatRequestMode::PageQuestion => {
+                "You are Maho AI, a helpful browser assistant. Analyze the current page deeply and be concise but specific."
+            }
+            ChatRequestMode::PageTransformation => {
+                "You are Maho AI, a helpful browser assistant. Explain the current page clearly in plain language."
+            }
+            ChatRequestMode::ToolAssistedTask => {
+                "You are Maho AI, a helpful browser assistant. Summarize the current page clearly and concisely."
+            }
+            _ => "You are Maho AI, a helpful browser assistant. Be concise and helpful.",
+        };
         messages.push(serde_json::json!({
             "role": "system",
-            "content": "You are Maho AI, a helpful browser assistant. Be concise and helpful."
+            "content": system_prompt
         }));
 
-        if include_page_context {
-            if let Some(ctx) = page_context.filter(|s| !s.is_empty()) {
-                messages.push(serde_json::json!({
-                    "role": "system",
-                    "content": format!("Current page context:\n{}", ctx)
-                }));
-            }
+        if let Some(ctx) = request_context.page_context.as_ref() {
+            messages.push(serde_json::json!({
+                "role": "system",
+                "content": format!(
+                    "Current page context:\n{}",
+                    serde_json::to_string_pretty(ctx).unwrap_or_default()
+                )
+            }));
         }
 
         for (role, content) in &self.chat_history {
@@ -222,18 +248,25 @@ impl LLMManager {
             }));
         }
 
+        let tools_schema = request_context.tools.as_ref().map(|tools| {
+            serde_json::Value::Array(
+                tools
+                    .iter()
+                    .map(|tool| tool.to_openai_function())
+                    .collect(),
+            )
+        });
         let prompt = if let Some(tools) = tools_schema {
             serde_json::json!({
                 "messages": messages,
                 "tools": tools,
-            }).to_string()
+            })
+            .to_string()
         } else {
             serde_json::to_string(&messages).unwrap_or_default()
         };
-        let context = if include_page_context {
-            serde_json::json!({ "page_context": page_context.unwrap_or("") })
-        } else {
-            serde_json::json!({})
+        let context = LLMRequestContext::Chat {
+            chat: request_context,
         };
 
         self.pending_requests.insert(
@@ -262,8 +295,10 @@ impl LLMManager {
         };
         match request.request_type {
             LLMRequestType::TidyTabTitle => {
-                let tab_id_str = request.context["tab_id"].as_str().unwrap_or_default();
-                let tab_id = TabId::new(tab_id_str);
+                let tab_id = match request.context {
+                    LLMRequestContext::TidyTabTitle { tab_id } => tab_id,
+                    _ => TabId::new(""),
+                };
                 vec![CoreUpdate::TabUpdated {
                     tab_id,
                     changes: maho_types::traits::shell_renderer::TabStateUpdate {
@@ -273,12 +308,14 @@ impl LLMManager {
                 }]
             }
             LLMRequestType::TidyDownload => {
-                let download_id_str = request.context["download_id"].as_str().unwrap_or_default();
+                let download_id = match request.context {
+                    LLMRequestContext::TidyDownload { download_id } => download_id,
+                    _ => DownloadId::new(""),
+                };
                 let new_name = result.trim().to_string();
                 if new_name.is_empty() {
                     return vec![];
                 }
-                let download_id = DownloadId::new(download_id_str);
                 vec![CoreUpdate::DownloadRenamed {
                     download_id,
                     old_name: String::new(),
@@ -286,22 +323,24 @@ impl LLMManager {
                 }]
             }
             LLMRequestType::PagePreview => {
-                let url = request.context["url"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string();
+                let url = match request.context {
+                    LLMRequestContext::PagePreview { url } => url,
+                    _ => Url(String::new()),
+                };
                 let (title, summary) = parse_page_preview_result(result);
                 self.preview_cache
-                    .insert(url.clone(), (title.clone(), summary.clone()));
+                    .insert(url.0.clone(), (title.clone(), summary.clone()));
                 vec![CoreUpdate::PagePreviewReady {
-                    url: Url(url),
+                    url,
                     title,
                     summary,
                 }]
             }
             LLMRequestType::TidyTabs => {
-                let space_id_str = request.context["space_id"].as_str().unwrap_or_default();
-                let space_id = SpaceId::new(space_id_str);
+                let space_id = match request.context {
+                    LLMRequestContext::TidyTabs { space_id } => space_id,
+                    _ => SpaceId::new(""),
+                };
                 if let Some(folders) = parse_tidy_tabs_result(result) {
                     self.pending_tidy_tabs = Some((space_id.clone(), folders.clone()));
                     vec![CoreUpdate::TidyTabsReady { space_id, folders }]
@@ -446,7 +485,7 @@ mod tests {
     #[test]
     fn test_request_chat_completion_message_format() {
         let mut manager = LLMManager::new();
-        let update = manager.request_chat_completion("Hello", false, None, None);
+        let update = manager.request_chat_completion("Hello", &ChatRequestContext::default());
         if let CoreUpdate::RequestLlmCompletion {
             request_id,
             request_type,
@@ -473,7 +512,7 @@ mod tests {
     #[test]
     fn test_chat_history_round_trip() {
         let mut manager = LLMManager::new();
-        let update = manager.request_chat_completion("Hi there", false, None, None);
+        let update = manager.request_chat_completion("Hi there", &ChatRequestContext::default());
         let request_id = match &update {
             CoreUpdate::RequestLlmCompletion { request_id, .. } => request_id.clone(),
             _ => panic!("Expected RequestLlmCompletion"),
@@ -496,8 +535,10 @@ mod tests {
     fn test_chat_history_cap() {
         let mut manager = LLMManager::new();
         for i in 0..12 {
-            let update =
-                manager.request_chat_completion(&format!("msg {}", i), false, None, None);
+            let update = manager.request_chat_completion(
+                &format!("msg {}", i),
+                &ChatRequestContext::default(),
+            );
             let rid = match update {
                 CoreUpdate::RequestLlmCompletion { request_id, .. } => request_id,
                 _ => panic!(),
@@ -511,7 +552,7 @@ mod tests {
     #[test]
     fn test_chat_completion_error_handling() {
         let mut manager = LLMManager::new();
-        let update = manager.request_chat_completion("test", false, None, None);
+        let update = manager.request_chat_completion("test", &ChatRequestContext::default());
         let request_id = match &update {
             CoreUpdate::RequestLlmCompletion { request_id, .. } => request_id.clone(),
             _ => panic!("Expected RequestLlmCompletion"),
@@ -535,11 +576,20 @@ mod tests {
     #[test]
     fn test_chat_completion_with_page_context() {
         let mut manager = LLMManager::new();
+        let page_context = maho_types::chat::PageContext {
+            title: "Rust Docs".into(),
+            url: Url("https://doc.rust-lang.org".into()),
+            selected_text: None,
+            main_text: Some("Rust documentation".into()),
+            headings: vec!["Overview".into()],
+            meta_description: None,
+            links: vec![],
+            extraction_status: maho_types::chat::PageExtractionStatus::Complete,
+            extraction_warnings: vec![],
+        };
         let update = manager.request_chat_completion(
             "Summarize this page",
-            true,
-            Some("Title: Rust Docs\nURL: https://doc.rust-lang.org"),
-            None,
+            &ChatRequestContext::new(ChatRequestMode::PageQuestion).with_page_context(page_context),
         );
         if let CoreUpdate::RequestLlmCompletion { prompt, context, .. } = &update {
             let messages: Vec<serde_json::Value> = serde_json::from_str(prompt).unwrap();
@@ -552,7 +602,7 @@ mod tests {
             assert!(ctx_content.contains("Rust Docs"));
             assert_eq!(messages[2]["role"], "user");
             assert_eq!(messages[2]["content"], "Summarize this page");
-            assert!(context["page_context"].as_str().unwrap().contains("Rust Docs"));
+            assert!(matches!(context, LLMRequestContext::Chat { .. }));
         } else {
             panic!("Expected RequestLlmCompletion");
         }

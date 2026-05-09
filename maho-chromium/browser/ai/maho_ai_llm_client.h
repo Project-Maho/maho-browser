@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
@@ -13,6 +14,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/values.h"
+#include "url/gurl.h"
 
 class PrefService;
 
@@ -20,6 +22,8 @@ namespace network {
 class SharedURLLoaderFactory;
 class SimpleURLLoader;
 }  // namespace network
+
+class MahoAiLlmClientStreamConsumer;
 
 class MahoAiLlmClient {
  public:
@@ -35,13 +39,64 @@ class MahoAiLlmClient {
   };
 
   using TokenCallback = base::RepeatingCallback<void(const std::string&)>;
-  using CompleteCallback =
-      base::OnceCallback<void(const std::string& full_text)>;
   using ErrorCallback = base::OnceCallback<void(const std::string& error)>;
+
+  struct ToolCall {
+    ToolCall();
+    ~ToolCall();
+    ToolCall(ToolCall&&);
+    ToolCall& operator=(ToolCall&&);
+
+    int index = -1;
+    std::string id;
+    std::string name;
+    std::string arguments_json;
+  };
+
+  struct CompletionResult {
+    CompletionResult();
+    ~CompletionResult();
+    CompletionResult(CompletionResult&&);
+    CompletionResult& operator=(CompletionResult&&);
+
+    std::string full_text;
+    std::vector<ToolCall> tool_calls;
+    std::optional<std::string> finish_reason;
+  };
+
+  using CompleteCallback =
+      base::OnceCallback<void(CompletionResult result)>;
+
+  struct RequestPlan {
+    GURL url;
+    std::string body_json;
+  };
+
+  class ProviderTransport {
+   public:
+    virtual ~ProviderTransport() = default;
+
+    virtual bool HasConfiguredCredential(PrefService* prefs) const = 0;
+    virtual std::optional<std::string> ResolveEndpoint(
+        const CompletionRequest& request,
+        PrefService* prefs) const = 0;
+    virtual std::optional<std::string> ResolveModel(
+        const CompletionRequest& request,
+        PrefService* prefs) const = 0;
+    virtual RequestPlan CreateRequestPlan(CompletionRequest request,
+                                          const std::string& endpoint,
+                                          const std::string& model) const = 0;
+    virtual void ProcessResponseBody(
+        std::string body,
+        std::string* sse_buffer,
+        CompletionResult* completion_result,
+        const TokenCallback& on_token) const = 0;
+  };
 
   MahoAiLlmClient(
       PrefService* prefs,
-      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+      bool provider_adapter_v2_enabled);
   MahoAiLlmClient(const MahoAiLlmClient&) = delete;
   MahoAiLlmClient& operator=(const MahoAiLlmClient&) = delete;
   ~MahoAiLlmClient();
@@ -56,35 +111,25 @@ class MahoAiLlmClient {
                        ErrorCallback on_error);
 
  private:
-  struct ResolvedConfig {
-    std::string endpoint;
-    std::string model;
-    std::string api_key;
-  };
+  friend class MahoAiLlmClientStreamConsumer;
 
-  struct LocalServerConfig {
-    std::string endpoint;
-    std::string model;
-  };
-
-  void OnResponseDownloaded(std::optional<std::string> body);
-  void ProcessSSEBuffer();
+  void OnResponseDataReceived(std::string body_chunk);
+  void OnResponseComplete(bool success);
   void FinishWithSuccess();
   void FinishWithError(const std::string& error);
 
-  std::optional<ResolvedConfig> ResolveConfig(
-      const CompletionRequest& request) const;
-  std::string GetConfiguredApiKey() const;
-  std::optional<LocalServerConfig> GetLocalServerConfig() const;
-  static std::string GetMacOSAppDefaultsString(const char* key);
-
   SEQUENCE_CHECKER(sequence_checker_);
+
+  friend class MahoAiLlmClientStreamConsumer;
 
   raw_ptr<PrefService> prefs_;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
   std::unique_ptr<network::SimpleURLLoader> url_loader_;
+  std::unique_ptr<MahoAiLlmClientStreamConsumer> stream_consumer_;
+  bool provider_adapter_v2_enabled_ = false;
+  std::unique_ptr<ProviderTransport> provider_transport_;
   std::string sse_buffer_;
-  std::string accumulated_response_;
+  CompletionResult completion_result_;
   TokenCallback on_token_;
   CompleteCallback on_complete_;
   ErrorCallback on_error_;

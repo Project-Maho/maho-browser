@@ -9,8 +9,10 @@ use maho_types::events::shell_event::ShellEvent;
 use maho_types::identifiers::{BoostId, FolderId, NoteId, ProfileId, SpaceId, TabId};
 use maho_types::note::Note;
 use maho_types::settings::{AppearanceSettingsUpdate, Settings, SettingsUpdate};
-use maho_types::space::{Space, SpaceColor};
-use maho_types::tab::Tab;
+use maho_types::keyboard::{KeyCombo, KeyModifier};
+use maho_types::space::{RootItem, Space, SpaceColor};
+use maho_types::split_view::{SplitConfig, SplitViewConfig};
+use maho_types::tab::{Tab, TabLifecycleState};
 use maho_types::traits::shell_renderer::{
     ArchivedTabViewModel, SearchContext, SpaceViewModel, SuggestionViewModel, TabStateUpdate,
     TabViewModel,
@@ -47,7 +49,6 @@ use crate::sharing_manager::SharingManager;
 use crate::shortcut_manager::ShortcutManager;
 use crate::skills_manager::SkillsManager;
 use crate::space_manager::SpaceManager;
-use crate::split_view_manager::SplitViewManager;
 use crate::sync_models::{SyncEntity, SyncEntityType};
 use crate::tab_lifecycle::{timestamp_millis_to_iso8601, TabLifecycleManager};
 use crate::tab_preview_manager::TabPreviewManager;
@@ -115,8 +116,8 @@ mod tests {
             .add_tab_to_space(&other_space.id, tab_id.clone(), None);
 
         let favorites = core.get_favorite_tabs(&active_space_id);
-        assert_eq!(favorites.len(), 1);
-        assert_eq!(favorites[0].id, tab_id);
+        let matching: Vec<_> = favorites.iter().filter(|tab| tab.id == tab_id).collect();
+        assert_eq!(matching.len(), 1);
     }
 }
 
@@ -157,6 +158,48 @@ fn urlencoding_decode(s: &str) -> String {
     String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
+fn format_key_combo_label(key_combo: &KeyCombo) -> String {
+    let is_mac = cfg!(target_os = "macos");
+    let mut parts: Vec<&str> = Vec::new();
+
+    for modifier in [KeyModifier::Ctrl, KeyModifier::Alt, KeyModifier::Shift, KeyModifier::Meta] {
+        if key_combo.modifiers.contains(&modifier) {
+            if is_mac {
+                parts.push(match modifier {
+                    KeyModifier::Ctrl => "\u{2303}",
+                    KeyModifier::Alt => "\u{2325}",
+                    KeyModifier::Shift => "\u{21E7}",
+                    KeyModifier::Meta => "\u{2318}",
+                });
+            } else {
+                parts.push(match modifier {
+                    KeyModifier::Ctrl => "Ctrl",
+                    KeyModifier::Alt => "Alt",
+                    KeyModifier::Shift => "Shift",
+                    KeyModifier::Meta => "Super",
+                });
+            }
+        }
+    }
+
+    let key = if key_combo.key.len() == 1 {
+        key_combo.key.to_uppercase()
+    } else {
+        key_combo.key.clone()
+    };
+
+    if is_mac {
+        // macOS: compact symbols without separators e.g. ⌃⌥⇧⌘K
+        let mut label = parts.join("");
+        label.push_str(&key);
+        label
+    } else {
+        // Other platforms: text with + separator e.g. Ctrl+Shift+K
+        parts.push(&key);
+        parts.join("+")
+    }
+}
+
 #[allow(dead_code)]
 pub struct MahoCore {
     tab_manager: TabLifecycleManager,
@@ -171,7 +214,6 @@ pub struct MahoCore {
     css_mod_manager: CssModManager,
     note_manager: NoteManager,
     easel_manager: EaselManager,
-    split_view_manager: SplitViewManager,
     download_manager: DownloadManager,
     permission_manager: PermissionManager,
     password_manager: PasswordManager,
@@ -190,6 +232,7 @@ pub struct MahoCore {
     reading_list_manager: ReadingListManager,
     shortcut_manager: ShortcutManager,
     account_manager: AccountManager,
+    split_view_config: Option<SplitViewConfig>,
     sync_manager: Option<crate::sync_manager::SyncManager>,
     sync_device_id: String,
     llm_manager: LLMManager,
@@ -388,7 +431,7 @@ impl MahoCore {
 
         let dispatcher = EventDispatcher::new();
 
-        Self {
+        let mut core = Self {
             tab_manager,
             space_manager,
             command_bar,
@@ -401,7 +444,6 @@ impl MahoCore {
             css_mod_manager: CssModManager::new(),
             note_manager: NoteManager::new(),
             easel_manager: EaselManager::new(),
-            split_view_manager: SplitViewManager::new(),
             download_manager: DownloadManager::new(),
             permission_manager: PermissionManager::new(),
             password_manager: PasswordManager::new(),
@@ -420,6 +462,7 @@ impl MahoCore {
             reading_list_manager: ReadingListManager::new(),
             shortcut_manager: ShortcutManager::new(),
             account_manager: AccountManager::new(),
+            split_view_config: None,
             sync_manager: None,
             sync_device_id: format!(
                 "{:x}",
@@ -432,7 +475,35 @@ impl MahoCore {
             mcp_manager: McpManager::new(),
             skills_manager: SkillsManager::new(),
             sharing_manager: SharingManager::new(),
+        };
+
+        core.seed_first_run_tabs();
+        core
+    }
+
+    fn seed_first_run_tabs(&mut self) {
+        if !self.tab_manager.get_all_tabs().is_empty() {
+            return;
         }
+
+        let active_space_id = self.space_manager.get_active_space_id().clone();
+
+        let favorite_tab = self
+            .tab_manager
+            .create_tab(active_space_id.clone(), None, None);
+        self.space_manager
+            .add_tab_to_space(&active_space_id, favorite_tab.id.clone(), None);
+        self.tab_manager.favorite_tab(&favorite_tab.id);
+
+        let pinned_tab = self
+            .tab_manager
+            .create_tab(active_space_id.clone(), None, None);
+        self.space_manager
+            .add_tab_to_space(&active_space_id, pinned_tab.id.clone(), None);
+        self.tab_manager.pin_tab(&pinned_tab.id);
+
+        self.space_manager
+            .set_last_active_tab(&active_space_id, Some(favorite_tab.id));
     }
 
     pub fn with_storage(mut self, path: &str) -> Self {
@@ -443,6 +514,20 @@ impl MahoCore {
                     if let Ok(Some(json)) = storage.get_setting("browser_settings") {
                         if let Ok(settings) = serde_json::from_str::<Settings>(&json) {
                             self.settings_manager = SettingsManager::with_settings(settings);
+                        }
+                    }
+                    if let Ok(shortcuts_data) = storage.load_shortcuts() {
+                        for (action, key_combo_json, _) in &shortcuts_data {
+                            if !key_combo_json.is_empty() {
+                                if let Ok(key_combo) = serde_json::from_str(key_combo_json) {
+                                    let _ = self.shortcut_manager.set_shortcut(action, key_combo);
+                                }
+                            }
+                        }
+                        for (action, _, enabled) in shortcuts_data {
+                            if !enabled {
+                                self.shortcut_manager.toggle_shortcut(&action, false);
+                            }
                         }
                     }
                 }
@@ -511,10 +596,21 @@ impl MahoCore {
             .as_ref()
             .ok_or_else(|| PersistenceError::Storage("LMDB storage not initialized".to_string()))?;
 
-        if let Some(tabs_data) = lmdb
+        let tabs_data = lmdb
             .get("tabs")
-            .map_err(|e| PersistenceError::Storage(e.to_string()))?
-        {
+            .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+        let spaces_data = lmdb
+            .get("spaces")
+            .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+        let profiles_data = lmdb
+            .get("profiles")
+            .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+
+        if tabs_data.is_some() || spaces_data.is_some() || profiles_data.is_some() {
+            self.tab_manager.clear();
+        }
+
+        if let Some(tabs_data) = tabs_data {
             let tabs: Vec<maho_types::tab::Tab> = serde_json::from_slice(&tabs_data)
                 .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
             for tab in tabs {
@@ -532,19 +628,13 @@ impl MahoCore {
             self.space_manager.get_active_space_id().clone()
         };
 
-        if let Some(spaces_data) = lmdb
-            .get("spaces")
-            .map_err(|e| PersistenceError::Storage(e.to_string()))?
-        {
+        if let Some(spaces_data) = spaces_data {
             let spaces: Vec<maho_types::space::Space> = serde_json::from_slice(&spaces_data)
                 .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
             self.space_manager.restore_spaces(spaces, active_space_id);
         }
 
-        if let Some(profiles_data) = lmdb
-            .get("profiles")
-            .map_err(|e| PersistenceError::Storage(e.to_string()))?
-        {
+        if let Some(profiles_data) = profiles_data {
             let profiles: Vec<maho_types::profile::ProfileConfig> =
                 serde_json::from_slice(&profiles_data)
                     .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
@@ -686,6 +776,19 @@ impl MahoCore {
             }
         }
 
+        if let Ok(passwords) = storage.get_all_passwords() {
+            for (id, domain, username, created_at, last_used, password) in passwords {
+                self.password_manager.restore_password(maho_types::passwords::SavedPassword {
+                    id,
+                    domain,
+                    username,
+                    created_at,
+                    last_used,
+                    password,
+                });
+            }
+        }
+
         // Load custom search engines from SQLite (skip built-in ones: google, duckduckgo, bing)
         if let Ok(engines) = storage.load_search_engines() {
             for (id, name, url_template, shortcut, icon_url, is_default) in engines {
@@ -759,7 +862,7 @@ impl MahoCore {
 
         // Load shortcuts
         if let Ok(shortcuts_data) = storage.load_shortcuts() {
-            for (action, key_combo_json) in shortcuts_data {
+            for (action, key_combo_json, _) in shortcuts_data {
                 if let Ok(key_combo) =
                     serde_json::from_str::<maho_types::keyboard::KeyCombo>(&key_combo_json)
                 {
@@ -796,6 +899,70 @@ impl MahoCore {
         }
     }
 
+    pub fn search_passwords(&self, query: &str) -> Vec<&maho_types::passwords::SavedPassword> {
+        self.password_manager.search_passwords(query)
+    }
+
+    pub fn list_passwords(&self) -> &[maho_types::passwords::SavedPassword] {
+        self.password_manager.list_passwords()
+    }
+
+    pub fn delete_password_persisted(&mut self, password_id: &str) -> bool {
+        if self.password_manager.delete_password(password_id) {
+            if let Some(ref storage) = self.storage {
+                let _ = storage.delete_password(password_id);
+            }
+            return true;
+        }
+        false
+    }
+
+    pub fn add_password_persisted(
+        &mut self,
+        domain: String,
+        username: String,
+        password: Option<String>,
+    ) -> maho_types::passwords::SavedPassword {
+        let added = self
+            .password_manager
+            .add_password(domain, username, password)
+            .clone();
+        if let Some(ref storage) = self.storage {
+            let _ = storage.save_password(
+                &added.id,
+                &added.domain,
+                &added.username,
+                &added.created_at,
+                added.password.as_deref(),
+            );
+        }
+        added
+    }
+
+    pub fn update_password_username_persisted(
+        &mut self,
+        id: &str,
+        username: String,
+    ) -> bool {
+        if !self.password_manager.update_username(id, username) {
+            return false;
+        }
+
+        if let Some(password) = self.password_manager.list_passwords().iter().find(|p| p.id == id) {
+            if let Some(ref storage) = self.storage {
+                let _ = storage.save_password(
+                    &password.id,
+                    &password.domain,
+                    &password.username,
+                    &password.created_at,
+                    password.password.as_deref(),
+                );
+            }
+        }
+
+        true
+    }
+
     /// Full command bar search using the CommandBarEngine.
     ///
     /// `external_tabs` provides the current tab list from the caller (e.g. C++
@@ -804,7 +971,9 @@ impl MahoCore {
     pub fn command_bar_search_with_tabs(
         &self,
         query: &str,
+        mode: Option<&str>,
         external_tabs: Vec<TabViewModel>,
+        is_incognito: bool,
     ) -> Vec<SuggestionViewModel> {
         let space_view_models = self.get_space_view_models();
 
@@ -827,6 +996,18 @@ impl MahoCore {
             .map(|b| (b.id.0.clone(), b.title.clone(), b.url.clone()))
             .collect();
 
+        let bookmark_favicons: Vec<(String, maho_types::common::ImageData)> = self
+            .bookmark_manager
+            .get_all_bookmarks()
+            .iter()
+            .filter_map(|b| {
+                b.favicon.as_deref().and_then(|favicon| {
+                    crate::command_bar::CommandBarEngine::bookmark_icon_from_data_url(favicon)
+                        .map(|icon| (b.id.0.clone(), icon))
+                })
+            })
+            .collect();
+
         let closed_tabs: Vec<TabViewModel> = self
             .tab_manager
             .get_closed_tabs()
@@ -842,21 +1023,59 @@ impl MahoCore {
             .map(|ext| (ext.id.clone(), ext.name.clone()))
             .collect();
 
+        let active_space_id = self.space_manager.get_active_space_id().clone();
+        let folders = self.get_folder_view_models(&active_space_id);
+
         let ctx = SearchContext {
             tabs: external_tabs,
             spaces: space_view_models,
+            folders,
             archived_tabs,
             bookmarks,
+            bookmark_favicons,
             closed_tabs,
             extensions,
+            is_incognito,
         };
 
-        self.command_bar.search(query, None, &ctx)
+        let mut results = self.command_bar.search(query, mode, &ctx);
+        let bindings = self.shortcut_manager.get_all_bindings();
+
+        for suggestion in &mut results {
+            let Some(action_id) = suggestion.key.strip_prefix("action:") else {
+                continue;
+            };
+
+            if let Some(binding) = bindings.iter().find(|b| b.action == action_id) {
+                suggestion.shortcut = Some(format_key_combo_label(&binding.key_combo));
+            }
+        }
+
+        results
+    }
+
+    fn favicon_for_url(&self, url: &str) -> Option<maho_types::common::ImageData> {
+        self.tab_manager
+            .get_all_tabs()
+            .into_iter()
+            .find(|tab| tab.url.0 == url)
+            .and_then(|tab| tab.favicon.clone())
+            .or_else(|| {
+                self.space_manager
+                    .get_space_order()
+                    .iter()
+                    .flat_map(|space_id| self.tab_manager.get_archived_tabs(space_id))
+                    .find(|tab| tab.url.0 == url)
+                    .and_then(|tab| tab.favicon.clone())
+            })
     }
 
     pub fn add_history_entry(&mut self, url: &str, title: &str) {
-        self.command_bar
-            .add_history_entry(url.to_string(), title.to_string());
+        self.command_bar.add_history_entry(
+            url.to_string(),
+            title.to_string(),
+            self.favicon_for_url(url),
+        );
 
         if let Some(ref storage) = self.storage {
             let _ = storage.add_history_entry(url, title);
@@ -1423,14 +1642,41 @@ impl MahoCore {
 
     pub fn set_zoom(&mut self, _tab_id: &maho_types::identifiers::TabId, _zoom_level: f64) {}
 
+    pub fn get_split_view_config(&self) -> Option<SplitViewConfig> {
+        self.split_view_config.clone()
+    }
+
+    pub fn clear_split_view_config(&mut self) {
+        self.split_view_config = None;
+    }
+
+    fn set_split_view_config(&mut self, config: SplitConfig) {
+        self.split_view_config = config.into_split_view_config();
+    }
+
     pub fn handle_event(&mut self, event: ShellEvent) -> Vec<CoreUpdate> {
         // Handle command bar mutation events before dispatch (dispatcher only has read-only access)
         match &event {
+            ShellEvent::ClearSplitView => {
+                self.clear_split_view_config();
+                return vec![];
+            }
+            ShellEvent::CreateSplit { tab_ids, orientation } => {
+                self.set_split_view_config(SplitConfig {
+                    tab_ids: tab_ids.clone(),
+                    orientation: orientation.clone(),
+                });
+                return vec![];
+            }
             ShellEvent::SaveSearch { query } => {
                 self.save_search_persisted(query.clone());
                 return vec![CoreUpdate::RecentSearchesUpdated {
                     searches: self.command_bar.get_recent_searches().to_vec(),
                 }];
+            }
+            ShellEvent::CommandBarSelect { key, .. } => {
+                self.record_command_bar_usage(&key);
+                return vec![];
             }
             ShellEvent::AddSearchEngine { engine } => {
                 self.add_search_engine_persisted(engine.clone());
@@ -2024,40 +2270,29 @@ impl MahoCore {
                 let skills = self.skills_manager.get_all_skill_infos();
                 return vec![CoreUpdate::SkillsListReady { skills }];
             }
+            ShellEvent::ChatRequestModeChanged { .. } => return vec![],
             ShellEvent::ChatMessage {
                 ref message,
-                include_page_context,
-                tools_enabled,
+                ref context,
             } => {
-                let page_context = if *include_page_context {
-                    self.tab_manager
-                        .get_active_tab_id()
-                        .and_then(|id| self.tab_manager.get_tab(id))
-                        .map(|tab| format!("Title: {}\nURL: {}", tab.title, tab.url.0))
-                } else {
-                    None
-                };
-                let tools_schema = if tools_enabled.unwrap_or(false) {
-                    Some(self.mcp_manager.get_tools_schema())
-                } else {
-                    None
-                };
-                let update = self.llm_manager.request_chat_completion(
-                    message,
-                    *include_page_context,
-                    page_context.as_deref(),
-                    tools_schema,
-                );
-                return vec![update];
+                // Browser-side orchestration owns page-context assembly. Core only
+                // forwards the typed chat payload for compatibility and persistence.
+                return vec![self.llm_manager.request_chat_completion(message, context)];
             }
             ShellEvent::UseSkill {
                 skill_id,
                 user_input,
                 page_context,
             } => {
+                let page_context_text = page_context.as_ref().map(|ctx| {
+                    serde_json::to_string_pretty(ctx).unwrap_or_else(|_| ctx.title.clone())
+                });
                 if let Some(prompt) =
-                    self.skills_manager
-                        .build_prompt(skill_id, user_input, page_context.as_deref().unwrap_or(""))
+                    self.skills_manager.build_prompt(
+                        skill_id,
+                        user_input,
+                        page_context_text.as_deref().unwrap_or(""),
+                    )
                 {
                     if let Some(skill) = self.skills_manager.get_skill(skill_id) {
                         return vec![CoreUpdate::SkillPromptReady {
@@ -2149,6 +2384,18 @@ impl MahoCore {
             .map(|b| (b.id.0.clone(), b.title.clone(), b.url.clone()))
             .collect();
 
+        let bookmark_favicons: Vec<(String, maho_types::common::ImageData)> = self
+            .bookmark_manager
+            .get_all_bookmarks()
+            .iter()
+            .filter_map(|b| {
+                b.favicon.as_deref().and_then(|favicon| {
+                    crate::command_bar::CommandBarEngine::bookmark_icon_from_data_url(favicon)
+                        .map(|icon| (b.id.0.clone(), icon))
+                })
+            })
+            .collect();
+
         let closed_tabs: Vec<TabViewModel> = self
             .tab_manager
             .get_closed_tabs()
@@ -2164,13 +2411,19 @@ impl MahoCore {
             .map(|ext| (ext.id.clone(), ext.name.clone()))
             .collect();
 
+        let active_space_id = self.space_manager.get_active_space_id().clone();
+        let folders = self.get_folder_view_models(&active_space_id);
+
         let ctx = SearchContext {
             tabs: tab_view_models,
             spaces: space_view_models,
+            folders,
             archived_tabs,
             bookmarks,
+            bookmark_favicons,
             closed_tabs,
             extensions,
+            is_incognito: false,
         };
 
         // Extract PinTab info before dispatch consumes the event
@@ -2187,7 +2440,6 @@ impl MahoCore {
             &self.command_bar,
             &mut self.boost_manager,
             &mut self.note_manager,
-            &mut self.split_view_manager,
             &mut self.settings_manager,
             &mut self.content_blocker,
             &mut self.notification_manager,
@@ -2240,7 +2492,12 @@ impl MahoCore {
     }
 
     pub fn get_tab_view_models(&self) -> Vec<TabViewModel> {
-        let all_tabs: Vec<&maho_types::tab::Tab> = self.tab_manager.get_all_tabs();
+        let all_tabs: Vec<&maho_types::tab::Tab> = self
+            .tab_manager
+            .get_all_tabs()
+            .into_iter()
+            .filter(|tab| !matches!(tab.state, TabLifecycleState::Archived { .. }))
+            .collect();
         all_tabs
             .iter()
             .map(|tab| {
@@ -2275,7 +2532,21 @@ impl MahoCore {
         self.space_manager
             .get_all_spaces()
             .into_iter()
-            .map(|space| self.space_manager.to_view_model(space))
+            .map(|space| {
+                let mut vm = self.space_manager.to_view_model(space);
+                let archived_count = space
+                    .tab_order
+                    .iter()
+                    .filter(|tid| {
+                        self.tab_manager
+                            .get_tab(tid)
+                            .map(|t| matches!(t.state, TabLifecycleState::Archived { .. }))
+                            .unwrap_or(false)
+                    })
+                    .count();
+                vm.tab_count = vm.tab_count.saturating_sub(archived_count);
+                vm
+            })
             .collect()
     }
 
@@ -2639,7 +2910,7 @@ impl MahoCore {
             .get_tab_order(space_id)
             .into_iter()
             .filter_map(|tab_id| self.tab_manager.get_tab(&tab_id))
-            .filter(|tab| tab.is_pinned && !tab.is_favorite)
+            .filter(|tab| tab.is_pinned && !matches!(tab.state, TabLifecycleState::Archived { .. }))
             .map(|tab| self.make_view_model(tab))
             .collect()
     }
@@ -2649,6 +2920,7 @@ impl MahoCore {
             .get_tab_order(space_id)
             .into_iter()
             .filter_map(|tab_id| self.tab_manager.get_tab(&tab_id))
+            .filter(|tab| !tab.is_pinned && !matches!(tab.state, TabLifecycleState::Archived { .. }))
             .map(|tab| self.make_view_model(tab))
             .collect()
     }
@@ -2671,7 +2943,7 @@ impl MahoCore {
                     continue;
                 }
                 if let Some(tab) = self.tab_manager.get_tab(&tab_id) {
-                    if tab.is_favorite {
+                    if tab.is_favorite && !matches!(tab.state, TabLifecycleState::Archived { .. }) {
                         tabs.push(self.make_view_model(tab));
                     }
                 }
@@ -2719,7 +2991,35 @@ impl MahoCore {
         &self,
         space_id: &SpaceId,
     ) -> Vec<maho_types::traits::shell_renderer::FolderViewModel> {
-        self.space_manager.get_folder_view_models(space_id)
+        self.space_manager
+            .get_folder_view_models(space_id)
+            .into_iter()
+            .map(|mut vm| {
+                vm.tab_ids.retain(|tid| {
+                    self.tab_manager
+                        .get_tab(tid)
+                        .map(|t| !matches!(t.state, TabLifecycleState::Archived { .. }))
+                        .unwrap_or(false)
+                });
+                vm.tab_count = vm.tab_ids.len();
+                vm
+            })
+            .collect()
+    }
+
+    pub fn get_sidebar_root_order(&self, space_id: &SpaceId) -> Vec<RootItem> {
+        self.space_manager
+            .get_root_order(space_id)
+            .into_iter()
+            .filter(|item| match item {
+                RootItem::Tab(tid) => self
+                    .tab_manager
+                    .get_tab(tid)
+                    .map(|t| !matches!(t.state, TabLifecycleState::Archived { .. }))
+                    .unwrap_or(false),
+                RootItem::Folder(_) => true,
+            })
+            .collect()
     }
 
     pub fn favorite_tab(&mut self, tab_id: &TabId) -> bool {
@@ -2781,6 +3081,25 @@ impl MahoCore {
             .collect()
     }
 
+    pub fn toggle_filter_list(&mut self, id: &str, enabled: bool) {
+        self.content_blocker.toggle_filter_list(id, enabled);
+    }
+
+    pub fn remove_filter_list(&mut self, id: &str) {
+        self.content_blocker.remove_filter_list(id);
+    }
+
+    pub fn toggle_extension(&mut self, extension_id: &str) -> Option<bool> {
+        self.extension_bridge.toggle_extension(extension_id)
+    }
+
+    pub fn remove_extension(
+        &mut self,
+        extension_id: &str,
+    ) -> Option<crate::extension_bridge::InstalledExtension> {
+        self.extension_bridge.remove_extension(extension_id)
+    }
+
     pub fn get_boosts_for_url(
         &self,
         url: &str,
@@ -2800,10 +3119,6 @@ impl MahoCore {
 
     pub fn get_note_view_models(&self) -> Vec<maho_types::traits::shell_renderer::NoteViewModel> {
         self.note_manager.get_all_view_models()
-    }
-
-    pub fn get_split_view_config(&self) -> Option<&maho_types::split_view::SplitViewConfig> {
-        self.split_view_manager.get_config()
     }
 
     pub fn get_download_view_models(
@@ -3086,9 +3401,31 @@ impl MahoCore {
         &mut self.import_export
     }
 
+    pub fn add_content_blocker_site_exception(&mut self, origin: &str) {
+        self.content_blocker.add_site_exception(origin.to_string());
+    }
+
+    pub fn remove_content_blocker_site_exception(&mut self, origin: &str) {
+        self.content_blocker.remove_site_exception(origin);
+    }
+
+    pub fn get_content_blocker_site_exceptions(&self) -> Vec<&str> {
+        self.content_blocker.get_site_exceptions()
+    }
+
     pub fn should_block_request(&self, url: &str, source_url: &str, request_type: &str) -> bool {
         self.content_blocker
             .should_block_request(url, source_url, request_type)
+    }
+
+    pub fn check_request(
+        &self,
+        url: &str,
+        source_url: &str,
+        request_type: &str,
+    ) -> crate::content_blocker::BlockResult {
+        self.content_blocker
+            .check_request(url, source_url, request_type)
     }
 
     pub fn get_cosmetic_resources(
@@ -3859,6 +4196,13 @@ impl MahoCore {
         self.shortcut_manager.reset_all_shortcuts();
     }
 
+    pub fn toggle_shortcut_persisted(&mut self, action: &str, enabled: bool) {
+        self.shortcut_manager.toggle_shortcut(action, enabled);
+        if let Some(ref storage) = self.storage {
+            let _ = storage.save_shortcut_enabled(action, enabled);
+        }
+    }
+
     pub fn set_shortcut_persisted(
         &mut self,
         action: &str,
@@ -3956,24 +4300,7 @@ impl MahoCore {
         });
     }
 
-    pub fn set_custom_chrome_css(&mut self, css: Option<String>) {
-        self.update_settings(SettingsUpdate {
-            appearance: Some(AppearanceSettingsUpdate {
-                custom_chrome_css: Some(css),
-                ..Default::default()
-            }),
-            general: None,
-            privacy: None,
-            reader: None,
-            keyboard_shortcuts: None,
-            per_site_settings: None,
-            toolbar_items: None,
-            max: None,
-            autofill: None,
-            advanced: None,
-            notifications: None,
-        });
-    }
+    pub fn set_custom_chrome_css(&mut self, _css: Option<String>) {}
 
     pub fn set_window_transparency(&mut self, enabled: bool) {
         self.update_settings(SettingsUpdate {
@@ -4768,6 +5095,15 @@ impl SpaceManagerInterface for SpaceManager {
 
     fn get_last_active_tab(&self, space_id: &SpaceId) -> Option<&TabId> {
         self.get_last_active_tab(space_id)
+    }
+
+    fn reorder_root_item(
+        &mut self,
+        space_id: &SpaceId,
+        item: &maho_types::space::RootItem,
+        insertion_point: &maho_types::space::RootInsertionPoint,
+    ) {
+        self.reorder_root_item(space_id, item, insertion_point)
     }
 }
 
