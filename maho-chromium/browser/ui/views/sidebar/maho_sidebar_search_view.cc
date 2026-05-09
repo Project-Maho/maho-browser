@@ -144,7 +144,7 @@ MahoSidebarSearchView::MahoSidebarSearchView(Browser* browser)
   idle_button_->set_context_menu_controller(this);
 
   auto icon_shell = std::make_unique<views::View>();
-   icon_shell->SetPreferredSize(gfx::Size(14, 14));
+  icon_shell->SetPreferredSize(gfx::Size(14, 14));
   auto* icon_layout = icon_shell->SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 0));
   icon_layout->set_main_axis_alignment(

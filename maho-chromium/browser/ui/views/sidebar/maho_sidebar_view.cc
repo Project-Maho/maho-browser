@@ -358,13 +358,6 @@ void MahoSidebarView::HandleLibraryCategorySelected(
     return;
   }
 
-  if (category != MahoSidebarLibraryRailView::Category::kArchivedTabs) {
-    library_rail_view_->SetSelectedCategory(
-        MahoSidebarLibraryRailView::Category::kArchivedTabs);
-    archive_view_->SetVisible(true);
-    return;
-  }
-
   library_rail_view_->SetSelectedCategory(category);
   archive_view_->SetVisible(true);
 }

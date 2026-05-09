@@ -6,6 +6,7 @@
 #include <string_view>
 
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
@@ -13,12 +14,14 @@
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
+#include "components/vector_icons/vector_icons.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
-#include "maho-chromium/browser/ui/views/sidebar/maho_sidebar_top_bar_mac_sf_symbol_helper.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/components/constants/webui_url_constants.h"
-#include "ui/base/metadata/metadata_impl_macros.h"
+#include "content/public/browser/page_navigator.h"
+#include "content/public/common/referrer.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/color/color_id.h"
@@ -42,6 +45,32 @@ constexpr int kTopBarClusterHorizontalInsetDp = 0;
 constexpr int kTopBarClusterVerticalInsetDp = 0;
 constexpr float kTopBarNavTintAlpha = 0.68f;
 constexpr float kTopBarDisabledAlpha = 0.4f;
+
+ui::ImageModel CreateSidebarTopBarMacSFSymbol(
+    std::string_view symbol_name,
+    std::string_view /*accessibility_description*/,
+    int icon_size,
+    ui::ColorId color_id,
+    float /*icon_alpha*/) {
+  if (symbol_name == "sidebar.left") {
+    return ui::ImageModel::FromVectorIcon(
+        vector_icons::kSelectWindowChromeRefreshIcon, color_id, icon_size);
+  }
+  if (symbol_name == "chevron.left") {
+    return ui::ImageModel::FromVectorIcon(vector_icons::kBackArrowIcon,
+                                          color_id, icon_size);
+  }
+  if (symbol_name == "chevron.right") {
+    return ui::ImageModel::FromVectorIcon(
+        vector_icons::kSubmenuArrowChromeRefreshIcon, color_id, icon_size);
+  }
+  if (symbol_name == "xmark") {
+    return ui::ImageModel::FromVectorIcon(
+        vector_icons::kCloseChromeRefreshIcon, color_id, icon_size);
+  }
+  return ui::ImageModel::FromVectorIcon(
+      vector_icons::kSyncChromeRefreshIcon, color_id, icon_size);
+}
 
 void ApplyButtonChrome(views::ImageButton* button) {
   button->SetBackground(nullptr);
@@ -213,8 +242,8 @@ void MahoSidebarTopBarView::ApplyChromeSpacing() {
   leading_cluster_->SetProperty(
       views::kMarginsKey,
       gfx::Insets::TLBR(0, 0, 0,
-                         show_nav ? sidebar_layout::kTopBarCompactLeadingGapDp
-                                  : 0));
+                        show_nav ? sidebar_layout::kTopBarCompactLeadingGapDp
+                                 : 0));
   flex_spacer_->SetVisible(show_nav);
   nav_cluster_->SetVisible(show_nav);
 
