@@ -93,7 +93,6 @@ fn profile_contains_all_entity_arrays() {
                 show_tab_bar: true,
                 window_transparency: false,
                 sidebar_collapsed: false,
-                custom_chrome_css: None,
                 custom_icon_path: None,
             },
             general: GeneralSettings {
