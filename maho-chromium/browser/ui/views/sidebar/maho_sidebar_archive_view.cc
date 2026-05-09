@@ -896,7 +896,10 @@ void MahoSidebarArchiveView::SetDeleteCallback(DeleteCallback callback) {
 void MahoSidebarArchiveView::ContentsChanged(
     views::Textfield* sender,
     const std::u16string& new_contents) {
-  ApplyFilters();
+  search_debounce_timer_.Start(
+      FROM_HERE, base::Milliseconds(200),
+      base::BindOnce(&MahoSidebarArchiveView::ApplyFilters,
+                     weak_factory_.GetWeakPtr()));
 }
 
 void MahoSidebarArchiveView::ApplyFilters() {

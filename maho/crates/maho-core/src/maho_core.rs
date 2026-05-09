@@ -119,6 +119,89 @@ mod tests {
         let matching: Vec<_> = favorites.iter().filter(|tab| tab.id == tab_id).collect();
         assert_eq!(matching.len(), 1);
     }
+
+    #[test]
+    fn reorder_favorite_persists_new_order() {
+        let mut core = MahoCore::new();
+        let active_space_id = core.get_active_space_id().clone();
+
+        let tab_a = create_tab(&mut core);
+        let tab_b = create_tab(&mut core);
+        let tab_c = create_tab(&mut core);
+        core.favorite_tab(&tab_a);
+        core.favorite_tab(&tab_b);
+        core.favorite_tab(&tab_c);
+
+        let favs = core.get_favorite_tabs(&active_space_id);
+        let initial_ids: Vec<TabId> = favs.iter().map(|f| f.id.clone()).collect();
+        let idx_a = initial_ids.iter().position(|id| *id == tab_a).unwrap();
+        let idx_b = initial_ids.iter().position(|id| *id == tab_b).unwrap();
+        let idx_c = initial_ids.iter().position(|id| *id == tab_c).unwrap();
+        assert!(idx_a < idx_b && idx_b < idx_c, "initial order: A < B < C");
+
+        // Move A to position idx_b (after removing A, A goes to where B was)
+        core.handle_event(ShellEvent::ReorderFavorite {
+            tab_id: tab_a.clone(),
+            new_index: idx_b,
+        });
+
+        let favs = core.get_favorite_tabs(&active_space_id);
+        let reordered_ids: Vec<TabId> = favs.iter().map(|f| f.id.clone()).collect();
+        let new_idx_a = reordered_ids.iter().position(|id| *id == tab_a).unwrap();
+        let new_idx_b = reordered_ids.iter().position(|id| *id == tab_b).unwrap();
+        assert!(
+            new_idx_b < new_idx_a,
+            "After reorder, B({new_idx_b}) should precede A({new_idx_a})"
+        );
+    }
+
+    #[test]
+    fn reorder_favorite_via_json_roundtrip() {
+        // Simulate the exact JSON that C++ DispatchShellEventEx produces
+        let json = r#"{"kind":"reorder_favorite","tab_id":"test-tab-id","new_index":1}"#;
+        let event: Result<ShellEvent, _> = serde_json::from_str(json);
+        assert!(
+            event.is_ok(),
+            "JSON deserialization should succeed, got: {:?}",
+            event.err()
+        );
+        match event.unwrap() {
+            ShellEvent::ReorderFavorite { tab_id, new_index } => {
+                assert_eq!(tab_id.0, "test-tab-id");
+                assert_eq!(new_index, 1);
+            }
+            other => panic!("Expected ReorderFavorite, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn reorder_favorite_move_to_end() {
+        let mut core = MahoCore::new();
+        let active_space_id = core.get_active_space_id().clone();
+
+        let tab_a = create_tab(&mut core);
+        let tab_b = create_tab(&mut core);
+        let tab_c = create_tab(&mut core);
+        core.favorite_tab(&tab_a);
+        core.favorite_tab(&tab_b);
+        core.favorite_tab(&tab_c);
+
+        let total_favs = core.get_favorite_tabs(&active_space_id).len();
+
+        // Move A to the very end
+        core.handle_event(ShellEvent::ReorderFavorite {
+            tab_id: tab_a.clone(),
+            new_index: total_favs - 1,
+        });
+
+        let favs = core.get_favorite_tabs(&active_space_id);
+        let reordered_ids: Vec<TabId> = favs.iter().map(|f| f.id.clone()).collect();
+        assert_eq!(
+            reordered_ids.last().unwrap(),
+            &tab_a,
+            "A should be last after move-to-end"
+        );
+    }
 }
 
 impl std::fmt::Display for PersistenceError {
@@ -2488,7 +2571,14 @@ impl MahoCore {
             .and_then(|p| p.archive_timeout_hours)
             .unwrap_or(global_archive_timeout);
         let today_timeout = self.settings_manager.get_settings().general.today_tab_timeout_hours;
-        self.tab_manager.tick_with_settings(archive_timeout, today_timeout)
+        let updates = self.tab_manager.tick_with_settings(archive_timeout, today_timeout);
+
+        let evicted = self.tab_manager.enforce_archive_cap();
+        for (tab_id, space_id) in &evicted {
+            self.space_manager.remove_tab_from_space(space_id, tab_id);
+        }
+
+        updates
     }
 
     pub fn get_tab_view_models(&self) -> Vec<TabViewModel> {

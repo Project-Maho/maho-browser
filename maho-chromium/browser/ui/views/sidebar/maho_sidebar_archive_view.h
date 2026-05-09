@@ -10,6 +10,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/menus/simple_menu_model.h"
 #include "ui/views/controls/scroll_view.h"
@@ -143,6 +144,7 @@ class MahoSidebarArchiveView : public views::View,
   std::vector<ArchivedTabItem> all_archived_tabs_;
   RestoreCallback restore_callback_;
   DeleteCallback delete_callback_;
+  base::OneShotTimer search_debounce_timer_;
 
   base::WeakPtrFactory<MahoSidebarArchiveView> weak_factory_{this};
 };

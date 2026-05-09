@@ -9,6 +9,7 @@ use maho_types::traits::shell_renderer::{TabStateUpdate, TabViewModel};
 
 const MAX_CLOSED_STACK: usize = 25;
 pub const MAX_FAVORITES: usize = 12;
+pub const MAX_ARCHIVED_PER_SPACE: usize = 100;
 const FREEZE_TIMEOUT_MS: u64 = TAB_LIFECYCLE_TIMEOUTS.active_to_frozen_minutes * 60 * 1000;
 const SUSPEND_TIMEOUT_MS: u64 = TAB_LIFECYCLE_TIMEOUTS.frozen_to_suspended_minutes * 60 * 1000;
 const ARCHIVE_TIMEOUT_MS: u64 = TAB_LIFECYCLE_TIMEOUTS.suspended_to_archived_hours * 60 * 60 * 1000;
@@ -872,6 +873,39 @@ impl TabLifecycleManager {
         }
 
         removed
+    }
+
+    pub fn enforce_archive_cap(&mut self) -> Vec<(TabId, SpaceId)> {
+        let mut per_space: HashMap<SpaceId, Vec<(TabId, u64)>> = HashMap::new();
+        for tab in self.tabs.values() {
+            if matches!(tab.state, TabLifecycleState::Archived { .. }) {
+                let ts = self.state_timestamps.get(&tab.id).copied().unwrap_or(0);
+                per_space
+                    .entry(tab.space_id.clone())
+                    .or_default()
+                    .push((tab.id.clone(), ts));
+            }
+        }
+
+        let mut evicted = Vec::new();
+        for (_space_id, mut entries) in per_space {
+            if entries.len() <= MAX_ARCHIVED_PER_SPACE {
+                continue;
+            }
+            entries.sort_by_key(|(_, ts)| *ts);
+            let evict_count = entries.len() - MAX_ARCHIVED_PER_SPACE;
+            for (tab_id, _) in entries.into_iter().take(evict_count) {
+                if let Some(tab) = self.tabs.remove(&tab_id) {
+                    self.state_timestamps.remove(&tab_id);
+                    self.creation_timestamps.remove(&tab_id);
+                    self.loading_states.remove(&tab_id);
+                    self.security_states.remove(&tab_id);
+                    self.reader_mode_tabs.remove(&tab_id);
+                    evicted.push((tab_id, tab.space_id));
+                }
+            }
+        }
+        evicted
     }
 
     pub(crate) fn to_view_model(&self, tab: &Tab) -> TabViewModel {
