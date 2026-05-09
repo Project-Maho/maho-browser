@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 use adblock::cosmetic_filter_cache::UrlSpecificResources;
@@ -24,10 +26,19 @@ pub struct CosmeticResourcesResponse {
     pub generichide: bool,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockResult {
+    pub blocked: bool,
+    pub redirect: Option<String>,
+    pub rewritten_url: Option<String>,
+}
+
 pub struct ContentBlocker {
     engine: Engine,
     filter_lists: Vec<FilterList>,
     filter_list_contents: std::collections::HashMap<String, String>,
+    site_exceptions: HashSet<String>,
     enabled: bool,
     popup_blocking_enabled: bool,
 }
@@ -38,6 +49,32 @@ impl Default for ContentBlocker {
     }
 }
 
+fn extract_origin_from_source_url(source_url: &str) -> Option<&str> {
+    let without_scheme = source_url
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(source_url);
+    let without_path = without_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(without_scheme);
+    let without_userinfo = without_path.rsplit_once('@').map(|(_, host)| host).unwrap_or(without_path);
+    let origin = if without_userinfo.starts_with('[') {
+        // IPv6 bracket notation — don't strip port via naive rsplit
+        without_userinfo
+    } else {
+        without_userinfo
+            .rsplit_once(':')
+            .map(|(host, _)| host)
+            .unwrap_or(without_userinfo)
+    };
+    if origin.is_empty() {
+        None
+    } else {
+        Some(origin)
+    }
+}
+
 impl ContentBlocker {
     pub fn new() -> Self {
         let filter_set = FilterSet::new(false);
@@ -45,6 +82,7 @@ impl ContentBlocker {
             engine: Engine::from_filter_set(filter_set, true),
             filter_lists: Vec::new(),
             filter_list_contents: std::collections::HashMap::new(),
+            site_exceptions: HashSet::new(),
             enabled: true,
             popup_blocking_enabled: true,
         }
@@ -66,9 +104,31 @@ impl ContentBlocker {
         self.popup_blocking_enabled
     }
 
+    pub fn add_site_exception(&mut self, origin: String) {
+        self.site_exceptions.insert(origin);
+    }
+
+    pub fn remove_site_exception(&mut self, origin: &str) {
+        self.site_exceptions.remove(origin);
+    }
+
+    pub fn get_site_exceptions(&self) -> Vec<&str> {
+        self.site_exceptions.iter().map(|s| s.as_str()).collect()
+    }
+
+    pub fn is_site_excepted(&self, origin: &str) -> bool {
+        self.site_exceptions.contains(origin)
+    }
+
     pub fn should_block_request(&self, url: &str, source_url: &str, request_type: &str) -> bool {
         if !self.enabled {
             return false;
+        }
+
+        if let Some(origin) = extract_origin_from_source_url(source_url) {
+            if self.site_exceptions.contains(origin) {
+                return false;
+            }
         }
 
         let request = match Request::new(url, source_url, request_type) {
@@ -78,6 +138,30 @@ impl ContentBlocker {
 
         let result = self.engine.check_network_request(&request);
         result.matched
+    }
+
+    pub fn check_request(&self, url: &str, source_url: &str, request_type: &str) -> BlockResult {
+        if !self.enabled {
+            return BlockResult::default();
+        }
+
+        if let Some(origin) = extract_origin_from_source_url(source_url) {
+            if self.site_exceptions.contains(origin) {
+                return BlockResult::default();
+            }
+        }
+
+        let request = match Request::new(url, source_url, request_type) {
+            Ok(r) => r,
+            Err(_) => return BlockResult::default(),
+        };
+
+        let result = self.engine.check_network_request(&request);
+        BlockResult {
+            blocked: result.matched,
+            redirect: result.redirect,
+            rewritten_url: result.rewritten_url,
+        }
     }
 
     pub fn add_filter_list(&mut self, id: String, name: String, url: String) -> &FilterList {
@@ -139,10 +223,7 @@ impl ContentBlocker {
         }
 
         if self.popup_blocking_enabled {
-            filter_set.add_filter_list(
-                "||*$popup,third-party",
-                ParseOptions::default(),
-            );
+            filter_set.add_filter_list("||*$popup,third-party", ParseOptions::default());
         }
 
         self.engine = Engine::from_filter_set(filter_set, true);

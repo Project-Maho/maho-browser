@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::autofill::{AutofillAddress, AutofillPayment};
+use crate::chat::ChatRequestContext;
 use crate::common::{ImageData, Url};
 use crate::identifiers::{DownloadId, FolderId, ProfileId, SpaceId, TabId};
 use crate::passwords::SavedPassword;
@@ -112,6 +113,26 @@ pub enum LLMRequestType {
     TidyTabs,
     PagePreview,
     ChatCompletion,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LLMRequestContext {
+    TidyTabTitle {
+        tab_id: TabId,
+    },
+    TidyDownload {
+        download_id: DownloadId,
+    },
+    PagePreview {
+        url: Url,
+    },
+    TidyTabs {
+        space_id: SpaceId,
+    },
+    Chat {
+        chat: ChatRequestContext,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -372,7 +393,7 @@ pub enum CoreUpdate {
         request_id: String,
         request_type: LLMRequestType,
         prompt: String,
-        context: serde_json::Value,
+        context: LLMRequestContext,
     },
     PagePreviewReady {
         url: Url,

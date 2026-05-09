@@ -45,6 +45,10 @@ fn extract_registrable_domain(url: &str) -> String {
     }
 }
 
+fn is_auto_lifecycle_exempt(tab: &Tab) -> bool {
+    tab.is_pinned || tab.is_favorite
+}
+
 pub struct TabLifecycleManager {
     tabs: HashMap<TabId, Tab>,
     closed_stack: VecDeque<Tab>,
@@ -249,8 +253,18 @@ impl TabLifecycleManager {
     pub fn get_tabs_by_space(&self, space_id: &SpaceId) -> Vec<&Tab> {
         self.tabs
             .values()
-            .filter(|t| t.space_id == *space_id)
-            .collect()
+            .filter(|t| t.space_id == *space_id && !matches!(t.state, TabLifecycleState::Archived { .. }))            .collect()
+    }
+
+    pub fn clear(&mut self) {
+        self.tabs.clear();
+        self.closed_stack.clear();
+        self.state_timestamps.clear();
+        self.creation_timestamps.clear();
+        self.loading_states.clear();
+        self.security_states.clear();
+        self.pending_updates.clear();
+        self.reader_mode_tabs.clear();
     }
 
     pub fn get_all_tabs(&self) -> Vec<&Tab> {
@@ -269,7 +283,7 @@ impl TabLifecycleManager {
         tab.state = TabLifecycleState::Active;
         tab.last_active_at = DateTime::now();
         self.tabs.insert(tab.id.clone(), tab.clone());
-        self.state_timestamps.insert(tab.id.clone(), now_millis());
+        self.reset_active_timestamps(&tab.id);
         (self.on_update)(CoreUpdate::TabCreated {
             tab: self.to_view_model(&tab),
         });
@@ -397,14 +411,14 @@ impl TabLifecycleManager {
         if self.tabs.get(tab_id).map(|tab| tab.is_favorite).unwrap_or(false) {
             return;
         }
-        let current_count = self.tabs.values().filter(|t| t.is_favorite).count();
+        let current_count = self.tabs.values().filter(|t| t.is_favorite && !matches!(t.state, TabLifecycleState::Archived { .. })).count();
         if current_count >= MAX_FAVORITES {
             return;
         }
         let max_order = self
             .tabs
             .values()
-            .filter(|t| t.is_favorite)
+            .filter(|t| t.is_favorite && !matches!(t.state, TabLifecycleState::Archived { .. }))
             .filter_map(|t| t.favorite_order)
             .max()
             .unwrap_or(0);
@@ -590,19 +604,19 @@ impl TabLifecycleManager {
             };
             let elapsed = now - timestamp;
             let state_kind = tab.state.kind_str();
-            let is_pinned = tab.is_pinned;
 
-            if state_kind == "active" && elapsed > FREEZE_TIMEOUT_MS && !is_pinned {
+            if state_kind == "active" && elapsed > FREEZE_TIMEOUT_MS && !is_auto_lifecycle_exempt(tab) {
                 if let Some(update) = self.freeze_tab_internal(&tab_id) {
                     pending.push(update);
                 }
-            } else if state_kind == "frozen" && elapsed > SUSPEND_TIMEOUT_MS {
+            } else if state_kind == "frozen" && elapsed > SUSPEND_TIMEOUT_MS && !is_auto_lifecycle_exempt(tab) {
                 if let Some(update) = self.suspend_tab_internal(&tab_id) {
                     pending.push(update);
                 }
             } else if state_kind == "suspended"
                 && !auto_archive_disabled
                 && elapsed > archive_timeout_ms
+                && !is_auto_lifecycle_exempt(tab)
             {
                 if let Some(update) = self.archive_tab_internal(&tab_id) {
                     pending.push(update);
@@ -721,7 +735,7 @@ impl TabLifecycleManager {
     pub fn get_pinned_tabs(&self, space_id: &SpaceId) -> Vec<&Tab> {
         self.tabs
             .values()
-            .filter(|t| t.space_id == *space_id && t.is_pinned && !t.is_favorite)
+            .filter(|t| t.space_id == *space_id && t.is_pinned && !matches!(t.state, TabLifecycleState::Archived { .. }))
             .collect()
     }
 
@@ -729,7 +743,7 @@ impl TabLifecycleManager {
         let mut tabs: Vec<&Tab> = self
             .tabs
             .values()
-            .filter(|t| t.space_id == *space_id && t.is_favorite)
+            .filter(|t| t.space_id == *space_id && t.is_favorite && !matches!(t.state, TabLifecycleState::Archived { .. }))
             .collect();
         tabs.sort_by_key(|t| t.favorite_order.unwrap_or(u32::MAX));
         tabs
@@ -739,7 +753,7 @@ impl TabLifecycleManager {
         let mut favorite_tabs: Vec<Tab> = self
             .tabs
             .values()
-            .filter(|t| t.is_favorite)
+            .filter(|t| t.is_favorite && !matches!(t.state, TabLifecycleState::Archived { .. }))
             .cloned()
             .collect();
         favorite_tabs.sort_by_key(|t| t.favorite_order.unwrap_or(u32::MAX));
@@ -778,7 +792,7 @@ impl TabLifecycleManager {
     pub fn count_favorite_tabs_in_spaces(&self, space_ids: &HashSet<SpaceId>) -> usize {
         self.tabs
             .values()
-            .filter(|t| t.is_favorite && space_ids.contains(&t.space_id))
+            .filter(|t| t.is_favorite && space_ids.contains(&t.space_id) && !matches!(t.state, TabLifecycleState::Archived { .. }))
             .count()
     }
 
@@ -808,16 +822,28 @@ impl TabLifecycleManager {
     }
 
     pub fn restore_archived_tab(&mut self, tab_id: &TabId) {
+        let should_restore = self
+            .tabs
+            .get(tab_id)
+            .map(|t| matches!(t.state, TabLifecycleState::Archived { .. }))
+            .unwrap_or(false);
+
+        if !should_restore {
+            return;
+        }
+
         if let Some(tab) = self.tabs.get_mut(tab_id) {
-            if matches!(tab.state, TabLifecycleState::Archived { .. }) {
-                tab.state = TabLifecycleState::Active;
-                tab.last_active_at = DateTime::now();
-                self.state_timestamps.insert(tab_id.clone(), now_millis());
-                (self.on_update)(CoreUpdate::TabLifecycleChanged {
-                    tab_id: tab_id.clone(),
-                    state: tab.state.clone(),
-                });
-            }
+            tab.state = TabLifecycleState::Active;
+            tab.last_active_at = DateTime::now();
+        }
+
+        self.reset_active_timestamps(tab_id);
+
+        if let Some(tab) = self.tabs.get(tab_id) {
+            (self.on_update)(CoreUpdate::TabLifecycleChanged {
+                tab_id: tab_id.clone(),
+                state: tab.state.clone(),
+            });
         }
     }
 
@@ -928,7 +954,11 @@ impl TabLifecycleManager {
         let to_close: Vec<TabId> = self
             .tabs
             .values()
-            .filter(|t| t.space_id == *space_id && t.id != *tab_id)
+            .filter(|t| {
+                t.space_id == *space_id
+                    && t.id != *tab_id
+                    && !matches!(t.state, TabLifecycleState::Archived { .. })
+            })
             .map(|t| t.id.clone())
             .collect();
 
@@ -966,6 +996,7 @@ impl TabLifecycleManager {
             .filter(|t| {
                 t.space_id == *space_id
                     && t.id != *tab_id
+                    && !matches!(t.state, TabLifecycleState::Archived { .. })
                     && self.creation_timestamps.get(&t.id).copied().unwrap_or(0) > reference_ts
             })
             .map(|t| t.id.clone())
@@ -1005,6 +1036,7 @@ impl TabLifecycleManager {
             .filter(|t| {
                 t.space_id == *space_id
                     && t.id != *tab_id
+                    && !matches!(t.state, TabLifecycleState::Archived { .. })
                     && self.creation_timestamps.get(&t.id).copied().unwrap_or(0) < reference_ts
             })
             .map(|t| t.id.clone())
@@ -1095,6 +1127,12 @@ impl TabLifecycleManager {
         false
     }
 
+    fn reset_active_timestamps(&mut self, tab_id: &TabId) {
+        let now = now_millis();
+        self.state_timestamps.insert(tab_id.clone(), now);
+        self.creation_timestamps.insert(tab_id.clone(), now);
+    }
+
     pub fn should_open_in_peek(tab: &Tab, new_url: &Url) -> bool {
         if !tab.is_pinned {
             return false;
@@ -1155,6 +1193,104 @@ mod tests {
                 .count(),
             1,
             "favorite_tab should emit exactly one CoreUpdate::TabUpdated for the first call only"
+        );
+    }
+
+    #[test]
+    fn restored_archived_tab_not_re_archived_by_today_tab_timeout() {
+        let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
+        let space_id = SpaceId::new("space-1");
+        let tab = manager.create_tab(space_id, Some(Url::new("https://example.com")), None);
+        let tab_id = tab.id.clone();
+
+        let old_ts = now_millis() - 24 * 60 * 60 * 1000;
+        manager.creation_timestamps.insert(tab_id.clone(), old_ts);
+
+        manager.suspend_tab(&tab_id);
+        manager.archive_tab(&tab_id);
+        assert!(matches!(manager.get_tab(&tab_id).unwrap().state, TabLifecycleState::Archived { .. }));
+
+        manager.restore_archived_tab(&tab_id);
+        assert!(matches!(manager.get_tab(&tab_id).unwrap().state, TabLifecycleState::Active));
+
+        manager.tick_with_settings(24.0, 12.0);
+
+        assert!(matches!(manager.get_tab(&tab_id).unwrap().state, TabLifecycleState::Active));
+    }
+
+    #[test]
+    fn favorite_tab_exempt_from_frozen_to_suspended() {
+        let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
+        let space_id = SpaceId::new("space-1");
+        let tab = manager.create_tab(space_id, Some(Url::new("https://example.com")), None);
+        let tab_id = tab.id.clone();
+
+        manager.favorite_tab(&tab_id);
+
+        if let Some(t) = manager.tabs.get_mut(&tab_id) {
+            t.state = TabLifecycleState::Frozen;
+        }
+        let old_ts = now_millis() - (SUSPEND_TIMEOUT_MS + 1000);
+        manager.state_timestamps.insert(tab_id.clone(), old_ts);
+
+        manager.tick_with_settings(24.0, 12.0);
+
+        assert!(matches!(manager.get_tab(&tab_id).unwrap().state, TabLifecycleState::Frozen));
+    }
+
+    #[test]
+    fn archived_tabs_excluded_from_getters() {
+        let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
+        let space_id = SpaceId::new("space-1");
+
+        let tab1 = manager.create_tab(space_id.clone(), Some(Url::new("https://a.com")), None);
+        let tab1_id = tab1.id.clone();
+        let tab2 = manager.create_tab(space_id.clone(), Some(Url::new("https://b.com")), None);
+        let tab2_id = tab2.id.clone();
+
+        manager.favorite_tab(&tab1_id);
+        manager.favorite_tab(&tab2_id);
+
+        manager.suspend_tab(&tab1_id);
+        manager.archive_tab(&tab1_id);
+
+        let tabs = manager.get_tabs_by_space(&space_id);
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(tabs[0].id, tab2_id);
+
+        let favs = manager.get_favorite_tabs(&space_id);
+        assert_eq!(favs.len(), 1);
+        assert_eq!(favs[0].id, tab2_id);
+
+        let mut space_ids = HashSet::new();
+        space_ids.insert(space_id.clone());
+        assert_eq!(manager.count_favorite_tabs_in_spaces(&space_ids), 1);
+    }
+
+    #[test]
+    fn reopened_tab_not_re_archived_by_tick() {
+        let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
+        let space_id = SpaceId::new("space-1");
+        let tab = manager.create_tab(space_id, Some(Url::new("https://example.com")), None);
+        let tab_id = tab.id.clone();
+
+        // Backdate creation timestamp so tab appears old
+        let old_ts = now_millis() - 48 * 60 * 60 * 1000;
+        manager.creation_timestamps.insert(tab_id.clone(), old_ts);
+
+        // Close and reopen
+        manager.close_tab(&tab_id);
+        let reopened = manager.reopen_last_closed().unwrap();
+        assert!(matches!(reopened.state, TabLifecycleState::Active));
+
+        // Tick should NOT re-archive — timestamps were reset on reopen
+        manager.tick_with_settings(24.0, 12.0);
+
+        let tab_after = manager.get_tab(&reopened.id).unwrap();
+        assert!(
+            matches!(tab_after.state, TabLifecycleState::Active),
+            "reopened tab must stay Active after tick, got {:?}",
+            tab_after.state
         );
     }
 }

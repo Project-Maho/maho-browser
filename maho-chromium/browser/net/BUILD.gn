@@ -2,6 +2,8 @@
 
 source_set("net") {
   sources = [
+    "maho_ad_block_tab_helper.cc",
+    "maho_ad_block_tab_helper.h",
     "maho_ad_block_throttle.cc",
     "maho_ad_block_throttle.h",
     "maho_cosmetic_filters_handler.cc",

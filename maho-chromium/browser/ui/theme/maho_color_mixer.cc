@@ -224,27 +224,29 @@ void AddLegacyAliasColors(ui::ColorMixer& mixer, bool dark_mode) {
 }
 
 void AddCommandBarColors(ui::ColorMixer& mixer, bool dark_mode) {
-  mixer[kMahoColorCommandBarBackground] = {SkColorSetARGB(245, 18, 18, 19)};
-  mixer[kMahoColorCommandBarPanelBorder] = {SkColorSetRGB(78, 80, 84)};
-  mixer[kMahoColorCommandBarInputFill] = {SkColorSetRGB(114, 116, 120)};
-  mixer[kMahoColorCommandBarInputBorder] = {SkColorSetARGB(15, 255, 255, 255)};
+  mixer[kMahoColorCommandBarBackground] = {SkColorSetRGB(0x1A, 0x1D, 0x26)};
+  mixer[kMahoColorCommandBarPanelBorder] = {
+      SkColorSetARGB(0x30, 0xFF, 0xFF, 0xFF)};
+  mixer[kMahoColorCommandBarInputFill] = {SkColorSetRGB(0x22, 0x26, 0x30)};
+  mixer[kMahoColorCommandBarInputBorder] = {
+      SkColorSetARGB(0x28, 0xFF, 0xFF, 0xFF)};
   mixer[kMahoColorCommandBarSelectionFill] = {dark_mode
-      ? SkColorSetARGB(235, 82, 87, 231)
+      ? SkColorSetRGB(0x4A, 0x4D, 0xE6)
       : SkColorSetARGB(56, 110, 136, 245)};
   mixer[kMahoColorCommandBarSelectionBorder] = {
       SkColorSetARGB(97, 110, 117, 249)};
   mixer[kMahoColorCommandBarKeycapBorder] = {
-      SkColorSetARGB(20, 255, 255, 255)};
+      SkColorSetARGB(0x20, 0xFF, 0xFF, 0xFF)};
   mixer[kMahoColorCommandBarInputSelection] = {
       SkColorSetARGB(107, 149, 155, 183)};
   mixer[kMahoColorCommandBarEmptyText] = {dark_mode
-      ? SkColorSetARGB(89, 255, 255, 255)
+      ? SkColorSetRGB(0x8A, 0x92, 0xA6)
       : SkColorSetARGB(89, 0, 0, 0)};
   mixer[kMahoColorCommandBarShortcutBadge] = {dark_mode
-      ? SkColorSetARGB(31, 255, 255, 255)
+      ? SkColorSetARGB(0x14, 0xFF, 0xFF, 0xFF)
       : SkColorSetARGB(20, 0, 0, 0)};
   mixer[kMahoColorCommandBarShortcutText] = {dark_mode
-      ? SkColorSetARGB(140, 255, 255, 255)
+      ? SkColorSetRGB(0x8A, 0x92, 0xA6)
       : SkColorSetARGB(115, 0, 0, 0)};
   mixer[kMahoColorCommandBarDivider] = {dark_mode
       ? SkColorSetARGB(20, 255, 255, 255)

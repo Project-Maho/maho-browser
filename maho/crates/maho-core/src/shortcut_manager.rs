@@ -65,6 +65,12 @@ impl ShortcutManager {
         self.bindings = self.defaults.clone();
     }
 
+    pub fn toggle_shortcut(&mut self, action: &str, enabled: bool) {
+        if let Some(binding) = self.bindings.iter_mut().find(|b| b.action == action) {
+            binding.enabled = enabled;
+        }
+    }
+
     pub fn find_binding_by_key_combo(&self, key_combo: &KeyCombo) -> Option<&ShortcutBinding> {
         let normalized = key_combo.to_normalized_string();
         self.bindings
@@ -80,6 +86,14 @@ impl Default for ShortcutManager {
 }
 
 fn register_default_bindings() -> Vec<ShortcutBinding> {
+    fn primary_modifier() -> KeyModifier {
+        if cfg!(target_os = "macos") {
+            KeyModifier::Meta
+        } else {
+            KeyModifier::Ctrl
+        }
+    }
+
     let mut bindings = Vec::new();
 
     // === Navigation ===
@@ -88,37 +102,37 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
         "navigate_back",
         "Back",
         nav.clone(),
-        KeyCombo::new("[", vec![KeyModifier::Meta]),
+        KeyCombo::new("[", vec![primary_modifier()]),
     ));
     bindings.push(ShortcutBinding::new(
         "navigate_forward",
         "Forward",
         nav.clone(),
-        KeyCombo::new("]", vec![KeyModifier::Meta]),
+        KeyCombo::new("]", vec![primary_modifier()]),
     ));
     bindings.push(ShortcutBinding::new(
-        "reload",
+        "reload_tab",
         "Reload",
         nav.clone(),
-        KeyCombo::new("r", vec![KeyModifier::Meta]),
+        KeyCombo::new("r", vec![primary_modifier()]),
     ));
     bindings.push(ShortcutBinding::new(
         "hard_reload",
         "Hard Reload",
         nav.clone(),
-        KeyCombo::new("r", vec![KeyModifier::Meta, KeyModifier::Shift]),
+        KeyCombo::new("r", vec![primary_modifier(), KeyModifier::Shift]),
     ));
     bindings.push(ShortcutBinding::new(
         "stop_loading",
         "Stop Loading",
         nav.clone(),
-        KeyCombo::new(".", vec![KeyModifier::Meta]),
+        KeyCombo::new(".", vec![primary_modifier()]),
     ));
     bindings.push(ShortcutBinding::new(
-        "focus_address_bar",
+        "focus_url_bar",
         "Focus Address Bar",
         nav.clone(),
-        KeyCombo::new("l", vec![KeyModifier::Meta]),
+        KeyCombo::new("l", vec![primary_modifier()]),
     ));
 
     // === Tabs (Arc-style: ⌘T = Command Bar, ⌘D = Pin) ===
@@ -127,55 +141,55 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
         "command_bar",
         "Command Bar",
         tabs.clone(),
-        KeyCombo::new("t", vec![KeyModifier::Meta]),
+        KeyCombo::new("t", vec![primary_modifier()]),
     ));
     bindings.push(ShortcutBinding::new(
         "close_tab",
         "Close Tab",
         tabs.clone(),
-        KeyCombo::new("w", vec![KeyModifier::Meta]),
+        KeyCombo::new("w", vec![primary_modifier()]),
     ));
     bindings.push(ShortcutBinding::new(
-        "reopen_tab",
+        "restore_tab",
         "Reopen Closed Tab",
         tabs.clone(),
-        KeyCombo::new("t", vec![KeyModifier::Meta, KeyModifier::Shift]),
+        KeyCombo::new("t", vec![primary_modifier(), KeyModifier::Shift]),
     ));
     bindings.push(ShortcutBinding::new(
         "pin_tab",
         "Pin/Unpin Tab",
         tabs.clone(),
-        KeyCombo::new("d", vec![KeyModifier::Meta]),
+        KeyCombo::new("d", vec![primary_modifier()]),
     ));
     bindings.push(ShortcutBinding::new(
         "duplicate_tab",
         "Duplicate Tab",
         tabs.clone(),
-        KeyCombo::new("d", vec![KeyModifier::Meta, KeyModifier::Shift]),
+        KeyCombo::new("d", vec![primary_modifier(), KeyModifier::Shift]),
     ));
     bindings.push(ShortcutBinding::new(
         "next_tab",
         "Next Tab",
         tabs.clone(),
-        KeyCombo::new("Down", vec![KeyModifier::Meta, KeyModifier::Alt]),
+        KeyCombo::new("arrowdown", vec![primary_modifier(), KeyModifier::Alt]),
     ));
     bindings.push(ShortcutBinding::new(
         "prev_tab",
         "Previous Tab",
         tabs.clone(),
-        KeyCombo::new("Up", vec![KeyModifier::Meta, KeyModifier::Alt]),
+        KeyCombo::new("arrowup", vec![primary_modifier(), KeyModifier::Alt]),
     ));
     bindings.push(ShortcutBinding::new(
         "clear_unpinned_tabs",
         "Clear Unpinned Tabs",
         tabs.clone(),
-        KeyCombo::new("k", vec![KeyModifier::Meta, KeyModifier::Shift]),
+        KeyCombo::new("k", vec![primary_modifier(), KeyModifier::Shift]),
     ));
     bindings.push(ShortcutBinding::new(
         "copy_url",
         "Copy URL",
         tabs.clone(),
-        KeyCombo::new("c", vec![KeyModifier::Meta, KeyModifier::Shift]),
+        KeyCombo::new("c", vec![primary_modifier(), KeyModifier::Shift]),
     ));
     bindings.push(ShortcutBinding::new(
         "copy_url_markdown",
@@ -183,7 +197,7 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
         tabs.clone(),
         KeyCombo::new(
             "c",
-            vec![KeyModifier::Meta, KeyModifier::Shift, KeyModifier::Alt],
+            vec![primary_modifier(), KeyModifier::Shift, KeyModifier::Alt],
         ),
     ));
     for i in 1..=9 {
@@ -191,7 +205,7 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
             &format!("select_tab_{}", i),
             &format!("Select Tab {}", i),
             tabs.clone(),
-            KeyCombo::new(&i.to_string(), vec![KeyModifier::Meta]),
+            KeyCombo::new(&i.to_string(), vec![primary_modifier()]),
         ));
     }
 
@@ -201,13 +215,13 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
         "next_space",
         "Next Space",
         spaces.clone(),
-        KeyCombo::new("Right", vec![KeyModifier::Meta, KeyModifier::Alt]),
+        KeyCombo::new("Right", vec![primary_modifier(), KeyModifier::Alt]),
     ));
     bindings.push(ShortcutBinding::new(
         "prev_space",
         "Previous Space",
         spaces.clone(),
-        KeyCombo::new("Left", vec![KeyModifier::Meta, KeyModifier::Alt]),
+        KeyCombo::new("Left", vec![primary_modifier(), KeyModifier::Alt]),
     ));
     bindings.push(ShortcutBinding::new(
         "new_space",
@@ -215,7 +229,7 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
         spaces.clone(),
         KeyCombo::new(
             "n",
-            vec![KeyModifier::Meta, KeyModifier::Shift, KeyModifier::Alt],
+            vec![primary_modifier(), KeyModifier::Shift, KeyModifier::Alt],
         ),
     ));
     for i in 1..=9 {
@@ -233,44 +247,59 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
         "toggle_sidebar",
         "Toggle Sidebar",
         window.clone(),
-        KeyCombo::new("s", vec![KeyModifier::Meta]),
+        KeyCombo::new("s", vec![primary_modifier()]),
+    ));
+    bindings.push(ShortcutBinding::new(
+        "ai_panel",
+        "AI Panel",
+        window.clone(),
+        KeyCombo::new("e", vec![primary_modifier()]),
     ));
 
     bindings.push(ShortcutBinding::new(
         "find_in_page",
         "Find in Page",
         window.clone(),
-        KeyCombo::new("f", vec![KeyModifier::Meta]),
+        KeyCombo::new("f", vec![primary_modifier()]),
     ));
-    bindings.push(ShortcutBinding::new(
-        "fullscreen",
-        "Fullscreen",
-        window.clone(),
-        KeyCombo::new("f", vec![KeyModifier::Ctrl, KeyModifier::Meta]),
-    ));
+    if cfg!(target_os = "macos") {
+        bindings.push(ShortcutBinding::new(
+            "fullscreen",
+            "Fullscreen",
+            window.clone(),
+            KeyCombo::new("f", vec![KeyModifier::Ctrl, KeyModifier::Meta]),
+        ));
+    } else {
+        bindings.push(ShortcutBinding::new(
+            "fullscreen",
+            "Fullscreen",
+            window.clone(),
+            KeyCombo::new("f11", vec![]),
+        ));
+    }
     bindings.push(ShortcutBinding::new(
         "minimize",
         "Minimize",
         window.clone(),
-        KeyCombo::new("m", vec![KeyModifier::Meta]),
+        KeyCombo::new("m", vec![primary_modifier()]),
     ));
     bindings.push(ShortcutBinding::new(
         "new_window",
         "New Window",
         window.clone(),
-        KeyCombo::new("n", vec![KeyModifier::Meta]),
+        KeyCombo::new("n", vec![primary_modifier()]),
     ));
     bindings.push(ShortcutBinding::new(
         "little_arc",
         "Little Arc",
         window.clone(),
-        KeyCombo::new("n", vec![KeyModifier::Meta, KeyModifier::Alt]),
+        KeyCombo::new("n", vec![primary_modifier(), KeyModifier::Alt]),
     ));
     bindings.push(ShortcutBinding::new(
         "close_window",
         "Close Window",
         window.clone(),
-        KeyCombo::new("w", vec![KeyModifier::Meta, KeyModifier::Shift]),
+        KeyCombo::new("w", vec![primary_modifier(), KeyModifier::Shift]),
     ));
     bindings.push(ShortcutBinding::new(
         "add_split_view",
@@ -300,33 +329,33 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
         "show_archive",
         "Show Archive",
         window.clone(),
-        KeyCombo::new("a", vec![KeyModifier::Meta, KeyModifier::Shift]),
+        KeyCombo::new("a", vec![primary_modifier(), KeyModifier::Shift]),
     ));
     bindings.push(ShortcutBinding::new(
-        "show_downloads",
+        "open_downloads",
         "Show Downloads",
         window.clone(),
-        KeyCombo::new("j", vec![KeyModifier::Meta]),
+        KeyCombo::new("j", vec![primary_modifier()]),
     ));
     bindings.push(ShortcutBinding::new(
-        "open_settings",
+        "settings",
         "Settings",
         window.clone(),
-        KeyCombo::new(",", vec![KeyModifier::Meta]),
+        KeyCombo::new(",", vec![primary_modifier()]),
     ));
     bindings.push(ShortcutBinding::new(
         "open_history",
         "History",
         window.clone(),
-        KeyCombo::new("y", vec![KeyModifier::Meta]),
+        KeyCombo::new("y", vec![primary_modifier()]),
     ));
     bindings.push(ShortcutBinding::new(
-        "show_bookmarks",
+        "open_bookmarks",
         "Bookmarks",
         window.clone(),
         KeyCombo::new(
             "b",
-            vec![KeyModifier::Meta, KeyModifier::Shift, KeyModifier::Alt],
+            vec![primary_modifier(), KeyModifier::Shift, KeyModifier::Alt],
         ),
     ));
     bindings.push(ShortcutBinding::new(
@@ -342,40 +371,40 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
         "zoom_in",
         "Zoom In",
         view.clone(),
-        KeyCombo::new("+", vec![KeyModifier::Meta]),
+        KeyCombo::new("+", vec![primary_modifier()]),
     ));
     bindings.push(ShortcutBinding::new(
         "zoom_out",
         "Zoom Out",
         view.clone(),
-        KeyCombo::new("-", vec![KeyModifier::Meta]),
+        KeyCombo::new("-", vec![primary_modifier()]),
     ));
     bindings.push(ShortcutBinding::new(
-        "zoom_reset",
+        "reset_zoom",
         "Reset Zoom",
         view.clone(),
-        KeyCombo::new("0", vec![KeyModifier::Meta]),
+        KeyCombo::new("0", vec![primary_modifier()]),
     ));
 
     // === Developer ===
     let dev = ShortcutCategory::Developer;
     bindings.push(ShortcutBinding::new(
-        "toggle_devtools",
+        "toggle_dev_tools",
         "Developer Tools",
         dev.clone(),
-        KeyCombo::new("i", vec![KeyModifier::Meta, KeyModifier::Alt]),
+        KeyCombo::new("i", vec![primary_modifier(), KeyModifier::Alt]),
     ));
     bindings.push(ShortcutBinding::new(
         "view_source",
         "View Source",
         dev.clone(),
-        KeyCombo::new("u", vec![KeyModifier::Meta, KeyModifier::Alt]),
+        KeyCombo::new("u", vec![primary_modifier(), KeyModifier::Alt]),
     ));
     bindings.push(ShortcutBinding::new(
         "js_console",
         "JavaScript Console",
         dev.clone(),
-        KeyCombo::new("j", vec![KeyModifier::Meta, KeyModifier::Alt]),
+        KeyCombo::new("j", vec![primary_modifier(), KeyModifier::Alt]),
     ));
 
     // === Custom (Maho-specific features) ===
@@ -383,13 +412,13 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
         "open_boost_editor",
         "Boost Editor",
         ShortcutCategory::Custom,
-        KeyCombo::new("b", vec![KeyModifier::Meta, KeyModifier::Alt]),
+        KeyCombo::new("b", vec![primary_modifier(), KeyModifier::Alt]),
     ));
     bindings.push(ShortcutBinding::new(
         "open_atc_rules",
         "ATC Rules",
         ShortcutCategory::Custom,
-        KeyCombo::new("a", vec![KeyModifier::Meta, KeyModifier::Alt]),
+        KeyCombo::new("a", vec![primary_modifier(), KeyModifier::Alt]),
     ));
 
     bindings

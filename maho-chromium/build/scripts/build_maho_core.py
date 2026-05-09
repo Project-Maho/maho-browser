@@ -61,34 +61,38 @@ def get_target_triple(target=None):
     sys.exit(f'Unsupported platform: {sys.platform}')
 
 
+def build_rust_prebuilt(target=None):
+    rust_target, cpu_dir, lib_name = get_target_triple(target)
+    output_dir = os.path.join(PREBUILT_DIR, cpu_dir)
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f'Building maho-core for {rust_target}...')
+    subprocess.run(
+        ['cargo', 'build', '--release', '--target', rust_target, '-p', 'maho-ffi'],
+        cwd=MAHO_ROOT,
+        check=True,
+    )
+
+    src_lib = os.path.join(MAHO_ROOT, 'target', rust_target, 'release', lib_name)
+    dst_lib = os.path.join(output_dir, lib_name)
+
+    if not os.path.exists(src_lib):
+        sys.exit(f'Build artifact not found: {src_lib}')
+
+    shutil.copy2(src_lib, dst_lib)
+    if sys.platform == 'darwin':
+        subprocess.run(['ranlib', '-c', dst_lib], check=True)
+    print(f'Copied {src_lib} -> {dst_lib}')
+    print(f'Size: {os.path.getsize(dst_lib) / 1024 / 1024:.1f} MB')
+
+
 def main():
     parser = argparse.ArgumentParser(description='Build maho-core Rust static library.')
     parser.add_argument('--target', help='Explicit Rust target triple for cross-compilation.')
     args = parser.parse_args()
 
-    rust_target, cpu_dir, lib_name = get_target_triple(args.target)
-    output_dir = os.path.join(PREBUILT_DIR, cpu_dir)
-    os.makedirs(output_dir, exist_ok=True)
-
     with build_lock():
-        print(f'Building maho-core for {rust_target}...')
-        subprocess.run(
-            ['cargo', 'build', '--release', '--target', rust_target, '-p', 'maho-ffi'],
-            cwd=MAHO_ROOT,
-            check=True,
-        )
-
-        src_lib = os.path.join(MAHO_ROOT, 'target', rust_target, 'release', lib_name)
-        dst_lib = os.path.join(output_dir, lib_name)
-
-        if not os.path.exists(src_lib):
-            sys.exit(f'Build artifact not found: {src_lib}')
-
-        shutil.copy2(src_lib, dst_lib)
-        if sys.platform == 'darwin':
-            subprocess.run(['ranlib', '-c', dst_lib], check=True)
-        print(f'Copied {src_lib} -> {dst_lib}')
-        print(f'Size: {os.path.getsize(dst_lib) / 1024 / 1024:.1f} MB')
+        build_rust_prebuilt(args.target)
 
 
 if __name__ == '__main__':

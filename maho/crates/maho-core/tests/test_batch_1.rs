@@ -805,8 +805,15 @@ fn delete_active_space_falls_back_to_first_remaining_space() {
 
     assert!(matches!(
         updates.as_slice(),
-        [CoreUpdate::SpaceDeleted { .. }, CoreUpdate::ActiveSpaceChanged { space_id, .. }]
-            if *space_id == second
+        [
+            CoreUpdate::TabsMigrated {
+                from_space_id,
+                to_space_id,
+                ..
+            },
+            CoreUpdate::SpaceDeleted { .. },
+            CoreUpdate::ActiveSpaceChanged { space_id, .. }
+        ] if *from_space_id == active && *to_space_id == second && *space_id == second
     ));
     assert_eq!(core.get_active_space_id(), second);
 }
@@ -1072,7 +1079,6 @@ fn settings_update_appearance() {
             show_tab_bar: None,
             window_transparency: None,
             sidebar_collapsed: None,
-            custom_chrome_css: None,
             custom_icon_path: None,
         }),
         privacy: None,
@@ -1682,12 +1688,6 @@ fn density_set_compact() {
 fn accent_color_set() {
     let mut core = MahoCore::new();
     core.set_accent_color("\"#FF0000\"");
-}
-
-#[test]
-fn custom_chrome_css_set() {
-    let mut core = MahoCore::new();
-    core.set_custom_chrome_css(Some("body { background: black; }".to_string()));
 }
 
 #[test]

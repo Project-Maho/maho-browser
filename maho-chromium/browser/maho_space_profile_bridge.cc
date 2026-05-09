@@ -47,7 +47,7 @@ bool MahoSpaceProfileBridge::SwitchToSpace(const std::string& space_id) {
   }
 
   auto old_it = space_to_profile_.find(active_space_id_);
-  bool profile_changed = (old_it == space_to_profile_.end() ||
+  bool profile_changed = (old_it != space_to_profile_.end() &&
                           old_it->second != it->second);
 
   active_space_id_ = space_id;

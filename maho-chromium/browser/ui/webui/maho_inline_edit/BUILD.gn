@@ -29,6 +29,7 @@ source_set("maho_inline_edit") {
     "//chrome/browser/ui/tabs:tab_strip",
     "//maho/browser:maho_ai_client",
     "//maho/browser:maho_core_holder",
+    "//maho/browser:maho_prompt_utils",
     "//maho/third_party/maho:maho_bridge",
     "//mojo/public/cpp/bindings",
     "//net",

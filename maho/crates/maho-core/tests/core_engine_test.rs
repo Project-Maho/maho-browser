@@ -17,7 +17,7 @@ fn shortcut_manager_has_default_bindings() {
         .collect();
     assert!(actions.contains(&"command_bar".to_string()));
     assert!(actions.contains(&"close_tab".to_string()));
-    assert!(actions.contains(&"reload".to_string()));
+    assert!(actions.contains(&"reload_tab".to_string()));
     assert!(actions.contains(&"toggle_sidebar".to_string()));
     assert!(actions.contains(&"zoom_in".to_string()));
 }
@@ -115,25 +115,6 @@ fn set_accent_color_null() {
     core.set_accent_color("null");
     let settings = core.get_settings();
     assert!(settings.appearance.accent_color.is_none());
-}
-
-#[test]
-fn set_custom_chrome_css() {
-    let mut core = MahoCore::new();
-    core.set_custom_chrome_css(Some(".sidebar { background: red; }".to_string()));
-    let settings = core.get_settings();
-    assert_eq!(
-        settings.appearance.custom_chrome_css.as_deref(),
-        Some(".sidebar { background: red; }")
-    );
-}
-
-#[test]
-fn set_custom_chrome_css_none() {
-    let mut core = MahoCore::new();
-    core.set_custom_chrome_css(None);
-    let settings = core.get_settings();
-    assert!(settings.appearance.custom_chrome_css.is_none());
 }
 
 #[test]
@@ -539,7 +520,7 @@ mod persistence_tests {
             modifiers: vec![KeyModifier::Meta, KeyModifier::Shift],
         };
 
-        core.set_shortcut_persisted("reload", key_combo)
+        core.set_shortcut_persisted("reload_tab", key_combo)
             .expect("should set shortcut");
 
         drop(core);
@@ -550,10 +531,10 @@ mod persistence_tests {
         let shortcuts_json = restored_core.get_all_shortcuts_json();
         let bindings: Vec<serde_json::Value> =
             serde_json::from_str(&shortcuts_json).expect("should parse shortcuts JSON");
-        let reload_binding = bindings.iter().find(|b| b["action"] == "reload");
+        let reload_binding = bindings.iter().find(|b| b["action"] == "reload_tab");
         assert!(
             reload_binding.is_some(),
-            "reload binding should exist after restore"
+            "reload_tab binding should exist after restore"
         );
         assert_eq!(reload_binding.unwrap()["keyCombo"]["key"], "p");
     }

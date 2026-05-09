@@ -16,6 +16,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/isolated_world_ids.h"
+#include "maho/browser/ai/maho_extract_prompt_messages.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/third_party/maho/maho_bridge.h"
 
@@ -32,7 +33,7 @@ MahoInlineEditHandler::MahoInlineEditHandler(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
     : browser_(browser),
       prefs_(prefs),
-      llm_client_(prefs, std::move(url_loader_factory)) {
+      llm_client_(prefs, std::move(url_loader_factory), false) {
   DCHECK(prefs_);
 }
 
@@ -139,19 +140,42 @@ void MahoInlineEditHandler::OnRustEventResponse(
 
   auto parsed =
       base::JSONReader::Read(rust_response_json, base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_dict()) {
+  if (!parsed) {
     std::move(callback).Run("Failed to process edit request.");
     return;
   }
 
-  base::DictValue& root = parsed->GetDict();
-  base::DictValue* llm_request = root.FindDict("RequestLlmCompletion");
+  const base::DictValue* llm_request = nullptr;
+
+  if (parsed->is_dict()) {
+    llm_request = parsed->GetDict().FindDict("RequestLlmCompletion");
+    if (!llm_request) {
+      llm_request = parsed->GetDict().FindDict("request_llm_completion");
+    }
+    if (!llm_request) {
+      const std::string* kind = parsed->GetDict().FindString("kind");
+      if (kind && *kind == "request_llm_completion") {
+        llm_request = &parsed->GetDict();
+      }
+    }
+  } else if (parsed->is_list()) {
+    for (const auto& item : parsed->GetList()) {
+      const base::DictValue* d = item.GetIfDict();
+      if (!d) continue;
+      const std::string* kind = d->FindString("kind");
+      if (kind && *kind == "request_llm_completion") {
+        llm_request = d;
+        break;
+      }
+    }
+  }
+
   if (!llm_request) {
     std::move(callback).Run("Unexpected response from AI engine.");
     return;
   }
 
-  base::ListValue* prompt_messages = llm_request->FindList("prompt");
+  auto prompt_messages = maho::ai::ExtractPromptMessages(*llm_request);
   if (!prompt_messages) {
     std::move(callback).Run("Invalid prompt from AI engine.");
     return;
@@ -175,14 +199,15 @@ void MahoInlineEditHandler::StartLlmRequest(
                      weak_factory_.GetWeakPtr()));
 }
 
-void MahoInlineEditHandler::FinalizeStreaming(const std::string& result) {
+void MahoInlineEditHandler::FinalizeStreaming(
+    MahoAiLlmClient::CompletionResult result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (pending_callback_) {
-    std::move(pending_callback_).Run(result);
+    std::move(pending_callback_).Run(result.full_text);
   }
 
-  std::string escaped = result;
+  std::string escaped = result.full_text;
   base::ReplaceSubstringsAfterOffset(&escaped, 0, "\\", "\\\\");
   base::ReplaceSubstringsAfterOffset(&escaped, 0, "'", "\\'");
   base::ReplaceSubstringsAfterOffset(&escaped, 0, "\n", "\\n");

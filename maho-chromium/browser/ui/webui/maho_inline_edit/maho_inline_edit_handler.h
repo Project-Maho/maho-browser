@@ -58,7 +58,7 @@ class MahoInlineEditHandler
                            const std::string& rust_response_json);
   void StartLlmRequest(base::ListValue prompt_messages,
                        RequestEditCallback callback);
-  void FinalizeStreaming(const std::string& result);
+  void FinalizeStreaming(MahoAiLlmClient::CompletionResult result);
   void HandleLlmError(const std::string& error);
 
   SEQUENCE_CHECKER(sequence_checker_);

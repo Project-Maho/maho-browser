@@ -16,11 +16,11 @@ all: generate-header universal-lib
 
 # Build the Rust FFI library for iOS device (arm64)
 build-rust-ios:
-	python3 ../scripts/build_lock.py -- cargo build --target $(RUST_TARGET_IOS) --release -p $(FFI_CRATE) --manifest-path ../Cargo.toml
+	cargo build --target $(RUST_TARGET_IOS) --release -p $(FFI_CRATE) --manifest-path ../Cargo.toml
 
 # Build the Rust FFI library for iOS simulator (arm64)
 build-rust-sim:
-	python3 ../scripts/build_lock.py -- cargo build --target $(RUST_TARGET_SIM) --release -p $(FFI_CRATE) --manifest-path ../Cargo.toml
+	cargo build --target $(RUST_TARGET_SIM) --release -p $(FFI_CRATE) --manifest-path ../Cargo.toml
 
 # Generate the C header from Rust FFI crate
 generate-header:

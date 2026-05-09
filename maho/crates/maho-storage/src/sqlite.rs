@@ -54,6 +54,10 @@ impl SqliteStorage {
     fn run_migrations(&self) -> Result<(), StorageError> {
         // NOTE: password stored as plaintext TEXT column. Encryption at rest is a future improvement.
         let _ = self.conn.execute("ALTER TABLE passwords ADD COLUMN password TEXT", []);
+        let _ = self.conn.execute(
+            "ALTER TABLE shortcuts ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1",
+            [],
+        );
         Ok(())
     }
 
@@ -219,7 +223,8 @@ impl SqliteStorage {
             CREATE TABLE IF NOT EXISTS shortcuts (
                 action TEXT PRIMARY KEY,
                 key_combo_json TEXT NOT NULL,
-                is_custom INTEGER NOT NULL DEFAULT 1
+                is_custom INTEGER NOT NULL DEFAULT 1,
+                enabled INTEGER NOT NULL DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS easels (
                 id TEXT PRIMARY KEY,
@@ -1243,8 +1248,16 @@ impl SqliteStorage {
 
     pub fn save_shortcut(&self, action: &str, key_combo_json: &str) -> Result<(), StorageError> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO shortcuts (action, key_combo_json, is_custom) VALUES (?1, ?2, 1)",
+            "INSERT INTO shortcuts (action, key_combo_json, is_custom, enabled) VALUES (?1, ?2, 1, 1) ON CONFLICT(action) DO UPDATE SET key_combo_json = excluded.key_combo_json, is_custom = 1, enabled = COALESCE(shortcuts.enabled, 1)",
             rusqlite::params![action, key_combo_json],
+        )?;
+        Ok(())
+    }
+
+    pub fn save_shortcut_enabled(&self, action: &str, enabled: bool) -> Result<(), StorageError> {
+        self.conn.execute(
+            "INSERT INTO shortcuts (action, key_combo_json, is_custom, enabled) VALUES (?1, '', 0, ?2) ON CONFLICT(action) DO UPDATE SET enabled = excluded.enabled",
+            rusqlite::params![action, enabled as i32],
         )?;
         Ok(())
     }
@@ -1262,12 +1275,16 @@ impl SqliteStorage {
         Ok(())
     }
 
-    pub fn load_shortcuts(&self) -> Result<Vec<(String, String)>, StorageError> {
+    pub fn load_shortcuts(&self) -> Result<Vec<(String, String, bool)>, StorageError> {
         let mut stmt = self
             .conn
-            .prepare("SELECT action, key_combo_json FROM shortcuts")?;
+            .prepare("SELECT action, key_combo_json, enabled FROM shortcuts")?;
         let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i32>(2)? != 0,
+            ))
         })?;
         let mut results = Vec::new();
         for row in rows {
