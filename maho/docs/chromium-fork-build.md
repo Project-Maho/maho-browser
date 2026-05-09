@@ -4,7 +4,7 @@ This document records the standard local build flow for the Chromium overlay use
 
 ## Purpose and scope
 
-Use this flow when you need to build the Chromium desktop app bundle or run the Chromium desktop macOS E2E harness from the local overlay checkout. Use `out/Default` as the standard build directory. Do not treat `out/Release` as the default path.
+Use this flow when you need to build the Chromium desktop app bundle or run the Chromium desktop macOS E2E harness from the local overlay checkout. Use `out/Default` as the standard build directory. Do not treat `out/Release` as the default path. The repo lock covers the Rust prebuilt flow here, but direct `autoninja -C out/Default chrome` is not serialized by it today.
 
 ## Repo layout and working directories
 
@@ -33,7 +33,7 @@ This local workspace already has that mount in place.
    python3 maho/build/scripts/build_maho_core.py
    ```
 
-   The checked-in helper runs `cargo build --release --target <triple> -p maho-ffi` in the sibling `maho` repo, producing `libmaho_ffi.a`, then copies it into the overlay prebuilt directory as `libmaho_core.a`.
+   This entrypoint uses the shared `.build.lock` at the workspace root, then runs the Rust build and copies the prebuilt library into the overlay directory.
 
 2. Build Chromium with the Maho overlay:
 

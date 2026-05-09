@@ -2,6 +2,8 @@
 
 Chromium overlay for Maho Browser. Brave-style chromium_src overrides.
 
+Shared-artifact build commands use the workspace root `.build.lock` for the Rust prebuilt flow, so `python3 maho/build/scripts/build_maho_core.py` may pause with `Waiting for build lock: ...` if another build is already running.
+
 ## Structure
 
 - `chromium_src/` — Upstream Chromium file overrides (#define + #include pattern)
@@ -21,6 +23,7 @@ Chromium overlay for Maho Browser. Brave-style chromium_src overrides.
    ```
    python3 maho/build/scripts/build_maho_core.py
    ```
+   This uses the shared workspace `.build.lock` at the repo root.
 
 3. Build Chromium with Maho:
    ```
