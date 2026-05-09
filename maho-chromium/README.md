@@ -2,7 +2,7 @@
 
 Chromium overlay for Maho Browser. Brave-style chromium_src overrides.
 
-Shared-artifact build commands use the workspace root `.build.lock` for the Rust prebuilt flow, so `python3 maho/build/scripts/build_maho_core.py` may pause with `Waiting for build lock: ...` if another build is already running.
+The canonical Chromium build entrypoint is the lock-backed wrapper at `python3 build/scripts/build_maho.py`, which builds the Rust prebuilt and then runs Chromium in one command. Raw `autoninja -C out/Default chrome` still works for narrower rebuilds, but it is no longer the recommended default flow.
 
 ## Structure
 
@@ -19,13 +19,13 @@ Shared-artifact build commands use the workspace root `.build.lock` for the Rust
    ln -s ../../maho-chromium chromium/src/maho
    ```
 
-2. Build maho-core:
-   ```
-   python3 maho/build/scripts/build_maho_core.py
-   ```
-   This uses the shared workspace `.build.lock` at the repo root.
+2. Build Chromium and the Rust prebuilt together:
+    ```
+    python3 build/scripts/build_maho.py
+    ```
+    This acquires the shared workspace `.build.lock` once, builds the Rust prebuilt if needed, and then runs `autoninja -C out/Default chrome` from `chromium/src` with `depot_tools` prepended to `PATH`.
 
-3. Build Chromium with Maho:
-   ```
-   autoninja -C out/Default chrome
-   ```
+3. For Chromium-only rebuilds:
+    ```
+    autoninja -C out/Default chrome
+    ```

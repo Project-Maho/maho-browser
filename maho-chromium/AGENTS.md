@@ -59,7 +59,7 @@ maho-chromium/
 - **WebUI pattern**: Each feature = `{feature}.mojom` + `_page_handler.cc/h` + `_ui.cc/h` + `resources/{feature}/app.ts` + `BUILD.gn`
 - **Upstream overrides**: `chromium_src/` mirrors upstream paths; uses `#define` to rename original, then `#include` original, then add patches
 - **C++ style**: Chromium conventions — explicit includes, `DCHECK_CALLED_ON_VALID_SEQUENCE`, namespace-local helpers
-- **Shared build lock**: `build/scripts/build_maho_core.py` uses the workspace root `.build.lock`, so this build flow can wait and print `Waiting for build lock: ...`
+- **Shared build lock**: `build/scripts/build_maho.py` acquires the workspace root `.build.lock` once for the combined Rust + Chromium build flow; the Rust helper in `build/scripts/build_maho_core.py` still uses the same lock when run standalone, so this build flow can wait and print `Waiting for build lock: ...`
 - **Mojo handlers**: Keep thin; delegate heavy logic to `browser/ai/` or reusable helpers
 - **Page-context results**: Use structured objects with status/title/url/text/warnings, not single text blobs
 - **GN builds**: Each WebUI and Views subsystem has its own `BUILD.gn`
@@ -91,7 +91,10 @@ maho-chromium/
 
 ## COMMANDS
 ```bash
-# Build (from chromium/src/)
+# Canonical build (from the overlay repo root)
+python3 build/scripts/build_maho.py
+
+# Chromium-only rebuild (from chromium/src/)
 autoninja -C out/Default chrome
 
 # Build maho-core prebuilt

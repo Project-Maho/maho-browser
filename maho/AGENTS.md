@@ -31,7 +31,7 @@ Hybrid repo: Rust workspace plus native shells and Appium test harnesses. Backen
 ## CONVENTIONS
 - Use `bun run` for repo scripts and local source files, and `bunx` for one-off package executables or CLIs.
 - Rust workspace commands at repo root: `bun run test` and `bun run typecheck` proxy to Cargo.
-- These shared-artifact entrypoints use the workspace root `.build.lock`, so `bun run test`, `bun run typecheck`, and the cargo-backed shell build leaf commands in `maho/macos-shell/Makefile` and `maho/ios-shell/Makefile` may wait and print `Waiting for build lock: ...`.
+- These shared-artifact entrypoints use the workspace root `.build.lock`, so `bun run test` and `bun run typecheck` may wait and print `Waiting for build lock: ...`.
 - Shells are platform-separated; do not assume shared UI code across macOS/iOS/Android.
 - Appium tests are repo-local and separate from product code.
 - Existing subtree AGENTS.md files take precedence over this root guide.
