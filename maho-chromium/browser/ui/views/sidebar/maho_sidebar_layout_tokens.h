@@ -10,8 +10,13 @@
 namespace maho::sidebar_layout {
 
 inline constexpr int kCollapsedRailWidthDp = 40;
-inline constexpr int kDefaultRailWidthDp = 224;
-inline constexpr int kRuntimeRailWidthMinDp = 176;
+// Library mode still spends width on root insets, the 64dp category rail, and
+// a 1dp divider before archive/download/media content, but the top-left shell
+// reservation now comes from the library structure itself rather than from an
+// oversized global width floor. Keep only a modest minimum so the library pane
+// still has usable room at narrow persisted widths.
+inline constexpr int kDefaultRailWidthDp = 288;
+inline constexpr int kRuntimeRailWidthMinDp = 280;
 inline constexpr int kRuntimeRailWidthMaxDp = 400;
 inline constexpr int kLegacyRailWidthResetThresholdDp = 80;
 inline constexpr int kCompactNavigationThresholdDp = 208;

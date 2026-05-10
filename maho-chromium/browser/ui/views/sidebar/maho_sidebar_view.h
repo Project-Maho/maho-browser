@@ -3,8 +3,10 @@
 #ifndef MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_VIEW_H_
 #define MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_VIEW_H_
 
+#include <map>
 #include <memory>
 #include <set>
+#include <string>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -18,6 +20,7 @@
 #include "ui/base/dragdrop/drop_target_event.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/views/view.h"
+#include "url/gurl.h"
 
 class Browser;
 class TabStripModel;
@@ -38,15 +41,18 @@ namespace maho {
 
 class MahoSidebarArchiveView;
 class MahoSidebarCreateSpaceView;
+class MahoSidebarDownloadsView;
 class MahoSidebarFavoritesGridView;
 class MahoSidebarFooterView;
+class MahoSidebarLibraryActionPaneView;
+class MahoSidebarMediaView;
 class MahoSidebarSearchView;
 class MahoSidebarTabListView;
 class MahoSidebarTopBarView;
 
 enum class MahoSidebarBodyMode {
   kTabs,
-  kArchive,
+  kLibrary,
   kCreateSpace,
 };
 
@@ -70,9 +76,14 @@ class MahoSidebarView : public views::View,
   DropCallback GetDropCallback(const ui::DropTargetEvent& event) override;
   void OnDragExited() override;
 
+  void OpenLibrary();
+  void OpenLibrary(MahoSidebarLibraryRailView::Category category);
+  void ExitLibraryToTabs();
+  void ShowCreateSpaceSurface();
+
+  // Legacy alias: toggle Library mode (backward compat for tests/footer).
   void ToggleArchiveMode();
   void ExitArchiveModeToTabs();
-  void ShowCreateSpaceSurface();
 
   bool IsPositionInWindowCaption(const gfx::Point& point) const;
 
@@ -88,6 +99,10 @@ class MahoSidebarView : public views::View,
   MahoSidebarTopBarView* top_bar_view_for_testing() { return top_bar_view_; }
   views::View* tabs_surface_for_testing() { return tabs_surface_; }
   MahoSidebarArchiveView* archive_view_for_testing() { return archive_view_; }
+  MahoSidebarDownloadsView* downloads_view_for_testing() {
+    return downloads_view_;
+  }
+  MahoSidebarMediaView* media_view_for_testing() { return media_view_; }
   MahoSidebarCreateSpaceView* create_space_view_for_testing() {
     return create_space_view_;
   }
@@ -95,11 +110,27 @@ class MahoSidebarView : public views::View,
     return library_rail_view_;
   }
   bool is_archive_mode_for_testing() const {
-    return current_body_mode_ == MahoSidebarBodyMode::kArchive;
+    return current_body_mode_ == MahoSidebarBodyMode::kLibrary &&
+           active_library_category_ ==
+               MahoSidebarLibraryRailView::Category::kArchivedTabs;
+  }
+  bool is_library_mode_for_testing() const {
+    return current_body_mode_ == MahoSidebarBodyMode::kLibrary;
   }
   bool is_create_space_mode_for_testing() const {
     return current_body_mode_ == MahoSidebarBodyMode::kCreateSpace;
   }
+  MahoSidebarLibraryActionPaneView* spaces_view_for_testing() {
+    return spaces_view_;
+  }
+  MahoSidebarLibraryActionPaneView* easel_view_for_testing() {
+    return easel_view_;
+  }
+  MahoSidebarLibraryActionPaneView* boost_view_for_testing() {
+    return boost_view_;
+  }
+  MahoSidebarLibraryRailView::Category active_library_category_for_testing()
+      const;
 
  private:
   void BuildUi();
@@ -107,8 +138,16 @@ class MahoSidebarView : public views::View,
   void CaptureLastFocusedBodyView();
   void RestoreLastFocusedBodyView();
   bool CanRestoreFocusToView(const views::View* view) const;
-  void HandleLibraryCategorySelected(MahoSidebarLibraryRailView::Category category);
+  void HandleLibraryCategorySelected(
+      MahoSidebarLibraryRailView::Category category);
   void HandleLibraryBack();
+  views::View* GetOrCreateLibraryPane(
+      MahoSidebarLibraryRailView::Category category);
+  void ShowLibraryPane(MahoSidebarLibraryRailView::Category category);
+  views::View* ActiveLibraryPane() const;
+  void UpdateSpacesPaneActions();
+  void OpenSpaceCreateSurface();
+  void OpenSpaceConfigSurface();
 
   void ScheduleRefreshAll();
   void RefreshFavoritesAndViewState();
@@ -122,6 +161,8 @@ class MahoSidebarView : public views::View,
   void UpdateFavorites(const MahoSidebarFavoritesModel& model);
   void UpdateTabList(const MahoSidebarTabListModel& model);
   void UpdateFooter(const MahoSidebarFooterModel& model);
+
+  void OpenWebUIInNewTab(const GURL& url);
 
   TabStripModel* tab_strip_model() const;
 
@@ -146,6 +187,11 @@ class MahoSidebarView : public views::View,
   raw_ptr<views::View> library_content_host_ = nullptr;
   raw_ptr<views::View> top_region_ = nullptr;
   raw_ptr<MahoSidebarArchiveView> archive_view_ = nullptr;
+  raw_ptr<MahoSidebarDownloadsView> downloads_view_ = nullptr;
+  raw_ptr<MahoSidebarMediaView> media_view_ = nullptr;
+  raw_ptr<MahoSidebarLibraryActionPaneView> spaces_view_ = nullptr;
+  raw_ptr<MahoSidebarLibraryActionPaneView> easel_view_ = nullptr;
+  raw_ptr<MahoSidebarLibraryActionPaneView> boost_view_ = nullptr;
   raw_ptr<MahoSidebarCreateSpaceView> create_space_view_ = nullptr;
   raw_ptr<MahoSidebarLibraryRailView> library_rail_view_ = nullptr;
   raw_ptr<MahoSidebarTopBarView> top_bar_view_ = nullptr;
@@ -156,8 +202,13 @@ class MahoSidebarView : public views::View,
   std::unique_ptr<views::ViewTracker> last_focused_body_view_tracker_;
   MahoSidebarStateAdapter state_adapter_;
   MahoSidebarBodyMode current_body_mode_ = MahoSidebarBodyMode::kTabs;
+  MahoSidebarLibraryRailView::Category active_library_category_ =
+      MahoSidebarLibraryRailView::Category::kArchivedTabs;
+  std::map<MahoSidebarLibraryRailView::Category, raw_ptr<views::View>>
+      library_pane_cache_;
 
   bool refresh_scheduled_ = false;
+  bool needs_re_refresh_ = false;
   std::set<content::WebContents*> recently_registered_contents_;
   base::WeakPtrFactory<MahoSidebarView> weak_factory_{this};
 };

@@ -604,10 +604,6 @@ void DispatchShellEventEx(
   }
   std::string json;
   base::JSONWriter::Write(event, &json);
-  if (kind == "reorder_favorite") {
-    LOG(ERROR) << "[MAHO_DND] DispatchShellEventEx: kind=" << kind
-               << " json=" << json << " core=" << (maho::GetCore() ? "OK" : "NULL");
-  }
   if (g_shell_event_observer_for_testing) {
     g_shell_event_observer_for_testing->OnShellEventDispatched(kind, json);
   }

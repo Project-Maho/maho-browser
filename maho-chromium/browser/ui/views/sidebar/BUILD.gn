@@ -26,6 +26,60 @@ source_set("maho_sidebar_action_popover") {
   ]
 }
 
+source_set("maho_sidebar_downloads") {
+  sources = [
+    "maho_sidebar_downloads_data.cc",
+    "maho_sidebar_downloads_data.h",
+    "maho_sidebar_downloads_view.cc",
+    "maho_sidebar_downloads_view.h",
+    "maho_sidebar_media_view.cc",
+    "maho_sidebar_media_view.h",
+  ]
+
+  public_deps = [
+    "//maho/browser:maho_core_holder",
+    "//maho/third_party/maho:maho_core_prebuilt",
+  ]
+
+  deps = [
+    "//base",
+    "//chrome/browser:primitives",
+    "//chrome/browser/ui/color:color_headers",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//ui/base",
+    "//ui/color",
+    "//ui/gfx",
+    "//ui/views",
+  ]
+}
+
+source_set("maho_sidebar_library") {
+  sources = [
+    "maho_sidebar_archive_view.cc",
+    "maho_sidebar_archive_view.h",
+    "maho_sidebar_create_space_view.cc",
+    "maho_sidebar_create_space_view.h",
+    "maho_sidebar_library_action_pane_view.cc",
+    "maho_sidebar_library_action_pane_view.h",
+    "maho_sidebar_library_rail_view.cc",
+    "maho_sidebar_library_rail_view.h",
+  ]
+
+  deps = [
+    ":maho_sidebar_downloads",
+    "//base",
+    "//chrome/browser/ui/color:color_headers",
+    "//maho/browser:maho_core_holder",
+    "//maho/browser:maho_space_profile_bridge",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//ui/base",
+    "//ui/color",
+    "//ui/gfx",
+    "//ui/views",
+  ]
+}
+
+
 source_set("unit_tests") {
   testonly = true
   sources = [ "maho_sidebar_dnd_dispatch_unittest.cc" ]

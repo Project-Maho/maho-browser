@@ -2,7 +2,6 @@
 
 #include "maho_sidebar_library_rail_view.h"
 
-#include <array>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -11,6 +10,9 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ref.h"
 #include "components/vector_icons/vector_icons.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
+#include "third_party/skia/include/core/SkColor.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/color/color_id.h"
@@ -19,8 +21,8 @@
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/text_constants.h"
-#include "ui/views/background.h"
 #include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/image_button.h"
@@ -30,15 +32,14 @@
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/style/typography.h"
-#include "third_party/skia/include/core/SkColor.h"
 
 namespace maho {
 
 namespace {
 
 constexpr int kRailWidthDp = 64;
-constexpr int kRailTopInsetDp = 12;
-constexpr int kRailSideInsetDp = 3;
+constexpr int kRailTopInsetDp = 0;
+constexpr int kRailSideInsetDp = 2;
 constexpr int kRailBottomInsetDp = 10;
 constexpr int kRailItemSpacingDp = 2;
 constexpr int kRailItemHeightDp = 50;
@@ -88,13 +89,24 @@ constexpr gfx::VectorIcon kArchiveboxIcon(kArchiveboxRepList, 1,
 struct RailCategorySpec {
   MahoSidebarLibraryRailView::Category category;
   std::u16string_view title;
+  std::u16string_view visible_label;
   raw_ptr<const gfx::VectorIcon> icon;
 };
 
-constexpr std::array<RailCategorySpec, 1> kRailCategories = {{
+constexpr RailCategorySpec kRailCategories[] = {
     {MahoSidebarLibraryRailView::Category::kArchivedTabs, u"Archived Tabs",
-     &kArchiveboxIcon},
-}};
+     u"Archive", &kArchiveboxIcon},
+    {MahoSidebarLibraryRailView::Category::kDownloads, u"Downloads",
+     u"Downloads", &vector_icons::kFileDownloadOffChromeRefreshIcon},
+    {MahoSidebarLibraryRailView::Category::kMedia, u"Media", u"Media",
+     &vector_icons::kVideoLibraryIcon},
+    {MahoSidebarLibraryRailView::Category::kSpaces, u"Spaces", u"Spaces",
+     &vector_icons::kHomeIcon},
+    {MahoSidebarLibraryRailView::Category::kEasels, u"Easels", u"Easels",
+     &vector_icons::kStickyNote2Icon},
+    {MahoSidebarLibraryRailView::Category::kBoosts, u"Boosts", u"Boosts",
+     &vector_icons::kScienceIcon},
+};
 
 void StyleIconButton(views::ImageButton* button) {
   button->SetBackground(nullptr);
@@ -117,21 +129,26 @@ const gfx::VectorIcon& GetMahoSidebarArchiveboxIcon() {
 
 class MahoSidebarLibraryRailItemButton : public views::Button {
  public:
+  METADATA_HEADER(MahoSidebarLibraryRailItemButton, views::Button)
+
+ public:
   MahoSidebarLibraryRailItemButton(MahoSidebarLibraryRailView::Category category,
                                    std::u16string title,
+                                   std::u16string visible_label,
                                    const gfx::VectorIcon& icon,
                                    bool enabled,
                                    PressedCallback callback)
       : views::Button(std::move(callback)),
         category_(category),
         title_(std::move(title)),
+        visible_label_(std::move(visible_label)),
         icon_(icon) {
     SetAccessibleName(title_);
     GetViewAccessibility().SetIsSelected(false);
     SetTooltipText(title_);
     SetFocusBehavior(FocusBehavior::ALWAYS);
     SetRequestFocusOnPress(false);
-    SetPreferredSize(gfx::Size(0, kRailItemHeightDp));
+    SetPreferredSize(gfx::Size(kRailWidthDp, kRailItemHeightDp));
 
     auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical,
@@ -152,7 +169,7 @@ class MahoSidebarLibraryRailItemButton : public views::Button {
     icon_view_ = tile_->AddChildView(std::make_unique<views::ImageView>());
     icon_view_->SetImageSize(gfx::Size(kRailIconSizeDp, kRailIconSizeDp));
 
-    label_ = AddChildView(std::make_unique<views::Label>(title_));
+    label_ = AddChildView(std::make_unique<views::Label>(visible_label_));
     label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
     label_->SetAutoColorReadabilityEnabled(false);
     label_->SetTextStyle(views::style::STYLE_BODY_5);
@@ -161,6 +178,7 @@ class MahoSidebarLibraryRailItemButton : public views::Button {
 
     views::InstallRoundRectHighlightPathGenerator(this, gfx::Insets(),
                                                   kRailTileCornerRadiusDp);
+    SetPaintToLayer();
     SetEnabled(enabled);
     UpdateAppearance();
   }
@@ -220,19 +238,22 @@ class MahoSidebarLibraryRailItemButton : public views::Button {
     icon_view_->SetImage(ui::ImageModel::FromVectorIcon(icon_.get(), foreground,
                                                         kRailIconSizeDp));
     label_->SetEnabledColor(foreground);
-    SetPaintToLayer();
     layer()->SetOpacity(enabled ? 1.0f : 0.6f);
     SetCanProcessEventsWithinSubtree(enabled);
   }
 
   const MahoSidebarLibraryRailView::Category category_;
   const std::u16string title_;
+  const std::u16string visible_label_;
   const base::raw_ref<const gfx::VectorIcon> icon_;
   raw_ptr<views::View> tile_ = nullptr;
   raw_ptr<views::ImageView> icon_view_ = nullptr;
   raw_ptr<views::Label> label_ = nullptr;
   bool selected_ = false;
 };
+
+BEGIN_METADATA(MahoSidebarLibraryRailItemButton)
+END_METADATA
 
 BEGIN_METADATA(MahoSidebarLibraryRailView)
 END_METADATA
@@ -249,6 +270,11 @@ MahoSidebarLibraryRailView::MahoSidebarLibraryRailView() {
   SetPreferredSize(gfx::Size(kRailWidthDp, 0));
   SetBackground(views::CreateSolidBackground(ui::kColorSysSurface));
 
+  auto* traffic_light_spacer = AddChildView(std::make_unique<views::View>());
+  traffic_light_spacer->SetPreferredSize(gfx::Size(
+      sidebar_layout::kTrafficLightAlignmentWidthDp,
+      sidebar_layout::kTopBarTrafficLightAlignmentHeightDp));
+
   item_container_ = AddChildView(std::make_unique<views::View>());
   auto* item_layout = item_container_->SetLayoutManager(
       std::make_unique<views::BoxLayout>(
@@ -258,13 +284,13 @@ MahoSidebarLibraryRailView::MahoSidebarLibraryRailView() {
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
   for (const auto& spec : kRailCategories) {
+    const bool enabled = true;
     auto button = std::make_unique<MahoSidebarLibraryRailItemButton>(
-        spec.category, std::u16string(spec.title), *spec.icon, true,
+        spec.category, std::u16string(spec.title),
+        std::u16string(spec.visible_label), *spec.icon, enabled,
         base::BindRepeating(&MahoSidebarLibraryRailView::HandleCategoryPressed,
                             weak_factory_.GetWeakPtr(), spec.category));
-    auto* button_ptr = static_cast<MahoSidebarLibraryRailItemButton*>(
-        item_container_->AddChildView(
-            std::unique_ptr<views::View>(button.release())));
+    auto* button_ptr = item_container_->AddChildView(std::move(button));
     category_buttons_.push_back(button_ptr);
   }
 
@@ -288,6 +314,7 @@ MahoSidebarLibraryRailView::MahoSidebarLibraryRailView() {
       gfx::Size(kRailBackButtonSizeDp, kRailBackButtonSizeDp));
   back_button->SetTooltipText(u"Back");
   back_button->SetAccessibleName(u"Back");
+  back_button->SetPaintToLayer();
   views::InstallCircleHighlightPathGenerator(back_button.get());
   StyleIconButton(back_button.get());
   back_button_ = back_button_host->AddChildView(std::move(back_button));
@@ -400,7 +427,6 @@ void MahoSidebarLibraryRailView::UpdateBackButtonAppearance() {
           vector_icons::kBackArrowIcon,
           enabled ? ui::kColorSysOnSurface : ui::kColorSysOnSurfaceSubtle,
           14));
-  back_button_->SetPaintToLayer();
   back_button_->layer()->SetOpacity(enabled ? 1.0f : kBackButtonDisabledAlpha);
 }
 

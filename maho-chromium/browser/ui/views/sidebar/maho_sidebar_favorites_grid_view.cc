@@ -395,6 +395,7 @@ views::Label* AddPlaceholderLabel(views::View* parent, std::u16string text) {
   label->SetMultiLine(false);
   label->SetElideBehavior(gfx::ELIDE_TAIL);
   label->SetTextStyle(views::style::STYLE_BODY_4);
+  label->SetSubpixelRenderingEnabled(false);
   return parent->AddChildView(std::move(label));
 }
 
@@ -617,7 +618,6 @@ void MahoSidebarFavoritesGridView::Update(
   }
 
   if (has_reorder) {
-    LOG(ERROR) << "[MAHO_DND] Update: FLIP reorder detected, running AnimateReorder";
     AnimateReorder();
   }
 }
@@ -842,13 +842,7 @@ views::View::DropCallback MahoSidebarFavoritesGridView::GetDropCallback(
                                ? ResolveDropIndex(
                                      event.location(), payload.node_id,
                                      payload.origin == SidebarDragOrigin::kFavorites)
-                               : 0;
-  LOG(ERROR) << "[MAHO_DND] GetDropCallback: has_payload=" << has_payload
-             << " target_index=" << target_index
-             << " favorite_count=" << favorite_count
-             << " origin=" << (has_payload ? static_cast<int>(payload.origin) : -1)
-             << " node_id=" << (has_payload ? payload.node_id : "N/A")
-             << " event_loc=(" << event.location().x() << "," << event.location().y() << ")";
+                                : 0;
   return base::BindOnce(
       [](int target_index,
          size_t favorite_count,
@@ -858,28 +852,18 @@ views::View::DropCallback MahoSidebarFavoritesGridView::GetDropCallback(
         SidebarDragPayload payload;
         if (!ReadMahoDragData(event.data(), payload) ||
             payload.node_kind != SidebarNodeKind::kTab) {
-          LOG(ERROR) << "[MAHO_DND] Drop callback: ReadMahoDragData FAILED or wrong node_kind";
           output_drag_op = ui::mojom::DragOperation::kNone;
           return;
         }
-        LOG(ERROR) << "[MAHO_DND] Drop callback: origin="
-                   << static_cast<int>(payload.origin)
-                   << " tab_id=" << payload.node_id
-                   << " target_index=" << target_index
-                   << " favorite_count=" << favorite_count;
         output_drag_op = ui::mojom::DragOperation::kMove;
 
         if (payload.origin == SidebarDragOrigin::kFavorites) {
-          LOG(ERROR) << "[MAHO_DND] Dispatching reorder_favorite: tab_id="
-                     << payload.node_id << " new_index=" << target_index;
           DispatchShellEventEx("reorder_favorite", {
               ShellEventField("tab_id", payload.node_id),
               ShellEventField("new_index", target_index)});
         } else {
           DispatchShellEvent("favorite_tab", {{"tab_id", payload.node_id}});
           if (target_index < static_cast<int>(favorite_count)) {
-            LOG(ERROR) << "[MAHO_DND] Dispatching reorder_favorite (from non-fav): tab_id="
-                       << payload.node_id << " new_index=" << target_index;
             DispatchShellEventEx("reorder_favorite", {
                 ShellEventField("tab_id", payload.node_id),
                 ShellEventField("new_index", target_index)});
@@ -947,8 +931,10 @@ int MahoSidebarFavoritesGridView::ResolveDropIndex(
     const std::string& source_tab_id,
     bool source_is_favorite) const {
   const int favorite_count = static_cast<int>(GetVisibleFavoriteCount());
-  const int item_count = source_is_favorite ? std::max(0, favorite_count - 1)
-                                            : favorite_count;
+  // Always resolve against the full N-item grid so the index matches
+  // AnimateDragPreview's GetTileBoundsForCount(N) layout.  Using N-1
+  // produced a different grid geometry, mapping the cursor to the wrong slot.
+  const int item_count = favorite_count;
   const int target_index = TileIndexForPoint(point, item_count);
 
   if (!source_is_favorite) {

@@ -14,6 +14,7 @@ namespace maho {
 namespace {
 
 constexpr float kTopBarDarkEnabledMinimumAlpha = 0.92f;
+constexpr CGFloat kTopBarSymbolVerticalOffsetPx = 1.0;
 constexpr NSImageSymbolScale kTopBarSymbolScale = NSImageSymbolScaleMedium;
 
 NSColor* CreateTopBarSymbolTint(ui::ColorId color_id, float alpha) {
@@ -56,6 +57,23 @@ NSColor* CreateTopBarSymbolTint(ui::ColorId color_id, float alpha) {
                 }];
 }
 
+NSImage* OffsetTopBarSymbolImage(NSImage* image) {
+  if (!image) {
+    return nil;
+  }
+
+  return [NSImage
+      imageWithSize:image.size
+            flipped:NO
+     drawingHandler:^BOOL(NSRect dst_rect) {
+       [image drawInRect:NSOffsetRect(dst_rect, 0, kTopBarSymbolVerticalOffsetPx)
+                fromRect:NSZeroRect
+               operation:NSCompositingOperationSourceOver
+                fraction:1.0];
+       return YES;
+     }];
+}
+
 }  // namespace
 
 ui::ImageModel CreateSidebarTopBarMacSFSymbol(
@@ -94,6 +112,8 @@ ui::ImageModel CreateSidebarTopBarMacSFSymbol(
       image = configured_image;
     }
   }
+
+  image = OffsetTopBarSymbolImage(image);
 
   return ui::ImageModel::FromImageSkia(gfx::ImageSkiaFromNSImage(image));
 }

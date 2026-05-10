@@ -31,9 +31,14 @@ const gfx::VectorIcon& GetMahoSidebarArchiveboxIcon();
 class MahoSidebarLibraryRailView : public views::View {
   METADATA_HEADER(MahoSidebarLibraryRailView, views::View)
 
-  public:
+ public:
   enum class Category {
     kArchivedTabs,
+    kDownloads,
+    kMedia,
+    kSpaces,
+    kEasels,
+    kBoosts,
   };
 
   using CategorySelectedCallback = base::RepeatingCallback<void(Category)>;

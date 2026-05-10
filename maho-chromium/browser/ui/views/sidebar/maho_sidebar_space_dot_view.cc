@@ -43,6 +43,7 @@ MahoSidebarSpaceDotView::MahoSidebarSpaceDotView() {
       kIndicatorSize, kIndicatorSize));
   icon_label_->SetPaintToLayer();
   icon_label_->layer()->SetFillsBoundsOpaquely(false);
+  icon_label_->SetSubpixelRenderingEnabled(false);
   icon_label_->layer()->SetOpacity(0.0f);
 
   constexpr int kBadgeSize = 4;

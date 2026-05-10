@@ -71,27 +71,24 @@ MahoSidebarView* FindSidebarViewAncestor(views::View* view) {
 
 constexpr int kUpdatePillCornerRadius = 11;
 constexpr int kUpdateIndicatorSize = 5;
-constexpr int kFooterRowHeight = 27;
+constexpr int kFooterRowHeight = 24;
 constexpr int kFooterControlSize = 22;
 constexpr int kFooterControlCornerRadius = 12;
 constexpr int kFooterButtonIconSize = 10;
 constexpr int kFooterRowSpacing = 0;
 constexpr int kDotSpacing = 4;
-constexpr int kSpaceTintAlpha = 12;
 constexpr int kFadeWidth = 8;
 constexpr int kDotTrackHeight = 9;
-constexpr int kDotTrackCornerRadius = 6;
 
 constexpr SkColor kFooterButtonIconColor = SkColorSetRGB(0xB4, 0xBC, 0xC8);
-constexpr SkColor kFooterTrackBaseColor = SkColorSetRGB(0x1C, 0x21, 0x28);
 constexpr SkColor kFooterSeparatorColor =
-    SkColorSetARGB(0x1A, 0xFF, 0xFF, 0xFF);
+    SkColorSetARGB(0x12, 0xFF, 0xFF, 0xFF);
 constexpr float kFooterButtonEnabledOpacity = 0.58f;
 constexpr float kFooterButtonDisabledOpacity = 0.28f;
 
 const gfx::Insets kFooterInsets = gfx::Insets::TLBR(0, 0, 0, 0);
 const gfx::Insets kUpdatePillInsets = gfx::Insets::TLBR(3, 10, 3, 10);
-const gfx::Insets kFooterRowInsets = gfx::Insets::TLBR(4, 8, 2, 8);
+const gfx::Insets kFooterRowInsets = gfx::Insets::TLBR(1, 8, 1, 8);
 const gfx::Insets kClusterInsets = gfx::Insets::TLBR(0, 8, 0, 8);
 
 bool ParseHexColor(const std::string& color, SkColor* out) {
@@ -110,15 +107,6 @@ bool ParseHexColor(const std::string& color, SkColor* out) {
 
   *out = SkColorSetRGB(red, green, blue);
   return true;
-}
-
-SkColor BlendTint(SkColor color, SkColor surface) {
-  const int tint = kSpaceTintAlpha;
-  const int base_alpha = 255 - tint;
-  return SkColorSetRGB(
-      (SkColorGetR(color) * tint + SkColorGetR(surface) * base_alpha) / 255,
-      (SkColorGetG(color) * tint + SkColorGetG(surface) * base_alpha) / 255,
-      (SkColorGetB(color) * tint + SkColorGetB(surface) * base_alpha) / 255);
 }
 
 views::MdTextButton* CreateRoundActionButton(
@@ -292,7 +280,7 @@ MahoSidebarFooterView::MahoSidebarFooterView(Browser* browser)
       footer_region_,
       base::BindRepeating(&MahoSidebarFooterView::OnArchivePressed,
                           weak_factory_.GetWeakPtr()),
-      GetMahoSidebarArchiveboxIcon(), u"Toggle archive");
+      GetMahoSidebarArchiveboxIcon(), u"Library");
 
   spaces_cluster_ = footer_region_->AddChildView(std::make_unique<views::View>());
   auto* cluster_layout =
@@ -427,7 +415,10 @@ void MahoSidebarFooterView::OnArchivePressed(const ui::Event& event) {
   (void)event;
   auto* sidebar_view = FindSidebarViewAncestor(this);
   if (sidebar_view) {
-    sidebar_view->ToggleArchiveMode();
+    // Footer archive button now opens Library mode (defaulting to
+    // Archived Tabs). Toggling back to tabs still works via library
+    // back button.
+    sidebar_view->OpenLibrary();
   }
 }
 
@@ -555,12 +546,6 @@ void MahoSidebarFooterView::RebuildDots(
 }
 
 void MahoSidebarFooterView::UpdateFooterChromeAppearance() {
-  SkColor tint = kFooterTrackBaseColor;
-  SkColor parsed = tint;
-  if (!active_space_color_.empty() && ParseHexColor(active_space_color_, &parsed)) {
-    tint = BlendTint(parsed, kFooterTrackBaseColor);
-  }
-
   SetBackground(nullptr);
   if (footer_separator_) {
     footer_separator_->SetBackground(
@@ -570,8 +555,7 @@ void MahoSidebarFooterView::UpdateFooterChromeAppearance() {
     footer_region_->SetBackground(nullptr);
     footer_region_->SetBorder(nullptr);
   }
-  spaces_cluster_->SetBackground(views::CreateRoundedRectBackground(
-      tint, kDotTrackCornerRadius));
+  spaces_cluster_->SetBackground(nullptr);
   spaces_cluster_->SetBorder(nullptr);
 
   auto style_button = [](views::MdTextButton* button) {
@@ -583,6 +567,7 @@ void MahoSidebarFooterView::UpdateFooterChromeAppearance() {
     button->SetBorder(views::CreateEmptyBorder(gfx::Insets()));
     button->SetPaintToLayer();
     button->layer()->SetFillsBoundsOpaquely(false);
+    button->SetTextSubpixelRenderingEnabled(false);
     button->layer()->SetOpacity(button->GetEnabled()
                                     ? kFooterButtonEnabledOpacity
                                     : kFooterButtonDisabledOpacity);
@@ -807,12 +792,6 @@ void MahoSidebarFooterView::UpdateFadeMask() {
 
   fade_mask_->SetBoundsRect(scroll_view_->bounds());
 
-  SkColor tint = kFooterTrackBaseColor;
-  SkColor parsed = tint;
-  if (!active_space_color_.empty() && ParseHexColor(active_space_color_, &parsed)) {
-    tint = BlendTint(parsed, kFooterTrackBaseColor);
-  }
-
   const int scroll_x = scroll_view_->GetVisibleRect().x();
   const int max_scroll = scroll_view_->contents()->width() -
                          scroll_view_->GetVisibleRect().width();
@@ -820,7 +799,7 @@ void MahoSidebarFooterView::UpdateFadeMask() {
   const bool show_right = max_scroll > 0 && scroll_x < max_scroll - 2;
 
   static_cast<MahoSidebarFadeMaskView*>(fade_mask_.get())
-      ->SetFadeState(show_left, show_right, tint);
+      ->SetFadeState(show_left, show_right, SK_ColorTRANSPARENT);
 }
 
 void MahoSidebarFooterView::ScrollToActiveSpace() {

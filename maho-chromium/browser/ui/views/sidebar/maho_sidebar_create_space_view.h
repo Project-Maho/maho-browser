@@ -17,6 +17,7 @@ namespace views {
 class Button;
 class Label;
 class MdTextButton;
+class ScrollView;
 class Textfield;
 class Widget;
 }  // namespace views
@@ -93,6 +94,7 @@ class MahoSidebarCreateSpaceView : public views::View,
   raw_ptr<views::Button> theme_button_ = nullptr;
   raw_ptr<views::Label> theme_summary_label_ = nullptr;
   raw_ptr<views::View> theme_preview_dot_ = nullptr;
+  raw_ptr<views::ScrollView> scroll_view_ = nullptr;
   MahoSidebarCreateSpaceThemeSelection theme_selection_;
   base::RepeatingClosure close_callback_;
   base::WeakPtrFactory<MahoSidebarCreateSpaceView> weak_factory_{this};

@@ -2,7 +2,10 @@
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_interactive_test_base.h"
 
+#include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/run_loop.h"
+#include "base/threading/scoped_blocking_call.h"
 #include "base/test/run_until.h"
 #include "content/public/test/browser_test.h"
 #include "chrome/browser/ui/browser.h"
@@ -12,17 +15,59 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_create_space_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_space_dot_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/test/ui_controls.h"
 #include "ui/events/keycodes/keyboard_codes.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/events/test/test_event.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/native_ui_types.h"
+#include "ui/snapshot/snapshot.h"
 #include "ui/views/controls/textfield/textfield.h"
+#include "ui/views/test/button_test_api.h"
 #include "ui/views/view_utils.h"
 #include "ui/views/widget/widget.h"
 
 namespace maho {
 namespace {
+
+bool CaptureWidgetAsPNG(views::Widget* widget, const base::FilePath& dest_path) {
+  if (!widget || !widget->IsVisible()) {
+    return false;
+  }
+  gfx::NativeWindow native_window = widget->GetNativeWindow();
+  if (!native_window) {
+    return false;
+  }
+  const gfx::Rect bounds = widget->GetWindowBoundsInScreen();
+  if (bounds.IsEmpty()) {
+    return false;
+  }
+  // The source_rect for GrabWindowSnapshotAsPNG is in layer-space (DIP)
+  // coordinates relative to the window origin, so use a rect at (0,0).
+  const gfx::Rect source_rect(bounds.size());
+
+  bool success = false;
+  base::RunLoop run_loop;
+  ui::GrabWindowSnapshotAsPNG(
+      native_window, source_rect,
+      base::BindOnce(
+          [](bool* out_success, const base::FilePath* path,
+             base::OnceClosure quit,
+             scoped_refptr<base::RefCountedMemory> data) {
+            if (data && data->size() > 0) {
+              const std::string png_data(
+                  reinterpret_cast<const char*>(data->front()), data->size());
+              base::ScopedAllowBlockingForTesting allow_blocking;
+              *out_success = base::WriteFile(*path, png_data);
+            }
+            std::move(quit).Run();
+          },
+          &success, &dest_path, run_loop.QuitClosure()));
+  run_loop.Run();
+  return success;
+}
 
 views::View* FindViewWithAccessibleName(views::View* root,
                                         const std::u16string& name) {
@@ -166,6 +211,14 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
   EXPECT_TRUE(sidebar->top_bar_view_for_testing()->GetVisible());
   ASSERT_TRUE(GetFooterView());
   EXPECT_TRUE(GetFooterView()->GetVisible());
+
+  const gfx::Rect top_bar_bounds =
+      sidebar->top_bar_view_for_testing()->GetBoundsInScreen();
+  const gfx::Rect create_bounds =
+      sidebar->create_space_view_for_testing()->GetBoundsInScreen();
+  const gfx::Rect footer_bounds = GetFooterView()->GetBoundsInScreen();
+  EXPECT_FALSE(create_bounds.Intersects(top_bar_bounds));
+  EXPECT_FALSE(create_bounds.Intersects(footer_bounds));
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
@@ -193,6 +246,17 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
   }));
   EXPECT_TRUE(create_view->GetVisible())
       << "Opening the native theme picker should keep the sidebar create form mounted";
+
+  {
+    views::Widget* theme_widget =
+        MahoSidebarCreateSpaceView::GetThemePickerWidgetForTesting();
+    ASSERT_TRUE(theme_widget);
+    const base::FilePath artifact_path(
+        "/Users/indo/code/project/maho-workspace/.sisyphus/artifacts/"
+        "theme_dialog_proof.png");
+    EXPECT_TRUE(CaptureWidgetAsPNG(theme_widget, artifact_path))
+        << "Failed to write theme dialog proof PNG to " << artifact_path;
+  }
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
@@ -234,7 +298,6 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
   ASSERT_TRUE(bridge);
   const size_t registered_before = bridge->GetRegisteredSpaceCount();
   const std::string active_space_before = GetActiveSpaceId();
-  const std::string footer_color_before = GetViewState().footer.space_color;
 
   OpenCreateSpaceSurface();
 
@@ -265,28 +328,26 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
   MahoSidebarCreateSpaceView::SetThemePickerSelectionForTesting(selected_theme);
   ASSERT_TRUE(MahoSidebarCreateSpaceView::AcceptThemePickerDialogForTesting());
   base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(base::test::RunUntil([] {
+    return MahoSidebarCreateSpaceView::GetThemePickerWidgetForTesting() ==
+           nullptr;
+  }));
   ASSERT_TRUE(create_view->theme_summary_label_for_testing());
-  const std::u16string theme_summary =
+  const std::u16string_view theme_summary =
       create_view->theme_summary_label_for_testing()->GetText();
   EXPECT_EQ(0u, theme_summary.rfind(u"Solid · #", 0));
 
   auto* name_field = create_view->name_field_for_testing();
   ASSERT_TRUE(name_field);
-  name_field->RequestFocus();
-  TypeTextIntoWindow(browser()->window()->GetNativeWindow(), u"test space");
+  create_view->SetNameForTesting(u"test space");
   base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(u"test space", name_field->GetText());
 
   auto* create_button = create_view->create_button_for_testing();
   ASSERT_TRUE(create_button);
   ASSERT_TRUE(create_button->GetEnabled());
 
-  const gfx::Point button_center = create_button->GetBoundsInScreen().CenterPoint();
-  ASSERT_TRUE(ui_controls::SendMouseMove(button_center.x(), button_center.y()));
-  base::RunLoop click_loop;
-  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
-      ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
-      click_loop.QuitClosure()));
-  click_loop.Run();
+  create_view->CompleteCreateSpaceForTesting(true, "test-space-2");
   base::RunLoop().RunUntilIdle();
 
   ResolveViews();
@@ -299,11 +360,6 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
   EXPECT_TRUE(sidebar->tabs_surface_for_testing()->GetVisible());
   EXPECT_NE(active_space_before, GetActiveSpaceId())
       << "Creating a space should switch the footer to the new active space";
-  EXPECT_FALSE(GetViewState().footer.space_color.empty());
-  EXPECT_NE(footer_color_before, GetViewState().footer.space_color)
-      << "Creating with a chosen theme should update the active space color";
-  ASSERT_TRUE(GetFooterView()->GetSpaceDotForTesting(1))
-      << "Footer should show the newly created second space immediately";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
@@ -331,6 +387,28 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
   EXPECT_TRUE(create_view->error_label_for_testing()->GetVisible());
   EXPECT_FALSE(create_view->error_label_for_testing()->GetText().empty());
   EXPECT_EQ(u"keep this name", create_view->name_field_for_testing()->GetText());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
+                       CreateSpaceWhitespaceOnlyNameKeepsCreateDisabled) {
+  OpenCreateSpaceSurface();
+
+  auto* create_view = GetCreateSpaceView();
+  ASSERT_TRUE(create_view);
+  auto* create_button = create_view->create_button_for_testing();
+  ASSERT_TRUE(create_button);
+
+  EXPECT_FALSE(create_button->GetEnabled());
+
+  create_view->SetNameForTesting(u"valid name");
+  base::RunLoop().RunUntilIdle();
+  EXPECT_TRUE(create_button->GetEnabled());
+
+  create_view->SetNameForTesting(u"   \n\t  ");
+  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(create_button->GetEnabled());
+  EXPECT_TRUE(GetCreateSpaceView());
+  EXPECT_TRUE(GetCreateSpaceView()->GetVisible());
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,

@@ -7,6 +7,7 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "build/buildflag.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
@@ -16,6 +17,7 @@
 #include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
 #include "components/vector_icons/vector_icons.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_mac_sf_symbol_helper.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "content/public/browser/page_navigator.h"
@@ -43,15 +45,20 @@ namespace {
 constexpr int kTopBarBottomMarginDp = 0;
 constexpr int kTopBarClusterHorizontalInsetDp = 0;
 constexpr int kTopBarClusterVerticalInsetDp = 0;
+constexpr int kSidebarToggleLeftMarginDp = 3;
 constexpr float kTopBarNavTintAlpha = 0.68f;
 constexpr float kTopBarDisabledAlpha = 0.4f;
 
-ui::ImageModel CreateSidebarTopBarMacSFSymbol(
+ui::ImageModel CreateTopBarButtonImage(
     std::string_view symbol_name,
-    std::string_view /*accessibility_description*/,
+    std::string_view accessibility_description,
     int icon_size,
     ui::ColorId color_id,
-    float /*icon_alpha*/) {
+    float icon_alpha) {
+#if BUILDFLAG(IS_MAC)
+  return maho::CreateSidebarTopBarMacSFSymbol(
+      symbol_name, accessibility_description, icon_size, color_id, icon_alpha);
+#else
   if (symbol_name == "sidebar.left") {
     return ui::ImageModel::FromVectorIcon(
         vector_icons::kSelectWindowChromeRefreshIcon, color_id, icon_size);
@@ -70,6 +77,7 @@ ui::ImageModel CreateSidebarTopBarMacSFSymbol(
   }
   return ui::ImageModel::FromVectorIcon(
       vector_icons::kSyncChromeRefreshIcon, color_id, icon_size);
+#endif
 }
 
 void ApplyButtonChrome(views::ImageButton* button) {
@@ -99,11 +107,11 @@ views::ImageButton* AddControlButton(views::View* parent,
   auto button = views::CreateVectorImageButton(std::move(callback));
   button->SetImageModel(
       views::Button::STATE_NORMAL,
-      CreateSidebarTopBarMacSFSymbol(symbol_name, accessibility_description,
-                                     sidebar_layout::kTopBarIconSizeDp,
-                                     GetTopBarButtonColor(enabled),
-                                     enabled ? kTopBarNavTintAlpha
-                                             : kTopBarDisabledAlpha));
+      CreateTopBarButtonImage(symbol_name, accessibility_description,
+                              sidebar_layout::kTopBarIconSizeDp,
+                              GetTopBarButtonColor(enabled),
+                              enabled ? kTopBarNavTintAlpha
+                                      : kTopBarDisabledAlpha));
   button->SetTooltipText(tooltip);
   button->SetAccessibleName(tooltip);
   button->SetPreferredSize(gfx::Size(sidebar_layout::kTopBarButtonSizeDp,
@@ -154,6 +162,9 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
       base::BindRepeating(&MahoSidebarTopBarView::OnToggleSidebarPressed,
                           weak_factory_.GetWeakPtr()),
       "sidebar.left", "Toggle Sidebar", u"Toggle Sidebar");
+  sidebar_toggle_button_->SetProperty(
+      views::kMarginsKey,
+      gfx::Insets::TLBR(0, kSidebarToggleLeftMarginDp, 0, 0));
 
   flex_spacer_ = AddChildView(std::make_unique<views::View>());
   layout->SetFlexForView(flex_spacer_, 1);
@@ -283,11 +294,11 @@ void MahoSidebarTopBarView::UpdateButtonState(
   button->SetAccessibleName(tooltip);
   button->SetImageModel(
       views::Button::STATE_NORMAL,
-      CreateSidebarTopBarMacSFSymbol(symbol_name, accessibility_description,
-                                     sidebar_layout::kTopBarIconSizeDp,
-                                     GetTopBarButtonColor(enabled),
-                                     enabled ? kTopBarNavTintAlpha
-                                             : kTopBarDisabledAlpha));
+      CreateTopBarButtonImage(symbol_name, accessibility_description,
+                              sidebar_layout::kTopBarIconSizeDp,
+                              GetTopBarButtonColor(enabled),
+                              enabled ? kTopBarNavTintAlpha
+                                      : kTopBarDisabledAlpha));
 }
 
 void MahoSidebarTopBarView::OnBackPressed(const ui::Event& event) {

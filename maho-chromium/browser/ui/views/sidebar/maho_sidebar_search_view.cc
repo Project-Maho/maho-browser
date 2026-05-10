@@ -432,8 +432,16 @@ views::Widget* MahoSidebarSearchView::ShowUtilityPanel() {
 
   MahoLocationBarUtilityPanelModel model =
       BuildMahoLocationBarUtilityPanelModelForBrowser(browser_);
-  SetUtilityPanelWidget(
-      MahoLocationBarUtilityPanelView::Show(utility_icon_, std::move(model)));
+  views::Widget* widget =
+      MahoLocationBarUtilityPanelView::CreateWidget(utility_icon_, std::move(model));
+  if (widget) {
+    widget->Show();
+    if (!widget->IsClosed()) {
+      widget->widget_delegate()->GetContentsView()->RequestFocus();
+    }
+  }
+  utility_icon_->SetPanelWidget(widget);
+  SetUtilityPanelWidget(widget);
   return utility_panel_widget_;
 }
 
