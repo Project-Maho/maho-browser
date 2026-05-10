@@ -5,12 +5,6 @@
 
 namespace maho {
 
-inline constexpr char kMahoSidebarHost[] = "maho-sidebar";
-inline constexpr char kMahoSidebarURL[] = "chrome://maho-sidebar/";
-
-inline constexpr char kMahoSidebarLegacyHost[] = "maho-sidebar-legacy";
-inline constexpr char kMahoSidebarLegacyURL[] = "chrome://maho-sidebar-legacy/";
-
 inline constexpr char kMahoCommandHost[] = "maho-command";
 inline constexpr char kMahoCommandURL[] = "chrome://maho-command/";
 
