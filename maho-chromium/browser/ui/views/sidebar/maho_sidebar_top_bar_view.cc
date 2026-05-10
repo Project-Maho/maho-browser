@@ -2,6 +2,7 @@
 
 #include "maho_sidebar_top_bar_view.h"
 
+#include <algorithm>
 #include <memory>
 #include <string_view>
 
@@ -45,7 +46,7 @@ namespace {
 constexpr int kTopBarBottomMarginDp = 0;
 constexpr int kTopBarClusterHorizontalInsetDp = 0;
 constexpr int kTopBarClusterVerticalInsetDp = 0;
-constexpr int kSidebarToggleLeftMarginDp = 3;
+constexpr int kSidebarToggleLeftMarginDp = 6;
 constexpr float kTopBarNavTintAlpha = 0.68f;
 constexpr float kTopBarDisabledAlpha = 0.4f;
 
@@ -92,6 +93,19 @@ void ApplyButtonChrome(views::ImageButton* button) {
 void StyleClusterView(views::View* cluster) {
   cluster->SetBackground(nullptr);
   cluster->SetBorder(nullptr);
+}
+
+gfx::Rect GetButtonIconHitRect(const views::ImageButton* button) {
+  gfx::Rect icon_hit_rect(button->GetLocalBounds());
+  const int icon_hit_width =
+      std::min(icon_hit_rect.width(), sidebar_layout::kTopBarIconSizeDp);
+  const int icon_hit_height =
+      std::min(icon_hit_rect.height(), sidebar_layout::kTopBarIconSizeDp);
+  const int icon_hit_x = icon_hit_rect.x() +
+                         (icon_hit_rect.width() - icon_hit_width) / 2;
+  const int icon_hit_y = icon_hit_rect.y() +
+                         (icon_hit_rect.height() - icon_hit_height) / 2;
+  return gfx::Rect(icon_hit_x, icon_hit_y, icon_hit_width, icon_hit_height);
 }
 
 ui::ColorId GetTopBarButtonColor(bool enabled) {
@@ -228,7 +242,7 @@ bool MahoSidebarTopBarView::IsPositionInWindowCaption(
     if (button && button->GetVisible()) {
       gfx::Point point_in_button = point;
       views::View::ConvertPointToTarget(this, button, &point_in_button);
-      if (button->HitTestPoint(point_in_button)) {
+      if (GetButtonIconHitRect(button).Contains(point_in_button)) {
         return false;
       }
     }

@@ -14,7 +14,7 @@ namespace maho {
 namespace {
 
 constexpr float kTopBarDarkEnabledMinimumAlpha = 0.92f;
-constexpr CGFloat kTopBarSymbolVerticalOffsetPx = 1.0;
+constexpr CGFloat kTopBarSymbolVerticalOffsetPx = -5.0;
 constexpr NSImageSymbolScale kTopBarSymbolScale = NSImageSymbolScaleMedium;
 
 NSColor* CreateTopBarSymbolTint(ui::ColorId color_id, float alpha) {
