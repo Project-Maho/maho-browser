@@ -14,7 +14,7 @@ from typing import Iterator
 
 _SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 _WAIT_INTERVAL_SECONDS = 0.25
-_DEFAULT_TIMEOUT_SECONDS = 300.0
+_DEFAULT_TIMEOUT_SECONDS = 3000.0
 
 
 def discover_workspace_root() -> str:

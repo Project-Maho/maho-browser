@@ -57,6 +57,30 @@ maho-workspace/
 - No domain types in `maho-core`; use `maho-types`
 - No direct FFI/business-logic mixing in `maho-ffi`
 - No direct Keychain/Security.framework use in macOS shell
+- **NEVER delete `.build.lock`** — see BUILD LOCK below
+
+## BUILD LOCK — `.build.lock`
+
+The workspace root `.build.lock` serializes all build/test entrypoints (`build_maho.py`, `bun run test`, `bun run typecheck`) via `fcntl.flock`. **The lock lives on the file descriptor, not the file path.**
+
+**NEVER `rm .build.lock`:**
+- The holding process still locks the deleted inode (fd stays open)
+- A new process creates a fresh file (new inode) and locks it immediately
+- Both builds run concurrently → corrupted output, partial writes, linker failures
+
+**If a build times out waiting for the lock:**
+```bash
+# 1. Find the process holding the lock
+lsof .build.lock
+
+# 2. If a build IS running → wait for it, or kill the PROCESS (not the file)
+kill <PID>
+
+# 3. If no process holds the file → the lock was already released; just retry
+python3 maho-chromium/build/scripts/build_maho.py
+```
+
+The lock is **automatically released** when the holding process exits (normal exit, crash, or SIGKILL). There is no scenario where deleting the file is the correct action.
 
 ## COMMANDS
 ```bash
