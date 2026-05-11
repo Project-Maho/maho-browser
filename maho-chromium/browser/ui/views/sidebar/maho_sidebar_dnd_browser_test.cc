@@ -758,5 +758,140 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
   }
 }
 
+IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
+                        LiveSameFolderChildReorderFinalState) {
+  auto state = GetState();
+  auto folder_info = FindFolderWithTwoChildTabs(state.tab_list.normal_tree);
+  if (!folder_info) {
+    GTEST_SKIP() << "Need a folder with at least 2 child tabs";
+  }
+
+  int tab2_index = -1;
+  for (const auto& n : state.tab_list.normal_tree) {
+    if (n.kind != SidebarNodeKind::kFolder ||
+        n.folder_id != folder_info->folder_id) {
+      continue;
+    }
+    for (const auto& child : n.children) {
+      if (child.kind == SidebarNodeKind::kTab &&
+          child.tab_id == folder_info->tab2_id) {
+        tab2_index = child.folder_child_index;
+      }
+    }
+    break;
+  }
+  if (tab2_index < 0) {
+    GTEST_SKIP() << "Could not resolve tab2 folder_child_index";
+  }
+
+  views::View* target_lane =
+      FindLiveTabInsertionLaneBeforeTab(folder_info->tab1_id);
+  if (!target_lane) {
+    GTEST_SKIP() << "Live insertion lane for child tab "
+                 << folder_info->tab1_id << " not found";
+  }
+
+  observer_.Clear();
+  auto payload = MakeFolderChildTabPayload(
+      folder_info->tab2_id, folder_info->folder_id, tab2_index);
+  PerformSyntheticDrop(target_lane, payload);
+
+  ASSERT_FALSE(observer_.events.empty())
+      << "Same-folder reorder should dispatch a shell event";
+  EXPECT_EQ(observer_.events[0].kind, "reorder_tab_in_folder");
+
+  auto post = GetState();
+  std::vector<std::string> post_order;
+  for (const auto& n : post.tab_list.normal_tree) {
+    if (n.kind != SidebarNodeKind::kFolder ||
+        n.folder_id != folder_info->folder_id) {
+      continue;
+    }
+    for (const auto& child : n.children) {
+      if (child.kind == SidebarNodeKind::kTab) {
+        post_order.push_back(child.tab_id);
+      }
+    }
+    break;
+  }
+
+  ASSERT_GE(post_order.size(), 2u)
+      << "Folder must still have at least 2 child tabs after reorder";
+
+  bool tab1_present = false;
+  bool tab2_present = false;
+  for (const auto& id : post_order) {
+    if (id == folder_info->tab1_id) tab1_present = true;
+    if (id == folder_info->tab2_id) tab2_present = true;
+  }
+  EXPECT_TRUE(tab1_present)
+      << "tab1 must survive same-folder reorder; post_order has "
+      << post_order.size() << " entries";
+  EXPECT_TRUE(tab2_present)
+      << "tab2 must survive same-folder reorder; post_order has "
+      << post_order.size() << " entries";
+
+  size_t tab1_pos = post_order.size();
+  size_t tab2_pos = post_order.size();
+  for (size_t i = 0; i < post_order.size(); ++i) {
+    if (post_order[i] == folder_info->tab1_id) tab1_pos = i;
+    if (post_order[i] == folder_info->tab2_id) tab2_pos = i;
+  }
+  EXPECT_LT(tab2_pos, tab1_pos)
+      << "After dropping tab2 before tab1, tab2 should precede tab1 in the "
+         "final child order";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
+                        LiveSameIndexFavoriteNoOp) {
+  auto state = GetState();
+  if (state.favorites.items.empty()) {
+    GTEST_SKIP() << "Need at least 1 favorite";
+  }
+
+  std::vector<std::string> pre_ids;
+  pre_ids.reserve(state.favorites.items.size());
+  for (const auto& item : state.favorites.items) {
+    pre_ids.push_back(item.tab_id);
+  }
+
+  const std::string target_id = pre_ids[0];
+  observer_.Clear();
+
+  auto payload = MakeFavoritePayload(target_id);
+  ui::OSExchangeData data;
+  WriteMahoDragData(payload, &data);
+  ui::DropTargetEvent event = MakeDropEvent(data, gfx::Point(5, 5));
+
+  favorites_->OnDragUpdated(event);
+  auto callback = favorites_->GetDropCallback(event);
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  if (callback) {
+    std::move(callback).Run(event, output,
+                            std::unique_ptr<ui::LayerTreeOwner>());
+  }
+  favorites_->OnDragExited();
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_EQ(observer_.events.size(), 1u)
+      << "Favorites grid always dispatches reorder_favorite; no same-index "
+         "suppression at the view layer";
+  EXPECT_EQ(observer_.events[0].kind, "reorder_favorite");
+  EXPECT_NE(observer_.events[0].json.find("\"new_index\":0"), std::string::npos)
+      << "Same-index drop must record new_index:0";
+
+  auto post = GetState();
+  std::vector<std::string> post_ids;
+  post_ids.reserve(post.favorites.items.size());
+  for (const auto& item : post.favorites.items) {
+    post_ids.push_back(item.tab_id);
+  }
+
+  ASSERT_EQ(post_ids.size(), pre_ids.size())
+      << "Same-index favorite drop must not add or remove items";
+  EXPECT_EQ(post_ids, pre_ids)
+      << "Same-index reorder_favorite must leave order unchanged";
+}
+
 }  // namespace
 }  // namespace maho

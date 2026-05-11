@@ -312,7 +312,7 @@ TEST_F(SidebarDnDDispatchTest, SameFolderTabSelfDropReturnsNoOp) {
   EXPECT_EQ(row.OnDragUpdated(event),
             static_cast<int>(ui::mojom::DragOperation::kNone));
   EXPECT_EQ(row.drop_zone_for_testing(),
-            SidebarTabRowView::DropZoneForTesting::kNone);
+            SidebarTabRowView::SidebarTabDropZone::kNone);
 
   ui::mojom::DragOperation output = ui::mojom::DragOperation::kMove;
   std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
@@ -563,7 +563,7 @@ TEST_F(SidebarDnDDispatchTest,
   EXPECT_EQ(folder_row.OnDragUpdated(event),
             static_cast<int>(ui::mojom::DragOperation::kMove));
   EXPECT_EQ(folder_row.drop_zone_for_testing(),
-            SidebarFolderRowView::DropZoneForTesting::kInto);
+            SidebarFolderRowView::SidebarFolderDropZone::kInto);
 
   ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
   std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
@@ -591,7 +591,7 @@ TEST_F(SidebarDnDDispatchTest, FolderDropOntoSelfReturnsNoOp) {
   EXPECT_EQ(folder_row.OnDragUpdated(event),
             static_cast<int>(ui::mojom::DragOperation::kNone));
   EXPECT_EQ(folder_row.drop_zone_for_testing(),
-            SidebarFolderRowView::DropZoneForTesting::kNone);
+            SidebarFolderRowView::SidebarFolderDropZone::kNone);
 
   ui::mojom::DragOperation output = ui::mojom::DragOperation::kMove;
   std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
@@ -1118,7 +1118,7 @@ TEST_F(SidebarDnDDispatchTest, FolderOnTabBodyIsNoOp) {
   EXPECT_EQ(row.OnDragUpdated(event),
             static_cast<int>(ui::mojom::DragOperation::kNone));
   EXPECT_EQ(row.drop_zone_for_testing(),
-            SidebarTabRowView::DropZoneForTesting::kNone);
+            SidebarTabRowView::SidebarTabDropZone::kNone);
   EXPECT_FALSE(row.is_drop_indicator_visible_for_testing());
 }
 
@@ -1199,7 +1199,7 @@ TEST_F(SidebarDnDDispatchTest, TabOnFolderBodyDispatchesMoveIntoFolder) {
   EXPECT_EQ(folder_row.OnDragUpdated(event),
             static_cast<int>(ui::mojom::DragOperation::kMove));
   EXPECT_EQ(folder_row.drop_zone_for_testing(),
-            SidebarFolderRowView::DropZoneForTesting::kInto);
+            SidebarFolderRowView::SidebarFolderDropZone::kInto);
 
   auto callback = folder_row.GetDropCallback(event);
   ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
@@ -1260,6 +1260,668 @@ TEST_F(SidebarDnDDispatchTest, LastItemAfterLaneAppendDispatchesReorderFolder) {
   EXPECT_NE(observer_.events.back().json.find("\"id\":\"source-folder\""),
             std::string::npos);
   EXPECT_NE(observer_.events.back().json.find("\"kind\":\"append\""),
+            std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// Wave 0 baseline: state-model contract invariants (pure unit tests, no FFI).
+//
+// These tests protect the structural contracts that the identity/refresh rewrite
+// depends on in later waves.  They run without a real Browser* or maho-core
+// instance and therefore execute fast as pure ViewsTestBase unit tests.
+// ---------------------------------------------------------------------------
+
+// SidebarStateModelContractTest — a separate fixture so the Wave 0 contract
+// tests stay clearly delineated from the DnD dispatch tests above.
+class SidebarStateModelContractTest : public views::ViewsTestBase {};
+
+// --- SidebarTreeNode field-kind invariants -----------------------------------
+
+// A tab node built from scratch must have kind==kTab and must not populate
+// folder-specific fields.
+TEST_F(SidebarStateModelContractTest,
+       TabNodeKindExcludesFolderFields) {
+  SidebarTreeNode node = MakeTabNode("tab-abc", 3);
+  EXPECT_EQ(node.kind, SidebarNodeKind::kTab);
+  EXPECT_EQ(node.tab_id, "tab-abc");
+  EXPECT_EQ(node.tab_strip_index, 3);
+  // Folder fields must be empty / default for a pure tab node.
+  EXPECT_TRUE(node.folder_id.empty())
+      << "Tab node must not carry a folder_id";
+  EXPECT_TRUE(node.folder_name.empty())
+      << "Tab node must not carry a folder_name";
+  EXPECT_FALSE(node.folder_is_pinned)
+      << "Tab node must not be marked folder_is_pinned";
+}
+
+// A folder node built from scratch must have kind==kFolder and must not
+// populate tab-specific identity fields.
+TEST_F(SidebarStateModelContractTest,
+       FolderNodeKindExcludesTabFields) {
+  SidebarTreeNode node = MakeFolderNode("folder-xyz");
+  EXPECT_EQ(node.kind, SidebarNodeKind::kFolder);
+  EXPECT_EQ(node.folder_id, "folder-xyz");
+  // Tab fields must be empty / default for a pure folder node.
+  EXPECT_TRUE(node.tab_id.empty())
+      << "Folder node must not carry a tab_id";
+  EXPECT_EQ(node.tab_strip_index, -1)
+      << "Folder node must default tab_strip_index to -1";
+  EXPECT_FALSE(node.is_pinned)
+      << "Folder node must not be marked is_pinned (use folder_is_pinned)";
+}
+
+// A folder node with children must have those children visible in the
+// children vector, preserving order and kind.
+TEST_F(SidebarStateModelContractTest,
+       FolderNodeChildrenPreserveOrderAndKind) {
+  SidebarTreeNode folder = MakeFolderNode("parent");
+  folder.children.push_back(MakeFolderChildTabNode("child-0", 0, "parent", 0));
+  folder.children.push_back(MakeFolderChildTabNode("child-1", 1, "parent", 1));
+  folder.children.push_back(MakeFolderChildTabNode("child-2", 2, "parent", 2));
+
+  ASSERT_EQ(folder.children.size(), 3u);
+  for (size_t i = 0; i < folder.children.size(); ++i) {
+    EXPECT_EQ(folder.children[i].kind, SidebarNodeKind::kTab);
+    EXPECT_EQ(folder.children[i].parent_folder_id, "parent");
+    EXPECT_EQ(folder.children[i].folder_child_index, static_cast<int>(i));
+  }
+}
+
+// --- MahoSidebarTabListModel section invariants -----------------------------
+
+// An empty MahoSidebarTabListModel must default-construct cleanly: no
+// active_space_id, empty trees, empty flat lists.
+TEST_F(SidebarStateModelContractTest,
+       TabListModelDefaultConstructedIsEmpty) {
+  MahoSidebarTabListModel model;
+  EXPECT_TRUE(model.active_space_id.empty())
+      << "Default model must have no active_space_id";
+  EXPECT_TRUE(model.pinned_tree.empty())
+      << "Default model must have no pinned_tree nodes";
+  EXPECT_TRUE(model.normal_tree.empty())
+      << "Default model must have no normal_tree nodes";
+  EXPECT_TRUE(model.pinned_tabs.empty())
+      << "Default model flat pinned_tabs must be empty";
+  EXPECT_TRUE(model.tabs.empty())
+      << "Default model flat tabs must be empty";
+  EXPECT_EQ(model.active_tab.index, -1)
+      << "Default active_tab.index must be -1";
+}
+
+// active_space_id survives a copy-assign round-trip (used by ScheduleRefreshAll
+// path to hand the captured space_id into the background task).
+TEST_F(SidebarStateModelContractTest,
+       TabListModelActiveSpaceIdRoundTripsViaCopy) {
+  MahoSidebarTabListModel original;
+  original.active_space_id = "space-wave0";
+  original.normal_tree.push_back(MakeTabNode("t1", 0));
+
+  MahoSidebarTabListModel copy = original;
+  EXPECT_EQ(copy.active_space_id, "space-wave0")
+      << "active_space_id must survive MahoSidebarTabListModel copy-assign";
+  ASSERT_EQ(copy.normal_tree.size(), 1u);
+  EXPECT_EQ(copy.normal_tree[0].tab_id, "t1");
+}
+
+// Pinned and normal trees must be independently mutable: clearing one must
+// not affect the other.
+TEST_F(SidebarStateModelContractTest,
+       TabListModelPinnedAndNormalTreesAreIndependent) {
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+
+  SidebarTreeNode pinned = MakeTabNode("pinned-1", 0);
+  pinned.is_pinned = true;
+  model.pinned_tree.push_back(pinned);
+  model.normal_tree.push_back(MakeTabNode("normal-1", 1));
+
+  model.pinned_tree.clear();
+  EXPECT_TRUE(model.pinned_tree.empty())
+      << "Clearing pinned_tree must leave it empty";
+  ASSERT_EQ(model.normal_tree.size(), 1u)
+      << "Clearing pinned_tree must not affect normal_tree";
+  EXPECT_EQ(model.normal_tree[0].tab_id, "normal-1");
+}
+
+// --- MahoSidebarFavoritesModel slot-count cap invariant ---------------------
+
+// The slot count must equal the layout constant after default construction
+// and must survive a move.
+TEST_F(SidebarStateModelContractTest,
+       FavoritesModelSlotCountEqualsLayoutConstant) {
+  MahoSidebarFavoritesModel model;
+  EXPECT_EQ(model.slot_count,
+            sidebar_layout::kMahoSidebarFavoriteSlotCount)
+      << "slot_count must equal kMahoSidebarFavoriteSlotCount at construction";
+  EXPECT_TRUE(model.items.empty())
+      << "Default favorites model must have no items";
+}
+
+// Adding items up to slot_count and beyond: the model itself does not enforce
+// the cap (that is the adapter's responsibility), but the slot_count field
+// must remain stable and readable after the items vector grows.
+TEST_F(SidebarStateModelContractTest,
+       FavoritesModelSlotCountRemainsStableAfterItemsAdded) {
+  MahoSidebarFavoritesModel model;
+  const size_t cap = model.slot_count;
+
+  MahoSidebarFavoriteItemModel item;
+  item.title = u"Test";
+  item.url = GURL("https://example.com");
+  item.tab_id = "fav-t";
+  model.items.push_back(item);
+
+  EXPECT_EQ(model.slot_count, cap)
+      << "slot_count must not change when items are added";
+  EXPECT_EQ(model.items.size(), 1u);
+}
+
+// --- MahoSidebarViewStateModel structural shape ----------------------------
+
+// BuildViewStateModel with a null browser must not crash and must return a
+// model with all five sub-model fields default-initialized.  This documents
+// the defensive null-browser contract that Wave 0 stabilizes.
+TEST_F(SidebarStateModelContractTest,
+       BuildViewStateModelWithNullBrowserReturnsDefaultShape) {
+  MahoSidebarStateAdapter adapter;
+  // Calling with nullptr is the documented null-browser defensive path.
+  // It must not crash, and the returned model must be structurally valid.
+  MahoSidebarViewStateModel model = adapter.BuildViewStateModel(nullptr);
+
+  // top_bar: navigation disabled when no browser.
+  EXPECT_FALSE(model.top_bar.navigation_enabled)
+      << "top_bar.navigation_enabled must be false for null browser";
+  EXPECT_FALSE(model.top_bar.can_go_back);
+  EXPECT_FALSE(model.top_bar.can_go_forward);
+  EXPECT_FALSE(model.top_bar.can_reload);
+  EXPECT_FALSE(model.top_bar.is_loading);
+
+  // search: must have a non-empty idle_text placeholder even with no browser.
+  EXPECT_FALSE(model.search.idle_text.empty())
+      << "search.idle_text must be non-empty for null browser";
+  EXPECT_EQ(model.search.display_mode,
+            MahoSidebarAddressDisplayMode::kSearchPlaceholder)
+      << "search.display_mode must be kSearchPlaceholder for null browser";
+  EXPECT_FALSE(model.search.has_active_tab)
+      << "search.has_active_tab must be false for null browser";
+
+  // favorites: slot_count must be the layout constant.
+  EXPECT_EQ(model.favorites.slot_count,
+            sidebar_layout::kMahoSidebarFavoriteSlotCount)
+      << "favorites.slot_count must equal layout constant";
+
+  // tab_list: active_space_id may be empty (no bridge in unit test context),
+  // but the model must be default-valid (no uninitialized state).
+  EXPECT_EQ(model.tab_list.active_tab.index, -1)
+      << "active_tab.index must be -1 for null browser";
+  EXPECT_TRUE(model.tab_list.pinned_tree.empty())
+      << "pinned_tree must be empty for null browser";
+  EXPECT_TRUE(model.tab_list.normal_tree.empty())
+      << "normal_tree must be empty for null browser";
+
+  // footer: can_create_space must be false without a browser.
+  EXPECT_FALSE(model.footer.can_create_space)
+      << "footer.can_create_space must be false for null browser";
+}
+
+// BuildViewStateModel called twice on the same adapter with null browser
+// must return equal results (deterministic / no hidden mutation).
+TEST_F(SidebarStateModelContractTest,
+       BuildViewStateModelIsIdempotentForNullBrowser) {
+  MahoSidebarStateAdapter adapter;
+  MahoSidebarViewStateModel first  = adapter.BuildViewStateModel(nullptr);
+  MahoSidebarViewStateModel second = adapter.BuildViewStateModel(nullptr);
+
+  EXPECT_EQ(first.top_bar.navigation_enabled,
+            second.top_bar.navigation_enabled);
+  EXPECT_EQ(first.search.idle_text, second.search.idle_text);
+  EXPECT_EQ(first.search.display_mode, second.search.display_mode);
+  EXPECT_EQ(first.favorites.slot_count, second.favorites.slot_count);
+  EXPECT_EQ(first.tab_list.active_tab.index, second.tab_list.active_tab.index);
+  EXPECT_EQ(first.footer.can_create_space, second.footer.can_create_space);
+}
+
+// SetFavoritesModel followed by BuildViewStateModel must propagate the stored
+// favorites into the returned model (the Wave 0 "set-then-build" pipeline).
+TEST_F(SidebarStateModelContractTest,
+       SetFavoritesModelPropagatesIntoViewStateModel) {
+  MahoSidebarStateAdapter adapter;
+
+  MahoSidebarFavoritesModel favs;
+  MahoSidebarFavoriteItemModel item;
+  item.title = u"Wave0 Fav";
+  item.url = GURL("https://wave0.example");
+  item.tab_id = "wave0-fav";
+  favs.items.push_back(item);
+  adapter.SetFavoritesModel(favs);
+
+  MahoSidebarViewStateModel model = adapter.BuildViewStateModel(nullptr);
+  ASSERT_EQ(model.favorites.items.size(), 1u)
+      << "favorites must reflect what was set via SetFavoritesModel";
+  EXPECT_EQ(model.favorites.items[0].tab_id, "wave0-fav");
+  EXPECT_EQ(model.favorites.items[0].url, GURL("https://wave0.example"));
+}
+
+// --- Drag payload serialization round-trip (tab_id stability) ---------------
+
+// The tab_id carried in SidebarDragPayload must survive a write/read
+// round-trip via WriteMahoDragData / ReadMahoDragData.  This is the
+// "stable identity across serialization" baseline that later phases extend.
+TEST_F(SidebarStateModelContractTest,
+       DragPayloadTabIdSurvivesSerializationRoundTrip) {
+  const std::string kTabId = "wave0-stable-tab-id";
+  SidebarDragPayload written = MakeTabPayload(kTabId,
+                                              SidebarDragOrigin::kNormalSection);
+  ui::OSExchangeData data;
+  WriteMahoDragData(written, &data);
+
+  SidebarDragPayload read;
+  ASSERT_TRUE(ReadMahoDragData(data, read))
+      << "ReadMahoDragData must succeed for a validly written payload";
+  EXPECT_EQ(read.node_id, kTabId)
+      << "node_id (tab_id) must survive serialize/deserialize unchanged";
+  EXPECT_EQ(read.node_kind, SidebarNodeKind::kTab);
+  EXPECT_EQ(read.origin, SidebarDragOrigin::kNormalSection);
+}
+
+// Folder payloads must also round-trip without loss of folder_id.
+TEST_F(SidebarStateModelContractTest,
+       DragPayloadFolderIdSurvivesSerializationRoundTrip) {
+  const std::string kFolderId = "wave0-stable-folder-id";
+  SidebarDragPayload written = MakeFolderPayload(kFolderId);
+  ui::OSExchangeData data;
+  WriteMahoDragData(written, &data);
+
+  SidebarDragPayload read;
+  ASSERT_TRUE(ReadMahoDragData(data, read));
+  EXPECT_EQ(read.node_id, kFolderId)
+      << "node_id (folder_id) must survive serialize/deserialize unchanged";
+  EXPECT_EQ(read.node_kind, SidebarNodeKind::kFolder);
+}
+
+// A folder-child tab payload must preserve the source_parent_folder_id
+// through the round-trip (this is the atomic cross-folder context that the
+// identity rewrite must not break).
+TEST_F(SidebarStateModelContractTest,
+       DragPayloadSourceParentFolderIdSurvivesRoundTrip) {
+  SidebarDragPayload written =
+      MakeFolderChildTabPayload("child-tab", "parent-folder-id", 2);
+  ui::OSExchangeData data;
+  WriteMahoDragData(written, &data);
+
+  SidebarDragPayload read;
+  ASSERT_TRUE(ReadMahoDragData(data, read));
+  EXPECT_EQ(read.node_id, "child-tab");
+  EXPECT_EQ(read.source_parent_folder_id, "parent-folder-id")
+      << "source_parent_folder_id must survive round-trip";
+  EXPECT_EQ(read.source_folder_child_index, 2)
+      << "source_folder_child_index must survive round-trip";
+}
+
+// --- TabListView Update idempotency -----------------------------------------
+
+// Calling Update() twice with identical models must leave the view in the
+// same structural state as calling it once (idempotent application contract).
+TEST_F(SidebarStateModelContractTest,
+       TabListViewUpdateIsStructurallyIdempotent) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-wave0";
+  model.normal_tree.push_back(MakeTabNode("tab-a", 0));
+  model.normal_tree.push_back(MakeTabNode("tab-b", 1));
+
+  list.Update(model, /*browser=*/nullptr);
+  auto* rows_after_first = list.tab_rows_for_testing();
+  ASSERT_TRUE(rows_after_first);
+  const size_t count_after_first = rows_after_first->children().size();
+
+  list.Update(model, /*browser=*/nullptr);
+  auto* rows_after_second = list.tab_rows_for_testing();
+  ASSERT_TRUE(rows_after_second);
+  EXPECT_EQ(rows_after_second->children().size(), count_after_first)
+      << "A second Update() with the same model must produce the same "
+         "child count as the first";
+}
+
+// After Update() with a model containing only normal tabs, the pinned section
+// must not be visible (empty-pinned contract referenced by Wave 0 layout
+// stabilization).
+TEST_F(SidebarStateModelContractTest,
+       TabListViewNormalOnlyModelHidesEmptyPinnedSection) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-wave0";
+  model.normal_tree.push_back(MakeTabNode("tab-1", 0));
+  list.Update(model, /*browser=*/nullptr);
+
+  auto* pinned_target =
+      list.FindSectionDropTargetForTesting(MahoSidebarTabSection::kPinned);
+  ASSERT_TRUE(pinned_target)
+      << "Empty pinned section must still exist in the view tree";
+  EXPECT_FALSE(pinned_target->GetVisible())
+      << "Empty pinned section must be hidden when normal_tree has content "
+         "but pinned_tree is empty";
+}
+
+// After Update() with a model that has pinned nodes, the pinned section must
+// be present and visible.
+TEST_F(SidebarStateModelContractTest,
+       TabListViewPinnedNodesModelShowsPinnedSection) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-wave0";
+  SidebarTreeNode pinned = MakeTabNode("pinned-t", 0);
+  pinned.is_pinned = true;
+  model.pinned_tree.push_back(pinned);
+  model.normal_tree.push_back(MakeTabNode("normal-t", 1));
+  list.Update(model, /*browser=*/nullptr);
+
+  auto* pinned_target =
+      list.FindSectionDropTargetForTesting(MahoSidebarTabSection::kPinned);
+  ASSERT_TRUE(pinned_target)
+      << "Pinned section drop target must exist when pinned_tree is non-empty";
+  EXPECT_TRUE(pinned_target->GetVisible())
+      << "Pinned section must be visible when pinned_tree has content";
+}
+
+// --- Stable identity: drag payload no longer serializes tab_strip_index ------
+
+TEST_F(SidebarStateModelContractTest,
+       DragPayloadDoesNotSerializeTabStripIndex) {
+  SidebarDragPayload written;
+  written.node_kind = SidebarNodeKind::kTab;
+  written.node_id = "tab-with-index";
+  written.origin = SidebarDragOrigin::kNormalSection;
+  written.space_id = "space-1";
+  written.tab_strip_index = 42;
+  written.source_parent_folder_id = "";
+  written.source_folder_child_index = -1;
+
+  std::string json = SerializeDragPayload(written);
+  EXPECT_EQ(json.find("tab_strip_index"), std::string::npos)
+      << "Serialized drag payload must not contain tab_strip_index; "
+         "live index must be resolved at drop time from stable ID";
+
+  ui::OSExchangeData data;
+  WriteMahoDragData(written, &data);
+  SidebarDragPayload read;
+  ASSERT_TRUE(ReadMahoDragData(data, read));
+  EXPECT_EQ(read.tab_strip_index, -1)
+      << "Deserialized tab_strip_index must be default (-1) since it is "
+         "no longer serialized";
+  EXPECT_EQ(read.node_id, "tab-with-index");
+}
+
+// --- Stable identity: duplicate-URL correctness ------------------------------
+
+TEST_F(SidebarStateModelContractTest,
+       DuplicateUrlTabsGetDistinctIdentityInTree) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+
+  SidebarTreeNode tab_a;
+  tab_a.kind = SidebarNodeKind::kTab;
+  tab_a.tab_id = "dup-url-tab-a";
+  tab_a.tab_strip_index = 0;
+  tab_a.title = u"Page A";
+  tab_a.host = u"example.com";
+
+  SidebarTreeNode tab_b;
+  tab_b.kind = SidebarNodeKind::kTab;
+  tab_b.tab_id = "dup-url-tab-b";
+  tab_b.tab_strip_index = 1;
+  tab_b.title = u"Page B";
+  tab_b.host = u"example.com";
+
+  model.normal_tree.push_back(tab_a);
+  model.normal_tree.push_back(tab_b);
+  list.Update(model, /*browser=*/nullptr);
+
+  auto* row_a = list.FindTabRowByIdForTesting("dup-url-tab-a");
+  auto* row_b = list.FindTabRowByIdForTesting("dup-url-tab-b");
+  ASSERT_TRUE(row_a) << "Tab A must be findable by its stable tab_id";
+  ASSERT_TRUE(row_b) << "Tab B must be findable by its stable tab_id";
+  EXPECT_NE(row_a, row_b)
+      << "Two tabs with the same URL must produce distinct rows "
+         "identified by tab_id, not URL";
+}
+
+TEST_F(SidebarStateModelContractTest,
+       DuplicateUrlTabsDragPayloadsCarryDistinctIds) {
+  SidebarDragPayload payload_a = MakeTabPayload(
+      "dup-url-tab-a", SidebarDragOrigin::kNormalSection);
+  SidebarDragPayload payload_b = MakeTabPayload(
+      "dup-url-tab-b", SidebarDragOrigin::kNormalSection);
+
+  ui::OSExchangeData data_a;
+  WriteMahoDragData(payload_a, &data_a);
+  ui::OSExchangeData data_b;
+  WriteMahoDragData(payload_b, &data_b);
+
+  SidebarDragPayload read_a, read_b;
+  ASSERT_TRUE(ReadMahoDragData(data_a, read_a));
+  ASSERT_TRUE(ReadMahoDragData(data_b, read_b));
+
+  EXPECT_EQ(read_a.node_id, "dup-url-tab-a");
+  EXPECT_EQ(read_b.node_id, "dup-url-tab-b");
+  EXPECT_NE(read_a.node_id, read_b.node_id)
+      << "Drag payloads for tabs with duplicate URLs must carry distinct "
+         "stable IDs, not be conflated by URL";
+}
+
+// ---------------------------------------------------------------------------
+// Favorites / state-model edge cases
+// ---------------------------------------------------------------------------
+
+// (a) Same-index favorite reorder dispatch contract.
+//
+// Dragging a favorite that resolves to its own current slot still dispatches
+// reorder_favorite.  The grid does not suppress same-index drops; idempotency
+// is the backend's responsibility.  This test verifies the payload carries the
+// correct new_index value (0 for the first slot) and the kind is correct.
+TEST_F(SidebarDnDDispatchTest,
+       SameIndexFavoriteReorderStillDispatchesReorderFavorite) {
+  MahoSidebarFavoritesGridView favorites(/*browser=*/nullptr);
+  MahoSidebarFavoritesModel model;
+
+  MahoSidebarFavoriteItemModel first;
+  first.tab_id = "fav-a";
+  first.url = GURL("https://alpha.example");
+  first.title = u"Alpha";
+  model.items.push_back(first);
+
+  MahoSidebarFavoriteItemModel second;
+  second.tab_id = "fav-b";
+  second.url = GURL("https://beta.example");
+  second.title = u"Beta";
+  model.items.push_back(second);
+
+  favorites.SetBoundsRect(gfx::Rect(0, 0, 220, 80));
+  favorites.Update(model);
+
+  // Drag fav-a (currently at index 0) and drop it back on the first slot
+  // (point(5, 5) → top-left of grid → index 0).
+  ui::OSExchangeData data;
+  WriteDropData(MakeTabPayload("fav-a", SidebarDragOrigin::kFavorites), &data);
+  ui::DropTargetEvent event = MakeDropEvent(data, gfx::Point(5, 5));
+
+  EXPECT_EQ(favorites.OnDragUpdated(event),
+            static_cast<int>(ui::mojom::DragOperation::kMove));
+
+  auto callback = favorites.GetDropCallbackForTesting(event);
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+  favorites.OnDragExited();
+
+  ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
+  ASSERT_EQ(observer_.events.size(), 1u)
+      << "Same-index drop must still emit exactly one reorder_favorite event";
+  EXPECT_EQ(observer_.events[0].kind, "reorder_favorite");
+  SCOPED_TRACE(observer_.events[0].json);
+  EXPECT_NE(observer_.events[0].json.find("\"tab_id\":\"fav-a\""),
+            std::string::npos)
+      << "reorder_favorite payload must carry the dragged tab_id";
+  EXPECT_NE(observer_.events[0].json.find("\"new_index\":0"),
+            std::string::npos)
+      << "reorder_favorite new_index must be 0 for a drop on the first slot";
+
+  auto parsed = ParseJson(observer_.events[0].json);
+  ASSERT_TRUE(parsed.has_value());
+  const base::DictValue& dict = parsed->GetDict();
+  ASSERT_TRUE(dict.Find("tab_id") != nullptr);
+  ASSERT_TRUE(dict.Find("new_index") != nullptr);
+}
+
+// (b) SetFavoritesModel replacement / no-leak contract.
+//
+// Calling SetFavoritesModel a second time with a different model must replace
+// the cached model entirely — old items must not appear in the next
+// BuildViewStateModel call, and no new items must be silently appended.
+TEST_F(SidebarStateModelContractTest,
+       SetFavoritesModelReplacementErasesOldItems) {
+  MahoSidebarStateAdapter adapter;
+
+  MahoSidebarFavoritesModel first_model;
+  MahoSidebarFavoriteItemModel item_x;
+  item_x.title = u"X";
+  item_x.url = GURL("https://x.example");
+  item_x.tab_id = "fav-x";
+  first_model.items.push_back(item_x);
+  MahoSidebarFavoriteItemModel item_y;
+  item_y.title = u"Y";
+  item_y.url = GURL("https://y.example");
+  item_y.tab_id = "fav-y";
+  first_model.items.push_back(item_y);
+  adapter.SetFavoritesModel(first_model);
+
+  {
+    MahoSidebarViewStateModel after_first = adapter.BuildViewStateModel(nullptr);
+    ASSERT_EQ(after_first.favorites.items.size(), 2u)
+        << "BuildViewStateModel must reflect the first SetFavoritesModel call";
+    EXPECT_EQ(after_first.favorites.items[0].tab_id, "fav-x");
+    EXPECT_EQ(after_first.favorites.items[1].tab_id, "fav-y");
+  }
+
+  MahoSidebarFavoritesModel second_model;
+  MahoSidebarFavoriteItemModel item_z;
+  item_z.title = u"Z";
+  item_z.url = GURL("https://z.example");
+  item_z.tab_id = "fav-z";
+  second_model.items.push_back(item_z);
+  adapter.SetFavoritesModel(second_model);
+
+  MahoSidebarViewStateModel after_second = adapter.BuildViewStateModel(nullptr);
+  ASSERT_EQ(after_second.favorites.items.size(), 1u)
+      << "After replacing the favorites model, only the new item must appear "
+         "(old items must not leak)";
+  EXPECT_EQ(after_second.favorites.items[0].tab_id, "fav-z")
+      << "The surviving item must be from the replacement model, not the old one";
+
+  for (const auto& item : after_second.favorites.items) {
+    EXPECT_NE(item.tab_id, "fav-x")
+        << "fav-x from the old model must not survive a SetFavoritesModel replacement";
+    EXPECT_NE(item.tab_id, "fav-y")
+        << "fav-y from the old model must not survive a SetFavoritesModel replacement";
+  }
+}
+
+// (b-bis) Replacing with an empty model clears all favorites.
+TEST_F(SidebarStateModelContractTest,
+       SetFavoritesModelWithEmptyModelClearsAllItems) {
+  MahoSidebarStateAdapter adapter;
+
+  MahoSidebarFavoritesModel populated;
+  MahoSidebarFavoriteItemModel item;
+  item.title = u"ToBeCleared";
+  item.url = GURL("https://clear.example");
+  item.tab_id = "fav-clear";
+  populated.items.push_back(item);
+  adapter.SetFavoritesModel(populated);
+
+  ASSERT_EQ(adapter.BuildViewStateModel(nullptr).favorites.items.size(), 1u)
+      << "Precondition: one item must be present before clearing";
+
+  adapter.SetFavoritesModel(MahoSidebarFavoritesModel{});
+
+  MahoSidebarViewStateModel cleared = adapter.BuildViewStateModel(nullptr);
+  EXPECT_TRUE(cleared.favorites.items.empty())
+      << "Setting an empty favorites model must clear all previously set items";
+  EXPECT_EQ(cleared.favorites.slot_count,
+            sidebar_layout::kMahoSidebarFavoriteSlotCount)
+      << "slot_count must remain equal to the layout constant after clearing";
+}
+
+// (c) Unfavorite dispatch when a favorite drag completes outside the grid.
+//
+// NOTE ON BLOCKER: The MahoSidebarFavoritesGridView::OnTileDragDone path
+// dispatches "unfavorite_tab" only when
+//   !GetBoundsInScreen().Contains(display::Screen::Get()->GetCursorScreenPoint())
+//   && !drag_drop_accepted_
+// Both conditions depend on the real screen cursor position and the view's
+// on-screen bounds, which are not reliably controllable in a ViewsTestBase
+// unit-test harness.  Injecting a synthetic cursor position or calling
+// SetBoundsInScreen is possible only with a full interactive-test environment
+// (see maho_sidebar_edge_cases_interactive_test.cc for the live version).
+//
+// The reliably testable path for unfavorite dispatch is the SectionDropTarget
+// callback: when a kFavorites-origin tab drag is dropped on the normal section
+// target, "unfavorite_tab" is dispatched unconditionally before the section
+// logic runs.  This path exercises the same DispatchShellEvent("unfavorite_tab")
+// contract and is stable under all test configurations.
+TEST_F(SidebarDnDDispatchTest,
+       FavoriteDragDropOnNormalSectionDispatchesUnfavoriteTab) {
+  ui::OSExchangeData data;
+  WriteDropData(MakeTabPayload("fav-drop", SidebarDragOrigin::kFavorites),
+                &data);
+  ui::DropTargetEvent event = MakeDropEvent(data);
+  auto callback = GetSectionDropCallbackForTesting(
+      MahoSidebarTabSection::kNormal, event);
+
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
+
+  // The normal section callback first emits "unfavorite_tab" for kFavorites
+  // origin, then the section-specific action (unpin_tab / move_tab_to_root /
+  // etc.).  We assert that unfavorite_tab is the first event and carries the
+  // correct tab_id.
+  ASSERT_GE(observer_.events.size(), 1u)
+      << "At least one event must be dispatched for a favorites drag to normal section";
+  EXPECT_EQ(observer_.events[0].kind, "unfavorite_tab")
+      << "unfavorite_tab must be dispatched first when a kFavorites drag "
+         "completes on the normal section target";
+  SCOPED_TRACE(observer_.events[0].json);
+  EXPECT_NE(observer_.events[0].json.find("\"tab_id\":\"fav-drop\""),
+            std::string::npos)
+      << "unfavorite_tab payload must carry the tab_id of the dragged favorite";
+}
+
+// Verify the same unfavorite-first contract when the kFavorites drag drops on
+// the pinned section — the atomic sequence must be
+// [unfavorite_tab, pin_tab] in that order.
+TEST_F(SidebarDnDDispatchTest,
+       FavoriteDragDropOnPinnedSectionDispatchesUnfavoriteBeforePin) {
+  ui::OSExchangeData data;
+  WriteDropData(MakeTabPayload("fav-pin", SidebarDragOrigin::kFavorites), &data);
+  ui::DropTargetEvent event = MakeDropEvent(data);
+  auto callback = GetSectionDropCallbackForTesting(
+      MahoSidebarTabSection::kPinned, event);
+
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
+  ASSERT_EQ(observer_.events.size(), 2u)
+      << "Exactly two events expected: unfavorite_tab then pin_tab";
+  EXPECT_EQ(observer_.events[0].kind, "unfavorite_tab")
+      << "unfavorite_tab must come before pin_tab";
+  EXPECT_NE(observer_.events[0].json.find("\"tab_id\":\"fav-pin\""),
+            std::string::npos);
+  EXPECT_EQ(observer_.events[1].kind, "pin_tab")
+      << "pin_tab must follow unfavorite_tab";
+  EXPECT_NE(observer_.events[1].json.find("\"tab_id\":\"fav-pin\""),
             std::string::npos);
 }
 

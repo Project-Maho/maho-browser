@@ -467,7 +467,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
   target_row->OnDragUpdated(event);
   EXPECT_TRUE(target_row->is_drop_indicator_visible_for_testing());
   EXPECT_NE(target_row->drop_zone_for_testing(),
-            SidebarTabRowView::DropZoneForTesting::kNone);
+            SidebarTabRowView::SidebarTabDropZone::kNone);
 
   target_row->OnDragExited();
 
@@ -476,7 +476,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
   EXPECT_FALSE(observer_.HasEvent("move_tab_to_root"));
   EXPECT_FALSE(target_row->is_drop_indicator_visible_for_testing());
   EXPECT_EQ(target_row->drop_zone_for_testing(),
-            SidebarTabRowView::DropZoneForTesting::kNone);
+            SidebarTabRowView::SidebarTabDropZone::kNone);
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
