@@ -8,6 +8,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_archive_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 #include "ui/gfx/geometry/point.h"
@@ -76,6 +77,21 @@ class MahoSidebarInteractiveTestBase : public InteractiveBrowserTest {
   // Seed helpers (navigates to chrome://maho-test?seed=N).
   void SeedProfile(int seed_number);
   void SeedSidebarPrefs(bool layout_enabled, bool panel_expanded);
+
+  // Archive state helpers — explicit provenance distinction.
+  //
+  // SeedArchivedTabs: test-injection path. Bypasses production FFI.
+  // Use for behavioral tests where archive content is required but production
+  // FFI backing is not the claim under test. Label captures from this path
+  // as "test-injection" in any provenance record.
+  //
+  // ReloadArchivedTabsFromFFI: production FFI path. Calls ReloadArchivedTabs()
+  // on the archive view, which calls maho_core_get_archived_tabs. Use this when
+  // the claim under test is that the production loading path is wired correctly.
+  // On a clean profile this returns empty — that is the expected result and is
+  // a valid empty-archive-state capture artifact.
+  void SeedArchivedTabs(std::vector<ArchivedTabItem> tabs);
+  void ReloadArchivedTabsFromFFI();
 
   void ExpectSidebarLayoutEnabled(bool enabled);
   void ExpectSidebarPanelExpanded(bool expanded);

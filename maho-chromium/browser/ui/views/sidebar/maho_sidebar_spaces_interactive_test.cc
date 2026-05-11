@@ -247,6 +247,37 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
   EXPECT_TRUE(create_view->GetVisible())
       << "Opening the native theme picker should keep the sidebar create form mounted";
 
+  // Assert forbidden create-space content is absent from the dialog.
+  {
+    views::Widget* theme_widget =
+        MahoSidebarCreateSpaceView::GetThemePickerWidgetForTesting();
+    ASSERT_TRUE(theme_widget);
+    views::View* dialog_contents = theme_widget->GetContentsView();
+    ASSERT_TRUE(dialog_contents);
+    EXPECT_FALSE(FindViewWithAccessibleName(dialog_contents, u"Create a Space"))
+        << "Dialog must not contain 'Create a Space' text";
+    EXPECT_FALSE(FindViewWithAccessibleName(dialog_contents, u"Space name"))
+        << "Dialog must not contain 'Space name' placeholder";
+    EXPECT_FALSE(FindViewWithAccessibleName(dialog_contents, u"Profile"))
+        << "Dialog must not contain 'Profile' card";
+    EXPECT_FALSE(FindViewWithAccessibleName(dialog_contents, u"Choose a Theme"))
+        << "Dialog must not contain 'Choose a Theme' card";
+    EXPECT_FALSE(FindViewWithAccessibleName(dialog_contents, u"Close"))
+        << "Dialog must not contain 'Close' action";
+    EXPECT_FALSE(FindViewWithAccessibleName(dialog_contents, u"Use Theme"))
+        << "Dialog must not contain 'Use Theme' action";
+  }
+
+  // Assert chooser dialog width is 680px (standalone, not 1110px split).
+  {
+    views::Widget* theme_widget =
+        MahoSidebarCreateSpaceView::GetThemePickerWidgetForTesting();
+    ASSERT_TRUE(theme_widget);
+    const gfx::Rect bounds = theme_widget->GetWindowBoundsInScreen();
+    EXPECT_EQ(680, bounds.width())
+        << "Theme chooser dialog should be 680px wide (chooser-only)";
+  }
+
   {
     views::Widget* theme_widget =
         MahoSidebarCreateSpaceView::GetThemePickerWidgetForTesting();
@@ -409,6 +440,245 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
   EXPECT_FALSE(create_button->GetEnabled());
   EXPECT_TRUE(GetCreateSpaceView());
   EXPECT_TRUE(GetCreateSpaceView()->GetVisible());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
+                       ThemeDialogDefaultState) {
+  OpenCreateSpaceSurface();
+  auto* create_view = GetCreateSpaceView();
+  ASSERT_TRUE(create_view);
+  ASSERT_TRUE(create_view->theme_button_for_testing());
+
+  const gfx::Point theme_center =
+      create_view->theme_button_for_testing()
+          ->GetBoundsInScreen()
+          .CenterPoint();
+  ASSERT_TRUE(ui_controls::SendMouseMove(theme_center.x(), theme_center.y()));
+  base::RunLoop click_loop;
+  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
+      ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
+      click_loop.QuitClosure()));
+  click_loop.Run();
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(base::test::RunUntil([] {
+    return MahoSidebarCreateSpaceView::GetThemePickerWidgetForTesting() !=
+           nullptr;
+  }));
+
+  ASSERT_TRUE(create_view->theme_summary_label_for_testing());
+  const std::u16string summary =
+      std::u16string(create_view->theme_summary_label_for_testing()->GetText());
+  EXPECT_NE(std::u16string::npos, summary.find(u"Zen"))
+      << "Default theme mode should be Zen, got: " << summary;
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
+                       ThemeDialogCancelPreservesOuterSelection) {
+  OpenCreateSpaceSurface();
+  auto* create_view = GetCreateSpaceView();
+  ASSERT_TRUE(create_view);
+  ASSERT_TRUE(create_view->theme_summary_label_for_testing());
+
+  const std::u16string summary_before =
+      std::u16string(create_view->theme_summary_label_for_testing()->GetText());
+
+  const gfx::Point theme_center =
+      create_view->theme_button_for_testing()
+          ->GetBoundsInScreen()
+          .CenterPoint();
+  ASSERT_TRUE(ui_controls::SendMouseMove(theme_center.x(), theme_center.y()));
+  base::RunLoop click_loop;
+  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
+      ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
+      click_loop.QuitClosure()));
+  click_loop.Run();
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(base::test::RunUntil([] {
+    return MahoSidebarCreateSpaceView::GetThemePickerWidgetForTesting() !=
+           nullptr;
+  }));
+
+  MahoSidebarCreateSpaceThemeSelection changed_theme;
+  changed_theme.preset_index = 3;
+  changed_theme.brightness = 40;
+  changed_theme.grain = 50;
+  changed_theme.mode = MahoSidebarCreateSpaceThemeMode::kSolid;
+  MahoSidebarCreateSpaceView::SetThemePickerSelectionForTesting(changed_theme);
+
+  views::Widget* theme_widget =
+      MahoSidebarCreateSpaceView::GetThemePickerWidgetForTesting();
+  ASSERT_TRUE(theme_widget);
+  theme_widget->Close();
+  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(base::test::RunUntil([] {
+    return MahoSidebarCreateSpaceView::GetThemePickerWidgetForTesting() ==
+           nullptr;
+  }));
+
+  ASSERT_TRUE(create_view->theme_summary_label_for_testing());
+  EXPECT_EQ(summary_before,
+            create_view->theme_summary_label_for_testing()->GetText())
+      << "Cancelling the theme dialog should not change the outer selection";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
+                       ThemeDialogAcceptUpdatesOuterSelection) {
+  OpenCreateSpaceSurface();
+  auto* create_view = GetCreateSpaceView();
+  ASSERT_TRUE(create_view);
+  ASSERT_TRUE(create_view->theme_summary_label_for_testing());
+
+  const std::u16string summary_before =
+      std::u16string(create_view->theme_summary_label_for_testing()->GetText());
+
+  const gfx::Point theme_center =
+      create_view->theme_button_for_testing()
+          ->GetBoundsInScreen()
+          .CenterPoint();
+  ASSERT_TRUE(ui_controls::SendMouseMove(theme_center.x(), theme_center.y()));
+  base::RunLoop click_loop;
+  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
+      ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
+      click_loop.QuitClosure()));
+  click_loop.Run();
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(base::test::RunUntil([] {
+    return MahoSidebarCreateSpaceView::GetThemePickerWidgetForTesting() !=
+           nullptr;
+  }));
+
+  MahoSidebarCreateSpaceThemeSelection new_theme;
+  new_theme.preset_index = 4;
+  new_theme.brightness = 60;
+  new_theme.grain = 30;
+  new_theme.mode = MahoSidebarCreateSpaceThemeMode::kSolid;
+  MahoSidebarCreateSpaceView::SetThemePickerSelectionForTesting(new_theme);
+  ASSERT_TRUE(MahoSidebarCreateSpaceView::AcceptThemePickerDialogForTesting());
+  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(base::test::RunUntil([] {
+    return MahoSidebarCreateSpaceView::GetThemePickerWidgetForTesting() ==
+           nullptr;
+  }));
+
+  ASSERT_TRUE(create_view->theme_summary_label_for_testing());
+  const std::u16string summary_after =
+      std::u16string(create_view->theme_summary_label_for_testing()->GetText());
+  EXPECT_NE(summary_before, summary_after)
+      << "Accepting the theme dialog should update the outer selection";
+  EXPECT_EQ(0u, summary_after.rfind(u"Solid · #", 0))
+      << "Summary should reflect Solid mode after accept";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
+                       ThemeDialogEnterAccepts) {
+  OpenCreateSpaceSurface();
+  auto* create_view = GetCreateSpaceView();
+  ASSERT_TRUE(create_view);
+  ASSERT_TRUE(create_view->theme_summary_label_for_testing());
+
+  const std::u16string summary_before =
+      std::u16string(create_view->theme_summary_label_for_testing()->GetText());
+
+  const gfx::Point theme_center =
+      create_view->theme_button_for_testing()
+          ->GetBoundsInScreen()
+          .CenterPoint();
+  ASSERT_TRUE(ui_controls::SendMouseMove(theme_center.x(), theme_center.y()));
+  base::RunLoop click_loop;
+  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
+      ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
+      click_loop.QuitClosure()));
+  click_loop.Run();
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(base::test::RunUntil([] {
+    return MahoSidebarCreateSpaceView::GetThemePickerWidgetForTesting() !=
+           nullptr;
+  }));
+
+  MahoSidebarCreateSpaceThemeSelection new_theme;
+  new_theme.preset_index = 5;
+  new_theme.brightness = 70;
+  new_theme.grain = 20;
+  new_theme.mode = MahoSidebarCreateSpaceThemeMode::kSolid;
+  MahoSidebarCreateSpaceView::SetThemePickerSelectionForTesting(new_theme);
+
+  // Press Enter to accept (real keyboard path).
+  base::RunLoop enter_loop;
+  ASSERT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
+      browser()->window()->GetNativeWindow(), ui::VKEY_RETURN, false, false,
+      false, false, enter_loop.QuitClosure()));
+  enter_loop.Run();
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(base::test::RunUntil([] {
+    return MahoSidebarCreateSpaceView::GetThemePickerWidgetForTesting() ==
+           nullptr;
+  }));
+
+  ASSERT_TRUE(create_view->theme_summary_label_for_testing());
+  const std::u16string summary_after =
+      std::u16string(create_view->theme_summary_label_for_testing()->GetText());
+  EXPECT_NE(summary_before, summary_after)
+      << "Enter key should accept the theme selection";
+  EXPECT_EQ(0u, summary_after.rfind(u"Solid · #", 0))
+      << "Summary should reflect Solid mode after Enter accept";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
+                       ThemeDialogEscCancels) {
+  OpenCreateSpaceSurface();
+  auto* create_view = GetCreateSpaceView();
+  ASSERT_TRUE(create_view);
+  ASSERT_TRUE(create_view->theme_summary_label_for_testing());
+
+  const std::u16string summary_before =
+      std::u16string(create_view->theme_summary_label_for_testing()->GetText());
+
+  const gfx::Point theme_center =
+      create_view->theme_button_for_testing()
+          ->GetBoundsInScreen()
+          .CenterPoint();
+  ASSERT_TRUE(ui_controls::SendMouseMove(theme_center.x(), theme_center.y()));
+  base::RunLoop click_loop;
+  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
+      ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
+      click_loop.QuitClosure()));
+  click_loop.Run();
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(base::test::RunUntil([] {
+    return MahoSidebarCreateSpaceView::GetThemePickerWidgetForTesting() !=
+           nullptr;
+  }));
+
+  MahoSidebarCreateSpaceThemeSelection changed_theme;
+  changed_theme.preset_index = 3;
+  changed_theme.brightness = 40;
+  changed_theme.grain = 50;
+  changed_theme.mode = MahoSidebarCreateSpaceThemeMode::kSolid;
+  MahoSidebarCreateSpaceView::SetThemePickerSelectionForTesting(changed_theme);
+
+  // Press Esc to cancel (real keyboard path).
+  base::RunLoop esc_loop;
+  ASSERT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
+      browser()->window()->GetNativeWindow(), ui::VKEY_ESCAPE, false, false,
+      false, false, esc_loop.QuitClosure()));
+  esc_loop.Run();
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(base::test::RunUntil([] {
+    return MahoSidebarCreateSpaceView::GetThemePickerWidgetForTesting() ==
+           nullptr;
+  }));
+
+  ASSERT_TRUE(create_view->theme_summary_label_for_testing());
+  EXPECT_EQ(summary_before,
+            create_view->theme_summary_label_for_testing()->GetText())
+      << "Esc key should cancel and preserve the original selection";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,

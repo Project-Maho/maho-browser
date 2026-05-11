@@ -12,6 +12,7 @@
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test_utils.h"
 #include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_archive_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h"
@@ -267,6 +268,23 @@ void MahoSidebarInteractiveTestBase::ExpectTabCount(int expected) {
 
 void MahoSidebarInteractiveTestBase::ExpectActiveTabIndex(int expected) {
   EXPECT_EQ(expected, browser()->tab_strip_model()->active_index());
+}
+
+void MahoSidebarInteractiveTestBase::SeedArchivedTabs(
+    std::vector<ArchivedTabItem> tabs) {
+  ASSERT_TRUE(sidebar_);
+  auto* archive_view = sidebar_->archive_view_for_testing();
+  ASSERT_TRUE(archive_view);
+  archive_view->SetArchivedTabsForTesting(std::move(tabs));
+  base::RunLoop().RunUntilIdle();
+}
+
+void MahoSidebarInteractiveTestBase::ReloadArchivedTabsFromFFI() {
+  ASSERT_TRUE(sidebar_);
+  auto* archive_view = sidebar_->archive_view_for_testing();
+  ASSERT_TRUE(archive_view);
+  archive_view->ReloadArchivedTabs();
+  base::RunLoop().RunUntilIdle();
 }
 
 }  // namespace maho

@@ -18,6 +18,7 @@
 #include "base/json/json_reader.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/test/bind.h"
@@ -362,18 +363,66 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
 
   auto* sidebar = GetSidebarView();
   ASSERT_TRUE(sidebar);
-  sidebar->OpenLibrary(MahoSidebarLibraryRailView::Category::kArchivedTabs);
+  auto* footer = GetFooterView();
+  ASSERT_TRUE(footer);
+  auto* archive_button = footer->archive_button_for_testing();
+  ASSERT_TRUE(archive_button);
+
+  views::test::ButtonTestApi(archive_button).NotifyClick(ui::test::TestEvent());
   base::RunLoop().RunUntilIdle();
 
   EXPECT_TRUE(sidebar->is_archive_mode_for_testing());
   EXPECT_TRUE(sidebar->is_library_mode_for_testing());
   EXPECT_EQ(MahoSidebarLibraryRailView::Category::kArchivedTabs,
             sidebar->active_library_category_for_testing());
-  ASSERT_TRUE(sidebar->archive_view_for_testing());
-  EXPECT_TRUE(sidebar->archive_view_for_testing()->GetVisible());
-  EXPECT_TRUE(sidebar->library_rail_view_for_testing());
+  auto* archive_view = sidebar->archive_view_for_testing();
+  ASSERT_TRUE(archive_view);
+  EXPECT_TRUE(archive_view->GetVisible());
+  auto* rail = sidebar->library_rail_view_for_testing();
+  ASSERT_TRUE(rail);
   EXPECT_EQ(MahoSidebarLibraryRailView::Category::kArchivedTabs,
-            sidebar->library_rail_view_for_testing()->selected_category());
+            rail->selected_category());
+  // PB1-B: Rail selection exclusivity — only kArchivedTabs must carry the
+  // selected AX attribute; every other category must be unselected.  This
+  // protects the SG-1 contract that the footer/library path drives the correct
+  // initial selection state rather than leaving the rail in an undefined or
+  // multi-selected state.
+  const std::vector<MahoSidebarLibraryRailView::Category> kAllCategories = {
+      MahoSidebarLibraryRailView::Category::kArchivedTabs,
+      MahoSidebarLibraryRailView::Category::kDownloads,
+      MahoSidebarLibraryRailView::Category::kMedia,
+      MahoSidebarLibraryRailView::Category::kSpaces,
+      MahoSidebarLibraryRailView::Category::kEasels,
+      MahoSidebarLibraryRailView::Category::kBoosts,
+  };
+  for (const auto category : kAllCategories) {
+    views::Button* btn = rail->button_for_category_for_testing(category);
+    ASSERT_TRUE(btn) << "Rail button missing for category "
+                     << static_cast<int>(category);
+    // All rail buttons must remain enabled regardless of selection so the user
+    // can switch categories without re-entering library mode.
+    EXPECT_TRUE(btn->GetEnabled())
+        << "Rail button should be enabled for category "
+        << static_cast<int>(category);
+    // Verify AX selected state matches the expected selection exclusively.
+    ui::AXNodeData ax_data;
+    btn->GetViewAccessibility().GetAccessibleNodeData(&ax_data);
+    const bool expect_selected =
+        (category == MahoSidebarLibraryRailView::Category::kArchivedTabs);
+    EXPECT_EQ(expect_selected,
+              ax_data.GetBoolAttribute(ax::mojom::BoolAttribute::kSelected))
+        << "AX kSelected mismatch for category "
+        << static_cast<int>(category);
+  }
+  // PB1-B: Archive pane geometry — the view must have non-zero rendered height,
+  // confirming the pane is actually laid out and not merely flagged visible.
+  EXPECT_GT(archive_view->GetBoundsInScreen().height(), 0)
+      << "Archive pane must have non-zero height after footer-entry";
+  // PB1-B: tabs_surface_ must be hidden while archive/library mode is active so
+  // the shell correctly swaps the body region.
+  ASSERT_TRUE(sidebar->tabs_surface_for_testing());
+  EXPECT_FALSE(sidebar->tabs_surface_for_testing()->GetVisible())
+      << "tabs_surface_ must be hidden when library/archive mode is active";
   ASSERT_TRUE(GetFooterView());
   EXPECT_TRUE(GetFooterView()->GetVisible());
   ASSERT_TRUE(GetTabListView());
@@ -1226,6 +1275,119 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   EXPECT_FALSE(archive_view->scroll_view_for_testing()->GetVisible());
   EXPECT_TRUE(archive_view->empty_state_view_for_testing()->GetVisible());
   EXPECT_TRUE(archive_view->list_container_for_testing()->children().empty());
+}
+
+// Phase 5 — V1/V2 verification behavioral hooks.
+//
+// These two tests form the behavioral proof for Phase 5 capture validity:
+//   ArchiveEmptyState_ProductionFFIPath   — V1 (capture validity) + V2 empty-state row
+//   ArchivePopulatedState_TestInjectionPath — V2 populated-state row
+//
+// Provenance is encoded in the test name and documented below each test.
+// Any visual capture taken against these tests must record the provenance label
+// from the test name as the artifact's state-provenance annotation.
+
+// V1 + V2: empty-archive-state proof via production FFI path.
+// Provenance: clean-profile, no test injection, ReloadArchivedTabs() called
+// (production maho_core_get_archived_tabs path). Empty result is the expected
+// and correct clean-profile artifact.
+IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
+                       ArchiveEmptyState_ProductionFFIPath) {
+  ResolveViews();
+
+  auto* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+  auto* footer = GetFooterView();
+  ASSERT_TRUE(footer);
+  auto* archive_button = footer->archive_button_for_testing();
+  ASSERT_TRUE(archive_button);
+
+  views::test::ButtonTestApi(archive_button).NotifyClick(ui::test::TestEvent());
+  base::RunLoop().RunUntilIdle();
+
+  auto* archive_view = sidebar->archive_view_for_testing();
+  ASSERT_TRUE(archive_view);
+  ASSERT_TRUE(archive_view->GetVisible());
+
+  // Exercise the production FFI path explicitly. On a clean profile this
+  // returns empty — that is the correct result for this state.
+  ReloadArchivedTabsFromFFI();
+
+  ASSERT_TRUE(archive_view->empty_state_view_for_testing());
+  EXPECT_TRUE(archive_view->empty_state_view_for_testing()->GetVisible())
+      << "Empty state must be visible after production FFI reload on clean profile";
+  EXPECT_FALSE(archive_view->scroll_view_for_testing()->GetVisible())
+      << "Scroll view must be hidden when archive is empty";
+  EXPECT_EQ(0, archive_view->visible_result_count_for_testing())
+      << "Visible result count must report zero for the clean-profile empty archive state";
+  EXPECT_GT(archive_view->GetBoundsInScreen().height(), 0)
+      << "Archive pane must have non-zero height confirming it is laid out";
+}
+
+// V2: populated-archive-state proof via explicit test-injection path.
+// Provenance: test-injection via SetArchivedTabsForTesting() — NOT production FFI.
+// This is the explicit mechanism for visual capture of populated archive state
+// until a maho_core_archive_tab FFI function is available. Any capture taken
+// here MUST be labeled "test-injection, not production-backed" in the provenance
+// record.
+IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
+                       ArchivePopulatedState_TestInjectionPath) {
+  ResolveViews();
+
+  auto* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+  auto* footer = GetFooterView();
+  ASSERT_TRUE(footer);
+  auto* archive_button = footer->archive_button_for_testing();
+  ASSERT_TRUE(archive_button);
+
+  views::test::ButtonTestApi(archive_button).NotifyClick(ui::test::TestEvent());
+  base::RunLoop().RunUntilIdle();
+
+  auto* archive_view = sidebar->archive_view_for_testing();
+  ASSERT_TRUE(archive_view);
+  ASSERT_TRUE(archive_view->GetVisible());
+
+  std::vector<ArchivedTabItem> seed_tabs;
+  for (int i = 0; i < 3; ++i) {
+    ArchivedTabItem tab;
+    tab.tab_id = base::StringPrintf("phase5-seed-tab-%d", i);
+    tab.title = base::UTF8ToUTF16(
+        base::StringPrintf("Phase 5 Seed Tab %d", i));
+    tab.url = base::StringPrintf(
+        "https://archive-seed.example.com/article-%d", i);
+    tab.host = base::UTF8ToUTF16(
+        base::StringPrintf("archive-seed.example.com / article-%d", i));
+    tab.archived_at = base::Time::Now();
+    seed_tabs.push_back(std::move(tab));
+  }
+
+  SeedArchivedTabs(std::move(seed_tabs));
+
+  EXPECT_EQ(3, archive_view->visible_result_count_for_testing())
+      << "Seeded populated archive state must report the three injected rows before any later reload";
+
+  EXPECT_TRUE(archive_view->scroll_view_for_testing()->GetVisible())
+      << "Scroll view must be visible after test-injection of archive content";
+  EXPECT_FALSE(archive_view->empty_state_view_for_testing()->GetVisible())
+      << "Empty state must be hidden when archive content is present";
+  ASSERT_TRUE(archive_view->list_container_for_testing());
+  EXPECT_GE(archive_view->list_container_for_testing()->children().size(), 1u)
+      << "List container must have at least one section for seeded tabs";
+
+  // Behavioral guardrail for the seed=4 capture contract: once the populated
+  // state is explicitly test-injected, a later production reload request must
+  // not wipe it before capture. The archive view now owns that suppression.
+  ReloadArchivedTabsFromFFI();
+
+  EXPECT_EQ(3, archive_view->visible_result_count_for_testing())
+      << "A later production reload request must not overwrite the explicit test-injection populated state";
+  EXPECT_TRUE(archive_view->scroll_view_for_testing()->GetVisible())
+      << "Scroll view must remain visible after a suppressed production reload request";
+  EXPECT_FALSE(archive_view->empty_state_view_for_testing()->GetVisible())
+      << "Empty state must remain hidden after a suppressed production reload request";
+  EXPECT_GT(archive_view->GetBoundsInScreen().height(), 0)
+      << "Archive pane must have non-zero height confirming it is laid out";
 }
 
 }  // namespace
