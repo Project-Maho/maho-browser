@@ -224,33 +224,48 @@ void AddLegacyAliasColors(ui::ColorMixer& mixer, bool dark_mode) {
 }
 
 void AddCommandBarColors(ui::ColorMixer& mixer, bool dark_mode) {
-  mixer[kMahoColorCommandBarBackground] = {SkColorSetRGB(0x1A, 0x1D, 0x26)};
+  mixer[kMahoColorCommandBarBackground] = {dark_mode
+      ? SkColorSetRGB(0x14, 0x17, 0x1D)
+      : SkColorSetRGB(0xF6, 0xF8, 0xFC)};
   mixer[kMahoColorCommandBarPanelBorder] = {
-      SkColorSetARGB(0x30, 0xFF, 0xFF, 0xFF)};
-  mixer[kMahoColorCommandBarInputFill] = {SkColorSetRGB(0x22, 0x26, 0x30)};
+      dark_mode ? SkColorSetARGB(0x20, 0xFF, 0xFF, 0xFF)
+                : SkColorSetARGB(0x38, 0x8D, 0x98, 0xB5)};
+  mixer[kMahoColorCommandBarInputFill] = {dark_mode
+      ? SkColorSetRGB(0x0F, 0x12, 0x17)
+      : SkColorSetRGB(0xFF, 0xFF, 0xFF)};
   mixer[kMahoColorCommandBarInputBorder] = {
-      SkColorSetARGB(0x28, 0xFF, 0xFF, 0xFF)};
+      dark_mode ? SkColorSetARGB(0x18, 0xFF, 0xFF, 0xFF)
+                : SkColorSetARGB(0x4A, 0xA3, 0xAE, 0xCB)};
   mixer[kMahoColorCommandBarSelectionFill] = {dark_mode
-      ? SkColorSetRGB(0x4A, 0x4D, 0xE6)
+      ? SkColorSetRGB(0x20, 0x45, 0xA8)
       : SkColorSetARGB(56, 110, 136, 245)};
   mixer[kMahoColorCommandBarSelectionBorder] = {
-      SkColorSetARGB(97, 110, 117, 249)};
+      dark_mode ? SkColorSetARGB(60, 140, 174, 248)
+                : SkColorSetARGB(128, 92, 126, 237)};
   mixer[kMahoColorCommandBarKeycapBorder] = {
-      SkColorSetARGB(0x20, 0xFF, 0xFF, 0xFF)};
+      dark_mode ? SkColorSetARGB(0x16, 0xFF, 0xFF, 0xFF)
+                : SkColorSetARGB(0x2C, 0x91, 0x9C, 0xB8)};
   mixer[kMahoColorCommandBarInputSelection] = {
-      SkColorSetARGB(107, 149, 155, 183)};
+      dark_mode ? SkColorSetARGB(96, 88, 129, 214)
+                : SkColorSetARGB(104, 150, 182, 255)};
   mixer[kMahoColorCommandBarEmptyText] = {dark_mode
-      ? SkColorSetRGB(0x8A, 0x92, 0xA6)
+      ? SkColorSetRGB(0x7E, 0x87, 0x97)
       : SkColorSetARGB(89, 0, 0, 0)};
   mixer[kMahoColorCommandBarShortcutBadge] = {dark_mode
-      ? SkColorSetARGB(0x14, 0xFF, 0xFF, 0xFF)
+      ? SkColorSetARGB(0x0E, 0xFF, 0xFF, 0xFF)
       : SkColorSetARGB(20, 0, 0, 0)};
   mixer[kMahoColorCommandBarShortcutText] = {dark_mode
-      ? SkColorSetRGB(0x8A, 0x92, 0xA6)
+      ? SkColorSetRGB(0x96, 0x9E, 0xAF)
       : SkColorSetARGB(115, 0, 0, 0)};
   mixer[kMahoColorCommandBarDivider] = {dark_mode
-      ? SkColorSetARGB(20, 255, 255, 255)
-      : SkColorSetARGB(20, 0, 0, 0)};
+      ? SkColorSetARGB(14, 255, 255, 255)
+      : SkColorSetARGB(28, 120, 129, 157)};
+  mixer[kMahoColorCommandBarRowTitleSelected] = {dark_mode
+      ? SkColorSetARGB(0xF4, 0xFF, 0xFF, 0xFF)
+      : SkColorSetARGB(0xE0, 0xFF, 0xFF, 0xFF)};
+  mixer[kMahoColorCommandBarRowSubtitleSelected] = {dark_mode
+      ? SkColorSetARGB(0xB5, 0xF4, 0xF7, 0xFF)
+      : SkColorSetARGB(0x98, 0xFF, 0xFF, 0xFF)};
 }
 
 void AddAccentAndSemanticColors(ui::ColorMixer& mixer, SkColor accent_color) {

@@ -97,6 +97,8 @@
   E_CPONLY(kMahoColorCommandBarShortcutBadge) \
   E_CPONLY(kMahoColorCommandBarShortcutText) \
   E_CPONLY(kMahoColorCommandBarDivider) \
+  E_CPONLY(kMahoColorCommandBarRowTitleSelected) \
+  E_CPONLY(kMahoColorCommandBarRowSubtitleSelected) \
   /* Accent & Semantic */ \
   E_CPONLY(kMahoColorAccentBlue) \
   E_CPONLY(kMahoColorAccentBlueBright) \

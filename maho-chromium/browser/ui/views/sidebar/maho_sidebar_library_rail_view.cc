@@ -11,8 +11,8 @@
 #include "base/memory/raw_ref.h"
 #include "components/vector_icons/vector_icons.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
+#include "maho/browser/ui/theme/maho_color_id.h"
 #include "third_party/skia/include/core/SkColor.h"
-#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/color/color_id.h"
@@ -37,20 +37,20 @@ namespace maho {
 
 namespace {
 
-constexpr int kRailWidthDp = 64;
+constexpr int kRailWidthDp = 60;
 constexpr int kRailTopInsetDp = 0;
 constexpr int kRailSideInsetDp = 2;
-constexpr int kRailBottomInsetDp = 10;
+constexpr int kRailBottomInsetDp = 8;
 constexpr int kRailItemSpacingDp = 2;
-constexpr int kRailItemHeightDp = 50;
-constexpr int kRailTileWidthDp = 48;
-constexpr int kRailTileHeightDp = 30;
+constexpr int kRailItemHeightDp = 48;
+constexpr int kRailTileWidthDp = 44;
+constexpr int kRailTileHeightDp = 28;
 constexpr int kRailTileCornerRadiusDp = 7;
-constexpr int kRailIconSizeDp = 18;
-constexpr int kRailLabelTopSpacingDp = 1;
-constexpr int kRailBackButtonSizeDp = 24;
+constexpr int kRailIconSizeDp = 16;
+constexpr int kRailLabelTopSpacingDp = 2;
+constexpr int kRailBackButtonSizeDp = 22;
 constexpr int kRailBackButtonLeadingInsetDp = 8;
-constexpr int kRailBackButtonCornerRadiusDp = 12;
+constexpr int kRailBackButtonCornerRadiusDp = 11;
 constexpr float kBackButtonDisabledAlpha = 0.38f;
 
 static constexpr gfx::PathElement kArchiveboxPath[] = {
@@ -118,7 +118,8 @@ void StyleIconButton(views::ImageButton* button) {
 }
 
 ui::ColorId GetRailItemForegroundColor(bool selected) {
-  return selected ? ui::kColorSysOnSurface : ui::kColorSysOnSurfaceSubtle;
+  return selected ? kMahoColorLibraryRailItemSelectedText
+                  : kMahoColorLibraryRailItemText;
 }
 
 }  // namespace
@@ -128,7 +129,6 @@ const gfx::VectorIcon& GetMahoSidebarArchiveboxIcon() {
 }
 
 class MahoSidebarLibraryRailItemButton : public views::Button {
- public:
   METADATA_HEADER(MahoSidebarLibraryRailItemButton, views::Button)
 
  public:
@@ -152,7 +152,7 @@ class MahoSidebarLibraryRailItemButton : public views::Button {
 
     auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical,
-        gfx::Insets::TLBR(2, 0, 2, 0), kRailLabelTopSpacingDp));
+        gfx::Insets::TLBR(3, 0, 3, 0), kRailLabelTopSpacingDp));
     layout->set_cross_axis_alignment(
         views::BoxLayout::CrossAxisAlignment::kCenter);
 
@@ -217,19 +217,19 @@ class MahoSidebarLibraryRailItemButton : public views::Button {
                          (GetState() == STATE_HOVERED ||
                           GetState() == STATE_PRESSED);
     const ui::ColorId foreground = selected_ || hovered
-                                       ? ui::kColorSysOnSurface
+                                       ? kMahoColorLibraryRailItemSelectedText
                                        : GetRailItemForegroundColor(selected_);
     if (enabled && selected_) {
       tile_->SetBackground(views::CreateRoundedRectBackground(
-          hovered ? ui::kColorSysSurface3 : ui::kColorSysSurface2,
+          hovered ? kMahoColorLibraryRailItemHover : kMahoColorLibraryRailItemSelected,
           kRailTileCornerRadiusDp));
       tile_->SetBorder(views::CreateRoundedRectBorder(
-          1, kRailTileCornerRadiusDp, ui::kColorSysSurfaceVariant));
+          1, kRailTileCornerRadiusDp, kMahoColorLibraryRailDivider));
     } else if (hovered) {
       tile_->SetBackground(views::CreateRoundedRectBackground(
-          ui::kColorSysSurface1, kRailTileCornerRadiusDp));
+          kMahoColorLibraryRailItemHover, kRailTileCornerRadiusDp));
       tile_->SetBorder(views::CreateRoundedRectBorder(
-          1, kRailTileCornerRadiusDp, ui::kColorSysSurfaceVariant));
+          1, kRailTileCornerRadiusDp, kMahoColorLibraryRailDivider));
     } else {
       tile_->SetBackground(nullptr);
       tile_->SetBorder(views::CreateEmptyBorder(1));
@@ -268,7 +268,7 @@ MahoSidebarLibraryRailView::MahoSidebarLibraryRailView() {
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
   SetPreferredSize(gfx::Size(kRailWidthDp, 0));
-  SetBackground(views::CreateSolidBackground(ui::kColorSysSurface));
+  SetBackground(views::CreateSolidBackground(kMahoColorLibraryRailBackground));
 
   auto* traffic_light_spacer = AddChildView(std::make_unique<views::View>());
   traffic_light_spacer->SetPreferredSize(gfx::Size(
@@ -356,7 +356,7 @@ void MahoSidebarLibraryRailView::SetBackCallback(
 
 void MahoSidebarLibraryRailView::OnThemeChanged() {
   views::View::OnThemeChanged();
-  SetBackground(views::CreateSolidBackground(ui::kColorSysSurface));
+  SetBackground(views::CreateSolidBackground(kMahoColorLibraryRailBackground));
   UpdateSelection();
   UpdateBackButtonAppearance();
 }
@@ -418,15 +418,16 @@ void MahoSidebarLibraryRailView::UpdateBackButtonAppearance() {
   const bool enabled = !back_callback_.is_null();
   back_button_->SetEnabled(enabled);
   back_button_->SetBackground(views::CreateRoundedRectBackground(
-      ui::kColorSysSurface1, kRailBackButtonCornerRadiusDp));
+      kMahoColorLibraryRailItemHover, kRailBackButtonCornerRadiusDp));
   back_button_->SetBorder(views::CreateRoundedRectBorder(
-      1, kRailBackButtonCornerRadiusDp, ui::kColorSysSurfaceVariant));
+      1, kRailBackButtonCornerRadiusDp, kMahoColorLibraryRailDivider));
   back_button_->SetImageModel(
       views::Button::STATE_NORMAL,
       ui::ImageModel::FromVectorIcon(
           vector_icons::kBackArrowIcon,
-          enabled ? ui::kColorSysOnSurface : ui::kColorSysOnSurfaceSubtle,
-          14));
+          enabled ? kMahoColorLibraryRailItemSelectedText
+                  : kMahoColorLibraryRailItemText,
+          12));
   back_button_->layer()->SetOpacity(enabled ? 1.0f : kBackButtonDisabledAlpha);
 }
 

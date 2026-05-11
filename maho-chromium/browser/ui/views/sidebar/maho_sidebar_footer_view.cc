@@ -55,6 +55,7 @@
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/canvas.h"
 #include "ui/compositor/layer.h"
+#include "maho/browser/ui/theme/maho_color_id.h"
 
 namespace maho {
 
@@ -72,17 +73,14 @@ MahoSidebarView* FindSidebarViewAncestor(views::View* view) {
 constexpr int kUpdatePillCornerRadius = 11;
 constexpr int kUpdateIndicatorSize = 5;
 constexpr int kFooterRowHeight = 24;
-constexpr int kFooterControlSize = 22;
-constexpr int kFooterControlCornerRadius = 12;
+constexpr int kFooterControlSize = 20;
+constexpr int kFooterControlCornerRadius = 10;
 constexpr int kFooterButtonIconSize = 10;
 constexpr int kFooterRowSpacing = 0;
 constexpr int kDotSpacing = 4;
 constexpr int kFadeWidth = 8;
 constexpr int kDotTrackHeight = 9;
 
-constexpr SkColor kFooterButtonIconColor = SkColorSetRGB(0xB4, 0xBC, 0xC8);
-constexpr SkColor kFooterSeparatorColor =
-    SkColorSetARGB(0x12, 0xFF, 0xFF, 0xFF);
 constexpr float kFooterButtonEnabledOpacity = 0.58f;
 constexpr float kFooterButtonDisabledOpacity = 0.28f;
 
@@ -122,9 +120,9 @@ views::MdTextButton* CreateRoundActionButton(
   button->SetMaxSize(gfx::Size(kFooterControlSize, kFooterControlSize));
   button->SetImageModel(
       views::Button::STATE_NORMAL,
-      ui::ImageModel::FromVectorIcon(icon, kFooterButtonIconColor,
+      ui::ImageModel::FromVectorIcon(icon, ui::kColorSysOnSurfaceSubtle,
                                      kFooterButtonIconSize));
-  button->SetEnabledTextColors(kFooterButtonIconColor);
+  button->SetEnabledTextColors(ui::kColorSysOnSurfaceSubtle);
   button->SetTooltipText(tooltip);
   button->SetAccessibleName(tooltip);
   button->SetBorder(views::CreateEmptyBorder(gfx::Insets()));
@@ -262,7 +260,7 @@ MahoSidebarFooterView::MahoSidebarFooterView(Browser* browser)
   footer_separator_->SetProperty(views::kMarginsKey,
                                  gfx::Insets::TLBR(0, 8, 0, 8));
   footer_separator_->SetBackground(
-      views::CreateSolidBackground(kFooterSeparatorColor));
+      views::CreateSolidBackground(kMahoColorFooterDivider));
   footer_separator_->SetBorder(nullptr);
 
   footer_region_ = AddChildView(std::make_unique<views::View>());
@@ -549,7 +547,7 @@ void MahoSidebarFooterView::UpdateFooterChromeAppearance() {
   SetBackground(nullptr);
   if (footer_separator_) {
     footer_separator_->SetBackground(
-        views::CreateSolidBackground(kFooterSeparatorColor));
+        views::CreateSolidBackground(kMahoColorFooterDivider));
   }
   if (footer_region_) {
     footer_region_->SetBackground(nullptr);
@@ -576,10 +574,10 @@ void MahoSidebarFooterView::UpdateFooterChromeAppearance() {
   style_button(plus_button_);
 
   if (archive_button_) {
-    archive_button_->SetEnabledTextColors(kFooterButtonIconColor);
+    archive_button_->SetEnabledTextColors(ui::kColorSysOnSurfaceSubtle);
   }
   if (plus_button_) {
-    plus_button_->SetEnabledTextColors(kFooterButtonIconColor);
+    plus_button_->SetEnabledTextColors(ui::kColorSysOnSurfaceSubtle);
   }
 }
 
