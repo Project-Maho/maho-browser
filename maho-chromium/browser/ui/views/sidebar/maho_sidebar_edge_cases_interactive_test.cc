@@ -2,6 +2,8 @@
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_interactive_test_base.h"
 
+#include "base/strings/utf_string_conversions.h"
+#include "base/test/run_until.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
@@ -21,6 +23,7 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
+#include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "ui/base/test/ui_controls.h"
@@ -144,6 +147,11 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
       << "Favorite count should decrease after remove_favorite event";
 }
 
+// TODO(maho): FolderRenameViaContextMenu covers only menu dismissal.
+// MahoFolderContextMenu::ExecuteCommand(IDC_MAHO_FOLDER_RENAME) currently
+// only logs and does not dispatch a rename_folder shell event, so the full
+// context-menu → commit → state/UI path cannot be exercised until that stub
+// is wired. See maho_folder_context_menu.cc.
 IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
                        FolderRenameViaContextMenu) {
   SeedProfile(2);
@@ -180,6 +188,58 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
 
   EXPECT_TRUE(folder_row->GetVisible())
       << "Folder row should remain visible after dismissing context menu";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       FolderRenameShellEventCommitPropagatesStateAndLabel) {
+  SeedProfile(2);
+  observer_.Clear();
+
+  auto state = GetViewState();
+  std::string folder_id;
+  std::u16string original_name;
+  for (const auto& node : state.tab_list.normal_tree) {
+    if (node.kind == SidebarNodeKind::kFolder) {
+      folder_id = node.folder_id;
+      original_name = node.folder_name;
+      break;
+    }
+  }
+  ASSERT_FALSE(folder_id.empty()) << "Seed 2 must have at least one folder";
+
+  const std::u16string kNewName = u"RenamedFolder_Test";
+  ASSERT_NE(original_name, kNewName)
+      << "Test setup: new name must differ from seed name";
+
+  DispatchShellEvent("rename_folder",
+                     {{"space_id", GetActiveSpaceId()},
+                      {"folder_id", folder_id},
+                      {"name", base::UTF16ToUTF8(kNewName)}});
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+
+  auto new_state = GetViewState();
+  bool found_renamed = false;
+  bool found_old_name = false;
+  for (const auto& node : new_state.tab_list.normal_tree) {
+    if (node.kind == SidebarNodeKind::kFolder &&
+        node.folder_id == folder_id) {
+      if (node.folder_name == kNewName) {
+        found_renamed = true;
+      }
+      if (!original_name.empty() && node.folder_name == original_name) {
+        found_old_name = true;
+      }
+      break;
+    }
+  }
+  EXPECT_TRUE(found_renamed)
+      << "GetViewState() must reflect the committed folder rename";
+  EXPECT_FALSE(found_old_name)
+      << "Old folder name must no longer appear in the state tree after rename";
+
+  EXPECT_TRUE(HasLabelWithText(tab_list_, kNewName))
+      << "Sidebar view must display the renamed folder label after commit";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
@@ -387,6 +447,59 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
   EXPECT_EQ(state.footer.update_pill.visible,
             state.footer.update_pill.has_update)
       << "Update pill visibility should match has_update flag";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                        FavoritesIsolatedToActiveSpaceAfterSpaceSwitch) {
+  SeedProfile(2);
+
+  auto state_space_a = GetViewState();
+  const std::string space_a_id = state_space_a.tab_list.active_space_id;
+  ASSERT_FALSE(space_a_id.empty());
+
+  MahoSpaceProfileBridge* bridge = MahoSpaceProfileBridge::GetInstance();
+  ASSERT_TRUE(bridge);
+
+  std::vector<std::string> all_space_ids = bridge->GetSpaceIds();
+  std::string space_b_id;
+  for (const auto& sid : all_space_ids) {
+    if (sid != space_a_id) {
+      space_b_id = sid;
+      break;
+    }
+  }
+
+  if (space_b_id.empty()) {
+    LOG(WARNING) << "Seed 2 has only one space — skipping isolation test";
+    return;
+  }
+
+  std::vector<std::string> space_a_fav_ids;
+  for (const auto& item : state_space_a.favorites.items) {
+    if (!item.tab_id.empty()) {
+      space_a_fav_ids.push_back(item.tab_id);
+    }
+  }
+
+  bridge->SwitchToSpace(space_b_id);
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    ResolveViews();
+    return GetViewState().tab_list.active_space_id == space_b_id;
+  })) << "Active space must switch to space B after SwitchToSpace";
+
+  ResolveViews();
+  auto state_space_b = GetViewState();
+  EXPECT_EQ(space_b_id, state_space_b.tab_list.active_space_id);
+
+  for (const auto& b_item : state_space_b.favorites.items) {
+    for (const auto& a_id : space_a_fav_ids) {
+      EXPECT_NE(b_item.tab_id, a_id)
+          << "Favorite tab_id '" << a_id
+          << "' from space A must not appear in space B favorites after switch";
+    }
+  }
 }
 
 }  // namespace
