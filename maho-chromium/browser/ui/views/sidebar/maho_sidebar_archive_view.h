@@ -102,6 +102,7 @@ class MahoSidebarArchiveView : public views::View,
   views::View* empty_state_view_for_testing() { return empty_state_view_; }
   ArchiveFilterMode filter_mode_for_testing() const { return filter_mode_; }
   std::u16string filter_accessibility_value_for_testing() const;
+  int visible_result_count_for_testing() const { return visible_result_count_; }
 
   // views::TextfieldController:
   void ContentsChanged(views::Textfield* sender,
@@ -142,6 +143,11 @@ class MahoSidebarArchiveView : public views::View,
   std::unique_ptr<views::MenuRunner> filter_menu_runner_;
 
   std::vector<ArchivedTabItem> all_archived_tabs_;
+  // When true, ReloadArchivedTabs() is suppressed so test-injected content
+  // (via SetArchivedTabsForTesting) is not overwritten by async RefreshAll
+  // callbacks that call ReloadArchivedTabs() with empty production FFI data.
+  bool test_injection_active_ = false;
+  int visible_result_count_ = 0;
   RestoreCallback restore_callback_;
   DeleteCallback delete_callback_;
   base::OneShotTimer search_debounce_timer_;

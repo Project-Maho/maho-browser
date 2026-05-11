@@ -626,6 +626,7 @@ MahoSidebarArchiveView::~MahoSidebarArchiveView() = default;
 
 void MahoSidebarArchiveView::SetArchivedTabsForTesting(
     std::vector<ArchivedTabItem> tabs) {
+  test_injection_active_ = true;
   all_archived_tabs_ = std::move(tabs);
   ApplyFilters();
 }
@@ -748,6 +749,10 @@ void MahoSidebarArchiveView::BuildUi() {
 }
 
 void MahoSidebarArchiveView::ReloadArchivedTabs() {
+  if (test_injection_active_) {
+    return;
+  }
+
   all_archived_tabs_.clear();
 
   auto* bridge = MahoSpaceProfileBridge::GetInstance();
@@ -834,6 +839,10 @@ void MahoSidebarArchiveView::ReloadArchivedTabs() {
 }
 
 void MahoSidebarArchiveView::ResetState() {
+  // Resetting the pane returns archive loading to the normal production path.
+  // Test-injected seed state should persist only for the active seeded session,
+  // not across a later pane reopen.
+  test_injection_active_ = false;
   if (search_field_) {
     search_field_->SetText(u"");
   }
@@ -951,6 +960,7 @@ void MahoSidebarArchiveView::ApplyFilters() {
   }
 
   auto sections = GroupIntoSections(filtered);
+  visible_result_count_ = static_cast<int>(filtered.size());
   RebuildList(sections, static_cast<int>(filtered.size()));
 }
 
