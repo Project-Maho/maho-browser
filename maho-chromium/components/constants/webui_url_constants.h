@@ -38,6 +38,12 @@ inline constexpr char kMahoSpaceCreateURL[] = "chrome://maho-space-create/";
 inline constexpr char kMahoSpaceConfigHost[] = "maho-space-config";
 inline constexpr char kMahoSpaceConfigURL[] = "chrome://maho-space-config/";
 
+inline constexpr char kMahoSidebarHost[] = "maho-sidebar";
+inline constexpr char kMahoSidebarURL[] = "chrome://maho-sidebar/";
+
+inline constexpr char kMahoSidebarLegacyHost[] = "maho-sidebar-legacy";
+inline constexpr char kMahoSidebarLegacyURL[] = "chrome://maho-sidebar-legacy/";
+
 }  // namespace maho
 
 #endif  // MAHO_CHROMIUM_COMPONENTS_CONSTANTS_WEBUI_URL_CONSTANTS_H_
