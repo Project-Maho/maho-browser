@@ -125,7 +125,10 @@ class MahoSidebarTabListView : public views::View {
   std::u16string GetNodeDisplayText(const SidebarTreeNode& node) const;
   std::u16string GetNodeTooltipText(const SidebarTreeNode& node) const;
   void ActivateTab(int tab_index);
+  void ActivateTabById(const std::string& tab_id);
   void CloseTab(int tab_index);
+  void CloseTabById(const std::string& tab_id);
+  int ResolveTabStripIndexForTabId(const std::string& tab_id) const;
   void OpenNewTab(const ui::Event& event);
   void ToggleFolderExpanded(const std::string& folder_id);
   void CommitTabTitleChange(const std::string& tab_id,
@@ -165,7 +168,9 @@ class SidebarTabRowView : public views::View,
                      views::Button::PressedCallback activate_callback,
                      views::Button::PressedCallback close_callback,
                      base::RepeatingCallback<void(const std::string&, const std::u16string&)>
-                         rename_callback);
+                         rename_callback,
+                     base::RepeatingCallback<int(const std::string&)>
+                         resolve_tab_index);
   SidebarTabRowView(const SidebarTabRowView&) = delete;
   SidebarTabRowView& operator=(const SidebarTabRowView&) = delete;
   ~SidebarTabRowView() override;
@@ -206,14 +211,14 @@ class SidebarTabRowView : public views::View,
     return drag_over_drop_target_;
   }
 
-  enum class DropZoneForTesting {
+  enum class SidebarTabDropZone {
     kNone,
     kBefore,
     kAfter,
     kSplit,
   };
 
-  DropZoneForTesting drop_zone_for_testing() const {
+  SidebarTabDropZone drop_zone_for_testing() const {
     return active_drop_zone_;
   }
 
@@ -224,7 +229,7 @@ class SidebarTabRowView : public views::View,
   views::LabelButton* title_button_for_testing() { return title_button_; }
 
  private:
-  DropZoneForTesting ResolveDropZone(const ui::DropTargetEvent& event,
+  SidebarTabDropZone ResolveDropZone(const ui::DropTargetEvent& event,
                                      const SidebarDragPayload& payload) const;
   void BeginTitleEditing();
   void EndTitleEditing(bool commit);
@@ -251,13 +256,14 @@ class SidebarTabRowView : public views::View,
   raw_ptr<views::Textfield> title_field_ = nullptr;
   raw_ptr<views::ImageButton> close_button_ = nullptr;
   base::RepeatingCallback<void(const std::string&, const std::u16string&)> rename_callback_;
+  base::RepeatingCallback<int(const std::string&)> resolve_tab_index_;
   std::unique_ptr<MahoTabContextMenu> context_menu_;
   GURL drop_url_;
   std::u16string drop_title_;
   std::unique_ptr<ui::SimpleMenuModel> menu_model_;
   std::unique_ptr<views::MenuRunner> menu_runner_;
   bool drag_over_drop_target_ = false;
-  DropZoneForTesting active_drop_zone_ = DropZoneForTesting::kNone;
+  SidebarTabDropZone active_drop_zone_ = SidebarTabDropZone::kNone;
 };
 
 class SidebarFolderRowView : public views::View,
@@ -299,22 +305,20 @@ class SidebarFolderRowView : public views::View,
     return drag_over_drop_target_;
   }
 
-  enum class DropZoneForTesting {
+  enum class SidebarFolderDropZone {
     kNone,
-    kBefore,
     kInto,
-    kAfter,
   };
 
-  DropZoneForTesting drop_zone_for_testing() const {
+  SidebarFolderDropZone drop_zone_for_testing() const {
     return active_drop_zone_;
   }
 
   const std::string& folder_id_for_testing() const { return folder_id_; }
 
  private:
-  DropZoneForTesting ResolveDropZone(const ui::DropTargetEvent& event,
-                                     const SidebarDragPayload& payload) const;
+  SidebarFolderDropZone ResolveDropZone(const ui::DropTargetEvent& event,
+                                        const SidebarDragPayload& payload) const;
   void UpdateAppearance();
 
   const std::string folder_id_;
@@ -327,7 +331,7 @@ class SidebarFolderRowView : public views::View,
   raw_ptr<views::ImageView> folder_icon_ = nullptr;
   raw_ptr<views::LabelButton> label_button_ = nullptr;
   bool drag_over_drop_target_ = false;
-  DropZoneForTesting active_drop_zone_ = DropZoneForTesting::kNone;
+  SidebarFolderDropZone active_drop_zone_ = SidebarFolderDropZone::kNone;
 };
 
 struct SidebarSectionDropIndicatorStateForTesting {
