@@ -99,8 +99,7 @@ class MahoSidebarFavoritesGridView : public views::View {
   };
 
   void OnTilePressed(size_t index);
-  bool ShouldSuppressDragRemoval(const gfx::Point& screen_point,
-                                 const std::string& tab_id) const;
+  void MarkDropAccepted();
   void OnTileDragDone(size_t index);
   int ResolveDropIndex(const gfx::Point& point,
                        const std::string& source_tab_id,
@@ -131,6 +130,7 @@ class MahoSidebarFavoritesGridView : public views::View {
   LayoutSpec current_layout_spec_;
   bool drag_over_drop_target_ = false;
   bool drag_reveal_active_ = false;
+  bool drag_drop_accepted_ = false;
 
   // --- Animation infrastructure ---
   std::array<gfx::Rect, kTileCount> snapshot_bounds_ = {};

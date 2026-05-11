@@ -9,6 +9,7 @@
 #include <memory>
 #include <set>
 
+#include "base/containers/flat_map.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
@@ -549,6 +550,33 @@ void MahoSidebarFavoritesGridView::Update(
 
   const auto specs = BuildTileSpecs(model);
 
+  // Build a URL→favicon map by scanning the tab strip once (O(M log M)),
+  // replacing the previous O(N×M) per-tile inner loop.
+  base::flat_map<GURL, ui::ImageModel> live_tab_favicons;
+  if (browser_ && browser_->tab_strip_model()) {
+    TabStripModel* strip = browser_->tab_strip_model();
+    const int strip_count = strip->count();
+    std::vector<std::pair<GURL, ui::ImageModel>> favicon_pairs;
+    favicon_pairs.reserve(static_cast<size_t>(strip_count));
+    for (int i = 0; i < strip_count; ++i) {
+      content::WebContents* contents = strip->GetWebContentsAt(i);
+      if (!contents) {
+        continue;
+      }
+      GURL url = contents->GetVisibleURL();
+      if (!url.is_valid()) {
+        continue;
+      }
+      auto* tab_iface = tabs::TabInterface::GetFromContents(contents);
+      if (tab_iface) {
+        favicon_pairs.emplace_back(std::move(url),
+                                   TabUIHelper::From(tab_iface)->GetFavicon());
+      }
+    }
+    live_tab_favicons = base::flat_map<GURL, ui::ImageModel>(
+        std::move(favicon_pairs));
+  }
+
   for (size_t index = 0; index < tile_views_.size(); ++index) {
     const bool has_item = specs[index].url.is_valid();
     tile_urls_[index] = has_item ? specs[index].url : GURL();
@@ -564,19 +592,11 @@ void MahoSidebarFavoritesGridView::Update(
     tile_btn->set_tab_id(tile_tab_ids_[index]);
 
     if (has_item) {
+      // O(log M) map lookup instead of O(M) tab-strip scan per tile.
       ui::ImageModel fav;
-      if (browser_ && browser_->tab_strip_model()) {
-        TabStripModel* strip = browser_->tab_strip_model();
-        for (int i = 0; i < strip->count(); ++i) {
-          content::WebContents* contents = strip->GetWebContentsAt(i);
-          if (contents && contents->GetVisibleURL() == specs[index].url) {
-            auto* tab_iface = tabs::TabInterface::GetFromContents(contents);
-            if (tab_iface) {
-              fav = TabUIHelper::From(tab_iface)->GetFavicon();
-            }
-            break;
-          }
-        }
+      const auto it = live_tab_favicons.find(specs[index].url);
+      if (it != live_tab_favicons.end()) {
+        fav = it->second;
       }
       tile_icons_[index]->SetImage(std::move(fav));
       tile_icons_[index]->SetImageSize(
@@ -786,7 +806,7 @@ int MahoSidebarFavoritesGridView::OnDragUpdated(
     return static_cast<int>(ui::mojom::DragOperation::kNone);
   }
 
-  const size_t favorite_count = GetVisibleFavoriteCount();
+  const size_t favorite_count = favorite_count_;
   if (payload.origin != SidebarDragOrigin::kFavorites &&
       favorite_count >= kTileCount) {
     drag_over_drop_target_ = false;
@@ -837,7 +857,7 @@ views::View::DropCallback MahoSidebarFavoritesGridView::GetDropCallback(
   SidebarDragPayload payload;
   const bool has_payload = ReadMahoDragData(event.data(), payload) &&
                            payload.node_kind == SidebarNodeKind::kTab;
-  const size_t favorite_count = GetVisibleFavoriteCount();
+  const size_t favorite_count = favorite_count_;
   const int target_index = has_payload
                                ? ResolveDropIndex(
                                      event.location(), payload.node_id,
@@ -846,6 +866,7 @@ views::View::DropCallback MahoSidebarFavoritesGridView::GetDropCallback(
   return base::BindOnce(
       [](int target_index,
          size_t favorite_count,
+         base::WeakPtr<MahoSidebarFavoritesGridView> weak_grid,
          const ui::DropTargetEvent& event,
          ui::mojom::DragOperation& output_drag_op,
          std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner) {
@@ -856,6 +877,9 @@ views::View::DropCallback MahoSidebarFavoritesGridView::GetDropCallback(
           return;
         }
         output_drag_op = ui::mojom::DragOperation::kMove;
+        if (weak_grid) {
+          weak_grid->MarkDropAccepted();
+        }
 
         if (payload.origin == SidebarDragOrigin::kFavorites) {
           DispatchShellEventEx("reorder_favorite", {
@@ -870,7 +894,7 @@ views::View::DropCallback MahoSidebarFavoritesGridView::GetDropCallback(
           }
         }
       },
-      target_index, favorite_count);
+      target_index, favorite_count, weak_factory_.GetWeakPtr());
 }
 
 void MahoSidebarFavoritesGridView::RevealForDrag() {
@@ -898,6 +922,7 @@ void MahoSidebarFavoritesGridView::CollapseFromDrag() {
 void MahoSidebarFavoritesGridView::OnDragExited() {
   current_drag_preview_index_ = -1;
   drag_over_drop_target_ = false;
+  drag_drop_accepted_ = false;
   SetBorder(nullptr);
   UpdateEmptyStateHighlight(false);
   for (size_t i = 0; i < kTileCount; ++i) {
@@ -1039,56 +1064,8 @@ size_t MahoSidebarFavoritesGridView::GetVisibleFavoriteCount() const {
                        [](const GURL& url) { return url.is_valid(); });
 }
 
-bool MahoSidebarFavoritesGridView::ShouldSuppressDragRemoval(
-    const gfx::Point& screen_point,
-    const std::string& tab_id) const {
-  const views::Widget* widget = GetWidget();
-  const views::View* root_view = widget ? widget->GetRootView() : nullptr;
-  if (!root_view) {
-    return false;
-  }
-
-  gfx::Point root_point = screen_point;
-  views::View::ConvertPointFromScreen(root_view, &root_point);
-  views::View* hovered_view = const_cast<views::View*>(root_view)->GetEventHandlerForPoint(root_point);
-  if (!hovered_view) {
-    return false;
-  }
-
-  ui::OSExchangeData data;
-  SidebarDragPayload payload;
-  payload.node_kind = SidebarNodeKind::kTab;
-  payload.node_id = tab_id;
-  payload.origin = SidebarDragOrigin::kFavorites;
-  WriteMahoDragData(payload, &data);
-
-  int formats = 0;
-  std::set<ui::ClipboardFormatType> format_types;
-  for (views::View* view = hovered_view; view; view = view->parent()) {
-    if (view == this) {
-      return false;
-    }
-    if (!view->GetEnabled()) {
-      continue;
-    }
-    formats = 0;
-    format_types.clear();
-    if (!view->GetDropFormats(&formats, &format_types) ||
-        !data.HasAnyFormat(formats, format_types) || !view->CanDrop(data)) {
-      continue;
-    }
-
-    gfx::Point local_point = root_point;
-    views::View::ConvertPointToTarget(root_view, view, &local_point);
-    ui::DropTargetEvent event(data, gfx::PointF(local_point), gfx::PointF(root_point),
-                              static_cast<int>(ui::mojom::DragOperation::kMove));
-    if (view->OnDragUpdated(event) !=
-        static_cast<int>(ui::mojom::DragOperation::kNone)) {
-      return true;
-    }
-  }
-
-  return false;
+void MahoSidebarFavoritesGridView::MarkDropAccepted() {
+  drag_drop_accepted_ = true;
 }
 
 void MahoSidebarFavoritesGridView::OnTileDragDone(size_t index) {
@@ -1101,9 +1078,11 @@ void MahoSidebarFavoritesGridView::OnTileDragDone(size_t index) {
     return;
   }
 
+  const bool accepted = drag_drop_accepted_;
+  drag_drop_accepted_ = false;
+
   const gfx::Point screen_point = display::Screen::Get()->GetCursorScreenPoint();
-  if (GetBoundsInScreen().Contains(screen_point) ||
-      ShouldSuppressDragRemoval(screen_point, tab_id)) {
+  if (GetBoundsInScreen().Contains(screen_point) || accepted) {
     return;
   }
 
