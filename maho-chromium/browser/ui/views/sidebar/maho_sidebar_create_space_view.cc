@@ -18,6 +18,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/values.h"
 #include "chrome/browser/ui/browser.h"
@@ -33,6 +34,7 @@
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider_manager.h"
+#include "ui/display/screen.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/point_f.h"
@@ -104,17 +106,93 @@ constexpr std::array<ColorPreset, 9> kColorPresets = {{
 constexpr int kSwatchSize = 40;
 constexpr int kSwatchCornerRadius = 20;
 constexpr int kSwatchSpacing = 14;
-constexpr int kThemeDialogWidth = 1110;
+constexpr int kThemeDialogWidth = 680;
 constexpr int kThemeDialogSurfaceCornerRadius = 30;
-constexpr int kThemeDialogLeftPanelWidth = 430;
 constexpr int kThemeChipSize = 52;
 constexpr int kThemeCanvasCornerRadius = 30;
 constexpr int kThemeCanvasHeight = 596;
 constexpr int kThemePreviewControlSize = 24;
 constexpr int kThemeChevronButtonSize = 30;
-constexpr int kThemeGrainDialSize = 106;
+constexpr int kThemeGrainDialSize = 98;
 constexpr int kThemeCanvasDotSpacing = 11;
 constexpr float kPi = 3.14159265f;
+
+constexpr int kChooserShellInsetTop = 8;
+constexpr int kChooserShellInsetHoriz = 8;
+constexpr int kChooserShellInsetBottom = 10;
+constexpr int kChooserShellSectionGap = 10;
+
+constexpr int kChooserCanvasInsetTopLeft = 18;
+constexpr int kChooserCanvasInsetBottom = 16;
+constexpr int kChooserChipRowTopPad = 4;
+constexpr int kChooserChipRowGap = 22;
+
+constexpr int kChooserSwatchNavHorizPad = 20;
+constexpr int kChooserSwatchNavBottomPad = 4;
+constexpr int kChooserSwatchNavGap = 18;
+
+constexpr int kChooserLowerTopPad = 14;
+constexpr int kChooserLowerLeftPad = 18;
+constexpr int kChooserLowerBottomPad = 12;
+constexpr int kChooserLowerRightPad = 24;
+constexpr int kChooserLowerGap = 24;
+constexpr int kChooserWaveViewHeight = 84;
+
+constexpr int kChooserBrightnessRowBottomPad = 20;
+constexpr int kChooserBrightnessRowGap = 64;
+
+constexpr int kChooserBrightnessMin = 15;
+constexpr int kChooserBrightnessMax = 100;
+constexpr int kChooserBrightnessStep = 5;
+
+constexpr int kChooserGrainMin = 0;
+constexpr int kChooserGrainMax = 100;
+constexpr int kChooserGrainStep = 10;
+
+constexpr int kChooserSwatchSelectedBorderWidth = 3;
+constexpr int kChooserSwatchUnselectedBorderWidth = 1;
+
+constexpr int kChooserFooterTopPadding = 4;
+constexpr int kChooserFooterBottomPadding = 4;
+constexpr int kChooserFooterHorizPadding = 16;
+constexpr int kChooserFooterButtonSpacing = 8;
+constexpr int kChooserDoneButtonCornerRadius = 12;
+constexpr int kChooserPreviewMessageMaxWidth = 450;
+// Fraction of the available work-area height the chooser is allowed to occupy.
+// Keeps the footer reachable on smaller displays without capping the preferred
+// height on typical screens.
+constexpr double kChooserMaxWorkAreaHeightFraction = 0.90;
+
+// ThemeWaveView paint geometry.
+constexpr float kWaveHorizMargin        = 8.0f;   // px inset from left/right edge
+constexpr float kWaveDotStep            = 6.0f;   // px between successive wave dots
+constexpr float kWaveAngularFrequency   = 0.58f;  // radians per dot index
+constexpr float kWaveDotRadius          = 1.9f;   // px radius of each wave dot
+constexpr float kWaveAmplitudeBase      = 4.0f;   // px amplitude at grain=0
+constexpr float kWaveAmplitudeScale     = 9.0f;   // additional px amplitude at grain=100
+
+// ThemeDialView paint geometry.
+constexpr float kDialOuterEdgeInset     = 6.0f;   // px gap between bounds edge and outer ring
+constexpr float kDialRingTrackWidth     = 10.0f;  // px radial distance between outer and inner rings
+constexpr float kDialRingStrokeWidth    = 1.2f;   // px stroke width for the inner ring
+constexpr int   kDialDotCount           = 18;     // number of tick dots on the outer ring
+constexpr float kDialDotRadius          = 1.5f;   // px radius of each tick dot
+constexpr float kDialKnobArcFraction    = 1.8f;   // fraction of 2π swept by the knob
+constexpr float kDialKnobDotRadius      = 4.0f;   // px radius of the knob indicator dot
+
+// ThemeCanvasView ambient-glow circle layout fractions (relative to canvas
+// bounds width/height).
+constexpr float kCanvasAmbient1CenterXFrac = 0.77f;
+constexpr float kCanvasAmbient1CenterYFrac = 0.27f;
+constexpr float kCanvasAmbient1RadiusFrac  = 0.23f;
+constexpr float kCanvasAmbient2CenterXFrac = 0.22f;
+constexpr float kCanvasAmbient2CenterYFrac = 0.82f;
+constexpr float kCanvasAmbient2RadiusFrac  = 0.18f;
+
+// ThemeCanvasView dot-grid margins (pixels) and dot radius.
+constexpr int   kCanvasDotGridMargin  = 16;
+constexpr int   kCanvasDotGridInsetX  = 18;
+constexpr float kCanvasDotRadius      = 1.2f;
 
 struct CreateResult {
   bool success = false;
@@ -145,11 +223,11 @@ const ColorPreset& GetColorPresetForSelection(
 }
 
 int ClampBrightness(int brightness) {
-  return std::clamp(brightness, 15, 100);
+  return std::clamp(brightness, kChooserBrightnessMin, kChooserBrightnessMax);
 }
 
 int ClampGrain(int grain) {
-  return std::clamp(grain, 0, 100);
+  return std::clamp(grain, kChooserGrainMin, kChooserGrainMax);
 }
 
 int ClampPresetIndex(int preset_index) {
@@ -189,7 +267,9 @@ std::string BuildThemeJsonForSelection(
   color_dict.Set("grain", ClampGrain(selection.grain) / 100.0);
 
   base::DictValue theme_dict;
-  theme_dict.Set("type", "solid");
+  theme_dict.Set("type", selection.mode == MahoSidebarCreateSpaceThemeMode::kSolid
+                             ? "solid"
+                             : "gradient");
   theme_dict.Set("color", std::move(color_dict));
 
   std::string theme_json;
@@ -217,24 +297,17 @@ SkColor GetThemeCanvasBackgroundColor(
               : SkColorSetRGB(0x18, 0x1E, 0x30);
 }
 
-SkColor GetThemeDialogShellColor() {
-  return SkColorSetRGB(0x1F, 0x1D, 0x30);
+SkColor GetThemeDialogBackgroundColor() {
+  return SkColorSetARGB(0xEF, 0x22, 0x24, 0x2E);
 }
 
-SkColor GetThemeDialogLeftPanelColor() {
-  return SkColorSetRGB(0x10, 0x0F, 0x1F);
+
+SkColor GetThemeDialogShellBorderColor() {
+  return SkColorSetARGB(0x22, 0xFF, 0xFF, 0xFF);
 }
 
-SkColor GetThemeDialogRightPanelColor() {
-  return SkColorSetRGB(0x24, 0x22, 0x35);
-}
-
-SkColor GetThemeDialogCardColor() {
-  return SkColorSetRGB(0x31, 0x2E, 0x43);
-}
-
-SkColor GetThemeDialogCardBorderColor() {
-  return SkColorSetARGB(0x44, 0xFF, 0xFF, 0xFF);
+SkColor GetThemeDialogCanvasBorderColor() {
+  return SkColorSetARGB(0x34, 0xFF, 0xFF, 0xFF);
 }
 
 SkColor GetThemeDialogSoftTextColor() {
@@ -274,27 +347,29 @@ class ThemeCanvasView : public views::View {
     ambient_flags.setStyle(cc::PaintFlags::kFill_Style);
     ambient_flags.setColor(WithAlpha(accent, 0x18));
     canvas->DrawCircle(
-        gfx::PointF(bounds.x() + bounds.width() * 0.77f,
-                    bounds.y() + bounds.height() * 0.27f),
-        bounds.height() * 0.23f, ambient_flags);
+        gfx::PointF(bounds.x() + bounds.width() * kCanvasAmbient1CenterXFrac,
+                    bounds.y() + bounds.height() * kCanvasAmbient1CenterYFrac),
+        bounds.height() * kCanvasAmbient1RadiusFrac, ambient_flags);
 
     ambient_flags.setColor(WithAlpha(accent, 0x10));
     canvas->DrawCircle(
-        gfx::PointF(bounds.x() + bounds.width() * 0.22f,
-                    bounds.y() + bounds.height() * 0.82f),
-        bounds.height() * 0.18f, ambient_flags);
+        gfx::PointF(bounds.x() + bounds.width() * kCanvasAmbient2CenterXFrac,
+                    bounds.y() + bounds.height() * kCanvasAmbient2CenterYFrac),
+        bounds.height() * kCanvasAmbient2RadiusFrac, ambient_flags);
 
     cc::PaintFlags dot_flags;
     dot_flags.setAntiAlias(true);
     dot_flags.setStyle(cc::PaintFlags::kFill_Style);
     dot_flags.setColor(WithAlpha(SK_ColorWHITE, 0x30));
 
-    for (int row = 0, y = bounds.y() + 16; y < bounds.bottom() - 16;
+    for (int row = 0, y = bounds.y() + kCanvasDotGridMargin;
+         y < bounds.bottom() - kCanvasDotGridMargin;
          y += kThemeCanvasDotSpacing, ++row) {
       const int x_offset = row % 2 == 0 ? 0 : kThemeCanvasDotSpacing / 2;
-      for (int x = bounds.x() + 18 + x_offset; x < bounds.right() - 18;
+      for (int x = bounds.x() + kCanvasDotGridInsetX + x_offset;
+           x < bounds.right() - kCanvasDotGridInsetX;
            x += kThemeCanvasDotSpacing) {
-        canvas->DrawCircle(gfx::PointF(x, y), 1.2f, dot_flags);
+        canvas->DrawCircle(gfx::PointF(x, y), kCanvasDotRadius, dot_flags);
       }
     }
   }
@@ -328,17 +403,19 @@ class ThemeWaveView : public views::View {
     cc::PaintFlags wave_flags;
     wave_flags.setAntiAlias(true);
     wave_flags.setStyle(cc::PaintFlags::kFill_Style);
-    wave_flags.setColor(SkColorSetARGB(0x80, 0x8C, 0x91, 0xA3));
+    wave_flags.setColor(SkColorSetARGB(0x6E, 0x98, 0x9C, 0xA8));
 
-    const float amplitude = 4.0f + (grain_ / 100.0f) * 9.0f;
+    const float amplitude = kWaveAmplitudeBase + (grain_ / 100.0f) * kWaveAmplitudeScale;
     const float center_y = bounds.CenterPoint().y();
-    const float start_x = bounds.x() + 8.0f;
-    const float step = 6.0f;
-    const int sample_count = std::max(1, (bounds.width() - 16) / 6);
+    const float start_x = bounds.x() + kWaveHorizMargin;
+    const float step = kWaveDotStep;
+    const int sample_count = std::max(
+        1, (bounds.width() - static_cast<int>(kWaveHorizMargin * 2)) /
+               static_cast<int>(kWaveDotStep));
     for (int i = 0; i <= sample_count; ++i) {
       const float x = start_x + i * step;
-      const float y = center_y + std::sin(i * 0.58f) * amplitude;
-      canvas->DrawCircle(gfx::PointF(x, y), 1.9f, wave_flags);
+      const float y = center_y + std::sin(i * kWaveAngularFrequency) * amplitude;
+      canvas->DrawCircle(gfx::PointF(x, y), kWaveDotRadius, wave_flags);
     }
   }
 
@@ -369,31 +446,33 @@ class ThemeDialView : public views::View {
     }
 
     const gfx::PointF center(bounds.CenterPoint().x(), bounds.CenterPoint().y());
-    const float outer_radius = std::min(bounds.width(), bounds.height()) / 2.0f - 6.0f;
-    const float inner_radius = outer_radius - 10.0f;
+    const float outer_radius =
+        std::min(bounds.width(), bounds.height()) / 2.0f - kDialOuterEdgeInset;
+    const float inner_radius = outer_radius - kDialRingTrackWidth;
     const SkColor accent = BuildSkColorForSelection(selection_);
 
     cc::PaintFlags ring_flags;
     ring_flags.setAntiAlias(true);
     ring_flags.setStyle(cc::PaintFlags::kStroke_Style);
-    ring_flags.setStrokeWidth(1.2f);
-    ring_flags.setColor(SkColorSetARGB(0x6A, 0xB8, 0xBD, 0xCC));
+    ring_flags.setStrokeWidth(kDialRingStrokeWidth);
+    ring_flags.setColor(SkColorSetARGB(0x56, 0xB2, 0xB7, 0xC2));
     canvas->DrawCircle(center, inner_radius, ring_flags);
 
     cc::PaintFlags dot_flags;
     dot_flags.setAntiAlias(true);
     dot_flags.setStyle(cc::PaintFlags::kFill_Style);
-    dot_flags.setColor(SkColorSetARGB(0x66, 0xB8, 0xBD, 0xCC));
-    for (int i = 0; i < 18; ++i) {
-      const float theta = (kPi * 2.0f * i) / 18.0f - (kPi / 2.0f);
+    dot_flags.setColor(SkColorSetARGB(0x50, 0xB2, 0xB7, 0xC2));
+    for (int i = 0; i < kDialDotCount; ++i) {
+      const float theta =
+          (kPi * 2.0f * i) / kDialDotCount - (kPi / 2.0f);
       canvas->DrawCircle(
           gfx::PointF(center.x() + std::cos(theta) * outer_radius,
                       center.y() + std::sin(theta) * outer_radius),
-          1.5f, dot_flags);
+          kDialDotRadius, dot_flags);
     }
 
     const float knob_theta =
-        (-kPi / 2.0f) + ((selection_.grain / 100.0f) * kPi * 1.8f);
+        (-kPi / 2.0f) + ((selection_.grain / 100.0f) * kPi * kDialKnobArcFraction);
     cc::PaintFlags knob_flags;
     knob_flags.setAntiAlias(true);
     knob_flags.setStyle(cc::PaintFlags::kFill_Style);
@@ -401,67 +480,13 @@ class ThemeDialView : public views::View {
     canvas->DrawCircle(
         gfx::PointF(center.x() + std::cos(knob_theta) * inner_radius,
                     center.y() + std::sin(knob_theta) * inner_radius),
-        4.0f, knob_flags);
+        kDialKnobDotRadius, knob_flags);
   }
 
  private:
   MahoSidebarCreateSpaceThemeSelection selection_;
 };
 
-class ThemeHeroBadgeView : public views::View {
-  METADATA_HEADER(ThemeHeroBadgeView, views::View)
-
- public:
-  ThemeHeroBadgeView() {
-    SetPreferredSize(gfx::Size(110, 80));
-
-    auto make_card = [](const std::u16string& glyph) {
-      auto card = std::make_unique<views::View>();
-      card->SetBackground(views::CreateRoundedRectBackground(
-          SkColorSetRGB(0xF6, 0xF1, 0xF4), 12));
-      card->SetBorder(views::CreateRoundedRectBorder(
-          1, 12, SkColorSetARGB(0x18, 0x00, 0x00, 0x00)));
-      auto* layout = card->SetLayoutManager(std::make_unique<views::BoxLayout>(
-          views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 0));
-      layout->set_main_axis_alignment(
-          views::BoxLayout::MainAxisAlignment::kCenter);
-      layout->set_cross_axis_alignment(
-          views::BoxLayout::CrossAxisAlignment::kCenter);
-      auto* label = card->AddChildView(std::make_unique<views::Label>(glyph));
-      label->SetAutoColorReadabilityEnabled(false);
-      label->SetEnabledColor(SkColorSetRGB(0x3A, 0x36, 0x47));
-      label->SetTextStyle(views::style::STYLE_BODY_4_MEDIUM);
-      label->SetHorizontalAlignment(gfx::ALIGN_CENTER);
-      return card;
-    };
-
-    left_card_ = AddChildView(make_card(u"🌿"));
-    center_card_ = AddChildView(make_card(u"▥"));
-    right_card_ = AddChildView(make_card(u"✦"));
-  }
-
-  ThemeHeroBadgeView(const ThemeHeroBadgeView&) = delete;
-  ThemeHeroBadgeView& operator=(const ThemeHeroBadgeView&) = delete;
-  ~ThemeHeroBadgeView() override = default;
-
-  void Layout(PassKey) override {
-    LayoutSuperclass<views::View>(this);
-    const gfx::Rect bounds = GetContentsBounds();
-    const int card_width = 34;
-    const int card_height = 48;
-    left_card_->SetBounds(bounds.x() + 12, bounds.y() + 16, card_width,
-                          card_height);
-    center_card_->SetBounds(bounds.CenterPoint().x() - (card_width / 2),
-                            bounds.y() + 4, card_width, 54);
-    right_card_->SetBounds(bounds.right() - card_width - 12, bounds.y() + 16,
-                           card_width, card_height);
-  }
-
- private:
-  raw_ptr<views::View> left_card_ = nullptr;
-  raw_ptr<views::View> center_card_ = nullptr;
-  raw_ptr<views::View> right_card_ = nullptr;
-};
 
 views::Label* AddLabel(views::View* parent,
                        const std::u16string& text,
@@ -539,9 +564,6 @@ BEGIN_METADATA(ThemeWaveView)
 END_METADATA
 
 BEGIN_METADATA(ThemeDialView)
-END_METADATA
-
-BEGIN_METADATA(ThemeHeroBadgeView)
 END_METADATA
 
 views::View* CreateInfoCard(views::View* parent,
@@ -632,6 +654,44 @@ CreateResult CreateSpaceOnPool(const std::string& name,
   return result;
 }
 
+class ThemePickerContentsView : public views::View {
+ public:
+  ThemePickerContentsView() = default;
+  ThemePickerContentsView(const ThemePickerContentsView&) = delete;
+  ThemePickerContentsView& operator=(const ThemePickerContentsView&) = delete;
+  ~ThemePickerContentsView() override = default;
+
+  void SetAcceleratorHandlers(base::RepeatingCallback<bool()> on_accept,
+                              base::RepeatingCallback<bool()> on_cancel) {
+    on_accept_ = std::move(on_accept);
+    on_cancel_ = std::move(on_cancel);
+  }
+
+  bool AcceleratorPressed(const ui::Accelerator& accelerator) override {
+    if (accelerator.key_code() == ui::VKEY_RETURN) {
+      if (on_accept_ && on_accept_.Run()) {
+        if (auto* widget = GetWidget()) {
+          widget->Close();
+        }
+      }
+      return true;
+    }
+    if (accelerator.key_code() == ui::VKEY_ESCAPE) {
+      if (on_cancel_ && on_cancel_.Run()) {
+        if (auto* widget = GetWidget()) {
+          widget->Close();
+        }
+      }
+      return true;
+    }
+    return false;
+  }
+
+ private:
+  base::RepeatingCallback<bool()> on_accept_;
+  base::RepeatingCallback<bool()> on_cancel_;
+};
+
 class MahoCreateSpaceThemePickerDialogView : public views::DialogDelegate {
  public:
   using ThemeChosenCallback =
@@ -641,268 +701,59 @@ class MahoCreateSpaceThemePickerDialogView : public views::DialogDelegate {
       MahoSidebarCreateSpaceThemeSelection selection,
       ThemeChosenCallback chosen_callback)
       : selection_(selection), chosen_callback_(std::move(chosen_callback)) {
-    SetButtons(0);
+    SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
+    SetShowCloseButton(false);
+    SetShowTitle(false);
+    SetCanResize(false);
+    // kWindow: blocks interaction with the parent browser window while the
+    // frameless chooser is open.  params.parent (not params.context) is set in
+    // ShowThemePickerDialog() to satisfy the parent-widget relationship that
+    // kWindow modality requires.
     SetModalType(ui::mojom::ModalType::kWindow);
     set_fixed_width(kThemeDialogWidth);
 
-    auto* contents_view = SetContentsView(std::make_unique<views::View>());
+    auto* contents_view = SetContentsView(std::make_unique<ThemePickerContentsView>());
+    contents_view->SetAcceleratorHandlers(
+        base::BindRepeating(&MahoCreateSpaceThemePickerDialogView::Accept,
+                            base::Unretained(this)),
+        base::BindRepeating(&MahoCreateSpaceThemePickerDialogView::Cancel,
+                            base::Unretained(this)));
+    contents_view->AddAccelerator(
+        ui::Accelerator(ui::VKEY_RETURN, ui::EF_NONE));
+    contents_view->AddAccelerator(
+        ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE));
     auto* layout = contents_view->SetLayoutManager(std::make_unique<views::BoxLayout>(
-        views::BoxLayout::Orientation::kVertical, gfx::Insets(8), 0));
+        views::BoxLayout::Orientation::kVertical,
+        gfx::Insets::TLBR(kChooserShellInsetTop, kChooserShellInsetHoriz,
+                           kChooserShellInsetBottom, kChooserShellInsetHoriz),
+        kChooserShellSectionGap));
     layout->set_cross_axis_alignment(
         views::BoxLayout::CrossAxisAlignment::kStretch);
-    contents_view->SetBackground(views::CreateSolidBackground(
-        GetThemeDialogShellColor()));
+    contents_view->SetBackground(views::CreateRoundedRectBackground(
+        GetThemeDialogBackgroundColor(), kThemeDialogSurfaceCornerRadius));
+    contents_view->SetBorder(views::CreateRoundedRectBorder(
+        1, kThemeDialogSurfaceCornerRadius, GetThemeDialogShellBorderColor()));
 
-    auto* shell = contents_view->AddChildView(std::make_unique<views::View>());
-    auto* shell_layout = shell->SetLayoutManager(std::make_unique<views::BoxLayout>(
-        views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 0));
-    shell_layout->set_cross_axis_alignment(
-        views::BoxLayout::CrossAxisAlignment::kStretch);
-    shell->SetBackground(views::CreateRoundedRectBackground(
-        GetThemeDialogShellColor(), kThemeDialogSurfaceCornerRadius));
-    shell->SetBorder(views::CreateRoundedRectBorder(
-        1, kThemeDialogSurfaceCornerRadius, GetThemeDialogCardBorderColor()));
-
-    auto* left_panel = shell->AddChildView(std::make_unique<views::View>());
-    left_panel->SetPreferredSize(gfx::Size(kThemeDialogLeftPanelWidth, 0));
-    left_panel->SetBackground(
-        views::CreateSolidBackground(GetThemeDialogLeftPanelColor()));
-    auto* left_layout = left_panel->SetLayoutManager(std::make_unique<views::BoxLayout>(
-        views::BoxLayout::Orientation::kVertical,
-        gfx::Insets::TLBR(22, 20, 22, 20), 12));
-    left_layout->set_cross_axis_alignment(
-        views::BoxLayout::CrossAxisAlignment::kStretch);
-
-    auto* hero_badge = left_panel->AddChildView(
-        std::make_unique<ThemeHeroBadgeView>());
-    hero_badge->SetProperty(views::kMarginsKey, gfx::Insets::TLBR(0, 8, 6, 8));
-
-    auto* title_label = AddLabel(left_panel, u"Create a Space",
-                                 views::style::STYLE_HEADLINE_3,
-                                 ui::kColorSysOnSurface, true);
-    title_label->SetMaximumWidth(300);
-    title_label->SetEnabledColor(SK_ColorWHITE);
-
-    auto* subtitle_label = AddLabel(
-        left_panel,
-        u"Separate your tabs for life,\nwork, projects, and more.",
-        views::style::STYLE_BODY_3, ui::kColorSysOnSurfaceSubtle, true);
-    subtitle_label->SetMaximumWidth(300);
-    subtitle_label->SetEnabledColor(GetThemeDialogSoftTextColor());
-    subtitle_label->SetProperty(views::kMarginsKey,
-                                gfx::Insets::TLBR(0, 0, 14, 0));
-
-    auto make_dialog_card = [](views::View* parent, const gfx::Insets& insets,
-                               int spacing) {
-      auto* card = parent->AddChildView(std::make_unique<views::View>());
-      auto* card_layout = card->SetLayoutManager(std::make_unique<views::BoxLayout>(
-          views::BoxLayout::Orientation::kHorizontal, insets, spacing));
-      card_layout->set_cross_axis_alignment(
-          views::BoxLayout::CrossAxisAlignment::kCenter);
-      card->SetBackground(views::CreateRoundedRectBackground(
-          GetThemeDialogCardColor(), 16));
-      card->SetBorder(views::CreateRoundedRectBorder(
-          1, 16, GetThemeDialogCardBorderColor()));
-      return card;
-    };
-
-    auto* name_card = make_dialog_card(
-        left_panel, gfx::Insets::TLBR(16, 14, 16, 14), 12);
-    auto* name_icon_shell = name_card->AddChildView(std::make_unique<views::View>());
-    name_icon_shell->SetPreferredSize(gfx::Size(36, 36));
-    name_icon_shell->SetBackground(views::CreateRoundedRectBackground(
-        SkColorSetARGB(0x12, 0xFF, 0xFF, 0xFF), 12));
-    name_icon_shell->SetBorder(views::CreateRoundedRectBorder(
-        1, 12, GetThemeDialogCardBorderColor()));
-    auto* name_icon_layout = name_icon_shell->SetLayoutManager(
-        std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal,
-                                           gfx::Insets(), 0));
-    name_icon_layout->set_main_axis_alignment(
-        views::BoxLayout::MainAxisAlignment::kCenter);
-    name_icon_layout->set_cross_axis_alignment(
-        views::BoxLayout::CrossAxisAlignment::kCenter);
-    auto* plus_icon = AddLabel(name_icon_shell, u"＋",
-                               views::style::STYLE_BODY_4_MEDIUM,
-                               ui::kColorSysOnSurfaceSubtle);
-    plus_icon->SetHorizontalAlignment(gfx::ALIGN_CENTER);
-    plus_icon->SetEnabledColor(GetThemeDialogSoftTextColor());
-
-    auto* name_text = name_card->AddChildView(std::make_unique<views::View>());
-    auto* name_text_layout = name_text->SetLayoutManager(
-        std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal,
-                                           gfx::Insets(), 0));
-    name_text_layout->set_cross_axis_alignment(
-        views::BoxLayout::CrossAxisAlignment::kCenter);
-    static_cast<views::BoxLayout*>(name_card->GetLayoutManager())
-        ->SetFlexForView(name_text, 1);
-    auto* name_placeholder = AddLabel(name_text, u"Space name...",
-                                      views::style::STYLE_HEADLINE_5,
-                                      ui::kColorSysOnSurfaceSubtle);
-    name_placeholder->SetEnabledColor(GetThemeDialogSoftTextColor());
-
-    auto* profile_card = make_dialog_card(
-        left_panel, gfx::Insets::TLBR(12, 14, 12, 14), 12);
-    auto* profile_glyph = profile_card->AddChildView(std::make_unique<views::View>());
-    profile_glyph->SetPreferredSize(gfx::Size(36, 36));
-    auto* profile_glyph_layout = profile_glyph->SetLayoutManager(
-        std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal,
-                                           gfx::Insets(), 0));
-    profile_glyph_layout->set_main_axis_alignment(
-        views::BoxLayout::MainAxisAlignment::kCenter);
-    profile_glyph_layout->set_cross_axis_alignment(
-        views::BoxLayout::CrossAxisAlignment::kCenter);
-    auto* profile_icon = AddLabel(profile_glyph, u"◡",
-                                  views::style::STYLE_HEADLINE_5,
-                                  ui::kColorSysOnSurfaceSubtle);
-    profile_icon->SetHorizontalAlignment(gfx::ALIGN_CENTER);
-    profile_icon->SetEnabledColor(GetThemeDialogSoftTextColor());
-
-    auto* profile_title = AddLabel(profile_card, u"Profile",
-                                   views::style::STYLE_HEADLINE_5,
-                                   ui::kColorSysOnSurface);
-    profile_title->SetEnabledColor(SK_ColorWHITE);
-
-    auto* profile_pill = profile_card->AddChildView(std::make_unique<views::View>());
-    profile_pill->SetBackground(views::CreateRoundedRectBackground(
-        SkColorSetARGB(0x20, 0xFF, 0xFF, 0xFF), 18));
-    auto* profile_pill_layout = profile_pill->SetLayoutManager(
-        std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal,
-                                           gfx::Insets::VH(8, 14), 8));
-    profile_pill_layout->set_cross_axis_alignment(
-        views::BoxLayout::CrossAxisAlignment::kCenter);
-    auto* profile_value = AddLabel(profile_pill, u"Default",
-                                   views::style::STYLE_BODY_3_MEDIUM,
-                                   ui::kColorSysOnSurface);
-    profile_value->SetEnabledColor(SK_ColorWHITE);
-    auto* profile_chevron = AddLabel(profile_pill, u"⌄",
-                                     views::style::STYLE_BODY_3_MEDIUM,
-                                     ui::kColorSysOnSurfaceSubtle);
-    profile_chevron->SetEnabledColor(SK_ColorWHITE);
-    profile_chevron->SetHorizontalAlignment(gfx::ALIGN_CENTER);
-
-    auto* profile_spacer = profile_card->AddChildView(std::make_unique<views::View>());
-    static_cast<views::BoxLayout*>(profile_card->GetLayoutManager())
-        ->SetFlexForView(profile_spacer, 1);
-
-    auto* info_shell = profile_card->AddChildView(std::make_unique<views::View>());
-    info_shell->SetPreferredSize(gfx::Size(28, 28));
-    info_shell->SetBackground(views::CreateRoundedRectBackground(
-        SkColorSetARGB(0x14, 0xFF, 0xFF, 0xFF), 14));
-    info_shell->SetBorder(views::CreateRoundedRectBorder(
-        1, 14, GetThemeDialogCardBorderColor()));
-    auto* info_layout = info_shell->SetLayoutManager(
-        std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal,
-                                           gfx::Insets(), 0));
-    info_layout->set_main_axis_alignment(
-        views::BoxLayout::MainAxisAlignment::kCenter);
-    info_layout->set_cross_axis_alignment(
-        views::BoxLayout::CrossAxisAlignment::kCenter);
-    auto* info_label = AddLabel(info_shell, u"i",
-                                views::style::STYLE_BODY_4_MEDIUM,
-                                ui::kColorSysOnSurfaceSubtle);
-    info_label->SetEnabledColor(SK_ColorWHITE);
-    info_label->SetHorizontalAlignment(gfx::ALIGN_CENTER);
-
-    theme_button_ = left_panel->AddChildView(std::make_unique<views::MdTextButton>(
-        base::BindRepeating(&MahoCreateSpaceThemePickerDialogView::OnThemePressed,
-                            weak_factory_.GetWeakPtr()),
-        std::u16string()));
-    auto* theme_card_layout = theme_button_->SetLayoutManager(
-        std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal,
-                                           gfx::Insets::TLBR(18, 16, 18, 16), 12));
-    theme_card_layout->set_cross_axis_alignment(
-        views::BoxLayout::CrossAxisAlignment::kCenter);
-    theme_button_->SetAccessibleName(u"Choose theme");
-    theme_button_->SetBackground(views::CreateRoundedRectBackground(
-        GetThemeDialogCardColor(), 16));
-    theme_button_->SetBorder(views::CreateRoundedRectBorder(
-        1, 16, GetThemeDialogCardBorderColor()));
-
-    auto* theme_glyph_shell = theme_button_->AddChildView(std::make_unique<views::View>());
-    theme_glyph_shell->SetPreferredSize(gfx::Size(36, 36));
-    theme_glyph_shell->SetLayoutManager(std::make_unique<views::BoxLayout>(
-        views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 0));
-    static_cast<views::BoxLayout*>(theme_glyph_shell->GetLayoutManager())
-        ->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kCenter);
-    static_cast<views::BoxLayout*>(theme_glyph_shell->GetLayoutManager())
-        ->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
-    auto* theme_glyph = AddLabel(theme_glyph_shell, u"✎",
-                                 views::style::STYLE_HEADLINE_5,
-                                 ui::kColorSysOnSurfaceSubtle);
-    theme_glyph->SetHorizontalAlignment(gfx::ALIGN_CENTER);
-    theme_glyph->SetEnabledColor(GetThemeDialogSoftTextColor());
-
-    auto* theme_text = theme_button_->AddChildView(std::make_unique<views::View>());
-    auto* theme_text_layout = theme_text->SetLayoutManager(
-        std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical,
-                                           gfx::Insets(), 4));
-    theme_text_layout->set_cross_axis_alignment(
-        views::BoxLayout::CrossAxisAlignment::kStretch);
-    theme_card_layout->SetFlexForView(theme_text, 1);
-    auto* theme_title = AddLabel(theme_text, u"Choose a Theme",
-                                 views::style::STYLE_HEADLINE_4,
-                                 ui::kColorSysOnSurface);
-    theme_title->SetEnabledColor(SK_ColorWHITE);
-    theme_summary_label_ = AddLabel(theme_text, u"",
-                                    views::style::STYLE_BODY_5,
-                                    ui::kColorSysOnSurfaceSubtle, true);
-    theme_summary_label_->SetEnabledColor(GetThemeDialogSoftTextColor());
-
-    theme_preview_dot_ = theme_button_->AddChildView(std::make_unique<views::View>());
-    theme_preview_dot_->SetPreferredSize(gfx::Size(18, 18));
-
-    auto* left_spacer = left_panel->AddChildView(std::make_unique<views::View>());
-    left_layout->SetFlexForView(left_spacer, 1);
-
-    auto* action_row = left_panel->AddChildView(std::make_unique<views::View>());
-    auto* action_layout = action_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
-        views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 10));
-    action_layout->set_cross_axis_alignment(
-        views::BoxLayout::CrossAxisAlignment::kCenter);
-
-    dismiss_button_ = action_row->AddChildView(std::make_unique<views::MdTextButton>(
-        base::BindRepeating(&MahoCreateSpaceThemePickerDialogView::OnDismissPressed,
-                            weak_factory_.GetWeakPtr()),
-        u"Close"));
-    dismiss_button_->SetCornerRadius(16);
-    dismiss_button_->SetMinSize(gfx::Size(112, 44));
-    dismiss_button_->SetAccessibleName(u"Close theme picker");
-
-    apply_button_ = action_row->AddChildView(std::make_unique<views::MdTextButton>(
-        base::BindRepeating(&MahoCreateSpaceThemePickerDialogView::OnConfirmPressed,
-                            weak_factory_.GetWeakPtr()),
-        u"Use Theme"));
-    apply_button_->SetCornerRadius(16);
-    apply_button_->SetMinSize(gfx::Size(150, 44));
-    apply_button_->SetAccessibleName(u"Use selected theme");
-
-    auto* right_panel = shell->AddChildView(std::make_unique<views::View>());
-    right_panel->SetBackground(
-        views::CreateSolidBackground(GetThemeDialogRightPanelColor()));
-    auto* right_layout = right_panel->SetLayoutManager(std::make_unique<views::BoxLayout>(
-        views::BoxLayout::Orientation::kVertical,
-        gfx::Insets::TLBR(12, 12, 14, 12), 12));
-    right_layout->set_cross_axis_alignment(
-        views::BoxLayout::CrossAxisAlignment::kStretch);
-    shell_layout->SetFlexForView(right_panel, 1);
-
-    preview_view_ = right_panel->AddChildView(std::make_unique<ThemeCanvasView>());
+    preview_view_ = contents_view->AddChildView(std::make_unique<ThemeCanvasView>());
     preview_view_->SetPreferredSize(gfx::Size(0, kThemeCanvasHeight));
     preview_view_->SetBorder(views::CreateRoundedRectBorder(
-        1, kThemeCanvasCornerRadius, GetThemeDialogCardBorderColor()));
+        1, kThemeCanvasCornerRadius, GetThemeDialogCanvasBorderColor()));
     preview_view_->SetBackground(views::CreateRoundedRectBackground(
         GetThemeCanvasBackgroundColor(selection_), kThemeCanvasCornerRadius));
     auto* canvas_layout = preview_view_->SetLayoutManager(std::make_unique<views::BoxLayout>(
-        views::BoxLayout::Orientation::kVertical, gfx::Insets::TLBR(18, 18, 16, 18),
+        views::BoxLayout::Orientation::kVertical,
+        gfx::Insets::TLBR(kChooserCanvasInsetTopLeft, kChooserCanvasInsetTopLeft,
+                           kChooserCanvasInsetBottom, kChooserCanvasInsetTopLeft),
         0));
     canvas_layout->set_cross_axis_alignment(
         views::BoxLayout::CrossAxisAlignment::kStretch);
-    right_layout->SetFlexForView(preview_view_, 1);
+    layout->SetFlexForView(preview_view_, 1);
 
     auto* chip_row = preview_view_->AddChildView(std::make_unique<views::View>());
     auto* chip_layout = chip_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
-        views::BoxLayout::Orientation::kHorizontal, gfx::Insets::TLBR(4, 0, 0, 0),
-        22));
+        views::BoxLayout::Orientation::kHorizontal,
+        gfx::Insets::TLBR(kChooserChipRowTopPad, 0, 0, 0),
+        kChooserChipRowGap));
     chip_layout->set_main_axis_alignment(
         views::BoxLayout::MainAxisAlignment::kCenter);
     chip_layout->set_cross_axis_alignment(
@@ -947,7 +798,7 @@ class MahoCreateSpaceThemePickerDialogView : public views::DialogDelegate {
                                       views::style::STYLE_HEADLINE_4,
                                       ui::kColorSysOnSurface, true);
     preview_message_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
-    preview_message_label_->SetMaximumWidth(450);
+    preview_message_label_->SetMaximumWidth(kChooserPreviewMessageMaxWidth);
     preview_message_label_->SetEnabledColor(SK_ColorWHITE);
 
     auto* middle_spacer = preview_view_->AddChildView(std::make_unique<views::View>());
@@ -956,7 +807,8 @@ class MahoCreateSpaceThemePickerDialogView : public views::DialogDelegate {
     auto* brightness_row = preview_view_->AddChildView(std::make_unique<views::View>());
     auto* brightness_layout = brightness_row->SetLayoutManager(
         std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal,
-                                           gfx::Insets::TLBR(0, 0, 20, 0), 64));
+                                           gfx::Insets::TLBR(0, 0, kChooserBrightnessRowBottomPad, 0),
+                                           kChooserBrightnessRowGap));
     brightness_layout->set_main_axis_alignment(
         views::BoxLayout::MainAxisAlignment::kCenter);
     brightness_minus_button_ = CreateCircularGlyphButton(
@@ -967,7 +819,7 @@ class MahoCreateSpaceThemePickerDialogView : public views::DialogDelegate {
                 return;
               }
               view->selection_.brightness =
-                  ClampBrightness(view->selection_.brightness - 5);
+                  ClampBrightness(view->selection_.brightness - kChooserBrightnessStep);
               view->UpdateUi();
             },
             weak_factory_.GetWeakPtr()),
@@ -981,17 +833,20 @@ class MahoCreateSpaceThemePickerDialogView : public views::DialogDelegate {
                 return;
               }
               view->selection_.brightness =
-                  ClampBrightness(view->selection_.brightness + 5);
+                  ClampBrightness(view->selection_.brightness + kChooserBrightnessStep);
               view->UpdateUi();
             },
             weak_factory_.GetWeakPtr()),
         u"+", u"Increase brightness", kThemePreviewControlSize,
         kThemePreviewControlSize / 2);
 
-    auto* swatch_nav_row = right_panel->AddChildView(std::make_unique<views::View>());
+    auto* swatch_nav_row = contents_view->AddChildView(std::make_unique<views::View>());
     auto* swatch_nav_layout = swatch_nav_row->SetLayoutManager(
         std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal,
-                                           gfx::Insets::TLBR(0, 22, 0, 22), 18));
+                                           gfx::Insets::TLBR(0, kChooserSwatchNavHorizPad,
+                                                              kChooserSwatchNavBottomPad,
+                                                              kChooserSwatchNavHorizPad),
+                                           kChooserSwatchNavGap));
     swatch_nav_layout->set_cross_axis_alignment(
         views::BoxLayout::CrossAxisAlignment::kCenter);
 
@@ -1012,14 +867,24 @@ class MahoCreateSpaceThemePickerDialogView : public views::DialogDelegate {
         u"‹", u"Previous color", kThemeChevronButtonSize,
         kThemeChevronButtonSize / 2);
 
-    swatch_row_ = swatch_nav_row->AddChildView(std::make_unique<views::View>());
+    auto swatch_scroll = std::make_unique<views::ScrollView>();
+    swatch_scroll->SetBackgroundColor(std::nullopt);
+    swatch_scroll->SetHorizontalScrollBarMode(
+        views::ScrollView::ScrollBarMode::kHiddenButEnabled);
+    swatch_scroll->SetVerticalScrollBarMode(
+        views::ScrollView::ScrollBarMode::kDisabled);
+    auto swatch_row_owned = std::make_unique<views::View>();
+    swatch_row_ = swatch_row_owned.get();
     auto* swatch_layout = swatch_row_->SetLayoutManager(
         std::make_unique<views::BoxLayout>(
             views::BoxLayout::Orientation::kHorizontal, gfx::Insets(),
             kSwatchSpacing));
     swatch_layout->set_main_axis_alignment(
         views::BoxLayout::MainAxisAlignment::kCenter);
-    swatch_nav_layout->SetFlexForView(swatch_row_, 1);
+    swatch_scroll->SetContents(std::move(swatch_row_owned));
+    auto* swatch_scroll_view =
+        swatch_nav_row->AddChildView(std::move(swatch_scroll));
+    swatch_nav_layout->SetFlexForView(swatch_scroll_view, 1);
 
     for (int i = 0; i < static_cast<int>(std::size(kColorPresets)); ++i) {
       const auto& preset = kColorPresets.at(i);
@@ -1066,14 +931,17 @@ class MahoCreateSpaceThemePickerDialogView : public views::DialogDelegate {
         u"›", u"Next color", kThemeChevronButtonSize,
         kThemeChevronButtonSize / 2);
 
-    auto* lower_row = right_panel->AddChildView(std::make_unique<views::View>());
+    auto* lower_row = contents_view->AddChildView(std::make_unique<views::View>());
     auto* lower_layout = lower_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
-        views::BoxLayout::Orientation::kHorizontal, gfx::Insets::TLBR(10, 18, 4, 18), 24));
+        views::BoxLayout::Orientation::kHorizontal,
+        gfx::Insets::TLBR(kChooserLowerTopPad, kChooserLowerLeftPad,
+                           kChooserLowerBottomPad, kChooserLowerRightPad),
+        kChooserLowerGap));
     lower_layout->set_cross_axis_alignment(
         views::BoxLayout::CrossAxisAlignment::kEnd);
 
     wave_view_ = lower_row->AddChildView(std::make_unique<ThemeWaveView>());
-    wave_view_->SetPreferredSize(gfx::Size(0, 84));
+    wave_view_->SetPreferredSize(gfx::Size(0, kChooserWaveViewHeight));
     lower_layout->SetFlexForView(wave_view_, 1);
 
     grain_dial_button_ = CreateCircularGlyphButton(
@@ -1083,9 +951,9 @@ class MahoCreateSpaceThemePickerDialogView : public views::DialogDelegate {
               if (!view) {
                 return;
               }
-              view->selection_.grain = view->selection_.grain >= 100
-                                           ? 0
-                                           : ClampGrain(view->selection_.grain + 10);
+              view->selection_.grain = view->selection_.grain >= kChooserGrainMax
+                                           ? kChooserGrainMin
+                                           : ClampGrain(view->selection_.grain + kChooserGrainStep);
               view->UpdateUi();
             },
             weak_factory_.GetWeakPtr()),
@@ -1100,6 +968,58 @@ class MahoCreateSpaceThemePickerDialogView : public views::DialogDelegate {
     grain_dial_view_ = grain_dial_button_->AddChildView(std::make_unique<ThemeDialView>());
     grain_dial_view_->SetPreferredSize(
         gfx::Size(kThemeGrainDialSize, kThemeGrainDialSize));
+
+    auto* footer_row = contents_view->AddChildView(std::make_unique<views::View>());
+    auto* footer_layout = footer_row->SetLayoutManager(
+        std::make_unique<views::BoxLayout>(
+            views::BoxLayout::Orientation::kHorizontal,
+            gfx::Insets::TLBR(kChooserFooterTopPadding,
+                               kChooserFooterHorizPadding,
+                               kChooserFooterBottomPadding,
+                               kChooserFooterHorizPadding),
+            kChooserFooterButtonSpacing));
+    footer_layout->set_main_axis_alignment(
+        views::BoxLayout::MainAxisAlignment::kEnd);
+    footer_layout->set_cross_axis_alignment(
+        views::BoxLayout::CrossAxisAlignment::kCenter);
+
+    cancel_footer_button_ = footer_row->AddChildView(
+        std::make_unique<views::MdTextButton>(
+            base::BindRepeating(
+                [](base::WeakPtr<MahoCreateSpaceThemePickerDialogView> view) {
+                  if (!view) {
+                    return;
+                  }
+                  if (view->Cancel()) {
+                    if (auto* widget = view->GetWidget()) {
+                      widget->Close();
+                    }
+                  }
+                },
+                weak_factory_.GetWeakPtr()),
+            u"Cancel"));
+    cancel_footer_button_->SetStyle(ui::ButtonStyle::kText);
+    cancel_footer_button_->SetAccessibleName(u"Cancel theme chooser");
+    cancel_footer_button_->SetEnabledTextColors(GetThemeDialogSoftTextColor());
+
+    done_button_ = footer_row->AddChildView(
+        std::make_unique<views::MdTextButton>(
+            base::BindRepeating(
+                [](base::WeakPtr<MahoCreateSpaceThemePickerDialogView> view) {
+                  if (!view) {
+                    return;
+                  }
+                  if (view->Accept()) {
+                    if (auto* widget = view->GetWidget()) {
+                      widget->Close();
+                    }
+                  }
+                },
+                weak_factory_.GetWeakPtr()),
+            u"Done"));
+    done_button_->SetStyle(ui::ButtonStyle::kProminent);
+    done_button_->SetCornerRadius(kChooserDoneButtonCornerRadius);
+    done_button_->SetAccessibleName(u"Apply theme");
 
     UpdateUi();
   }
@@ -1134,54 +1054,21 @@ class MahoCreateSpaceThemePickerDialogView : public views::DialogDelegate {
   ~MahoCreateSpaceThemePickerDialogView() override = default;
 
  private:
-  void OnThemePressed() {
-    // The theme card acts as a passive left-side affordance in the split
-    // composition, so keep focus on the live composer rather than re-opening
-    // nested dialogs.
-    if (preview_view_) {
-      preview_view_->RequestFocus();
-    }
-  }
-
-  void OnConfirmPressed() {
-    if (Accept() && GetWidget()) {
-      GetWidget()->Close();
-    }
-  }
-
-  void OnDismissPressed() {
-    if (GetWidget()) {
-      GetWidget()->Close();
-    }
-  }
-
   void UpdateUi() {
     selection_.preset_index = ClampPresetIndex(selection_.preset_index);
     selection_.brightness = ClampBrightness(selection_.brightness);
     selection_.grain = ClampGrain(selection_.grain);
     const SkColor accent = BuildSkColorForSelection(selection_);
     const SkColor chip_background = SkColorSetARGB(0x18, 0xFF, 0xFF, 0xFF);
-    const SkColor chip_border = GetThemeDialogCardBorderColor();
+    const SkColor chip_border = GetThemeDialogCanvasBorderColor();
     const SkColor selected_ring = SkColorSetRGB(0xE8, 0xDD, 0xD2);
 
     if (preview_view_) {
       preview_view_->SetBackground(views::CreateRoundedRectBackground(
           GetThemeCanvasBackgroundColor(selection_), kThemeCanvasCornerRadius));
       preview_view_->SetBorder(views::CreateRoundedRectBorder(
-          1, kThemeCanvasCornerRadius, GetThemeDialogCardBorderColor()));
+          1, kThemeCanvasCornerRadius, GetThemeDialogCanvasBorderColor()));
       preview_view_->SetSelection(selection_);
-    }
-    if (theme_summary_label_) {
-      theme_summary_label_->SetText(BuildThemeSummaryForSelection(selection_));
-      theme_summary_label_->SetEnabledColor(GetThemeDialogSoftTextColor());
-    }
-    if (theme_preview_dot_) {
-      theme_preview_dot_->SetBackground(views::CreateRoundedRectBackground(
-          accent, 9));
-      theme_preview_dot_->SetBorder(views::CreateRoundedRectBorder(
-          2, 9, selected_ring));
-      theme_preview_dot_->SetProperty(views::kMarginsKey,
-                                      gfx::Insets::TLBR(0, 8, 0, 0));
     }
     if (solid_mode_button_) {
       const bool selected =
@@ -1217,7 +1104,9 @@ class MahoCreateSpaceThemePickerDialogView : public views::DialogDelegate {
       int swatch_index = 0;
       for (views::View* child : swatch_row_->children()) {
         child->SetBorder(views::CreateRoundedRectBorder(
-            swatch_index == selection_.preset_index ? 3 : 1, kSwatchCornerRadius,
+            swatch_index == selection_.preset_index ? kChooserSwatchSelectedBorderWidth
+                                                    : kChooserSwatchUnselectedBorderWidth,
+            kSwatchCornerRadius,
             swatch_index == selection_.preset_index ? selected_ring
                                                     : GetThemeDialogMutedStrokeColor()));
         ++swatch_index;
@@ -1225,10 +1114,10 @@ class MahoCreateSpaceThemePickerDialogView : public views::DialogDelegate {
       swatch_row_->InvalidateLayout();
     }
     if (brightness_minus_button_) {
-      brightness_minus_button_->SetEnabled(selection_.brightness > 15);
+      brightness_minus_button_->SetEnabled(selection_.brightness > kChooserBrightnessMin);
     }
     if (brightness_plus_button_) {
-      brightness_plus_button_->SetEnabled(selection_.brightness < 100);
+      brightness_plus_button_->SetEnabled(selection_.brightness < kChooserBrightnessMax);
     }
     if (previous_swatch_button_) {
       previous_swatch_button_->SetBackground(nullptr);
@@ -1256,31 +1145,12 @@ class MahoCreateSpaceThemePickerDialogView : public views::DialogDelegate {
     if (grain_dial_view_) {
       grain_dial_view_->SetSelection(selection_);
     }
-    if (dismiss_button_) {
-      dismiss_button_->SetStyle(ui::ButtonStyle::kText);
-      dismiss_button_->SetBackground(views::CreateRoundedRectBackground(
-          SkColorSetARGB(0x18, 0xFF, 0xFF, 0xFF), 16));
-      dismiss_button_->SetBorder(views::CreateRoundedRectBorder(
-          1, 16, GetThemeDialogCardBorderColor()));
-      dismiss_button_->SetEnabledTextColors(SK_ColorWHITE);
-    }
-    if (apply_button_) {
-      apply_button_->SetStyle(ui::ButtonStyle::kText);
-      apply_button_->SetBackground(
-          views::CreateRoundedRectBackground(accent, 16));
-      apply_button_->SetBorder(views::CreateRoundedRectBorder(
-          1, 16, accent));
-      apply_button_->SetEnabledTextColors(SK_ColorWHITE);
-    }
   }
 
   MahoSidebarCreateSpaceThemeSelection selection_;
   ThemeChosenCallback chosen_callback_;
-  raw_ptr<views::Button> theme_button_ = nullptr;
   raw_ptr<ThemeCanvasView> preview_view_ = nullptr;
   raw_ptr<views::Label> preview_message_label_ = nullptr;
-  raw_ptr<views::Label> theme_summary_label_ = nullptr;
-  raw_ptr<views::View> theme_preview_dot_ = nullptr;
   raw_ptr<views::View> swatch_row_ = nullptr;
   raw_ptr<views::MdTextButton> solid_mode_button_ = nullptr;
   raw_ptr<views::MdTextButton> zen_mode_button_ = nullptr;
@@ -1292,8 +1162,8 @@ class MahoCreateSpaceThemePickerDialogView : public views::DialogDelegate {
   raw_ptr<ThemeWaveView> wave_view_ = nullptr;
   raw_ptr<views::MdTextButton> grain_dial_button_ = nullptr;
   raw_ptr<ThemeDialView> grain_dial_view_ = nullptr;
-  raw_ptr<views::MdTextButton> dismiss_button_ = nullptr;
-  raw_ptr<views::MdTextButton> apply_button_ = nullptr;
+  raw_ptr<views::MdTextButton> done_button_ = nullptr;
+  raw_ptr<views::MdTextButton> cancel_footer_button_ = nullptr;
   base::WeakPtrFactory<MahoCreateSpaceThemePickerDialogView> weak_factory_{this};
 };
 
@@ -1311,14 +1181,54 @@ void ShowThemePickerDialog(
 
   auto* dialog = new MahoCreateSpaceThemePickerDialogView(
       initial_selection, std::move(chosen_callback));
-  auto* weak_dialog = dialog;
-  views::Widget* widget = views::DialogDelegate::CreateDialogWidget(
-      dialog, browser->window()->GetNativeWindow(), gfx::NativeView());
-  if (!widget) {
-    return;
-  }
 
-  g_theme_picker_dialog_view = weak_dialog;
+  const gfx::Rect browser_bounds = browser->window()->GetBounds();
+  // NOTE: display::Screen::GetScreen() was renamed to display::Screen::Get()
+  // in upstream Chromium (circa M130+). If rebasing onto an older Chromium
+  // version, revert to GetScreen().
+  const gfx::Rect work_area =
+      display::Screen::Get()
+          ->GetDisplayMatching(browser_bounds)
+          .work_area();
+  const int chooser_width =
+      std::min(kThemeDialogWidth, work_area.width());
+  const int max_height =
+      static_cast<int>(work_area.height() * kChooserMaxWorkAreaHeightFraction);
+
+  const gfx::Size preferred =
+      dialog->GetContentsView()->GetPreferredSize(
+          views::SizeBounds(chooser_width, {}));
+  const int unclamped_height =
+      preferred.height() > 0
+          ? preferred.height()
+          : dialog->GetContentsView()->GetPreferredSize().height();
+
+  const gfx::Size dialog_size(chooser_width,
+                               std::min(unclamped_height, max_height));
+
+  const int raw_origin_x =
+      browser_bounds.x() +
+          (browser_bounds.width() - dialog_size.width()) / 2;
+  const int clamped_origin_x =
+      std::clamp(raw_origin_x, work_area.x(),
+                 work_area.right() - dialog_size.width());
+  const gfx::Point origin(
+      clamped_origin_x,
+      work_area.y() +
+          (work_area.height() - dialog_size.height()) / 2);
+
+  views::Widget::InitParams params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
+  params.delegate = dialog;
+  params.context = browser->window()->GetNativeWindow();
+  params.bounds = gfx::Rect(origin, dialog_size);
+  params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
+
+  auto* widget = new views::Widget();
+  widget->Init(std::move(params));
+
+  g_theme_picker_dialog_view = dialog;
   g_theme_picker_widget = widget;
   widget->Show();
   widget->Activate();

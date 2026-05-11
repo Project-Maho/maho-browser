@@ -80,6 +80,56 @@ source_set("maho_sidebar_library") {
 }
 
 
+source_set("maho_sidebar_core") {
+  sources = [
+    "maho_sidebar_container_view.cc",
+    "maho_sidebar_container_view.h",
+    "maho_sidebar_favorites_grid_view.cc",
+    "maho_sidebar_favorites_grid_view.h",
+    "maho_sidebar_footer_view.cc",
+    "maho_sidebar_footer_view.h",
+    "maho_sidebar_search_view.cc",
+    "maho_sidebar_search_view.h",
+    "maho_sidebar_space_dot_view.cc",
+    "maho_sidebar_space_dot_view.h",
+    "maho_sidebar_state_adapter.cc",
+    "maho_sidebar_state_adapter.h",
+    "maho_sidebar_state_models.cc",
+    "maho_sidebar_state_models.h",
+    "maho_sidebar_tab_list_view.cc",
+    "maho_sidebar_tab_list_view.h",
+    "maho_sidebar_top_bar_view.cc",
+    "maho_sidebar_top_bar_view.h",
+    "maho_sidebar_view.cc",
+    "maho_sidebar_view.h",
+  ]
+
+  deps = [
+    ":maho_sidebar_downloads",
+    ":maho_sidebar_library",
+    ":maho_sidebar_prefs",
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui:browser_navigator_params_headers",
+    "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//chrome/browser/ui/views/frame",
+    "//components/prefs",
+    "//content/public/browser",
+    "//maho/browser:maho_core_holder",
+    "//maho/browser:maho_space_profile_bridge",
+    "//maho/components/constants",
+    "//maho/third_party/maho:maho_bridge",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//net",
+    "//ui/base",
+    "//ui/color",
+    "//ui/gfx",
+    "//ui/views",
+    "//url",
+  ]
+}
+
 source_set("unit_tests") {
   testonly = true
   sources = [ "maho_sidebar_dnd_dispatch_unittest.cc" ]
