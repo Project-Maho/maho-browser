@@ -35,7 +35,7 @@ class MahoSidebarContainerView : public views::View,
   MahoSidebarContainerView& operator=(const MahoSidebarContainerView&) = delete;
 
   views::View* sidebar_view() { return sidebar_view_; }
-  void ShowCommandOverlayForCurrentTab(const std::string& current_url);
+  void ShowCommandOverlayForCurrentTab();
   void ShowCommandOverlayForNewTab();
   void ShowCommandOverlayForSearch(const std::string& initial_query);
 

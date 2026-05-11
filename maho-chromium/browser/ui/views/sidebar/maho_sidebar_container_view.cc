@@ -76,9 +76,7 @@ MahoSidebarContainerView::MahoSidebarContainerView(Browser* browser)
 MahoSidebarContainerView::~MahoSidebarContainerView() = default;
 
 
-void MahoSidebarContainerView::ShowCommandOverlayForCurrentTab(
-    const std::string& current_url) {
-  (void)current_url;
+void MahoSidebarContainerView::ShowCommandOverlayForCurrentTab() {
   if (browser_) {
     if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_)) {
       browser_view->ShowMahoCommandOverlayForCurrentTab();
@@ -96,7 +94,6 @@ void MahoSidebarContainerView::ShowCommandOverlayForNewTab() {
 
 void MahoSidebarContainerView::ShowCommandOverlayForSearch(
     const std::string& initial_query) {
-  (void)initial_query;
   if (browser_) {
     if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_)) {
       browser_view->ShowMahoCommandOverlayForSearch(initial_query);

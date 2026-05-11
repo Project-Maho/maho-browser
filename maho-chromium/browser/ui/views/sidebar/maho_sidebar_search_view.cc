@@ -348,13 +348,7 @@ void MahoSidebarSearchView::FocusCommandSurface() {
   for (views::View* child : browser_view->children()) {
     auto* container = views::AsViewClass<MahoSidebarContainerView>(child);
     if (container) {
-      std::string current_url;
-      auto* active_contents =
-          browser_->tab_strip_model()->GetActiveWebContents();
-      if (active_contents) {
-        current_url = active_contents->GetVisibleURL().spec();
-      }
-      container->ShowCommandOverlayForCurrentTab(current_url);
+      container->ShowCommandOverlayForCurrentTab();
       return;
     }
   }
@@ -433,7 +427,7 @@ views::Widget* MahoSidebarSearchView::ShowUtilityPanel() {
   MahoLocationBarUtilityPanelModel model =
       BuildMahoLocationBarUtilityPanelModelForBrowser(browser_);
   views::Widget* widget =
-      MahoLocationBarUtilityPanelView::CreateWidget(utility_icon_, std::move(model));
+      MahoLocationBarUtilityPanelView::Show(utility_icon_, std::move(model));
   if (widget) {
     widget->Show();
     if (!widget->IsClosed()) {

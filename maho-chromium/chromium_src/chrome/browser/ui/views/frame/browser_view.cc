@@ -17,21 +17,68 @@
 //
 // 4. In BrowserView::SetFocusToLocationBar(), BEFORE the original body:
 //      if (is_user_initiated && maho_sidebar_container_) {
-//        auto* container = static_cast<maho::MahoSidebarContainerView*>(
-//            maho_sidebar_container_);
-//        std::string current_url;
-//        auto* active_contents =
-//            browser_->tab_strip_model()->GetActiveWebContents();
-//        if (active_contents) {
-//          current_url = active_contents->GetLastCommittedURL().spec();
-//        }
-//        container->ShowCommandOverlayForCurrentTab(current_url);
+//        ShowMahoCommandOverlayForCurrentTab();
 //        return;
 //      }
 //    Opens the palette in kCurrentTab mode with URL prefill + select-all.
+//    Delegates to ShowMahoCommandOverlayForCurrentTab() which fetches the
+//    active tab URL internally rather than receiving it as a parameter.
 //
-// 5. Member field in BrowserView class (public, in member section):
+// 5. Member fields in BrowserView class (public, in member section):
 //      raw_ptr<views::View> maho_sidebar_container_ = nullptr;
+//      std::unique_ptr<maho::MahoCommandOverlayController>
+//          maho_command_overlay_controller_;
+//
+// 5a. Three helper methods added to BrowserView:
+//
+//      void BrowserView::ShowMahoCommandOverlayForCurrentTab() {
+//        if (!maho_command_overlay_controller_)
+//          return;
+//        std::string current_url;
+//        if (auto* contents =
+//                browser_->tab_strip_model()->GetActiveWebContents()) {
+//          current_url = contents->GetLastCommittedURL().spec();
+//        }
+//        maho_command_overlay_controller_->Show(
+//            GetWidget(),
+//            maho::CommandOverlayMode::kCurrentTab,
+//            current_url,
+//            /*select_initial_text=*/true);
+//      }
+//
+//      void BrowserView::ShowMahoCommandOverlayForNewTab() {
+//        if (!maho_command_overlay_controller_)
+//          return;
+//        maho_command_overlay_controller_->Show(
+//            GetWidget(),
+//            maho::CommandOverlayMode::kNewTab);
+//      }
+//
+//      void BrowserView::ShowMahoCommandOverlayForSearch(
+//          const std::string& initial_query) {
+//        if (!maho_command_overlay_controller_)
+//          return;
+//        maho_command_overlay_controller_->Show(
+//            GetWidget(),
+//            maho::CommandOverlayMode::kSearch,
+//            initial_query);
+//      }
+//
+//    These three methods are the canonical entry points from all call sites:
+//    MahoShortcutInterceptor (Cmd+L, command_bar action),
+//    MahoSidebarContainerView (Cmd+T via ShowCommandOverlayForNewTab,
+//    search-entry via ShowCommandOverlayForCurrentTab/ForSearch), and
+//    MahoCommandActionHandler (command_bar action). The container's
+//    ShowCommandOverlay* methods are thin delegation stubs that forward to
+//    these BrowserView methods so callers without a direct BrowserView
+//    reference can still reach the controller.
+//
+//    The controller is initialized alongside the sidebar container:
+//      if (GetIsNormalType()) {
+//        maho_sidebar_container_ = AddChildView(...);
+//        maho_command_overlay_controller_ =
+//            std::make_unique<maho::MahoCommandOverlayController>(browser_.get());
+//      }
 //
 // 6. In BrowserView::NonClientHitTest(), BEFORE the vertical_tab_strip and
 //    projects_panel checks (around line 4763 upstream), insert:
