@@ -134,6 +134,8 @@ struct SidebarTreeNode {
 };
 
 // Legacy flat row kept for compatibility during transition, wraps tree node.
+// TODO(E1-cutover): Remove struct once flat lists are eliminated from
+// MahoSidebarTabListModel. Only used by BuildTreeSection and flat fallback.
 struct MahoSidebarTabRowModel {
   MahoSidebarTabRowModel();
   MahoSidebarTabRowModel(const MahoSidebarTabRowModel&);
@@ -181,6 +183,11 @@ struct MahoSidebarTabListModel {
   std::vector<SidebarTreeNode> normal_tree;
 
   // Flat lists kept for backward compat (populated alongside trees).
+  // TODO(E1-cutover): Remove once all consumers read from pinned_tree/normal_tree.
+  // Consumers: tab_list_view (model acceptance, contents_to_core_id map,
+  //   drop-lane guard, has_flat gate, flat rendering fallback, prune cache,
+  //   FindCoreTabIdByTabStripIndex fallback), maho_test_ui (debug display),
+  //   interactive_test_base, dnd tests, contract test.
   std::vector<MahoSidebarTabRowModel> pinned_tabs;
   std::vector<MahoSidebarTabRowModel> tabs;
 
