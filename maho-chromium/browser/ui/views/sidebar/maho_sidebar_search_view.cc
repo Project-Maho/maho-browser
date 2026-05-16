@@ -45,20 +45,52 @@ namespace maho {
 
 namespace {
 
+// --- Search pill spacing constants ---
+//
+// The pill layout (left to right) is:
+//   [leading-inset | icon | icon-label-gap | text-stack | utility-gap | utility-icon | trailing-inset]
+//
+// "Card" variants apply when displaying a real URL (address card mode).
+// "Pill" variants apply in the compact placeholder/search mode.
+
 constexpr int kSearchShellInsetTopDp = 0;
 constexpr int kSearchShellInsetBottomDp = 0;
 constexpr int kSearchShellInnerInsetDp = 0;
+
+// Leading inset: space from the pill's left border stroke to the leading icon.
 constexpr int kSearchCardLeadingInsetDp = 13;
-constexpr int kSearchCardTrailingInsetDp = 13;
-constexpr int kSearchPillTrailingInsetDp = 13;
+
+// Trailing inset: space from the utility icon's trailing edge to the pill's
+// right border stroke. Intentionally wider than the leading inset so the
+// utility affordance doesn't feel cramped against the pill edge.
+constexpr int kSearchCardTrailingInsetDp = 15;
+constexpr int kSearchPillTrailingInsetDp = 15;
+
+// Leading inset for the compact (placeholder) pill variant.
 constexpr int kSearchPillLeadingInsetDp = 13;
+
+// Horizontal gap between the leading icon and the start of the text stack.
 constexpr int kSearchPillIconLabelSpacingDp = 8;
+
+// Textfield horizontal padding (used in editing mode).
 constexpr int kSearchTextfieldHorizontalInsetDp = 13;
+
+// Dimensions of the trailing utility icon hit target.
 constexpr int kSearchPillActionShellWidthDp = 24;
 constexpr int kSearchPillActionShellHeightDp = 20;
-constexpr int kSearchPillUtilitySlotSpacingDp = 0;
+
+// Gap between the text stack's trailing edge and the utility icon slot.
+// This creates a small breathing room so the icon doesn't touch the text.
+constexpr int kSearchPillUtilitySlotSpacingDp = 2;
+
+// Vertical spacing between the primary label and secondary label (0 = flush).
 constexpr int kSearchPillPrimarySecondarySpacingDp = 0;
+
+// Vertical breathing room inside the pill, above and below content.
 constexpr int kSearchPillInnerVerticalInsetDp = 5;
+
+// Negative top-margin on the secondary label to pull its baseline closer
+// to the primary label, achieving tighter optical alignment.
 constexpr int kSearchPillSecondaryBaselineOffsetDp = -1;
 
 class SidebarSearchIdleButton : public views::LabelButton {
@@ -191,6 +223,8 @@ MahoSidebarSearchView::MahoSidebarSearchView(Browser* browser)
   utility_slot_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
   utility_icon_slot_ = idle_button_raw->AddChildView(std::move(utility_icon_slot));
+  // Left margin on the utility slot creates the gap between the flexible text
+  // stack and the trailing utility icon, preventing them from touching.
   utility_icon_slot_->SetProperty(
       views::kMarginsKey,
       gfx::Insets::TLBR(0, kSearchPillUtilitySlotSpacingDp, 0, 0));
@@ -235,7 +269,34 @@ void MahoSidebarSearchView::FocusVisibleControl() {
 }
 
 void MahoSidebarSearchView::Update(const MahoSidebarSearchModel& model) {
-  model_ = model;
+  MahoSidebarSearchModel patched = model;
+
+  // Live-tab-strip priming: if the incoming model reports no active tab but the
+  // browser's tab strip currently has a valid active entry, force has_active_tab
+  // to true before the anti-demotion latch below runs. This handles the startup
+  // failure mode where a valid active index exists in the model but
+  // GetActiveWebContents() is still null (contents not yet committed); we match
+  // the adapter's own fallback: active_index != kNoTab && ContainsIndex.
+  if (!patched.has_active_tab && browser_) {
+    TabStripModel* tsm = browser_->tab_strip_model();
+    if (tsm) {
+      const int active_index = tsm->active_index();
+      if (active_index != TabStripModel::kNoTab &&
+          tsm->ContainsIndex(active_index)) {
+        patched.has_active_tab = true;
+      }
+    }
+  }
+
+  // Cold-start safety: once has_active_tab has been observed as true for this
+  // sidebar instance, never allow a transient startup refresh to demote it back
+  // to false. Tab state is not yet trustworthy when the sidebar is first
+  // created; subsequent refreshes that arrive before first paint can carry a
+  // stale false value and would hide the utility icon unnecessarily.
+  if (model_.has_active_tab && !patched.has_active_tab) {
+    patched.has_active_tab = true;
+  }
+  model_ = patched;
   UpdateSearchChrome();
   if (!is_editing_) {
     UpdateIdleSurface();
@@ -463,10 +524,10 @@ void MahoSidebarSearchView::CloseUtilityPanel() {
 }
 
 bool MahoSidebarSearchView::CanShowUtilityAffordance() const {
-  const bool show_placeholder =
-      model_.force_placeholder_for_empty_favorites ||
-      model_.display_mode == MahoSidebarAddressDisplayMode::kSearchPlaceholder;
-  return !is_editing_ && model_.has_active_tab && !show_placeholder;
+  // Editing suppresses the utility affordance; placeholder/new-tab style does
+  // not — the icon should remain available whenever there is an active tab and
+  // the user is not actively typing in the search field.
+  return !is_editing_ && model_.has_active_tab;
 }
 
 void MahoSidebarSearchView::UpdateUtilityAffordanceVisibility() {
@@ -474,8 +535,12 @@ void MahoSidebarSearchView::UpdateUtilityAffordanceVisibility() {
     return;
   }
 
-  utility_icon_slot_->SetVisible(CanShowUtilityAffordance() &&
-                                 utility_icon_->GetVisible());
+  const bool affordance = CanShowUtilityAffordance();
+  utility_icon_slot_->SetVisible(affordance);
+  utility_icon_->SetAffordanceVisible(affordance);
+  if (!affordance) {
+    utility_icon_->SetHoverVisible(false);
+  }
 }
 
 void MahoSidebarSearchView::UpdateIdleSurface() {
@@ -519,6 +584,9 @@ void MahoSidebarSearchView::UpdateSearchChrome() {
       show_placeholder ? ui::kColorSysSurface1 : ui::kColorSysSurface1,
       show_placeholder ? sidebar_layout::kSearchPillCompactCornerRadiusDp
                        : sidebar_layout::kSearchPillCornerRadiusDp));
+  // Padded border provides the pill's inner leading/trailing breathing room.
+  // The trailing side is intentionally wider than the leading side so the
+  // utility affordance (trailing icon) doesn't hug the pill's right edge.
   idle_button_->SetBorder(views::CreatePaddedBorder(
       views::CreateRoundedRectBorder(
           1,

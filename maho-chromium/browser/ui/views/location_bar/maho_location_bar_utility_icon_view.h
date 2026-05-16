@@ -30,11 +30,15 @@ class MahoLocationBarUtilityIconView : public views::ToggleImageButton,
       const MahoLocationBarUtilityIconView&) = delete;
   ~MahoLocationBarUtilityIconView() override;
 
+  // Show the icon because the pill's trailing action area is expanded (focus, etc.).
+  void SetAffordanceVisible(bool affordance_visible);
+  // Show the icon because the user is hovering the pill region.
   void SetHoverVisible(bool hover_visible);
   void SetPanelWidget(views::Widget* panel_widget);
 
   bool IsPanelOpenForTesting() const { return panel_widget_ != nullptr; }
   bool IsHoverVisibleForTesting() const { return hover_visible_; }
+  bool IsAffordanceVisibleForTesting() const { return affordance_visible_; }
 
   // views::WidgetObserver:
   void OnWidgetDestroyed(views::Widget* widget) override;
@@ -54,6 +58,7 @@ class MahoLocationBarUtilityIconView : public views::ToggleImageButton,
   raw_ptr<views::Widget> panel_widget_ = nullptr;
   base::ScopedObservation<views::Widget, views::WidgetObserver>
       panel_widget_observation_{this};
+  bool affordance_visible_ = false;
   bool hover_visible_ = false;
 };
 

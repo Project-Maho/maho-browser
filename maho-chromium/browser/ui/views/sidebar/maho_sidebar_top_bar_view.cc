@@ -43,10 +43,17 @@ namespace maho {
 
 namespace {
 
+// Extra margin below the top-bar row (currently zero; the kTopBarInsets bottom
+// value handles separation from the search pill).
 constexpr int kTopBarBottomMarginDp = 0;
+// Internal padding inside each button cluster (leading and nav).
 constexpr int kTopBarClusterHorizontalInsetDp = 0;
 constexpr int kTopBarClusterVerticalInsetDp = 0;
+// Left margin on the sidebar-toggle button, shifting it inward from the
+// traffic-light spacer edge for optical alignment with macOS window controls.
 constexpr int kSidebarToggleLeftMarginDp = 6;
+// Icon tint alpha for enabled nav buttons (slightly subdued so they don't
+// compete with page content).
 constexpr float kTopBarNavTintAlpha = 0.68f;
 constexpr float kTopBarDisabledAlpha = 0.4f;
 
@@ -143,6 +150,7 @@ END_METADATA
 
 MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
     : browser_(browser) {
+  // Horizontal BoxLayout: [traffic-light spacer | leading cluster | flex | nav cluster]
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kHorizontal,
       gfx::Insets::TLBR(sidebar_layout::kTopBarInsets.top(),
@@ -156,11 +164,13 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
   SetProperty(views::kMarginsKey,
               gfx::Insets::TLBR(0, 0, kTopBarBottomMarginDp, 0));
 
+  // Fixed-width spacer reserving room for macOS traffic-light buttons.
   traffic_light_spacer_ = AddChildView(std::make_unique<views::View>());
   traffic_light_spacer_->SetPreferredSize(gfx::Size(
       sidebar_layout::kTrafficLightAlignmentWidthDp,
       sidebar_layout::kTopBarTrafficLightAlignmentHeightDp));
 
+  // Leading cluster: sidebar-toggle (and any future leading actions).
   leading_cluster_ = AddChildView(std::make_unique<views::View>());
   auto* leading_layout =
       leading_cluster_->SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -180,9 +190,11 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
       views::kMarginsKey,
       gfx::Insets::TLBR(0, kSidebarToggleLeftMarginDp, 0, 0));
 
+  // Flexible spacer pushes the nav cluster to the trailing edge.
   flex_spacer_ = AddChildView(std::make_unique<views::View>());
   layout->SetFlexForView(flex_spacer_, 1);
 
+  // Nav cluster: back, forward, reload, AI (trailing, right-aligned).
   nav_cluster_ = AddChildView(std::make_unique<views::View>());
   auto* nav_layout =
       nav_cluster_->SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -250,6 +262,12 @@ bool MahoSidebarTopBarView::IsPositionInWindowCaption(
   return true;
 }
 
+// Adjusts spacing and visibility based on whether in-sidebar navigation is
+// active.  When navigation is disabled (default), leading/nav clusters and the
+// flex spacer are hidden, leaving only the traffic-light spacer visible so the
+// row still provides window-drag area.  When navigation is enabled, the leading
+// cluster gets wider inter-button spacing and a trailing margin to visually
+// separate it from the nav cluster.
 void MahoSidebarTopBarView::ApplyChromeSpacing() {
   auto* leading_layout =
       static_cast<views::BoxLayout*>(leading_cluster_->GetLayoutManager());

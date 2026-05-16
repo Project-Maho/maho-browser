@@ -31,13 +31,34 @@ inline constexpr int kTopRegionSpacingDp = 6;
 // Spacer starts at x = kRailInsets.left() (10dp), so width = 74 − 10.
 inline constexpr int kTrafficLightAlignmentWidthDp = 64;
 inline constexpr int kTopBarTrafficLightAlignmentHeightDp = 22;
+// Top-bar action button hit target (width × height).
 inline constexpr int kTopBarButtonSizeDp = 22;
 inline constexpr int kTopBarButtonCornerRadiusDp = 8;
+// Rendered icon size within the button hit target.
 inline constexpr int kTopBarIconSizeDp = 15;
+// Gap between adjacent buttons in a cluster (tight packing).
 inline constexpr int kTopBarButtonSpacingDp = 1;
+// Extra gap after the sidebar-toggle button when navigation is active,
+// visually separating the toggle from back/forward/reload.
 inline constexpr int kTopBarCompactLeadingGapDp = 4;
 inline constexpr int kTopBarCompactNavSpacingDp = 4;
 inline constexpr int kTopBarCompactTrailingInsetDp = 3;
+inline constexpr int kLibraryRailWidthDp = 80;
+inline constexpr int kLibraryRailTopInsetDp = 14;
+inline constexpr int kLibraryRailSideInsetDp = 0;
+inline constexpr int kLibraryRailBottomInsetDp = 14;
+inline constexpr int kLibraryRailUtilitySpacingDp = 8;
+inline constexpr int kLibraryRailUtilityButtonSizeDp = 20;
+inline constexpr int kLibraryRailUtilityButtonCornerRadiusDp = 10;
+inline constexpr int kLibraryRailItemWidthDp = 64;
+inline constexpr int kLibraryRailItemHeightDp = 64;
+inline constexpr int kLibraryRailItemCornerRadiusDp = 12;
+inline constexpr int kLibraryRailItemSpacingDp = 4;
+inline constexpr int kLibraryRailItemVerticalInsetDp = 8;
+inline constexpr int kLibraryRailItemHorizontalInsetDp = 6;
+inline constexpr int kLibraryRailTileCornerRadiusDp = 12;
+inline constexpr int kLibraryRailIconSizeDp = 24;
+inline constexpr int kLibraryRailIconLabelSpacingDp = 4;
 inline constexpr int kSearchPillHeightDp = 38;
 inline constexpr int kSearchPillCornerRadiusDp = 16;
 inline constexpr int kSearchPillCompactHeightDp = 35;
@@ -59,7 +80,10 @@ inline constexpr int kSidebarHideDelayMs = 300;      // Delay before hide on mou
 inline const gfx::Insets kRailInsets = gfx::Insets::TLBR(8, 8, 8, 8);
 inline const gfx::Insets kSectionInsets = gfx::Insets::TLBR(2, 0, 2, 0);
 inline const gfx::Insets kRowInsets = gfx::Insets::TLBR(2, 5, 2, 5);
-inline const gfx::Insets kTopBarInsets = gfx::Insets::TLBR(2, 1, 0, 1);
+// Top-bar row padding: 1dp horizontal keeps icons off the rail edge; 2dp
+// bottom separates the action row from the search pill below it (no top
+// padding because the traffic-light spacer already provides vertical offset).
+inline const gfx::Insets kTopBarInsets = gfx::Insets::TLBR(0, 1, 2, 1);
 inline const gfx::Insets kSearchPillInsets = gfx::Insets::TLBR(0, 2, 0, 2);
 inline const gfx::Insets kFavoriteTileInsets = gfx::Insets::TLBR(6, 4, 6, 4);
 

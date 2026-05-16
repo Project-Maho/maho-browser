@@ -2,16 +2,15 @@
 
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h"
 
-#include <utility>
-
 #include "base/functional/bind.h"
+#include "maho/browser/ui/views/maho_mac_sf_symbol_helper.h"
+#include "ui/base/models/image_model.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/color/color_id.h"
+#include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/vector_icon_types.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
-#include "ui/views/controls/button/image_button_factory.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/widget/widget.h"
 
@@ -19,34 +18,36 @@ namespace maho {
 
 namespace {
 
-constexpr int kUtilityButtonWidth = 24;
-constexpr int kUtilityButtonHeight = 20;
-constexpr int kUtilityIconSize = 12;
-constexpr int kUtilityButtonCornerRadius = 8;
+// Dimensions for the trailing utility icon inside the search pill's action area.
+// The icon occupies a compact slot at the right edge of the pill, sized to feel
+// proportional to the pill height without crowding adjacent controls.
+constexpr int kUtilityButtonWidth = 24;   // Horizontal hit target within the pill slot.
+constexpr int kUtilityButtonHeight = 20;  // Shorter than pill height; vertically centered.
+constexpr int kUtilityIconSize = 12;      // SF Symbol render size; small to avoid visual weight.
+constexpr int kUtilityButtonCornerRadius = 8;  // Matches the pill's inner rounding.
 
-const gfx::VectorIcon& GetUtilitySlidersIcon() {
-  static constexpr gfx::PathElement kSlidersPath[39] = {
-      gfx::CANVAS_DIMENSIONS, 16,
-      gfx::STROKE, 1.6f,
-      gfx::MOVE_TO, 2.5f, 4,
-      gfx::LINE_TO, 13.5f, 4,
-      gfx::NEW_PATH,
-      gfx::MOVE_TO, 2.5f, 8,
-      gfx::LINE_TO, 13.5f, 8,
-      gfx::NEW_PATH,
-      gfx::MOVE_TO, 2.5f, 12,
-      gfx::LINE_TO, 13.5f, 12,
-      gfx::NEW_PATH,
-      gfx::CIRCLE, 5, 4, 1.4f,
-      gfx::NEW_PATH,
-      gfx::CIRCLE, 11, 8, 1.4f,
-      gfx::NEW_PATH,
-      gfx::CIRCLE, 7, 12, 1.4f,
-  };
-  static constexpr char kSlidersIconId[] = "maho_utility_sliders";
-  static constexpr gfx::VectorIconRep kSlidersRepList[] = {{kSlidersPath}};
-  static constexpr gfx::VectorIcon kIcon(kSlidersRepList, 1, kSlidersIconId);
-  return kIcon;
+ui::ImageModel CreateUtilityButtonImage(ui::ColorId color_id) {
+  return CreateMahoMacSFSymbol("slider.horizontal.3", "Show utility panel",
+                               kUtilityIconSize, color_id);
+}
+
+void UpdateUtilityButtonImages(views::ToggleImageButton* button) {
+  button->SetImageModel(views::Button::STATE_NORMAL,
+                        CreateUtilityButtonImage(ui::kColorIcon));
+  button->SetImageModel(views::Button::STATE_HOVERED,
+                        CreateUtilityButtonImage(ui::kColorIcon));
+  button->SetImageModel(views::Button::STATE_PRESSED,
+                        CreateUtilityButtonImage(ui::kColorIcon));
+  button->SetImageModel(views::Button::STATE_DISABLED,
+                        CreateUtilityButtonImage(ui::kColorIconDisabled));
+  button->SetToggledImageModel(views::Button::STATE_NORMAL,
+                               CreateUtilityButtonImage(ui::kColorIcon));
+  button->SetToggledImageModel(views::Button::STATE_HOVERED,
+                               CreateUtilityButtonImage(ui::kColorIcon));
+  button->SetToggledImageModel(views::Button::STATE_PRESSED,
+                               CreateUtilityButtonImage(ui::kColorIcon));
+  button->SetToggledImageModel(views::Button::STATE_DISABLED,
+                               CreateUtilityButtonImage(ui::kColorIconDisabled));
 }
 
 }  // namespace
@@ -67,12 +68,7 @@ MahoLocationBarUtilityIconView::MahoLocationBarUtilityIconView(
   SetImageHorizontalAlignment(ALIGN_CENTER);
   SetImageVerticalAlignment(ALIGN_MIDDLE);
   SetInstallFocusRingOnFocus(false);
-  views::SetImageFromVectorIconWithColor(
-      this, GetUtilitySlidersIcon(), kUtilityIconSize,
-      {ui::kColorIcon, ui::kColorIconDisabled});
-  views::SetToggledImageFromVectorIconWithColor(
-      this, GetUtilitySlidersIcon(), kUtilityIconSize,
-      {ui::kColorIcon, ui::kColorIconDisabled});
+  UpdateUtilityButtonImages(this);
   UpdateButtonChrome();
 }
 
@@ -90,7 +86,14 @@ void MahoLocationBarUtilityIconView::StateChanged(ButtonState old_state) {
 
 void MahoLocationBarUtilityIconView::OnThemeChanged() {
   views::ToggleImageButton::OnThemeChanged();
+  UpdateUtilityButtonImages(this);
   UpdateButtonChrome();
+}
+
+void MahoLocationBarUtilityIconView::SetAffordanceVisible(
+    bool affordance_visible) {
+  affordance_visible_ = affordance_visible;
+  UpdateVisibilityState();
 }
 
 void MahoLocationBarUtilityIconView::SetHoverVisible(bool hover_visible) {
@@ -142,13 +145,23 @@ void MahoLocationBarUtilityIconView::UpdateButtonChrome() {
   const bool active = GetToggled() || GetState() == STATE_HOVERED ||
                       GetState() == STATE_PRESSED;
   SetBackground(nullptr);
-  SetBorder(views::CreateRoundedRectBorder(
-      1, kUtilityButtonCornerRadius,
-      active ? ui::kColorSysNeutralOutline : ui::kColorSysSurfaceVariant));
+  // Bottom padding (4px) optically centers the icon within the taller pill,
+  // compensating for the pill's internal top padding applied elsewhere.
+  SetBorder(views::CreatePaddedBorder(
+      views::CreateRoundedRectBorder(
+          1, kUtilityButtonCornerRadius,
+          active ? ui::kColorSysNeutralOutline
+                 : ui::kColorSysSurfaceVariant),
+      gfx::Insets::TLBR(0, 0, 4, 0)));
 }
 
 void MahoLocationBarUtilityIconView::UpdateVisibilityState() {
-  const bool should_show = hover_visible_ || panel_widget_;
+  // The icon is shown when ANY of these three conditions hold:
+  //  - affordance_visible_: the pill's trailing area is expanded (e.g. focused).
+  //  - hover_visible_: the user is hovering the pill region.
+  //  - panel_widget_: the utility panel is currently open (keep icon visible
+  //    so the user can dismiss it).
+  const bool should_show = affordance_visible_ || hover_visible_ || panel_widget_;
   SetVisible(should_show);
   SetToggled(panel_widget_ != nullptr);
   UpdateButtonChrome();
