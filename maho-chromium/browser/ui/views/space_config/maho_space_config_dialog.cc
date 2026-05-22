@@ -1,19 +1,26 @@
 #include "maho/browser/ui/views/space_config/maho_space_config_dialog.h"
 
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_tabstrip.h"
-#include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "base/logging.h"
+#include "base/memory/raw_ptr.h"
+#include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "net/base/url_util.h"
-#include "ui/gfx/geometry/rect.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/color/color_provider_manager.h"
+#include "ui/gfx/geometry/size.h"
+#include "ui/views/controls/webview/webview.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/window/dialog_delegate.h"
 #include "url/gurl.h"
 
 namespace {
 
 constexpr int kDialogWidth = 420;
-constexpr int kDialogHeight = 280;
+constexpr int kDialogHeight = 520;
+
+views::Widget* g_space_config_dialog_widget = nullptr;
+MahoSpaceConfigDialog::ActiveMode g_active_mode =
+    MahoSpaceConfigDialog::ActiveMode::kNone;
 
 const char* FocusToString(maho_space_config::mojom::InitialFocus focus) {
   switch (focus) {
@@ -29,41 +36,100 @@ const char* FocusToString(maho_space_config::mojom::InitialFocus focus) {
   return "name";
 }
 
+class MahoSpaceConfigDialogDelegate : public views::DialogDelegate {
+ public:
+  MahoSpaceConfigDialogDelegate(Profile* profile, const GURL& url) {
+    SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
+    SetModalType(ui::mojom::ModalType::kWindow);
+    SetShowCloseButton(false);
+    SetShowTitle(false);
+    SetCanResize(false);
+    set_fixed_width(kDialogWidth);
+
+    web_view_ = new views::WebView(profile);
+    web_view_->SetPreferredSize(gfx::Size(kDialogWidth, kDialogHeight));
+    web_view_->LoadInitialURL(url);
+  }
+
+  MahoSpaceConfigDialogDelegate(const MahoSpaceConfigDialogDelegate&) = delete;
+  MahoSpaceConfigDialogDelegate& operator=(
+      const MahoSpaceConfigDialogDelegate&) = delete;
+
+  views::View* GetContentsView() override { return web_view_; }
+
+  void WindowClosing() override {
+    g_space_config_dialog_widget = nullptr;
+    g_active_mode = MahoSpaceConfigDialog::ActiveMode::kNone;
+
+    if (MahoSpaceThemeState::HasPreviewOverride()) {
+      MahoSpaceThemeState::ClearPreviewOverride();
+      MahoSpaceThemeState::UpdateFromCore();
+      ui::ColorProviderManager::Get().ResetColorProviderCache();
+    }
+
+    if (web_view_) {
+      web_view_->SetWebContents(nullptr);
+    }
+  }
+
+ private:
+  ~MahoSpaceConfigDialogDelegate() override = default;
+
+  raw_ptr<views::WebView> web_view_ = nullptr;
+};
+
 }  // namespace
 
+// static
 void MahoSpaceConfigDialog::Open(
-    Browser* parent_browser,
+    Profile* profile,
+    gfx::NativeWindow parent_window,
     const std::string& space_id,
     maho_space_config::mojom::InitialFocus focus) {
-  if (!parent_browser || space_id.empty()) {
+  if (!profile || space_id.empty()) {
     return;
   }
 
-  gfx::Rect parent_bounds = parent_browser->window()->GetBounds();
-  int x = parent_bounds.x() + (parent_bounds.width() - kDialogWidth) / 2;
-  int y = parent_bounds.y() + (parent_bounds.height() - kDialogHeight) / 2;
-
-  Browser::CreateParams params(Browser::TYPE_POPUP,
-                               parent_browser->profile(),
-                               true);
-  params.initial_bounds = gfx::Rect(x, y, kDialogWidth, kDialogHeight);
-  params.omit_from_session_restore = true;
+  if (g_space_config_dialog_widget) {
+    DLOG(WARNING) << "MahoSpaceConfigDialog::Open: closing stale widget before "
+                     "reopening for space_id="
+                  << space_id;
+    g_space_config_dialog_widget->CloseNow();
+    g_space_config_dialog_widget = nullptr;
+    g_active_mode = ActiveMode::kNone;
+  }
 
   GURL url(maho::kMahoSpaceConfigURL);
   url = net::AppendQueryParameter(url, "space_id", space_id);
   url = net::AppendQueryParameter(url, "focus", FocusToString(focus));
 
-  Browser* popup = Browser::Create(params);
-  chrome::AddTabAt(popup, url, -1, true);
-
-  BrowserView* browser_view =
-      BrowserView::GetBrowserViewForBrowser(popup);
-  if (browser_view) {
-    views::Widget* widget = browser_view->GetWidget();
-    if (widget) {
-      widget->SetZOrderLevel(ui::ZOrderLevel::kFloatingWindow);
-    }
+  auto* dialog = new MahoSpaceConfigDialogDelegate(profile, url);
+  views::Widget* widget =
+      dialog->CreateDialogWidget(dialog, parent_window, gfx::NativeView());
+  if (!widget) {
+    return;
   }
 
-  popup->window()->Show();
+  g_space_config_dialog_widget = widget;
+  g_active_mode = ActiveMode::kEdit;
+  widget->Show();
+  widget->Activate();
+}
+
+// static
+void MahoSpaceConfigDialog::CloseActiveDialog() {
+  if (g_space_config_dialog_widget) {
+    g_space_config_dialog_widget->Close();
+  }
+}
+
+// static
+MahoSpaceConfigDialog::ActiveMode
+MahoSpaceConfigDialog::GetActiveModeForTesting() {
+  return g_active_mode;
+}
+
+// static
+views::Widget* MahoSpaceConfigDialog::GetWidgetForTesting() {
+  return g_space_config_dialog_widget;
 }

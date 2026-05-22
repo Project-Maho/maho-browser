@@ -16,7 +16,8 @@ class MahoFavoritesContextMenu : public ui::SimpleMenuModel::Delegate {
  public:
   MahoFavoritesContextMenu(Browser* browser,
                            const GURL& url,
-                           const std::u16string& title);
+                           const std::u16string& title,
+                           const std::string& tab_id);
   ~MahoFavoritesContextMenu() override;
 
   MahoFavoritesContextMenu(const MahoFavoritesContextMenu&) = delete;
@@ -32,8 +33,7 @@ class MahoFavoritesContextMenu : public ui::SimpleMenuModel::Delegate {
   raw_ptr<Browser> browser_;
   GURL url_;
   std::u16string title_;
-  std::unique_ptr<ui::SimpleMenuModel> change_icon_submenu_;
-  std::unique_ptr<ui::SimpleMenuModel> move_to_space_submenu_;
+  std::string tab_id_;
 };
 
 #endif  // MAHO_CHROMIUM_BROWSER_UI_CONTEXT_MENU_MAHO_FAVORITES_CONTEXT_MENU_H_

@@ -289,9 +289,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDnDBrowserTest,
       << "Active space ID should be set after seeding";
 
   bool has_tabs = !state.tab_list.pinned_tree.empty() ||
-                  !state.tab_list.normal_tree.empty() ||
-                  !state.tab_list.pinned_tabs.empty() ||
-                  !state.tab_list.tabs.empty();
+                  !state.tab_list.normal_tree.empty();
   EXPECT_TRUE(has_tabs) << "Seeded state should have tabs";
 
   views::View* pinned_section = FindLiveSectionTarget(MahoSidebarTabSection::kPinned);

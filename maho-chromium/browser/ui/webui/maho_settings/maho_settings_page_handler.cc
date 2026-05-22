@@ -1171,20 +1171,7 @@ std::string MahoSettingsPageHandler::ReadSetting(
 }
 
 void MahoSettingsPageHandler::GetSettings(GetSettingsCallback callback) {
-  std::vector<maho_settings::mojom::SettingValuePtr> settings;
-  auto add = [&](const std::string& key) {
-    auto s = maho_settings::mojom::SettingValue::New();
-    s->key = key;
-    s->value = ReadSetting(key);
-    settings.push_back(std::move(s));
-  };
-  for (const auto& m : kSettingsMap) {
-    add(m.maho_key);
-  }
-  add(kPasswordProviderModeMahoKey);
-  add(kPasswordsEnabledMahoKey);
-  AppendFfiSettings(settings);
-  std::move(callback).Run(std::move(settings));
+  std::move(callback).Run(BuildSettingsSnapshot());
 }
 
 void MahoSettingsPageHandler::SetSetting(const std::string& key,
@@ -1192,7 +1179,7 @@ void MahoSettingsPageHandler::SetSetting(const std::string& key,
                                           SetSettingCallback callback) {
   if (HandleFfiSetting(key, value)) {
     std::move(callback).Run(true);
-    NotifySettingsChanged();
+    ScheduleNotify();
     return;
   }
 
@@ -1206,7 +1193,7 @@ void MahoSettingsPageHandler::SetSetting(const std::string& key,
     }
     std::move(callback).Run(
         UpdateAutofillSettingsInCore(passwords_enabled, mode));
-    NotifySettingsChanged();
+    ScheduleNotify();
     return;
   }
 
@@ -1214,7 +1201,7 @@ void MahoSettingsPageHandler::SetSetting(const std::string& key,
     bool passwords_enabled = value == "true";
     std::move(callback).Run(UpdateAutofillSettingsInCore(
         passwords_enabled, ReadPasswordProviderModeFromCore()));
-    NotifySettingsChanged();
+    ScheduleNotify();
     return;
   }
 
@@ -1267,10 +1254,11 @@ void MahoSettingsPageHandler::SetSetting(const std::string& key,
 }
 
 void MahoSettingsPageHandler::OnPrefChanged(const std::string& pref_name) {
-  NotifySettingsChanged();
+  ScheduleNotify();
 }
 
-void MahoSettingsPageHandler::NotifySettingsChanged() {
+std::vector<maho_settings::mojom::SettingValuePtr>
+MahoSettingsPageHandler::BuildSettingsSnapshot() {
   std::vector<maho_settings::mojom::SettingValuePtr> settings;
   auto add = [&](const std::string& key) {
     auto s = maho_settings::mojom::SettingValue::New();
@@ -1284,6 +1272,33 @@ void MahoSettingsPageHandler::NotifySettingsChanged() {
   add(kPasswordProviderModeMahoKey);
   add(kPasswordsEnabledMahoKey);
   AppendFfiSettings(settings);
+  return settings;
+}
+
+void MahoSettingsPageHandler::ScheduleNotify() {
+  notify_timer_.Start(
+      FROM_HERE, base::Milliseconds(50),
+      base::BindOnce(&MahoSettingsPageHandler::FlushNotify,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void MahoSettingsPageHandler::FlushNotify() {
+  std::vector<maho_settings::mojom::SettingValuePtr> settings =
+      BuildSettingsSnapshot();
+
+  std::string snapshot_key;
+  snapshot_key.reserve(settings.size() * 32);
+  for (const auto& s : settings) {
+    snapshot_key += s->key;
+    snapshot_key += '=';
+    snapshot_key += s->value;
+    snapshot_key += '\n';
+  }
+
+  if (snapshot_key == last_emitted_snapshot_) {
+    return;
+  }
+  last_emitted_snapshot_ = snapshot_key;
   page_->SettingsChanged(std::move(settings));
 }
 
@@ -1872,7 +1887,7 @@ void MahoSettingsPageHandler::AddPassword(const std::string& domain,
   const bool success = maho_core_add_password(
       core, domain.c_str(), username.c_str(), password.empty() ? nullptr : password.c_str());
   if (success) {
-    NotifySettingsChanged();
+    ScheduleNotify();
   }
   std::move(callback).Run(success);
 }
@@ -1890,7 +1905,7 @@ void MahoSettingsPageHandler::UpdatePasswordUsername(
   const bool success = maho_core_update_password_username(
       core, password_id.c_str(), username.c_str());
   if (success) {
-    NotifySettingsChanged();
+    ScheduleNotify();
   }
   std::move(callback).Run(success);
 }
@@ -1906,7 +1921,7 @@ void MahoSettingsPageHandler::DeletePassword(
 
   const bool success = maho_core_delete_password(core, password_id.c_str());
   if (success) {
-    NotifySettingsChanged();
+    ScheduleNotify();
   }
   std::move(callback).Run(success);
 }

@@ -1,9 +1,10 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+
 module maho_space_create.mojom;
 
-struct ProfileInfo {
-  string id;
-  string name;
-  bool is_default;
+// Theme selection state passed between WebUI and native parent.
+struct ThemeSelection {
+  string theme_json;  // Serialized SpaceThemeData JSON
 };
 
 interface PageHandlerFactory {
@@ -12,11 +13,19 @@ interface PageHandlerFactory {
 };
 
 interface PageHandler {
-  GetProfiles() => (array<ProfileInfo> profiles);
-  GetSpaceCount() => (int32 count);
-  CreateSpace(string name, string color, string icon,
-              string? profile_id, string? theme_json) => (bool success);
-  CloseDialog();
+  // Live preview while user is picking. Page handler calls
+  // MahoSpaceThemeState::SetPreviewOverride and flushes color cache.
+  PreviewTheme(ThemeSelection selection);
+
+  // User clicked Done. Notify dialog wrapper to close + apply selection.
+  CommitTheme(ThemeSelection selection);
+
+  // User clicked Cancel. Notify dialog wrapper to close + discard.
+  CancelTheme();
 };
 
-interface Page {};
+interface Page {
+  // Handler -> page on dialog open: deliver initial selection so React can
+  // hydrate the picker state.
+  Initialize(ThemeSelection initial);
+};

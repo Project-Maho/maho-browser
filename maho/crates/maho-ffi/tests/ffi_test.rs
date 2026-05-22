@@ -80,6 +80,8 @@ fn handle_event_invalid_json_returns_null() {
 #[test]
 fn get_tab_view_models_returns_seeded_first_run_tabs() {
     let ptr = maho_ffi::maho_core_new();
+    // SAFETY: ptr was just returned by maho_core_new() and has not been freed.
+    unsafe { &mut *ptr }.seed_first_run_tabs();
     let result = unsafe { maho_ffi::maho_core_get_tab_view_models(ptr) };
     assert!(!result.is_null());
     let json = unsafe { CStr::from_ptr(result) }.to_str().unwrap();

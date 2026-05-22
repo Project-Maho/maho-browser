@@ -11,8 +11,17 @@
 namespace maho::core {
 
 // Lifecycle — returns opaque MahoCore pointer from Rust FFI.
+// Create() is the in-memory/test variant (no storage).
 MahoCore* Create();
+// CreateWithStorage() initialises both LMDB and SQLite storage under |path|.
+// The directory must exist or be creatable.  Returns nullptr on error.
+MahoCore* CreateWithStorage(const std::string& path);
 void Destroy(MahoCore* core);
+
+// Durable state persistence (tab/space state via LMDB + SQLite).
+// Returns true on success.  Silently succeeds on in-memory cores.
+bool SaveState(MahoCore* core);
+bool LoadState(MahoCore* core);
 
 // Version info
 std::string Version();
@@ -40,6 +49,11 @@ bool SaveContentEngineCache(MahoCore* core, const char* path);
 bool LoadContentEngineCache(MahoCore* core, const char* path);
 
 std::string GetCosmeticResources(MahoCore* core, const char* url);
+
+// Boost injection — returns the concatenated CSS/JS from all enabled boosts
+// matching |url|. Returns an empty string if none apply.
+std::string GetBoostInjectionCss(MahoCore* core, const char* url);
+std::string GetBoostInjectionJs(MahoCore* core, const char* url);
 
 // History search (returns JSON)
 std::string SearchHistory(MahoCore* core,

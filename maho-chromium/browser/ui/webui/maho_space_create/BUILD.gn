@@ -21,13 +21,11 @@ source_set("maho_space_create") {
 
   deps = [
     "//chrome/browser/profiles:profile",
-    "//maho/browser:maho_core_holder",
-    "//maho/browser:maho_space_profile_bridge",
+    "//chrome/browser/ui:browser_navigator_params_headers",
+    "//chrome/browser/ui/browser_window",
     "//maho/browser:maho_theme_support",
     "//maho/browser/resources/maho_space_create:resources",
     "//maho/components/constants",
-    "//maho/third_party/maho:maho_core_prebuilt",
-    "//maho/third_party/maho:maho_ffi_headers",
     "//mojo/public/cpp/bindings",
     "//ui/color",
     "//ui/webui",

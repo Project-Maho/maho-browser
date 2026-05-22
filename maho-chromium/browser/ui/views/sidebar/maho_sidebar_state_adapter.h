@@ -3,17 +3,12 @@
 #ifndef MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_STATE_ADAPTER_H_
 #define MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_STATE_ADAPTER_H_
 
-#include <map>
 #include <string>
 
 #include "base/values.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 
 class Browser;
-
-namespace content {
-class WebContents;
-}  // namespace content
 
 namespace maho {
 
@@ -73,17 +68,12 @@ class MahoSidebarStateAdapter {
   MahoSidebarFooterModel BuildFooterModel(Browser* browser) const;
   MahoSidebarViewStateModel BuildViewStateModel(Browser* browser) const;
 
-  const std::map<std::string, content::WebContents*>&
-  tab_id_to_contents() const {
-    return tab_id_to_contents_;
-  }
-
  private:
   MahoSidebarFavoritesModel favorites_model_;
   std::u16string GetActiveHostText(Browser* browser) const;
-
-  mutable std::map<std::string, content::WebContents*> tab_id_to_contents_;
 };
+
+bool IsSidebarIneligibleUrl(const GURL& url);
 
 }  // namespace maho
 

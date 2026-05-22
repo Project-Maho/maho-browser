@@ -57,14 +57,14 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest, DragTabToPinnedSection) {
   observer_.Clear();
 
   auto state = GetViewState();
-  ASSERT_FALSE(state.tab_list.tabs.empty());
+  ASSERT_FALSE(state.tab_list.normal_tree.empty());
 
   std::string tab_id;
   int tab_strip_index = -1;
-  for (const auto& node : state.tab_list.tabs) {
-    if (node.index >= 0) {
+  for (const auto& node : state.tab_list.normal_tree) {
+    if (node.kind == SidebarNodeKind::kTab && node.tab_strip_index >= 0) {
       tab_id = node.tab_id;
-      tab_strip_index = node.index;
+      tab_strip_index = node.tab_strip_index;
       break;
     }
   }
@@ -141,26 +141,16 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest, DragTabIntoFolder) {
   }
 
   if (tab_id.empty()) {
-    std::string active_fallback_tab_id;
-    int active_fallback_tab_strip_index = -1;
-    for (const auto& row : state.tab_list.tabs) {
-      if (row.tab_id.empty() || row.index < 0 || row.is_pinned ||
-          row.section != MahoSidebarTabSection::kNormal) {
+    // All normal tree tabs were active or had no strip index; use the active one.
+    for (const auto& node : state.tab_list.normal_tree) {
+      if (node.kind != SidebarNodeKind::kTab || node.tab_id.empty() ||
+          node.tab_strip_index < 0 || node.is_pinned ||
+          !node.parent_folder_id.empty()) {
         continue;
       }
-      if (!row.is_active) {
-        tab_id = row.tab_id;
-        tab_strip_index = row.index;
-        break;
-      }
-      if (active_fallback_tab_id.empty()) {
-        active_fallback_tab_id = row.tab_id;
-        active_fallback_tab_strip_index = row.index;
-      }
-    }
-    if (tab_id.empty()) {
-      tab_id = active_fallback_tab_id;
-      tab_strip_index = active_fallback_tab_strip_index;
+      tab_id = node.tab_id;
+      tab_strip_index = node.tab_strip_index;
+      break;
     }
   }
 
@@ -432,13 +422,13 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
   std::string source_tab_id;
   std::string target_tab_id;
   int source_index = -1;
-  for (const auto& node : state.tab_list.tabs) {
-    if (node.index < 0) {
+  for (const auto& node : state.tab_list.normal_tree) {
+    if (node.kind != SidebarNodeKind::kTab || node.tab_strip_index < 0) {
       continue;
     }
     if (source_tab_id.empty()) {
       source_tab_id = node.tab_id;
-      source_index = node.index;
+      source_index = node.tab_strip_index;
     } else {
       target_tab_id = node.tab_id;
       break;
@@ -480,7 +470,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
-                       InvalidCrossAreaDropRejected) {
+                       FavoriteTabDropOnPinnedSectionDispatchesPinTab) {
   SeedProfile(2);
   observer_.Clear();
 
@@ -496,8 +486,10 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
 
   DragViewToView(fav_tile, pinned_target);
 
-  EXPECT_FALSE(observer_.HasEvent("pin_tab"))
-      << "Dragging a favorite tile to pinned section should be rejected";
+  EXPECT_TRUE(observer_.HasEvent("unfavorite_tab"))
+      << "Favorites->pinned drop must first remove the tab from favorites";
+  EXPECT_TRUE(observer_.HasEvent("pin_tab"))
+      << "Favorites->pinned is a canonical valid transition; pin_tab must fire";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
@@ -544,7 +536,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
   auto post_state = GetViewState();
   EXPECT_TRUE(observer_.HasEvent("pin_tab"));
   EXPECT_EQ(post_state.tab_list.pinned_tree.size(), state.tab_list.pinned_tree.size());
-  EXPECT_EQ(post_state.tab_list.pinned_tabs.size(), state.tab_list.pinned_tabs.size());
+  EXPECT_EQ(post_state.tab_list.pinned_tree.size(), state.tab_list.pinned_tree.size());
 }
 
 }  // namespace

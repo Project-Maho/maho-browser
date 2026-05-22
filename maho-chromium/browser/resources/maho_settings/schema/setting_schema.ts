@@ -1,7 +1,6 @@
 import type {AccentColor, SettingDefinition, SettingMetadata} from '../models.js';
 
 export const RESTORE_ON_STARTUP_OPTIONS = [
-  {value: '5', label: 'Open the New Tab page', displayLabel: 'New Tab'},
   {value: '1', label: 'Continue where you left off', displayLabel: 'Resume'},
   {value: '4', label: 'Open a specific set of pages', displayLabel: 'Specific Pages'},
 ];
@@ -57,7 +56,7 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
     key: 'general.restore_on_startup',
     metadata: {
       label: 'On startup',
-      description: 'Choose whether Maho opens the New Tab page, restores your last session, or opens the pages saved for startup.',
+      description: 'Choose whether Maho restores your last session or opens the pages saved for startup.',
       control: 'select',
       options: RESTORE_ON_STARTUP_OPTIONS,
       segmented: true,

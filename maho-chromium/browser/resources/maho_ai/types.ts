@@ -1,6 +1,8 @@
 import {
   ApprovalRequestInfo,
   ApprovalResultInfo,
+  BrowserContextPayload as BrowserContextPayloadRecord,
+  BrowserContextStatus,
   RuntimeConnectionState,
   RuntimeEvent,
   RuntimeEventKind,
@@ -11,6 +13,7 @@ import {
 } from './maho_ai.mojom-webui.js';
 
 export type ConnectionState = RuntimeConnectionState;
+export {RuntimeEventKind};
 export type SessionRecord = SessionInfo;
 export type RuntimeEventRecord = RuntimeEvent;
 export type SessionStatusValue = SessionStatus;
@@ -19,6 +22,8 @@ export type ToolResultRecord = ToolResultInfo;
 export type ApprovalRequestRecord = ApprovalRequestInfo;
 export type ApprovalResultRecord = ApprovalResultInfo;
 export type EventKind = RuntimeEventKind;
+export type BrowserContextPayload = BrowserContextPayloadRecord;
+export type BrowserContextStatusValue = BrowserContextStatus;
 
 export interface TimelineEntry {
   sessionId: string;
@@ -45,6 +50,7 @@ export interface AppState {
   initialized: boolean;
   booting: boolean;
   bootError: string|null;
+  developerMode: boolean;
   connectionState: ConnectionState;
   activeAdapterName: string;
   sessionsById: Record<string, SessionRecord>;
@@ -60,6 +66,7 @@ export interface AppState {
   selectedInspector: InspectorSelection;
   composer: ComposerState;
   turnPendingBySessionId: Record<string, boolean>;
+  lastContextBySessionId: Record<string, BrowserContextPayload>;
 }
 
 export const DEFAULT_COMPOSER_STATE: ComposerState = {
@@ -73,6 +80,7 @@ export function createInitialState(): AppState {
     initialized: false,
     booting: true,
     bootError: null,
+    developerMode: false,
     connectionState: RuntimeConnectionState.kConnecting,
     activeAdapterName: 'OpenCode',
     sessionsById: {},
@@ -88,6 +96,7 @@ export function createInitialState(): AppState {
     selectedInspector: {kind: 'session'},
     composer: {...DEFAULT_COMPOSER_STATE},
     turnPendingBySessionId: {},
+    lastContextBySessionId: {},
   };
 }
 
@@ -160,6 +169,53 @@ export function getConnectionStateTone(state: ConnectionState): string {
   }
 }
 
+export function getBrowserContextStatusLabel(status: BrowserContextStatusValue): string {
+  switch (status) {
+    case BrowserContextStatus.kInjected:
+      return 'Injected';
+    case BrowserContextStatus.kDeniedInternalPage:
+      return 'Denied: internal page';
+    case BrowserContextStatus.kNoActiveTab:
+      return 'No active tab';
+    case BrowserContextStatus.kCannotAccess:
+      return 'Cannot access page';
+    case BrowserContextStatus.kExtractionFailed:
+      return 'Extraction failed';
+    case BrowserContextStatus.kNotRequested:
+      return 'Not requested';
+  }
+}
+
+export function getBrowserContextStatusTone(status: BrowserContextStatusValue): string {
+  switch (status) {
+    case BrowserContextStatus.kInjected:
+      return 'success';
+    case BrowserContextStatus.kNotRequested:
+      return 'neutral';
+    case BrowserContextStatus.kDeniedInternalPage:
+    case BrowserContextStatus.kNoActiveTab:
+    case BrowserContextStatus.kCannotAccess:
+      return 'warning';
+    case BrowserContextStatus.kExtractionFailed:
+      return 'danger';
+  }
+}
+
+export function getLastBrowserContext(events: RuntimeEventRecord[]): BrowserContextPayload|undefined {
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index];
+    if (!event) {
+      continue;
+    }
+
+    if (event.kind === RuntimeEventKind.kBrowserContextInjected && event.browserContext) {
+      return event.browserContext;
+    }
+  }
+
+  return undefined;
+}
+
 function toTitleCaseRuntimeStateLabel(state: string): string {
   return state.split(/[_-]+/).filter(Boolean).map(part =>
     part[0] ? `${part[0].toUpperCase()}${part.slice(1)}` : '').join(' ');
@@ -218,4 +274,6 @@ export function isRenderableTimelineEvent(event: RuntimeEventRecord): boolean {
     case RuntimeEventKind.kConnectionStateChanged:
       return true;
   }
+
+  return false;
 }

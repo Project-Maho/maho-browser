@@ -16,12 +16,13 @@
 #include "ui/webui/webui_util.h"
 
 MahoNotesUIConfig::MahoNotesUIConfig()
-    : DefaultWebUIConfig(content::kChromeUIScheme, maho::kMahoNotesHost) {}
+    : DefaultTopChromeWebUIConfig(content::kChromeUIScheme,
+                                  maho::kMahoNotesHost) {}
 
 WEB_UI_CONTROLLER_TYPE_IMPL(MahoNotesUI)
 
 MahoNotesUI::MahoNotesUI(content::WebUI* web_ui)
-    : ui::MojoWebUIController(web_ui) {
+    : TopChromeWebUIController(web_ui) {
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       Profile::FromWebUI(web_ui), maho::kMahoNotesHost);
   webui::SetupWebUIDataSource(source, kMahoNotesResources,

@@ -82,3 +82,4 @@ For targeted rebuilds, use `chrome_framework_shared_library` or `chrome_app`.
 - `macos-shell/AGENTS.md` already contains the most specific shell rules.
 - Prefer the nearest AGENTS.md when working inside a subtree.
 - `docs/test-matrix.md` is the canonical execution order.
+- `relay/` is a separate Cargo workspace with its own `relay/AGENTS.md`; use that guide for relay-specific build, auth, and migration rules.

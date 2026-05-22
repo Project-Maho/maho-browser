@@ -447,7 +447,7 @@ void MahoSidebarFooterView::HandleActionPopoverAction(
     case MahoSidebarActionPopoverAction::kNewSpace: {
       auto* sidebar_view = FindSidebarViewAncestor(this);
       if (sidebar_view) {
-        sidebar_view->ShowCreateSpaceSurface();
+        sidebar_view->ShowCreateSpace();
       }
       break;
     }

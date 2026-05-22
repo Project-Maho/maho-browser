@@ -16,7 +16,7 @@ maho-chromium/
 │   ├── ui/
 │   │   ├── views/        # Native Views — sidebar, command palette, split view, little arc
 │   │   │   └── sidebar/  # Biggest subsystem: container, tabs, favorites, DnD, search, spaces
-│   │   ├── webui/        # Mojo-backed WebUI surfaces (14 features)
+│   │   ├── webui/        # Mojo-backed WebUI surfaces (13 features)
 │   │   ├── theme/        # Color mixer, space theme state, color IDs
 │   │   ├── context_menu/ # Tab, space, folder, favorites, address bar menus
 │   │   ├── link_preview/ # Hover preview manager
@@ -46,7 +46,7 @@ maho-chromium/
 |------|----------|
 | Add new WebUI surface | `browser/ui/webui/maho_{feature}/` + `browser/resources/maho_{feature}/` |
 | Sidebar changes | `browser/ui/views/sidebar/` (Views) + `browser/ui/webui/maho_sidebar/` (WebUI) |
-| Command palette | `browser/ui/views/command/` (Views) + `browser/ui/webui/maho_command/` (WebUI) |
+| Command palette | `browser/ui/views/command/` (native Views only) |
 | AI / LLM features | `browser/ai/` (helpers) + `browser/ui/webui/maho_ai/` (WebUI) |
 | Theme / colors | `browser/ui/theme/` — `maho_color_mixer.cc`, `maho_color_id.h` |
 | Ad blocking | `browser/net/maho_ad_block_throttle.cc` |
@@ -70,19 +70,18 @@ maho-chromium/
 - No raw string WebUI URLs — use `components/constants/webui_url_constants.h`
 - No skipping Mojo IDL for new WebUI features
 - No modifying upstream Chromium files directly — always use `chromium_src/` overrides
+- **빌드 실패 시 GN 파일 강제 수정 금지** — `build_maho.py` 가 GN regen (`gn gen` / `Regenerating ninja files`) 단계 또는 그 이후 단계에서 실패하면 즉시 중단하고 사용자에게 보고. `BUILD.gn`, `chromium/src/chrome/test/BUILD.gn`, override 파일 등을 GN 통과를 위해 임의로 편집하지 말 것. unresolved deps / missing target 류 에러는 다른 세션 미완 작업·working tree dirty state 가 원인인 경우가 대부분이며, 임의 cleanup 은 추후 충돌과 데이터 손실을 부른다. **사용자 명시 승인 없이는 GN 편집 금지.**
 
-## WEBUI SURFACES (14)
+## WEBUI SURFACES (13)
 | Feature | URL | Mojom |
 |---------|-----|-------|
 | Settings | `chrome://maho-settings` | `maho_settings.mojom` |
 | Sidebar | `chrome://maho-sidebar` | `maho_sidebar.mojom` |
-| Command | `chrome://maho-command` | `maho_command.mojom` |
 | AI | `chrome://maho-ai` | `maho_ai.mojom` |
 | Boost | `chrome://maho-boost` | `maho_boost.mojom` |
 | Notes | `chrome://maho-notes` | `maho_notes.mojom` |
 | Easel | `chrome://maho-easel` | `maho_easel.mojom` |
 | Space Config | `chrome://maho-space-config` | `maho_space_config.mojom` |
-| Space Create | `chrome://maho-space-create` | `maho_space_create.mojom` |
 | Space Manage | `chrome://maho-space-manage` | `maho_space_manage.mojom` |
 | Sync | `chrome://maho-sync` | `maho_sync.mojom` |
 | Live Folders | `chrome://maho-live-folders` | `maho_live_folders.mojom` |

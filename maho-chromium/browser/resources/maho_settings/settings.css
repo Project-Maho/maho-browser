@@ -216,8 +216,8 @@ maho-settings-app {
   color: var(--maho-settings-text-primary);
   cursor: pointer;
   display: grid;
-  gap: 10px;
-  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 0;
+  grid-template-columns: minmax(0, 1fr);
   min-height: 38px;
   padding: 8px 10px;
   text-align: left;
@@ -249,25 +249,6 @@ maho-settings-app {
 
 .sidebar-nav-button.is-active .sidebar-nav-button__label {
   color: var(--maho-settings-text-primary);
-}
-
-.sidebar-nav-button__badge {
-  align-items: center;
-  background: rgba(255, 255, 255, 0.055);
-  border-radius: 7px;
-  color: var(--maho-settings-accent-strong);
-  display: inline-flex;
-  flex: 0 0 22px;
-  font-size: 10.5px;
-  font-weight: 700;
-  height: 22px;
-  justify-content: center;
-  letter-spacing: 0.05em;
-  width: 22px;
-}
-
-.sidebar-nav-button.is-active .sidebar-nav-button__badge {
-  background: rgba(155, 178, 255, 0.16);
 }
 
 .sidebar-nav-button__text {
@@ -797,64 +778,6 @@ maho-settings-app {
   background: var(--maho-settings-input-focus);
   border-color: var(--maho-settings-accent);
   box-shadow: 0 0 0 1px rgba(145, 169, 255, 0.3);
-}
-
-@media (max-width: 1080px) {
-  .preferences-workspace {
-    grid-template-columns: 68px minmax(0, 1fr);
-  }
-
-  .preferences-sidebar {
-    border-right: 1px solid rgba(255, 255, 255, 0.055);
-    padding-inline: 6px;
-  }
-
-  .sidebar-brand-card {
-    margin-bottom: 10px;
-    padding-inline: 0;
-    place-items: center;
-  }
-
-  .sidebar-title {
-    display: none;
-  }
-
-  .sidebar-navigation {
-    align-items: center;
-  }
-
-  .sidebar-nav-button {
-    gap: 0;
-    grid-template-columns: 1fr;
-    justify-items: center;
-    padding-inline: 8px;
-  }
-
-  .sidebar-nav-button__text {
-    border: 0;
-    clip: rect(0 0 0 0);
-    clip-path: inset(50%);
-    height: 1px;
-    margin: -1px;
-    overflow: hidden;
-    padding: 0;
-    position: absolute;
-    white-space: nowrap;
-    width: 1px;
-  }
-
-  .sidebar-domain-label {
-    border: 0;
-    clip: rect(0 0 0 0);
-    clip-path: inset(50%);
-    height: 1px;
-    margin: -1px;
-    overflow: hidden;
-    padding: 0;
-    position: absolute;
-    white-space: nowrap;
-    width: 1px;
-  }
 }
 
 @media (max-width: 720px) {

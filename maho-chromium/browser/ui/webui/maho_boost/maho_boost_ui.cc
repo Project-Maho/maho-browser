@@ -16,12 +16,13 @@
 #include "ui/webui/webui_util.h"
 
 MahoBoostUIConfig::MahoBoostUIConfig()
-    : DefaultWebUIConfig(content::kChromeUIScheme, maho::kMahoBoostHost) {}
+    : DefaultTopChromeWebUIConfig(content::kChromeUIScheme,
+                                  maho::kMahoBoostHost) {}
 
 WEB_UI_CONTROLLER_TYPE_IMPL(MahoBoostUI)
 
 MahoBoostUI::MahoBoostUI(content::WebUI* web_ui)
-    : ui::MojoWebUIController(web_ui) {
+    : TopChromeWebUIController(web_ui) {
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       Profile::FromWebUI(web_ui), maho::kMahoBoostHost);
   webui::SetupWebUIDataSource(source, kMahoBoostResources,

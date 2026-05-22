@@ -7,6 +7,7 @@
 #include <string>
 #include <utility>
 
+#include "base/command_line.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/json/string_escape.h"
@@ -21,6 +22,7 @@
 #include "content/public/browser/web_contents.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/maho_tab_id_helper.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
@@ -28,17 +30,44 @@
 
 namespace maho {
 
+bool IsSidebarIneligibleUrl(const GURL& url) {
+  if (!url.is_valid() || url.is_empty()) {
+    return true;
+  }
+  if (url.SchemeIs("about")) {
+    return true;
+  }
+  if (url.SchemeIs("chrome")) {
+    if (url.host() == "newtab" || url.host() == "downloads" ||
+        url.host() == "history") {
+      return true;
+    }
+  }
+  return false;
+}
+
 namespace {
 
 ShellEventObserver* g_shell_event_observer_for_testing = nullptr;
+
+// Returns true when the browser was launched with --maho-sidebar-safe-mode.
+// In safe mode all maho-core FFI calls in the sidebar state path are skipped
+// so the browser stays usable (e.g. for maho-ai QA) even when the core is
+// in a bad state.
+bool IsSidebarSafeMode() {
+  const base::CommandLine* cmd = base::CommandLine::ForCurrentProcess();
+  return cmd && cmd->HasSwitch("maho-sidebar-safe-mode");
+}
 
 struct FooterSpaceState {
   size_t space_count = 0;
   int active_space_index = -1;
   std::string active_space_color;
+  MahoSpaceDisplayThemeModel active_space_theme;
   std::vector<std::string> space_icons;
   std::vector<std::string> space_names;
   std::vector<std::string> space_colors;
+  std::vector<MahoSpaceDisplayThemeModel> space_themes;
   std::vector<std::string> space_ids;
   bool has_core_state = false;
 };
@@ -110,13 +139,18 @@ FooterSpaceState GetCoreFooterSpaceState() {
     const std::string* color = dict->FindString("color");
     const std::string* icon = dict->FindString("icon");
     const std::string* name = dict->FindString("name");
+    const MahoSpaceDisplayThemeModel theme = BuildMahoSpaceDisplayThemeModel(*dict);
+    const std::string display_color =
+        GetMahoSpaceDisplayPrimaryColor(theme, color ? *color : std::string());
     state.space_icons.push_back(icon ? *icon : std::string());
     state.space_names.push_back(name ? *name : std::string());
-    state.space_colors.push_back(color ? *color : std::string());
+    state.space_colors.push_back(display_color);
+    state.space_themes.push_back(theme);
     state.space_ids.push_back(id ? *id : std::string());
     if (id && *id == active_id) {
       state.active_space_index = index;
-      state.active_space_color = color ? *color : std::string();
+      state.active_space_color = display_color;
+      state.active_space_theme = theme;
     }
     ++state.space_count;
     ++index;
@@ -138,12 +172,37 @@ bool HasSafeNavigationContext(Browser* browser) {
   return GetActiveWebContents(browser) != nullptr;
 }
 
+// Returns true if the tab strip has a valid active index entry, even when the
+// WebContents at that index is not yet initialized (startup-state race).
+// This is intentionally weaker than HasSafeNavigationContext: it answers
+// "does a tab exist?" rather than "can we navigate?".
+bool TabStripHasActiveEntry(Browser* browser) {
+  if (!browser) {
+    return false;
+  }
+  TabStripModel* tab_strip_model = browser->tab_strip_model();
+  if (!tab_strip_model) {
+    return false;
+  }
+  const int active_index = tab_strip_model->active_index();
+  return active_index != TabStripModel::kNoTab &&
+         tab_strip_model->ContainsIndex(active_index);
+}
+
 bool ShouldShowSearchPlaceholderAddress(const GURL& url) {
   if (url.is_empty() || !url.is_valid()) {
     return true;
   }
 
-  return url.SchemeIs("chrome") && url.host() == "newtab";
+  if (url.SchemeIs("chrome") && url.host() == "newtab") {
+    return true;
+  }
+
+  if (url.IsAboutBlank()) {
+    return true;
+  }
+
+  return false;
 }
 
 std::u16string GetTabTitle(TabStripModel* model, int index) {
@@ -169,8 +228,8 @@ std::u16string GetTabHost(TabStripModel* model, int index) {
   }
 
   const GURL& url = GetVisibleOrCommittedUrl(contents);
-  if (!url.is_valid()) {
-    return u"maho://new-tab";
+  if (!url.is_valid() || MahoDisplayPolicy::IsNtpOrBlankUrl(url)) {
+    return std::u16string();
   }
 
   if (!url.host().empty()) {
@@ -180,24 +239,24 @@ std::u16string GetTabHost(TabStripModel* model, int index) {
   return base::UTF8ToUTF16(url.spec());
 }
 
-std::string GetActiveSpaceIdJson() {
+std::string GetActiveSpaceIdJsonForBrowser(Browser* browser) {
   auto* bridge = MahoSpaceProfileBridge::GetInstance();
   if (!bridge) {
     return std::string();
   }
-  const std::string& active_space_id = bridge->GetActiveSpaceId();
+  const std::string& active_space_id = bridge->GetActiveSpaceId(browser);
   if (active_space_id.empty()) {
     return std::string();
   }
   return base::GetQuotedJSONString(active_space_id);
 }
 
-std::string GetRawActiveSpaceId() {
+std::string GetRawActiveSpaceIdForBrowser(Browser* browser) {
   auto* bridge = MahoSpaceProfileBridge::GetInstance();
   if (!bridge) {
     return std::string();
   }
-  return bridge->GetActiveSpaceId();
+  return bridge->GetActiveSpaceId(browser);
 }
 
 std::optional<base::Value> CallCoreFfi(
@@ -216,9 +275,26 @@ std::optional<base::Value> CallCoreFfi(
   return base::JSONReader::Read(json, base::JSON_PARSE_RFC);
 }
 
-// Build a URL-to-tab-strip-index map for linking core tab IDs to browser tabs.
-std::map<std::string, std::vector<int>> BuildUrlToIndexMap(TabStripModel* model) {
-  std::map<std::string, std::vector<int>> result;
+std::optional<base::Value> CallCoreFfi(
+    char* (*ffi_fn)(MahoCore*, const char*, const int64_t*),
+    const std::string& space_id_json,
+    const int64_t* window_id_ptr) {
+  MahoCore* core = maho::GetCore();
+  if (!core || space_id_json.empty()) {
+    return std::nullopt;
+  }
+  char* json_str = ffi_fn(core, space_id_json.c_str(), window_id_ptr);
+  if (!json_str) {
+    return std::nullopt;
+  }
+  std::string json(json_str);
+  maho_string_free(json_str);
+  return base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+}
+
+// Build a stable-tab-ID-to-strip-index map using MahoTabIdHelper (primary path).
+std::map<std::string, int> BuildStableIdToIndexMap(TabStripModel* model) {
+  std::map<std::string, int> result;
   if (!model) {
     return result;
   }
@@ -227,19 +303,20 @@ std::map<std::string, std::vector<int>> BuildUrlToIndexMap(TabStripModel* model)
     if (!contents) {
       continue;
     }
-    const GURL& url = GetVisibleOrCommittedUrl(contents);
-    if (url.is_valid()) {
-      result[url.spec()].push_back(i);
+    auto* helper = MahoTabIdHelper::FromWebContents(contents);
+    if (helper && !helper->stable_tab_id().empty()) {
+      result[helper->stable_tab_id()] = i;
     }
   }
   return result;
 }
 
+
 SidebarTreeNode TabNodeFromCoreJson(const base::DictValue& dict,
-                                    TabStripModel* model,
-                                    std::map<std::string, std::vector<int>>& url_index,
-                                    bool is_pinned,
-                                    int depth) {
+                                     TabStripModel* model,
+                                     const std::map<std::string, int>& stable_id_map,
+                                     bool is_pinned,
+                                     int depth) {
   SidebarTreeNode node;
   node.kind = SidebarNodeKind::kTab;
   node.depth = depth;
@@ -262,28 +339,36 @@ SidebarTreeNode TabNodeFromCoreJson(const base::DictValue& dict,
 
   const std::string* url = dict.FindString("url");
   if (url) {
+    node.url = *url;
     node.host = base::UTF8ToUTF16(GURL(*url).host());
-    auto it = url_index.find(*url);
-    if (it != url_index.end() && !it->second.empty()) {
-      node.tab_strip_index = it->second.front();
-      it->second.erase(it->second.begin());
-      if (it->second.empty()) {
-        url_index.erase(it);
+  }
+
+  // Match by stable tab ID via MahoTabIdHelper.
+  if (!node.tab_id.empty()) {
+    auto stable_it = stable_id_map.find(node.tab_id);
+    if (stable_it != stable_id_map.end()) {
+      node.tab_strip_index = stable_it->second;
+    }
+  }
+
+  if (model && model->ContainsIndex(node.tab_strip_index)) {
+    content::WebContents* contents =
+        model->GetWebContentsAt(node.tab_strip_index);
+    if (contents && !node.tab_id.empty()) {
+      if (auto* helper = MahoTabIdHelper::FromWebContents(contents);
+          helper && helper->stable_tab_id() != node.tab_id) {
+        helper->SetRestoredTabId(node.tab_id);
       }
-      if (model && model->ContainsIndex(node.tab_strip_index)) {
-        content::WebContents* contents =
-            model->GetWebContentsAt(node.tab_strip_index);
-        node.is_active = model->active_index() == node.tab_strip_index;
-        if (node.custom_title.empty()) {
-          node.title = GetTabTitle(model, node.tab_strip_index);
-        }
-        node.host = GetTabHost(model, node.tab_strip_index);
-        if (contents) {
-          node.is_loading = contents->IsLoading();
-          node.is_audible = contents->IsCurrentlyAudible();
-          node.is_muted = contents->IsAudioMuted();
-        }
-      }
+    }
+    node.is_active = model->active_index() == node.tab_strip_index;
+    if (node.custom_title.empty()) {
+      node.title = GetTabTitle(model, node.tab_strip_index);
+    }
+    node.host = GetTabHost(model, node.tab_strip_index);
+    if (contents) {
+      node.is_loading = contents->IsLoading();
+      node.is_audible = contents->IsCurrentlyAudible();
+      node.is_muted = contents->IsAudioMuted();
     }
   }
 
@@ -316,7 +401,7 @@ struct RootItemInfo {
 
 std::vector<RootItemInfo> ParseRootOrder(const std::string& space_id_json) {
   std::vector<RootItemInfo> root_items;
-  auto parsed = CallCoreFfi(maho_core_get_sidebar_root_order, space_id_json);
+  auto parsed = CallCoreFfi(maho_core_get_sidebar_root_order, space_id_json, nullptr);
   if (!parsed || !parsed->is_list()) {
     return root_items;
   }
@@ -465,46 +550,43 @@ void GroupSplitTabs(std::vector<SidebarTreeNode>& nodes,
 }
 
 void BuildTreeSection(
+    std::optional<base::Value> parsed_tabs,
     const std::string& space_id_json,
-    char* (*tab_ffi)(MahoCore*, const char*),
     bool is_pinned,
     TabStripModel* model,
-    std::map<std::string, std::vector<int>>& url_index,
+    const std::map<std::string, int>& stable_id_map,
     const std::vector<FolderInfo>& all_folders,
-    std::vector<SidebarTreeNode>& out_tree,
-    std::vector<MahoSidebarTabRowModel>& out_flat) {
-  auto parsed = CallCoreFfi(tab_ffi, space_id_json);
-  if (!parsed || !parsed->is_list()) {
+    std::vector<SidebarTreeNode>& out_tree) {
+  if (!parsed_tabs || !parsed_tabs->is_list()) {
     return;
   }
 
   std::map<std::string, SidebarTreeNode> tab_nodes_by_id;
   std::vector<SidebarTreeNode> all_tab_nodes;
 
-  for (const auto& item : parsed->GetList()) {
+  for (const auto& item : parsed_tabs->GetList()) {
     const auto* dict = item.GetIfDict();
     if (!dict) {
       continue;
     }
+    const std::string* raw_url = dict->FindString("url");
+    if (raw_url) {
+      if (IsSidebarIneligibleUrl(GURL(*raw_url))) {
+        continue;
+      }
+    }
+    const std::string* raw_title = dict->FindString("title");
+    const std::string url_str = raw_url ? *raw_url : std::string();
+    const std::u16string title_str = raw_title
+        ? base::UTF8ToUTF16(*raw_title)
+        : std::u16string();
+    if (MahoDisplayPolicy::IsGhostTab(url_str, title_str)) {
+      continue;
+    }
     SidebarTreeNode tab_node =
-        TabNodeFromCoreJson(*dict, model, url_index, is_pinned, 0);
+        TabNodeFromCoreJson(*dict, model, stable_id_map, is_pinned, 0);
     tab_nodes_by_id[tab_node.tab_id] = tab_node;
     all_tab_nodes.push_back(std::move(tab_node));
-
-    MahoSidebarTabRowModel row;
-    const auto& last = tab_nodes_by_id.rbegin()->second;
-    row.tab_id = last.tab_id;
-    row.index = last.tab_strip_index;
-    row.is_active = last.is_active;
-    row.is_pinned = is_pinned;
-    row.section = is_pinned ? MahoSidebarTabSection::kPinned
-                            : MahoSidebarTabSection::kNormal;
-    row.title = last.title;
-    row.host = last.host;
-    row.is_loading = last.is_loading;
-    row.is_audible = last.is_audible;
-    row.is_muted = last.is_muted;
-    out_flat.push_back(std::move(row));
   }
 
   std::set<std::string> tabs_in_folders;
@@ -549,10 +631,97 @@ void BuildTreeSection(
   if (model) {
     GroupSplitTabs(out_tree, model);
   }
+}
 
-  if (model) {
-    GroupSplitTabs(out_tree, model);
+// Overlays live active-tab fields onto a matched node so stale persisted data
+// (e.g. customTitle="newtab") never wins over the real page state.
+// Preserves any legitimate user-set custom_title; stale NTP sentinel values
+// are handled narrowly in ResolveTabDisplayText on the display-policy side.
+void OverlayActiveTabFields(SidebarTreeNode& node,
+                             TabStripModel* model,
+                             int active_index,
+                             content::WebContents* active_contents) {
+  node.tab_strip_index = active_index;
+  node.is_active = true;
+  node.is_pinned = model->IsTabPinned(active_index);
+  node.title = GetTabTitle(model, active_index);
+  node.host = GetTabHost(model, active_index);
+  if (active_contents) {
+    const GURL& live_url = GetVisibleOrCommittedUrl(active_contents);
+    node.url = live_url.is_valid() ? live_url.spec() : std::string();
+    node.is_loading = active_contents->IsLoading();
+    node.is_audible = active_contents->IsCurrentlyAudible();
+    node.is_muted = active_contents->IsAudioMuted();
+    if (auto* helper = MahoTabIdHelper::FromWebContents(active_contents);
+        helper && !helper->stable_tab_id().empty()) {
+      node.tab_id = helper->stable_tab_id();
+    }
   }
+}
+
+// Recursively searches |nodes| for a tab node matching the active tab by
+// (a) tab_strip_index == active_index or (b) tab_id == active_stable_id.
+// On match, overlays live fields via OverlayActiveTabFields and returns true.
+// Both criteria are checked because stable IDs can race during startup (the ID
+// may not be assigned yet) and because tab_strip_index may shift under reorder.
+bool FindAndOverlayActiveTabInTree(std::vector<SidebarTreeNode>& nodes,
+                                    int active_index,
+                                    const std::string& active_stable_id,
+                                    TabStripModel* model,
+                                    content::WebContents* active_contents) {
+  for (auto& node : nodes) {
+    if (node.kind == SidebarNodeKind::kTab) {
+      const bool index_match =
+          active_index >= 0 && node.tab_strip_index == active_index;
+      const bool id_match = !active_stable_id.empty() && !node.tab_id.empty() &&
+                            node.tab_id == active_stable_id;
+      if (index_match || id_match) {
+        OverlayActiveTabFields(node, model, active_index, active_contents);
+        return true;
+      }
+    }
+    if (!node.children.empty() &&
+        FindAndOverlayActiveTabInTree(node.children, active_index,
+                                      active_stable_id, model,
+                                      active_contents)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Builds a SidebarTreeNode for the live active tab, bypassing
+// IsSidebarIneligibleUrl so the active row is always surfaced.  All live
+// fields are populated directly from the TabStripModel and WebContents; no
+// maho-core round-trip is needed.
+SidebarTreeNode SynthesizeActiveTabNode(TabStripModel* model,
+                                        int active_index,
+                                        content::WebContents* contents) {
+  DCHECK(model);
+  DCHECK(model->ContainsIndex(active_index));
+
+  SidebarTreeNode node;
+  node.kind = SidebarNodeKind::kTab;
+  node.tab_strip_index = active_index;
+  node.is_active = true;
+  node.is_pinned = model->IsTabPinned(active_index);
+  node.title = GetTabTitle(model, active_index);
+  node.host = GetTabHost(model, active_index);
+  node.depth = 0;
+
+  if (contents) {
+    const GURL& live_url = GetVisibleOrCommittedUrl(contents);
+    node.url = live_url.is_valid() ? live_url.spec() : std::string();
+    node.is_loading = contents->IsLoading();
+    node.is_audible = contents->IsCurrentlyAudible();
+    node.is_muted = contents->IsAudioMuted();
+    if (auto* helper = MahoTabIdHelper::FromWebContents(contents);
+        helper && !helper->stable_tab_id().empty()) {
+      node.tab_id = helper->stable_tab_id();
+    }
+  }
+
+  return node;
 }
 
 }  // namespace
@@ -668,11 +837,13 @@ MahoSidebarSearchModel MahoSidebarStateAdapter::BuildSearchModel(
                             : base::UTF8ToUTF16(model.current_url);
     }
     model.display_mode =
-        (model.force_placeholder_for_empty_favorites ||
-         ShouldShowSearchPlaceholderAddress(url))
+        ShouldShowSearchPlaceholderAddress(url)
             ? MahoSidebarAddressDisplayMode::kSearchPlaceholder
             : MahoSidebarAddressDisplayMode::kAddressCard;
   } else {
+    // WebContents not yet initialized (startup-state race), but the tab strip
+    // already has an active entry — the utility icon should still be available.
+    model.has_active_tab = TabStripHasActiveEntry(browser);
     model.idle_text = u"Search or Enter URL...";
     model.display_mode = MahoSidebarAddressDisplayMode::kSearchPlaceholder;
   }
@@ -684,6 +855,10 @@ MahoSidebarStateAdapter::BuildFavoritesModelForSpaceIdJson(
     std::string active_space_id_json) {
   MahoSidebarFavoritesModel model;
   model.items.reserve(model.slot_count);
+
+  if (IsSidebarSafeMode()) {
+    return model;
+  }
 
   MahoCore* core = maho::GetCore();
   if (!core || active_space_id_json.empty()) {
@@ -722,20 +897,27 @@ MahoSidebarStateAdapter::BuildFavoritesModelForSpaceIdJson(
 
     MahoSidebarFavoriteItemModel favorite_item;
     const std::string* title = dict->FindString("title");
-    if (title) {
-      favorite_item.title = base::UTF8ToUTF16(*title);
-    }
     const std::string* custom_title = dict->FindString("customTitle");
-    if (custom_title && !custom_title->empty()) {
-      favorite_item.title = base::UTF8ToUTF16(*custom_title);
-    }
+
+    const std::u16string title_u16 =
+        title ? base::UTF8ToUTF16(*title) : std::u16string();
+    const std::u16string custom_title_u16 =
+        (custom_title && !custom_title->empty())
+            ? base::UTF8ToUTF16(*custom_title)
+            : std::u16string();
+
+    favorite_item.title = MahoDisplayPolicy::ResolveTabDisplayText(
+        favorite_url, title_u16, custom_title_u16);
+
     const std::string* id = dict->FindString("id");
     if (id) {
       favorite_item.tab_id = *id;
     }
-    favorite_item.subtitle = favorite_url.host().empty()
-                                  ? base::UTF8ToUTF16(favorite_url.spec())
-                                  : base::UTF8ToUTF16(favorite_url.host());
+    if (!MahoDisplayPolicy::IsNtpOrBlankUrl(favorite_url)) {
+      favorite_item.subtitle = favorite_url.host().empty()
+                                    ? base::UTF8ToUTF16(favorite_url.spec())
+                                    : base::UTF8ToUTF16(favorite_url.host());
+    }
     favorite_item.url = favorite_url;
     model.items.push_back(std::move(favorite_item));
     if (model.items.size() == model.slot_count) {
@@ -761,8 +943,8 @@ MahoSidebarTabListModel MahoSidebarStateAdapter::BuildTabListModel(
   MahoSidebarTabListModel model;
   TabStripModel* tab_strip_model = browser ? browser->tab_strip_model() : nullptr;
 
-  model.active_space_id = GetRawActiveSpaceId();
-  std::string space_id_json = GetActiveSpaceIdJson();
+  model.active_space_id = GetRawActiveSpaceIdForBrowser(browser);
+  std::string space_id_json = GetActiveSpaceIdJsonForBrowser(browser);
 
   if (tab_strip_model) {
     model.active_tab.index = tab_strip_model->active_index();
@@ -772,64 +954,113 @@ MahoSidebarTabListModel MahoSidebarStateAdapter::BuildTabListModel(
     }
   }
 
-  auto url_index = BuildUrlToIndexMap(tab_strip_model);
-  auto all_folders = ParseFolders(space_id_json);
-  const bool tree_requested = !space_id_json.empty();
-  bool used_flat_fallback = false;
-
-  auto build_flat_from_tab_strip = [&]() {
+  auto stable_id_map = BuildStableIdToIndexMap(tab_strip_model);
+  const bool tree_requested = !IsSidebarSafeMode() && !space_id_json.empty();
+  std::vector<FolderInfo> all_folders;
+  if (tree_requested) {
+    all_folders = ParseFolders(space_id_json);
+  }
+  auto build_tree_from_tab_strip = [&]() {
     if (!tab_strip_model) {
       return;
     }
 
     for (int i = 0; i < tab_strip_model->count(); ++i) {
-      MahoSidebarTabRowModel row;
-      row.index = i;
-      row.is_active = tab_strip_model->active_index() == i;
-      row.is_pinned = tab_strip_model->IsTabPinned(i);
-      row.section = row.is_pinned ? MahoSidebarTabSection::kPinned
-                                  : MahoSidebarTabSection::kNormal;
-      row.title = GetTabTitle(tab_strip_model, i);
-      row.host = GetTabHost(tab_strip_model, i);
       content::WebContents* contents = tab_strip_model->GetWebContentsAt(i);
       if (contents) {
-        row.is_loading = contents->IsLoading();
-        row.is_audible = contents->IsCurrentlyAudible();
-        row.is_muted = contents->IsAudioMuted();
+        const GURL& tab_url = GetVisibleOrCommittedUrl(contents);
+        if (IsSidebarIneligibleUrl(tab_url)) {
+          continue;
+        }
       }
-      if (row.is_pinned) {
-        model.pinned_tabs.push_back(std::move(row));
+      SidebarTreeNode node;
+      node.kind = SidebarNodeKind::kTab;
+      node.tab_strip_index = i;
+      node.is_active = tab_strip_model->active_index() == i;
+      node.is_pinned = tab_strip_model->IsTabPinned(i);
+      node.title = GetTabTitle(tab_strip_model, i);
+      node.host = GetTabHost(tab_strip_model, i);
+      if (contents) {
+        const GURL& tab_url = GetVisibleOrCommittedUrl(contents);
+        node.url = tab_url.is_valid() ? tab_url.spec() : std::string();
+        node.is_loading = contents->IsLoading();
+        node.is_audible = contents->IsCurrentlyAudible();
+        node.is_muted = contents->IsAudioMuted();
+        auto* helper = MahoTabIdHelper::FromWebContents(contents);
+        if (helper && !helper->stable_tab_id().empty()) {
+          node.tab_id = helper->stable_tab_id();
+        }
+      }
+      if (node.is_pinned) {
+        model.pinned_tree.push_back(std::move(node));
       } else {
-        model.tabs.push_back(std::move(row));
+        model.normal_tree.push_back(std::move(node));
       }
     }
   };
 
   if (tree_requested) {
-    BuildTreeSection(space_id_json, maho_core_get_pinned_tabs, true,
-                     tab_strip_model, url_index, all_folders,
-                     model.pinned_tree, model.pinned_tabs);
-    BuildTreeSection(space_id_json, maho_core_get_space_tabs, false,
-                     tab_strip_model, url_index, all_folders,
-                     model.normal_tree, model.tabs);
+    auto pinned_parsed = CallCoreFfi(maho_core_get_pinned_tabs, space_id_json);
+    BuildTreeSection(std::move(pinned_parsed), space_id_json, true,
+                     tab_strip_model, stable_id_map, all_folders,
+                     model.pinned_tree);
 
-    if (tab_strip_model && model.pinned_tree.empty() && model.normal_tree.empty() &&
-        model.pinned_tabs.empty() && model.tabs.empty()) {
-      used_flat_fallback = true;
-      build_flat_from_tab_strip();
-    }
+    auto normal_parsed = CallCoreFfi(maho_core_get_space_tabs, space_id_json, nullptr);
+    BuildTreeSection(std::move(normal_parsed), space_id_json, false,
+                     tab_strip_model, stable_id_map, all_folders,
+                     model.normal_tree);
+
+    // When tree_requested is true, respect the core's result even if both
+    // trees are empty.  Falling back to the tab-strip here would silently
+    // mask an empty-core state and lose split-group consistency.
   } else {
-    used_flat_fallback = true;
-    build_flat_from_tab_strip();
+    build_tree_from_tab_strip();
   }
 
-  LOG(INFO) << "MahoPinnedDebug BuildTabListModel: active_space_id='"
-            << model.active_space_id << "' tree_mode=" << tree_requested
-            << " flat_fallback=" << used_flat_fallback
-            << " pinned_tree=" << model.pinned_tree.size()
-            << " normal_tree=" << model.normal_tree.size()
-            << " pinned_tabs=" << model.pinned_tabs.size()
-            << " normal_tabs=" << model.tabs.size();
+  // Active-tab normalization: ensure the live active tab always has a row in
+  // one of the two trees with up-to-date live fields.  The active row can be
+  // absent because:
+  //   (a) maho-core hasn't persisted the tab yet (startup race), or
+  //   (b) the tab URL is ineligible per IsSidebarIneligibleUrl — the active
+  //       tab bypasses that filter so content is never left without a row.
+  // When a matching row IS found, we still overlay live fields onto it so that
+  // stale persisted state (e.g. customTitle="newtab") never wins over the real
+  // page title/host.
+  if (tab_strip_model) {
+    const int active_index = tab_strip_model->active_index();
+    if (active_index != TabStripModel::kNoTab &&
+        tab_strip_model->ContainsIndex(active_index)) {
+      content::WebContents* active_contents =
+          tab_strip_model->GetWebContentsAt(active_index);
+
+      std::string active_stable_id;
+      if (active_contents) {
+        if (auto* helper = MahoTabIdHelper::FromWebContents(active_contents);
+            helper && !helper->stable_tab_id().empty()) {
+          active_stable_id = helper->stable_tab_id();
+        }
+      }
+
+      const bool overlaid_in_pinned = FindAndOverlayActiveTabInTree(
+          model.pinned_tree, active_index, active_stable_id, tab_strip_model,
+          active_contents);
+      const bool overlaid_in_normal =
+          !overlaid_in_pinned &&
+          FindAndOverlayActiveTabInTree(model.normal_tree, active_index,
+                                        active_stable_id, tab_strip_model,
+                                        active_contents);
+
+      if (!overlaid_in_pinned && !overlaid_in_normal) {
+        SidebarTreeNode active_node =
+            SynthesizeActiveTabNode(tab_strip_model, active_index, active_contents);
+        if (tab_strip_model->IsTabPinned(active_index)) {
+          model.pinned_tree.push_back(std::move(active_node));
+        } else {
+          model.normal_tree.push_back(std::move(active_node));
+        }
+      }
+    }
+  }
 
   return model;
 }
@@ -837,7 +1068,8 @@ MahoSidebarTabListModel MahoSidebarStateAdapter::BuildTabListModel(
 MahoSidebarFooterModel MahoSidebarStateAdapter::BuildFooterModel(
     Browser* browser) const {
   MahoSidebarFooterModel model;
-  const FooterSpaceState core_state = GetCoreFooterSpaceState();
+  const FooterSpaceState core_state =
+      IsSidebarSafeMode() ? FooterSpaceState{} : GetCoreFooterSpaceState();
   const auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
   const size_t bridge_space_count =
       bridge ? bridge->GetRegisteredSpaceCount() : 0u;
@@ -848,18 +1080,24 @@ MahoSidebarFooterModel MahoSidebarStateAdapter::BuildFooterModel(
   model.space_count = static_cast<int>(space_count);
   int active_space_index = core_state.has_core_state
                                ? core_state.active_space_index
-                               : (bridge ? bridge->GetActiveSpaceIndex() : -1);
+                               : (bridge ? bridge->GetActiveSpaceIndex(browser)
+                                         : -1);
   std::string active_space_color = core_state.has_core_state
                                        ? core_state.active_space_color
                                        : std::string();
+  MahoSpaceDisplayThemeModel active_space_theme = core_state.active_space_theme;
   if (bridge && !core_state.space_ids.empty()) {
-    const std::string bridge_active_space_id = bridge->GetActiveSpaceId();
+    const std::string bridge_active_space_id =
+        bridge->GetActiveSpaceId(browser);
     if (!bridge_active_space_id.empty()) {
       for (size_t i = 0; i < core_state.space_ids.size(); ++i) {
         if (core_state.space_ids[i] == bridge_active_space_id) {
           active_space_index = static_cast<int>(i);
           if (i < core_state.space_colors.size()) {
             active_space_color = core_state.space_colors[i];
+          }
+          if (i < core_state.space_themes.size()) {
+            active_space_theme = core_state.space_themes[i];
           }
           break;
         }
@@ -870,9 +1108,11 @@ MahoSidebarFooterModel MahoSidebarStateAdapter::BuildFooterModel(
   model.can_open_space_controls = space_count > 0;
   model.can_create_space = browser != nullptr;
   model.space_color = active_space_color;
+  model.space_theme = active_space_theme;
   model.space_icons = core_state.space_icons;
   model.space_names = core_state.space_names;
   model.space_colors = core_state.space_colors;
+  model.space_themes = core_state.space_themes;
   model.space_ids = core_state.space_ids;
   model.update_pill.visible = false;
   model.update_pill.has_update = false;

@@ -1,8 +1,76 @@
-# Copyright 2026 Maho Browser. All rights reserved.
-
 import("//ui/webui/resources/tools/build_webui.gni")
+import("//ui/webui/resources/tools/generate_grd.gni")
 
 assert(!is_android)
+
+action("bundle_react") {
+  script = "//third_party/node/node.py"
+  inputs = [
+    "//third_party/node/node.py",
+    "../maho_common/react/store_utils.ts",
+    "../maho_common/react/use_mojo.ts",
+    "maho_ai.mojom-webui.js.d.ts",
+    "react/app.tsx",
+    "react/features/compact/compact-header.tsx",
+    "react/features/compact/compact-shell.tsx",
+    "react/features/compact/compact-stage.tsx",
+    "react/features/compact/composer.tsx",
+    "react/features/compact/conversation-message.tsx",
+    "react/features/compact/conversation-system-item.tsx",
+    "react/features/compact/conversation-thread.tsx",
+    "react/features/compact/overflow-menu.tsx",
+    "react/features/compact/pending-thought.tsx",
+    "react/features/developer/developer-workspace.tsx",
+    "react/features/developer/event-card.tsx",
+    "react/features/developer/inspector.tsx",
+    "react/features/developer/left-rail.tsx",
+    "react/features/developer/mode-toggle.tsx",
+    "react/features/developer/timeline.tsx",
+    "react/hooks/use-app-state.ts",
+    "react/hooks/use-auto-scroll.ts",
+    "react/lib/cn.ts",
+    "react/lib/editable-snapshot.ts",
+    "react/lib/format-timestamp.ts",
+    "react/store.ts",
+    "react/tsconfig.json",
+    "react/ui/button.tsx",
+    "react/ui/dropdown-menu.tsx",
+    "react/ui/empty-state.tsx",
+    "react/ui/icon-button.tsx",
+    "react/ui/icon.tsx",
+    "react/ui/markdown.tsx",
+    "react/ui/pill.tsx",
+    "react/ui/popover.tsx",
+    "react/ui/textarea.tsx",
+    "store.ts",
+    "styles/base.css",
+    "styles/composer.css",
+    "styles/compact-panel.css",
+    "styles/developer-console.css",
+    "styles/overflow-menu.css",
+    "styles/thread.css",
+    "styles/tokens.css",
+    "types.ts",
+    "views/cards.ts",
+    "views/conversation_thread.ts",
+    "views/icons.ts",
+    "bundle_react.mjs",
+  ]
+  outputs = [ "$target_gen_dir/app_bundle.js" ]
+  args = [
+    rebase_path("//maho/browser/resources/maho_ai/bundle_react.mjs", root_build_dir),
+    rebase_path(".", root_build_dir),
+    rebase_path("$target_gen_dir/app_bundle.js", root_build_dir),
+  ]
+}
+
+generate_grd("bundle_grdp") {
+  grd_prefix = "maho_ai_bundle"
+  out_grd = "$target_gen_dir/maho_ai_bundle.grdp"
+  input_files = [ "app_bundle.js" ]
+  input_files_base_dir = rebase_path(target_gen_dir, root_build_dir)
+  deps = [ ":bundle_react" ]
+}
 
 build_webui("build") {
   grd_prefix = "maho_ai"
@@ -10,28 +78,25 @@ build_webui("build") {
   static_files = [
     "maho_ai.html",
     "maho_ai.css",
+    "styles/base.css",
+    "styles/composer.css",
+    "styles/compact-panel.css",
+    "styles/developer-console.css",
+    "styles/overflow-menu.css",
+    "styles/thread.css",
+    "styles/tokens.css",
   ]
 
-  ts_files = [
-    "app.ts",
-    "store.ts",
-    "types.ts",
-    "views/cards.ts",
-    "views/composer.ts",
-    "views/console_shell.ts",
-    "views/inspector.ts",
-    "views/left_rail.ts",
-    "views/timeline.ts",
-  ]
+  ts_files = [ "app.ts" ]
 
-  ts_deps = [
-    "//ui/webui/resources/js:build_ts",
-    "//ui/webui/resources/mojo:build_ts",
-  ]
+  ts_deps = [ "//ui/webui/resources/mojo:build_ts" ]
 
   webui_context_type = "trusted"
 
   mojo_files_deps =
       [ "//maho/browser/ui/webui/maho_ai:mojo_bindings_ts__generator" ]
   mojo_files = [ "$root_gen_dir/maho/browser/ui/webui/maho_ai/maho_ai.mojom-webui.ts" ]
+
+  extra_grdp_deps = [ ":bundle_grdp" ]
+  extra_grdp_files = [ "$target_gen_dir/maho_ai_bundle.grdp" ]
 }

@@ -68,12 +68,18 @@ source_set("maho_sidebar_library") {
   deps = [
     ":maho_sidebar_downloads",
     "//base",
+    "//cc/paint",
+    "//chrome/browser/ui:browser_navigator_params_headers",
+    "//chrome/browser/ui/browser_window",
     "//chrome/browser/ui/color:color_headers",
     "//maho/browser:maho_core_holder",
     "//maho/browser:maho_space_profile_bridge",
+    "//maho/browser:maho_theme_support",
+    "//maho/browser/ui/views/space_create:maho_space_theme_picker_dialog",
     "//maho/third_party/maho:maho_ffi_headers",
     "//ui/base",
     "//ui/color",
+    "//ui/display",
     "//ui/gfx",
     "//ui/views",
   ]
@@ -118,6 +124,7 @@ source_set("maho_sidebar_core") {
     "//content/public/browser",
     "//maho/browser:maho_core_holder",
     "//maho/browser:maho_space_profile_bridge",
+    "//maho/browser:maho_tab_id_helper",
     "//maho/components/constants",
     "//maho/third_party/maho:maho_bridge",
     "//maho/third_party/maho:maho_ffi_headers",
@@ -168,6 +175,47 @@ source_set("browser_tests") {
   ]
 }
 
+source_set("maho_sidebar_boosts") {
+  sources = [
+    "maho_sidebar_boosts_data.cc",
+    "maho_sidebar_boosts_data.h",
+    "maho_sidebar_boosts_view.cc",
+    "maho_sidebar_boosts_view.h",
+  ]
+
+  deps = [
+    ":maho_sidebar_core",
+    "//base",
+    "//components/vector_icons",
+    "//maho/browser:maho_core_holder",
+    "//maho/third_party/maho:maho_bridge",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//ui/accessibility",
+    "//ui/base",
+    "//ui/color",
+    "//ui/compositor",
+    "//ui/gfx",
+    "//ui/views",
+    "//url",
+  ]
+}
+
+source_set("maho_spaces_board_data") {
+  sources = [
+    "maho_spaces_board_data.cc",
+    "maho_spaces_board_data.h",
+  ]
+
+  deps = [
+    ":maho_sidebar_core",
+    "//base",
+    "//maho/browser:maho_core_holder",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//url",
+  ]
+}
+
 source_set("interactive_tests") {
   testonly = true
   sources = [
@@ -193,7 +241,6 @@ source_set("interactive_tests") {
     "//components/prefs",
     "//content/public/browser",
     "//content/test:test_support",
-    "//maho/browser/ui/webui/maho_space_config:maho_space_config",
     "//testing/gtest",
     "//ui/base",
     "//ui/base:test_support",

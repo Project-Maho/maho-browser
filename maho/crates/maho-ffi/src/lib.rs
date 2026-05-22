@@ -1,5 +1,7 @@
 #![allow(clippy::missing_safety_doc)]
 
+pub mod acp;
+
 use std::ffi::{c_char, CStr, CString};
 use std::path::Path;
 use std::ptr;
@@ -124,6 +126,7 @@ pub unsafe extern "C" fn maho_core_get_space_view_models(ptr: *mut MahoCore) -> 
 pub unsafe extern "C" fn maho_core_get_sidebar_root_order(
     ptr: *mut MahoCore,
     space_id_json: *const c_char,
+    window_id_ptr: *const i64,
 ) -> *mut c_char {
     if ptr.is_null() || space_id_json.is_null() {
         return ptr::null_mut();
@@ -137,8 +140,14 @@ pub unsafe extern "C" fn maho_core_get_sidebar_root_order(
         Ok(id) => id,
         Err(_) => return ptr::null_mut(),
     };
-    let root_items = core
-        .get_sidebar_root_order(&space_id)
+    
+    let root_order = if !window_id_ptr.is_null() {
+        core.get_sidebar_root_order_for_window(&space_id, *window_id_ptr)
+    } else {
+        core.get_sidebar_root_order(&space_id)
+    };
+
+    let root_items = root_order
         .into_iter()
         .map(|item| match item {
             RootItem::Tab(tab_id) => SidebarRootItemView {
@@ -259,6 +268,7 @@ pub unsafe extern "C" fn maho_core_get_pinned_tabs(
 pub unsafe extern "C" fn maho_core_get_space_tabs(
     ptr: *mut MahoCore,
     space_id_json: *const c_char,
+    window_id_ptr: *const i64,
 ) -> *mut c_char {
     if ptr.is_null() || space_id_json.is_null() {
         return ptr::null_mut();
@@ -272,7 +282,28 @@ pub unsafe extern "C" fn maho_core_get_space_tabs(
         Ok(id) => id,
         Err(_) => return ptr::null_mut(),
     };
-    to_json_cstring(&core.get_space_tabs(&space_id))
+    
+    let tabs = if !window_id_ptr.is_null() {
+        core.get_space_tabs_for_window(&space_id, *window_id_ptr)
+    } else {
+        core.get_space_tabs(&space_id)
+    };
+    
+    to_json_cstring(&tabs)
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_release_window_tabs(
+    ptr: *mut MahoCore,
+    window_id: i64,
+) {
+    if ptr.is_null() {
+        return;
+    }
+    let core = &mut *ptr;
+    core.release_window_tabs(window_id);
 }
 
 /// # Safety

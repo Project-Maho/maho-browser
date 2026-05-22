@@ -1,9 +1,11 @@
+use maho_core::command_bar::CommandBarEngine;
 use maho_core::maho_core::MahoCore;
 use maho_types::common::{Orientation, Url, UrlPattern, UrlPatternType};
 use maho_types::events::core_update::CoreUpdate;
 use maho_types::events::shell_event::ShellEvent;
 use maho_types::identifiers::{FolderId, SpaceId, TabId};
 use maho_types::space::{SpaceColor, SpaceConfigUpdate};
+use maho_types::traits::shell_renderer::{SearchContext, SuggestionType, TabViewModel};
 
 fn make_color(hue: f64) -> SpaceColor {
     SpaceColor {
@@ -25,6 +27,8 @@ fn create_tab(core: &mut MahoCore) -> TabId {
         space_id,
         url: None,
         parent_id: None,
+        tab_id: None,
+        window_id: None,
     });
     let after = core.get_tab_view_models();
     after
@@ -46,6 +50,8 @@ fn create_tab_with_url(core: &mut MahoCore, url: &str) -> TabId {
         space_id,
         url: Some(Url::new(url)),
         parent_id: None,
+        tab_id: None,
+        window_id: None,
     });
     let after = core.get_tab_view_models();
     after
@@ -66,6 +72,8 @@ fn create_tab_in_space(core: &mut MahoCore, space_id: &SpaceId) -> TabId {
         space_id: space_id.clone(),
         url: None,
         parent_id: None,
+        tab_id: None,
+        window_id: None,
     });
     let after = core.get_tab_view_models();
     after
@@ -119,6 +127,8 @@ fn create_tab_emits_tab_created_update() {
         space_id,
         url: Some(Url::new("https://example.com/emitted")),
         parent_id: None,
+        tab_id: None,
+        window_id: None,
     });
 
     assert!(matches!(
@@ -933,6 +943,8 @@ fn space_tab_in_new_space() {
         space_id: sid,
         url: None,
         parent_id: None,
+        tab_id: None,
+        window_id: None,
     });
     assert_eq!(core.get_tab_view_models().len(), before + 1);
 }
@@ -1738,9 +1750,34 @@ fn url_scheme_newtab() {
     let mut core = MahoCore::new();
     let before_count = core.get_tab_view_models().len();
     let result = core.handle_url_scheme("maho://newtab");
-    assert!(result.contains("\"ok\":true"));
+    assert!(result.contains("\"error\""), "expected error JSON, got: {result}");
+    assert_eq!(
+        core.get_tab_view_models().len(),
+        before_count,
+        "newtab without url= must not create a tab"
+    );
+}
+
+#[test]
+fn url_scheme_newtab_missing_url() {
+    let mut core = MahoCore::new();
+    let before_count = core.get_tab_view_models().len();
+    let result = core.handle_url_scheme("maho://newtab");
+    assert!(result.contains("\"error\""), "expected error JSON, got: {result}");
+    assert_eq!(core.get_tab_view_models().len(), before_count);
+}
+
+#[test]
+fn url_scheme_newtab_with_url() {
+    let mut core = MahoCore::new();
+    let before_count = core.get_tab_view_models().len();
+    let result = core.handle_url_scheme("maho://newtab?url=https%3A%2F%2Fexample.com");
+    assert!(result.contains("\"ok\":true"), "expected ok JSON, got: {result}");
     assert!(result.contains("\"action\":\"newtab\""));
-    assert!(core.get_tab_view_models().len() > before_count);
+    assert!(
+        core.get_tab_view_models().len() > before_count,
+        "newtab with url= must create a tab"
+    );
 }
 
 #[test]
@@ -1862,7 +1899,7 @@ fn searchable_items_returns_json_array() {
 #[test]
 fn searchable_items_includes_tabs() {
     let mut core = MahoCore::new();
-    core.handle_url_scheme("maho://newtab");
+    create_tab(&mut core);
     let items = core.get_searchable_items();
     assert!(items.contains("\"kind\":\"tab\""));
 }
@@ -2527,4 +2564,250 @@ fn move_nested_folder_to_root_among_regular_folders() {
         .find(|f| f.id == child)
         .unwrap();
     assert!(child_vm.parent_folder_id.is_none());
+}
+
+// ===== COMMAND BAR: RANKING INTEGRITY (PHASE 1) =====
+
+fn make_tab_vm(id: &str, title: &str, url: &str) -> TabViewModel {
+    let space_id = SpaceId::new("space-test");
+    TabViewModel {
+        id: TabId::new(id),
+        space_id,
+        title: title.to_string(),
+        custom_title: None,
+        url: url.to_string(),
+        favicon: None,
+        is_loading: false,
+        is_pinned: false,
+        is_favorite: false,
+        favorite_order: None,
+        is_muted: false,
+        is_playing_audio: false,
+        lifecycle_state: "active".to_string(),
+        children: vec![],
+        created_at: maho_types::common::DateTime("2024-01-01T00:00:00Z".to_string()),
+        last_active_at: maho_types::common::DateTime("2024-01-01T00:00:00Z".to_string()),
+    }
+}
+
+fn empty_ctx() -> SearchContext {
+    SearchContext {
+        tabs: vec![],
+        spaces: vec![],
+        folders: vec![],
+        archived_tabs: vec![],
+        bookmarks: vec![],
+        bookmark_favicons: vec![],
+        closed_tabs: vec![],
+        extensions: vec![],
+        is_incognito: false,
+    }
+}
+
+#[test]
+fn cross_type_url_dedup_tab_beats_history() {
+    let mut engine = CommandBarEngine::new();
+    engine.add_history_entry(
+        "https://rust-lang.org".to_string(),
+        "Rust Programming Language".to_string(),
+        None,
+    );
+
+    let mut ctx = empty_ctx();
+    ctx.tabs = vec![make_tab_vm("t1", "Rust Programming Language", "https://rust-lang.org")];
+
+    let results = engine.search("rust", None, &ctx);
+
+    let rust_results: Vec<_> = results
+        .iter()
+        .filter(|r| {
+            r.execution_payload
+                .as_deref()
+                .map(|u| u.starts_with("https://rust-lang.org"))
+                .unwrap_or(false)
+        })
+        .collect();
+
+    assert_eq!(
+        rust_results.len(),
+        1,
+        "same URL should collapse to one result; got {} rust-lang entries",
+        rust_results.len()
+    );
+}
+
+#[test]
+fn cross_type_url_dedup_bookmark_beats_history_when_no_tab() {
+    let mut engine = CommandBarEngine::new();
+    engine.add_history_entry(
+        "https://example.com/page".to_string(),
+        "Example Page".to_string(),
+        None,
+    );
+
+    let mut ctx = empty_ctx();
+    ctx.bookmarks = vec![("bm1".to_string(), "Example Page".to_string(), "https://example.com/page".to_string())];
+
+    let results = engine.search("example", None, &ctx);
+
+    let matches: Vec<_> = results
+        .iter()
+        .filter(|r| {
+            r.execution_payload
+                .as_deref()
+                .map(|u| u.starts_with("https://example.com/page"))
+                .unwrap_or(false)
+        })
+        .collect();
+
+    assert_eq!(matches.len(), 1, "bookmark and history for same URL should collapse to one result");
+}
+
+#[test]
+fn cross_type_url_dedup_closed_tab_collapses_with_history() {
+    let mut engine = CommandBarEngine::new();
+    engine.add_history_entry(
+        "https://closed.example.com".to_string(),
+        "Closed Example".to_string(),
+        None,
+    );
+
+    let mut ctx = empty_ctx();
+    ctx.closed_tabs = vec![make_tab_vm("c1", "Closed Example", "https://closed.example.com")];
+
+    let results = engine.search("closed example", None, &ctx);
+
+    let matches: Vec<_> = results
+        .iter()
+        .filter(|r| {
+            r.execution_payload
+                .as_deref()
+                .map(|u| u.starts_with("https://closed.example.com"))
+                .unwrap_or(false)
+        })
+        .collect();
+
+    assert_eq!(
+        matches.len(),
+        1,
+        "closed tab and history for same URL should collapse; got {}",
+        matches.len()
+    );
+}
+
+#[test]
+fn cross_type_url_dedup_different_urls_not_collapsed() {
+    let mut engine = CommandBarEngine::new();
+    engine.add_history_entry(
+        "https://alpha.example.com".to_string(),
+        "Alpha Example".to_string(),
+        None,
+    );
+
+    let mut ctx = empty_ctx();
+    ctx.tabs = vec![make_tab_vm("t1", "Beta Example", "https://beta.example.com")];
+
+    let results = engine.search("example", None, &ctx);
+
+    let alpha_count = results
+        .iter()
+        .filter(|r| r.execution_payload.as_deref() == Some("https://alpha.example.com"))
+        .count();
+    let beta_count = results
+        .iter()
+        .filter(|r| r.execution_payload.as_deref() == Some("https://beta.example.com"))
+        .count();
+
+    assert_eq!(alpha_count, 1, "distinct URL alpha.example.com should appear");
+    assert_eq!(beta_count, 1, "distinct URL beta.example.com should appear");
+}
+
+#[test]
+fn search_respects_max_results_limit() {
+    let mut engine = CommandBarEngine::new();
+    for i in 0..30 {
+        engine.add_history_entry(
+            format!("https://site{}.example.com", i),
+            format!("Site {} Example Page Testing Query", i),
+            None,
+        );
+    }
+
+    let ctx = empty_ctx();
+    let results = engine.search("example", None, &ctx);
+
+    assert!(
+        results.len() <= 12,
+        "results must not exceed MAX_RESULTS=12; got {}",
+        results.len()
+    );
+}
+
+#[test]
+fn type_priority_tiebreak_results_are_deterministic() {
+    let mut engine = CommandBarEngine::new();
+    engine.add_history_entry(
+        "https://tiebreak.example.com".to_string(),
+        "Tiebreak Test Page".to_string(),
+        None,
+    );
+    engine.add_history_entry(
+        "https://tiebreak2.example.com".to_string(),
+        "Tiebreak Test Page Alt".to_string(),
+        None,
+    );
+
+    let mut ctx = empty_ctx();
+    ctx.tabs = vec![make_tab_vm("t1", "Tiebreak Test Page", "https://tiebreak2.example.com")];
+
+    let results_a = engine.search("tiebreak test page", None, &ctx);
+    let results_b = engine.search("tiebreak test page", None, &ctx);
+
+    let keys_a: Vec<_> = results_a.iter().map(|r| r.key.clone()).collect();
+    let keys_b: Vec<_> = results_b.iter().map(|r| r.key.clone()).collect();
+    assert_eq!(keys_a, keys_b, "identical queries must produce identical result order");
+}
+
+#[test]
+fn non_url_results_not_collapsed_by_url_dedup() {
+    let mut engine = CommandBarEngine::new();
+    engine.add_action("new_tab".to_string(), "New Tab".to_string(), "Navigation".to_string());
+    engine.add_action("new_window".to_string(), "New Window".to_string(), "Navigation".to_string());
+
+    let ctx = empty_ctx();
+    let results = engine.search("> new", None, &ctx);
+
+    let action_count = results.iter().filter(|r| matches!(r.kind, SuggestionType::Action)).count();
+    assert!(action_count >= 2, "distinct actions should not be collapsed by URL dedup; got {}", action_count);
+}
+
+#[test]
+fn url_dedup_normalises_trailing_slash() {
+    let mut engine = CommandBarEngine::new();
+    engine.add_history_entry(
+        "https://trailing.example.com/".to_string(),
+        "Trailing Slash Page".to_string(),
+        None,
+    );
+
+    let mut ctx = empty_ctx();
+    ctx.tabs = vec![make_tab_vm("t1", "Trailing Slash Page", "https://trailing.example.com")];
+
+    let results = engine.search("trailing slash", None, &ctx);
+
+    let matches: Vec<_> = results
+        .iter()
+        .filter(|r| {
+            r.execution_payload
+                .as_deref()
+                .map(|u| u.trim_end_matches('/') == "https://trailing.example.com")
+                .unwrap_or(false)
+        })
+        .collect();
+
+    assert_eq!(
+        matches.len(),
+        1,
+        "trailing slash variant and non-slash variant of same URL should collapse to one result"
+    );
 }

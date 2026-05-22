@@ -195,14 +195,12 @@ views::Widget* MahoSidebarActionPopoverView::Show(
 
   auto contents = std::make_unique<MahoSidebarActionPopoverView>(
       std::move(action_callback));
-  auto* contents_ptr = contents.get();
   delegate->SetContentsView(std::move(contents));
 
   views::Widget* widget =
       views::BubbleDialogDelegate::CreateBubble(std::move(delegate));
   if (widget) {
     widget->Show();
-    contents_ptr->RequestFocus();
   }
   return widget;
 }

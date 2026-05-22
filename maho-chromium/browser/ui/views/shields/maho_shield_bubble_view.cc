@@ -1,5 +1,6 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
+#include "maho/browser/ui/maho_settings_navigation.h"
 #include "maho/browser/ui/views/shields/maho_shield_bubble_view.h"
 
 #include <memory>
@@ -11,13 +12,9 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/browser.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/page_navigator.h"
-#include "content/public/common/referrer.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/third_party/maho/maho_bridge.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/base/page_transition_types.h"
-#include "ui/base/window_open_disposition.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/views/background.h"
@@ -30,7 +27,6 @@
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/widget/widget.h"
-#include "url/gurl.h"
 
 namespace maho {
 
@@ -152,12 +148,7 @@ void MahoShieldBubbleView::OnSettingsPressed(
   if (!browser_) {
     return;
   }
-
-  content::OpenURLParams params(
-      GURL("chrome://maho-settings"), content::Referrer(),
-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui::PAGE_TRANSITION_LINK, false);
-  browser_->OpenURL(params, {});
+  maho::OpenMahoSettingsPane(browser_, "content-blocker");
 }
 
 }  // namespace maho

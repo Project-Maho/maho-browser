@@ -19,6 +19,5 @@
 //    checkout via:
 //      build/scripts/apply_chromium_src_overrides.py
 //
-//    We use this sync step because this workspace does not yet have active
-//    compile-time wiring that consumes `maho-chromium/chromium_src/` directly
-//    for these `.cc` overrides.
+//    The canonical build wrapper now runs that script before autoninja so the
+//    tracked registration patch is reproducibly applied during Chromium builds.

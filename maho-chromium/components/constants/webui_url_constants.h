@@ -5,9 +5,6 @@
 
 namespace maho {
 
-inline constexpr char kMahoCommandHost[] = "maho-command";
-inline constexpr char kMahoCommandURL[] = "chrome://maho-command/";
-
 inline constexpr char kMahoAIHost[] = "maho-ai";
 inline constexpr char kMahoAIURL[] = "chrome://maho-ai/";
 
@@ -32,17 +29,17 @@ inline constexpr char kMahoLiveFoldersURL[] = "chrome://maho-live-folders/";
 inline constexpr char kMahoSyncHost[] = "maho-sync";
 inline constexpr char kMahoSyncURL[] = "chrome://maho-sync/";
 
-inline constexpr char kMahoSpaceCreateHost[] = "maho-space-create";
-inline constexpr char kMahoSpaceCreateURL[] = "chrome://maho-space-create/";
-
-inline constexpr char kMahoSpaceConfigHost[] = "maho-space-config";
-inline constexpr char kMahoSpaceConfigURL[] = "chrome://maho-space-config/";
-
 inline constexpr char kMahoSidebarHost[] = "maho-sidebar";
 inline constexpr char kMahoSidebarURL[] = "chrome://maho-sidebar/";
 
 inline constexpr char kMahoSidebarLegacyHost[] = "maho-sidebar-legacy";
 inline constexpr char kMahoSidebarLegacyURL[] = "chrome://maho-sidebar-legacy/";
+
+inline constexpr char kMahoSpaceConfigHost[] = "maho-space-config";
+inline constexpr char kMahoSpaceConfigURL[] = "chrome://maho-space-config/";
+
+inline constexpr char kMahoSpaceCreateHost[] = "maho-space-create";
+inline constexpr char kMahoSpaceCreateURL[] = "chrome://maho-space-create/";
 
 }  // namespace maho
 

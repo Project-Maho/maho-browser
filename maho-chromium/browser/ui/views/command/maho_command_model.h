@@ -13,7 +13,9 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/cancelable_task_tracker.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "base/values.h"
 
 class Browser;
 
@@ -77,6 +79,7 @@ struct CommandSuggestion {
   std::string shortcut_label;
   std::string folder_id;
   int32_t tab_index = -1;
+  std::string stable_tab_id;
   std::string browser_session_id;
   std::string tab_session_id;
   // Each pair is (start, end) character offset for match highlighting.
@@ -121,6 +124,14 @@ class MahoCommandModel {
     results_ = std::move(results);
   }
 
+  static CommandSuggestionType ParseType(const std::string& kind);
+  static void CapResults(std::vector<CommandSuggestion>& results);
+  static base::Value BuildTabEntryDict(const std::string& stable_id,
+                                       const std::string& browser_session_id,
+                                       const std::string& tab_session_id,
+                                       const std::string& title,
+                                       const std::string& url);
+
  private:
   static std::string BuildTabsJson(Browser* browser);
   static std::vector<CommandSuggestion> BuildChromiumBookmarkSuggestions(
@@ -132,8 +143,6 @@ class MahoCommandModel {
       const std::vector<CommandSuggestion>& chromium_bookmarks,
       CommandOverlayMode mode,
       bool is_incognito);
-  static CommandSuggestionType ParseType(const std::string& kind);
-  static void CapResults(std::vector<CommandSuggestion>& results);
 
   void FireSearch();
   void OnResults(ResultsCallback callback,
@@ -142,6 +151,7 @@ class MahoCommandModel {
   void OnBookmarkLargeIconLoaded(uint32_t search_generation,
                                   std::string bookmark_url,
                                   const favicon_base::LargeIconResult& result);
+  void RequestTabFavicons();
   void HydrateSiteSearchEngines();
 
   raw_ptr<Browser> browser_;
@@ -155,6 +165,7 @@ class MahoCommandModel {
   base::OneShotTimer debounce_timer_;
   base::CancelableTaskTracker favicon_task_tracker_;
   uint32_t search_generation_ = 0;
+  base::TimeTicks search_start_ticks_;
 
   base::WeakPtrFactory<MahoCommandModel> weak_factory_{this};
 };

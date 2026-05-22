@@ -92,6 +92,26 @@ void MahoSplitViewController::RemoveSplit() {
   model->RemoveSplit(split_id.value());
 }
 
+void MahoSplitViewController::SwapSplit() {
+  TabStripModel* model = browser_->tab_strip_model();
+  if (!model) {
+    return;
+  }
+
+  int active_index = model->active_index();
+  if (active_index == TabStripModel::kNoTab) {
+    return;
+  }
+
+  std::optional<split_tabs::SplitTabId> split_id =
+      model->GetSplitForTab(active_index);
+  if (!split_id.has_value()) {
+    return;
+  }
+
+  model->ReverseTabsInSplit(split_id.value());
+}
+
 bool MahoSplitViewController::IsSplitActive() const {
   TabStripModel* model = browser_->tab_strip_model();
   if (!model) {

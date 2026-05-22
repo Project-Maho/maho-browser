@@ -59,6 +59,7 @@ class MahoChatOrchestrationService {
 
   void HandleMessage(const std::string& message,
                      maho_ai::mojom::ChatIntent chat_intent,
+                     bool force_page_context,
                      TokenCallback on_token,
                      CompleteCallback on_complete,
                      ErrorCallback on_error);

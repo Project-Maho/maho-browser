@@ -1,0 +1,19 @@
+[package]
+name = "maho-acp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { version = "1", features = ["rt", "process", "io-util", "sync", "macros", "time"] }
+tracing = "0.1"
+libc = "0.2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
+
+[[bin]]
+name = "maho-acp-watchdog"
+path = "src/bin/watchdog.rs"

@@ -339,10 +339,26 @@ void MahoLinkPreviewManager::ShowBubble(const std::u16string& text,
                                          const gfx::Rect& anchor_rect) {
   CloseBubble();
 
+  // Guard against teardown: if the WebContents is gone or being destroyed,
+  // or its native view is not available, skip bubble creation entirely.
+  // BubbleDialogDelegate::CreateBubble() DCHECKs that a parent window exists
+  // when has_parent() is true (the default), and with a null anchor view that
+  // parent must come from parent_window(). During last-tab close the native
+  // view may already be invalid, so we bail out rather than crash.
+  content::WebContents* wc = web_contents();
+  if (!wc || wc->IsBeingDestroyed()) {
+    return;
+  }
+  gfx::NativeView native_view = wc->GetNativeView();
+  if (!native_view) {
+    return;
+  }
+
   auto delegate = std::make_unique<views::BubbleDialogDelegate>(
       nullptr, views::BubbleBorder::TOP_LEFT);
   delegate->SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
   delegate->set_margins(gfx::Insets(8));
+  delegate->set_parent_window(native_view);
   delegate->SetAnchorRect(anchor_rect);
 
   auto contents = std::make_unique<views::View>();
@@ -357,12 +373,22 @@ void MahoLinkPreviewManager::ShowBubble(const std::u16string& text,
   bubble_widget_ = views::BubbleDialogDelegate::CreateBubble(
       std::move(delegate));
   if (bubble_widget_) {
+    bubble_widget_observation_.Observe(bubble_widget_);
     bubble_widget_->Show();
+  }
+}
+
+void MahoLinkPreviewManager::OnWidgetDestroying(views::Widget* widget) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (widget == bubble_widget_) {
+    bubble_widget_observation_.Reset();
+    bubble_widget_ = nullptr;
   }
 }
 
 void MahoLinkPreviewManager::CloseBubble() {
   if (bubble_widget_) {
+    bubble_widget_observation_.Reset();
     bubble_widget_->Close();
     bubble_widget_ = nullptr;
   }

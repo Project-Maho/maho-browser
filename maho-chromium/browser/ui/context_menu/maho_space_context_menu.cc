@@ -21,9 +21,7 @@
 #include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
 #include "maho/browser/ui/theme/maho_space_theme_io.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
-#include "maho/components/constants/webui_url_constants.h"
 #include "maho/third_party/maho/maho_ffi.h"
-#include "net/base/url_util.h"
 #include "url/gurl.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
@@ -181,32 +179,6 @@ void RecolorSpaceOnPool(const std::string& space_id,
   std::string color_json;
   base::JSONWriter::Write(color_dict, &color_json);
   maho_core_recolor_space(core, space_id.c_str(), color_json.c_str());
-}
-
-const char* FocusForCommand(int command_id) {
-  switch (command_id) {
-    case IDC_MAHO_SPACE_RENAME:
-      return "name";
-    case IDC_MAHO_SPACE_CHANGE_ICON:
-      return "icon";
-    case IDC_MAHO_SPACE_EDIT_THEME:
-      return "color";
-    default:
-      return "name";
-  }
-}
-
-void OpenSpaceConfigSurface(Browser* browser,
-                            const std::string& space_id,
-                            int command_id) {
-  if (!browser || space_id.empty()) {
-    return;
-  }
-
-  GURL url(maho::kMahoSpaceConfigURL);
-  url = net::AppendQueryParameter(url, "space_id", space_id);
-  url = net::AppendQueryParameter(url, "focus", FocusForCommand(command_id));
-  chrome::AddTabAt(browser, url, -1, true);
 }
 
 }  // namespace
@@ -397,13 +369,10 @@ void MahoSpaceContextMenu::ExecuteCommand(int command_id, int event_flags) {
   (void)event_flags;
   switch (command_id) {
     case IDC_MAHO_SPACE_RENAME:
-      OpenSpaceConfigSurface(browser_, space_id_, command_id);
       break;
     case IDC_MAHO_SPACE_CHANGE_ICON:
-      OpenSpaceConfigSurface(browser_, space_id_, command_id);
       break;
     case IDC_MAHO_SPACE_EDIT_THEME:
-      OpenSpaceConfigSurface(browser_, space_id_, command_id);
       break;
     case IDC_MAHO_SPACE_DELETE:
       LOG(INFO) << "MahoSpaceContextMenu: delete space confirmation pending";
@@ -460,7 +429,14 @@ void MahoSpaceContextMenu::ExecuteCommand(int command_id, int event_flags) {
 }
 
 bool MahoSpaceContextMenu::IsCommandIdEnabled(int command_id) const {
-  return true;
+  switch (command_id) {
+    case IDC_MAHO_SPACE_RENAME:
+    case IDC_MAHO_SPACE_CHANGE_ICON:
+    case IDC_MAHO_SPACE_EDIT_THEME:
+      return false;
+    default:
+      return true;
+  }
 }
 
 bool MahoSpaceContextMenu::IsCommandIdChecked(int command_id) const {

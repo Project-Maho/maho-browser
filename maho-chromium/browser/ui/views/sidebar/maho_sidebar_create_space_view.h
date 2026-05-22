@@ -19,7 +19,6 @@ class Label;
 class MdTextButton;
 class ScrollView;
 class Textfield;
-class Widget;
 }  // namespace views
 
 namespace maho {
@@ -67,10 +66,6 @@ class MahoSidebarCreateSpaceView : public views::View,
   void SetNameForTesting(const std::u16string& text);
   void CompleteCreateSpaceForTesting(bool success,
                                      const std::string& new_space_id);
-  static views::Widget* GetThemePickerWidgetForTesting();
-  static void SetThemePickerSelectionForTesting(
-      const MahoSidebarCreateSpaceThemeSelection& selection);
-  static bool AcceptThemePickerDialogForTesting();
 
  private:
   void ContentsChanged(views::Textfield* sender,

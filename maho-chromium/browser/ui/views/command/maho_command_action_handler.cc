@@ -22,6 +22,9 @@
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
+#include "ui/views/view_utils.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "ui/views/view_utils.h"
@@ -150,7 +153,14 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
   DCHECK(browser);
   DCHECK(browser->tab_strip_model());
   if (action_id == "new_tab") {
-    chrome::NewTab(browser);
+    BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
+    if (browser_view) {
+      auto* container = views::AsViewClass<MahoSidebarContainerView>(
+          browser_view->maho_sidebar_container());
+      if (container) {
+        container->ShowCommandOverlayForNewTab();
+      }
+    }
   } else if (action_id == "close_tab") {
     chrome::CloseTab(browser);
   } else if (action_id == "reload_tab") {
@@ -368,16 +378,23 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
       }
     }
   } else if (action_id == "new_space") {
-    MahoCore* core = maho::GetCore();
-    if (core) {
-      base::Value color_dict(base::Value::Type::DICT);
-      color_dict.GetDict().Set("color", "#5F8BFF");
-      std::string color_json;
-      base::JSONWriter::Write(color_dict, &color_json);
-      char* result = maho_core_create_space(core, "New Space",
-                                            color_json.c_str(), nullptr);
-      if (result)
-        maho_string_free(result);
+    if (browser) {
+      BrowserView* browser_view =
+          BrowserView::GetBrowserViewForBrowser(browser);
+      if (browser_view) {
+        for (views::View* child : browser_view->children()) {
+          auto* container =
+              views::AsViewClass<maho::MahoSidebarContainerView>(child);
+          if (container) {
+            auto* sidebar = views::AsViewClass<maho::MahoSidebarView>(
+                container->sidebar_view());
+            if (sidebar) {
+              sidebar->ShowCreateSpace();
+            }
+            break;
+          }
+        }
+      }
     }
   } else if (action_id == "show_archive") {
     maho::sidebar_prefs::ToggleSidebarPanelExpanded(

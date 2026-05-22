@@ -2,6 +2,7 @@
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_interactive_test_base.h"
 
+#include <algorithm>
 #include <optional>
 #include <cstdint>
 #include <utility>
@@ -22,6 +23,7 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/test/bind.h"
+#include "base/test/run_until.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
@@ -30,17 +32,19 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_library_action_pane_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_downloads_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_boosts_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_easels_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_notes_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_library_rail_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_media_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_spaces_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
-#include "maho/components/constants/webui_url_constants.h"
+#include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_board_view.h"
 #include "maho/third_party/maho/maho_ffi.h"
-#include "net/base/url_util.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/events/test/test_event.h"
@@ -49,6 +53,7 @@
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/test/button_test_api.h"
+#include "ui/views/view_utils.h"
 #include "base/values.h"
 #include "url/gurl.h"
 
@@ -99,6 +104,25 @@ std::string StartDownload(MahoCore* core,
 views::View* FindDownloadRow(MahoSidebarDownloadsView* downloads_view,
                              const std::string& download_id) {
   return downloads_view->download_row_for_download_id_for_testing(download_id);
+}
+
+views::Label* FindLabelWithText(views::View* root, const std::u16string& text) {
+  if (!root) {
+    return nullptr;
+  }
+
+  if (auto* label = views::AsViewClass<views::Label>(root);
+      label && label->GetText() == text) {
+    return label;
+  }
+
+  for (const auto& child : root->children()) {
+    if (views::Label* match = FindLabelWithText(child.get(), text)) {
+      return match;
+    }
+  }
+
+  return nullptr;
 }
 
 ui::AXNodeData GetAccessibilityNodeData(views::View* view) {
@@ -169,9 +193,12 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
 
   auto* tab_row = tab_list_->FindTabRowByIdForTesting(target_tab_id);
   ASSERT_TRUE(tab_row);
+  views::View* title_button = tab_row->title_button_for_testing();
+  ASSERT_TRUE(title_button);
 
-  // Click the tab row to activate it.
-  const gfx::Point center = tab_row->GetBoundsInScreen().CenterPoint();
+  // Click the visible label button so activation exercises the same surface
+  // users hit for normal row selection.
+  const gfx::Point center = title_button->GetBoundsInScreen().CenterPoint();
   ASSERT_TRUE(ui_controls::SendMouseMove(center.x(), center.y()));
   base::RunLoop click_loop;
   ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
@@ -202,14 +229,48 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   }
   ASSERT_FALSE(target_tab_id.empty());
 
+  {
+    auto* tab_row = tab_list_->FindTabRowByIdForTesting(target_tab_id);
+    ASSERT_TRUE(tab_row);
+
+    // Hover over the row synchronously so the hover-reveal logic runs before we
+    // try to read the close button's state.
+    const gfx::Point row_center = tab_row->GetBoundsInScreen().CenterPoint();
+    ASSERT_TRUE(ui_test_utils::SendMouseMoveSync(row_center));
+  }
+  base::RunLoop().RunUntilIdle();
+
+  // Re-acquire the row after hover/wait: the sidebar may have rebuilt its view
+  // tree during RunUntilIdle(), making any previously captured pointer stale.
   auto* tab_row = tab_list_->FindTabRowByIdForTesting(target_tab_id);
-  ASSERT_TRUE(tab_row);
+  ASSERT_TRUE(tab_row) << "tab row must still exist after hover settle";
+  ASSERT_TRUE(tab_row->GetVisible()) << "tab row must be visible after hover settle";
 
   views::View* close_btn = tab_row->close_button_for_testing();
   ASSERT_TRUE(close_btn);
 
+  // Wait until the close button is actually visible (hover-reveal may be async).
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    // Re-fetch each poll iteration to guard against further rebuilds during wait.
+    auto* row = tab_list_->FindTabRowByIdForTesting(target_tab_id);
+    if (!row) return false;
+    auto* btn = row->close_button_for_testing();
+    return btn && btn->GetVisible();
+  })) << "close button must become visible after hovering the row";
+
+  // Re-acquire a fresh close_btn pointer after the RunUntil loop above, since
+  // the sidebar may have rebuilt during the polling iterations.
+  tab_row = tab_list_->FindTabRowByIdForTesting(target_tab_id);
+  ASSERT_TRUE(tab_row) << "tab row must still exist after close-button visibility wait";
+  close_btn = tab_row->close_button_for_testing();
+  ASSERT_TRUE(close_btn);
+  // Sanity-check the button has been laid out with non-empty bounds before
+  // dereferencing its screen position.
+  ASSERT_FALSE(close_btn->GetBoundsInScreen().IsEmpty())
+      << "close button must have non-empty bounds when visible";
+
   const gfx::Point center = close_btn->GetBoundsInScreen().CenterPoint();
-  ASSERT_TRUE(ui_controls::SendMouseMove(center.x(), center.y()));
+  ASSERT_TRUE(ui_test_utils::SendMouseMoveSync(center));
   base::RunLoop click_loop;
   ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
       ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
@@ -382,6 +443,14 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   ASSERT_TRUE(rail);
   EXPECT_EQ(MahoSidebarLibraryRailView::Category::kArchivedTabs,
             rail->selected_category());
+  const std::vector<MahoSidebarLibraryRailView::Category>
+      kVisibleFirstEntryCategories = {
+          MahoSidebarLibraryRailView::Category::kDownloads,
+          MahoSidebarLibraryRailView::Category::kArchivedTabs,
+          MahoSidebarLibraryRailView::Category::kSpaces,
+          MahoSidebarLibraryRailView::Category::kBoosts,
+      };
+  EXPECT_EQ(kVisibleFirstEntryCategories, rail->visible_categories_for_testing());
   // PB1-B: Rail selection exclusivity — only kArchivedTabs must carry the
   // selected AX attribute; every other category must be unselected.  This
   // protects the SG-1 contract that the footer/library path drives the correct
@@ -394,6 +463,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
       MahoSidebarLibraryRailView::Category::kSpaces,
       MahoSidebarLibraryRailView::Category::kEasels,
       MahoSidebarLibraryRailView::Category::kBoosts,
+      MahoSidebarLibraryRailView::Category::kNotes,
   };
   for (const auto category : kAllCategories) {
     views::Button* btn = rail->button_for_category_for_testing(category);
@@ -403,6 +473,13 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
     // can switch categories without re-entering library mode.
     EXPECT_TRUE(btn->GetEnabled())
         << "Rail button should be enabled for category "
+        << static_cast<int>(category);
+    const bool expect_visible =
+        std::find(kVisibleFirstEntryCategories.begin(),
+                  kVisibleFirstEntryCategories.end(),
+                  category) != kVisibleFirstEntryCategories.end();
+    EXPECT_EQ(expect_visible, btn->GetVisible())
+        << "Rail button visibility mismatch for category "
         << static_cast<int>(category);
     // Verify AX selected state matches the expected selection exclusively.
     ui::AXNodeData ax_data;
@@ -488,16 +565,20 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
     auto* downloads_view = sidebar->downloads_view_for_testing();
     ASSERT_TRUE(downloads_view);
     ASSERT_TRUE(downloads_view->GetVisible());
+    ASSERT_TRUE(FindLabelWithText(downloads_view->list_container_for_testing(),
+                                  u"Today"));
 
     auto* downloading_row = FindDownloadRow(downloads_view, downloading_id);
     ASSERT_TRUE(downloading_row);
+    auto* text_block = downloading_row->children()[1].get();
+    ASSERT_GE(text_block->children().size(), 2u);
     auto* downloading_title =
-        static_cast<views::Label*>(downloading_row->children()[0]);
+        static_cast<views::Label*>(text_block->children()[0].get());
     auto* downloading_subtitle =
-        static_cast<views::Label*>(downloading_row->children()[1]);
+        static_cast<views::Label*>(text_block->children()[1].get());
     EXPECT_EQ(u"active.zip", downloading_title->GetText());
-    EXPECT_EQ(u"Downloading · 0 / 100 bytes",
-              downloading_subtitle->GetText());
+    EXPECT_EQ(u"0 bytes of 100 bytes", downloading_subtitle->GetText());
+    EXPECT_EQ(3u, text_block->children().size());
     EXPECT_TRUE(downloads_view->download_action_button_for_testing(
         downloading_id, 0));
     EXPECT_TRUE(downloads_view->download_action_button_for_testing(
@@ -513,9 +594,10 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
 
     downloading_row = FindDownloadRow(downloads_view, downloading_id);
     ASSERT_TRUE(downloading_row);
+    text_block = downloading_row->children()[1].get();
     downloading_subtitle =
-        static_cast<views::Label*>(downloading_row->children()[1]);
-    EXPECT_EQ(u"Paused", downloading_subtitle->GetText());
+        static_cast<views::Label*>(text_block->children()[1].get());
+    EXPECT_EQ(u"0 bytes of 100 bytes", downloading_subtitle->GetText());
     EXPECT_TRUE(downloads_view->download_action_button_for_testing(
         downloading_id, 0));
     EXPECT_TRUE(downloads_view->download_action_button_for_testing(
@@ -523,8 +605,10 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
 
     auto* paused_row = FindDownloadRow(downloads_view, paused_id);
     ASSERT_TRUE(paused_row);
-    auto* paused_subtitle = static_cast<views::Label*>(paused_row->children()[1]);
-    EXPECT_EQ(u"Paused", paused_subtitle->GetText());
+    auto* paused_text_block = paused_row->children()[1].get();
+    auto* paused_subtitle =
+        static_cast<views::Label*>(paused_text_block->children()[1].get());
+    EXPECT_EQ(u"0 bytes of 200 bytes", paused_subtitle->GetText());
     auto* resume_button = downloads_view->download_action_button_for_testing(
         paused_id, 0);
     ASSERT_TRUE(resume_button);
@@ -533,8 +617,10 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
 
     paused_row = FindDownloadRow(downloads_view, paused_id);
     ASSERT_TRUE(paused_row);
-    paused_subtitle = static_cast<views::Label*>(paused_row->children()[1]);
-    EXPECT_EQ(u"Downloading · 0 / 200 bytes", paused_subtitle->GetText());
+    paused_text_block = paused_row->children()[1].get();
+    paused_subtitle =
+        static_cast<views::Label*>(paused_text_block->children()[1].get());
+    EXPECT_EQ(u"0 bytes of 200 bytes", paused_subtitle->GetText());
   }
 
   maho_core_free(core);
@@ -624,6 +710,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
       MahoSidebarLibraryRailView::Category::kMedia);
   ASSERT_TRUE(media_button);
   EXPECT_TRUE(media_button->GetEnabled());
+  EXPECT_FALSE(media_button->GetVisible());
 
   sidebar->OpenLibrary(MahoSidebarLibraryRailView::Category::kMedia);
   base::RunLoop().RunUntilIdle();
@@ -698,7 +785,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
-                        LibraryOpensSpacesPaneAndShowsCanonicalActions) {
+                         LibraryOpensSpacesPaneInline) {
   SeedProfile(2);
   ResolveViews();
 
@@ -710,6 +797,10 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
       MahoSidebarLibraryRailView::Category::kSpaces);
   ASSERT_TRUE(spaces_button);
 
+  sidebar->OpenLibrary(MahoSidebarLibraryRailView::Category::kArchivedTabs);
+  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(sidebar->is_library_mode_for_testing());
+
   views::test::ButtonTestApi(spaces_button).NotifyClick(ui::test::TestEvent());
   base::RunLoop().RunUntilIdle();
 
@@ -720,37 +811,19 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   EXPECT_TRUE(sidebar->spaces_view_for_testing()->GetVisible());
   EXPECT_EQ(MahoSidebarLibraryRailView::Category::kSpaces,
             rail->selected_category());
-
-  auto* create_button = sidebar->spaces_view_for_testing()->button_for_action_for_testing(0);
-  ASSERT_TRUE(create_button);
-  const int initial_tab_count = browser()->tab_strip_model()->count();
-  views::test::ButtonTestApi(create_button).NotifyClick(ui::test::TestEvent());
-  base::RunLoop().RunUntilIdle();
-  ASSERT_EQ(initial_tab_count + 1, browser()->tab_strip_model()->count());
-  content::WebContents* active = browser()->tab_strip_model()->GetActiveWebContents();
-  ASSERT_TRUE(active);
-  EXPECT_EQ(GURL(maho::kMahoSpaceCreateURL), active->GetVisibleURL());
-
-  auto* config_button = sidebar->spaces_view_for_testing()->button_for_action_for_testing(1);
-  ASSERT_TRUE(config_button);
-  const int tab_count_before_config = browser()->tab_strip_model()->count();
-  views::test::ButtonTestApi(config_button).NotifyClick(ui::test::TestEvent());
-  base::RunLoop().RunUntilIdle();
-  ASSERT_EQ(tab_count_before_config + 1, browser()->tab_strip_model()->count());
-  active = browser()->tab_strip_model()->GetActiveWebContents();
-  ASSERT_TRUE(active);
-  const GURL& active_url = active->GetVisibleURL();
-  EXPECT_EQ(maho::kMahoSpaceConfigHost, active_url.host());
-  std::string space_id;
-  EXPECT_TRUE(net::GetValueForKeyInQuery(active_url, "space_id", &space_id));
-  EXPECT_FALSE(space_id.empty());
-  std::string focus;
-  EXPECT_TRUE(net::GetValueForKeyInQuery(active_url, "focus", &focus));
-  EXPECT_EQ("name", focus);
+  ASSERT_TRUE(sidebar->spaces_view_for_testing()->board_view_for_testing());
+  EXPECT_GT(sidebar->spaces_view_for_testing()->GetBoundsInScreen().height(), 0);
+  EXPECT_GT(sidebar->spaces_view_for_testing()
+                ->board_view_for_testing()
+                ->GetBoundsInScreen()
+                .height(),
+            0);
+  ASSERT_TRUE(sidebar->archive_view_for_testing());
+  EXPECT_FALSE(sidebar->archive_view_for_testing()->GetVisible());
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
-                        LibraryOpensEaselsPaneAndLaunchesCanonicalWebUI) {
+                        LibraryOpensEaselsPaneWithEmbeddedWebUI) {
   ResolveViews();
 
   auto* sidebar = GetSidebarView();
@@ -760,8 +833,9 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   auto* easels_button = rail->button_for_category_for_testing(
       MahoSidebarLibraryRailView::Category::kEasels);
   ASSERT_TRUE(easels_button);
+  EXPECT_FALSE(easels_button->GetVisible());
 
-  views::test::ButtonTestApi(easels_button).NotifyClick(ui::test::TestEvent());
+  sidebar->OpenLibrary(MahoSidebarLibraryRailView::Category::kEasels);
   base::RunLoop().RunUntilIdle();
 
   EXPECT_TRUE(sidebar->is_library_mode_for_testing());
@@ -772,20 +846,38 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   EXPECT_EQ(MahoSidebarLibraryRailView::Category::kEasels,
             rail->selected_category());
 
-  auto* open_button = sidebar->easel_view_for_testing()->button_for_action_for_testing(0);
-  ASSERT_TRUE(open_button);
-  const int initial_tab_count = browser()->tab_strip_model()->count();
-  views::test::ButtonTestApi(open_button).NotifyClick(ui::test::TestEvent());
-  base::RunLoop().RunUntilIdle();
-
-  ASSERT_EQ(initial_tab_count + 1, browser()->tab_strip_model()->count());
-  content::WebContents* active = browser()->tab_strip_model()->GetActiveWebContents();
-  ASSERT_TRUE(active);
-  EXPECT_EQ(GURL(maho::kMahoEaselURL), active->GetVisibleURL());
+  ASSERT_TRUE(sidebar->easel_view_for_testing()->web_view_for_testing());
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
-                        LibraryOpensBoostsPaneAndLaunchesCanonicalWebUI) {
+                        LibraryOpensNotesPaneWithEmbeddedWebUI) {
+  ResolveViews();
+
+  auto* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+  auto* rail = sidebar->library_rail_view_for_testing();
+  ASSERT_TRUE(rail);
+  auto* notes_button = rail->button_for_category_for_testing(
+      MahoSidebarLibraryRailView::Category::kNotes);
+  ASSERT_TRUE(notes_button);
+  EXPECT_FALSE(notes_button->GetVisible());
+
+  sidebar->OpenLibrary(MahoSidebarLibraryRailView::Category::kNotes);
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_TRUE(sidebar->is_library_mode_for_testing());
+  EXPECT_EQ(MahoSidebarLibraryRailView::Category::kNotes,
+            sidebar->active_library_category_for_testing());
+  ASSERT_TRUE(sidebar->notes_view_for_testing());
+  EXPECT_TRUE(sidebar->notes_view_for_testing()->GetVisible());
+  EXPECT_EQ(MahoSidebarLibraryRailView::Category::kNotes,
+            rail->selected_category());
+
+  ASSERT_TRUE(sidebar->notes_view_for_testing()->web_view_for_testing());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
+                         LibraryOpensBoostsPaneInline) {
   ResolveViews();
 
   auto* sidebar = GetSidebarView();
@@ -795,8 +887,9 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   auto* boosts_button = rail->button_for_category_for_testing(
       MahoSidebarLibraryRailView::Category::kBoosts);
   ASSERT_TRUE(boosts_button);
+  EXPECT_TRUE(boosts_button->GetEnabled());
 
-  views::test::ButtonTestApi(boosts_button).NotifyClick(ui::test::TestEvent());
+  sidebar->OpenLibrary(MahoSidebarLibraryRailView::Category::kBoosts);
   base::RunLoop().RunUntilIdle();
 
   EXPECT_TRUE(sidebar->is_library_mode_for_testing());
@@ -807,16 +900,8 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   EXPECT_EQ(MahoSidebarLibraryRailView::Category::kBoosts,
             rail->selected_category());
 
-  auto* open_button = sidebar->boost_view_for_testing()->button_for_action_for_testing(0);
-  ASSERT_TRUE(open_button);
-  const int initial_tab_count = browser()->tab_strip_model()->count();
-  views::test::ButtonTestApi(open_button).NotifyClick(ui::test::TestEvent());
-  base::RunLoop().RunUntilIdle();
-
-  ASSERT_EQ(initial_tab_count + 1, browser()->tab_strip_model()->count());
-  content::WebContents* active = browser()->tab_strip_model()->GetActiveWebContents();
-  ASSERT_TRUE(active);
-  EXPECT_EQ(GURL(maho::kMahoBoostURL), active->GetVisibleURL());
+  ASSERT_TRUE(sidebar->boost_view_for_testing()->scroll_view_for_testing() ||
+              sidebar->boost_view_for_testing()->empty_state_view_for_testing());
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
@@ -917,6 +1002,32 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
 
   EXPECT_FALSE(sidebar->is_archive_mode_for_testing());
   EXPECT_EQ(archive_button, sidebar->GetFocusManager()->GetFocusedView());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
+                       LibraryRailBackButtonAnchorsBottomLeft) {
+  ResolveViews();
+
+  auto* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+  sidebar->OpenLibrary(MahoSidebarLibraryRailView::Category::kArchivedTabs);
+  base::RunLoop().RunUntilIdle();
+
+  auto* rail = sidebar->library_rail_view_for_testing();
+  ASSERT_TRUE(rail);
+  auto* back_button = rail->back_button_for_testing();
+  ASSERT_TRUE(back_button);
+  EXPECT_TRUE(back_button->GetVisible());
+
+  const gfx::Rect rail_bounds = rail->GetBoundsInScreen();
+  const gfx::Rect back_bounds = back_button->GetBoundsInScreen();
+  const int expected_left =
+      rail_bounds.x() + sidebar_layout::kLibraryRailUtilitySpacingDp;
+  const int expected_bottom =
+      rail_bounds.bottom() - sidebar_layout::kLibraryRailBottomInsetDp;
+
+  EXPECT_EQ(expected_left, back_bounds.x());
+  EXPECT_EQ(expected_bottom, back_bounds.bottom());
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,

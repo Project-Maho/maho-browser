@@ -1,6 +1,34 @@
 import("//ui/webui/resources/tools/build_webui.gni")
+import("//ui/webui/resources/tools/generate_grd.gni")
 
 assert(!is_android)
+
+action("bundle_react") {
+  script = "//third_party/node/node.py"
+  inputs = [
+    "//third_party/node/node.py",
+    "maho_boost.mojom-webui.js.d.ts",
+    "react/app.tsx",
+    "react/store.ts",
+    "react/tsconfig.json",
+    "react/types.ts",
+    "bundle_react.mjs",
+  ]
+  outputs = [ "$target_gen_dir/app_bundle.js" ]
+  args = [
+    rebase_path("//maho/browser/resources/maho_boost/bundle_react.mjs", root_build_dir),
+    rebase_path(".", root_build_dir),
+    rebase_path("$target_gen_dir/app_bundle.js", root_build_dir),
+  ]
+}
+
+generate_grd("bundle_grdp") {
+  grd_prefix = "maho_boost_bundle"
+  out_grd = "$target_gen_dir/maho_boost_bundle.grdp"
+  input_files = [ "app_bundle.js" ]
+  input_files_base_dir = rebase_path(target_gen_dir, root_build_dir)
+  deps = [ ":bundle_react" ]
+}
 
 build_webui("build") {
   grd_prefix = "maho_boost"
@@ -19,4 +47,7 @@ build_webui("build") {
   mojo_files_deps =
       [ "//maho/browser/ui/webui/maho_boost:mojo_bindings_ts__generator" ]
   mojo_files = [ "$root_gen_dir/maho/browser/ui/webui/maho_boost/maho_boost.mojom-webui.ts" ]
+
+  extra_grdp_deps = [ ":bundle_grdp" ]
+  extra_grdp_files = [ "$target_gen_dir/maho_boost_bundle.grdp" ]
 }

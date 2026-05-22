@@ -6,6 +6,7 @@ members = [
     "crates/maho-ffi",
     "crates/maho-storage",
     "crates/maho-bench",
+    "crates/maho-acp",
 ]
 
 [workspace.dependencies]

@@ -1,4 +1,4 @@
-import type {Tab, Space, Suggestion, ChatMessage, Conversation, Note, Settings, SettingValue} from './types.js';
+import type {Tab, Space, ChatMessage, Conversation, Note, Settings, SettingValue} from './types.js';
 import {SpaceColor} from './types.js';
 
 export interface MahoSidebarPageHandler {
@@ -7,13 +7,6 @@ export interface MahoSidebarPageHandler {
   getTabs(): Promise<Tab[]>;
   getSpaces(): Promise<Space[]>;
   switchSpace(id: string): Promise<void>;
-}
-
-export interface MahoCommandPageHandler {
-  search(query: string): Promise<Suggestion[]>;
-  getTabSuggestions(query: string): Promise<Suggestion[]>;
-  getBookmarkSuggestions(query: string): Promise<Suggestion[]>;
-  getHistorySuggestions(query: string): Promise<Suggestion[]>;
 }
 
 export interface MahoAIPageHandler {
@@ -78,19 +71,6 @@ const MOCK_SPACES: Space[] = [
   {id: 's3', name: 'Research', color: SpaceColor.Purple, icon: '🔬', tabIds: ['t11', 't12', 't13', 't14'], isActive: false},
 ];
 
-const MOCK_SUGGESTIONS: Suggestion[] = [
-  {id: 'sg1', type: 'tab', title: 'GitHub - maho-browser/maho', subtitle: 'github.com', url: 'https://github.com/maho-browser/maho', icon: 'tab', score: 1.0},
-  {id: 'sg2', type: 'tab', title: 'Lit — Simple. Fast. Web Components.', subtitle: 'lit.dev', url: 'https://lit.dev/', icon: 'tab', score: 0.9},
-  {id: 'sg3', type: 'history', title: 'CSS Custom Properties Guide', subtitle: 'developer.mozilla.org', url: 'https://developer.mozilla.org/en-US/docs/Web/CSS/Using_CSS_custom_properties', icon: 'history', score: 0.85},
-  {id: 'sg4', type: 'history', title: 'Web Components Best Practices', subtitle: 'web.dev', url: 'https://web.dev/custom-elements-best-practices/', icon: 'history', score: 0.8},
-  {id: 'sg5', type: 'bookmark', title: 'Chromium Design Docs', subtitle: 'chromium.org', url: 'https://www.chromium.org/developers/design-documents/', icon: 'bookmark', score: 0.75},
-  {id: 'sg6', type: 'bookmark', title: 'Bun Documentation', subtitle: 'bun.sh', url: 'https://bun.sh/docs', icon: 'bookmark', score: 0.7},
-  {id: 'sg7', type: 'action', title: 'New Tab', subtitle: 'Open a new tab', url: '', icon: 'add', score: 0.65},
-  {id: 'sg8', type: 'action', title: 'Clear Browsing Data', subtitle: 'Privacy & Security', url: '', icon: 'delete', score: 0.6},
-  {id: 'sg9', type: 'action', title: 'Toggle Dark Mode', subtitle: 'Appearance', url: '', icon: 'dark_mode', score: 0.55},
-  {id: 'sg10', type: 'history', title: 'Rust Programming Language', subtitle: 'rust-lang.org', url: 'https://www.rust-lang.org/', icon: 'history', score: 0.5},
-];
-
 const MOCK_CONVERSATIONS: Conversation[] = [
   {
     id: 'c1', title: 'Help with CSS Grid layout', createdAt: Date.now() - 3600000, updatedAt: Date.now() - 3000000,
@@ -146,13 +126,6 @@ const mockSidebarHandler: MahoSidebarPageHandler = {
   async getTabs() { await delay(); return MOCK_TABS; },
   async getSpaces() { await delay(); return MOCK_SPACES; },
   async switchSpace(_id: string) { await delay(); },
-};
-
-const mockCommandHandler: MahoCommandPageHandler = {
-  async search(query: string) { await delay(); return filterByQuery(MOCK_SUGGESTIONS, query); },
-  async getTabSuggestions(query: string) { await delay(); return filterByQuery(MOCK_SUGGESTIONS.filter(s => s.type === 'tab'), query); },
-  async getBookmarkSuggestions(query: string) { await delay(); return filterByQuery(MOCK_SUGGESTIONS.filter(s => s.type === 'bookmark'), query); },
-  async getHistorySuggestions(query: string) { await delay(); return filterByQuery(MOCK_SUGGESTIONS.filter(s => s.type === 'history'), query); },
 };
 
 const mockAIHandler: MahoAIPageHandler = {
@@ -231,7 +204,6 @@ const mockSpacesHandler: MahoSpacesPageHandler = {
 
 const handlers: Record<string, unknown> = {
   'MahoSidebarPageHandler': mockSidebarHandler,
-  'MahoCommandPageHandler': mockCommandHandler,
   'MahoAIPageHandler': mockAIHandler,
   'MahoSettingsPageHandler': mockSettingsHandler,
   'MahoNotesPageHandler': mockNotesHandler,

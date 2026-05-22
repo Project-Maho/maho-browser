@@ -1,6 +1,7 @@
 #ifndef MAHO_BROWSER_MAHO_BROWSER_MAIN_EXTRA_PARTS_H_
 #define MAHO_BROWSER_MAHO_BROWSER_MAIN_EXTRA_PARTS_H_
 
+#include "base/files/file_path.h"
 #include "chrome/browser/chrome_browser_main_extra_parts.h"
 #include "base/memory/raw_ptr_exclusion.h"
 
@@ -21,6 +22,7 @@ class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts {
   void PostProfileInit(Profile* profile, bool is_initial_profile) override;
   void PostMainMessageLoopRun() override;
 
+  base::FilePath storage_path_;
   RAW_PTR_EXCLUSION MahoCore* core_ = nullptr;
 };
 

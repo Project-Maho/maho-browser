@@ -7,12 +7,14 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "maho/browser/ui/views/command/maho_command_model.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/animation/animation_delegate.h"
 #include "ui/gfx/animation/slide_animation.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/views/view_tracker.h"
 #include "ui/views/widget/widget_observer.h"
 
 class Browser;
@@ -44,6 +46,10 @@ class MahoCommandOverlayController : public views::WidgetObserver,
   void Hide();
   bool IsVisible() const;
 
+  MahoCommandOverlayView* GetOverlayViewForTesting() const {
+    return overlay_view_;
+  }
+
   // views::WidgetObserver:
   void OnWidgetDestroying(views::Widget* widget) override;
   void OnWidgetBoundsChanged(views::Widget* widget,
@@ -56,11 +62,15 @@ class MahoCommandOverlayController : public views::WidgetObserver,
 
  private:
   void FinishHideAnimation();
-  void ScheduleFocusRetentionPasses();
   gfx::Rect ComputePopupBounds() const;
   gfx::Rect ComputeBoundsForHeight(int height) const;
   void Reposition();
   void AnimateBoundsToHeight(int height);
+
+  void RestoreFocusToPreShowView();
+
+  friend class MahoCommandOverlayControllerTest;
+  friend class MahoUnifiedClickPathBehaviorTest;
 
   raw_ptr<Browser> browser_;
   std::unique_ptr<views::Widget> widget_;
@@ -71,8 +81,13 @@ class MahoCommandOverlayController : public views::WidgetObserver,
   gfx::Rect animation_target_bounds_;
   gfx::SlideAnimation resize_animation_{this};
   base::OneShotTimer deactivation_hide_timer_;
-  int remaining_focus_retention_passes_ = 0;
   bool is_hiding_ = false;
+
+  views::ViewTracker pre_show_focused_view_;
+
+  // Latency instrumentation: records when Show() was called so we can log the
+  // open-to-first-paint interval once the widget is visible and active.
+  base::TimeTicks open_start_ticks_;
 
   base::WeakPtrFactory<MahoCommandOverlayController> weak_factory_{this};
 };

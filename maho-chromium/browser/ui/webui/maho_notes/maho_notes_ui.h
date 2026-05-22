@@ -4,13 +4,14 @@
 #define MAHO_BROWSER_UI_WEBUI_MAHO_NOTES_MAHO_NOTES_UI_H_
 
 #include <memory>
+#include <string_view>
 
-#include "content/public/browser/webui_config.h"
+#include "chrome/browser/ui/webui/top_chrome/top_chrome_web_ui_controller.h"
+#include "chrome/browser/ui/webui/top_chrome/top_chrome_webui_config.h"
 #include "maho/browser/ui/webui/maho_notes/maho_notes.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "ui/webui/mojo_web_ui_controller.h"
 
 class MahoNotesPageHandler;
 
@@ -20,12 +21,12 @@ class WebUI;
 
 class MahoNotesUI;
 
-class MahoNotesUIConfig : public content::DefaultWebUIConfig<MahoNotesUI> {
+class MahoNotesUIConfig : public DefaultTopChromeWebUIConfig<MahoNotesUI> {
  public:
   MahoNotesUIConfig();
 };
 
-class MahoNotesUI : public ui::MojoWebUIController,
+class MahoNotesUI : public TopChromeWebUIController,
                     public maho_notes::mojom::PageHandlerFactory {
  public:
   explicit MahoNotesUI(content::WebUI* web_ui);
@@ -35,6 +36,10 @@ class MahoNotesUI : public ui::MojoWebUIController,
 
   void BindInterface(
       mojo::PendingReceiver<maho_notes::mojom::PageHandlerFactory> receiver);
+
+  static constexpr std::string_view GetWebUIName() {
+    return "MahoNotes";
+  }
 
  private:
   WEB_UI_CONTROLLER_TYPE_DECL();

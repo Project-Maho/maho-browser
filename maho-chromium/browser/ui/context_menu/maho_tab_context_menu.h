@@ -14,7 +14,19 @@ class Browser;
 
 class MahoTabContextMenu : public ui::SimpleMenuModel::Delegate {
  public:
+  class Delegate {
+   public:
+    virtual ~Delegate() = default;
+    virtual void ActivateTabAndOpenBoostBubble(int tab_index) = 0;
+    virtual void RenameTab(int tab_index) {}
+  };
+
   MahoTabContextMenu(Browser* browser, int tab_index);
+  MahoTabContextMenu(Browser* browser, int tab_index, Delegate* delegate);
+  MahoTabContextMenu(Browser* browser,
+                     int tab_index,
+                     Delegate* delegate,
+                     std::string core_tab_id);
   ~MahoTabContextMenu() override;
 
   MahoTabContextMenu(const MahoTabContextMenu&) = delete;
@@ -35,8 +47,11 @@ class MahoTabContextMenu : public ui::SimpleMenuModel::Delegate {
 
   raw_ptr<Browser> browser_;
   int tab_index_;
+  raw_ptr<Delegate> delegate_ = nullptr;
+  std::string core_tab_id_;
   std::vector<SpaceEntry> space_entries_;
   std::unique_ptr<ui::SimpleMenuModel> move_to_space_submenu_;
+  std::unique_ptr<ui::SimpleMenuModel> boost_submenu_;
 };
 
 #endif  // MAHO_CHROMIUM_BROWSER_UI_CONTEXT_MENU_MAHO_TAB_CONTEXT_MENU_H_

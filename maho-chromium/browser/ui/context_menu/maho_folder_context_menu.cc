@@ -2,13 +2,32 @@
 
 #include "maho/browser/ui/context_menu/maho_folder_context_menu.h"
 
-#include "base/logging.h"
+#include <memory>
+
+#include "base/functional/callback_helpers.h"
+#include "chrome/browser/ui/browser.h"
 #include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_dnd_events.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "ui/menus/simple_menu_model.h"
 
 MahoFolderContextMenu::MahoFolderContextMenu(Browser* browser,
                                                const std::string& folder_id)
     : browser_(browser), folder_id_(folder_id) {}
+
+MahoFolderContextMenu::MahoFolderContextMenu(
+    Browser* browser,
+    const std::string& space_id,
+    const std::string& folder_id,
+    bool folder_is_pinned,
+    const std::string& parent_folder_id,
+    BeginRenameCallback begin_rename_callback)
+    : browser_(browser),
+      space_id_(space_id),
+      folder_id_(folder_id),
+      folder_is_pinned_(folder_is_pinned),
+      parent_folder_id_(parent_folder_id),
+      begin_rename_callback_(std::move(begin_rename_callback)) {}
 
 MahoFolderContextMenu::~MahoFolderContextMenu() = default;
 
@@ -19,10 +38,18 @@ std::unique_ptr<ui::SimpleMenuModel> MahoFolderContextMenu::BuildMenuModel() {
 
   model->AddSeparator(ui::NORMAL_SEPARATOR);
 
-  model->AddItem(IDC_MAHO_FOLDER_PIN, u"Pin Folder");
-  model->AddItem(IDC_MAHO_FOLDER_NEW_TAB, u"New Tab in Folder");
+  if (folder_is_pinned_) {
+    model->AddItem(IDC_MAHO_FOLDER_UNPIN, u"Unpin Folder");
+  } else {
+    model->AddItem(IDC_MAHO_FOLDER_PIN, u"Pin Folder");
+  }
 
   model->AddSeparator(ui::NORMAL_SEPARATOR);
+
+  if (!parent_folder_id_.empty()) {
+    model->AddItem(IDC_MAHO_FOLDER_MOVE_TO_ROOT, u"Move Folder to Root");
+    model->AddSeparator(ui::NORMAL_SEPARATOR);
+  }
 
   model->AddItem(IDC_MAHO_FOLDER_DELETE, u"Delete Folder");
 
@@ -30,23 +57,45 @@ std::unique_ptr<ui::SimpleMenuModel> MahoFolderContextMenu::BuildMenuModel() {
 }
 
 void MahoFolderContextMenu::ExecuteCommand(int command_id, int event_flags) {
-  // TODO(maho): Wire up Mojo IPC calls to MahoCore.
   switch (command_id) {
     case IDC_MAHO_FOLDER_RENAME:
-      LOG(INFO) << "MahoFolderContextMenu: Rename Folder " << folder_id_;
+      if (begin_rename_callback_) {
+        std::move(begin_rename_callback_).Run();
+      }
       break;
+
     case IDC_MAHO_FOLDER_PIN:
-      LOG(INFO) << "MahoFolderContextMenu: Pin Folder " << folder_id_;
+      if (!space_id_.empty() && !folder_id_.empty()) {
+        maho::DispatchShellEvent("pin_folder",
+                                 {{"space_id", space_id_},
+                                  {"folder_id", folder_id_}});
+      }
       break;
+
     case IDC_MAHO_FOLDER_UNPIN:
-      LOG(INFO) << "MahoFolderContextMenu: Unpin Folder " << folder_id_;
+      if (!space_id_.empty() && !folder_id_.empty()) {
+        maho::DispatchShellEvent("unpin_folder",
+                                 {{"space_id", space_id_},
+                                  {"folder_id", folder_id_}});
+      }
       break;
-    case IDC_MAHO_FOLDER_NEW_TAB:
-      LOG(INFO) << "MahoFolderContextMenu: New Tab in " << folder_id_;
-      break;
+
     case IDC_MAHO_FOLDER_DELETE:
-      LOG(INFO) << "MahoFolderContextMenu: Delete Folder " << folder_id_;
+      if (!space_id_.empty() && !folder_id_.empty()) {
+        maho::DispatchShellEvent("delete_folder",
+                                 {{"space_id", space_id_},
+                                  {"folder_id", folder_id_}});
+      }
       break;
+
+    case IDC_MAHO_FOLDER_MOVE_TO_ROOT:
+      if (!space_id_.empty() && !folder_id_.empty()) {
+        maho::DispatchShellEvent(maho::sidebar::kMoveFolderToRoot,
+                                 {{"space_id", space_id_},
+                                  {"folder_id", folder_id_}});
+      }
+      break;
+
     default:
       break;
   }

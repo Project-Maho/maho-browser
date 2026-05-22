@@ -1,0 +1,58 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background:
+      radial-gradient(circle at top, var(--maho-ai-bg-page-top), transparent 26%),
+      radial-gradient(circle at 80% 14%, var(--maho-ai-bg-page-flare), transparent 18%),
+      linear-gradient(180deg, var(--maho-ai-bg-page-gradient-start), var(--maho-ai-bg-page-gradient-end));
+  color: var(--maho-ai-text-secondary);
+  font-family: var(--maho-ai-font-body);
+}
+
+body,
+button,
+textarea,
+input {
+  font: inherit;
+}
+
+button {
+  appearance: none;
+  border: 0;
+  background: none;
+  color: inherit;
+  padding: 0;
+}
+
+textarea,
+input {
+  appearance: none;
+}
+
+.maho-ai-icon {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background-color: currentcolor;
+  -webkit-mask-image: var(--maho-ai-icon-url);
+  -webkit-mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-image: var(--maho-ai-icon-url);
+  mask-position: center;
+  mask-repeat: no-repeat;
+  mask-size: contain;
+}
+
+#app {
+  height: 100vh;
+}

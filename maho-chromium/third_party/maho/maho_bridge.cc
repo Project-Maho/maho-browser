@@ -25,8 +25,38 @@ MahoCore* Create() {
   return maho_core_new();
 }
 
+MahoCore* CreateWithStorage(const std::string& path) {
+  MahoCore* core = maho_core_new_with_storage(path.c_str());
+  if (!core) {
+    LOG(ERROR) << "Maho core: CreateWithStorage failed for path: " << path;
+  }
+  return core;
+}
+
 void Destroy(MahoCore* core) {
   maho_core_free(core);
+}
+
+bool SaveState(MahoCore* core) {
+  if (!core) {
+    return false;
+  }
+  bool ok = maho_core_save_state(core) != 0;
+  if (!ok) {
+    LOG(WARNING) << "Maho core: SaveState failed";
+  }
+  return ok;
+}
+
+bool LoadState(MahoCore* core) {
+  if (!core) {
+    return false;
+  }
+  bool ok = maho_core_load_state(core) != 0;
+  if (!ok) {
+    LOG(WARNING) << "Maho core: LoadState failed";
+  }
+  return ok;
 }
 
 std::string Version() {
@@ -100,6 +130,66 @@ std::string GetCosmeticResources(MahoCore* core, const char* url) {
   std::string ret(result);
   maho_string_free(result);
   return ret;
+}
+
+std::string GetBoostInjectionCss(MahoCore* core, const char* url) {
+  char* raw = maho_core_get_boosts_for_url(core, url);
+  if (!raw) {
+    return std::string();
+  }
+  auto parsed = base::JSONReader::Read(raw, base::JSON_PARSE_RFC);
+  maho_string_free(raw);
+  if (!parsed || !parsed->is_list()) {
+    return std::string();
+  }
+  std::string combined;
+  for (const auto& item : parsed->GetList()) {
+    if (!item.is_dict()) {
+      continue;
+    }
+    const auto& dict = item.GetDict();
+    if (!dict.FindBool("enabled").value_or(false)) {
+      continue;
+    }
+    const std::string* css = dict.FindString("customCss");
+    if (css && !css->empty()) {
+      if (!combined.empty()) {
+        combined += "\n";
+      }
+      combined += *css;
+    }
+  }
+  return combined;
+}
+
+std::string GetBoostInjectionJs(MahoCore* core, const char* url) {
+  char* raw = maho_core_get_boosts_for_url(core, url);
+  if (!raw) {
+    return std::string();
+  }
+  auto parsed = base::JSONReader::Read(raw, base::JSON_PARSE_RFC);
+  maho_string_free(raw);
+  if (!parsed || !parsed->is_list()) {
+    return std::string();
+  }
+  std::string combined;
+  for (const auto& item : parsed->GetList()) {
+    if (!item.is_dict()) {
+      continue;
+    }
+    const auto& dict = item.GetDict();
+    if (!dict.FindBool("enabled").value_or(false)) {
+      continue;
+    }
+    const std::string* js = dict.FindString("customJs");
+    if (js && !js->empty()) {
+      if (!combined.empty()) {
+        combined += "\n";
+      }
+      combined += *js;
+    }
+  }
+  return combined;
 }
 
 std::string SearchHistory(MahoCore* core,

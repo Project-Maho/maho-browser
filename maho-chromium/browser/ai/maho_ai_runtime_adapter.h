@@ -3,7 +3,7 @@
 // MahoAiRuntimeAdapter: Abstract interface for the AI runtime backend.
 //
 // Defines a session-oriented, event-driven contract implemented by
-// MahoOpenCodeAdapter. The page handler and Mojo proxy talk to this
+// MahoOpenCodeAcpAdapter. The page handler and Mojo proxy talk to this
 // interface — they never know backend details. Runtime selection is
 // handled by MahoAiRuntimeRouter.
 //
@@ -23,6 +23,7 @@
 
 namespace maho_ai::mojom {
 enum class ChatIntent;
+enum class InteractionMode;
 }  // namespace maho_ai::mojom
 
 // Event types that a runtime adapter can emit. This is the beginning of
@@ -46,6 +47,10 @@ enum class MahoAiRuntimeEventType {
   kApprovalResult,
   // Session connection state changed.
   kConnectionStateChanged,
+  // Browser context was injected (or denied) into the prompt.
+  // payload carries url, title, content_snippet, content_length, status,
+  // warnings — mirroring the Mojo BrowserContextPayload.
+  kBrowserContextInjected,
 };
 
 // A single runtime event. Adapters produce these; the proxy/page handler
@@ -92,11 +97,17 @@ class MahoAiRuntimeAdapter {
   // Submit a user message to the runtime. The adapter emits events via
   // |on_event| as the turn progresses and completes.
   //
+  // When |attach_browser_context| is true and the intent is kFreeform, the
+  // adapter injects current page context (URL, title, content) into the
+  // prompt. The caller (page handler) does NOT assemble context.
+  //
   // The caller must keep the adapter alive for the duration of the turn.
   // Calling SubmitMessage while a turn is in progress is undefined
   // behavior for now (the legacy adapter serializes; OpenCode may queue).
   virtual void SubmitMessage(const std::string& message,
                              maho_ai::mojom::ChatIntent chat_intent,
+                             bool attach_browser_context,
+                             maho_ai::mojom::InteractionMode mode,
                              RuntimeEventCallback on_event) = 0;
 
   // Cancel the current turn, if any. The adapter should emit a

@@ -6,8 +6,6 @@
 
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
-#include "base/json/json_writer.h"
-#include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
 #include "base/values.h"
@@ -74,12 +72,11 @@ void DeleteSpaceOnPool(const std::string& space_id) {
   maho_core_delete_space(core, space_id.c_str());
 }
 
-class MahoSpaceDeleteConfirmationDialogView : public views::DialogDelegateView {
+class MahoSpaceDeleteConfirmationDialogView : public views::DialogDelegate {
  public:
   MahoSpaceDeleteConfirmationDialogView(std::string space_id,
                                         std::u16string space_name)
-      : browser_(nullptr),
-        space_id_(std::move(space_id)),
+      : space_id_(std::move(space_id)),
         space_name_(std::move(space_name)) {
     SetButtons(static_cast<int>(ui::mojom::DialogButton::kOk) |
                static_cast<int>(ui::mojom::DialogButton::kCancel));
@@ -88,13 +85,14 @@ class MahoSpaceDeleteConfirmationDialogView : public views::DialogDelegateView {
     SetButtonLabel(ui::mojom::DialogButton::kOk, u"Delete");
     SetButtonLabel(ui::mojom::DialogButton::kCancel, u"Cancel");
 
-    SetLayoutManager(std::make_unique<views::BoxLayout>(
+    auto contents = std::make_unique<views::View>();
+    contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical, gfx::Insets(16), 8));
-
-    auto* label = AddChildView(std::make_unique<views::Label>(
+    auto* label = contents->AddChildView(std::make_unique<views::Label>(
         std::u16string(kDeleteBodyText)));
     label->SetMultiLine(true);
     label->SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_LEFT);
+    SetContentsView(std::move(contents));
   }
 
   MahoSpaceDeleteConfirmationDialogView(
@@ -119,7 +117,6 @@ class MahoSpaceDeleteConfirmationDialogView : public views::DialogDelegateView {
   bool Cancel() override { return true; }
 
  private:
-  raw_ptr<Browser> browser_;
   std::string space_id_;
   std::u16string space_name_;
 };
@@ -133,11 +130,11 @@ void MahoSpaceDeleteConfirmationDialog::Show(Browser* browser,
   }
 
   const std::string space_name = ResolveSpaceName(space_id);
-  auto dialog = std::make_unique<MahoSpaceDeleteConfirmationDialogView>(
+  auto delegate = std::make_unique<MahoSpaceDeleteConfirmationDialogView>(
       space_id, base::UTF8ToUTF16(space_name));
-  auto* weak_dialog = dialog.get();
-  views::Widget* widget = weak_dialog->CreateDialogWidget(
-      std::move(dialog), browser->window()->GetNativeWindow(), nullptr);
+  views::Widget* widget = views::DialogDelegate::CreateDialogWidget(
+      std::move(delegate), browser->window()->GetNativeWindow(),
+      gfx::NativeView());
   if (widget) {
     widget->Show();
   }

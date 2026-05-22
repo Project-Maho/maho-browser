@@ -5,6 +5,8 @@
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "base/values.h"
+#include "maho/browser/ui/webui/maho_ai/maho_ai.mojom.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
 MahoLegacyChatAdapter::MahoLegacyChatAdapter(
@@ -28,11 +30,26 @@ bool MahoLegacyChatAdapter::IsAvailable() const {
 void MahoLegacyChatAdapter::SubmitMessage(
     const std::string& message,
     maho_ai::mojom::ChatIntent chat_intent,
+    bool attach_browser_context,
+    maho_ai::mojom::InteractionMode mode,
     RuntimeEventCallback on_event) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+  if (attach_browser_context) {
+    MahoAiRuntimeEvent ctx_event;
+    ctx_event.type = MahoAiRuntimeEventType::kBrowserContextInjected;
+    ctx_event.payload.Set("status", "injected");
+    ctx_event.payload.Set("url", "");
+    ctx_event.payload.Set("title", "");
+    ctx_event.payload.Set("content_snippet", "");
+    ctx_event.payload.Set("content_length", 0);
+    ctx_event.text = "Browser context requested via legacy adapter.";
+    ctx_event.payload.Set("warnings", base::ListValue());
+    on_event.Run(std::move(ctx_event));
+  }
+
   orchestration_service_.HandleMessage(
-      message, chat_intent,
+      message, chat_intent, attach_browser_context,
       base::BindRepeating(&MahoLegacyChatAdapter::OnToken,
                           weak_factory_.GetWeakPtr(), on_event),
       base::BindOnce(&MahoLegacyChatAdapter::OnComplete,

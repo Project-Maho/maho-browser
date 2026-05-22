@@ -78,6 +78,8 @@ mod tests {
             space_id,
             url: None,
             parent_id: None,
+            tab_id: None,
+            window_id: None,
         });
         core.get_tab_view_models()
             .iter()
@@ -200,6 +202,395 @@ mod tests {
             reordered_ids.last().unwrap(),
             &tab_a,
             "A should be last after move-to-end"
+        );
+    }
+
+    #[test]
+    fn favorite_tab_removes_from_root_order() {
+        let mut core = MahoCore::new();
+        let space_id = core.get_active_space_id().clone();
+        let tab_id = create_tab(&mut core);
+
+        assert!(
+            core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id.clone())),
+            "tab should be in root_order before favoriting"
+        );
+
+        core.favorite_tab(&tab_id);
+
+        assert!(
+            !core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            "tab must not be in root_order after favoriting"
+        );
+    }
+
+    #[test]
+    fn unfavorite_tab_restores_to_root_order() {
+        let mut core = MahoCore::new();
+        let space_id = core.get_active_space_id().clone();
+        let tab_id = create_tab(&mut core);
+
+        core.favorite_tab(&tab_id);
+        assert!(
+            !core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id.clone())),
+            "tab must not be in root_order after favoriting"
+        );
+
+        core.unfavorite_tab(&tab_id);
+
+        assert!(
+            core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            "tab must be back in root_order after unfavoriting"
+        );
+    }
+
+    #[test]
+    fn favorite_unfavorite_roundtrip_root_order_contains_no_duplicates() {
+        let mut core = MahoCore::new();
+        let space_id = core.get_active_space_id().clone();
+        let tab_id = create_tab(&mut core);
+
+        core.favorite_tab(&tab_id);
+        core.unfavorite_tab(&tab_id);
+
+        let order = core.space_manager.get_root_order(&space_id);
+        let count = order.iter().filter(|i| *i == &maho_types::space::RootItem::Tab(tab_id.clone())).count();
+        assert_eq!(count, 1, "tab should appear exactly once in root_order after roundtrip");
+    }
+
+    #[test]
+    fn handle_event_favorite_tab_removes_from_root_order() {
+        let mut core = MahoCore::new();
+        let space_id = core.get_active_space_id().clone();
+        let tab_id = create_tab(&mut core);
+
+        core.handle_event(ShellEvent::FavoriteTab { tab_id: tab_id.clone() });
+
+        assert!(
+            !core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            "tab must not be in root_order after FavoriteTab event"
+        );
+    }
+
+    #[test]
+    fn handle_event_unfavorite_tab_restores_root_order() {
+        let mut core = MahoCore::new();
+        let space_id = core.get_active_space_id().clone();
+        let tab_id = create_tab(&mut core);
+
+        core.handle_event(ShellEvent::FavoriteTab { tab_id: tab_id.clone() });
+        core.handle_event(ShellEvent::UnfavoriteTab { tab_id: tab_id.clone() });
+
+        assert!(
+            core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            "tab must be back in root_order after UnfavoriteTab event"
+        );
+    }
+
+    #[test]
+    fn delete_space_migrated_favorited_tab_absent_from_destination_root_order() {
+        let mut core = MahoCore::new();
+        let src_space_id = core.get_active_space_id().clone();
+        let tab_id = create_tab(&mut core);
+
+        core.favorite_tab(&tab_id);
+        assert!(
+            !core.space_manager.get_root_order(&src_space_id).contains(&maho_types::space::RootItem::Tab(tab_id.clone())),
+            "pre-condition: favorited tab not in source root_order"
+        );
+
+        let profile_id = core
+            .get_space_view_models()
+            .into_iter()
+            .find(|s| s.id == src_space_id)
+            .and_then(|s| s.profile_id)
+            .expect("active space must have profile");
+        let dest = core.create_space(
+            "Dest",
+            SpaceColor { hue: 0.0, saturation: 0.5, brightness: 0.8, grain: 0.0 },
+            profile_id,
+        );
+        let dest_space_id = dest.id.clone();
+
+        core.handle_event(ShellEvent::DeleteSpace { space_id: src_space_id.clone() });
+
+        assert!(
+            !core.space_manager.get_root_order(&dest_space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            "favorited tab must not appear in destination root_order after DeleteSpace migration"
+        );
+    }
+
+    #[test]
+    fn export_space_into_folder_favorited_tab_absent_from_destination_root_order() {
+        let mut core = MahoCore::new();
+        let src_space_id = core.get_active_space_id().clone();
+        let tab_id = create_tab(&mut core);
+
+        core.favorite_tab(&tab_id);
+
+        let profile_id = core
+            .get_space_view_models()
+            .into_iter()
+            .find(|s| s.id == src_space_id)
+            .and_then(|s| s.profile_id)
+            .expect("active space must have profile");
+        let dest = core.create_space(
+            "Dest",
+            SpaceColor { hue: 0.0, saturation: 0.5, brightness: 0.8, grain: 0.0 },
+            profile_id,
+        );
+        let dest_space_id = dest.id.clone();
+
+        core.handle_event(ShellEvent::ExportSpaceIntoFolder {
+            space_id: src_space_id.clone(),
+            target_space_id: dest_space_id.clone(),
+        });
+
+        assert!(
+            !core.space_manager.get_root_order(&dest_space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            "favorited tab must not appear in destination root_order after ExportSpaceIntoFolder"
+        );
+    }
+
+    #[test]
+    fn unfavorite_folder_resident_tab_does_not_add_to_root_order() {
+        let mut core = MahoCore::new();
+        let space_id = core.get_active_space_id().clone();
+        let tab_id = create_tab(&mut core);
+
+        let folder_vm = core.space_manager.create_folder(&space_id, "F", false).unwrap();
+        core.space_manager.add_tab_to_folder(&space_id, &folder_vm.id, tab_id.clone());
+
+        core.favorite_tab(&tab_id);
+        core.unfavorite_tab(&tab_id);
+
+        let root_order = core.space_manager.get_root_order(&space_id);
+        assert!(
+            !root_order.contains(&maho_types::space::RootItem::Tab(tab_id)),
+            "folder-resident tab must not appear in root_order after unfavoriting"
+        );
+    }
+
+    #[test]
+    fn unfavorite_non_folder_tab_restores_to_root_order() {
+        let mut core = MahoCore::new();
+        let space_id = core.get_active_space_id().clone();
+        let tab_id = create_tab(&mut core);
+
+        core.favorite_tab(&tab_id);
+        core.unfavorite_tab(&tab_id);
+
+        assert!(
+            core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            "non-folder tab must be restored to root_order after unfavoriting"
+        );
+    }
+
+    #[test]
+    fn move_tab_favorited_does_not_add_to_root_order_on_destination() {
+        let mut core = MahoCore::new();
+        let src_space_id = core.get_active_space_id().clone();
+        let tab_id = create_tab(&mut core);
+
+        core.favorite_tab(&tab_id);
+        assert!(
+            !core.space_manager.get_root_order(&src_space_id).contains(&maho_types::space::RootItem::Tab(tab_id.clone())),
+            "pre-condition: favorited tab not in src root_order"
+        );
+
+        let profile_id = core.get_space_view_models()
+            .into_iter()
+            .find(|s| s.id == src_space_id)
+            .and_then(|s| s.profile_id)
+            .expect("active space must have profile");
+        let dest = core.create_space("Dest", SpaceColor { hue: 0.0, saturation: 0.5, brightness: 0.8, grain: 0.0 }, profile_id);
+        let dest_id = dest.id.clone();
+
+        core.handle_event(ShellEvent::MoveTab {
+            tab_id: tab_id.clone(),
+            target_space: dest_id.clone(),
+            position: 0,
+        });
+
+        assert!(
+            !core.space_manager.get_root_order(&dest_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            "favorited tab must not appear in destination root_order after MoveTab"
+        );
+    }
+
+    #[test]
+    fn move_tab_non_favorited_appears_in_destination_root_order() {
+        let mut core = MahoCore::new();
+        let src_space_id = core.get_active_space_id().clone();
+        let tab_id = create_tab(&mut core);
+
+        let profile_id = core.get_space_view_models()
+            .into_iter()
+            .find(|s| s.id == src_space_id)
+            .and_then(|s| s.profile_id)
+            .expect("active space must have profile");
+        let dest = core.create_space("Dest", SpaceColor { hue: 0.0, saturation: 0.5, brightness: 0.8, grain: 0.0 }, profile_id);
+        let dest_id = dest.id.clone();
+
+        core.handle_event(ShellEvent::MoveTab {
+            tab_id: tab_id.clone(),
+            target_space: dest_id.clone(),
+            position: 0,
+        });
+
+        assert!(
+            core.space_manager.get_root_order(&dest_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            "non-favorited tab must appear in destination root_order after MoveTab"
+        );
+    }
+
+    #[test]
+    fn move_tab_to_space_favorited_does_not_add_to_root_order_on_destination() {
+        let mut core = MahoCore::new();
+        let src_space_id = core.get_active_space_id().clone();
+        let tab_id = create_tab(&mut core);
+
+        core.favorite_tab(&tab_id);
+
+        let profile_id = core.get_space_view_models()
+            .into_iter()
+            .find(|s| s.id == src_space_id)
+            .and_then(|s| s.profile_id)
+            .expect("active space must have profile");
+        let dest = core.create_space("Dest", SpaceColor { hue: 0.0, saturation: 0.5, brightness: 0.8, grain: 0.0 }, profile_id);
+        let dest_id = dest.id.clone();
+
+        core.handle_event(ShellEvent::MoveTabToSpace {
+            tab_id: tab_id.clone(),
+            target_space_id: dest_id.clone(),
+            section: String::new(),
+        });
+
+        assert!(
+            !core.space_manager.get_root_order(&dest_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            "favorited tab must not appear in destination root_order after MoveTabToSpace"
+        );
+    }
+
+    #[test]
+    fn reopen_last_closed_favorited_tab_does_not_add_to_root_order() {
+        let mut core = MahoCore::new();
+        let space_id = core.get_active_space_id().clone();
+        let tab_id = create_tab(&mut core);
+
+        core.favorite_tab(&tab_id);
+        assert!(
+            !core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id.clone())),
+            "pre-condition: favorited tab not in root_order"
+        );
+
+        core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone() });
+        core.handle_event(ShellEvent::ReopenLastClosed);
+
+        assert!(
+            !core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            "reopened favorited tab must not appear in root_order"
+        );
+    }
+
+    #[test]
+    fn reopen_last_closed_non_favorited_tab_restores_to_root_order() {
+        let mut core = MahoCore::new();
+        let space_id = core.get_active_space_id().clone();
+        let tab_id = create_tab(&mut core);
+
+        core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone() });
+        core.handle_event(ShellEvent::ReopenLastClosed);
+
+        assert!(
+            core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            "reopened non-favorited tab must appear in root_order"
+        );
+    }
+
+    #[test]
+    fn remove_tab_from_folder_favorited_does_not_add_to_root_order() {
+        let mut core = MahoCore::new();
+        let space_id = core.get_active_space_id().clone();
+        let tab_id = create_tab(&mut core);
+
+        let folder_vm = core.space_manager.create_folder(&space_id, "F", false).unwrap();
+        core.space_manager.add_tab_to_folder(&space_id, &folder_vm.id, tab_id.clone());
+        core.favorite_tab(&tab_id);
+
+        core.handle_event(ShellEvent::RemoveTabFromFolder {
+            space_id: space_id.clone(),
+            folder_id: folder_vm.id.clone(),
+            tab_id: tab_id.clone(),
+        });
+
+        assert!(
+            !core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            "favorited tab must not be added to root_order when removed from folder"
+        );
+    }
+
+    #[test]
+    fn remove_tab_from_folder_non_favorited_restores_to_root_order() {
+        let mut core = MahoCore::new();
+        let space_id = core.get_active_space_id().clone();
+        let tab_id = create_tab(&mut core);
+
+        let folder_vm = core.space_manager.create_folder(&space_id, "F", false).unwrap();
+        core.space_manager.add_tab_to_folder(&space_id, &folder_vm.id, tab_id.clone());
+        assert!(
+            !core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id.clone())),
+            "pre-condition: folder-resident tab not in root_order"
+        );
+
+        core.handle_event(ShellEvent::RemoveTabFromFolder {
+            space_id: space_id.clone(),
+            folder_id: folder_vm.id.clone(),
+            tab_id: tab_id.clone(),
+        });
+
+        assert!(
+            core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            "non-favorited tab must be restored to root_order when removed from folder"
+        );
+    }
+
+    #[test]
+    fn move_folder_into_folder_scoped_to_space_does_not_affect_same_folder_in_other_space() {
+        let mut core = MahoCore::new();
+        let space_a = core.get_active_space_id().clone();
+
+        let folder_a = core.space_manager.create_folder(&space_a, "FA", false).unwrap();
+
+        let profile_id = core.get_space_view_models()
+            .into_iter()
+            .find(|s| s.id == space_a)
+            .and_then(|s| s.profile_id)
+            .expect("active space must have profile");
+        let space_b_space = core.create_space("B", SpaceColor { hue: 0.5, saturation: 0.5, brightness: 0.5, grain: 0.0 }, profile_id);
+        let space_b = space_b_space.id.clone();
+
+        let parent_b = core.space_manager.create_folder(&space_b, "Parent", false).unwrap();
+
+        core.handle_event(ShellEvent::MoveFolderIntoFolder {
+            space_id: space_a.clone(),
+            folder_id: folder_a.id.clone(),
+            target_folder_id: parent_b.id.clone(),
+        });
+
+        let space_a_data = core.space_manager.get_space(&space_a).unwrap();
+        let folder_in_a = space_a_data.folders.iter().find(|f| f.id == folder_a.id).unwrap();
+        assert_eq!(
+            folder_in_a.parent_folder_id,
+            Some(parent_b.id.clone()),
+            "folder in space_a should have new parent"
+        );
+
+        let space_b_data = core.space_manager.get_space(&space_b).unwrap();
+        let parent_in_b = space_b_data.folders.iter().find(|f| f.id == parent_b.id).unwrap();
+        assert!(
+            parent_in_b.parent_folder_id.is_none(),
+            "parent folder in space_b must be unmodified"
         );
     }
 }
@@ -560,27 +951,40 @@ impl MahoCore {
             sharing_manager: SharingManager::new(),
         };
 
-        core.seed_first_run_tabs();
         core
     }
 
-    fn seed_first_run_tabs(&mut self) {
+    /// Seeds the active space with an initial favorite tab and a pinned tab.
+    ///
+    /// Not called from `new()` in the Chromium build path: Chromium already has
+    /// real live tabs in its `TabStripModel` before the sidebar is ready, and
+    /// calling this would produce ghost core-only tabs (about:blank,
+    /// `tab_strip_index = -1`) that break sidebar actions. Instead,
+    /// `MahoSidebarView::MaybeReconcileStartupTabs()` performs a one-time
+    /// startup reconciliation once the `Browser` and `TabStripModel` are ready.
+    ///
+    /// Callers that need the placeholder seed (e.g. unit tests that run without
+    /// a Chromium browser) may call this explicitly after `new()`.
+    #[allow(dead_code)]
+    pub fn seed_first_run_tabs(&mut self) {
         if !self.tab_manager.get_all_tabs().is_empty() {
             return;
         }
 
         let active_space_id = self.space_manager.get_active_space_id().clone();
 
+        let ntp_url = Some(maho_types::common::Url::new("chrome://newtab"));
+
         let favorite_tab = self
             .tab_manager
-            .create_tab(active_space_id.clone(), None, None);
+            .create_tab(active_space_id.clone(), ntp_url.clone(), None, None);
         self.space_manager
             .add_tab_to_space(&active_space_id, favorite_tab.id.clone(), None);
         self.tab_manager.favorite_tab(&favorite_tab.id);
 
         let pinned_tab = self
             .tab_manager
-            .create_tab(active_space_id.clone(), None, None);
+            .create_tab(active_space_id.clone(), ntp_url, None, None);
         self.space_manager
             .add_tab_to_space(&active_space_id, pinned_tab.id.clone(), None);
         self.tab_manager.pin_tab(&pinned_tab.id);
@@ -715,6 +1119,14 @@ impl MahoCore {
             let spaces: Vec<maho_types::space::Space> = serde_json::from_slice(&spaces_data)
                 .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
             self.space_manager.restore_spaces(spaces, active_space_id);
+
+            let favorited_ids: std::collections::HashSet<maho_types::identifiers::TabId> = self
+                .tab_manager
+                .get_all_favorite_tabs()
+                .into_iter()
+                .map(|t| t.id.clone())
+                .collect();
+            self.space_manager.strip_favorited_tabs_from_root_orders(&favorited_ids);
         }
 
         if let Some(profiles_data) = profiles_data {
@@ -2199,6 +2611,17 @@ impl MahoCore {
                     },
                 }];
             }
+            ShellEvent::UnfavoriteTab { ref tab_id } => {
+                self.unfavorite_tab(tab_id);
+                return vec![CoreUpdate::TabUpdated {
+                    tab_id: tab_id.clone(),
+                    changes: TabStateUpdate {
+                        custom_title: None,
+                        is_favorite: Some(false),
+                        ..Default::default()
+                    },
+                }];
+            }
             ShellEvent::ResetPinnedTab { ref tab_id } => {
                 self.reset_pinned_tab(tab_id);
                 return vec![];
@@ -2218,6 +2641,7 @@ impl MahoCore {
 
                 let tab_ids = self.space_manager.get_tab_order(space_id);
                 let next_space_id = space_order.iter().find(|id| *id != space_id).cloned();
+                let is_active_space = self.space_manager.get_active_space_id() == space_id;
 
                 let mut updates = Vec::new();
                 if let Some(ref target_space_id) = next_space_id {
@@ -2227,8 +2651,15 @@ impl MahoCore {
                         self.space_manager.remove_tab_from_space(space_id, tab_id);
                         self.space_manager
                             .add_tab_to_space(target_space_id, tab_id.clone(), None);
+                        let is_favorite = self
+                            .tab_manager
+                            .get_tab(tab_id)
+                            .map(|t| t.is_favorite)
+                            .unwrap_or(false);
+                        self.space_manager
+                            .apply_tab_residency(target_space_id, tab_id, is_favorite, false);
                     }
-                    if !tab_ids.is_empty() {
+                    if !tab_ids.is_empty() || is_active_space {
                         updates.push(CoreUpdate::TabsMigrated {
                             tab_ids,
                             from_space_id: space_id.clone(),
@@ -3015,6 +3446,49 @@ impl MahoCore {
             .collect()
     }
 
+    /// Get unpinned tabs for a space that belong to a specific browser window.
+    /// Returns tabs in the space's ordering, filtered to only include those
+    /// whose `window_id` matches the given value.
+    pub fn get_space_tabs_for_window(
+        &self,
+        space_id: &SpaceId,
+        window_id: i64,
+    ) -> Vec<TabViewModel> {
+        self.space_manager
+            .get_tab_order(space_id)
+            .into_iter()
+            .filter_map(|tab_id| self.tab_manager.get_tab(&tab_id))
+            .filter(|tab| {
+                !tab.is_pinned
+                    && tab.window_id == Some(window_id)
+                    && !matches!(tab.state, TabLifecycleState::Archived { .. })
+            })
+            .map(|tab| self.make_view_model(tab))
+            .collect()
+    }
+
+    /// Release all tabs owned by a closing window. The tabs are moved to the
+    /// closed stack and removed from the live tab map. Returns the list of
+    /// released tab IDs for the C++ side to clean up its TabStripModel.
+    pub fn release_window_tabs(&mut self, window_id: i64) -> Vec<TabId> {
+        let released = self.tab_manager.release_window_tabs(window_id);
+        // Also remove released tabs from their spaces' tab_order
+        for tab_id in &released {
+            // Find which space this tab belonged to by checking all spaces
+            let space_ids: Vec<SpaceId> = self
+                .space_manager
+                .get_all_spaces()
+                .iter()
+                .filter(|s| s.tab_order.contains(tab_id))
+                .map(|s| s.id.clone())
+                .collect();
+            for sid in space_ids {
+                self.space_manager.remove_tab_from_space(&sid, tab_id);
+            }
+        }
+        released
+    }
+
     pub fn get_favorite_tabs(&self, space_id: &SpaceId) -> Vec<TabViewModel> {
         let profile_space_ids = self
             .space_manager
@@ -3112,6 +3586,31 @@ impl MahoCore {
             .collect()
     }
 
+    /// Get root items for a space, filtered by window ownership.
+    /// Folders are shared across windows so they are always included.
+    /// Unpinned tabs are filtered to only include those belonging to the given `window_id`.
+    pub fn get_sidebar_root_order_for_window(
+        &self,
+        space_id: &SpaceId,
+        window_id: i64,
+    ) -> Vec<RootItem> {
+        self.space_manager
+            .get_root_order(space_id)
+            .into_iter()
+            .filter(|item| match item {
+                RootItem::Tab(tid) => self
+                    .tab_manager
+                    .get_tab(tid)
+                    .map(|t| {
+                        !matches!(t.state, TabLifecycleState::Archived { .. })
+                            && t.window_id == Some(window_id)
+                    })
+                    .unwrap_or(false),
+                RootItem::Folder(_) => true,
+            })
+            .collect()
+    }
+
     pub fn favorite_tab(&mut self, tab_id: &TabId) -> bool {
         let profile_space_ids = self
             .tab_manager
@@ -3132,11 +3631,22 @@ impl MahoCore {
         }
 
         self.tab_manager.favorite_tab(tab_id);
+
+        if let Some(space_id) = self.tab_manager.get_tab(tab_id).map(|t| t.space_id.clone()) {
+            self.space_manager.remove_tab_from_root_order(&space_id, tab_id);
+        }
+
         true
     }
 
     pub fn unfavorite_tab(&mut self, tab_id: &TabId) {
         self.tab_manager.unfavorite_tab(tab_id);
+
+        if let Some(space_id) = self.tab_manager.get_tab(tab_id).map(|t| t.space_id.clone()) {
+            if !self.space_manager.is_tab_in_folder(&space_id, tab_id) {
+                self.space_manager.add_tab_to_root_order_if_absent(&space_id, tab_id);
+            }
+        }
     }
 
     pub fn reset_pinned_tab(&mut self, tab_id: &TabId) -> bool {
@@ -4602,14 +5112,24 @@ impl MahoCore {
 
         match command {
             "newtab" => {
-                let space_id = self.get_active_space_id().clone();
-                let url_value = parse_query_param(query, "url").map(|u| Url(urlencoding_decode(u)));
-                self.handle_event(ShellEvent::CreateTab {
-                    space_id,
-                    url: url_value,
-                    parent_id: None,
-                });
-                serde_json::json!({"action": "newtab", "ok": true}).to_string()
+                let url_param = parse_query_param(query, "url");
+                match url_param {
+                    None => {
+                        serde_json::json!({"error": "missing url parameter"}).to_string()
+                    }
+                    Some(raw_url) => {
+                        let space_id = self.get_active_space_id().clone();
+                        let url_value = Url(urlencoding_decode(raw_url));
+                        self.handle_event(ShellEvent::CreateTab {
+                            space_id,
+                            url: Some(url_value),
+                            parent_id: None,
+                            tab_id: None,
+                            window_id: None,
+                        });
+                        serde_json::json!({"action": "newtab", "ok": true}).to_string()
+                    }
+                }
             }
             "settings" => serde_json::json!({"action": "settings", "ok": true}).to_string(),
             "space" => {
@@ -4645,6 +5165,8 @@ impl MahoCore {
                         space_id,
                         url: Some(Url(decoded)),
                         parent_id: None,
+                        tab_id: None,
+                        window_id: None,
                     });
                     serde_json::json!({"action": "open", "ok": true}).to_string()
                 } else {
@@ -4900,8 +5422,12 @@ fn parse_sync_entity_type(s: &str) -> SyncEntityType {
 // === Trait implementations for EventDispatcher ===
 
 impl TabManagerInterface for TabLifecycleManager {
-    fn create_tab(&mut self, space_id: SpaceId, url: Option<Url>, parent_id: Option<TabId>) -> Tab {
-        self.create_tab(space_id, url, parent_id)
+    fn create_tab(&mut self, space_id: SpaceId, url: Option<Url>, parent_id: Option<TabId>, window_id: Option<i64>) -> Tab {
+        self.create_tab(space_id, url, parent_id, window_id)
+    }
+
+    fn create_tab_with_id(&mut self, tab_id: TabId, space_id: SpaceId, url: Option<Url>, parent_id: Option<TabId>, window_id: Option<i64>) -> Tab {
+        self.create_tab_with_id(tab_id, space_id, url, parent_id, window_id)
     }
 
     fn close_tab(&mut self, tab_id: &TabId) -> Option<Tab> {
@@ -5044,6 +5570,10 @@ impl TabManagerInterface for TabLifecycleManager {
     fn toggle_freeze(&mut self, tab_id: &TabId) {
         self.toggle_freeze(tab_id)
     }
+
+    fn release_window_tabs(&mut self, window_id: i64) -> Vec<TabId> {
+        self.release_window_tabs(window_id)
+    }
 }
 
 impl SpaceManagerInterface for SpaceManager {
@@ -5168,6 +5698,15 @@ impl SpaceManagerInterface for SpaceManager {
         self.move_folder(folder_id, new_parent)
     }
 
+    fn move_folder_in_space(
+        &mut self,
+        space_id: &SpaceId,
+        folder_id: &FolderId,
+        new_parent: Option<FolderId>,
+    ) {
+        self.move_folder_in_space(space_id, folder_id, new_parent)
+    }
+
     fn move_folder_to_root(&mut self, space_id: &SpaceId, folder_id: &FolderId, before_folder_id: Option<&FolderId>) {
         self.move_folder_to_root(space_id, folder_id, before_folder_id)
     }
@@ -5185,6 +5724,24 @@ impl SpaceManagerInterface for SpaceManager {
 
     fn get_last_active_tab(&self, space_id: &SpaceId) -> Option<&TabId> {
         self.get_last_active_tab(space_id)
+    }
+
+    fn is_tab_in_folder(&self, space_id: &SpaceId, tab_id: &TabId) -> bool {
+        self.is_tab_in_folder(space_id, tab_id)
+    }
+
+    fn apply_tab_residency(
+        &mut self,
+        space_id: &SpaceId,
+        tab_id: &TabId,
+        is_favorite: bool,
+        is_in_folder: bool,
+    ) {
+        self.apply_tab_residency(space_id, tab_id, is_favorite, is_in_folder)
+    }
+
+    fn remove_tab_from_root_order(&mut self, space_id: &SpaceId, tab_id: &TabId) {
+        self.remove_tab_from_root_order(space_id, tab_id)
     }
 
     fn reorder_root_item(

@@ -1,11 +1,11 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-05-05
+**Generated:** 2026-05-15
 **Commit:** e2e5fbf
 **Branch:** main
 
 ## OVERVIEW
-Maho Browser monorepo: Rust core crates + Chromium overlay fork + native shells (macOS/iOS/Android). Brave-style architecture — `maho-chromium` patches upstream Chromium, `maho` crates provide backend logic via FFI bridge.
+Maho Browser monorepo: Rust core crates + Chromium overlay fork + native shells (macOS/iOS/Android). Also includes Maho Mail (Tauri) and Maho Website (Astro). Brave-style architecture — `maho-chromium` patches upstream Chromium, `maho` crates provide backend logic via FFI bridge.
 
 ## STRUCTURE
 ```
@@ -23,6 +23,8 @@ maho-workspace/
 │   ├── components/     # Mojo IDL, shared constants
 │   ├── third_party/maho/ # maho-core prebuilt static lib + C++ bridge
 │   └── build/          # GN config + build scripts
+├── mail/               # Maho Mail (Tauri v2 + React 19; separate Cargo workspace)
+├── website/            # Maho Website (Astro 6 + Starlight)
 ├── chromium/           # Upstream Chromium source (gitignored, ~121GB, gclient-managed)
 └── docs/               # Design docs
 ```
@@ -35,12 +37,14 @@ maho-workspace/
 | FFI bridge (Rust→C++) | `maho/crates/maho-ffi/` → `maho-chromium/third_party/maho/` | |
 | Chromium UI features | `maho-chromium/browser/ui/` | Views + WebUI surfaces |
 | WebUI resources (TS) | `maho-chromium/browser/resources/` | Per-feature app.ts + HTML |
+| Maho Mail (Frontend) | `mail/src/` | React 19 + Vite |
+| Maho Mail (Rust) | `mail/src-tauri/` | Tauri v2 commands/state |
+| Maho Website | `website/src/` | Astro pages & Starlight docs |
 | Upstream overrides | `maho-chromium/chromium_src/` | Brave-style #define + #include |
 | Sync relay server | `maho/relay/` | Standalone workspace; do NOT add to root Cargo.toml |
 | Build Chromium | `chromium/src/out/Default/` | Canonical: `python3 maho-chromium/build/scripts/build_maho.py` from repo root. Optional: `autoninja -C out/Default chrome` for narrower rebuilds. |
 | Build maho-core lib | `maho-chromium/build/scripts/build_maho_core.py` | Produces prebuilt static lib |
 | Regression tests | `maho/appium-tests/` | Appium runners |
-| Native shells (ref) | `maho/macos-shell/`, `maho/ios-shell/` | Reference only; active work in Chromium fork |
 
 ## CONVENTIONS
 - `bun run` for repo scripts, `bunx` for one-off CLIs
@@ -52,12 +56,13 @@ maho-workspace/
 - Subtree AGENTS.md files take precedence over this root guide
 
 ## ANTI-PATTERNS (THIS PROJECT)
-- No adding relay/ crates to root workspace members (libsqlite3-sys conflict)
+- **No adding relay/ or mail/ crates to root workspace members** (libsqlite3-sys conflict)
 - No type-safety suppression
 - No domain types in `maho-core`; use `maho-types`
 - No direct FFI/business-logic mixing in `maho-ffi`
 - No direct Keychain/Security.framework use in macOS shell
 - **NEVER delete `.build.lock`** — see BUILD LOCK below
+- **빌드 실패 시 GN 파일 강제 수정 금지** — 빌드 (특히 `build_maho.py`) 가 GN regen 단계 또는 그 이후에서 실패하면 즉시 중단하고 사용자에게 보고. `chromium/src/**/BUILD.gn`, `maho-chromium/**/BUILD.gn`, `chromium/src/chrome/test/BUILD.gn` 등의 GN 파일을 우회 fix 목적으로 직접 수정하지 말 것. 다른 세션의 미완 작업이나 working tree dirty state 인 경우가 많고, 임의 cleanup 은 추후 충돌·revert·데이터 손실을 부른다. fix 가 필요해 보여도 **사용자 명시 승인 없이는 GN 편집·삭제 금지**.
 
 ## BUILD LOCK — `.build.lock`
 
@@ -84,9 +89,18 @@ The lock is **automatically released** when the holding process exits (normal ex
 
 ## COMMANDS
 ```bash
-# Rust workspace
+# Rust workspace (Browser)
 cd maho && bun run typecheck          # cargo check --workspace
 cd maho && bun run test               # cargo test --workspace
+
+# Maho Mail
+cd mail && bun run tauri dev          # Run Tauri dev
+cd mail && bun run test               # vitest (frontend)
+cd mail && cargo test                 # Rust tests (run inside mail/ folder)
+
+# Maho Website
+cd website && bun run dev             # Astro dev (port 5555)
+cd website && bun run build           # Build site
 
 # Chromium build
 python3 maho-chromium/build/scripts/build_maho.py    # canonical repo-root build
@@ -99,14 +113,11 @@ python3 maho-chromium/build/scripts/build_maho_core.py
 
 # Relay server
 cd maho/relay && cargo test && cargo clippy -- -D warnings
-
-# Native shells
-cd maho/macos-shell && make app
-cd maho/appium-tests && bun run test
 ```
 
 ## NOTES
 - `chromium/` is gitignored (121GB upstream); managed by gclient, not this repo's git
+- **Never use `git sparse-checkout`** in this workspace. `chromium/` is already gitignored and gclient-managed, so there is nothing to sparse-checkout. Do not infer sparse-checkout from the repo size unless the user explicitly requests it.
 - Symlink setup: `ln -s ../../maho-chromium chromium/src/maho`
-- Two Cargo workspaces: `maho/Cargo.toml` (main) and `maho/relay/Cargo.toml` (isolated)
+- **Three Cargo workspaces**: `maho/Cargo.toml` (main), `maho/relay/Cargo.toml` (isolated), and `mail/Cargo.toml` (isolated).
 - See `maho/AGENTS.md` for crate-level detail; `maho-chromium/AGENTS.md` for overlay detail

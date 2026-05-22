@@ -14,13 +14,16 @@
 #include "base/containers/span.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/logging.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
+#include "base/trace_event/trace_event.h"
 #include "base/values.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/favicon/large_icon_service_factory.h"
@@ -46,6 +49,7 @@
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/maho_tab_id_helper.h"
 #include "maho/third_party/maho/maho_ffi.h"
 
 
@@ -89,8 +93,17 @@ bool IsEligibleBrowserForTabSearch(const BrowserWindowInterface* browser,
 
 std::string BuildStableTabId(const BrowserWindowInterface* browser,
                              content::WebContents* contents) {
+  if (!browser || !contents) {
+    return std::string();
+  }
+
+  auto* helper = MahoTabIdHelper::FromWebContents(contents);
+  if (helper) {
+    return helper->stable_tab_id();
+  }
+
   auto* tab_helper = sessions::SessionTabHelper::FromWebContents(contents);
-  if (!browser || !contents || !tab_helper) {
+  if (!tab_helper) {
     return std::string();
   }
 
@@ -376,6 +389,11 @@ void MahoCommandModel::Cancel() {
 
 void MahoCommandModel::FireSearch() {
   ++search_generation_;
+  search_start_ticks_ = base::TimeTicks::Now();
+  TRACE_EVENT_NESTABLE_ASYNC_BEGIN1("ui",
+                                    "MahoCommandPalette.Search",
+                                    search_generation_,
+                                    "gen", search_generation_);
   std::string search_query = query_;
   actions_only_ = false;
 
@@ -386,7 +404,7 @@ void MahoCommandModel::FireSearch() {
     actions_only_ = true;
   }
 
-  std::string tabs_json = BuildTabsJson(browser_);
+  std::string tabs_json = actions_only_ ? std::string() : BuildTabsJson(browser_);
   std::vector<CommandSuggestion> chromium_bookmarks =
       BuildChromiumBookmarkSuggestions(browser_, search_query);
   const bool is_incognito = browser_->profile()->IsOffTheRecord();
@@ -398,6 +416,22 @@ void MahoCommandModel::FireSearch() {
                      chromium_bookmarks, mode_, is_incognito),
       base::BindOnce(&MahoCommandModel::OnResults, weak_factory_.GetWeakPtr(),
                      pending_callback_));
+}
+
+// static
+base::Value MahoCommandModel::BuildTabEntryDict(
+    const std::string& stable_id,
+    const std::string& browser_session_id,
+    const std::string& tab_session_id,
+    const std::string& title,
+    const std::string& url) {
+  base::Value dict(base::Value::Type::DICT);
+  dict.GetDict().Set("id", stable_id);
+  dict.GetDict().Set("browser_session_id", browser_session_id);
+  dict.GetDict().Set("tab_session_id", tab_session_id);
+  dict.GetDict().Set("title", title);
+  dict.GetDict().Set("url", url);
+  return dict;
 }
 
 // static
@@ -426,34 +460,12 @@ std::string MahoCommandModel::BuildTabsJson(Browser* browser) {
           if (stable_id.empty())
             continue;
 
-          base::Value tab_json(base::Value::Type::DICT);
-          tab_json.GetDict().Set("id", stable_id);
-          tab_json.GetDict().Set("browser_session_id",
-                            base::NumberToString(
-                                candidate->GetSessionID().id()));
-          tab_json.GetDict().Set("tab_session_id",
-                            base::NumberToString(tab_helper->session_id().id()));
-          tab_json.GetDict().Set("title", base::UTF16ToUTF8(wc->GetTitle()));
-          tab_json.GetDict().Set("url", wc->GetVisibleURL().spec());
-
-          std::optional<ImageData> image_data = BuildImageDataFromTab(tab);
-          if (!image_data.has_value()) {
-            image_data = BuildImageDataFromFavicon(tab_ui_helper->GetFavicon());
-          }
-          if (image_data.has_value()) {
-            base::Value icon(base::Value::Type::DICT);
-            icon.GetDict().Set("width", image_data->width);
-            icon.GetDict().Set("height", image_data->height);
-            icon.GetDict().Set("format", image_data->format);
-
-            base::Value data(base::Value::Type::LIST);
-            for (uint8_t byte : image_data->data) {
-              data.GetList().Append(static_cast<int>(byte));
-            }
-            icon.GetDict().Set("data", std::move(data));
-            tab_json.GetDict().Set("icon", std::move(icon));
-          }
-          tabs.GetList().Append(std::move(tab_json));
+          tabs.GetList().Append(BuildTabEntryDict(
+              stable_id,
+              base::NumberToString(candidate->GetSessionID().id()),
+              base::NumberToString(tab_helper->session_id().id()),
+              base::UTF16ToUTF8(wc->GetTitle()),
+              wc->GetVisibleURL().spec()));
         }
         return true;
       });
@@ -559,6 +571,12 @@ std::vector<CommandSuggestion> MahoCommandModel::SearchOnPool(
       }
     }
 
+    const std::string* stable_id_field = dict->FindString("id");
+    if (stable_id_field && !stable_id_field->empty() &&
+        suggestion.type == CommandSuggestionType::kTab) {
+      suggestion.stable_tab_id = *stable_id_field;
+    }
+
     if (key->starts_with("action:"))
       suggestion.action_id = key->substr(7);
     if (key->starts_with("folder:"))
@@ -617,13 +635,19 @@ CommandSuggestionType MahoCommandModel::ParseType(const std::string& kind) {
 
 void MahoCommandModel::OnResults(ResultsCallback callback,
                                  std::vector<CommandSuggestion> results) {
+  const base::TimeDelta elapsed = base::TimeTicks::Now() - search_start_ticks_;
+  TRACE_EVENT_INSTANT("ui", "MahoCommandPalette.SearchComplete",
+                      "elapsed_ms", elapsed.InMilliseconds(),
+                      "result_count", results.size(),
+                      "gen", search_generation_);
+  UMA_HISTOGRAM_TIMES("Maho.CommandPalette.SearchLatency", elapsed);
+
   if (actions_only_) {
     std::erase_if(results, [](const CommandSuggestion& s) {
       return s.type != CommandSuggestionType::kAction;
     });
-  } else {
-    CapResults(results);
   }
+  CapResults(results);
 
   std::string prev_key;
   if (selected_index_ >= 0 &&
@@ -644,8 +668,13 @@ void MahoCommandModel::OnResults(ResultsCallback callback,
   }
   selected_index_ = (restored >= 0) ? restored
                                      : (results_.empty() ? -1 : 0);
+  TRACE_EVENT_NESTABLE_ASYNC_END1("ui",
+                                   "MahoCommandPalette.Search",
+                                   search_generation_,
+                                   "final_count", results_.size());
   callback.Run(results_);
   RequestBookmarkFavicons();
+  RequestTabFavicons();
 }
 
 void MahoCommandModel::RequestBookmarkFavicons() {
@@ -716,64 +745,126 @@ void MahoCommandModel::OnBookmarkLargeIconLoaded(
   }
 }
 
-// static
-void MahoCommandModel::CapResults(std::vector<CommandSuggestion>& results) {
-  std::vector<CommandSuggestion> tabs, folders, history, navigation, bookmarks, other;
-  for (auto& r : results) {
-    switch (r.type) {
-      case CommandSuggestionType::kTab:
-      case CommandSuggestionType::kClosedTab:
-      case CommandSuggestionType::kArchivedTab:
-        tabs.push_back(std::move(r));
-        break;
-      case CommandSuggestionType::kFolder:
-        folders.push_back(std::move(r));
-        break;
-      case CommandSuggestionType::kHistory:
-        history.push_back(std::move(r));
-        break;
-      case CommandSuggestionType::kNavigation:
-        navigation.push_back(std::move(r));
-        break;
-      case CommandSuggestionType::kBookmark:
-        bookmarks.push_back(std::move(r));
-        break;
-      default:
-        other.push_back(std::move(r));
-        break;
-    }
+void MahoCommandModel::RequestTabFavicons() {
+  if (!browser_) {
+    return;
   }
 
-  results.clear();
+  const Profile* profile = browser_->profile();
+  bool updated = false;
 
-  constexpr size_t kMaxVisibleResults = 5;
+  for (auto& result : results_) {
+    if (result.type != CommandSuggestionType::kTab || result.icon.has_value()) {
+      continue;
+    }
 
-  for (size_t i = 0; i < std::min(tabs.size(), size_t{2}) &&
-                      results.size() < kMaxVisibleResults;
-       ++i)
-    results.push_back(std::move(tabs[i]));
-  for (size_t i = 0; i < std::min(folders.size(), size_t{2}) &&
-                      results.size() < kMaxVisibleResults;
-       ++i)
-    results.push_back(std::move(folders[i]));
-  for (size_t i = 0; i < std::min(history.size(), size_t{2}) &&
-                      results.size() < kMaxVisibleResults;
-       ++i)
-    results.push_back(std::move(history[i]));
-  for (size_t i = 0; i < std::min(navigation.size(), size_t{1}) &&
-                      results.size() < kMaxVisibleResults;
-       ++i)
-    results.push_back(std::move(navigation[i]));
+    // Primary: match by stable tab ID via MahoTabIdHelper.
+    if (!result.stable_tab_id.empty()) {
+      ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+          [&result, &updated, profile](BrowserWindowInterface* candidate) {
+            if (result.icon.has_value()) {
+              return false;
+            }
+            if (!IsEligibleBrowserForTabSearch(candidate, profile)) {
+              return true;
+            }
 
-  for (size_t i = 0; i < bookmarks.size() &&
-                      results.size() < kMaxVisibleResults;
-       ++i)
-    results.push_back(std::move(bookmarks[i]));
+            TabStripModel* model = candidate->GetTabStripModel();
+            for (int i = 0; i < model->count(); ++i) {
+              auto* tab = model->GetTabAtIndex(i);
+              auto* wc = model->GetWebContentsAt(i);
+              if (!tab || !wc) {
+                continue;
+              }
+              auto* id_helper = MahoTabIdHelper::FromWebContents(wc);
+              if (!id_helper ||
+                  id_helper->stable_tab_id() != result.stable_tab_id) {
+                continue;
+              }
+              result.icon = BuildImageDataFromTab(tab);
+              if (!result.icon.has_value()) {
+                auto* tab_ui_helper = TabUIHelper::From(tab);
+                if (tab_ui_helper) {
+                  result.icon =
+                      BuildImageDataFromFavicon(tab_ui_helper->GetFavicon());
+                }
+              }
+              if (result.icon.has_value()) {
+                updated = true;
+              }
+              return false;
+            }
+            return true;
+          });
+      if (result.icon.has_value()) {
+        continue;
+      }
+    }
 
-  for (auto& o : other) {
-    if (results.size() >= kMaxVisibleResults)
-      break;
-    results.push_back(std::move(o));
+    // Fallback: match by browser/tab session IDs for backward compatibility.
+    if (result.browser_session_id.empty() || result.tab_session_id.empty()) {
+      continue;
+    }
+
+    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+        [&result, &updated, profile](BrowserWindowInterface* candidate) {
+          if (result.icon.has_value()) {
+            return false;
+          }
+          if (!IsEligibleBrowserForTabSearch(candidate, profile)) {
+            return true;
+          }
+          if (base::NumberToString(candidate->GetSessionID().id()) !=
+              result.browser_session_id) {
+            return true;
+          }
+
+          TabStripModel* model = candidate->GetTabStripModel();
+          for (int i = 0; i < model->count(); ++i) {
+            auto* tab = model->GetTabAtIndex(i);
+            auto* wc = model->GetWebContentsAt(i);
+            if (!tab || !wc) {
+              continue;
+            }
+            auto* tab_helper = sessions::SessionTabHelper::FromWebContents(wc);
+            if (!tab_helper) {
+              continue;
+            }
+            if (base::NumberToString(tab_helper->session_id().id()) !=
+                result.tab_session_id) {
+              continue;
+            }
+            result.icon = BuildImageDataFromTab(tab);
+            if (!result.icon.has_value()) {
+              auto* tab_ui_helper = TabUIHelper::From(tab);
+              if (tab_ui_helper) {
+                result.icon =
+                    BuildImageDataFromFavicon(tab_ui_helper->GetFavicon());
+              }
+            }
+            if (result.icon.has_value()) {
+              updated = true;
+            }
+            return false;
+          }
+          return true;
+        });
+  }
+
+  if (updated && pending_callback_) {
+    pending_callback_.Run(results_);
+  }
+}
+
+// static
+void MahoCommandModel::CapResults(std::vector<CommandSuggestion>& results) {
+  // Phase 1: truncation-only — preserve Rust-ranked input order exactly.
+  // The previous bucket-based logic re-sorted by type, overriding the Rust
+  // ranker. Now we simply drop results beyond the display limit so that
+  // whatever order Rust produced is surfaced unchanged.
+  constexpr size_t kMaxVisibleResults = 8;
+  if (results.size() > kMaxVisibleResults) {
+    results.resize(kMaxVisibleResults);
   }
 }
 

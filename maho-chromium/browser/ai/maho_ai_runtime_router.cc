@@ -7,16 +7,15 @@
 #include "base/logging.h"
 #include "components/prefs/pref_service.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
-#include "maho/browser/ai/maho_opencode_adapter.h"
+#include "maho/browser/ai/maho_opencode_acp_adapter.h"
 
 MahoAiRuntimeRouter::MahoAiRuntimeRouter(
-    Browser* browser,
     PrefService* prefs,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
-    : opencode_adapter_(
-          std::make_unique<MahoOpenCodeAdapter>(browser,
-                                                prefs,
-                                                url_loader_factory)) {}
+    : prefs_(prefs),
+      url_loader_factory_(std::move(url_loader_factory)) {
+  RebuildAdapterIfStale();
+}
 
 MahoAiRuntimeRouter::~MahoAiRuntimeRouter() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -24,14 +23,23 @@ MahoAiRuntimeRouter::~MahoAiRuntimeRouter() {
 
 MahoAiRuntimeAdapter* MahoAiRuntimeRouter::GetActiveAdapter() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return opencode_adapter_.get();
+  RebuildAdapterIfStale();
+  return active_adapter_.get();
 }
 
 std::string MahoAiRuntimeRouter::GetActiveAdapterName() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return opencode_adapter_->GetAdapterName();
+  return active_adapter_->GetAdapterName();
 }
 
 bool MahoAiRuntimeRouter::IsAvailable() const {
-  return opencode_adapter_->IsAvailable();
+  return active_adapter_->IsAvailable();
+}
+
+void MahoAiRuntimeRouter::RebuildAdapterIfStale() {
+  if (active_adapter_) {
+    return;
+  }
+  active_adapter_ =
+      std::make_unique<MahoOpenCodeAcpAdapter>(prefs_, url_loader_factory_);
 }

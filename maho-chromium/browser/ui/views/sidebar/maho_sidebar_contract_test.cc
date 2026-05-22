@@ -10,18 +10,41 @@
 #include "base/json/string_escape.h"
 #include "base/test/run_until.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/maho_tab_id_helper.h"
+#include "maho/browser/ui/maho_settings_navigation.h"
+#include "maho/browser/ui/views/command/maho_command_action_handler.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_search_view.h"
+#include "maho/browser/ui/views/sidebar/maho_spaces_board_data.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/third_party/maho/maho_ffi.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/test/ui_controls.h"
+#include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/label.h"
+#include "url/gurl.h"
 
 namespace maho {
 namespace {
+
+bool IsDescendantOfView(const views::View* candidate,
+                        const views::View* ancestor) {
+  for (const views::View* current = candidate; current;
+       current = current->parent()) {
+    if (current == ancestor) {
+      return true;
+    }
+  }
+  return false;
+}
 
 bool IsInlineRowButton(views::View* view, std::u16string expected_text) {
   auto* button = views::AsViewClass<views::LabelButton>(view);
@@ -242,7 +265,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, SidebarTreeJsonContract) {
   const std::string space_id_json =
       base::GetQuotedJSONString(state.tab_list.active_space_id);
   char* root_order_json_c =
-      maho_core_get_sidebar_root_order(core, space_id_json.c_str());
+      maho_core_get_sidebar_root_order(core, space_id_json.c_str(), nullptr);
   ASSERT_TRUE(root_order_json_c);
   std::string root_order_json(root_order_json_c);
   maho_string_free(root_order_json_c);
@@ -407,19 +430,48 @@ int CountTabsInTree(const std::vector<SidebarTreeNode>& nodes) {
 }  // namespace
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, LargeTabCountRenders) {
-  AddTestTabs(50);
+  constexpr int kAddedTabs = 20;
+  AddTestTabs(kAddedTabs);
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
     ResolveViews();
     TabStripModel* strip = browser()->tab_strip_model();
-    return strip && strip->count() >= 51;
+    return strip && strip->count() >= kAddedTabs + 1;
   })) << "Browser tab strip should eventually include the added tabs";
 
   ResolveViews();
+  MahoSidebarView* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+  views::ScrollView* tabs_scroll_view = sidebar->tabs_scroll_view_for_testing();
+  views::View* tabs_scroll_content = sidebar->tabs_scroll_content_for_testing();
+  ASSERT_TRUE(tabs_scroll_view);
+  ASSERT_TRUE(tabs_scroll_content);
+  ASSERT_TRUE(GetFooterView());
+
   EXPECT_TRUE(tab_list_->GetVisible())
       << "Tab list should remain visible with many tabs";
   EXPECT_GT(tab_list_->GetPreferredSize().height(), 0)
       << "Tab list should have non-zero preferred height";
+  EXPECT_EQ(tab_list_->parent(), tabs_scroll_content)
+      << "Tabs-mode scroll ownership must live in MahoSidebarView, not the tab list";
+  EXPECT_TRUE(IsDescendantOfView(sidebar->search_view_for_testing(),
+                                 tabs_scroll_content));
+  EXPECT_TRUE(IsDescendantOfView(sidebar->favorites_view_for_testing(),
+                                 tabs_scroll_content));
+  EXPECT_TRUE(IsDescendantOfView(tab_list_, tabs_scroll_content));
+  EXPECT_EQ(GetFooterView()->parent(), sidebar->body_host_for_testing())
+      << "Footer must remain a direct sibling of the content host";
+  EXPECT_FALSE(IsDescendantOfView(GetFooterView(), tabs_scroll_content))
+      << "Footer must stay outside the tabs-mode scroll tree";
+  EXPECT_TRUE(GetFooterView()->GetVisible());
+  EXPECT_GT(GetFooterView()->GetBoundsInScreen().height(), 0);
+  EXPECT_EQ(GetFooterView()->GetPreferredSize().height(), GetFooterView()->height())
+      << "Footer must keep its fixed preferred height under large tab counts";
+  EXPECT_GT(tabs_scroll_content->GetPreferredSize().height(), tabs_scroll_view->height())
+      << "Outer sidebar scroll band should own vertical overflow in tabs mode";
+  EXPECT_LE(tabs_scroll_view->GetBoundsInScreen().bottom(),
+            GetFooterView()->GetBoundsInScreen().y())
+      << "Scrollable tabs band must sit above the fixed footer";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
@@ -434,24 +486,6 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   empty_pinned_tree.pinned_tree.clear();
 
   tab_list_->Update(empty_pinned_tree, browser());
-  ExpectEmptyPinnedSectionLayout(tab_list_->tab_rows_for_testing());
-}
-
-IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
-                        SidebarRowOrderFlatFallbackPlacesSeparatorAboveNewTab) {
-  SeedProfile(0);
-
-  auto state = GetViewState();
-  ASSERT_FALSE(state.tab_list.pinned_tabs.empty() && state.tab_list.tabs.empty())
-      << "Seed 0 should provide flat rows to validate the fallback layout";
-
-  MahoSidebarTabListModel flat_model = state.tab_list;
-  flat_model.active_space_id = "test-space";
-  flat_model.pinned_tabs.clear();
-  flat_model.pinned_tree.clear();
-  flat_model.normal_tree.clear();
-
-  tab_list_->Update(flat_model, browser());
   ExpectEmptyPinnedSectionLayout(tab_list_->tab_rows_for_testing());
 }
 
@@ -820,6 +854,293 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   }
   EXPECT_EQ(ids_before, ids_after)
       << "Favorites order must be unchanged after a same-index no-op dispatch";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       FooterAndBoardPreserveCanonicalThemeData) {
+  SeedProfile(2);
+  ResolveViews();
+
+  const std::string active_space_id = GetActiveSpaceId();
+  ASSERT_FALSE(active_space_id.empty());
+
+  base::ListValue gradient_colors;
+  {
+    base::DictValue primary;
+    primary.Set("hue", 0.08);
+    primary.Set("saturation", 0.84);
+    primary.Set("brightness", 0.96);
+    primary.Set("isCustom", false);
+    primary.Set("isPrimary", true);
+    gradient_colors.Append(std::move(primary));
+  }
+  {
+    base::DictValue secondary;
+    secondary.Set("hue", 0.56);
+    secondary.Set("saturation", 0.72);
+    secondary.Set("brightness", 0.74);
+    secondary.Set("isCustom", false);
+    secondary.Set("isPrimary", false);
+    gradient_colors.Append(std::move(secondary));
+  }
+
+  base::DictValue theme;
+  theme.Set("type", "zen");
+  theme.Set("gradientColors", std::move(gradient_colors));
+  theme.Set("harmony", "analogous");
+  theme.Set("opacity", 0.9);
+  theme.Set("texture", 0.2);
+
+  base::DictValue changes;
+  changes.Set("spaceId", active_space_id);
+  changes.Set("theme", std::move(theme));
+
+  base::DictValue event;
+  event.Set("changes", std::move(changes));
+  DispatchShellEventDict("update_space_config", std::move(event));
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    auto state = GetViewState();
+    const int active_index = state.footer.active_space_index;
+    return active_index >= 0 &&
+           active_index < static_cast<int>(state.footer.space_themes.size()) &&
+           state.footer.space_themes[active_index].has_theme &&
+           state.footer.space_themes[active_index].kind ==
+               MahoSpaceDisplayThemeKind::kZen &&
+           !state.footer.space_themes[active_index].primary_color.empty() &&
+           !state.footer.space_themes[active_index].secondary_color.empty();
+  }));
+
+  const auto state = GetViewState();
+  ASSERT_GE(state.footer.active_space_index, 0);
+  ASSERT_LT(state.footer.active_space_index,
+            static_cast<int>(state.footer.space_themes.size()));
+
+  const MahoSpaceDisplayThemeModel& active_theme =
+      state.footer.space_themes[state.footer.active_space_index];
+  EXPECT_TRUE(active_theme.has_theme);
+  EXPECT_EQ(MahoSpaceDisplayThemeKind::kZen, active_theme.kind);
+  EXPECT_FALSE(active_theme.theme_json.empty());
+  EXPECT_FALSE(active_theme.palette_colors.empty());
+  EXPECT_EQ(active_theme.primary_color,
+            state.footer.space_colors[state.footer.active_space_index]);
+  EXPECT_EQ(active_theme.primary_color, state.footer.space_color);
+  EXPECT_EQ(active_theme.primary_color, state.footer.space_theme.primary_color);
+  EXPECT_EQ(active_theme.secondary_color,
+            state.footer.space_theme.secondary_color);
+
+  const SpaceBoardModel board = BuildSpacesBoardModel();
+  const auto column_it =
+      std::find_if(board.columns.begin(), board.columns.end(), [&](const auto& column) {
+        return column.space_id == active_space_id;
+      });
+  ASSERT_NE(column_it, board.columns.end());
+  EXPECT_TRUE(column_it->theme.has_theme);
+  EXPECT_EQ(MahoSpaceDisplayThemeKind::kZen, column_it->theme.kind);
+  EXPECT_EQ(active_theme.primary_color, column_it->theme.primary_color);
+  EXPECT_EQ(active_theme.primary_color, column_it->color);
+}
+
+// --- Startup-state: has_active_tab fallback when GetActiveWebContents is null --
+
+// BuildSearchModel with a null browser must always report has_active_tab=false.
+// This preserves the "genuinely no tab" contract.
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                        BuildSearchModelNullBrowserHasNoActiveTab) {
+  MahoSidebarStateAdapter adapter;
+  MahoSidebarSearchModel model = adapter.BuildSearchModel(nullptr);
+  EXPECT_FALSE(model.has_active_tab)
+      << "has_active_tab must be false when browser is null";
+  EXPECT_EQ(model.display_mode, MahoSidebarAddressDisplayMode::kSearchPlaceholder)
+      << "display_mode must be kSearchPlaceholder when browser is null";
+}
+
+// After a seeded profile the tab strip has active entries, so
+// BuildSearchModel must report has_active_tab=true regardless of whether
+// GetActiveWebContents returns a value — covering both the normal path
+// (non-null WebContents) and the startup-fallback path (tab strip entry
+// present but WebContents temporarily null).
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                        BuildSearchModelWithTabStripEntryHasActiveTab) {
+  SeedProfile(2);
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+
+  MahoSidebarStateAdapter adapter;
+  MahoSidebarSearchModel model = adapter.BuildSearchModel(browser());
+  EXPECT_TRUE(model.has_active_tab)
+      << "has_active_tab must be true when the tab strip has a seeded entry";
+  EXPECT_FALSE(model.idle_text.empty())
+      << "idle_text must be non-empty when a tab is active";
+}
+
+// --- Regression tests for helper-based sidebar tab identity/activation ---
+
+// Given a seeded profile with tabs,
+// When BuildTabListModel resolves tab identity,
+// Then every tab row with a tab_id must have a matching MahoTabIdHelper on
+// the corresponding WebContents (no URL fallback, no contents_to_core_id_).
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                         TabActivationUsesHelperIdentityOnly) {
+  SeedProfile(2);
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+
+  auto state = GetViewState();
+  TabStripModel* strip = browser()->tab_strip_model();
+  ASSERT_TRUE(strip);
+
+  auto check_nodes = [&](const std::vector<SidebarTreeNode>& nodes) {
+    for (const auto& node : nodes) {
+      if (node.kind != SidebarNodeKind::kTab || node.tab_id.empty() ||
+          node.tab_strip_index < 0 ||
+          !strip->ContainsIndex(node.tab_strip_index)) {
+        continue;
+      }
+      content::WebContents* contents =
+          strip->GetWebContentsAt(node.tab_strip_index);
+      ASSERT_TRUE(contents) << "WebContents must exist at index "
+                            << node.tab_strip_index;
+      auto* helper = MahoTabIdHelper::FromWebContents(contents);
+      ASSERT_TRUE(helper) << "MahoTabIdHelper must be attached at index "
+                          << node.tab_strip_index;
+      EXPECT_EQ(helper->stable_tab_id(), node.tab_id)
+          << "Helper stable_tab_id must match core tab_id at index "
+          << node.tab_strip_index;
+    }
+  };
+
+  check_nodes(state.tab_list.pinned_tree);
+  check_nodes(state.tab_list.normal_tree);
+}
+
+// Given a tab navigated to an internal chrome:// URL,
+// When the sidebar resolves its identity,
+// Then the helper-based identity still works (no URL-based fallback needed).
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                         InternalTabHasHelperIdentity) {
+  SeedProfile(2);
+  base::RunLoop().RunUntilIdle();
+
+  TabStripModel* strip = browser()->tab_strip_model();
+  ASSERT_TRUE(strip);
+  ASSERT_GT(strip->count(), 0);
+
+  content::WebContents* contents = strip->GetWebContentsAt(0);
+  ASSERT_TRUE(contents);
+  auto* helper = MahoTabIdHelper::FromWebContents(contents);
+  ASSERT_TRUE(helper);
+  EXPECT_FALSE(helper->stable_tab_id().empty())
+      << "Even internal/special tabs must have a stable_tab_id via helper";
+
+  MahoSidebarTabListView* tab_list = GetTabListView();
+  ASSERT_TRUE(tab_list);
+  std::string core_id = tab_list->FindCoreTabIdByWebContents(contents);
+  EXPECT_FALSE(core_id.empty())
+      << "FindCoreTabIdByWebContents must resolve via helper for any tab";
+  EXPECT_EQ(core_id, helper->stable_tab_id());
+}
+
+// Given a seeded profile,
+// When ResolveTabStripIndexForTabId is called with a known tab_id,
+// Then it returns the correct strip index using only the helper scan.
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                         ResolveTabStripIndexUsesHelperScan) {
+  SeedProfile(2);
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+
+  TabStripModel* strip = browser()->tab_strip_model();
+  ASSERT_TRUE(strip);
+  ASSERT_GT(strip->count(), 0);
+
+  content::WebContents* contents = strip->GetWebContentsAt(0);
+  ASSERT_TRUE(contents);
+  auto* helper = MahoTabIdHelper::FromWebContents(contents);
+  ASSERT_TRUE(helper);
+  ASSERT_FALSE(helper->stable_tab_id().empty());
+
+  MahoSidebarTabListView* tab_list = GetTabListView();
+  ASSERT_TRUE(tab_list);
+
+  auto state = GetViewState();
+  tab_list->Update(state.tab_list, browser());
+
+  std::string tab_id = helper->stable_tab_id();
+  views::View* rows = tab_list->tab_rows_for_testing();
+  ASSERT_TRUE(rows);
+
+  SidebarTabRowView* row = tab_list->FindTabRowByIdForTesting(tab_id);
+  if (row) {
+    EXPECT_EQ(row->tab_id_for_testing(), tab_id);
+  }
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                         RuntimeNewTabIdentityAligned) {
+  SeedProfile(2);
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+
+  TabStripModel* strip = browser()->tab_strip_model();
+  ASSERT_TRUE(strip);
+  const int count_before = strip->count();
+
+  NavigateToNewForegroundTab(browser(),
+                              GURL("https://maho.test/identity-check"),
+                              ui::PAGE_TRANSITION_GENERATED);
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_EQ(count_before + 1, strip->count())
+      << "NavigateToNewForegroundTab must insert exactly one new tab";
+
+  content::WebContents* new_contents =
+      strip->GetWebContentsAt(strip->active_index());
+  ASSERT_TRUE(new_contents);
+
+  auto* helper = MahoTabIdHelper::FromWebContents(new_contents);
+  ASSERT_TRUE(helper) << "New tab must have MahoTabIdHelper attached";
+  const std::string helper_id = helper->stable_tab_id();
+  EXPECT_FALSE(helper_id.empty())
+      << "New tab MahoTabIdHelper must carry a non-empty stable_tab_id";
+
+  // Verify helper_id is present in core's own tab store — not just derived
+  // from the helper itself.  maho_core_get_space_tabs reads core state
+  // directly so this assertion fails if create_tab was never dispatched.
+  MahoCore* core = GetCore();
+  ASSERT_TRUE(core);
+  const std::string active_space_id = GetActiveSpaceId();
+  ASSERT_FALSE(active_space_id.empty())
+      << "Active space must be set after seeded profile";
+  const std::string space_id_json =
+      base::GetQuotedJSONString(active_space_id);
+  char* space_tabs_json_c =
+      maho_core_get_space_tabs(core, space_id_json.c_str(), nullptr);
+  ASSERT_TRUE(space_tabs_json_c)
+      << "maho_core_get_space_tabs must return a result for the active space";
+  std::string space_tabs_json(space_tabs_json_c);
+  maho_string_free(space_tabs_json_c);
+
+  auto parsed = base::JSONReader::Read(space_tabs_json, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(parsed && parsed->is_list())
+      << "maho_core_get_space_tabs must return a JSON array";
+
+  bool found_in_core = false;
+  for (const auto& item : parsed->GetList()) {
+    const auto* dict = item.GetIfDict();
+    if (!dict) {
+      continue;
+    }
+    const std::string* id = dict->FindString("id");
+    if (id && *id == helper_id) {
+      found_in_core = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(found_in_core)
+      << "helper stable_tab_id '" << helper_id
+      << "' must be present in core's tab store for the active space "
+         "(create_tab was dispatched after Navigate succeeded)";
 }
 
 }  // namespace

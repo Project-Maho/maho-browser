@@ -89,8 +89,10 @@ class MahoSidebarSearchView : public views::View,
   void UpdateIdleSurface();
   void UpdateSearchChrome();
   bool LooksLikeUrl(const std::string& input) const;
+  bool ShouldToggleUtilityPanelForEvent(const ui::Event& event) const;
   void OnIdleButtonPressed(const ui::Event& event);
   void OnIdleButtonHoverChanged(bool hover_visible);
+  void ToggleUtilityPanel();
   views::Widget* ShowUtilityPanel();
   void SetUtilityPanelWidget(views::Widget* widget);
   void CloseUtilityPanel();

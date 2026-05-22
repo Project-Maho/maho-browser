@@ -56,6 +56,15 @@
   E_CPONLY(kMahoColorFavoritesEmptyBadgeBorder) \
   E_CPONLY(kMahoColorFavoritesEmptyBadgeIcon) \
   E_CPONLY(kMahoColorFavoritesEmptyCloseGlyph) \
+  /* Library Content (shared across Archive, Downloads, Boosts panels) */ \
+  E_CPONLY(kMahoColorLibraryContentBackground) \
+  E_CPONLY(kMahoColorLibraryListRowBackground) \
+  E_CPONLY(kMahoColorLibraryRowHover) \
+  E_CPONLY(kMahoColorLibraryRowSelected) \
+  E_CPONLY(kMahoColorLibrarySectionHeaderText) \
+  E_CPONLY(kMahoColorLibraryGlyphBorder) \
+  E_CPONLY(kMahoColorLibrarySearchPillBackground) \
+  E_CPONLY(kMahoColorLibraryProgressFill) \
   /* Archive */ \
   E_CPONLY(kMahoColorArchivePanelBackground) \
   E_CPONLY(kMahoColorArchiveControlBackground) \

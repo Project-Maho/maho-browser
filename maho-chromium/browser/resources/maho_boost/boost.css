@@ -5,3 +5,9 @@ body {
   background: var(--color-sys-base-container, #1a1a2e);
   color: var(--color-sys-on-surface, #e0e0e0);
 }
+
+maho-boost-app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}

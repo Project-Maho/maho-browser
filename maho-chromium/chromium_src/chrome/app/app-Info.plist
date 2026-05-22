@@ -1,0 +1,11 @@
+<!-- Copyright 2026 Maho Browser. All rights reserved. -->
+<!-- chromium_src overlay reference for app-Info.plist -->
+<!--
+  Documents the upstream patch applied to app-Info.plist:
+
+  1. Add CrProductDirName=Maho before CFBundleExecutable.
+     This sets the user data directory to ~/Library/Application Support/Maho/
+     instead of the Chromium default ~/Library/Application Support/Chromium/.
+
+  Applied via: build/scripts/apply_chromium_src_overrides.py
+-->

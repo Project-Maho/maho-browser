@@ -1,3 +1,5 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+
 #include "maho/browser/ui/webui/maho_space_create/maho_space_create_ui.h"
 
 #include <memory>
@@ -9,7 +11,6 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
-#include "content/public/common/url_constants.h"
 #include "maho/browser/ui/webui/maho_space_create/maho_space_create_page_handler.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "ui/webui/webui_util.h"
@@ -50,6 +51,7 @@ void MahoSpaceCreateUI::CreatePageHandler(
   if (!browser) {
     return;
   }
+
   page_handler_ = std::make_unique<MahoSpaceCreatePageHandler>(
       std::move(receiver), std::move(page), browser,
       web_ui()->GetWebContents());

@@ -7,10 +7,111 @@
 #include <string>
 #include <vector>
 
+#include "base/values.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "url/gurl.h"
 
 namespace maho {
+
+// ---------------------------------------------------------------------------
+// MahoDisplayPolicy — URL-aware display normalization used consistently by
+// sidebar tab rows, favorites, subtitles/tooltips, and search pill text.
+//
+// Two concerns are deliberately separated:
+//   Data layer  — ghost/url-less tabs must never enter core state from the
+//                 Chromium path (enforced in maho_sidebar_state_adapter.cc and
+//                 maho_core.rs).
+//   Display layer — legitimate live chrome://newtab tabs are representable but
+//                   must never surface raw internal placeholder text in the UI.
+// ---------------------------------------------------------------------------
+namespace MahoDisplayPolicy {
+
+inline bool IsNtpOrBlankUrl(const GURL& url) {
+  if (!url.is_valid() || url.is_empty()) {
+    return true;
+  }
+  if (url.SchemeIs("about")) {
+    return true;
+  }
+  if (url.SchemeIs("chrome") && url.host() == "newtab") {
+    return true;
+  }
+  return false;
+}
+
+// Returns true for URLs that represent internal browser state rather than
+// navigable web content: NTP, about: pages, chrome:// surfaces, devtools://,
+// chrome-extension://, chrome-untrusted://, and chrome-native:// pages.
+//
+// Used in two enforcement points:
+//   Opener-side  — BrowserView::ShowMahoCommandOverlayForCurrentTab() must not
+//                  pre-fill the textfield with a raw internal URL.
+//   Overlay-side — InitializeCurrentTabSeedState() must not enter seeded state
+//                  for internal pages that arrive (e.g. via history seeds).
+inline bool IsInternalBrowserPage(const GURL& url) {
+  if (!url.is_valid() || url.is_empty()) {
+    return true;
+  }
+  if (url.SchemeIs("about")) {
+    return true;
+  }
+  if (url.SchemeIs("chrome")) {
+    return true;
+  }
+  if (url.SchemeIs("devtools")) {
+    return true;
+  }
+  if (url.SchemeIs("chrome-extension")) {
+    return true;
+  }
+  if (url.SchemeIs("chrome-untrusted")) {
+    return true;
+  }
+  if (url.SchemeIs("chrome-native")) {
+    return true;
+  }
+  return false;
+}
+
+inline bool IsGhostTab(const std::string& url, const std::u16string& title) {
+  return url.empty() && title.empty();
+}
+
+inline bool IsSentinelText(const std::u16string& text) {
+  return text == u"newtab" || text == u"New Tab" || text == u"about:blank" ||
+         text == u"chrome://newtab/";
+}
+
+// Returns a clean display title for a tab row or favorite tile.
+//
+// Priority order:
+//   1. |custom_title| if non-empty AND (URL is not NTP/blank OR custom_title
+//      is not a raw sentinel).  A real user custom title on a real page is
+//      always preserved even if it happens to read "newtab".
+//   2. |title| if non-empty and not a raw NTP/blank sentinel string.
+//   3. "New Tab" when the URL is an NTP/blank origin — live NTP tabs must still
+//      render a clean user-visible label.
+//   4. Empty string — caller falls back to host or its own placeholder.
+inline std::u16string ResolveTabDisplayText(
+    const GURL& url,
+    const std::u16string& title,
+    const std::u16string& custom_title = std::u16string()) {
+  const bool is_ntp = IsNtpOrBlankUrl(url);
+  if (!custom_title.empty()) {
+    if (!is_ntp || !IsSentinelText(custom_title)) {
+      return custom_title;
+    }
+  }
+  if (!title.empty() && !IsSentinelText(title)) {
+    return title;
+  }
+  if (is_ntp) {
+    return u"New Tab";
+  }
+  return std::u16string();
+}
+
+}  // namespace MahoDisplayPolicy
 
 enum class MahoSidebarAddressDisplayMode {
   kSearchPlaceholder,
@@ -100,6 +201,7 @@ struct SidebarTreeNode {
   bool is_active = false;
   bool is_pinned = false;
   bool is_favorite = false;
+  std::string url;          // Raw URL string; used by display policy helpers.
   std::u16string custom_title;
   std::u16string title;
   std::u16string host;
@@ -133,29 +235,6 @@ struct SidebarTreeNode {
   int depth = 0;
 };
 
-// Legacy flat row kept for compatibility during transition, wraps tree node.
-// TODO(E1-cutover): Remove struct once flat lists are eliminated from
-// MahoSidebarTabListModel. Only used by BuildTreeSection and flat fallback.
-struct MahoSidebarTabRowModel {
-  MahoSidebarTabRowModel();
-  MahoSidebarTabRowModel(const MahoSidebarTabRowModel&);
-  MahoSidebarTabRowModel(MahoSidebarTabRowModel&&);
-  MahoSidebarTabRowModel& operator=(const MahoSidebarTabRowModel&);
-  MahoSidebarTabRowModel& operator=(MahoSidebarTabRowModel&&);
-  ~MahoSidebarTabRowModel();
-
-  int index;
-  bool is_active;
-  bool is_pinned;
-  MahoSidebarTabSection section;
-  std::u16string title;
-  std::u16string host;
-  std::string tab_id;  // Stable ID from core.
-  bool is_loading = false;
-  bool is_audible = false;
-  bool is_muted = false;
-};
-
 struct MahoSidebarActiveTabModel {
   MahoSidebarActiveTabModel();
   MahoSidebarActiveTabModel(const MahoSidebarActiveTabModel&);
@@ -181,15 +260,6 @@ struct MahoSidebarTabListModel {
   // Tree-based sections: top-level nodes for pinned and normal.
   std::vector<SidebarTreeNode> pinned_tree;
   std::vector<SidebarTreeNode> normal_tree;
-
-  // Flat lists kept for backward compat (populated alongside trees).
-  // TODO(E1-cutover): Remove once all consumers read from pinned_tree/normal_tree.
-  // Consumers: tab_list_view (model acceptance, contents_to_core_id map,
-  //   drop-lane guard, has_flat gate, flat rendering fallback, prune cache,
-  //   FindCoreTabIdByTabStripIndex fallback), maho_test_ui (debug display),
-  //   interactive_test_base, dnd tests, contract test.
-  std::vector<MahoSidebarTabRowModel> pinned_tabs;
-  std::vector<MahoSidebarTabRowModel> tabs;
 
   // Active space ID (needed for ShellEvent dispatch).
   std::string active_space_id;
@@ -230,6 +300,45 @@ struct MahoSidebarFooterUpdatePillModel {
   std::u16string accessible_label;
 };
 
+enum class MahoSpaceDisplayThemeKind {
+  kLegacyColor,
+  kSolid,
+  kGradient,
+  kZen,
+};
+
+// Canonical per-space theme payload for display-only consumers.
+// `theme_json` preserves the source theme object so downstream surfaces do not
+// lose fidelity at the model boundary, while primary/secondary/palette colors
+// provide inexpensive render-ready swatches for native views.
+struct MahoSpaceDisplayThemeModel {
+  MahoSpaceDisplayThemeModel();
+  MahoSpaceDisplayThemeModel(const MahoSpaceDisplayThemeModel&);
+  MahoSpaceDisplayThemeModel(MahoSpaceDisplayThemeModel&&);
+  MahoSpaceDisplayThemeModel& operator=(const MahoSpaceDisplayThemeModel&);
+  MahoSpaceDisplayThemeModel& operator=(MahoSpaceDisplayThemeModel&&);
+  ~MahoSpaceDisplayThemeModel();
+
+  bool has_theme = false;
+  MahoSpaceDisplayThemeKind kind = MahoSpaceDisplayThemeKind::kLegacyColor;
+  std::string theme_json;
+  std::string primary_color;
+  std::string secondary_color;
+  std::vector<std::string> palette_colors;
+  float opacity = 1.0f;
+  float texture = 0.0f;
+  float grain = 0.0f;
+};
+
+MahoSpaceDisplayThemeModel BuildMahoSpaceDisplayThemeModel(
+    const base::DictValue& space_dict);
+std::string GetMahoSpaceDisplayPrimaryColor(
+    const MahoSpaceDisplayThemeModel& theme,
+    const std::string& fallback_color);
+std::string GetMahoSpaceDisplaySecondaryColor(
+    const MahoSpaceDisplayThemeModel& theme,
+    const std::string& fallback_color);
+
 struct MahoSidebarFooterModel {
   MahoSidebarFooterModel();
   MahoSidebarFooterModel(const MahoSidebarFooterModel&);
@@ -242,9 +351,11 @@ struct MahoSidebarFooterModel {
   int space_count;
   int active_space_index;
   std::string space_color;
+  MahoSpaceDisplayThemeModel space_theme;
   std::vector<std::string> space_icons;    // emoji strings per space
   std::vector<std::string> space_names;    // display names per space
   std::vector<std::string> space_colors;   // hex colors per space
+  std::vector<MahoSpaceDisplayThemeModel> space_themes;
   std::vector<std::string> space_ids;      // space IDs in display order
   bool can_open_space_controls;
   bool can_create_space;

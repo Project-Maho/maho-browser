@@ -4,13 +4,14 @@
 #define MAHO_BROWSER_UI_WEBUI_MAHO_BOOST_MAHO_BOOST_UI_H_
 
 #include <memory>
+#include <string_view>
 
-#include "content/public/browser/webui_config.h"
+#include "chrome/browser/ui/webui/top_chrome/top_chrome_web_ui_controller.h"
+#include "chrome/browser/ui/webui/top_chrome/top_chrome_webui_config.h"
 #include "maho/browser/ui/webui/maho_boost/maho_boost.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "ui/webui/mojo_web_ui_controller.h"
 
 class MahoBoostPageHandler;
 
@@ -20,12 +21,12 @@ class WebUI;
 
 class MahoBoostUI;
 
-class MahoBoostUIConfig : public content::DefaultWebUIConfig<MahoBoostUI> {
+class MahoBoostUIConfig : public DefaultTopChromeWebUIConfig<MahoBoostUI> {
  public:
   MahoBoostUIConfig();
 };
 
-class MahoBoostUI : public ui::MojoWebUIController,
+class MahoBoostUI : public TopChromeWebUIController,
                     public maho_boost::mojom::PageHandlerFactory {
  public:
   explicit MahoBoostUI(content::WebUI* web_ui);
@@ -35,6 +36,10 @@ class MahoBoostUI : public ui::MojoWebUIController,
 
   void BindInterface(
       mojo::PendingReceiver<maho_boost::mojom::PageHandlerFactory> receiver);
+
+  static constexpr std::string_view GetWebUIName() {
+    return "MahoBoost";
+  }
 
  private:
   WEB_UI_CONTROLLER_TYPE_DECL();

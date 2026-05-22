@@ -17,17 +17,25 @@
 #include "ui/base/clipboard/clipboard_format_type.h"
 #include "ui/base/dragdrop/drop_target_event.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/views/context_menu_controller.h"
 #include "ui/views/view.h"
 #include "url/gurl.h"
 
 class Browser;
+class MahoFavoritesContextMenu;
+
+namespace ui {
+class SimpleMenuModel;
+}
 
 namespace views {
 class Button;
 class ImageView;
 class Label;
+class MenuRunner;
 class View;
 }  // namespace views
 
@@ -86,6 +94,12 @@ class MahoSidebarFavoritesGridView : public views::View {
     return index < kTileCount ? tile_views_[index].get() : nullptr;
   }
 
+  void ShowTileContextMenu(size_t index,
+                           const gfx::Point& point,
+                           ui::mojom::MenuSourceType source_type);
+
+  void MarkDropAccepted(const std::string& tab_id);
+
  private:
   struct LayoutSpec {
     LayoutSpec();
@@ -99,8 +113,7 @@ class MahoSidebarFavoritesGridView : public views::View {
   };
 
   void OnTilePressed(size_t index);
-  void MarkDropAccepted();
-  void OnTileDragDone(size_t index);
+  void OnTileDragDone(const std::string& tab_id);
   int ResolveDropIndex(const gfx::Point& point,
                        const std::string& source_tab_id,
                        bool source_is_favorite) const;
@@ -125,12 +138,17 @@ class MahoSidebarFavoritesGridView : public views::View {
   std::array<raw_ptr<views::ImageView>, kTileCount> tile_icons_ = {};
   std::array<raw_ptr<views::Label>, kTileCount> tile_labels_ = {};
   std::array<GURL, kTileCount> tile_urls_ = {};
+  std::array<std::u16string, kTileCount> tile_titles_ = {};
   std::array<std::string, kTileCount> tile_tab_ids_ = {};
   std::vector<raw_ptr<views::View>> row_views_;
   LayoutSpec current_layout_spec_;
   bool drag_over_drop_target_ = false;
   bool drag_reveal_active_ = false;
-  bool drag_drop_accepted_ = false;
+  std::string drag_accepted_tab_id_;
+
+  std::unique_ptr<MahoFavoritesContextMenu> active_context_menu_;
+  std::unique_ptr<ui::SimpleMenuModel> active_menu_model_;
+  std::unique_ptr<views::MenuRunner> active_menu_runner_;
 
   // --- Animation infrastructure ---
   std::array<gfx::Rect, kTileCount> snapshot_bounds_ = {};

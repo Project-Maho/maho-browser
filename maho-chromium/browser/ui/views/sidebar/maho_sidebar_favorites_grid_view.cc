@@ -23,16 +23,19 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
 #include "components/vector_icons/vector_icons.h"
+#include "maho/browser/ui/context_menu/maho_favorites_context_menu.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_drag_util.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_drop_planner.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/events/event_constants.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/mojom/menu_source_type.mojom-shared.h"
 #include "cc/paint/path_effect.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/base/window_open_disposition.h"
@@ -49,6 +52,8 @@
 #include "cc/paint/paint_flags.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
+#include "ui/views/context_menu_controller.h"
+#include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/paint_info.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/image_view.h"
@@ -216,18 +221,22 @@ BEGIN_METADATA(EmptyFavoritesPlaceholderView)
 END_METADATA
 
 class FavoriteTileButton : public views::Button,
-                           public views::DragController {
+                           public views::DragController,
+                           public views::ContextMenuController {
  public:
   FavoriteTileButton(views::Button::PressedCallback callback,
-                     base::RepeatingClosure drag_done_callback,
+                     base::RepeatingCallback<void(const std::string&)> drag_done_callback,
                      raw_ptr<MahoSidebarFavoritesGridView> drop_target,
-                     std::string tab_id)
+                     std::string tab_id,
+                     size_t tile_index)
       : views::Button(std::move(callback)),
         drag_done_callback_(std::move(drag_done_callback)),
         drop_target_(drop_target),
-        tab_id_(std::move(tab_id)) {
+        tab_id_(std::move(tab_id)),
+        tile_index_(tile_index) {
     UpdateAppearance();
     set_drag_controller(this);
+    set_context_menu_controller(this);
   }
 
   void OnThemeChanged() override {
@@ -251,9 +260,10 @@ class FavoriteTileButton : public views::Button,
     if (tab_id_.empty()) {
       return;
     }
+    dragging_tab_id_ = tab_id_;
     SidebarDragPayload payload;
     payload.node_kind = SidebarNodeKind::kTab;
-    payload.node_id = tab_id_;
+    payload.node_id = dragging_tab_id_;
     payload.origin = SidebarDragOrigin::kFavorites;
     WriteMahoDragData(payload, data);
     data->provider().SetDragImage(CreateSidebarDragImage(sender),
@@ -281,14 +291,23 @@ class FavoriteTileButton : public views::Button,
 
   void set_tab_id(std::string tab_id) { tab_id_ = std::move(tab_id); }
 
+  void ShowContextMenuForViewImpl(views::View* source,
+                                  const gfx::Point& point,
+                                  ui::mojom::MenuSourceType source_type) override {
+    if (drop_target_) {
+      drop_target_->ShowTileContextMenu(tile_index_, point, source_type);
+    }
+  }
+
   void OnDragDone() override {
     views::Button::OnDragDone();
     if (layer()) {
       layer()->SetOpacity(1.f);
     }
     if (drag_done_callback_) {
-      drag_done_callback_.Run();
+      drag_done_callback_.Run(dragging_tab_id_);
     }
+    dragging_tab_id_.clear();
   }
 
   bool GetDropFormats(int* formats,
@@ -341,9 +360,11 @@ class FavoriteTileButton : public views::Button,
         sidebar_layout::kFavoriteTileCornerRadiusDp));
   }
 
-  base::RepeatingClosure drag_done_callback_;
+  base::RepeatingCallback<void(const std::string&)> drag_done_callback_;
   raw_ptr<MahoSidebarFavoritesGridView> drop_target_ = nullptr;
   std::string tab_id_;
+  std::string dragging_tab_id_;
+  size_t tile_index_ = 0;
 };
 
 struct FavoriteTileSpec {
@@ -354,21 +375,21 @@ struct FavoriteTileSpec {
 };
 
 std::u16string BuildFavoriteText(const MahoSidebarFavoriteItemModel& item) {
-  if (!item.title.empty()) {
-    return item.title;
+  const std::u16string resolved = MahoDisplayPolicy::ResolveTabDisplayText(
+      item.url, item.title);
+  if (!resolved.empty()) {
+    return resolved;
   }
-  if (item.url.is_valid()) {
-    if (!item.url.host().empty()) {
-      std::string host(item.url.host());
-      if (host.rfind("www.", 0) == 0) {
-        host.erase(0, 4);
-      }
-      return base::UTF8ToUTF16(host);
+  if (item.url.is_valid() && !item.url.host().empty() &&
+      !MahoDisplayPolicy::IsNtpOrBlankUrl(item.url)) {
+    std::string host(item.url.host());
+    if (host.rfind("www.", 0) == 0) {
+      host.erase(0, 4);
     }
-    return base::UTF8ToUTF16(item.url.possibly_invalid_spec());
+    return base::UTF8ToUTF16(host);
   }
-  if (!item.subtitle.empty()) {
-    return item.subtitle;
+  if (item.url.is_valid() && !MahoDisplayPolicy::IsNtpOrBlankUrl(item.url)) {
+    return base::UTF8ToUTF16(item.url.possibly_invalid_spec());
   }
   return std::u16string();
 }
@@ -460,9 +481,10 @@ MahoSidebarFavoritesGridView::MahoSidebarFavoritesGridView(Browser* browser)
         base::BindRepeating(&MahoSidebarFavoritesGridView::OnTilePressed,
                             weak_factory_.GetWeakPtr(), index),
         base::BindRepeating(&MahoSidebarFavoritesGridView::OnTileDragDone,
-                            weak_factory_.GetWeakPtr(), index),
+                            weak_factory_.GetWeakPtr()),
         this,
-        std::string());
+        std::string(),
+        index);
     tile->SetPreferredSize(
         gfx::Size(1, sidebar_layout::kFavoriteTileHeightDp));
     tile->SetPaintToLayer();
@@ -543,6 +565,7 @@ void MahoSidebarFavoritesGridView::Update(
     for (size_t index = 0; index < tile_views_.size(); ++index) {
       tile_views_[index]->SetVisible(false);
       tile_urls_[index] = GURL();
+      tile_titles_[index] = std::u16string();
       tile_tab_ids_[index].clear();
     }
     return;
@@ -580,6 +603,7 @@ void MahoSidebarFavoritesGridView::Update(
   for (size_t index = 0; index < tile_views_.size(); ++index) {
     const bool has_item = specs[index].url.is_valid();
     tile_urls_[index] = has_item ? specs[index].url : GURL();
+    tile_titles_[index] = has_item ? specs[index].text : std::u16string();
     tile_tab_ids_[index] = has_item ? specs[index].tab_id : std::string();
     tile_views_[index]->SetVisible(has_item);
     tile_views_[index]->SetEnabled(has_item);
@@ -878,20 +902,22 @@ views::View::DropCallback MahoSidebarFavoritesGridView::GetDropCallback(
         }
         output_drag_op = ui::mojom::DragOperation::kMove;
         if (weak_grid) {
-          weak_grid->MarkDropAccepted();
+          weak_grid->MarkDropAccepted(payload.node_id);
         }
 
-        if (payload.origin == SidebarDragOrigin::kFavorites) {
+        const SidebarDropPlan plan = PlanFavoritesGridDrop(payload);
+        ExecuteDropPlan(plan);
+
+        const bool from_favorites =
+            (payload.origin == SidebarDragOrigin::kFavorites);
+        if (from_favorites) {
           DispatchShellEventEx("reorder_favorite", {
               ShellEventField("tab_id", payload.node_id),
               ShellEventField("new_index", target_index)});
-        } else {
-          DispatchShellEvent("favorite_tab", {{"tab_id", payload.node_id}});
-          if (target_index < static_cast<int>(favorite_count)) {
-            DispatchShellEventEx("reorder_favorite", {
-                ShellEventField("tab_id", payload.node_id),
-                ShellEventField("new_index", target_index)});
-          }
+        } else if (target_index < static_cast<int>(favorite_count)) {
+          DispatchShellEventEx("reorder_favorite", {
+              ShellEventField("tab_id", payload.node_id),
+              ShellEventField("new_index", target_index)});
         }
       },
       target_index, favorite_count, weak_factory_.GetWeakPtr());
@@ -922,7 +948,6 @@ void MahoSidebarFavoritesGridView::CollapseFromDrag() {
 void MahoSidebarFavoritesGridView::OnDragExited() {
   current_drag_preview_index_ = -1;
   drag_over_drop_target_ = false;
-  drag_drop_accepted_ = false;
   SetBorder(nullptr);
   UpdateEmptyStateHighlight(false);
   for (size_t i = 0; i < kTileCount; ++i) {
@@ -1064,22 +1089,17 @@ size_t MahoSidebarFavoritesGridView::GetVisibleFavoriteCount() const {
                        [](const GURL& url) { return url.is_valid(); });
 }
 
-void MahoSidebarFavoritesGridView::MarkDropAccepted() {
-  drag_drop_accepted_ = true;
+void MahoSidebarFavoritesGridView::MarkDropAccepted(const std::string& tab_id) {
+  drag_accepted_tab_id_ = tab_id;
 }
 
-void MahoSidebarFavoritesGridView::OnTileDragDone(size_t index) {
-  if (index >= tile_tab_ids_.size()) {
-    return;
-  }
-
-  const std::string& tab_id = tile_tab_ids_[index];
+void MahoSidebarFavoritesGridView::OnTileDragDone(const std::string& tab_id) {
   if (tab_id.empty()) {
     return;
   }
 
-  const bool accepted = drag_drop_accepted_;
-  drag_drop_accepted_ = false;
+  const bool accepted = (drag_accepted_tab_id_ == tab_id);
+  drag_accepted_tab_id_.clear();
 
   const gfx::Point screen_point = display::Screen::Get()->GetCursorScreenPoint();
   if (GetBoundsInScreen().Contains(screen_point) || accepted) {
@@ -1099,6 +1119,33 @@ void MahoSidebarFavoritesGridView::OnTilePressed(size_t index) {
                         WindowOpenDisposition::CURRENT_TAB,
                         ui::PAGE_TRANSITION_AUTO_BOOKMARK, false),
                     base::NullCallback());
+}
+
+void MahoSidebarFavoritesGridView::ShowTileContextMenu(
+    size_t index,
+    const gfx::Point& point,
+    ui::mojom::MenuSourceType source_type) {
+  if (!browser_ || index >= kTileCount) {
+    return;
+  }
+  if (!tile_urls_[index].is_valid() && tile_tab_ids_[index].empty()) {
+    return;
+  }
+
+  active_context_menu_ = std::make_unique<MahoFavoritesContextMenu>(
+      browser_, tile_urls_[index], tile_titles_[index], tile_tab_ids_[index]);
+  active_menu_model_ = active_context_menu_->BuildMenuModel();
+  active_menu_runner_ = std::make_unique<views::MenuRunner>(
+      active_menu_model_.get(),
+      views::MenuRunner::CONTEXT_MENU | views::MenuRunner::IS_NESTED);
+
+  views::View* tile = tile_views_[index];
+  active_menu_runner_->RunMenuAt(
+      tile ? tile->GetWidget() : GetWidget(),
+      nullptr,
+      gfx::Rect(point, gfx::Size()),
+      views::MenuAnchorPosition::kTopLeft,
+      source_type);
 }
 
 void MahoSidebarFavoritesGridView::SnapshotCurrentBounds() {

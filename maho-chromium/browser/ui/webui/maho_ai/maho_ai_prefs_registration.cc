@@ -31,6 +31,7 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterDictionaryPref(ai_prefs::kSessionEventLogs);
   registry->RegisterStringPref(ai_prefs::kRuntimeEndpoint, std::string());
   registry->RegisterStringPref(ai_prefs::kRuntimeModel, std::string());
+  registry->RegisterStringPref(ai_prefs::kRuntimeCommand, std::string());
 }
 
 }  // namespace maho::ai

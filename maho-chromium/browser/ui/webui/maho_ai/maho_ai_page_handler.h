@@ -55,6 +55,7 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   void GetConnectionState(GetConnectionStateCallback callback) override;
   void GetSessionList(GetSessionListCallback callback) override;
   void StartSession(const std::optional<std::string>& initial_prompt,
+                    maho_ai::mojom::InteractionMode mode,
                     StartSessionCallback callback) override;
   void ResumeSession(const std::string& session_id,
                      ResumeSessionCallback callback) override;
@@ -63,7 +64,9 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
                          uint32_t limit,
                          GetSessionHistoryCallback callback) override;
   void SubmitPrompt(const std::string& session_id,
-                    const std::string& prompt) override;
+                    const std::string& prompt,
+                    bool attach_browser_context,
+                    maho_ai::mojom::InteractionMode mode) override;
   void CancelTurn(const std::string& session_id) override;
   void RespondToApproval(const std::string& session_id,
                          const std::string& approval_id,

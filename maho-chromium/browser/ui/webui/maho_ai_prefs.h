@@ -27,6 +27,7 @@ inline constexpr char kSessionEventLogs[] =
     "maho.ai.session_event_logs";
 inline constexpr char kRuntimeEndpoint[] = "maho.ai.runtime_endpoint";
 inline constexpr char kRuntimeModel[] = "maho.ai.runtime_model";
+inline constexpr char kRuntimeCommand[] = "maho.ai.runtime_command";
 
 }  // namespace maho::ai_prefs
 

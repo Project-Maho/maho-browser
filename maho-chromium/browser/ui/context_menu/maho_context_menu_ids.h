@@ -7,7 +7,7 @@
 // Range 57000-57099 is reserved for context menu commands.
 // (56000-56099 is used by keyboard shortcuts.)
 
-// Tab context menu: 57000-57019
+// Tab context menu: 57000-57024
 enum MahoTabContextMenuCommand {
   IDC_MAHO_TAB_CLOSE = 57000,
   IDC_MAHO_TAB_CLOSE_OTHERS = 57001,
@@ -26,6 +26,16 @@ enum MahoTabContextMenuCommand {
   IDC_MAHO_TAB_FREEZE = 57014,
   IDC_MAHO_TAB_UNFREEZE = 57015,
   IDC_MAHO_TAB_OPEN_SPLIT = 57016,
+  // Customize Page submenu: 57017-57019
+  IDC_MAHO_TAB_CUSTOMIZE_PAGE = 57017,
+  IDC_MAHO_TAB_BOOST_MY_BOOST = 57018,
+  IDC_MAHO_TAB_BOOST_EDIT = 57019,
+  // Extended tab actions: 57020-57024
+  IDC_MAHO_TAB_SHARE = 57020,
+  IDC_MAHO_TAB_CHANGE_ICON = 57021,
+  IDC_MAHO_TAB_RENAME = 57022,
+  IDC_MAHO_TAB_ARCHIVE = 57023,
+  IDC_MAHO_TAB_ARCHIVE_BELOW = 57024,
 };
 
 // Address bar context menu: 57020-57029
@@ -82,6 +92,7 @@ enum MahoFolderContextMenuCommand {
   IDC_MAHO_FOLDER_UNPIN = 57072,
   IDC_MAHO_FOLDER_NEW_TAB = 57073,
   IDC_MAHO_FOLDER_DELETE = 57074,
+  IDC_MAHO_FOLDER_MOVE_TO_ROOT = 57075,
 };
 
 // Dynamic "Move Tab to Space" submenu: 57200-57299

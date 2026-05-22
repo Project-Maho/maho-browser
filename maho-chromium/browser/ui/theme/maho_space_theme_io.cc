@@ -16,6 +16,83 @@ namespace maho_theme {
 
 namespace {
 
+bool ValidateColorStop(const base::DictValue& entry) {
+  std::optional<bool> is_primary = entry.FindBool("isPrimary");
+  std::optional<bool> is_custom = entry.FindBool("isCustom");
+  if (!is_primary.has_value() || !is_custom.has_value()) {
+    return false;
+  }
+
+  bool has_hsb = entry.FindDouble("hue") && entry.FindDouble("saturation") &&
+                 entry.FindDouble("brightness");
+  const base::Value* c_val = entry.Find("c");
+  if (!has_hsb && !c_val) {
+    return false;
+  }
+  if (c_val) {
+    if (c_val->is_string()) {
+      if (c_val->GetString().empty()) {
+        return false;
+      }
+    } else if (c_val->is_list()) {
+      const auto& c_list = c_val->GetList();
+      if (c_list.size() != 3) {
+        return false;
+      }
+      for (const auto& elem : c_list) {
+        if (!elem.is_int() && !elem.is_double()) {
+          return false;
+        }
+      }
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+static constexpr const char* kKnownHarmonies[] = {
+    "single_analogous", "analogous",       "complementary",
+    "triadic",          "split_complementary", "custom",
+    "floating",
+};
+
+static constexpr const char* kKnownSchemes[] = {"auto", "light", "dark"};
+
+bool ValidateHarmony(const base::DictValue& dict) {
+  const std::string* harmony = dict.FindString("harmony");
+  if (!harmony) {
+    return true;
+  }
+  bool known = false;
+  for (const char* h : kKnownHarmonies) {
+    if (*harmony == h) {
+      known = true;
+      break;
+    }
+  }
+  if (!known) {
+    return false;
+  }
+  if (*harmony == "floating") {
+    const std::string* scheme = dict.FindString("scheme");
+    if (!scheme) {
+      return false;
+    }
+    bool valid_scheme = false;
+    for (const char* s : kKnownSchemes) {
+      if (*scheme == s) {
+        valid_scheme = true;
+        break;
+      }
+    }
+    if (!valid_scheme) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool ValidateThemeValue(const base::Value& theme_value) {
   if (!theme_value.is_dict()) {
     return false;
@@ -23,7 +100,8 @@ bool ValidateThemeValue(const base::Value& theme_value) {
 
   const auto& dict = theme_value.GetDict();
   const std::string* type = dict.FindString("type");
-  if (!type || (*type != "solid" && *type != "gradient")) {
+  if (!type ||
+      (*type != "solid" && *type != "gradient" && *type != "zen")) {
     return false;
   }
 
@@ -31,15 +109,27 @@ bool ValidateThemeValue(const base::Value& theme_value) {
     const auto* color_dict = dict.FindDict("color");
     return color_dict && color_dict->FindDouble("hue") &&
            color_dict->FindDouble("saturation") &&
-           color_dict->FindDouble("brightness");
+           color_dict->FindDouble("brightness") &&
+           color_dict->FindDouble("grain");
   }
 
   const auto* gradient_colors = dict.FindList("gradientColors");
   if (!gradient_colors || gradient_colors->empty()) {
     return false;
   }
-  return dict.FindString("harmony") && dict.FindDouble("opacity") &&
-         dict.FindDouble("texture");
+
+  for (const auto& stop : *gradient_colors) {
+    const auto* entry = stop.GetIfDict();
+    if (!entry || !ValidateColorStop(*entry)) {
+      return false;
+    }
+  }
+
+  if (!dict.FindDouble("opacity") || !dict.FindDouble("texture")) {
+    return false;
+  }
+
+  return ValidateHarmony(dict);
 }
 
 std::optional<std::string> ValidateThemeJson(const std::string& contents) {
@@ -141,7 +231,7 @@ bool ApplyThemeJsonToSpace(MahoCore* core,
   event.Set("kind", "update_space_config");
   event.Set("changes", std::move(changes));
   std::string event_json;
-  base::JSONWriter::Write(event, &event_json);
+  base::JSONWriter::Write(base::Value(std::move(event)), &event_json);
   char* result = maho_core_handle_event(core, event_json.c_str());
   if (result) {
     maho_string_free(result);

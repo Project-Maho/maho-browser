@@ -1,5 +1,7 @@
 import {
+  InteractionMode,
   PageCallbackRouter,
+  PageHandlerFactory,
   PageHandlerRemote,
   RuntimeConnectionState,
   RuntimeEvent,
@@ -9,11 +11,13 @@ import {
 import {
   AppState,
   createInitialState,
+  getLastBrowserContext,
   isRenderableTimelineEvent,
   TimelineEntry,
 } from './types.js';
-
-type Listener = (state: AppState) => void;
+import {notifyListeners} from '../maho_common/react/store_utils.js';
+import type {Listener} from '../maho_common/react/store_utils.js';
+import {bindMojoPageHandler} from '../maho_common/react/use_mojo.js';
 
 function cloneState(state: AppState): AppState {
   return {
@@ -30,6 +34,7 @@ function cloneState(state: AppState): AppState {
     selectedInspector: {...state.selectedInspector},
     composer: {...state.composer},
     turnPendingBySessionId: {...state.turnPendingBySessionId},
+    lastContextBySessionId: {...state.lastContextBySessionId},
   };
 }
 
@@ -37,6 +42,12 @@ function sortSessionIds(sessionsById: AppState['sessionsById']): string[] {
   return Object.values(sessionsById)
       .sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt))
       .map(session => session.sessionId);
+}
+
+export function createMahoAiStore(): MahoAiStore {
+  const {router, handler} = bindMojoPageHandler(
+      PageCallbackRouter, PageHandlerRemote, PageHandlerFactory);
+  return new MahoAiStore(handler, router);
 }
 
 export class MahoAiStore {
@@ -50,12 +61,11 @@ export class MahoAiStore {
   }
 
   getSnapshot(): AppState {
-    return cloneState(this.state);
+    return this.state;
   }
 
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
-    listener(this.getSnapshot());
     return () => this.listeners.delete(listener);
   }
 
@@ -119,9 +129,18 @@ export class MahoAiStore {
     });
   }
 
+  setDeveloperMode(enabled: boolean) {
+    this.patch(state => {
+      state.developerMode = enabled;
+    });
+  }
+
   async startSession(): Promise<void> {
     const prompt = this.state.composer.prompt.trim() || null;
-    const {session} = await this.pageHandler.startSession(prompt);
+    const mode = this.state.developerMode ?
+        InteractionMode.kDeveloper :
+        InteractionMode.kAssistant;
+    const {session} = await this.pageHandler.startSession(prompt, mode);
 
     this.patch(state => {
       state.sessionsById[session.sessionId] = session;
@@ -146,6 +165,7 @@ export class MahoAiStore {
         state.sessionOrder = sortSessionIds(state.sessionsById);
       }
       state.selectedInspector = {kind: 'session', id: sessionId};
+      this.updateLastContextSnapshot(state, sessionId, replayEvents);
       if (replayEvents.length) {
         state.eventsBySessionId[sessionId] = replayEvents.filter(isRenderableTimelineEvent)
                                           .map(event => ({sessionId, event}));
@@ -160,9 +180,16 @@ export class MahoAiStore {
   async loadHistory(sessionId: string): Promise<void> {
     const {events, totalCount} = await this.pageHandler.getSessionHistory(sessionId, 0, 200);
     this.patch(state => {
+      this.updateLastContextSnapshot(state, sessionId, events);
       state.eventsBySessionId[sessionId] = events.filter(isRenderableTimelineEvent)
                                         .map(event => ({sessionId, event}));
       state.historiesBySessionId[sessionId] = {loaded: true, totalCount};
+    });
+  }
+
+  toggleBrowserContext() {
+    this.patch(state => {
+      state.composer.attachBrowserContext = !state.composer.attachBrowserContext;
     });
   }
 
@@ -174,12 +201,16 @@ export class MahoAiStore {
       return;
     }
 
+    const attachBrowserContext = this.state.composer.attachBrowserContext;
+    const mode = this.state.developerMode ?
+        InteractionMode.kDeveloper :
+        InteractionMode.kAssistant;
     this.patch(state => {
       state.turnPendingBySessionId[sessionId] = true;
       state.composer.prompt = '';
     });
 
-    await this.pageHandler.submitPrompt(sessionId, prompt);
+    await this.pageHandler.submitPrompt(sessionId, prompt, attachBrowserContext, mode);
   }
 
   async cancelTurn(): Promise<void> {
@@ -233,6 +264,9 @@ export class MahoAiStore {
         if (event.kind === RuntimeEventKind.kTurnComplete || event.kind === RuntimeEventKind.kError) {
           state.turnPendingBySessionId[sessionId] = false;
         }
+        if (event.kind === RuntimeEventKind.kBrowserContextInjected && event.browserContext) {
+          state.lastContextBySessionId[sessionId] = event.browserContext;
+        }
       });
     });
 
@@ -274,13 +308,20 @@ export class MahoAiStore {
     state.eventsBySessionId[sessionId] = [...existing, nextEntry];
   }
 
+  private updateLastContextSnapshot(state: AppState, sessionId: string, events: RuntimeEvent[]) {
+    const browserContext = getLastBrowserContext(events);
+    if (browserContext) {
+      state.lastContextBySessionId[sessionId] = browserContext;
+      return;
+    }
+
+    delete state.lastContextBySessionId[sessionId];
+  }
+
   private patch(mutator: (state: AppState) => void) {
     const draft = cloneState(this.state);
     mutator(draft);
     this.state = draft;
-    const snapshot = this.getSnapshot();
-    for (const listener of this.listeners) {
-      listener(snapshot);
-    }
+    notifyListeners(this.listeners);
   }
 }

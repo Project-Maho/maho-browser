@@ -10,6 +10,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/ui/webui/maho_settings/maho_settings.mojom.h"
@@ -141,7 +142,19 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler {
   static const char* GetPrefPath(const std::string& maho_key);
   std::string ReadSetting(const std::string& maho_key);
   void OnPrefChanged(const std::string& pref_name);
-  void NotifySettingsChanged();
+
+  // Builds the full settings snapshot. Used by both GetSettings() and the
+  // coalesced notify path so there is a single construction site.
+  std::vector<maho_settings::mojom::SettingValuePtr> BuildSettingsSnapshot();
+
+  // Schedules a coalesced notify: if one is already pending the timer is
+  // restarted, collapsing burst triggers into a single flush.
+  void ScheduleNotify();
+
+  // Fired by notify_timer_. Builds the snapshot, compares against the last
+  // emitted value, and pushes to the page only if something changed.
+  void FlushNotify();
+
   bool HandleFfiSetting(const std::string& key, const std::string& value);
   void AppendFfiSettings(
       std::vector<maho_settings::mojom::SettingValuePtr>& settings);
@@ -159,6 +172,9 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler {
   PrefChangeRegistrar pref_registrar_;
   raw_ptr<PrefService> local_state_;
   PrefChangeRegistrar local_state_pref_registrar_;
+
+  base::OneShotTimer notify_timer_;
+  std::string last_emitted_snapshot_;
 
   std::unique_ptr<network::SimpleURLLoader> theme_store_loader_;
   std::string cached_theme_store_json_;

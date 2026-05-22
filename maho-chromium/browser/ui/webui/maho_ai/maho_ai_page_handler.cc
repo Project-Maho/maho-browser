@@ -18,7 +18,6 @@
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
-#include "maho/browser/ai/maho_opencode_runtime_service.h"
 #include "maho/browser/ui/webui/maho_ai/maho_ai_prefs_registration.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 
@@ -30,10 +29,6 @@ constexpr size_t kMaxHistory = 200;
 constexpr size_t kMaxPersistedEvents = 500;
 
 std::string GetRuntimeUnavailableMessage() {
-  auto* service = MahoOpenCodeRuntimeService::GetInstance();
-  if (service && !service->GetStatusMessage().empty()) {
-    return service->GetStatusMessage();
-  }
   return "OpenCode runtime is not available. "
          "Please configure the runtime endpoint in settings.";
 }
@@ -45,14 +40,27 @@ std::string GenerateSessionId() {
       "_" + base::NumberToString(base::RandUint64() % 100000);
 }
 
+// UTF-8 continuation bytes match 10xxxxxx (0x80–0xBF); walking back past them
+// lands on the lead byte of the interrupted sequence, giving a safe cut point.
+std::string UTF8SafeTruncate(const std::string& text, size_t max_bytes) {
+  if (text.size() <= max_bytes) {
+    return text;
+  }
+  size_t cut = max_bytes;
+  while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80) {
+    --cut;
+  }
+  return text.substr(0, cut);
+}
+
 std::string DeriveTitle(const std::string& text) {
   constexpr size_t kMaxTitleLen = 80;
-  std::string title = text.substr(0, kMaxTitleLen);
+  std::string title = UTF8SafeTruncate(text, kMaxTitleLen);
   size_t newline = title.find('\n');
   if (newline != std::string::npos) {
     title = title.substr(0, newline);
   }
-  if (title.length() == kMaxTitleLen && text.length() > kMaxTitleLen) {
+  if (text.size() > kMaxTitleLen && title.size() < text.size()) {
     title += "...";
   }
   return title;
@@ -108,6 +116,21 @@ base::DictValue RuntimeEventToDict(
       ares.Set("reason", *event.approval_result->reason);
     }
     dict.Set("approval_result", std::move(ares));
+  }
+  if (event.browser_context) {
+    base::DictValue bc;
+    bc.Set("status", static_cast<int>(event.browser_context->status));
+    bc.Set("url", event.browser_context->url);
+    bc.Set("title", event.browser_context->title);
+    bc.Set("content_snippet", event.browser_context->content_snippet);
+    bc.Set("content_length",
+           static_cast<int>(event.browser_context->content_length));
+    base::ListValue warns;
+    for (const auto& w : event.browser_context->warnings) {
+      warns.Append(w);
+    }
+    bc.Set("warnings", std::move(warns));
+    dict.Set("browser_context", std::move(bc));
   }
   return dict;
 }
@@ -184,6 +207,30 @@ maho_ai::mojom::RuntimeEventPtr DictToRuntimeEvent(
     }
     event->approval_result = std::move(result);
   }
+  const base::DictValue* bc = dict.FindDict("browser_context");
+  if (bc) {
+    auto ctx = maho_ai::mojom::BrowserContextPayload::New();
+    ctx->status = static_cast<maho_ai::mojom::BrowserContextStatus>(
+        bc->FindInt("status").value_or(
+            static_cast<int>(maho_ai::mojom::BrowserContextStatus::kNotRequested)));
+    const std::string* bc_url = bc->FindString("url");
+    ctx->url = bc_url ? *bc_url : "";
+    const std::string* bc_title = bc->FindString("title");
+    ctx->title = bc_title ? *bc_title : "";
+    const std::string* bc_snippet = bc->FindString("content_snippet");
+    ctx->content_snippet = bc_snippet ? *bc_snippet : "";
+    ctx->content_length = static_cast<uint32_t>(
+        bc->FindInt("content_length").value_or(0));
+    const base::ListValue* bc_warns = bc->FindList("warnings");
+    if (bc_warns) {
+      for (const auto& w : *bc_warns) {
+        if (w.is_string()) {
+          ctx->warnings.push_back(w.GetString());
+        }
+      }
+    }
+    event->browser_context = std::move(ctx);
+  }
   return event;
 }
 
@@ -206,6 +253,8 @@ maho_ai::mojom::RuntimeEventKind InternalToMojoEventKind(
       return maho_ai::mojom::RuntimeEventKind::kApprovalResult;
     case MahoAiRuntimeEventType::kConnectionStateChanged:
       return maho_ai::mojom::RuntimeEventKind::kConnectionStateChanged;
+    case MahoAiRuntimeEventType::kBrowserContextInjected:
+      return maho_ai::mojom::RuntimeEventKind::kBrowserContextInjected;
   }
 }
 
@@ -221,7 +270,7 @@ MahoAIPageHandler::MahoAIPageHandler(
       page_(std::move(page)),
       browser_(browser),
       prefs_(prefs),
-      runtime_router_(browser, prefs, url_loader_factory),
+      runtime_router_(prefs, url_loader_factory),
       page_context_extractor_(browser) {
   DCHECK(prefs_);
   LoadPersistedSessions();
@@ -290,7 +339,8 @@ void MahoAIPageHandler::SendMessage(maho_ai::mojom::ChatIntent chat_intent,
   }
 
   adapter->SubmitMessage(
-      message, chat_intent,
+      message, chat_intent, /*attach_browser_context=*/false,
+      maho_ai::mojom::InteractionMode::kAssistant,
       base::BindRepeating(&MahoAIPageHandler::OnRuntimeEvent,
                           weak_factory_.GetWeakPtr()));
 }
@@ -366,6 +416,9 @@ void MahoAIPageHandler::OnRuntimeEvent(MahoAiRuntimeEvent event) {
         last_runtime_state_ = event.text;
       }
       MaybeEmitConnectionStateChanged();
+      break;
+
+    case MahoAiRuntimeEventType::kBrowserContextInjected:
       break;
   }
 }
@@ -448,6 +501,42 @@ maho_ai::mojom::RuntimeEventPtr MahoAIPageHandler::ToMojoEvent(
     mojo_event->approval_result = std::move(result);
   }
 
+  if (event.type == MahoAiRuntimeEventType::kBrowserContextInjected) {
+    auto ctx = maho_ai::mojom::BrowserContextPayload::New();
+    const std::string* status_str = event.payload.FindString("status");
+    std::string s = status_str ? *status_str : "not_requested";
+    if (s == "injected") {
+      ctx->status = maho_ai::mojom::BrowserContextStatus::kInjected;
+    } else if (s == "denied_internal_page") {
+      ctx->status = maho_ai::mojom::BrowserContextStatus::kDeniedInternalPage;
+    } else if (s == "no_active_tab") {
+      ctx->status = maho_ai::mojom::BrowserContextStatus::kNoActiveTab;
+    } else if (s == "cannot_access") {
+      ctx->status = maho_ai::mojom::BrowserContextStatus::kCannotAccess;
+    } else if (s == "extraction_failed") {
+      ctx->status = maho_ai::mojom::BrowserContextStatus::kExtractionFailed;
+    } else {
+      ctx->status = maho_ai::mojom::BrowserContextStatus::kNotRequested;
+    }
+    const std::string* url = event.payload.FindString("url");
+    ctx->url = url ? *url : "";
+    const std::string* title = event.payload.FindString("title");
+    ctx->title = title ? *title : "";
+    const std::string* snippet = event.payload.FindString("content_snippet");
+    ctx->content_snippet = snippet ? *snippet : "";
+    ctx->content_length = static_cast<uint32_t>(
+        event.payload.FindInt("content_length").value_or(0));
+    const base::ListValue* warns = event.payload.FindList("warnings");
+    if (warns) {
+      for (const auto& w : *warns) {
+        if (w.is_string()) {
+          ctx->warnings.push_back(w.GetString());
+        }
+      }
+    }
+    mojo_event->browser_context = std::move(ctx);
+  }
+
   return mojo_event;
 }
 
@@ -507,6 +596,7 @@ void MahoAIPageHandler::GetSessionList(GetSessionListCallback callback) {
 
 void MahoAIPageHandler::StartSession(
     const std::optional<std::string>& initial_prompt,
+    maho_ai::mojom::InteractionMode mode,
     StartSessionCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
@@ -558,7 +648,9 @@ void MahoAIPageHandler::StartSession(
   std::move(callback).Run(session_info->Clone());
 
   if (initial_prompt.has_value() && !initial_prompt->empty()) {
-    SubmitPrompt(active_session_id_, *initial_prompt);
+    SubmitPrompt(active_session_id_, *initial_prompt,
+                 /*attach_browser_context=*/true,
+                 mode);
   }
 }
 
@@ -597,7 +689,9 @@ void MahoAIPageHandler::ResumeSession(const std::string& session_id,
 }
 
 void MahoAIPageHandler::SubmitPrompt(const std::string& session_id,
-                                      const std::string& prompt) {
+                                      const std::string& prompt,
+                                      bool attach_browser_context,
+                                      maho_ai::mojom::InteractionMode mode) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (session_id != active_session_id_) {
@@ -633,6 +727,7 @@ void MahoAIPageHandler::SubmitPrompt(const std::string& session_id,
 
   adapter->SubmitMessage(
       prompt, maho_ai::mojom::ChatIntent::kFreeform,
+      attach_browser_context, mode,
       base::BindRepeating(&MahoAIPageHandler::OnRuntimeEvent,
                           weak_factory_.GetWeakPtr()));
 }

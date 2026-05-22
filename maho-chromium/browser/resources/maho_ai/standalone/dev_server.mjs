@@ -1,0 +1,138 @@
+import http from 'node:http';
+import https from 'node:https';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+
+import {context} from '../../../../../website/node_modules/esbuild/lib/main.js';
+import {nodeModulesGuardPlugin} from '../../maho_common/react/bundle_guard.mjs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const mahoAiDir = path.resolve(__dirname, '..');
+const websiteNodeModules = path.resolve(__dirname, '../../../../../website/node_modules');
+const outputFile = path.join(__dirname, 'app_bundle.js');
+const hostname = process.env.MAHO_AI_STANDALONE_HOST || '127.0.0.1';
+const port = Number(process.env.MAHO_AI_STANDALONE_PORT || '4071');
+const opencodeBaseUrl = new URL(process.env.OPENCODE_BASE_URL || 'http://127.0.0.1:4096/');
+
+function aliasPlugin() {
+  return {
+    name: 'maho-ai-standalone-alias',
+    setup(build) {
+      build.onResolve({filter: /maho_ai\.mojom-webui\.js$/}, () => ({
+        path: path.join(__dirname, 'maho_ai.mojom-webui.js'),
+      }));
+      build.onResolve({filter: /\/views\/icons\.[jt]s$/}, () => ({
+        path: path.join(__dirname, 'icons_stub.ts'),
+      }));
+      build.onResolve({filter: /^chrome:\/\/resources\/js\/load_time_data\.js$/}, () => ({
+        path: path.join(__dirname, 'load_time_data.js'),
+      }));
+      build.onResolve({filter: /^chrome:\/\/resources\/js\/parse_html_subset\.js$/}, () => ({
+        path: path.join(__dirname, 'parse_html_subset.js'),
+      }));
+    },
+  };
+}
+
+function contentTypeFor(filePath) {
+  const extension = path.extname(filePath);
+  switch (extension) {
+    case '.css':
+      return 'text/css; charset=utf-8';
+    case '.html':
+      return 'text/html; charset=utf-8';
+    case '.js':
+    case '.mjs':
+      return 'text/javascript; charset=utf-8';
+    case '.json':
+      return 'application/json; charset=utf-8';
+    default:
+      return 'text/plain; charset=utf-8';
+  }
+}
+
+async function serveStatic(requestPath, response) {
+  const normalized = requestPath === '/' ? '/standalone/index.html' : requestPath;
+  const filePath = path.resolve(mahoAiDir, `.${normalized}`);
+  if (!filePath.startsWith(mahoAiDir)) {
+    response.writeHead(403);
+    response.end('Forbidden');
+    return;
+  }
+
+  try {
+    const contents = await fs.readFile(filePath);
+    response.writeHead(200, {'Content-Type': contentTypeFor(filePath)});
+    response.end(contents);
+  } catch {
+    response.writeHead(404);
+    response.end('Not found');
+  }
+}
+
+function proxyRequest(request, response) {
+  const upstreamPath = request.url.replace(/^\/api\/?/, '/');
+  const upstreamUrl = new URL(upstreamPath, opencodeBaseUrl);
+  const transport = upstreamUrl.protocol === 'https:' ? https : http;
+  const proxy = transport.request(upstreamUrl, {
+    method: request.method,
+    headers: {
+      ...request.headers,
+      host: upstreamUrl.host,
+    },
+  }, upstreamResponse => {
+    response.writeHead(upstreamResponse.statusCode || 502, upstreamResponse.headers);
+    upstreamResponse.pipe(response);
+  });
+
+  proxy.on('error', error => {
+    response.writeHead(502, {'Content-Type': 'text/plain; charset=utf-8'});
+    response.end(`Proxy error: ${error.message}`);
+  });
+
+  request.pipe(proxy);
+}
+
+const buildContext = await context({
+  absWorkingDir: mahoAiDir,
+  bundle: true,
+  entryPoints: [path.join(__dirname, 'app.ts')],
+  format: 'esm',
+  legalComments: 'none',
+  loader: {
+    '.ts': 'ts',
+    '.tsx': 'tsx',
+  },
+  nodePaths: [websiteNodeModules],
+  outfile: outputFile,
+  platform: 'browser',
+  plugins: [aliasPlugin(), nodeModulesGuardPlugin(websiteNodeModules)],
+  sourcemap: true,
+  target: ['chrome120'],
+});
+
+await buildContext.rebuild();
+await buildContext.watch();
+
+const server = http.createServer((request, response) => {
+  if (!request.url) {
+    response.writeHead(400);
+    response.end('Missing URL');
+    return;
+  }
+
+  if (request.url.startsWith('/api/')) {
+    proxyRequest(request, response);
+    return;
+  }
+
+  void serveStatic(request.url, response);
+});
+
+server.listen(port, hostname, () => {
+  process.stdout.write(
+      `Maho AI standalone dev server running at http://${hostname}:${port}\n` +
+      `Proxying OpenCode requests to ${opencodeBaseUrl.href}\n`);
+});

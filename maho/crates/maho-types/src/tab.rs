@@ -46,4 +46,9 @@ pub struct Tab {
     pub scroll_position: ScrollPosition,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned_url: Option<Url>,
+    /// Identifies the browser window that owns this tab. `None` means the tab
+    /// is shared across all windows (e.g. pinned/favorite tabs). When set, the
+    /// tab belongs exclusively to the window with this session ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_id: Option<i64>,
 }

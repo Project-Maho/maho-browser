@@ -13,6 +13,7 @@ source_set("maho_test") {
 
   deps = [
     "//chrome/browser/profiles:profile",
+    "//maho/browser:maho_tab_id_helper",
     "//maho/components/constants",
     "//url",
   ]

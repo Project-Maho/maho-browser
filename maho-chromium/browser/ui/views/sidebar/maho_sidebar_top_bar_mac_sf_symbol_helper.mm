@@ -1,4 +1,4 @@
-#include "maho-chromium/browser/ui/views/sidebar/maho_sidebar_top_bar_mac_sf_symbol_helper.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_mac_sf_symbol_helper.h"
 
 #include <algorithm>
 #include <string>

@@ -38,6 +38,8 @@ class MahoLegacyChatAdapter : public MahoAiRuntimeAdapter {
   bool IsAvailable() const override;
   void SubmitMessage(const std::string& message,
                      maho_ai::mojom::ChatIntent chat_intent,
+                     bool attach_browser_context,
+                     maho_ai::mojom::InteractionMode mode,
                      RuntimeEventCallback on_event) override;
   void CancelCurrentTurn() override;
   void RespondToApproval(const std::string& approval_id,

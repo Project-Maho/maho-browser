@@ -37,7 +37,17 @@
 //        std::string current_url;
 //        if (auto* contents =
 //                browser_->tab_strip_model()->GetActiveWebContents()) {
-//          current_url = contents->GetLastCommittedURL().spec();
+//          const GURL& visible = contents->GetVisibleURL();
+//          const GURL& url =
+//              visible.is_empty() ? contents->GetLastCommittedURL() : visible;
+//          // Denylist: skip javascript: (script injection), data: (opaque blobs),
+//          // and about:blank (empty-tab sentinel). All other schemes — including
+//          // chrome://, devtools://, file://, http, https, ftp — pass through.
+//          if (!url.is_empty() &&
+//              !url.SchemeIs("javascript") &&
+//              !url.SchemeIs("data") &&
+//              url.spec() != "about:blank")
+//            current_url = url.spec();
 //        }
 //        maho_command_overlay_controller_->Show(
 //            GetWidget(),
@@ -98,6 +108,12 @@
 //      "//maho/browser/ui/views/command:maho_command_overlay",
 //      "//maho/browser/ui/views/split_view:maho_split_view",
 //
+// Sources injected into chrome/browser/ui BUILD.gn (sidebar pane files):
+//      "//maho/browser/ui/views/sidebar/maho_sidebar_easels_view.cc",
+//      "//maho/browser/ui/views/sidebar/maho_sidebar_easels_view.h",
+//      "//maho/browser/ui/views/sidebar/maho_sidebar_notes_view.cc",
+//      "//maho/browser/ui/views/sidebar/maho_sidebar_notes_view.h",
+//
 // 7. #include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
 //
 // 8. Forward declaration in browser_view.h:
@@ -106,17 +122,39 @@
 //    Member field in BrowserView class:
 //      std::unique_ptr<MahoSplitViewController> split_view_controller_;
 //
-// 9. Lazy-init factory (creates controller on first use):
-//      MahoSplitViewController* BrowserView::GetOrCreateMahoSplitViewController() {
+// 9. Lazy-init accessor (creates controller on first use):
+//
+//      MahoSplitViewController*
+//      BrowserView::GetOrCreateMahoSplitViewController() {
 //        if (!split_view_controller_) {
-//          split_view_controller_ = std::make_unique<MahoSplitViewController>(browser_);
+//          split_view_controller_ =
+//              std::make_unique<MahoSplitViewController>(browser_.get());
 //        }
 //        return split_view_controller_.get();
 //      }
 //
-// 10. Const accessor (returns nullptr if not yet created):
-//      MahoSplitViewController* GetMahoSplitViewController() const {
+//    This is the canonical entry point for split-view mutations from command
+//    and action-handler paths owned by BrowserView. Context menu split actions
+//    still use their legacy direct controller construction until BrowserView
+//    exposes a suitable public delegation hook for them.
+//
+// 10. Const read-only accessor (inline in browser_view.h; returns nullptr if
+//     not yet created):
+//
+//      MahoSplitViewController*
+//      BrowserView::GetMahoSplitViewController() const {
 //        return split_view_controller_.get();
+//      }
+//
+//     Use this for inspection-only paths that must not force creation (e.g.
+//     serialization, metrics). Returns nullptr when no split has been
+//     requested in this window's lifetime.
+//
+// 10a. Test accessor for the command overlay controller (in browser_view.h
+//      public section, adjacent to maho_spaces_overlay_visible_for_testing):
+//      maho::MahoCommandOverlayController*
+//      GetMahoCommandOverlayControllerForTesting() const {
+//        return maho_command_overlay_controller_.get();
 //      }
 //
 // 11. #include "maho/browser/ui/views/command/maho_shortcut_interceptor.h"
@@ -131,3 +169,15 @@
 //        }
 //    This resolves Maho-registered shortcuts (e.g. ⌘S → toggle_sidebar)
 //    via Rust maho_core_resolve_shortcut() before Chromium's accelerator table.
+//
+// ---- Call-site inventory for GetOrCreateMahoSplitViewController() ----
+//
+// The split-view command actions route through this accessor so split-view
+// state is owned by the BrowserView instead of ephemeral per-command
+// controller instances.
+//
+// Current caller:
+//   - maho/browser/ui/views/command/maho_command_action_handler.cc
+//       actions: add_split_view, remove_split_view, toggle_split_view
+//                swap_split_view
+//       via file-local GetOrCreateSplitViewController(Browser*) helper

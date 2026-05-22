@@ -468,6 +468,11 @@ void MahoSidebarSearchView::SubmitText(const std::u16string& text) {
 }
 
 void MahoSidebarSearchView::OnIdleButtonPressed(const ui::Event& event) {
+  if (ShouldToggleUtilityPanelForEvent(event)) {
+    ToggleUtilityPanel();
+    return;
+  }
+
   OnSearchPressed(event);
 }
 
@@ -480,6 +485,15 @@ void MahoSidebarSearchView::OnIdleButtonHoverChanged(bool hover_visible) {
   UpdateUtilityAffordanceVisibility();
 }
 
+void MahoSidebarSearchView::ToggleUtilityPanel() {
+  if (utility_panel_widget_) {
+    CloseUtilityPanel();
+    return;
+  }
+
+  ShowUtilityPanel();
+}
+
 views::Widget* MahoSidebarSearchView::ShowUtilityPanel() {
   if (!browser_ || !utility_icon_) {
     return nullptr;
@@ -489,15 +503,9 @@ views::Widget* MahoSidebarSearchView::ShowUtilityPanel() {
       BuildMahoLocationBarUtilityPanelModelForBrowser(browser_);
   views::Widget* widget =
       MahoLocationBarUtilityPanelView::Show(utility_icon_, std::move(model));
-  if (widget) {
-    widget->Show();
-    if (!widget->IsClosed()) {
-      widget->widget_delegate()->GetContentsView()->RequestFocus();
-    }
-  }
   utility_icon_->SetPanelWidget(widget);
   SetUtilityPanelWidget(widget);
-  return utility_panel_widget_;
+  return widget;
 }
 
 void MahoSidebarSearchView::SetUtilityPanelWidget(views::Widget* widget) {
@@ -547,7 +555,6 @@ void MahoSidebarSearchView::UpdateIdleSurface() {
   const std::u16string primary_text = BuildPrimaryText();
   const std::u16string secondary_text = BuildSecondaryText();
   const bool show_placeholder =
-      model_.force_placeholder_for_empty_favorites ||
       model_.display_mode == MahoSidebarAddressDisplayMode::kSearchPlaceholder;
   const bool has_active_tab = model_.has_active_tab;
   idle_button_->SetAccessibleName(primary_text);
@@ -578,10 +585,9 @@ void MahoSidebarSearchView::UpdateIdleSurface() {
 void MahoSidebarSearchView::UpdateSearchChrome() {
   const bool show_placeholder =
       !is_editing_ &&
-      (model_.force_placeholder_for_empty_favorites ||
-       model_.display_mode == MahoSidebarAddressDisplayMode::kSearchPlaceholder);
+      model_.display_mode == MahoSidebarAddressDisplayMode::kSearchPlaceholder;
   idle_button_->SetBackground(views::CreateRoundedRectBackground(
-      show_placeholder ? ui::kColorSysSurface1 : ui::kColorSysSurface1,
+      ui::kColorSysSurface1,
       show_placeholder ? sidebar_layout::kSearchPillCompactCornerRadiusDp
                        : sidebar_layout::kSearchPillCornerRadiusDp));
   // Padded border provides the pill's inner leading/trailing breathing room.
@@ -627,8 +633,7 @@ void MahoSidebarSearchView::UpdateSearchChrome() {
 }
 
 std::u16string MahoSidebarSearchView::BuildPrimaryText() const {
-  if (model_.force_placeholder_for_empty_favorites ||
-      model_.display_mode == MahoSidebarAddressDisplayMode::kSearchPlaceholder ||
+  if (model_.display_mode == MahoSidebarAddressDisplayMode::kSearchPlaceholder ||
       !model_.has_active_tab) {
     return u"Search or Enter URL...";
   }
@@ -661,6 +666,46 @@ bool MahoSidebarSearchView::LooksLikeUrl(const std::string& input) const {
   }
   return input.starts_with("http://") || input.starts_with("https://") ||
          input.starts_with("chrome://") || input.find('.') != std::string::npos;
+}
+
+bool MahoSidebarSearchView::ShouldToggleUtilityPanelForEvent(
+    const ui::Event& event) const {
+  if (!idle_button_ || !utility_icon_slot_ || !utility_icon_ ||
+      !utility_icon_slot_->GetVisible() || !CanShowUtilityAffordance()) {
+    return false;
+  }
+
+  if (!event.IsLocatedEvent()) {
+    return false;
+  }
+
+  const auto* located_event = event.AsLocatedEvent();
+  if (!located_event) {
+    return false;
+  }
+
+  // Primary check: click landed inside the utility icon slot itself.
+  gfx::Point point_in_utility_slot = located_event->location();
+  views::View::ConvertPointToTarget(idle_button_, utility_icon_slot_,
+                                     &point_in_utility_slot);
+  if (utility_icon_slot_->HitTestPoint(point_in_utility_slot)) {
+    return true;
+  }
+
+  // Secondary check: click landed in the trailing inset — the visible area of
+  // the pill that lies to the right of the utility icon slot (between the
+  // slot's trailing edge and the pill's right border stroke). Live clicks in
+  // this region are visually part of the utility affordance but fall outside
+  // utility_icon_slot_'s bounds, so we extend the hit zone here.
+  const gfx::Point& point_in_idle = located_event->location();
+  const gfx::Rect slot_bounds_in_idle = utility_icon_slot_->bounds();
+  const gfx::Rect idle_local_bounds = idle_button_->GetLocalBounds();
+  const gfx::Rect trailing_inset_rect(
+      slot_bounds_in_idle.right(),
+      idle_local_bounds.y(),
+      idle_local_bounds.right() - slot_bounds_in_idle.right(),
+      idle_local_bounds.height());
+  return trailing_inset_rect.Contains(point_in_idle);
 }
 
 }  // namespace maho

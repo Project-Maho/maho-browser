@@ -53,7 +53,6 @@ class MahoSidebarTopBarView;
 enum class MahoSidebarBodyMode {
   kTabs,
   kLibrary,
-  kCreateSpace,
 };
 
 class MahoSidebarView : public views::View,
@@ -79,7 +78,12 @@ class MahoSidebarView : public views::View,
   void OpenLibrary();
   void OpenLibrary(MahoSidebarLibraryRailView::Category category);
   void ExitLibraryToTabs();
-  void ShowCreateSpaceSurface();
+
+  // Inline native create-space surface. ShowCreateSpace replaces the entire
+  // sidebar UI with the create-space form; HideCreateSpace restores the prior
+  // sidebar state.
+  void ShowCreateSpace();
+  void HideCreateSpace();
 
   // Legacy alias: toggle Library mode (backward compat for tests/footer).
   void ToggleArchiveMode();
@@ -103,9 +107,6 @@ class MahoSidebarView : public views::View,
     return downloads_view_;
   }
   MahoSidebarMediaView* media_view_for_testing() { return media_view_; }
-  MahoSidebarCreateSpaceView* create_space_view_for_testing() {
-    return create_space_view_;
-  }
   MahoSidebarLibraryRailView* library_rail_view_for_testing() {
     return library_rail_view_;
   }
@@ -116,9 +117,6 @@ class MahoSidebarView : public views::View,
   }
   bool is_library_mode_for_testing() const {
     return current_body_mode_ == MahoSidebarBodyMode::kLibrary;
-  }
-  bool is_create_space_mode_for_testing() const {
-    return current_body_mode_ == MahoSidebarBodyMode::kCreateSpace;
   }
   MahoSidebarLibraryActionPaneView* spaces_view_for_testing() {
     return spaces_view_;
@@ -192,13 +190,13 @@ class MahoSidebarView : public views::View,
   raw_ptr<MahoSidebarLibraryActionPaneView> spaces_view_ = nullptr;
   raw_ptr<MahoSidebarLibraryActionPaneView> easel_view_ = nullptr;
   raw_ptr<MahoSidebarLibraryActionPaneView> boost_view_ = nullptr;
-  raw_ptr<MahoSidebarCreateSpaceView> create_space_view_ = nullptr;
   raw_ptr<MahoSidebarLibraryRailView> library_rail_view_ = nullptr;
   raw_ptr<MahoSidebarTopBarView> top_bar_view_ = nullptr;
   raw_ptr<MahoSidebarSearchView> search_view_ = nullptr;
   raw_ptr<MahoSidebarFavoritesGridView> favorites_view_ = nullptr;
   raw_ptr<MahoSidebarTabListView> tab_list_view_ = nullptr;
   raw_ptr<MahoSidebarFooterView> footer_view_ = nullptr;
+  raw_ptr<MahoSidebarCreateSpaceView> create_space_view_ = nullptr;
   std::unique_ptr<views::ViewTracker> last_focused_body_view_tracker_;
   MahoSidebarStateAdapter state_adapter_;
   MahoSidebarBodyMode current_body_mode_ = MahoSidebarBodyMode::kTabs;

@@ -39,6 +39,7 @@ class MahoSidebarLibraryRailView : public views::View {
     kSpaces,
     kEasels,
     kBoosts,
+    kNotes,
   };
 
   using CategorySelectedCallback = base::RepeatingCallback<void(Category)>;
@@ -56,8 +57,10 @@ class MahoSidebarLibraryRailView : public views::View {
   void SetBackCallback(base::RepeatingClosure callback);
 
   views::Button* button_for_category_for_testing(Category category);
+  std::vector<Category> visible_categories_for_testing() const;
   views::ImageButton* back_button_for_testing() { return back_button_; }
 
+  void Layout(PassKey) override;
   void OnThemeChanged() override;
 
   // Returns true if `point` (in this view's coordinates) is not over any
@@ -71,6 +74,7 @@ class MahoSidebarLibraryRailView : public views::View {
   void UpdateSelection();
   void UpdateBackButtonAppearance();
 
+  raw_ptr<views::View> utility_host_ = nullptr;
   raw_ptr<views::View> item_container_ = nullptr;
   std::vector<raw_ptr<MahoSidebarLibraryRailItemButton>> category_buttons_;
   raw_ptr<views::ImageButton> back_button_ = nullptr;

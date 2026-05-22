@@ -10,6 +10,8 @@ fn extract_tab_id_from_updates(core: &mut MahoCore, space_id: &SpaceId, url: &st
         space_id: space_id.clone(),
         url: Some(Url::new(url)),
         parent_id: None,
+        tab_id: None,
+        window_id: None,
     };
     let updates = core.handle_event(event);
 

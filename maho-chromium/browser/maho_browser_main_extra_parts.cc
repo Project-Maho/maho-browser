@@ -2,31 +2,31 @@
 
 #include <string>
 
+#include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
+#include "base/path_service.h"
 #include "base/values.h"
 #include "base/functional/bind.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/profiles/profile.h"
-#include "components/prefs/pref_service.h"
+#include "chrome/common/chrome_paths.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
-#include "maho/browser/ai/maho_opencode_runtime_service.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/theme/maho_color_mixer.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
-#include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/third_party/maho/maho_bridge.h"
+#include "maho/browser/ui/theme/maho_color_mixer.h"
 #include "maho/third_party/maho/maho_ffi.h"
-#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "ui/color/color_provider_manager.h"
 
 MahoBrowserMainExtraParts::MahoBrowserMainExtraParts() = default;
 
 MahoBrowserMainExtraParts::~MahoBrowserMainExtraParts() {
   if (core_) {
+    maho::core::SaveState(core_);
     maho::SetCore(nullptr);
     maho::core::Destroy(core_);
     core_ = nullptr;
@@ -107,10 +107,23 @@ void PopulateBridgeFromCore(MahoCore* core) {
 }  // namespace
 
 void MahoBrowserMainExtraParts::PostEarlyInitialization() {
-  core_ = maho::core::Create();
+  base::FilePath user_data_dir;
+  if (base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir)) {
+    storage_path_ = user_data_dir.AppendASCII("MahoCore");
+    base::CreateDirectory(storage_path_);
+  }
+
+  if (!storage_path_.empty()) {
+    core_ = maho::core::CreateWithStorage(storage_path_.AsUTF8Unsafe());
+  }
+  if (!core_) {
+    core_ = maho::core::Create();
+  }
+
   if (core_) {
     maho::SetCore(core_);
     maho::core::InstallLogCallback();
+    maho::core::LoadState(core_);
     LOG(INFO) << "Maho core initialized, version: " << maho::core::Version();
     PopulateBridgeFromCore(core_);
   } else {
@@ -126,27 +139,12 @@ void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
   if (!is_initial_profile) {
     return;
   }
-
-  auto service = std::make_unique<MahoOpenCodeRuntimeService>();
-  MahoOpenCodeRuntimeService::SetInstance(std::move(service));
-
-  std::string custom_endpoint =
-      profile->GetPrefs()->GetString(maho::ai_prefs::kRuntimeEndpoint);
-
-  auto* system_network =
-      g_browser_process->system_network_context_manager();
-  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory =
-      system_network->GetSharedURLLoaderFactory();
-
-  MahoOpenCodeRuntimeService::GetInstance()->Start(
-      custom_endpoint, std::move(url_loader_factory));
 }
 
 void MahoBrowserMainExtraParts::PostMainMessageLoopRun() {
-  MahoOpenCodeRuntimeService::ResetInstance();
-
   if (core_) {
     MahoSpaceThemeState::Clear();
+    maho::core::SaveState(core_);
     maho::SetCore(nullptr);
     maho::core::Destroy(core_);
     core_ = nullptr;

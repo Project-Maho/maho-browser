@@ -637,7 +637,7 @@ impl CommandBarEngine {
             }
         }
 
-        // Deduplicate results by key
+        // Pass 1: key dedup (same type, same URL)
         {
             let mut seen = std::collections::HashSet::new();
             results.retain(|r| seen.insert(r.suggestion.key.clone()));
@@ -678,12 +678,34 @@ impl CommandBarEngine {
             }
         }
 
-        // Sort by score descending, limit results
+        // Sort descending by score; type priority breaks ties deterministically.
         results.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    Self::type_priority(&a.suggestion.kind)
+                        .cmp(&Self::type_priority(&b.suggestion.kind))
+                })
         });
+
+        // Pass 2: cross-type URL dedup — collapse same URL across Tab/Bookmark/History/ClosedTab/ArchivedTab,
+        // keeping the highest-ranked entry (already sorted above).
+        {
+            let mut seen_urls: std::collections::HashSet<String> = std::collections::HashSet::new();
+            results.retain(|r| {
+                if Self::is_url_bearing_type(&r.suggestion.kind) {
+                    if let Some(ref url) = r.suggestion.execution_payload {
+                        seen_urls.insert(url.trim_end_matches('/').to_lowercase())
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                }
+            });
+        }
+
         results
             .into_iter()
             .take(MAX_RESULTS)
@@ -745,6 +767,33 @@ impl CommandBarEngine {
             .take(MAX_RESULTS)
             .map(|r| r.suggestion)
             .collect()
+    }
+
+    fn type_priority(kind: &SuggestionType) -> u8 {
+        match kind {
+            SuggestionType::Tab => 0,
+            SuggestionType::Bookmark => 1,
+            SuggestionType::ClosedTab => 2,
+            SuggestionType::ArchivedTab => 3,
+            SuggestionType::History => 4,
+            SuggestionType::Navigation => 5,
+            SuggestionType::Action => 6,
+            SuggestionType::Folder => 7,
+            SuggestionType::Calculator => 8,
+            SuggestionType::UnitConversion => 9,
+            _ => 10,
+        }
+    }
+
+    fn is_url_bearing_type(kind: &SuggestionType) -> bool {
+        matches!(
+            kind,
+            SuggestionType::Tab
+                | SuggestionType::Bookmark
+                | SuggestionType::History
+                | SuggestionType::ClosedTab
+                | SuggestionType::ArchivedTab
+        )
     }
 
     fn is_url(text: &str) -> bool {

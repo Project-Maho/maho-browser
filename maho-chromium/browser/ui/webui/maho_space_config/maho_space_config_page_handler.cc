@@ -224,8 +224,6 @@ void MahoSpaceConfigPageHandler::UpdateName(
 void MahoSpaceConfigPageHandler::UpdateIcon(
     const std::string& icon,
     UpdateIconCallback callback) {
-  // Icon is stored as part of color_json in the view model.
-  // Recolor with the icon embedded.
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE,
       {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
@@ -236,7 +234,6 @@ void MahoSpaceConfigPageHandler::UpdateIcon(
               return false;
             }
 
-            // Read current space to get existing color, then update with icon.
             char* json_str = maho_core_get_space_view_models(core);
             if (!json_str) {
               return false;
@@ -316,7 +313,5 @@ void MahoSpaceConfigPageHandler::UpdateProfile(
 }
 
 void MahoSpaceConfigPageHandler::CloseDialog() {
-  if (web_contents_) {
-    web_contents_->ClosePage();
-  }
+  MahoSpaceConfigDialog::CloseActiveDialog();
 }

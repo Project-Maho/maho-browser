@@ -37,6 +37,9 @@ This doc intentionally avoids pixel-perfect claims. The verified current-tab flo
 | Selected row style | Expanded selected row | Selected row styling implemented |
 | Inline subtitle | Present when unselected | Present when unselected |
 | Shortcut badges | Present | Present |
+| Current-tab visual strip | Present | Removed (2026-05-16) |
+| Left selection rail | Present | Removed (2026-05-16) |
+| Focus stealing loop | Not present | Removed (2026-05-16) |
 
 ## Notes on the verified current state
 
@@ -45,10 +48,20 @@ This doc intentionally avoids pixel-perfect claims. The verified current-tab flo
 - The 2026-05-07 after-fix captures remain the verification source for AI mode, site search, keyboard navigation, recent-search activation, pointer hover/click, and popup resize.
 - The remaining differences should be treated as polish-only, not blockers.
 
+## 2026-05-16 UX cleanup
+
+Five visible issues removed across two passes:
+
+1. **Current-tab visual strip** — the frosted-glass rounded-rect container (`current_tab_shell_`) with the "Current tab" badge and URL label has been removed. `CommandOverlayMode::kCurrentTab` semantics are preserved: URL prefill, select-all, and `CURRENT_TAB` disposition are unchanged.
+2. **Focus-stealing loop** — `ScheduleFocusRetentionPasses` and its 30-pass timer loop removed from the controller. One-shot `widget_->Activate()` + `overlay_ptr->RequestFocus()` at Show time is kept. Deactivation-hide timer is unchanged.
+3. **Left purple selection rail** — `selection_indicator_` view and `kSelectionRailWidthDp`/`kSelectionRailCornerRadiusDp` constants removed from `MahoCommandResultRowView`. The selected-row fill and border are unchanged.
+4. **Residual current-tab visual sizing** — removed `kCurrentTabPanelBottomInsetDp` (38dp extra bottom padding), `kCurrentTabFontSizeDeltaDp` (enlarged font), and collapsed the `kCurrentTabSearchRowHeightDp`/`kCurrentTabSearchTextfieldHeightDp` branches (both were identical to the shared values). `UpdateLayoutForMode()` and `UpdateTextfieldPresentation()` no longer branch on `kCurrentTab`.
+5. **Residual current-tab input surface alpha** — `OnThemeChanged()` no longer applies mode-specific alpha tweaks to input fill (`0xFF` vs `0xFD`) or border (`0x52` vs `0x3A`). Both now use the color token directly.
+
 ## Deliberately not claimed here
 
 - Exact pixel parity with Swift or Arc.
 - Exact animation feel equivalence.
 - Any unverified claim about match highlighting.
 
-*Report updated 2026-05-08. Sources: current Chromium command-palette implementation and the latest after-fix runtime captures.*
+*Report updated 2026-05-16. Sources: current Chromium command-palette implementation and the latest after-fix runtime captures.*

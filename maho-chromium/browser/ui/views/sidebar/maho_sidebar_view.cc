@@ -31,7 +31,6 @@
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/view_tracker.h"
 #include "ui/views/view_class_properties.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_create_space_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_downloads_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_library_action_pane_view.h"
@@ -42,6 +41,7 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_search_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_archive_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_create_space_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.h"
 #include "net/base/url_util.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
@@ -238,24 +238,19 @@ void MahoSidebarView::BuildUi() {
   library_layout->SetFlexForView(library_content_host_, 1, true);
 
 
-  create_space_view_ = content_host_->AddChildView(
-      std::make_unique<MahoSidebarCreateSpaceView>(browser_));
-  create_space_view_->SetVisible(false);
-  create_space_view_->SetCloseCallback(base::BindRepeating(
-      [](base::WeakPtr<MahoSidebarView> sidebar_view) {
-        if (sidebar_view) {
-          sidebar_view->SetBodyMode(MahoSidebarBodyMode::kTabs);
-        }
-      },
-      weak_factory_.GetWeakPtr()));
-
-
   footer_view_ = body_host_->AddChildView(
       std::make_unique<MahoSidebarFooterView>(browser_));
 
   normal_body_layout->SetFlexForView(tab_list_view_, 1, true);
   body_layout->SetFlexForView(content_host_, 1, true);
   root_layout->SetFlexForView(body_host_, 1, true);
+
+  create_space_view_ =
+      AddChildView(std::make_unique<MahoSidebarCreateSpaceView>(browser_));
+  create_space_view_->SetVisible(false);
+  create_space_view_->SetCloseCallback(base::BindRepeating(
+      &MahoSidebarView::HideCreateSpace, weak_factory_.GetWeakPtr()));
+  root_layout->SetFlexForView(create_space_view_, 1, true);
 }
 
 void MahoSidebarView::SetBodyMode(MahoSidebarBodyMode mode) {
@@ -287,16 +282,6 @@ void MahoSidebarView::SetBodyMode(MahoSidebarBodyMode mode) {
     if (active_pane) {
       active_pane->SetVisible(false);
     }
-  }
-  if (create_space_view_) {
-    create_space_view_->SetVisible(mode == MahoSidebarBodyMode::kCreateSpace);
-    if (mode == MahoSidebarBodyMode::kCreateSpace) {
-      create_space_view_->PrepareForOpen();
-    }
-  }
-
-  if (mode == MahoSidebarBodyMode::kCreateSpace && create_space_view_) {
-    create_space_view_->RequestNameFocus();
   }
 
   if (previous_mode == MahoSidebarBodyMode::kLibrary &&
@@ -343,8 +328,7 @@ bool MahoSidebarView::CanRestoreFocusToView(const views::View* view) const {
     return false;
   }
 
-  return !IsDescendantOfView(view, library_container_) &&
-         !IsDescendantOfView(view, create_space_view_);
+  return !IsDescendantOfView(view, library_container_);
 }
 
 void MahoSidebarView::HandleLibraryCategorySelected(
@@ -370,7 +354,37 @@ void MahoSidebarView::UpdateSpacesPaneActions() {
 }
 
 void MahoSidebarView::OpenSpaceCreateSurface() {
-  OpenWebUIInNewTab(GURL(maho::kMahoSpaceCreateURL));
+  ShowCreateSpace();
+}
+
+void MahoSidebarView::ShowCreateSpace() {
+  if (!create_space_view_) {
+    return;
+  }
+  if (top_bar_view_) {
+    top_bar_view_->SetVisible(false);
+  }
+  if (body_host_) {
+    body_host_->SetVisible(false);
+  }
+  create_space_view_->SetVisible(true);
+  create_space_view_->PrepareForOpen();
+  create_space_view_->RequestNameFocus();
+  InvalidateLayout();
+}
+
+void MahoSidebarView::HideCreateSpace() {
+  if (!create_space_view_) {
+    return;
+  }
+  create_space_view_->SetVisible(false);
+  if (top_bar_view_) {
+    top_bar_view_->SetVisible(true);
+  }
+  if (body_host_) {
+    body_host_->SetVisible(true);
+  }
+  InvalidateLayout();
 }
 
 void MahoSidebarView::OpenSpaceConfigSurface() {
@@ -380,10 +394,7 @@ void MahoSidebarView::OpenSpaceConfigSurface() {
   if (active_space_id.empty()) {
     return;
   }
-  GURL url(maho::kMahoSpaceConfigURL);
-  url = net::AppendQueryParameter(url, "space_id", active_space_id);
-  url = net::AppendQueryParameter(url, "focus", "name");
-  OpenWebUIInNewTab(url);
+  return;
 }
 
 views::View* MahoSidebarView::GetOrCreateLibraryPane(
@@ -473,6 +484,9 @@ views::View* MahoSidebarView::GetOrCreateLibraryPane(
       }
       UpdateSpacesPaneActions();
       pane = spaces_view_;
+      break;
+    }
+    case MahoSidebarLibraryRailView::Category::kNotes: {
       break;
     }
     case MahoSidebarLibraryRailView::Category::kEasels: {
@@ -593,10 +607,6 @@ void MahoSidebarView::ExitArchiveModeToTabs() {
   ExitLibraryToTabs();
 }
 
-void MahoSidebarView::ShowCreateSpaceSurface() {
-  SetBodyMode(MahoSidebarBodyMode::kCreateSpace);
-}
-
 void MahoSidebarView::OpenWebUIInNewTab(const GURL& url) {
   if (!browser_) {
     return;
@@ -686,6 +696,9 @@ void MahoSidebarView::UpdateSearch(const MahoSidebarSearchModel& model) {
 void MahoSidebarView::UpdateFavorites(const MahoSidebarFavoritesModel& model) {
   if (favorites_view_) {
     favorites_view_->Update(model);
+  }
+  if (tab_list_view_) {
+    tab_list_view_->SetLastFavoritesModel(model);
   }
 }
 

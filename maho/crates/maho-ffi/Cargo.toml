@@ -9,8 +9,10 @@ crate-type = ["lib", "staticlib", "cdylib"]
 [dependencies]
 maho-core = { path = "../maho-core" }
 maho-types = { path = "../maho-types" }
+maho-acp = { path = "../maho-acp" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

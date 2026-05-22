@@ -4,7 +4,9 @@
 #define MAHO_BROWSER_UI_VIEWS_COMMAND_MAHO_COMMAND_OVERLAY_VIEW_H_
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/functional/callback.h"
@@ -14,17 +16,18 @@
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/gfx/geometry/insets.h"
+#include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/controls/textfield/textfield_controller.h"
 #include "ui/views/view.h"
-#include "ui/views/widget/widget_observer.h"
 
 class Browser;
 
 namespace views {
+class ImageView;
 class Label;
 class ScrollView;
 class Separator;
-class Textfield;
 class View;
 }  // namespace views
 
@@ -34,8 +37,7 @@ class MahoCommandModel;
 struct CommandSuggestion;
 
 class MahoCommandOverlayView : public views::View,
-                               public views::TextfieldController,
-                               public views::WidgetObserver {
+                               public views::TextfieldController {
   METADATA_HEADER(MahoCommandOverlayView, views::View)
 
  public:
@@ -43,16 +45,77 @@ class MahoCommandOverlayView : public views::View,
   using ResizeCallback = base::RepeatingCallback<void(int)>;
 
   explicit MahoCommandOverlayView(Browser* browser,
-                                  CommandOverlayMode mode,
-                                  const std::string& initial_text,
-                                  bool select_initial_text,
-                                  DismissCallback dismiss_callback,
-                                  ResizeCallback resize_callback);
+                                   CommandOverlayMode mode,
+                                   const std::string& initial_text,
+                                   bool select_initial_text,
+                                   DismissCallback dismiss_callback,
+                                   ResizeCallback resize_callback);
+
+  // Test-only constructor: accepts nullptr for |browser| and skips the
+  // production DCHECK so that unit tests can exercise key-handling and mode
+  // transitions without a live Browser instance.
+  struct ForTestingTag {};
+  MahoCommandOverlayView(ForTestingTag,
+                         CommandOverlayMode mode,
+                         const std::string& initial_text,
+                         bool select_initial_text,
+                         DismissCallback dismiss_callback,
+                         ResizeCallback resize_callback);
   MahoCommandOverlayView(const MahoCommandOverlayView&) = delete;
   MahoCommandOverlayView& operator=(const MahoCommandOverlayView&) = delete;
   ~MahoCommandOverlayView() override;
 
   views::Textfield* textfield() { return textfield_; }
+  size_t GetRenderedResultCountForTesting() const;
+  const std::vector<CommandSuggestion>& GetSeededResultsForTesting() const {
+    return seeded_results_;
+  }
+  bool IsSeededStateForTesting() const { return is_seeded_state_; }
+  views::View* GetResultsContainerForTesting() const { return results_container_; }
+  bool IsModeChipVisibleForTesting() const {
+    return mode_chip_ && mode_chip_->GetVisible();
+  }
+  bool TextfieldControlsResultsContainerForTesting() const;
+  bool TextfieldIsCollapsedForTesting() const;
+  bool TextfieldIsExpandedForTesting() const;
+  views::ViewAccessibility* GetActiveDescendantForTesting() const;
+  views::View* GetSearchRowForTesting() const { return search_row_; }
+  views::View* GetTrailingAccessoryForTesting() const {
+    return trailing_accessory_;
+  }
+  views::Label* GetTrailingAccessoryLabelForTesting() const {
+    return trailing_accessory_label_;
+  }
+  void UpdateResultViewsForTesting(
+      const std::vector<CommandSuggestion>& results);
+  void UpdateSelectionA11yForTesting(int old_index, int new_index);
+  void InitializeSeededStateForTesting(
+      std::vector<CommandSuggestion> seeds);
+  WindowOpenDisposition DispositionForModeForTesting() const {
+    return DispositionForMode();
+  }
+  CommandOverlayMode CurrentModeForTesting() const { return mode_; }
+  CommandOverlayMode OriginModeForTesting() const { return origin_mode_; }
+  static size_t GetMaxSeededVisibleResultsForTesting();
+  static CommandSuggestion BuildCurrentTabSeedForTesting(
+      const std::string& url,
+      const std::string& title) {
+    return BuildCurrentTabSeed(url, title, std::nullopt);
+  }
+  static std::vector<CommandSuggestion>
+  BuildCurrentTabSeedResultsFromHistoryForTesting(
+      const std::string& current_url,
+      const std::string& current_title,
+      const std::vector<std::pair<std::string, std::string>>& history_entries);
+  static int GetPanelCornerRadiusForTesting();
+  static int GetSearchRowCornerRadiusForTesting();
+  static int GetTopbarHorizontalInsetForTesting();
+  static gfx::Insets GetPanelInsetsForTesting();
+  static gfx::Insets GetEmptyStateInsetsForTesting(bool compact);
+  static int GetPanelSectionSpacingForTesting();
+  static int GetResultRowSpacingForTesting();
+  static gfx::Insets GetDividerInsetsForTesting();
+  static int GetTrailingAccessoryTrailingInsetForTesting();
 
   // views::TextfieldController:
   void ContentsChanged(views::Textfield* sender,
@@ -63,14 +126,7 @@ class MahoCommandOverlayView : public views::View,
 
   // views::View:
   void RequestFocus() override;
-  void AddedToWidget() override;
-  void RemovedFromWidget() override;
   void OnThemeChanged() override;
-
-  // views::WidgetObserver:
-  void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
-  void OnWidgetVisibilityChanged(views::Widget* widget, bool visible) override;
-  void OnWidgetDestroying(views::Widget* widget) override;
 
  private:
   void OnSearchResults(std::vector<CommandSuggestion> results);
@@ -86,6 +142,11 @@ class MahoCommandOverlayView : public views::View,
   void ResizeWidgetToContents();
   void UpdateLayoutForMode();
   void UpdateTextfieldPresentation();
+  void UpdateSearchLeadingAccessory();
+  void UpdateTrailingAccessoryPresentation();
+  void UpdateSearchRowChrome();
+  void InitializeCurrentTabSeedState(const std::string& initial_text);
+  bool ShouldClearSeededStateForText(std::u16string_view text) const;
 
   raw_ptr<Browser> browser_;
   CommandOverlayMode mode_;
@@ -94,15 +155,12 @@ class MahoCommandOverlayView : public views::View,
   ResizeCallback resize_callback_;
 
   raw_ptr<views::View> field_shell_ = nullptr;
-  raw_ptr<views::View> current_tab_shell_ = nullptr;
-  raw_ptr<views::View> current_tab_context_row_ = nullptr;
-  raw_ptr<views::Label> current_tab_context_label_ = nullptr;
-  raw_ptr<views::Label> current_tab_url_label_ = nullptr;
   raw_ptr<views::View> search_icon_lane_ = nullptr;
+  raw_ptr<views::ImageView> search_context_icon_ = nullptr;
   raw_ptr<views::Textfield> textfield_ = nullptr;
   raw_ptr<views::View> search_row_ = nullptr;
   raw_ptr<views::View> input_background_ = nullptr;
-  raw_ptr<views::View> trailing_gutter_ = nullptr;
+  raw_ptr<views::View> trailing_accessory_ = nullptr;
   raw_ptr<views::View> mode_chip_ = nullptr;
   raw_ptr<views::View> mode_chip_dot_ = nullptr;
   raw_ptr<views::Separator> divider_ = nullptr;
@@ -110,11 +168,13 @@ class MahoCommandOverlayView : public views::View,
   raw_ptr<views::View> results_container_ = nullptr;
   raw_ptr<views::Label> hint_label_ = nullptr;
   raw_ptr<views::Label> mode_label_ = nullptr;
-  raw_ptr<views::Widget> observed_widget_ = nullptr;
+  raw_ptr<views::Label> trailing_accessory_label_ = nullptr;
 
   std::string site_search_prefix_;
   std::string site_search_engine_name_;
-  std::string current_tab_url_text_;
+  // The mode active before entering a transient sub-mode (AI / SiteSearch).
+  // Used to restore the correct disposition when the sub-mode is exited.
+  CommandOverlayMode origin_mode_;
   const bool select_initial_text_;
 
   void EnterSiteSearchMode(const std::string& prefix,
@@ -123,8 +183,25 @@ class MahoCommandOverlayView : public views::View,
   void EnterAIMode();
   void ExitAIMode();
   void ApplyPlaceholderForMode();
+  void UpdateModeChipVisibility();
   void UpdateModeChip();
-  void UpdateCurrentTabShell();
+
+  static CommandSuggestion BuildCurrentTabSeed(
+      const std::string& url,
+      const std::string& title,
+      std::optional<ImageData> icon);
+  static std::vector<CommandSuggestion> BuildCurrentTabSeedResultsFromHistory(
+      const std::string& current_url,
+      const std::string& current_title,
+      const std::optional<ImageData>& current_icon,
+      const std::vector<CommandSuggestion>& history_entries);
+  static std::vector<CommandSuggestion> BuildCurrentTabSeedResults(
+      Browser* browser,
+      const std::string& url);
+
+  std::vector<CommandSuggestion> seeded_results_;
+  bool is_seeded_state_ = false;
+  std::string initial_url_;
 
   base::WeakPtrFactory<MahoCommandOverlayView> weak_factory_{this};
 };

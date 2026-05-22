@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Arc Library Mockup</title>
+  <style>
+    :root {
+      color-scheme: dark;
+
+      --page-bg: #090a0c;
+      --page-glow: rgba(90, 96, 108, 0.1);
+      --window-bg: #121315;
+      --window-top: #141517;
+      --window-border: rgba(255, 255, 255, 0.07);
+      --window-divider: rgba(255, 255, 255, 0.04);
+      --rail-bg: #101113;
+      --rail-hover: rgba(255, 255, 255, 0.045);
+      --rail-active: rgba(255, 255, 255, 0.062);
+      --panel-bg: #111214;
+      --panel-row: #181a1d;
+      --panel-row-soft: #16181b;
+      --panel-row-line: rgba(255, 255, 255, 0.032);
+      --panel-field: #181a1d;
+      --panel-field-line: rgba(255, 255, 255, 0.045);
+      --preview-bg: #1a1c20;
+      --preview-vignette: rgba(255, 255, 255, 0.015);
+      --text-strong: #eef1f6;
+      --text-body: #cad0da;
+      --text-muted: #969daa;
+      --text-faint: #6f7785;
+      --text-fainter: #5c6471;
+      --cta: #f2f4f7;
+      --cta-text: #111317;
+      --glow-blue: rgba(125, 154, 255, 0.14);
+      --shadow-window: 0 34px 110px rgba(0, 0, 0, 0.5);
+      --shadow-card: 0 14px 28px rgba(0, 0, 0, 0.24);
+
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-5: 20px;
+      --space-6: 24px;
+      --space-7: 32px;
+
+      --radius-window: 20px;
+      --radius-panel: 14px;
+      --radius-card: 15px;
+      --radius-pill: 999px;
+      --radius-control: 10px;
+
+      --titlebar-height: 45px;
+      --rail-width: 58px;
+      --list-width: 304px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      display: grid;
+      place-items: center;
+      padding: 22px;
+      background:
+        radial-gradient(circle at 50% 0%, var(--page-glow), transparent 36%),
+        linear-gradient(180deg, #0c0e12, var(--page-bg));
+      color: var(--text-strong);
+      font-family: "SF Pro Display", "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    .window {
+      width: min(1500px, 100%);
+      height: min(930px, calc(100vh - 44px));
+      overflow: hidden;
+      border-radius: var(--radius-window);
+      border: 1px solid var(--window-border);
+      background: linear-gradient(180deg, var(--window-top), var(--window-bg) 14%, var(--window-bg));
+      box-shadow: var(--shadow-window);
+    }
+
+    .titlebar {
+      display: flex;
+      align-items: center;
+      height: var(--titlebar-height);
+      padding: 0 14px;
+      border-bottom: 0;
+      background: transparent;
+    }
+
+    .traffic-lights {
+      display: flex;
+      gap: 8px;
+    }
+
+    .traffic-light {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 0 0 1px rgba(0, 0, 0, 0.16);
+    }
+
+    .traffic-light.red { background: #ff5f57; }
+    .traffic-light.yellow { background: #ffbd2e; }
+    .traffic-light.green { background: #28c840; }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: var(--rail-width) var(--list-width) minmax(0, 1fr);
+      height: calc(100% - var(--titlebar-height));
+    }
+
+    .rail {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      align-items: start;
+      padding: 10px 8px 10px;
+      border-right: 1px solid var(--window-divider);
+      background: linear-gradient(180deg, #121315, var(--rail-bg));
+    }
+
+    .rail-top {
+      display: grid;
+      gap: 10px;
+      justify-items: center;
+      padding-top: 4px;
+    }
+
+    .rail-badge {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.035);
+      display: grid;
+      place-items: center;
+      color: var(--text-body);
+    }
+
+    .rail-badge svg,
+    .rail-item svg,
+    .rail-footer-button svg,
+    .onboarding-icon svg,
+    .onboarding-close svg {
+      width: 15px;
+      height: 15px;
+      display: block;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .rail-nav {
+      display: grid;
+      gap: 8px;
+      align-content: start;
+      padding-top: 10px;
+    }
+
+    .rail-item {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      color: var(--text-faint);
+      display: grid;
+      justify-items: center;
+      gap: 4px;
+      padding: 8px 0;
+    }
+
+    .rail-item-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 11px;
+      display: grid;
+      place-items: center;
+      background: transparent;
+      border: 1px solid transparent;
+    }
+
+    .rail-item.active .rail-item-icon {
+      background: var(--rail-active);
+      border-color: rgba(255, 255, 255, 0.04);
+      color: var(--text-strong);
+    }
+
+    .rail-item:not(.active) .rail-item-icon {
+      color: var(--text-muted);
+    }
+
+    .rail-item-label {
+      font-size: 10px;
+      line-height: 1.15;
+      letter-spacing: 0.01em;
+      color: inherit;
+    }
+
+    .rail-footer {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: end;
+      gap: 8px;
+      padding-top: 8px;
+      opacity: 0.72;
+    }
+
+    .rail-back {
+      display: inline-flex;
+      align-items: center;
+      justify-self: start;
+      gap: 6px;
+      min-height: 24px;
+      padding: 0 2px;
+      color: rgba(111, 119, 133, 0.82);
+      font-size: 10px;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+    }
+
+    .rail-footer-button {
+      width: 24px;
+      height: 24px;
+      border: 0;
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.022);
+      color: rgba(111, 119, 133, 0.9);
+      display: grid;
+      place-items: center;
+      justify-self: end;
+    }
+
+    .list-pane {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      border-right: 1px solid var(--window-divider);
+      background: linear-gradient(180deg, #141517, var(--panel-bg));
+    }
+
+    .list-scroll,
+    .preview-scroll {
+      height: 100%;
+      overflow: auto;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+    }
+
+    .list-scroll::-webkit-scrollbar,
+    .preview-scroll::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+
+    .list-scroll::-webkit-scrollbar-thumb,
+    .preview-scroll::-webkit-scrollbar-thumb {
+      border: 2px solid transparent;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.11);
+      background-clip: padding-box;
+    }
+
+    .list-scroll {
+      padding: 15px 14px 22px;
+    }
+
+    .search {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      padding-bottom: 16px;
+      background: linear-gradient(180deg, #141517 74%, rgba(20, 21, 23, 0));
+    }
+
+    .search-field {
+      width: 100%;
+      height: 35px;
+      border: 1px solid var(--panel-field-line);
+      border-radius: 10px;
+      background: var(--panel-field);
+      color: var(--text-body);
+      padding: 0 12px;
+      font-size: 13px;
+      outline: none;
+    }
+
+    .search-field::placeholder {
+      color: var(--text-faint);
+    }
+
+    .section {
+      margin-top: 2px;
+    }
+
+    .section + .section {
+      margin-top: 24px;
+    }
+
+    .section-label {
+      margin: 0 0 10px;
+      color: rgba(111, 119, 133, 0.7);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+    }
+
+    .rows {
+      display: grid;
+      gap: 9px;
+    }
+
+    .row {
+      display: grid;
+      gap: 10px;
+      padding: 12px 12px 11px;
+      border-radius: 11px;
+      background: linear-gradient(180deg, var(--panel-row), var(--panel-row-soft));
+      border: 1px solid var(--panel-row-line);
+    }
+
+    .row-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .row-domain {
+      min-width: 0;
+      color: var(--text-body);
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .row-time {
+      flex: 0 0 auto;
+      color: var(--text-fainter);
+      font-size: 10px;
+    }
+
+    .row-lines {
+      display: grid;
+      gap: 7px;
+    }
+
+    .line {
+      height: 5px;
+      border-radius: var(--radius-pill);
+      background: rgba(255, 255, 255, 0.074);
+    }
+
+    .line.medium { width: 68%; }
+    .line.long { width: 92%; }
+    .line.short { width: 42%; }
+    .line.tiny { width: 28%; }
+
+    .onboarding {
+      position: relative;
+      overflow: hidden;
+      padding: 14px 14px 12px;
+      border-radius: var(--radius-card);
+      border: 1px solid rgba(255, 255, 255, 0.03);
+      background:
+        radial-gradient(circle at 16% 18%, var(--glow-blue), transparent 38%),
+        linear-gradient(180deg, #1d2027, #17191e 70%, #15171b);
+      box-shadow: var(--shadow-card);
+    }
+
+    .onboarding-top {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 9px;
+    }
+
+    .onboarding-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: rgba(255, 255, 255, 0.055);
+      color: var(--text-strong);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+    }
+
+    .onboarding-close {
+      width: 18px;
+      height: 18px;
+      border: 0;
+      padding: 0;
+      border-radius: 50%;
+      background: transparent;
+      color: rgba(255, 255, 255, 0.58);
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+    }
+
+    .onboarding-title {
+      margin: 0;
+      color: var(--text-strong);
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+
+    .onboarding-copy {
+      margin: 6px 0 12px;
+      color: rgba(238, 241, 246, 0.68);
+      font-size: 11px;
+      line-height: 1.45;
+      max-width: 216px;
+    }
+
+    .onboarding-cta {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 28px;
+      padding: 0 12px;
+      border: 0;
+      border-radius: 8px;
+      background: linear-gradient(180deg, #ffffff, #e8ebf1);
+      color: var(--cta-text);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.48);
+    }
+
+    .onboarding-note {
+      margin-top: 10px;
+      color: rgba(255, 255, 255, 0.34);
+      font-size: 9px;
+      line-height: 1.35;
+    }
+
+    .preview-pane {
+      min-width: 0;
+      background:
+        radial-gradient(circle at 65% 42%, var(--preview-vignette), transparent 34%),
+        linear-gradient(180deg, #1c1e22, var(--preview-bg));
+    }
+
+    .preview-scroll {
+      min-height: 100%;
+      padding: 18px 20px 20px;
+    }
+
+    @media (max-width: 1100px) {
+      :root {
+        --list-width: 286px;
+      }
+
+      .window {
+        height: min(920px, calc(100vh - 32px));
+      }
+    }
+
+    @media (max-width: 900px) {
+      body {
+        padding: 12px;
+      }
+
+      .window {
+        width: 100%;
+        height: calc(100vh - 24px);
+      }
+
+      .workspace {
+        grid-template-columns: var(--rail-width) minmax(250px, 0.92fr) minmax(0, 1fr);
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="window" aria-label="Arc Library mockup">
+    <header class="titlebar" aria-hidden="true">
+      <div class="traffic-lights">
+        <span class="traffic-light red"></span>
+        <span class="traffic-light yellow"></span>
+        <span class="traffic-light green"></span>
+      </div>
+    </header>
+
+    <section class="workspace">
+      <aside class="rail" aria-label="Library sections">
+        <div class="rail-top">
+          <div class="rail-badge" aria-hidden="true">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M12 3.75 5.75 7 12 10.25 18.25 7 12 3.75Z"></path>
+              <path d="M5.75 11.5 12 14.75 18.25 11.5"></path>
+              <path d="M5.75 16 12 19.25 18.25 16"></path>
+            </svg>
+          </div>
+        </div>
+
+        <div class="rail-nav">
+          <button class="rail-item active" type="button" aria-current="page">
+            <span class="rail-item-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <rect x="4.5" y="6" width="15" height="12" rx="2.75"></rect>
+                <path d="M9 18V20"></path>
+                <path d="M15 18V20"></path>
+              </svg>
+            </span>
+            <span class="rail-item-label">Media</span>
+          </button>
+
+          <button class="rail-item" type="button">
+            <span class="rail-item-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M12 4.5V14"></path>
+                <path d="m8.5 10.5 3.5 3.5 3.5-3.5"></path>
+                <path d="M5 18.5h14"></path>
+              </svg>
+            </span>
+            <span class="rail-item-label">Downloads</span>
+          </button>
+
+          <button class="rail-item" type="button">
+            <span class="rail-item-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M6 5.5h12"></path>
+                <path d="M6 18.5h12"></path>
+                <path d="M7 5.5v13"></path>
+                <path d="M17 5.5v13"></path>
+              </svg>
+            </span>
+            <span class="rail-item-label">Easels</span>
+          </button>
+        </div>
+
+        <div class="rail-footer">
+          <div class="rail-back" aria-hidden="true">‹ Back</div>
+          <button class="rail-footer-button" type="button" aria-label="Utility">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <circle cx="12" cy="12" r="2"></circle>
+              <path d="M4.75 12h.01"></path>
+              <path d="M19.24 12h.01"></path>
+            </svg>
+          </button>
+        </div>
+      </aside>
+
+      <section class="list-pane" aria-label="Media list">
+        <div class="list-scroll">
+          <div class="search">
+            <input class="search-field" type="search" placeholder="Search" aria-label="Search library">
+          </div>
+
+          <section class="section" aria-labelledby="today-label">
+            <h2 class="section-label" id="today-label">Today</h2>
+            <div class="rows">
+              <article class="row">
+                <div class="row-head">
+                  <div class="row-domain">youtube.com</div>
+                  <div class="row-time">4m</div>
+                </div>
+                <div class="row-lines">
+                  <div class="line long"></div>
+                  <div class="line medium"></div>
+                </div>
+              </article>
+
+              <article class="row">
+                <div class="row-head">
+                  <div class="row-domain">figma.com</div>
+                  <div class="row-time">18m</div>
+                </div>
+                <div class="row-lines">
+                  <div class="line long"></div>
+                  <div class="line short"></div>
+                </div>
+              </article>
+
+              <article class="row">
+                <div class="row-head">
+                  <div class="row-domain">notion.so</div>
+                  <div class="row-time">31m</div>
+                </div>
+                <div class="row-lines">
+                  <div class="line medium"></div>
+                  <div class="line tiny"></div>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="section" aria-labelledby="yesterday-label">
+            <h2 class="section-label" id="yesterday-label">Yesterday</h2>
+            <div class="rows">
+              <article class="onboarding">
+                <div class="onboarding-top">
+                  <div class="onboarding-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path d="M12 4.75 6.25 8 12 11.25 17.75 8 12 4.75Z"></path>
+                      <path d="M6.25 11.5 12 14.75 17.75 11.5"></path>
+                    </svg>
+                  </div>
+                  <button class="onboarding-close" type="button" aria-label="Dismiss card">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path d="M7 7 17 17"></path>
+                      <path d="M17 7 7 17"></path>
+                    </svg>
+                  </button>
+                </div>
+                <h3 class="onboarding-title">Turn on Library Sync</h3>
+                <p class="onboarding-copy">Keep captures and downloads available across devices.</p>
+                <button class="onboarding-cta" type="button">Enable Sync</button>
+                <div class="onboarding-note">Private by default. Your data stays linked to your profile.</div>
+              </article>
+
+              <article class="row">
+                <div class="row-head">
+                  <div class="row-domain">medium.com</div>
+                  <div class="row-time">7:12 PM</div>
+                </div>
+                <div class="row-lines">
+                  <div class="line long"></div>
+                  <div class="line medium"></div>
+                </div>
+              </article>
+
+              <article class="row">
+                <div class="row-head">
+                  <div class="row-domain">drive.google.com</div>
+                  <div class="row-time">5:46 PM</div>
+                </div>
+                <div class="row-lines">
+                  <div class="line medium"></div>
+                  <div class="line short"></div>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="section" aria-labelledby="earlier-label">
+            <h2 class="section-label" id="earlier-label">Earlier This Week</h2>
+            <div class="rows">
+              <article class="row">
+                <div class="row-head">
+                  <div class="row-domain">github.com</div>
+                  <div class="row-time">Mon</div>
+                </div>
+                <div class="row-lines">
+                  <div class="line long"></div>
+                  <div class="line short"></div>
+                </div>
+              </article>
+
+              <article class="row">
+                <div class="row-head">
+                  <div class="row-domain">read.cv</div>
+                  <div class="row-time">Sun</div>
+                </div>
+                <div class="row-lines">
+                  <div class="line medium"></div>
+                  <div class="line tiny"></div>
+                </div>
+              </article>
+
+              <article class="row">
+                <div class="row-head">
+                  <div class="row-domain">calendar.google.com</div>
+                  <div class="row-time">Sun</div>
+                </div>
+                <div class="row-lines">
+                  <div class="line long"></div>
+                  <div class="line medium"></div>
+                </div>
+              </article>
+
+              <article class="row">
+                <div class="row-head">
+                  <div class="row-domain">spotify.com</div>
+                  <div class="row-time">Sat</div>
+                </div>
+                <div class="row-lines">
+                  <div class="line medium"></div>
+                  <div class="line short"></div>
+                </div>
+              </article>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section class="preview-pane" aria-label="Preview area">
+        <div class="preview-scroll"></div>
+      </section>
+    </section>
+  </main>
+</body>
+</html>

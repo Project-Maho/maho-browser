@@ -8,10 +8,12 @@
 #include <string>
 
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/sequence_checker.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/views/widget/widget_observer.h"
 
 namespace network {
 class SharedURLLoaderFactory;
@@ -27,12 +29,23 @@ class Profile;
 
 class MahoLinkPreviewManager
     : public content::WebContentsObserver,
-      public content::WebContentsUserData<MahoLinkPreviewManager> {
+      public content::WebContentsUserData<MahoLinkPreviewManager>,
+      public views::WidgetObserver {
  public:
   ~MahoLinkPreviewManager() override;
 
   MahoLinkPreviewManager(const MahoLinkPreviewManager&) = delete;
   MahoLinkPreviewManager& operator=(const MahoLinkPreviewManager&) = delete;
+
+  // Test-only accessors.  Keep minimal — do not extend beyond what the
+  // interactive UI tests strictly require.
+  views::Widget* bubble_widget_for_testing() const { return bubble_widget_; }
+  void HandleLinkHoverForTesting(const std::string& url,
+                                 const std::string& text,
+                                 const gfx::Rect& rect) {
+    HandleLinkHover(url, text, rect);
+  }
+  void HandleLinkDismissForTesting() { HandleLinkDismiss(); }
 
   // content::WebContentsObserver:
   void DidFinishNavigation(
@@ -44,6 +57,9 @@ class MahoLinkPreviewManager
       int32_t line_no,
       const std::u16string& source_id,
       const std::optional<std::u16string>& untrusted_stack_trace) override;
+
+  // views::WidgetObserver:
+  void OnWidgetDestroying(views::Widget* widget) override;
 
  private:
   friend class content::WebContentsUserData<MahoLinkPreviewManager>;
@@ -70,6 +86,8 @@ class MahoLinkPreviewManager
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
   std::unique_ptr<network::SimpleURLLoader> url_loader_;
   raw_ptr<views::Widget> bubble_widget_ = nullptr;
+  base::ScopedObservation<views::Widget, views::WidgetObserver>
+      bubble_widget_observation_{this};
   gfx::Rect pending_anchor_rect_;
   uint64_t generation_ = 0;
   uint64_t pending_generation_ = 0;

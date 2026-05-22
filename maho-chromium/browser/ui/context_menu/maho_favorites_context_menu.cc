@@ -8,6 +8,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
 #include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
@@ -18,8 +19,9 @@
 MahoFavoritesContextMenu::MahoFavoritesContextMenu(
     Browser* browser,
     const GURL& url,
-    const std::u16string& title)
-    : browser_(browser), url_(url), title_(title) {}
+    const std::u16string& title,
+    const std::string& tab_id)
+    : browser_(browser), url_(url), title_(title), tab_id_(tab_id) {}
 
 MahoFavoritesContextMenu::~MahoFavoritesContextMenu() = default;
 
@@ -33,23 +35,6 @@ MahoFavoritesContextMenu::BuildMenuModel() {
   model->AddSeparator(ui::NORMAL_SEPARATOR);
 
   model->AddItem(IDC_MAHO_FAV_COPY_LINK, u"Copy Link");
-
-  model->AddSeparator(ui::NORMAL_SEPARATOR);
-
-  model->AddItem(IDC_MAHO_FAV_RENAME, u"Rename");
-
-  // TODO(maho): Populate with actual icon options from MahoCore.
-  change_icon_submenu_ = std::make_unique<ui::SimpleMenuModel>(this);
-  model->AddSubMenu(IDC_MAHO_FAV_CHANGE_ICON, u"Change Icon",
-                     change_icon_submenu_.get());
-
-  model->AddSeparator(ui::NORMAL_SEPARATOR);
-
-  // TODO(maho): Populate with actual space names from MahoCore.
-  move_to_space_submenu_ = std::make_unique<ui::SimpleMenuModel>(this);
-  model->AddSubMenu(IDC_MAHO_FAV_MOVE_TO_SPACE, u"Move to Space",
-                     move_to_space_submenu_.get());
-  model->AddItem(IDC_MAHO_FAV_DUPLICATE, u"Duplicate");
 
   model->AddSeparator(ui::NORMAL_SEPARATOR);
 
@@ -73,21 +58,13 @@ void MahoFavoritesContextMenu::ExecuteCommand(int command_id,
       writer.WriteText(base::UTF8ToUTF16(url_.spec()));
       break;
     }
-    case IDC_MAHO_FAV_OPEN_SPLIT: {
+    case IDC_MAHO_FAV_OPEN_SPLIT:
       MahoSplitViewController(browser_).AddSplitWithURL(url_);
       break;
-    }
-    case IDC_MAHO_FAV_RENAME:
-      // TODO(maho): Wire to maho-core FFI.
-      LOG(INFO) << "MahoFavoritesContextMenu: Rename";
-      break;
-    case IDC_MAHO_FAV_DUPLICATE:
-      // TODO(maho): Wire to maho-core FFI.
-      LOG(INFO) << "MahoFavoritesContextMenu: Duplicate";
-      break;
     case IDC_MAHO_FAV_REMOVE:
-      // TODO(maho): Wire to maho-core FFI.
-      LOG(INFO) << "MahoFavoritesContextMenu: Remove from Favorites";
+      if (!tab_id_.empty()) {
+        maho::DispatchShellEvent("unfavorite_tab", {{"tab_id", tab_id_}});
+      }
       break;
     default:
       break;
@@ -98,15 +75,10 @@ bool MahoFavoritesContextMenu::IsCommandIdEnabled(int command_id) const {
   switch (command_id) {
     case IDC_MAHO_FAV_OPEN_NEW_TAB:
     case IDC_MAHO_FAV_COPY_LINK:
-      return url_.is_valid();
     case IDC_MAHO_FAV_OPEN_SPLIT:
       return url_.is_valid();
-    case IDC_MAHO_FAV_RENAME:
-    case IDC_MAHO_FAV_CHANGE_ICON:
-    case IDC_MAHO_FAV_MOVE_TO_SPACE:
-    case IDC_MAHO_FAV_DUPLICATE:
     case IDC_MAHO_FAV_REMOVE:
-      return false;
+      return !tab_id_.empty();
     default:
       return false;
   }

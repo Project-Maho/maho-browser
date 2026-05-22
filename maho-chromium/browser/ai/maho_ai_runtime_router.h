@@ -11,18 +11,18 @@
 #include "base/sequence_checker.h"
 #include "maho/browser/ai/maho_ai_runtime_adapter.h"
 
-class Browser;
 class PrefService;
 
 namespace network {
 class SharedURLLoaderFactory;
 }
 
-// Owns the OpenCode runtime adapter and returns it as the sole active adapter.
+// Owns the single ACP runtime adapter. Reads the `maho.ai.runtime_command`
+// pref for the binary path. The adapter is constructed lazily on the first
+// call to GetActiveAdapter().
 class MahoAiRuntimeRouter {
  public:
   MahoAiRuntimeRouter(
-      Browser* browser,
       PrefService* prefs,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
   ~MahoAiRuntimeRouter();
@@ -35,8 +35,13 @@ class MahoAiRuntimeRouter {
   bool IsAvailable() const;
 
  private:
+  void RebuildAdapterIfStale();
+
   SEQUENCE_CHECKER(sequence_checker_);
-  std::unique_ptr<MahoAiRuntimeAdapter> opencode_adapter_;
+  raw_ptr<PrefService> prefs_;
+  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
+
+  std::unique_ptr<MahoAiRuntimeAdapter> active_adapter_;
 };
 
 #endif  // MAHO_BROWSER_AI_MAHO_AI_RUNTIME_ROUTER_H_

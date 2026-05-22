@@ -36,19 +36,16 @@ source_set("maho_ai_client") {
   ]
 }
 
-source_set("maho_opencode_runtime_service") {
+# Interface-only target: just the abstract adapter header. Concrete adapter
+# implementors (HTTP, ACP) depend on this rather than the full router target,
+# which avoids a dependency cycle.
+source_set("maho_ai_runtime_adapter_interface") {
   sources = [
-    "ai/maho_opencode_runtime_service.cc",
-    "ai/maho_opencode_runtime_service.h",
+    "ai/maho_ai_runtime_adapter.h",
   ]
   public_deps = [
     "//base",
-  ]
-  deps = [
-    "//net",
-    "//services/network/public/cpp",
-    "//services/network/public/mojom",
-    "//url",
+    "//components/prefs",
   ]
 }
 
@@ -56,8 +53,6 @@ source_set("maho_ai_runtime_adapter") {
   sources = [
     "ai/maho_ai_runtime_adapter.cc",
     "ai/maho_ai_runtime_adapter.h",
-    "ai/maho_opencode_adapter.cc",
-    "ai/maho_opencode_adapter.h",
     "ai/maho_ai_runtime_router.cc",
     "ai/maho_ai_runtime_router.h",
   ]
@@ -66,8 +61,9 @@ source_set("maho_ai_runtime_adapter") {
     "//components/prefs",
   ]
   deps = [
+    ":maho_ai_runtime_adapter_interface",
     ":maho_browser_ai_tools",
-    ":maho_opencode_runtime_service",
+    ":maho_opencode_acp_adapter",
     "//chrome/browser/ui/tabs:tab_strip",
     "//content/public/browser",
     "//maho/browser/ui/webui/maho_ai:mojo_bindings",
@@ -154,6 +150,7 @@ source_set("maho_context_menus") {
     "//content/public/browser",
     "//maho/browser:maho_core_holder",
     "//maho/browser:maho_space_profile_bridge",
+    "//maho/browser:maho_tab_id_helper",
     # TODO(nicolo): Re-enable when split_view is wired up.
     # "//maho/browser/ui/views/split_view:maho_split_view",
     "//maho/components/constants",
@@ -175,6 +172,8 @@ source_set("maho_context_menus") {
 
 source_set("maho_location_bar_views") {
   sources = [
+    "ui/views/location_bar/maho_location_bar_utility_bubble_coordinator.cc",
+    "ui/views/location_bar/maho_location_bar_utility_bubble_coordinator.h",
     "ui/views/location_bar/maho_location_bar_utility_icon_view.cc",
     "ui/views/location_bar/maho_location_bar_utility_icon_view.h",
     "ui/views/location_bar/maho_location_bar_utility_panel_provider.cc",
@@ -198,6 +197,7 @@ source_set("maho_location_bar_views") {
     "//components/security_state/core",
     "//components/vector_icons",
     "//content/public/browser",
+    "//maho/browser/ui/site_control:maho_site_control",
     "//maho/third_party/maho:maho_core_prebuilt",
     "//maho/third_party/maho:maho_ffi_headers",
     "//ui/base",
@@ -359,15 +359,165 @@ source_set("maho_browser_main_extra_parts") {
   ]
   deps = [
     ":maho_core_holder",
-    ":maho_opencode_runtime_service",
     ":maho_theme_support",
     "//base",
     "//chrome/browser:main_extra_parts",
-    "//chrome/browser/net",
     "//chrome/browser/profiles:profile",
-    "//components/prefs",
     "//maho/third_party/maho:maho_bridge",
-    "//services/network/public/cpp",
     "//ui/color",
+  ]
+}
+
+source_set("maho_features") {
+  sources = [
+    "maho_features.cc",
+    "maho_features.h",
+  ]
+  public_deps = [
+    "//base",
+  ]
+}
+
+source_set("maho_settings_navigation") {
+  sources = [
+    "ui/maho_settings_navigation.cc",
+    "ui/maho_settings_navigation.h",
+  ]
+  deps = [
+    "//base",
+    "//chrome/browser/ui:browser_navigator_params_headers",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//content/public/browser",
+    "//maho/components/constants",
+    "//net",
+    "//ui/base",
+    "//url",
+  ]
+}
+
+source_set("maho_tab_id_helper") {
+  sources = [
+    "maho_tab_id_helper.cc",
+    "maho_tab_id_helper.h",
+  ]
+  public_deps = [
+    "//base",
+    "//content/public/browser",
+  ]
+}
+
+source_set("maho_os_crypt_key_provider") {
+  sources = [
+    "os_crypt/maho_file_key_provider_mac.h",
+  ]
+  if (is_mac) {
+    sources += [
+      "os_crypt/maho_file_key_provider_mac.mm",
+    ]
+  }
+  deps = [
+    "//base",
+    "//components/os_crypt/async/browser:browser",
+    "//components/os_crypt/async/common:common",
+    "//crypto",
+    "//third_party/boringssl",
+  ]
+}
+
+source_set("maho_mac_sf_symbol_helper") {
+  sources = [
+    "ui/views/maho_mac_sf_symbol_helper.h",
+  ]
+  if (is_mac) {
+    sources += [
+      "ui/views/maho_mac_sf_symbol_helper.mm",
+    ]
+  }
+  public_deps = [
+    "//ui/base",
+    "//ui/color",
+    "//ui/gfx",
+  ]
+  deps = [
+    "//base",
+  ]
+}
+
+source_set("maho_opencode_acp_adapter") {
+  sources = [
+    "ai/maho_acp_event_decoder.cc",
+    "ai/maho_acp_event_decoder.h",
+    "ai/maho_opencode_acp_adapter.cc",
+    "ai/maho_opencode_acp_adapter.h",
+  ]
+  public_deps = [
+    "//base",
+  ]
+  deps = [
+    ":maho_ai_runtime_adapter_interface",
+    "//maho/browser/ui/webui/maho_ai:mojo_bindings",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//services/network/public/cpp",
+  ]
+}
+
+source_set("maho_opencode_acp_adapter_unittests") {
+  testonly = true
+  sources = [
+    "ai/maho_acp_event_decoder_unittest.cc",
+    "ai/maho_opencode_acp_adapter_unittest.cc",
+  ]
+  deps = [
+    ":maho_opencode_acp_adapter",
+    "//base",
+    "//base/test:test_support",
+    "//maho/browser/ui/webui/maho_ai:mojo_bindings",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_ai_runtime_router_unittests") {
+  testonly = true
+  sources = [
+    "ai/maho_ai_runtime_router_unittest.cc",
+  ]
+  deps = [
+    ":maho_ai_runtime_adapter",
+    ":maho_opencode_acp_adapter",
+    "//base",
+    "//base/test:test_support",
+    "//components/prefs:test_support",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_context_menus_unittests") {
+  testonly = true
+  sources = [
+    "ui/context_menu/maho_address_bar_context_menu_unittest.cc",
+    "ui/context_menu/maho_favorites_context_menu_unittest.cc",
+    "ui/context_menu/maho_folder_context_menu_unittest.cc",
+    "ui/context_menu/maho_space_context_menu_unittest.cc",
+    "ui/context_menu/maho_tab_context_menu_unittest.cc",
+  ]
+  deps = [
+    ":maho_context_menus",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+    "//ui/menus",
+  ]
+}
+
+source_set("maho_theme_io_unittests") {
+  testonly = true
+  sources = [
+    "ui/theme/maho_space_theme_io_unittest.cc",
+  ]
+  deps = [
+    ":maho_theme_support",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
   ]
 }

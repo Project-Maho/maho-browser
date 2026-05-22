@@ -8,7 +8,6 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, 'index.html'),
         sidebar: resolve(__dirname, 'sidebar/index.html'),
-        command: resolve(__dirname, 'command/index.html'),
         ai: resolve(__dirname, 'ai/index.html'),
         settings: resolve(__dirname, 'settings/index.html'),
         notes: resolve(__dirname, 'notes/index.html'),

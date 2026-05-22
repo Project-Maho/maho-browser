@@ -83,6 +83,11 @@ pub enum ShellEvent {
         space_id: SpaceId,
         url: Option<Url>,
         parent_id: Option<TabId>,
+        tab_id: Option<TabId>,
+        /// Browser window session ID that is creating this tab. Used to assign
+        /// window ownership for per-window tab isolation.
+        #[serde(default)]
+        window_id: Option<i64>,
     },
     CreateSplit {
         tab_ids: Vec<TabId>,
@@ -130,6 +135,11 @@ pub enum ShellEvent {
         tab_id: TabId,
         target_space: SpaceId,
         position: usize,
+    },
+    MoveTabToSpace {
+        tab_id: TabId,
+        target_space_id: SpaceId,
+        section: String,
     },
     SetTabParent {
         tab_id: TabId,
@@ -687,6 +697,7 @@ impl ShellEvent {
                 | Self::FreezeTab { .. }
                 | Self::UnfreezeTab { .. }
                 | Self::MoveTab { .. }
+                | Self::MoveTabToSpace { .. }
                 | Self::SetTabParent { .. }
                 | Self::SetTabCustomTitle { .. }
                 | Self::TabFaviconUpdated { .. }

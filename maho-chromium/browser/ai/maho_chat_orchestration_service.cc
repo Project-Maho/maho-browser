@@ -83,12 +83,16 @@ void MahoChatOrchestrationService::Reset() {
 void MahoChatOrchestrationService::HandleMessage(
     const std::string& message,
     maho_ai::mojom::ChatIntent chat_intent,
+    bool force_page_context,
     TokenCallback on_token,
     CompleteCallback on_complete,
     ErrorCallback on_error) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   RequestClassification classification = ClassifyRequest(message, chat_intent);
+  if (force_page_context) {
+    classification.requires_page_context = true;
+  }
   if (!chat_orchestrator_v2_enabled_ &&
       (classification.request_mode == RequestMode::kBrowserAction ||
        classification.request_mode == RequestMode::kToolAssistedTask)) {

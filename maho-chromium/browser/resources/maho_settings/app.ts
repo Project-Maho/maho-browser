@@ -1,5 +1,5 @@
-import {PageHandlerFactory, PageHandlerRemote, SettingValue, ProfileInfo, ATCRule, AISettings, ShortcutBinding, SyncStatus, SyncDeviceInfo, SyncKeyInfo, ThemeStoreEntry, AutofillAddress, AutofillPayment, FilterListInfo, ContentBlockerStats, InstalledExtension, PasswordProviderStatus, PasswordProviderKind, SavedPassword} from './maho_settings.mojom-webui.js';
-import {PageCallbackRouter} from './maho_settings.mojom-webui.js';
+import {PageHandlerRemote, PasswordProviderKind} from './mojo.js';
+import type {AISettings, ATCRule, AutofillAddress, AutofillPayment, ContentBlockerStats, FilterListInfo, InstalledExtension, PasswordProviderStatus, ProfileInfo, SavedPassword, SettingValue, ShortcutBinding, SyncDeviceInfo, SyncKeyInfo, SyncStatus, ThemeStoreEntry} from './mojo.js';
 import {
   ACCENT_COLORS,
   SETTING_METADATA,
@@ -9,18 +9,18 @@ import {
   PANE_DEFINITIONS,
   PANE_DEFINITION_MAP,
 } from './schema/panes.js';
-import {DOMAIN_DEFINITIONS} from './schema/domains.js';
 import type {LivePaneSectionDefinition} from './schema/panes.js';
 import type {
   ControlKind,
-  DomainId,
   PaneDefinition,
   SettingMetadata,
 } from './models.js';
 
+interface LegacySettingsEnvironment {
+  sync: (settings: SettingValue[]) => void;
+}
+
 let pageHandler: PageHandlerRemote;
-let callbackRouter: PageCallbackRouter;
-let currentPaneKey = 'general';
 let currentSettings: SettingValue[] = [];
 let currentPasswordProviderStatus: PasswordProviderStatus | null = null;
 let currentSavedPasswords: SavedPassword[] = [];
@@ -28,25 +28,73 @@ let currentPasswordSearchQuery = '';
 let passwordDataLoaded = false;
 let passwordDataLoading = false;
 const revealedPasswordIds = new Set<string>();
+let legacySettingsEnvironment: LegacySettingsEnvironment | null = null;
 
-function initialize() {
-  callbackRouter = new PageCallbackRouter();
-  pageHandler = new PageHandlerRemote();
+function cloneSetting(setting: SettingValue): SettingValue {
+  return {
+    ...setting,
+    key: setting.key,
+    value: setting.value,
+  };
+}
 
-  const factory = PageHandlerFactory.getRemote();
-  factory.createPageHandler(
-      callbackRouter.$.bindNewPipeAndPassRemote(),
-      pageHandler.$.bindNewPipeAndPassReceiver());
+function cloneSettings(settings: SettingValue[]): SettingValue[] {
+  return settings.map(cloneSetting);
+}
 
-  callbackRouter.settingsChanged.addListener((settings: SettingValue[]) => {
-    currentSettings = settings;
-    renderSettings(currentSettings);
-  });
+export function bindLegacySettingsEnvironment(
+    handler: PageHandlerRemote, environment: LegacySettingsEnvironment): void {
+  pageHandler = handler;
+  legacySettingsEnvironment = environment;
+}
 
-  pageHandler.getSettings().then(({settings}: {settings: SettingValue[]}) => {
-    currentSettings = settings;
-    renderSettings(currentSettings);
-  });
+export function syncLegacySettings(settings: SettingValue[]): void {
+  currentSettings = cloneSettings(settings);
+}
+
+export function renderLegacyPane(pane: PaneDefinition): HTMLElement {
+  const resolvedPane = PANE_DEFINITION_MAP[pane.key] ?? PANE_DEFINITIONS[0]!;
+
+  if (resolvedPane.kind === 'embed') {
+    return createEmbedPane(resolvedPane);
+  }
+
+  if (resolvedPane.contentKind === 'profiles') {
+    return createDomainPane(resolvedPane, createProfilesContent);
+  }
+  if (resolvedPane.contentKind === 'atc') {
+    return createDomainPane(resolvedPane, createATCContent);
+  }
+  if (resolvedPane.contentKind === 'ai') {
+    return createDomainPane(resolvedPane, createAIContent);
+  }
+  if (resolvedPane.contentKind === 'shortcuts') {
+    return createDomainPane(resolvedPane, createShortcutsContent);
+  }
+  if (resolvedPane.contentKind === 'sync') {
+    return createDomainPane(resolvedPane, createSyncContent);
+  }
+  if (resolvedPane.contentKind === 'theme-store') {
+    return createDomainPane(resolvedPane, createThemeStoreContent);
+  }
+  if (resolvedPane.contentKind === 'autofill') {
+    return createDomainPane(resolvedPane, createAutofillContent);
+  }
+  if (resolvedPane.contentKind === 'passwords') {
+    const section = createDomainPane(resolvedPane, createPasswordsContent);
+    if (!passwordDataLoaded && !passwordDataLoading) {
+      loadPasswordProviderState();
+    }
+    return section;
+  }
+  if (resolvedPane.contentKind === 'content-blocker') {
+    return createDomainPane(resolvedPane, createContentBlockerContent);
+  }
+  if (resolvedPane.contentKind === 'extensions') {
+    return createDomainPane(resolvedPane, createExtensionsContent);
+  }
+
+  return createLivePane(resolvedPane, currentSettings);
 }
 
 function getPasswordsEnabled(settings: SettingValue[]): boolean {
@@ -92,7 +140,7 @@ function loadPasswordProviderState() {
   ]).then(([providerResult, passwordsResult]) => {
     currentPasswordProviderStatus = providerResult.status;
     currentPasswordSearchQuery = '';
-    currentSavedPasswords = passwordsResult.passwords.map(password => ({
+    currentSavedPasswords = passwordsResult.passwords.map((password: SavedPassword) => ({
       ...password,
       password: password.password || null,
       lastUsed: password.lastUsed || null,
@@ -129,157 +177,10 @@ async function refreshSavedPasswords() {
 }
 
 function renderSettings(settings: SettingValue[]) {
-  const container = document.querySelector<HTMLElement>('maho-settings-app');
-  if (!container) {
-    return;
-  }
-
-  currentPaneKey = getInitialPaneKey();
-  container.replaceChildren(createPreferencesShell(settings));
-  if (currentPaneKey === 'passwords' && !passwordDataLoaded && !passwordDataLoading) {
-    loadPasswordProviderState();
-  }
+  currentSettings = cloneSettings(settings);
+  legacySettingsEnvironment?.sync(cloneSettings(currentSettings));
 }
 
-function getInitialPaneKey(): string {
-  const visible = PANE_DEFINITIONS.find(p => p.key === currentPaneKey);
-  return visible ? currentPaneKey : PANE_DEFINITIONS[0]!.key;
-}
-
-function createPreferencesShell(settings: SettingValue[]): HTMLElement {
-  const shell = document.createElement('div');
-  shell.className = 'preferences-shell';
-
-  const windowShell = document.createElement('div');
-  windowShell.className = 'preferences-window';
-
-  const workspace = document.createElement('div');
-  workspace.className = 'preferences-workspace';
-  workspace.append(createSidebar(), createContentPane(settings));
-
-  windowShell.appendChild(workspace);
-  shell.appendChild(windowShell);
-  return shell;
-}
-
-function createSidebar(): HTMLElement {
-  const sidebar = document.createElement('aside');
-  sidebar.className = 'preferences-sidebar';
-
-  const scroll = document.createElement('div');
-  scroll.className = 'preferences-sidebar__scroll';
-
-  const brand = document.createElement('section');
-  brand.className = 'sidebar-brand-card';
-
-  const brandTitle = document.createElement('h1');
-  brandTitle.className = 'sidebar-title';
-  brandTitle.textContent = 'Settings';
-
-  brand.appendChild(brandTitle);
-
-  const nav = document.createElement('nav');
-  nav.className = 'sidebar-navigation';
-  nav.setAttribute('aria-label', 'Settings panes');
-
-  const panesByDomain = new Map<DomainId, PaneDefinition[]>();
-  for (const pane of PANE_DEFINITIONS) {
-    const list = panesByDomain.get(pane.domain) || [];
-    list.push(pane);
-    panesByDomain.set(pane.domain, list);
-  }
-
-  for (const domain of DOMAIN_DEFINITIONS) {
-    const domainPanes = panesByDomain.get(domain.id);
-    if (!domainPanes || domainPanes.length === 0) continue;
-
-    const label = document.createElement('div');
-    label.className = 'sidebar-domain-label';
-    label.textContent = domain.label;
-    nav.appendChild(label);
-
-    for (const pane of domainPanes) {
-      nav.appendChild(createPaneButton(pane));
-    }
-  }
-
-  scroll.append(brand, nav);
-  sidebar.appendChild(scroll);
-  return sidebar;
-}
-
-function createPaneButton(pane: PaneDefinition): HTMLButtonElement {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'sidebar-nav-button';
-  button.dataset['pane'] = pane.key;
-  if (pane.key === currentPaneKey) {
-    button.classList.add('is-active');
-    button.setAttribute('aria-current', 'page');
-  }
-
-  const badge = document.createElement('span');
-  badge.className = 'sidebar-nav-button__badge';
-  badge.textContent = pane.symbol;
-
-  const text = document.createElement('span');
-  text.className = 'sidebar-nav-button__text';
-
-  const label = document.createElement('span');
-  label.className = 'sidebar-nav-button__label';
-  label.textContent = pane.navTitle;
-
-  text.appendChild(label);
-  button.append(badge, text);
-  button.addEventListener('click', () => {
-    if (currentPaneKey === pane.key) {
-      return;
-    }
-    currentPaneKey = pane.key;
-    renderSettings(currentSettings);
-  });
-  return button;
-}
-
-function createContentPane(settings: SettingValue[]): HTMLElement {
-  const content = document.createElement('main');
-  content.className = 'preferences-content';
-
-  const scroll = document.createElement('div');
-  scroll.className = 'preferences-content__scroll';
-
-  const pane = PANE_DEFINITION_MAP[currentPaneKey];
-  const resolvedPane = (pane && pane.kind !== 'hidden') ? pane : PANE_DEFINITIONS[0]!;
-
-  if (resolvedPane.kind === 'embed') {
-    scroll.appendChild(createEmbedPane(resolvedPane));
-  } else if (resolvedPane.contentKind === 'profiles') {
-    scroll.appendChild(createDomainPane(resolvedPane, createProfilesContent));
-  } else if (resolvedPane.contentKind === 'atc') {
-    scroll.appendChild(createDomainPane(resolvedPane, createATCContent));
-  } else if (resolvedPane.contentKind === 'ai') {
-    scroll.appendChild(createDomainPane(resolvedPane, createAIContent));
-  } else if (resolvedPane.contentKind === 'shortcuts') {
-    scroll.appendChild(createDomainPane(resolvedPane, createShortcutsContent));
-  } else if (resolvedPane.contentKind === 'sync') {
-    scroll.appendChild(createDomainPane(resolvedPane, createSyncContent));
-  } else if (resolvedPane.contentKind === 'theme-store') {
-    scroll.appendChild(createDomainPane(resolvedPane, createThemeStoreContent));
-  } else if (resolvedPane.contentKind === 'autofill') {
-    scroll.appendChild(createDomainPane(resolvedPane, createAutofillContent));
-  } else if (resolvedPane.contentKind === 'passwords') {
-    scroll.appendChild(createDomainPane(resolvedPane, createPasswordsContent));
-  } else if (resolvedPane.contentKind === 'content-blocker') {
-    scroll.appendChild(createDomainPane(resolvedPane, createContentBlockerContent));
-  } else if (resolvedPane.contentKind === 'extensions') {
-    scroll.appendChild(createDomainPane(resolvedPane, createExtensionsContent));
-  } else {
-    scroll.appendChild(createLivePane(resolvedPane, settings));
-  }
-
-  content.appendChild(scroll);
-  return content;
-}
 
 function createLivePane(pane: PaneDefinition, settings: SettingValue[]): HTMLElement {
   const section = createPaneSectionShell(pane);
@@ -470,8 +371,7 @@ function createProfilesContent(container: HTMLElement) {
     addBtn.addEventListener('click', () => {
       if (!nameInput.value.trim()) return;
       addBtn.disabled = true;
-      pageHandler.createProfile(nameInput.value.trim()).then(
-          ({profile}: {profile: ProfileInfo | null}) => {
+      pageHandler.createProfile(nameInput.value.trim()).then(({profile}) => {
             addBtn.disabled = false;
             if (profile) {
               rows.insertBefore(createProfileRow(profile, rows), addRow);
@@ -835,7 +735,8 @@ function createShortcutRow(binding: ShortcutBinding, parentContainer: HTMLElemen
   copy.className = 'setting-row__copy';
   const title = document.createElement('h4');
   title.className = 'setting-row__title';
-  title.textContent = binding.action.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+  title.textContent =
+      binding.action.replace(/_/g, ' ').replace(/\b\w/g, (letter: string) => letter.toUpperCase());
   const desc = document.createElement('p');
   desc.className = 'setting-row__description';
   desc.textContent = !binding.isDefault ? 'Custom binding' : 'Default';
@@ -2473,12 +2374,22 @@ function createSelectControl(item: SettingValue, meta: SettingMetadata): HTMLEle
 }
 
 function createSegmentedControl(item: SettingValue, meta: SettingMetadata): HTMLElement {
+  const wrapper = document.createElement('div');
   const segmented = document.createElement('div');
   segmented.className = 'setting-segmented';
   segmented.setAttribute('role', 'tablist');
   segmented.setAttribute('aria-label', meta.label);
 
-  for (const option of meta.options || []) {
+  const options = meta.options || [];
+  const hasKnownValue = options.some(option => option.value === item.value);
+  if (!hasKnownValue) {
+    const notice = document.createElement('p');
+    notice.className = 'setting-row__description';
+    notice.textContent = `Current value ${item.value || '(empty)'} is not recognized by the metadata registry.`;
+    wrapper.appendChild(notice);
+  }
+
+  for (const option of options) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'setting-segment';
@@ -2499,7 +2410,8 @@ function createSegmentedControl(item: SettingValue, meta: SettingMetadata): HTML
     segmented.appendChild(button);
   }
 
-  return segmented;
+  wrapper.appendChild(segmented);
+  return wrapper;
 }
 
 function normalizeInputValue(value: string, fallback: string, meta: SettingMetadata): string {
@@ -2542,5 +2454,3 @@ function getSettingMetadata(item: SettingValue): SettingMetadata|null {
 function getSectionId(key: string): string {
   return `section-${key}`;
 }
-
-document.addEventListener('DOMContentLoaded', initialize);

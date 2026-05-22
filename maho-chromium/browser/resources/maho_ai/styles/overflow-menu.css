@@ -1,0 +1,34 @@
+.compact-overflow-menu {
+  z-index: 4;
+  display: grid;
+  min-width: 150px;
+  padding: var(--maho-ai-space-1);
+  border: var(--maho-ai-border-width) solid var(--maho-ai-border);
+  border-radius: var(--maho-ai-radius-md);
+  background: var(--maho-ai-bg-card-strong);
+  box-shadow: var(--maho-ai-shadow-panel);
+  backdrop-filter: blur(var(--maho-ai-blur-surface));
+}
+
+.compact-overflow-menu__item {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 var(--maho-ai-space-3);
+  border-radius: calc(var(--maho-ai-radius-md) - var(--maho-ai-space-1));
+  color: var(--maho-ai-text-secondary);
+  font-size: var(--maho-ai-text-sm);
+  cursor: pointer;
+  transition:
+      background-color var(--maho-ai-transition-fast),
+      color var(--maho-ai-transition-fast),
+      transform var(--maho-ai-transition-fast);
+}
+
+.compact-overflow-menu__item:hover,
+.compact-overflow-menu__item:focus-visible {
+  background: var(--maho-ai-bg-panel-strong);
+  color: var(--maho-ai-text-primary);
+  outline: none;
+  transform: translateY(-1px);
+}

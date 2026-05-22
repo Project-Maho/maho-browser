@@ -3,6 +3,7 @@
 #include "maho/browser/ui/webui/maho_test/maho_test_ui.h"
 
 #include <memory>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -31,6 +32,7 @@
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
@@ -41,11 +43,14 @@
 #include "net/base/url_util.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
+#include "ui/views/view_utils.h"
 #include "url/gurl.h"
 
 namespace {
@@ -158,8 +163,8 @@ std::string BuildSidebarSnapshotJson(const maho::MahoSidebarViewStateModel& stat
   snapshot.Set("favorites_count", static_cast<int>(state.favorites.items.size()));
   snapshot.Set("favorites_slot_count",
                static_cast<int>(state.favorites.slot_count));
-  snapshot.Set("pinned_tabs_count", static_cast<int>(state.tab_list.pinned_tabs.size()));
-  snapshot.Set("normal_tabs_count", static_cast<int>(state.tab_list.tabs.size()));
+  snapshot.Set("pinned_tabs_count", static_cast<int>(state.tab_list.pinned_tree.size()));
+  snapshot.Set("normal_tabs_count", static_cast<int>(state.tab_list.normal_tree.size()));
   snapshot.Set("space_count", state.footer.space_count);
   snapshot.Set("active_space_index", state.footer.active_space_index);
   snapshot.Set("active_tab_index", state.tab_list.active_tab.index);
@@ -318,24 +323,25 @@ void SeedLevel2(Profile* profile) {
       {"https://maho.test/runtime-seed", false, false, nullptr},
   };
 
-  for (const auto& seed : kFavoriteSeedTabs) {
-    bool already_open = false;
+  // Open all tabs first WITHOUT pinning. Pin state is applied later, after
+  // core tab IDs have been created and bound to the WebContents, so that
+  // OnTabPinnedStateChanged() can always resolve a valid core tab ID.
+  auto open_seed_tab_if_missing = [&](const SeedTab& seed) {
     for (int i = 0; i < tab_strip_model->count(); ++i) {
       content::WebContents* wc = tab_strip_model->GetWebContentsAt(i);
       if (wc && wc->GetVisibleURL().spec() == std::string(seed.url)) {
-        already_open = true;
-        break;
+        return;
       }
     }
-    if (already_open) {
-      continue;
-    }
-
     chrome::AddAndReturnTabAt(browser, GURL(seed.url), -1, false);
-    int new_index = tab_strip_model->count() - 1;
-    if (seed.pin && !tab_strip_model->IsTabPinned(new_index)) {
-      tab_strip_model->SetTabPinned(new_index, true);
-    }
+  };
+
+  for (const auto& seed : kFavoriteSeedTabs) {
+    open_seed_tab_if_missing(seed);
+  }
+
+  for (const auto& seed : kSupportSeedTabs) {
+    open_seed_tab_if_missing(seed);
   }
 
   auto dispatch_seed_tab_event = [&](const char* kind,
@@ -469,6 +475,40 @@ void SeedLevel2(Profile* profile) {
     return normalized;
   };
 
+  std::set<std::string> live_urls_bound_to_core_ids;
+
+  auto bind_live_tab_id_for_url = [&](const std::string& target_url,
+                                      const std::string& tab_id) {
+    if (target_url.empty() || tab_id.empty() ||
+        live_urls_bound_to_core_ids.contains(target_url)) {
+      return;
+    }
+
+    for (int i = 0; i < tab_strip_model->count(); ++i) {
+      content::WebContents* contents = tab_strip_model->GetWebContentsAt(i);
+      if (!contents) {
+        continue;
+      }
+
+      const std::string live_url = contents->GetVisibleURL().is_empty()
+                                       ? contents->GetLastCommittedURL().spec()
+                                       : contents->GetVisibleURL().spec();
+      if (normalize_url_for_seed_match(live_url) !=
+          normalize_url_for_seed_match(target_url)) {
+        continue;
+      }
+
+      if (auto* helper = MahoTabIdHelper::FromWebContents(contents)) {
+        helper->SetRestoredTabId(tab_id);
+        live_urls_bound_to_core_ids.insert(target_url);
+        FavoriteDebugLines().push_back(
+            "bind_live_tab_id url=" + target_url + " tab_id=" + tab_id +
+            " strip_index=" + base::NumberToString(i));
+      }
+      return;
+    }
+  };
+
   auto find_tab_id_by_url = [&](const std::string& target_url) -> std::string {
     const std::string normalized_target_url =
         normalize_url_for_seed_match(target_url);
@@ -492,10 +532,10 @@ void SeedLevel2(Profile* profile) {
       return {};
     };
 
-    auto search_space_list = [&](char* (*ffi_fn)(MahoCore*, const char*)) -> std::string {
+    auto search_space_list = [&](auto get_json_fn) -> std::string {
       std::string space_id_json = resolve_space_id_json();
       if (space_id_json.empty()) return {};
-      char* json_c = ffi_fn(core, space_id_json.c_str());
+      char* json_c = get_json_fn(space_id_json.c_str());
       if (!json_c) return {};
       std::string json(json_c);
       maho_string_free(json_c);
@@ -513,8 +553,8 @@ void SeedLevel2(Profile* profile) {
       return {};
     };
 
-    std::string id = search_space_list(maho_core_get_space_tabs);
-    if (id.empty()) id = search_space_list(maho_core_get_pinned_tabs);
+    std::string id = search_space_list([&](const char* s) { return maho_core_get_space_tabs(core, s, nullptr); });
+    if (id.empty()) id = search_space_list([&](const char* s) { return maho_core_get_pinned_tabs(core, s); });
     if (id.empty()) id = search_global_list(maho_core_get_tab_view_models);
     return id;
   };
@@ -626,12 +666,36 @@ void SeedLevel2(Profile* profile) {
                                    " tab_id=" + tab_id);
   };
 
+  std::vector<std::string> pending_live_pins;
+
+  auto apply_live_strip_pin_for_url = [&](const std::string& target_url) {
+    const std::string normalized = normalize_url_for_seed_match(target_url);
+    for (int i = 0; i < tab_strip_model->count(); ++i) {
+      content::WebContents* wc = tab_strip_model->GetWebContentsAt(i);
+      if (!wc) continue;
+      const std::string live_url =
+          wc->GetVisibleURL().is_empty()
+              ? wc->GetLastCommittedURL().spec()
+              : wc->GetVisibleURL().spec();
+      if (normalize_url_for_seed_match(live_url) != normalized) continue;
+      if (!tab_strip_model->IsTabPinned(i)) {
+        tab_strip_model->SetTabPinned(i, true);
+      }
+      return;
+    }
+  };
+
   auto ensure_core_tab_id_for_seed = [&](const SeedTab& seed,
                                           bool force_create = false) {
     const std::string target_url(seed.url);
     const bool should_log_favorite_debug = seed.favorite;
     std::string tab_id;
-    if (!force_create) {
+
+    const bool already_bound =
+        live_urls_bound_to_core_ids.contains(target_url) ||
+        live_urls_bound_to_core_ids.contains(
+            normalize_url_for_seed_match(target_url));
+    if (!force_create || already_bound) {
       tab_id = find_tab_id_by_url_with_retry(target_url);
       if (should_log_favorite_debug) {
         FavoriteDebugLines().push_back("favorite_seed url=" + target_url +
@@ -646,7 +710,14 @@ void SeedLevel2(Profile* profile) {
         if (seed.pin) {
           dispatch_seed_tab_event("pin_tab", tab_id);
         }
+        bind_live_tab_id_for_url(target_url, tab_id);
+        if (seed.pin) {
+          pending_live_pins.push_back(target_url);
+        }
         set_seed_favorite_custom_title(seed, tab_id);
+        return tab_id;
+      }
+      if (!force_create) {
         return tab_id;
       }
     }
@@ -679,6 +750,10 @@ void SeedLevel2(Profile* profile) {
     }
     if (!tab_id.empty() && seed.pin) {
       dispatch_seed_tab_event("pin_tab", tab_id);
+    }
+    bind_live_tab_id_for_url(target_url, tab_id);
+    if (!tab_id.empty() && seed.pin) {
+      pending_live_pins.push_back(target_url);
     }
     set_seed_favorite_custom_title(seed, tab_id);
     return tab_id;
@@ -729,10 +804,6 @@ void SeedLevel2(Profile* profile) {
       LOG(WARNING) << "SeedLevel2 support seed skipped: no tab_id for url="
                    << seed.url;
       continue;
-    }
-
-    if (seed.pin) {
-      dispatch_seed_tab_event("pin_tab", tab_id);
     }
 
     const std::string support_title = custom_title_for_support_seed(seed.url);
@@ -786,6 +857,10 @@ void SeedLevel2(Profile* profile) {
           {"folder_id", folder_id},
           {"tab_id", tab_id}});
     }
+  }
+
+  for (const std::string& pin_url : pending_live_pins) {
+    apply_live_strip_pin_for_url(pin_url);
   }
 
   {
@@ -959,11 +1034,11 @@ std::string BuildSidebarSnapshotHtml(Profile* profile) {
           std::to_string(state.favorites.items.size()) + " items / " +
           std::to_string(state.favorites.slot_count) + " slots)</dd>";
   html += "      <dt>Pinned tabs present</dt><dd>" +
-          BoolText(!state.tab_list.pinned_tabs.empty()) + " (" +
-          std::to_string(state.tab_list.pinned_tabs.size()) + ")</dd>";
+          BoolText(!state.tab_list.pinned_tree.empty()) + " (" +
+          std::to_string(state.tab_list.pinned_tree.size()) + ")</dd>";
   html += "      <dt>Normal tabs present</dt><dd>" +
-          BoolText(!state.tab_list.tabs.empty()) + " (" +
-          std::to_string(state.tab_list.tabs.size()) + ")</dd>";
+          BoolText(!state.tab_list.normal_tree.empty()) + " (" +
+          std::to_string(state.tab_list.normal_tree.size()) + ")</dd>";
   html += "      <dt>Spaces visible</dt><dd>" +
           BoolText(state.footer.space_count > 0) + " (" +
           std::to_string(state.footer.space_count) + ", registered " +
@@ -1013,14 +1088,17 @@ std::string BuildSidebarSnapshotHtml(Profile* profile) {
   html += "    <p><strong>Pinned order:</strong> " +
           JoinHtmlLabels(RootTabOrderLabels(state.tab_list.pinned_tree)) +
           "</p>";
-  if (state.tab_list.pinned_tabs.empty()) {
+  if (state.tab_list.pinned_tree.empty()) {
     html += "    <p><span class=\"ok\">EMPTY</span></p>";
   } else {
     html += "    <ul>";
-    for (const auto& tab : state.tab_list.pinned_tabs) {
-      html += "      <li>#" + std::to_string(tab.index) + " " +
-              HtmlEscape(tab.title) + " — " + HtmlEscape(tab.host) +
-              (tab.is_active ? " <span class=\"ok\">ACTIVE</span>" : "") +
+    for (const auto& node : state.tab_list.pinned_tree) {
+      if (node.kind != maho::SidebarNodeKind::kTab) {
+        continue;
+      }
+      html += "      <li>#" + std::to_string(node.tab_strip_index) + " " +
+              HtmlEscape(node.title) + " — " + HtmlEscape(node.host) +
+              (node.is_active ? " <span class=\"ok\">ACTIVE</span>" : "") +
               "</li>";
     }
     html += "    </ul>";
@@ -1032,14 +1110,17 @@ std::string BuildSidebarSnapshotHtml(Profile* profile) {
   html += "    <p><strong>Normal order:</strong> " +
           JoinHtmlLabels(RootTabOrderLabels(state.tab_list.normal_tree)) +
           "</p>";
-  if (state.tab_list.tabs.empty()) {
+  if (state.tab_list.normal_tree.empty()) {
     html += "    <p><span class=\"ok\">EMPTY</span></p>";
   } else {
     html += "    <ul>";
-    for (const auto& tab : state.tab_list.tabs) {
-      html += "      <li>#" + std::to_string(tab.index) + " " +
-              HtmlEscape(tab.title) + " — " + HtmlEscape(tab.host) +
-              (tab.is_active ? " <span class=\"ok\">ACTIVE</span>" : "") +
+    for (const auto& node : state.tab_list.normal_tree) {
+      if (node.kind != maho::SidebarNodeKind::kTab) {
+        continue;
+      }
+      html += "      <li>#" + std::to_string(node.tab_strip_index) + " " +
+              HtmlEscape(node.title) + " — " + HtmlEscape(node.host) +
+              (node.is_active ? " <span class=\"ok\">ACTIVE</span>" : "") +
               "</li>";
     }
     html += "    </ul>";

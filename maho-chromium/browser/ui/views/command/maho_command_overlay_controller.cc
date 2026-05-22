@@ -8,8 +8,10 @@
 
 #include "base/check.h"
 #include "base/functional/bind.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
+#include "base/trace_event/trace_event.h"
 #include "maho/browser/ui/views/command/maho_command_overlay_view.h"
 #include "ui/compositor/layer.h"
 #include "ui/display/display.h"
@@ -20,7 +22,9 @@
 #include "ui/gfx/geometry/transform.h"
 #include "ui/views/animation/animation_builder.h"
 #include "ui/views/controls/textfield/textfield.h"
+#include "ui/views/focus/focus_manager.h"
 #include "ui/views/view.h"
+#include "ui/views/view_tracker.h"
 #include "ui/views/widget/widget.h"
 
 namespace maho {
@@ -32,11 +36,9 @@ constexpr base::TimeDelta kResizeDuration = base::Milliseconds(200);
 constexpr base::TimeDelta kFadeInDuration = base::Milliseconds(120);
 constexpr base::TimeDelta kSlideInDuration = base::Milliseconds(350);
 constexpr base::TimeDelta kDeactivationHideDelay = base::Milliseconds(200);
-constexpr base::TimeDelta kFocusRetentionInterval = base::Milliseconds(120);
-constexpr int kFocusRetentionPassCount = 30;
 
-constexpr int kPopupWidthDp = 720;
-constexpr int kPopupInitialHeightDp = 220;
+constexpr int kPopupWidthDp = 744;
+constexpr int kPopupInitialHeightDp = 232;
 constexpr int kPopupMinTopMarginDp = 62;
 constexpr int kPopupMinBottomMarginDp = 32;
 constexpr int kSlideOffsetDp = 10;
@@ -110,6 +112,8 @@ void MahoCommandOverlayController::Hide() {
   deactivation_hide_timer_.Stop();
   is_hiding_ = true;
 
+  RestoreFocusToPreShowView();
+
   if (parent_widget_) {
     parent_widget_->RemoveObserver(this);
     parent_widget_ = nullptr;
@@ -156,28 +160,14 @@ void MahoCommandOverlayController::FinishHideAnimation() {
       base::BindOnce([](std::unique_ptr<views::Widget>) {}, std::move(widget)));
 }
 
-void MahoCommandOverlayController::ScheduleFocusRetentionPasses() {
-  if (!widget_ || !overlay_view_ || is_hiding_ ||
-      remaining_focus_retention_passes_ <= 0) {
+void MahoCommandOverlayController::RestoreFocusToPreShowView() {
+  views::View* saved = pre_show_focused_view_.view();
+  pre_show_focused_view_.SetView(nullptr);
+  if (!saved || !parent_widget_)
     return;
-  }
-
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-      FROM_HERE,
-      base::BindOnce(
-          [](base::WeakPtr<MahoCommandOverlayController> self) {
-            if (!self || !self->widget_ || !self->overlay_view_ ||
-                self->is_hiding_) {
-              return;
-            }
-
-            --self->remaining_focus_retention_passes_;
-            self->widget_->Activate();
-            self->overlay_view_->RequestFocus();
-            self->ScheduleFocusRetentionPasses();
-          },
-          weak_factory_.GetWeakPtr()),
-      kFocusRetentionInterval);
+  views::FocusManager* fm = parent_widget_->GetFocusManager();
+  if (fm && fm->ContainsView(saved))
+    fm->SetFocusedView(saved);
 }
 
 void MahoCommandOverlayController::OnWidgetDestroying(
@@ -186,6 +176,7 @@ void MahoCommandOverlayController::OnWidgetDestroying(
     parent_widget_->RemoveObserver(this);
     parent_widget_ = nullptr;
     anchor_ = nullptr;
+    pre_show_focused_view_.SetView(nullptr);
   }
   if (widget == widget_.get()) {
     weak_factory_.InvalidateWeakPtrs();
@@ -193,6 +184,7 @@ void MahoCommandOverlayController::OnWidgetDestroying(
     is_hiding_ = false;
     overlay_view_ = nullptr;
     anchor_ = nullptr;
+    RestoreFocusToPreShowView();
     // The widget is already in its destruction path, so the controller must
     // relinquish ownership without attempting to delete it again here.
     widget_.release();
@@ -215,7 +207,9 @@ void MahoCommandOverlayController::OnWidgetActivationChanged(
   }
 
   if (active) {
-    deactivation_hide_timer_.Stop();
+    if (parent_widget_ && parent_widget_->IsActive()) {
+      deactivation_hide_timer_.Stop();
+    }
     return;
   }
 
@@ -308,13 +302,15 @@ void MahoCommandOverlayController::AnimateBoundsToHeight(int height) {
 }
 
 void MahoCommandOverlayController::Show(views::View* anchor,
-                                        CommandOverlayMode mode,
-                                        const std::string& initial_text,
-                                        bool select_initial_text) {
+                                         CommandOverlayMode mode,
+                                         const std::string& initial_text,
+                                         bool select_initial_text) {
   DCHECK(anchor);
   DCHECK(anchor->GetWidget());
   if (!anchor || !anchor->GetWidget())
     return;
+
+  open_start_ticks_ = base::TimeTicks::Now();
 
   if (widget_) {
     widget_->RemoveObserver(this);
@@ -325,26 +321,38 @@ void MahoCommandOverlayController::Show(views::View* anchor,
     parent_widget_ = nullptr;
   }
   is_hiding_ = false;
-  remaining_focus_retention_passes_ = 0;
 
   anchor_ = anchor;
   parent_widget_ = anchor->GetWidget();
   parent_widget_->AddObserver(this);
 
-  auto overlay_view = std::make_unique<MahoCommandOverlayView>(
-      browser_, mode, initial_text, select_initial_text,
-      base::BindOnce(
-          [](base::WeakPtr<MahoCommandOverlayController> self) {
-            if (self)
-              self->Hide();
-          },
-          weak_factory_.GetWeakPtr()),
-      base::BindRepeating(
-          [](base::WeakPtr<MahoCommandOverlayController> self, int height) {
-            if (self)
-              self->AnimateBoundsToHeight(height);
-          },
-          weak_factory_.GetWeakPtr()));
+  views::FocusManager* parent_focus_manager = parent_widget_->GetFocusManager();
+  pre_show_focused_view_.SetView(
+      parent_focus_manager ? parent_focus_manager->GetFocusedView() : nullptr);
+
+  auto dismiss_cb = base::BindOnce(
+      [](base::WeakPtr<MahoCommandOverlayController> self) {
+        if (self)
+          self->Hide();
+      },
+      weak_factory_.GetWeakPtr());
+  auto resize_cb = base::BindRepeating(
+      [](base::WeakPtr<MahoCommandOverlayController> self, int height) {
+        if (self)
+          self->AnimateBoundsToHeight(height);
+      },
+      weak_factory_.GetWeakPtr());
+
+  std::unique_ptr<MahoCommandOverlayView> overlay_view;
+  if (browser_) {
+    overlay_view = std::make_unique<MahoCommandOverlayView>(
+        browser_, mode, initial_text, select_initial_text,
+        std::move(dismiss_cb), std::move(resize_cb));
+  } else {
+    overlay_view = std::make_unique<MahoCommandOverlayView>(
+        MahoCommandOverlayView::ForTestingTag{}, mode, initial_text,
+        select_initial_text, std::move(dismiss_cb), std::move(resize_cb));
+  }
 
   auto* overlay_ptr = overlay_view.get();
 
@@ -373,6 +381,13 @@ void MahoCommandOverlayController::Show(views::View* anchor,
 
   widget_ptr->Show();
   widget_ptr->Activate();
+  {
+    const base::TimeDelta open_latency =
+        base::TimeTicks::Now() - open_start_ticks_;
+    TRACE_EVENT_INSTANT("ui", "MahoCommandPalette.OpenToFirstPaint",
+                        "latency_ms", open_latency.InMilliseconds());
+    UMA_HISTOGRAM_TIMES("Maho.CommandPalette.OpenLatency", open_latency);
+  }
 
   if (root_view && root_view->layer()) {
     root_view->layer()->SetOpacity(0.0f);
@@ -388,8 +403,6 @@ void MahoCommandOverlayController::Show(views::View* anchor,
 
   widget_ = std::move(widget);
   overlay_view_ = overlay_ptr;
-  remaining_focus_retention_passes_ = kFocusRetentionPassCount;
-  ScheduleFocusRetentionPasses();
 
   if (root_view && root_view->layer()) {
     views::AnimationBuilder()
@@ -402,7 +415,24 @@ void MahoCommandOverlayController::Show(views::View* anchor,
         .SetOpacity(root_view->layer(), 1.0f, gfx::Tween::EASE_OUT);
   }
 
+  // RequestFocus() is posted rather than called synchronously so that the
+  // platform's native window activation (triggered by Activate() above) has
+  // a chance to be processed before the view-system focus is set.  Without
+  // this, the FocusManager may set focused_view_ before the native window
+  // owns OS focus, which causes the first key event dispatched via
+  // SendKeyPressSync to be routed to the wrong window.
   overlay_ptr->RequestFocus();
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](base::WeakPtr<MahoCommandOverlayController> self) {
+            if (!self || !self->overlay_view_ || !self->widget_ ||
+                !self->widget_->IsVisible()) {
+              return;
+            }
+            self->overlay_view_->RequestFocus();
+          },
+          weak_factory_.GetWeakPtr()));
 }
 
 

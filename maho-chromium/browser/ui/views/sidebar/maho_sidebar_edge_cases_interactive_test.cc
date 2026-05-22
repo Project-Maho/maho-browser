@@ -25,10 +25,14 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_search_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "ui/base/test/ui_controls.h"
 #include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/label.h"
+#include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/view_utils.h"
 
 namespace maho {
@@ -55,6 +59,11 @@ bool HasLabelWithText(views::View* root, std::u16string_view expected) {
     }
   }
   return false;
+}
+
+MahoSidebarViewStateModel BuildViewStateForBrowser(Browser* target_browser) {
+  MahoSidebarStateAdapter adapter;
+  return adapter.BuildViewStateModel(target_browser);
 }
 
 class MahoSidebarEdgeCasesInteractiveTest
@@ -147,11 +156,6 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
       << "Favorite count should decrease after remove_favorite event";
 }
 
-// TODO(maho): FolderRenameViaContextMenu covers only menu dismissal.
-// MahoFolderContextMenu::ExecuteCommand(IDC_MAHO_FOLDER_RENAME) currently
-// only logs and does not dispatch a rename_folder shell event, so the full
-// context-menu → commit → state/UI path cannot be exercised until that stub
-// is wired. See maho_folder_context_menu.cc.
 IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
                        FolderRenameViaContextMenu) {
   SeedProfile(2);
@@ -243,6 +247,144 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       FolderInlineRenameViaContextMenuDispatchesShellEvent) {
+  SeedProfile(2);
+  observer_.Clear();
+
+  auto state = GetViewState();
+  std::string folder_id;
+  std::u16string original_name;
+  for (const auto& node : state.tab_list.normal_tree) {
+    if (node.kind == SidebarNodeKind::kFolder) {
+      folder_id = node.folder_id;
+      original_name = node.folder_name;
+      break;
+    }
+  }
+  ASSERT_FALSE(folder_id.empty()) << "Seed 2 must have at least one folder";
+
+  auto* folder_row = tab_list_->FindFolderRowByIdForTesting(folder_id);
+  ASSERT_TRUE(folder_row);
+  ASSERT_FALSE(folder_row->is_editing_for_testing());
+
+  folder_row->BeginFolderEditing();
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(folder_row->is_editing_for_testing())
+      << "BeginFolderEditing must activate inline edit mode";
+  ASSERT_TRUE(folder_row->name_field_for_testing());
+  ASSERT_TRUE(folder_row->name_field_for_testing()->GetVisible())
+      << "Name field must be visible while editing";
+
+  const std::u16string kNewName = u"InlineRenamed_Test";
+  folder_row->name_field_for_testing()->SetText(kNewName);
+
+  ui::KeyEvent enter_event(ui::EventType::kKeyPressed, ui::VKEY_RETURN,
+                           ui::EF_NONE);
+  folder_row->HandleKeyEvent(folder_row->name_field_for_testing(), enter_event);
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_FALSE(folder_row->is_editing_for_testing())
+      << "Inline edit must be committed on Enter";
+
+  EXPECT_TRUE(observer_.HasEvent("rename_folder"))
+      << "rename_folder shell event must be dispatched on inline edit commit";
+
+  ResolveViews();
+  EXPECT_TRUE(HasLabelWithText(tab_list_, kNewName))
+      << "Sidebar must display the new folder name after inline rename commit";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       FolderInlineRenameEscapeDoesNotDispatch) {
+  SeedProfile(2);
+  observer_.Clear();
+
+  auto state = GetViewState();
+  std::string folder_id;
+  for (const auto& node : state.tab_list.normal_tree) {
+    if (node.kind == SidebarNodeKind::kFolder) {
+      folder_id = node.folder_id;
+      break;
+    }
+  }
+  ASSERT_FALSE(folder_id.empty());
+
+  auto* folder_row = tab_list_->FindFolderRowByIdForTesting(folder_id);
+  ASSERT_TRUE(folder_row);
+
+  folder_row->BeginFolderEditing();
+  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(folder_row->is_editing_for_testing());
+
+  folder_row->name_field_for_testing()->SetText(u"ShouldNotCommit");
+  ui::KeyEvent esc_event(ui::EventType::kKeyPressed, ui::VKEY_ESCAPE,
+                         ui::EF_NONE);
+  folder_row->HandleKeyEvent(folder_row->name_field_for_testing(), esc_event);
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_FALSE(folder_row->is_editing_for_testing())
+      << "Escape must cancel inline editing";
+  EXPECT_FALSE(observer_.HasEvent("rename_folder"))
+      << "Escape must not dispatch rename_folder shell event";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       FolderPinViaContextMenuDispatchesShellEvent) {
+  SeedProfile(2);
+  observer_.Clear();
+
+  auto state = GetViewState();
+  std::string folder_id;
+  for (const auto& node : state.tab_list.normal_tree) {
+    if (node.kind == SidebarNodeKind::kFolder && !node.folder_is_pinned) {
+      folder_id = node.folder_id;
+      break;
+    }
+  }
+  if (folder_id.empty()) {
+    LOG(WARNING) << "No unpinned folder found in seed 2 — skipping";
+    return;
+  }
+
+  auto* folder_row = tab_list_->FindFolderRowByIdForTesting(folder_id);
+  ASSERT_TRUE(folder_row);
+
+  ShowContextMenuOnView(folder_row);
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
+      browser()->window()->GetNativeWindow(), ui::VKEY_ESCAPE,
+      false, false, false, false, base::DoNothing()));
+  base::RunLoop().RunUntilIdle();
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       FolderDeleteDispatchesShellEvent) {
+  SeedProfile(2);
+  observer_.Clear();
+
+  auto state = GetViewState();
+  std::string folder_id;
+  for (const auto& node : state.tab_list.normal_tree) {
+    if (node.kind == SidebarNodeKind::kFolder) {
+      folder_id = node.folder_id;
+      break;
+    }
+  }
+  ASSERT_FALSE(folder_id.empty());
+
+  const std::string active_space_id = GetActiveSpaceId();
+  maho::DispatchShellEvent("delete_folder",
+                           {{"space_id", active_space_id},
+                            {"folder_id", folder_id}});
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_TRUE(observer_.HasEvent("delete_folder"))
+      << "delete_folder shell event must be observable after dispatch";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
                        MultiWindowIndependentSidebars) {
   SeedProfile(2);
 
@@ -266,11 +408,98 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
       << "Second browser should also have a sidebar container";
   EXPECT_TRUE(container2->GetVisible());
 
+  // Verify per-window active space isolation: switch window 2 to a different
+  // space and confirm window 1 retains its original active space.
+  MahoSpaceProfileBridge* bridge = MahoSpaceProfileBridge::GetInstance();
+  ASSERT_TRUE(bridge);
+
+  const std::string space_a_id = bridge->GetActiveSpaceId(browser());
+  std::vector<std::string> all_space_ids = bridge->GetSpaceIds();
+  std::string space_b_id;
+  for (const auto& sid : all_space_ids) {
+    if (sid != space_a_id) {
+      space_b_id = sid;
+      break;
+    }
+  }
+
+  if (!space_b_id.empty()) {
+    bridge->SwitchToSpace(second_browser, space_b_id);
+    base::RunLoop().RunUntilIdle();
+
+    EXPECT_EQ(space_a_id, bridge->GetActiveSpaceId(browser()))
+        << "Window 1 active space must not change when window 2 switches";
+    EXPECT_EQ(space_b_id, bridge->GetActiveSpaceId(second_browser))
+        << "Window 2 must reflect the switched space";
+
+    auto state1 = BuildViewStateForBrowser(browser());
+    auto state2 = BuildViewStateForBrowser(second_browser);
+    EXPECT_EQ(space_a_id, state1.tab_list.active_space_id)
+        << "Window 1 sidebar model must report space A";
+    EXPECT_EQ(space_b_id, state2.tab_list.active_space_id)
+        << "Window 2 sidebar model must report space B";
+    EXPECT_NE(state1.tab_list.active_space_id,
+              state2.tab_list.active_space_id)
+        << "The two windows must not share the same sidebar active space";
+  }
+
   chrome::CloseWindow(second_browser);
   base::RunLoop().RunUntilIdle();
 
   EXPECT_TRUE(container_->GetVisible())
       << "First browser sidebar unaffected by second window close";
+}
+
+// Regression test: two windows can hold the same active space without
+// cross-contamination. Switching one window away must not affect the other
+// window that remains on the original space.
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       MultiWindowSameSpaceIndependence) {
+  SeedProfile(2);
+
+  MahoSpaceProfileBridge* bridge = MahoSpaceProfileBridge::GetInstance();
+  ASSERT_TRUE(bridge);
+
+  const std::string initial_space = bridge->GetActiveSpaceId(browser());
+  ASSERT_FALSE(initial_space.empty());
+
+  // Open a second window — it should inherit the same active space.
+  Browser* second_browser = CreateBrowser(browser()->profile());
+  ASSERT_TRUE(second_browser);
+
+  // Explicitly set window 2 to the same space as window 1.
+  bridge->SetActiveSpaceId(second_browser, initial_space);
+  EXPECT_EQ(initial_space, bridge->GetActiveSpaceId(second_browser));
+
+  // Find a different space to switch window 1 to.
+  std::vector<std::string> all_space_ids = bridge->GetSpaceIds();
+  std::string other_space;
+  for (const auto& sid : all_space_ids) {
+    if (sid != initial_space) {
+      other_space = sid;
+      break;
+    }
+  }
+
+  if (!other_space.empty()) {
+    bridge->SwitchToSpace(browser(), other_space);
+    base::RunLoop().RunUntilIdle();
+
+    EXPECT_EQ(initial_space, bridge->GetActiveSpaceId(second_browser))
+        << "Window 2 must retain its active space when window 1 switches away";
+    EXPECT_EQ(other_space, bridge->GetActiveSpaceId(browser()))
+        << "Window 1 must reflect the new space";
+
+    auto state1 = BuildViewStateForBrowser(browser());
+    auto state2 = BuildViewStateForBrowser(second_browser);
+    EXPECT_EQ(other_space, state1.tab_list.active_space_id)
+        << "Window 1 sidebar model must report the switched space";
+    EXPECT_EQ(initial_space, state2.tab_list.active_space_id)
+        << "Window 2 sidebar model must still report the original space";
+  }
+
+  chrome::CloseWindow(second_browser);
+  base::RunLoop().RunUntilIdle();
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
@@ -449,6 +678,43 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
       << "Update pill visibility should match has_update flag";
 }
 
+// Regression test: OnThemeChanged() must not call RefreshAll() directly.
+// A direct RefreshAll() fires during early widget attachment before the tab
+// strip is populated, producing has_active_tab=false and hiding the utility
+// affordance. After switching to ScheduleRefreshAll() the async favorites
+// pipeline runs first, so the first meaningful model push arrives with the
+// correct has_active_tab value.
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                        OnThemeChangedDoesNotHideUtilityAffordance) {
+  SeedProfile(2);
+  ResolveViews();
+
+  MahoSidebarSearchView* search = sidebar_->search_view_for_testing();
+  ASSERT_TRUE(search);
+
+  views::View* utility_slot = search->utility_icon_slot_for_testing();
+  ASSERT_TRUE(utility_slot);
+
+  // Verify the utility affordance is visible (has_active_tab=true from seed).
+  auto utility_slot_visible = [&]() { return utility_slot->GetVisible(); };
+  ASSERT_TRUE(base::test::RunUntil(utility_slot_visible))
+      << "Utility slot must be visible with an active tab before theme change";
+
+  // Simulate a theme change (as would fire during widget re-attachment or
+  // theme switch). Previously this called RefreshAll() directly, pushing
+  // has_active_tab=false before the tab strip is ready.
+  sidebar_->OnThemeChanged();
+
+  // Let the async scheduled refresh complete.
+  auto utility_slot_still_visible = [&]() {
+    base::RunLoop().RunUntilIdle();
+    return utility_slot->GetVisible();
+  };
+  ASSERT_TRUE(base::test::RunUntil(utility_slot_still_visible))
+      << "Utility slot must remain visible after OnThemeChanged() with an "
+         "active tab; a direct RefreshAll() regression would hide it";
+}
+
 IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
                         FavoritesIsolatedToActiveSpaceAfterSpaceSwitch) {
   SeedProfile(2);
@@ -481,7 +747,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
     }
   }
 
-  bridge->SwitchToSpace(space_b_id);
+  bridge->SwitchToSpace(browser(), space_b_id);
   base::RunLoop().RunUntilIdle();
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
@@ -500,6 +766,170 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
           << "' from space A must not appear in space B favorites after switch";
     }
   }
+}
+
+// Regression test: the search pill utility icon must be visible on first paint
+// without any SeedProfile() call or manual model injection. This covers the
+// constructor startup path where MahoSidebarView is created with a tab already
+// in the strip (the browser's initial NTP/about:blank tab). The synchronous
+// UpdateSearch() call in the constructor must seed has_active_tab=true before
+// the async favorites refresh arrives; without it the utility icon stays hidden
+// until OnFavoritesModelReady fires.
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       UtilityIconVisibleOnFirstPaintWithoutSeed) {
+  // No SeedProfile(), no manual model injection — use the browser as-is.
+  // The default browser starts with at least one tab in the strip.
+  ASSERT_GE(browser()->tab_strip_model()->count(), 1);
+
+  ResolveViews();
+
+  MahoSidebarSearchView* search = sidebar_->search_view_for_testing();
+  ASSERT_TRUE(search);
+
+  views::View* utility_slot = search->utility_icon_slot_for_testing();
+  ASSERT_TRUE(utility_slot);
+
+  // The utility slot must already be visible from the synchronous seed in the
+  // constructor — no async pump needed. RunUntilIdle() is used only to drain
+  // any in-flight tasks that could arrive after construction; the slot must
+  // already be visible before this call completes.
+  base::RunLoop().RunUntilIdle();
+  EXPECT_TRUE(utility_slot->GetVisible())
+      << "Utility icon slot must be visible on first paint with an active tab; "
+         "missing synchronous UpdateSearch() in constructor would leave it "
+         "hidden until the async favorites refresh completes.";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       IneligibleUrlsExcludedFromStartupReconciliation) {
+  TabStripModel* model = browser()->tab_strip_model();
+  ASSERT_GE(model->count(), 1);
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), GURL("chrome://newtab")));
+  ui_test_utils::NavigateToURLWithDisposition(
+      browser(), GURL("chrome://downloads"),
+      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+  base::RunLoop().RunUntilIdle();
+
+  ResolveViews();
+  ASSERT_TRUE(tab_list_);
+
+  views::View* rows_container = tab_list_->tab_rows_for_testing();
+  ASSERT_TRUE(rows_container);
+
+  for (views::View* child : rows_container->children()) {
+    auto* row = views::AsViewClass<SidebarTabRowView>(child);
+    if (!row) {
+      continue;
+    }
+    int live_index = row->live_tab_index_for_testing();
+    if (live_index < 0 || live_index >= model->count()) {
+      continue;
+    }
+    content::WebContents* contents = model->GetWebContentsAt(live_index);
+    ASSERT_TRUE(contents);
+    const GURL& url = contents->GetVisibleURL().is_empty()
+                          ? contents->GetLastCommittedURL()
+                          : contents->GetVisibleURL();
+    EXPECT_FALSE(maho::IsSidebarIneligibleUrl(url))
+        << "Sidebar rendered an ineligible URL as a tab row: " << url.spec();
+  }
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       GhostRowsNotRenderedAfterTabClose) {
+  ui_test_utils::NavigateToURLWithDisposition(
+      browser(), GURL("https://example.com"),
+      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+  base::RunLoop().RunUntilIdle();
+
+  ResolveViews();
+  ASSERT_TRUE(tab_list_);
+
+  TabStripModel* model = browser()->tab_strip_model();
+  ASSERT_GE(model->count(), 2);
+
+  chrome::CloseTab(browser());
+  base::RunLoop().RunUntilIdle();
+
+  views::View* rows_container = tab_list_->tab_rows_for_testing();
+  ASSERT_TRUE(rows_container);
+
+  for (views::View* child : rows_container->children()) {
+    auto* row = views::AsViewClass<SidebarTabRowView>(child);
+    if (!row) {
+      continue;
+    }
+    int live_index = row->live_tab_index_for_testing();
+    EXPECT_GE(live_index, 0)
+        << "A rendered sidebar row has no live tab-strip counterpart "
+           "(ghost row). It should have been filtered out during rebuild.";
+  }
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       TabsModeFooterRemainsFixedOutsideScrollTree) {
+  constexpr int kAddedTabs = 20;
+  AddTestTabs(kAddedTabs);
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    ResolveViews();
+    TabStripModel* strip = browser()->tab_strip_model();
+    return strip && strip->count() >= kAddedTabs + 1;
+  }));
+
+  ResolveViews();
+
+  MahoSidebarView* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+  views::ScrollView* tabs_scroll_view = sidebar->tabs_scroll_view_for_testing();
+  views::View* tabs_scroll_content = sidebar->tabs_scroll_content_for_testing();
+  MahoSidebarFooterView* footer = GetFooterView();
+  ASSERT_TRUE(tabs_scroll_view);
+  ASSERT_TRUE(tabs_scroll_content);
+  ASSERT_TRUE(footer);
+
+  EXPECT_TRUE(footer->GetVisible());
+  EXPECT_EQ(footer->parent(), sidebar->body_host_for_testing());
+  EXPECT_NE(footer->parent(), tabs_scroll_content);
+  EXPECT_EQ(tab_list_->parent(), tabs_scroll_content);
+  EXPECT_EQ(sidebar->search_view_for_testing()->parent()->parent(),
+            tabs_scroll_content)
+      << "Top-region content should live inside the outer tabs scroll content";
+
+  const int footer_height_before = footer->GetBoundsInScreen().height();
+  const int footer_y_before = footer->GetBoundsInScreen().y();
+  EXPECT_GT(footer_height_before, 0);
+  EXPECT_GT(tabs_scroll_content->GetPreferredSize().height(),
+            tabs_scroll_view->height());
+  EXPECT_LE(tabs_scroll_view->GetBoundsInScreen().bottom(),
+            footer->GetBoundsInScreen().y());
+
+  tabs_scroll_view->ScrollToPosition(tabs_scroll_view->vertical_scroll_bar(),
+                                     tabs_scroll_content->GetPreferredSize().height());
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+
+  footer = GetFooterView();
+  ASSERT_TRUE(footer);
+  EXPECT_EQ(footer_height_before, footer->GetBoundsInScreen().height())
+      << "Footer height must stay fixed while the tabs band scrolls";
+  EXPECT_EQ(footer_y_before, footer->GetBoundsInScreen().y())
+      << "Footer position must remain fixed while the tabs band scrolls";
+}
+
+TEST(IsSidebarIneligibleUrlTest, KnownSpecialPagesAreExcluded) {
+  EXPECT_TRUE(maho::IsSidebarIneligibleUrl(GURL("chrome://newtab")));
+  EXPECT_TRUE(maho::IsSidebarIneligibleUrl(GURL("chrome://downloads")));
+  EXPECT_TRUE(maho::IsSidebarIneligibleUrl(GURL("chrome://history")));
+  EXPECT_TRUE(maho::IsSidebarIneligibleUrl(GURL("about:blank")));
+  EXPECT_FALSE(maho::IsSidebarIneligibleUrl(GURL("https://example.com")));
+  EXPECT_FALSE(maho::IsSidebarIneligibleUrl(GURL("https://google.com")));
+  EXPECT_FALSE(maho::IsSidebarIneligibleUrl(GURL("chrome://settings")));
+  EXPECT_FALSE(maho::IsSidebarIneligibleUrl(GURL()));
 }
 
 }  // namespace

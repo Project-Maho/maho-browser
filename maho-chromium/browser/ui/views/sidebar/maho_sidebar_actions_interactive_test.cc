@@ -2,28 +2,233 @@
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_interactive_test_base.h"
 
+#include "base/check.h"
 #include "base/test/run_until.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "content/public/test/browser_test.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
+#include "maho/browser/ui/views/command/maho_command_overlay_controller.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_search_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
+#include "ui/accessibility/ax_enums.mojom.h"
+#include "ui/accessibility/ax_node_data.h"
 #include "ui/base/test/ui_controls.h"
 #include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/gfx/native_ui_types.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/textfield/textfield.h"
+#include "ui/views/bubble/bubble_dialog_delegate_view.h"
+#include "ui/views/focus/focus_manager.h"
 
 namespace maho {
 namespace {
 
+views::View* FindViewWithAccessibleName(views::View* root,
+                                        const std::u16string& name) {
+  if (!root) {
+    return nullptr;
+  }
+
+  ui::AXNodeData data;
+  root->GetViewAccessibility().GetAccessibleNodeData(&data);
+  const std::u16string accessible_name =
+      data.GetString16Attribute(ax::mojom::StringAttribute::kName);
+  if (accessible_name.find(name) != std::u16string::npos) {
+    return root;
+  }
+
+  for (views::View* child : root->children()) {
+    if (views::View* found = FindViewWithAccessibleName(child, name)) {
+      return found;
+    }
+  }
+  return nullptr;
+}
+
+void ClickScreenPoint(const gfx::Point& point) {
+  ASSERT_TRUE(ui_controls::SendMouseMove(point.x(), point.y()));
+  base::RunLoop click_loop;
+  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
+      ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
+      click_loop.QuitClosure()));
+  click_loop.Run();
+  base::RunLoop().RunUntilIdle();
+}
+
+void SendKeyPressToWindow(gfx::NativeWindow window, ui::KeyboardCode key_code) {
+  base::RunLoop key_loop;
+  ASSERT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
+      window, key_code, false, false, false, false, key_loop.QuitClosure()));
+  key_loop.Run();
+  base::RunLoop().RunUntilIdle();
+}
+
 class MahoSidebarActionsInteractiveTest
-    : public MahoSidebarInteractiveTestBase {};
+    : public MahoSidebarInteractiveTestBase {
+ protected:
+  views::Widget* OpenFooterActionPopover() {
+    MahoSidebarFooterView* footer = GetFooterView();
+    CHECK(footer);
+    views::MdTextButton* plus_button = footer->plus_button_for_testing();
+    CHECK(plus_button);
+
+    plus_button->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
+    plus_button->RequestFocus();
+    base::RunLoop().RunUntilIdle();
+
+    SendKeyPressToWindow(plus_button->GetWidget()->GetNativeWindow(),
+                         ui::VKEY_SPACE);
+
+    EXPECT_TRUE(base::test::RunUntil([footer] {
+      views::Widget* widget = footer->action_popover_widget_for_testing();
+      return widget && widget->IsVisible();
+    }));
+    return footer->action_popover_widget_for_testing();
+  }
+};
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
-                       ContextMenuCloseTab) {
+                       FooterPlusShowsAnchoredActionPopover) {
+  SeedProfile(1);
+
+  MahoSidebarFooterView* footer = GetFooterView();
+  ASSERT_TRUE(footer);
+  views::View* plus_button = footer->plus_button_for_testing();
+  ASSERT_TRUE(plus_button);
+
+  views::Widget* popover_widget = OpenFooterActionPopover();
+  ASSERT_TRUE(popover_widget);
+  ASSERT_FALSE(popover_widget->GetWindowBoundsInScreen().IsEmpty());
+
+  auto* bubble_delegate =
+      static_cast<views::BubbleDialogDelegateView*>(popover_widget->widget_delegate());
+  ASSERT_TRUE(bubble_delegate);
+
+  EXPECT_EQ(plus_button, bubble_delegate->GetAnchorView());
+  EXPECT_EQ(plus_button->GetBoundsInScreen(), bubble_delegate->GetAnchorRect());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       FooterPopoverNewTabExecutesAndDismisses) {
+  SeedProfile(1);
+
+  auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+  ASSERT_TRUE(browser_view);
+  EXPECT_EQ(nullptr, browser_view->GetMahoCommandOverlayControllerForTesting());
+
+  MahoSidebarFooterView* footer = GetFooterView();
+  ASSERT_TRUE(footer);
+  views::Widget* popover_widget = OpenFooterActionPopover();
+  ASSERT_TRUE(popover_widget);
+
+  views::View* new_tab_row =
+      FindViewWithAccessibleName(popover_widget->GetContentsView(), u"New Tab");
+  ASSERT_TRUE(new_tab_row);
+
+  ClickScreenPoint(new_tab_row->GetBoundsInScreen().CenterPoint());
+
+  EXPECT_TRUE(base::test::RunUntil([footer] {
+    return footer->action_popover_widget_for_testing() == nullptr;
+  }));
+  EXPECT_TRUE(base::test::RunUntil([browser_view] {
+    auto* overlay_controller =
+        browser_view->GetMahoCommandOverlayControllerForTesting();
+    return overlay_controller && overlay_controller->IsVisible();
+  }));
+
+  auto* overlay_controller =
+      browser_view->GetMahoCommandOverlayControllerForTesting();
+  ASSERT_TRUE(overlay_controller);
+  EXPECT_TRUE(overlay_controller->IsVisible());
+
+  overlay_controller->Hide();
+  EXPECT_TRUE(base::test::RunUntil([overlay_controller] {
+    return !overlay_controller->IsVisible();
+  }));
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       FooterPopoverEscapeDismissesWithoutExecutingAction) {
+  SeedProfile(1);
+  observer_.Clear();
+
+  auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+  ASSERT_TRUE(browser_view);
+  EXPECT_EQ(nullptr, browser_view->GetMahoCommandOverlayControllerForTesting());
+
+  MahoSidebarFooterView* footer = GetFooterView();
+  ASSERT_TRUE(footer);
+  views::Widget* popover_widget = OpenFooterActionPopover();
+  ASSERT_TRUE(popover_widget);
+
+  SendKeyPressToWindow(popover_widget->GetNativeWindow(), ui::VKEY_ESCAPE);
+
+  EXPECT_TRUE(base::test::RunUntil([footer] {
+    return footer->action_popover_widget_for_testing() == nullptr;
+  }));
+  auto* overlay_controller =
+      browser_view->GetMahoCommandOverlayControllerForTesting();
+  EXPECT_TRUE(overlay_controller == nullptr || !overlay_controller->IsVisible());
+  EXPECT_TRUE(observer_.events().empty());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       FooterPopoverDismissesOnBrowserFocusLossClick) {
+  SeedProfile(1);
+
+  auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+  ASSERT_TRUE(browser_view);
+  ASSERT_TRUE(browser_view->toolbar());
+
+  MahoSidebarFooterView* footer = GetFooterView();
+  ASSERT_TRUE(footer);
+  views::Widget* popover_widget = OpenFooterActionPopover();
+  ASSERT_TRUE(popover_widget);
+
+  ClickScreenPoint(browser_view->toolbar()->GetBoundsInScreen().CenterPoint());
+
+  EXPECT_TRUE(base::test::RunUntil([footer] {
+    return footer->action_popover_widget_for_testing() == nullptr;
+  }));
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       FooterPopoverDismissRestoresFocusToPlusButton) {
+  SeedProfile(1);
+
+  MahoSidebarFooterView* footer = GetFooterView();
+  ASSERT_TRUE(footer);
+  views::MdTextButton* plus_button = footer->plus_button_for_testing();
+  ASSERT_TRUE(plus_button);
+
+  plus_button->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
+  plus_button->RequestFocus();
+  ASSERT_EQ(plus_button,
+            plus_button->GetWidget()->GetFocusManager()->GetFocusedView());
+
+  views::Widget* popover_widget = OpenFooterActionPopover();
+  ASSERT_TRUE(popover_widget);
+
+  SendKeyPressToWindow(popover_widget->GetNativeWindow(), ui::VKEY_ESCAPE);
+
+  EXPECT_TRUE(base::test::RunUntil([footer] {
+    return footer->action_popover_widget_for_testing() == nullptr;
+  }));
+
+  EXPECT_EQ(plus_button,
+            plus_button->GetWidget()->GetFocusManager()->GetFocusedView())
+      << "Focus must return to plus_button after popover dismiss";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                        ContextMenuCloseTab) {
   SeedProfile(2);
   observer_.Clear();
 
@@ -54,13 +259,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   ASSERT_TRUE(target_node);
   ASSERT_TRUE(target_row);
 
-  const gfx::Point center = target_row->GetBoundsInScreen().CenterPoint();
-  ASSERT_TRUE(ui_controls::SendMouseMove(center.x(), center.y()));
-  base::RunLoop rclick_loop;
-  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
-      ui_controls::RIGHT, ui_controls::DOWN | ui_controls::UP,
-      rclick_loop.QuitClosure()));
-  rclick_loop.Run();
+  ShowContextMenuOnView(target_row);
   base::RunLoop().RunUntilIdle();
 
   base::RunLoop down_loop;
@@ -109,13 +308,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   auto* tab_row = tab_list_->FindTabRowByIdForTesting(unpinned_tab_id);
   ASSERT_TRUE(tab_row);
 
-  const gfx::Point center = tab_row->GetBoundsInScreen().CenterPoint();
-  ASSERT_TRUE(ui_controls::SendMouseMove(center.x(), center.y()));
-  base::RunLoop rclick_loop;
-  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
-      ui_controls::RIGHT, ui_controls::DOWN | ui_controls::UP,
-      rclick_loop.QuitClosure()));
-  rclick_loop.Run();
+  ShowContextMenuOnView(tab_row);
   base::RunLoop().RunUntilIdle();
 
   for (int i = 0; i < 7; ++i) {
@@ -244,17 +437,21 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   ASSERT_TRUE(idle_button);
   auto* hover_utility_slot = search->utility_icon_slot_for_testing();
   ASSERT_TRUE(hover_utility_slot);
-  EXPECT_FALSE(icon->GetVisible());
+  EXPECT_TRUE(icon->GetVisible())
+      << "Icon must be visible at startup via affordance_visible before any hover";
   EXPECT_FALSE(icon->IsHoverVisibleForTesting());
   EXPECT_FALSE(icon->IsPanelOpenForTesting());
-  EXPECT_FALSE(hover_utility_slot->GetVisible())
-      << "Baseline pill state should not expose an empty utility slot";
+  EXPECT_TRUE(hover_utility_slot->GetVisible())
+      << "Utility slot must be visible at baseline (has_active_tab=true) "
+         "so the affordance hit-target is present before hover";
 
   const gfx::Rect idle_bounds_before_hover = idle_button->GetBoundsInScreen();
 
   const gfx::Point idle_center = idle_button->GetBoundsInScreen().CenterPoint();
   ASSERT_TRUE(ui_controls::SendMouseMove(idle_center.x(), idle_center.y()));
-  ASSERT_TRUE(base::test::RunUntil([&]() { return icon->GetVisible(); }));
+  ASSERT_TRUE(base::test::RunUntil([&]() { return icon->IsHoverVisibleForTesting(); }));
+  EXPECT_TRUE(icon->GetVisible())
+      << "Hovering the sidebar pill should keep the utility icon visible";
   EXPECT_TRUE(icon->IsHoverVisibleForTesting())
       << "Hovering the sidebar pill should reveal the utility icon";
   EXPECT_TRUE(hover_utility_slot->GetVisible())
@@ -268,11 +465,12 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
       << "Utility affordance should live in the dedicated far-right slot";
   EXPECT_EQ(idle_button, hover_utility_slot->parent())
       << "Utility affordance should be attached to the idle pill surface";
-  EXPECT_GE(hover_utility_slot->GetBoundsInScreen().right(),
-            idle_bounds_after_hover.right() - 10)
-      << "Utility slot should occupy the far-right edge once the baseline icon is removed";
-  EXPECT_GE(icon_bounds.right(), idle_bounds_after_hover.right() - 10)
-      << "Utility affordance should sit at the far-right edge of the pill";
+  EXPECT_GT(hover_utility_slot->GetBoundsInScreen().CenterPoint().x(),
+            idle_bounds_after_hover.CenterPoint().x())
+      << "Utility slot should stay in the trailing half of the pill";
+  EXPECT_GT(icon_bounds.CenterPoint().x(),
+            idle_bounds_after_hover.CenterPoint().x())
+      << "Utility affordance should stay in the trailing half of the pill";
 
   const gfx::Point icon_center = icon->GetBoundsInScreen().CenterPoint();
   ASSERT_TRUE(ui_controls::SendMouseMove(icon_center.x(), icon_center.y()));
@@ -288,10 +486,99 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
       << "Utility icon should remain visible while its panel is open";
   EXPECT_TRUE(icon->IsHoverVisibleForTesting())
       << "Panel opening should not immediately hide hover visibility";
+  auto* overlay_controller =
+      BrowserView::GetBrowserViewForBrowser(browser())
+          ->GetMahoCommandOverlayControllerForTesting();
+  EXPECT_TRUE(overlay_controller == nullptr || !overlay_controller->IsVisible())
+      << "Clicking the utility icon should not fall through to the command "
+         "overlay";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
-                       EditingAndPlaceholderSuppressUtilityIcon) {
+                       UtilitySlotCenterClickOpensUtilityPanel) {
+  SeedProfile(2);
+
+  auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+  ASSERT_TRUE(browser_view);
+  EXPECT_EQ(nullptr, browser_view->GetMahoCommandOverlayControllerForTesting());
+
+  MahoSidebarSearchView* search = sidebar_->search_view_for_testing();
+  ASSERT_TRUE(search);
+
+  auto* icon = search->utility_icon_for_testing();
+  ASSERT_TRUE(icon);
+  auto* idle_button = search->idle_button_for_testing();
+  ASSERT_TRUE(idle_button);
+  auto* utility_slot = search->utility_icon_slot_for_testing();
+  ASSERT_TRUE(utility_slot);
+  ASSERT_TRUE(utility_slot->GetVisible());
+  EXPECT_FALSE(icon->IsPanelOpenForTesting());
+
+  const gfx::Point idle_center = idle_button->GetBoundsInScreen().CenterPoint();
+  ASSERT_TRUE(ui_controls::SendMouseMove(idle_center.x(), idle_center.y()));
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return icon->IsHoverVisibleForTesting(); }));
+
+  ClickScreenPoint(utility_slot->GetBoundsInScreen().CenterPoint());
+
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return icon->IsPanelOpenForTesting(); }));
+  auto* overlay_controller =
+      browser_view->GetMahoCommandOverlayControllerForTesting();
+  EXPECT_TRUE(overlay_controller == nullptr || !overlay_controller->IsVisible())
+      << "Clicking the utility slot should open the utility panel instead of "
+         "falling through to the command overlay";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       TrailingInsetClickOpensUtilityPanelNotCommandOverlay) {
+  SeedProfile(2);
+
+  auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+  ASSERT_TRUE(browser_view);
+  EXPECT_EQ(nullptr, browser_view->GetMahoCommandOverlayControllerForTesting());
+
+  MahoSidebarSearchView* search = sidebar_->search_view_for_testing();
+  ASSERT_TRUE(search);
+
+  auto* icon = search->utility_icon_for_testing();
+  ASSERT_TRUE(icon);
+  auto* idle_button = search->idle_button_for_testing();
+  ASSERT_TRUE(idle_button);
+  auto* utility_slot = search->utility_icon_slot_for_testing();
+  ASSERT_TRUE(utility_slot);
+  ASSERT_TRUE(utility_slot->GetVisible());
+  EXPECT_FALSE(icon->IsPanelOpenForTesting());
+
+  const gfx::Point idle_center = idle_button->GetBoundsInScreen().CenterPoint();
+  ASSERT_TRUE(ui_controls::SendMouseMove(idle_center.x(), idle_center.y()));
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return icon->IsHoverVisibleForTesting(); }));
+
+  // Click in the trailing inset: one pixel right of the utility slot's
+  // trailing screen edge, vertically centered on the pill. This point is
+  // inside idle_button_ but outside utility_icon_slot_, which is the region
+  // that previously fell through to the command overlay.
+  const gfx::Rect slot_screen = utility_slot->GetBoundsInScreen();
+  const gfx::Rect idle_screen = idle_button->GetBoundsInScreen();
+  const int trailing_inset_x = slot_screen.right() + 1;
+  const int trailing_inset_y = idle_screen.CenterPoint().y();
+  ASSERT_LT(trailing_inset_x, idle_screen.right())
+      << "Trailing inset must be inside the idle pill bounds";
+  ClickScreenPoint(gfx::Point(trailing_inset_x, trailing_inset_y));
+
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return icon->IsPanelOpenForTesting(); }))
+      << "Click in trailing pill inset must open the utility panel";
+  auto* overlay_controller =
+      browser_view->GetMahoCommandOverlayControllerForTesting();
+  EXPECT_TRUE(overlay_controller == nullptr || !overlay_controller->IsVisible())
+      << "Click in trailing pill inset must not fall through to the command "
+         "overlay";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                        EditingSuppressesUtilityIconPlaceholderDoesNot) {
   SeedProfile(2);
 
   MahoSidebarSearchView* search = sidebar_->search_view_for_testing();
@@ -306,7 +593,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
 
   const gfx::Point idle_center = idle_button->GetBoundsInScreen().CenterPoint();
   ASSERT_TRUE(ui_controls::SendMouseMove(idle_center.x(), idle_center.y()));
-  ASSERT_TRUE(base::test::RunUntil([&]() { return icon->GetVisible(); }));
+  ASSERT_TRUE(base::test::RunUntil([&]() { return icon->IsHoverVisibleForTesting(); }));
   EXPECT_TRUE(icon->IsHoverVisibleForTesting());
 
   ASSERT_TRUE(ui_controls::SendMouseMove(idle_center.x(), idle_center.y()));
@@ -338,25 +625,75 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   MahoSidebarSearchModel placeholder_model = GetViewState().search;
   placeholder_model.display_mode = MahoSidebarAddressDisplayMode::kSearchPlaceholder;
   placeholder_model.force_placeholder_for_empty_favorites = true;
+  placeholder_model.has_active_tab = true;
   search->Update(placeholder_model);
   base::RunLoop().RunUntilIdle();
 
-  ASSERT_TRUE(base::test::RunUntil([&]() { return !icon->GetVisible(); }));
-  EXPECT_FALSE(utility_slot->GetVisible())
-      << "Placeholder mode should keep the utility slot hidden";
-  EXPECT_FALSE(icon->IsHoverVisibleForTesting())
-      << "Placeholder mode should suppress the hover-revealed utility icon";
-
   ASSERT_TRUE(ui_controls::SendMouseMove(idle_center.x(), idle_center.y()));
-  base::RunLoop().RunUntilIdle();
-  EXPECT_FALSE(icon->GetVisible())
-      << "Placeholder mode should keep the utility affordance hidden even on hover";
-  EXPECT_FALSE(icon->IsHoverVisibleForTesting())
-      << "Placeholder mode should continue suppressing hover visibility";
+  ASSERT_TRUE(base::test::RunUntil([&]() { return icon->IsHoverVisibleForTesting(); }));
+  EXPECT_TRUE(utility_slot->GetVisible())
+      << "Placeholder mode with an active tab should keep the utility slot available";
+  EXPECT_TRUE(icon->IsHoverVisibleForTesting())
+      << "Placeholder mode should not suppress hover-revealed utility icon";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
-                       NewTabButtonCreatesTab) {
+                       UtilitySlotVisibleAtStartupBeforeHover) {
+  SeedProfile(2);
+
+  MahoSidebarSearchView* search = sidebar_->search_view_for_testing();
+  ASSERT_TRUE(search);
+
+  auto* utility_slot = search->utility_icon_slot_for_testing();
+  ASSERT_TRUE(utility_slot);
+  auto* icon = search->utility_icon_for_testing();
+  ASSERT_TRUE(icon);
+
+  MahoSidebarSearchModel startup_model = GetViewState().search;
+  startup_model.has_active_tab = true;
+  startup_model.display_mode = MahoSidebarAddressDisplayMode::kAddressCard;
+  startup_model.force_placeholder_for_empty_favorites = false;
+  search->Update(startup_model);
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_TRUE(utility_slot->GetVisible())
+      << "Utility slot must be visible at startup (has_active_tab=true) before "
+         "any hover, so the affordance hit-target exists after relaunch";
+  EXPECT_TRUE(icon->GetVisible())
+      << "Icon must be visible at startup (affordance_visible=true) without "
+         "requiring an initial hover";
+  EXPECT_FALSE(icon->IsHoverVisibleForTesting())
+      << "hover_visible flag stays false until an actual hover occurs";
+  EXPECT_TRUE(icon->IsAffordanceVisibleForTesting())
+      << "affordance_visible flag drives the startup-visible icon state";
+
+  MahoSidebarSearchModel editing_model = startup_model;
+  editing_model.has_active_tab = true;
+  search->Update(editing_model);
+  base::RunLoop().RunUntilIdle();
+
+  const gfx::Point idle_center =
+      search->idle_button_for_testing()->GetBoundsInScreen().CenterPoint();
+  ASSERT_TRUE(ui_controls::SendMouseMove(idle_center.x(), idle_center.y()));
+  base::RunLoop click_loop;
+  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
+      ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
+      click_loop.QuitClosure()));
+  click_loop.Run();
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return search->is_editing_for_testing(); }));
+
+  EXPECT_FALSE(utility_slot->GetVisible())
+      << "Utility slot must be hidden while editing, regardless of "
+         "has_active_tab";
+  EXPECT_FALSE(icon->GetVisible())
+      << "Inner icon must also be hidden during editing";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                        NewTabButtonCreatesTab) {
   SeedProfile(2);
 
   int initial_tab_count = browser()->tab_strip_model()->count();

@@ -30,7 +30,17 @@ export interface GradientTheme {
   texture: number;
 }
 
-export type SpaceThemeData = SolidTheme|GradientTheme;
+export interface ZenTheme {
+  type: 'zen';
+  gradientColors: ThemeColor[];
+  harmony: ColorHarmony;
+  opacity: number;
+  texture: number;
+}
+
+export type SpaceThemeData = SolidTheme|GradientTheme|ZenTheme;
+
+export const ZEN_THEME_HARMONY: ColorHarmony = 'analogous';
 
 export interface ColorPreset {
   title: string;
@@ -100,6 +110,16 @@ export function computeHarmonyColors(
     case 'custom':
       return [primary];
   }
+}
+
+export function buildZenTheme(spaceColor: SpaceColor, texture: number): ZenTheme {
+  return {
+    type: 'zen',
+    gradientColors: computeHarmonyColors(spaceColor, ZEN_THEME_HARMONY),
+    harmony: ZEN_THEME_HARMONY,
+    opacity: 1,
+    texture,
+  };
 }
 
 export function hsbToRgb(h: number, s: number, b: number): [number, number, number] {

@@ -20,6 +20,60 @@ enum ChatIntent {
   kSummarizeCurrentPage,
 };
 
+// Per-prompt interaction mode. Controls persona injection and response
+// shaping behavior. Sent with each SubmitPrompt call, not persisted.
+enum InteractionMode {
+  // Conversational assistant: concise, helpful, non-technical by default.
+  kAssistant,
+  // Developer/power-user mode: raw agent output, no persona prefix.
+  kDeveloper,
+};
+
+// ==========================================================================
+// Browser-context payload — typed contract for the actual page context
+// injected (or denied) by the adapter at submit time. This lets WebUI
+// inspect exactly what the runtime received without owning extraction.
+// ==========================================================================
+
+// Extraction outcome reported by the adapter after attempting page-context
+// injection.
+enum BrowserContextStatus {
+  // Context was successfully extracted and injected into the prompt.
+  kInjected,
+  // Context extraction was attempted but the page is an internal/privileged
+  // scheme (chrome://, devtools://, etc.) that the privacy deny-list blocks.
+  kDeniedInternalPage,
+  // No active tab was available at extraction time.
+  kNoActiveTab,
+  // The page could not be accessed (e.g. still loading, cross-origin).
+  kCannotAccess,
+  // Extraction ran but produced no usable content.
+  kExtractionFailed,
+  // The caller did not request context attachment (attach_browser_context
+  // was false).
+  kNotRequested,
+};
+
+// The actual browser context that was injected (or attempted) by the
+// adapter. Emitted as part of a kBrowserContextInjected RuntimeEvent so
+// WebUI can display truthful context metadata without owning extraction.
+struct BrowserContextPayload {
+  BrowserContextStatus status;
+  // Page URL at extraction time. Empty when status is kNotRequested or
+  // kNoActiveTab.
+  string url;
+  // Page title at extraction time.
+  string title;
+  // Truncated content snippet (first ~200 chars) for inspector display.
+  // The full content is only in the augmented prompt sent to the runtime.
+  string content_snippet;
+  // Number of characters of page content that were injected.
+  uint32 content_length;
+  // Human-readable warnings (e.g. "content was truncated", "partial
+  // extraction").
+  array<string> warnings;
+};
+
 // ==========================================================================
 // Session/event-oriented types — the new contract for the OpenCode console.
 // ==========================================================================
@@ -59,6 +113,9 @@ enum RuntimeEventKind {
   kSessionStatus,
   // Connection state changed (for UI indicators).
   kConnectionStateChanged,
+  // Browser context was injected (or denied) into the prompt. Carries a
+  // BrowserContextPayload with the truthful extraction outcome.
+  kBrowserContextInjected,
 };
 
 // Status of a tool invocation.
@@ -128,6 +185,7 @@ struct RuntimeEvent {
   ToolResultInfo? tool_result;
   ApprovalRequestInfo? approval_request;
   ApprovalResultInfo? approval_result;
+  BrowserContextPayload? browser_context;
 };
 
 // Lifecycle status of a session.
@@ -211,7 +269,9 @@ interface PageHandler {
 
   // Start a new session. Returns the session info and begins streaming
   // events to the Page interface via OnRuntimeEvent.
-  StartSession(string? initial_prompt) => (SessionInfo session);
+  // |mode| controls the interaction persona for the initial prompt only;
+  // subsequent prompts supply their own mode via SubmitPrompt.
+  StartSession(string? initial_prompt, InteractionMode mode) => (SessionInfo session);
 
   // Resume/reconnect to an existing session. For the currently active session,
   // returns live state and replay events. For historical sessions, returns
@@ -226,7 +286,11 @@ interface PageHandler {
       => (array<RuntimeEvent> events, uint32 total_count);
 
   // Submit a user prompt into the active session.
-  SubmitPrompt(string session_id, string prompt);
+  // When |attach_browser_context| is true, the runtime adapter injects
+  // current page context (URL, title, content) into the prompt at submit
+  // time. The page handler does NOT assemble context — the adapter owns it.
+  SubmitPrompt(string session_id, string prompt, bool attach_browser_context,
+               InteractionMode mode);
 
   // Cancel the current turn in a session.
   CancelTurn(string session_id);

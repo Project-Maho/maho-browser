@@ -5,12 +5,14 @@ import argparse
 import importlib.util
 import os
 import subprocess
+import sys
 
 _SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 _WORKSPACE_ROOT = os.path.normpath(os.path.join(_SCRIPT_DIR, '..', '..', '..'))
 _MAHO_SCRIPTS_DIR = os.path.join(_WORKSPACE_ROOT, 'maho', 'scripts')
 _CHROMIUM_SRC_ROOT = os.path.join(_WORKSPACE_ROOT, 'chromium', 'src')
 _DEPOT_TOOLS_DIR = os.path.join(_CHROMIUM_SRC_ROOT, 'third_party', 'depot_tools')
+_APPLY_OVERRIDES_SCRIPT = os.path.join(_SCRIPT_DIR, 'apply_chromium_src_overrides.py')
 
 
 def load_module(module_name, module_path):
@@ -43,6 +45,15 @@ def build_chromium_app(extra_args):
     subprocess.run(command, cwd=_CHROMIUM_SRC_ROOT, check=True, env=env)
 
 
+def apply_tracked_chromium_overrides():
+    print('Applying tracked Chromium overrides...')
+    subprocess.run(
+        [sys.executable, _APPLY_OVERRIDES_SCRIPT, '--chromium-src', _CHROMIUM_SRC_ROOT],
+        cwd=_WORKSPACE_ROOT,
+        check=True,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description='Build maho-core and Chromium with one shared lock.')
     parser.add_argument('--target', help='Explicit Rust target triple for the prebuilt build.')
@@ -59,6 +70,7 @@ def main():
         if not args.skip_rust:
             build_maho_core.build_rust_prebuilt(args.target)
         if not args.skip_chromium:
+            apply_tracked_chromium_overrides()
             build_chromium_app(extra_args)
 
 

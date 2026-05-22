@@ -18,7 +18,9 @@ pub enum SpaceUpdateError {
 mod tests {
     use super::*;
     use maho_types::folder::Folder;
-    use maho_types::space::{RootInsertionPoint, RootItem};
+    use maho_types::space::{
+        ColorHarmony, RootInsertionPoint, RootItem, SpaceConfigUpdate, SpaceTheme, ThemeColor,
+    };
 
     #[test]
     fn add_tab_to_space_ignores_duplicate_tab_ids() {
@@ -487,6 +489,368 @@ mod tests {
         let order = manager.get_root_order(&space_id);
         assert_eq!(order, vec![tab_item, folder_item, new_tab_item]);
     }
+
+    #[test]
+    fn update_space_config_theme_derives_color() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+
+        let primary_color = ThemeColor {
+            hue: 0.6,
+            saturation: 0.8,
+            brightness: 0.9,
+            is_custom: false,
+            is_primary: true,
+            c_raw: None,
+        };
+        let theme = SpaceTheme::Gradient {
+            colors: vec![primary_color],
+            harmony: ColorHarmony::Analogous,
+            opacity: 0.5,
+            texture: 0.0,
+            schema_version: 0,
+        };
+        let changes = SpaceConfigUpdate {
+            space_id: space_id.clone(),
+            name: None,
+            color: None,
+            theme: Some(theme.clone()),
+            icon: None,
+            profile_id: None,
+        };
+
+        let result = manager.update_space_config(changes).unwrap();
+        assert!(result.is_some());
+
+        let space = manager.spaces.get(&space_id).unwrap();
+        let derived = theme.base_color();
+        assert_eq!(space.color.hue, derived.hue);
+        assert_eq!(space.color.saturation, derived.saturation);
+        assert_eq!(space.color.brightness, derived.brightness);
+    }
+
+    #[test]
+    fn update_space_config_explicit_color_overrides_theme_derived_color() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+
+        let primary_color = ThemeColor {
+            hue: 0.6,
+            saturation: 0.8,
+            brightness: 0.9,
+            is_custom: false,
+            is_primary: true,
+            c_raw: None,
+        };
+        let theme = SpaceTheme::Gradient {
+            colors: vec![primary_color],
+            harmony: ColorHarmony::Analogous,
+            opacity: 0.5,
+            texture: 0.0,
+            schema_version: 0,
+        };
+        let override_color = SpaceColor { hue: 0.1, saturation: 0.2, brightness: 0.3, grain: 0.0 };
+        let changes = SpaceConfigUpdate {
+            space_id: space_id.clone(),
+            name: None,
+            color: Some(override_color.clone()),
+            theme: Some(theme),
+            icon: None,
+            profile_id: None,
+        };
+
+        manager.update_space_config(changes).unwrap();
+
+        let space = manager.spaces.get(&space_id).unwrap();
+        assert_eq!(space.color.hue, override_color.hue);
+        assert_eq!(space.color.saturation, override_color.saturation);
+        assert_eq!(space.color.brightness, override_color.brightness);
+    }
+
+    #[test]
+    fn update_space_config_zen_theme_derives_color() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+
+        let primary_color = ThemeColor {
+            hue: 0.25,
+            saturation: 0.6,
+            brightness: 0.75,
+            is_custom: false,
+            is_primary: true,
+            c_raw: None,
+        };
+        let theme = SpaceTheme::Zen {
+            colors: vec![primary_color],
+            harmony: None,
+            opacity: 0.8,
+            texture: 0.1,
+            schema_version: 0,
+        };
+        let changes = SpaceConfigUpdate {
+            space_id: space_id.clone(),
+            name: None,
+            color: None,
+            theme: Some(theme.clone()),
+            icon: None,
+            profile_id: None,
+        };
+
+        manager.update_space_config(changes).unwrap();
+
+        let space = manager.spaces.get(&space_id).unwrap();
+        let derived = theme.base_color();
+        assert_eq!(space.color.hue, derived.hue);
+        assert_eq!(space.color.saturation, derived.saturation);
+        assert_eq!(space.color.brightness, derived.brightness);
+    }
+
+    #[test]
+    fn remove_tab_from_root_order_removes_the_entry() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+        let tab_id = TabId::generate();
+
+        manager.add_tab_to_space(&space_id, tab_id.clone(), None);
+        assert!(manager.get_root_order(&space_id).contains(&RootItem::Tab(tab_id.clone())));
+
+        manager.remove_tab_from_root_order(&space_id, &tab_id);
+
+        assert!(!manager.get_root_order(&space_id).contains(&RootItem::Tab(tab_id)));
+    }
+
+    #[test]
+    fn remove_tab_from_root_order_is_idempotent() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+        let tab_id = TabId::generate();
+
+        manager.add_tab_to_space(&space_id, tab_id.clone(), None);
+        manager.remove_tab_from_root_order(&space_id, &tab_id);
+        manager.remove_tab_from_root_order(&space_id, &tab_id);
+
+        assert!(manager.get_root_order(&space_id).is_empty());
+    }
+
+    #[test]
+    fn add_tab_to_root_order_if_absent_appends_missing_tab() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+        let tab_id = TabId::generate();
+
+        manager.add_tab_to_space(&space_id, tab_id.clone(), None);
+        manager.remove_tab_from_root_order(&space_id, &tab_id);
+        assert!(manager.get_root_order(&space_id).is_empty());
+
+        manager.add_tab_to_root_order_if_absent(&space_id, &tab_id);
+
+        assert_eq!(manager.get_root_order(&space_id), vec![RootItem::Tab(tab_id)]);
+    }
+
+    #[test]
+    fn add_tab_to_root_order_if_absent_is_idempotent() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+        let tab_id = TabId::generate();
+
+        manager.add_tab_to_space(&space_id, tab_id.clone(), None);
+        manager.remove_tab_from_root_order(&space_id, &tab_id);
+
+        manager.add_tab_to_root_order_if_absent(&space_id, &tab_id);
+        manager.add_tab_to_root_order_if_absent(&space_id, &tab_id);
+
+        let order = manager.get_root_order(&space_id);
+        assert_eq!(order.iter().filter(|i| *i == &RootItem::Tab(tab_id.clone())).count(), 1);
+    }
+
+    #[test]
+    fn strip_favorited_tabs_from_root_orders_removes_favorited_entries() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+        let tab_a = TabId::generate();
+        let tab_b = TabId::generate();
+
+        manager.add_tab_to_space(&space_id, tab_a.clone(), None);
+        manager.add_tab_to_space(&space_id, tab_b.clone(), None);
+
+        let mut favorited = std::collections::HashSet::new();
+        favorited.insert(tab_a.clone());
+
+        manager.strip_favorited_tabs_from_root_orders(&favorited);
+
+        let order = manager.get_root_order(&space_id);
+        assert!(!order.contains(&RootItem::Tab(tab_a)));
+        assert!(order.contains(&RootItem::Tab(tab_b)));
+    }
+
+    #[test]
+    fn strip_favorited_tabs_from_root_orders_preserves_folders() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+        let tab_id = TabId::generate();
+        let folder_vm = manager.create_folder(&space_id, "F", false).unwrap();
+
+        manager.add_tab_to_space(&space_id, tab_id.clone(), None);
+
+        let mut favorited = std::collections::HashSet::new();
+        favorited.insert(tab_id.clone());
+
+        manager.strip_favorited_tabs_from_root_orders(&favorited);
+
+        let order = manager.get_root_order(&space_id);
+        assert!(!order.contains(&RootItem::Tab(tab_id)));
+        assert!(order.contains(&RootItem::Folder(folder_vm.id)));
+    }
+
+    #[test]
+    fn restore_spaces_with_favorited_tab_in_root_order_is_normalized_by_strip() {
+        let mut manager = SpaceManager::new();
+        let space_id = SpaceId::generate();
+        let tab_a = TabId::generate();
+        let tab_b = TabId::generate();
+
+        let restored = Space {
+            id: space_id.clone(),
+            profile_id: ProfileId::new(""),
+            name: "Legacy".to_string(),
+            color: SpaceColor { hue: 1.0, saturation: 0.5, brightness: 0.5, grain: 0.0 },
+            theme: None,
+            icon: None,
+            tab_order: vec![tab_a.clone(), tab_b.clone()],
+            folders: vec![],
+            root_order: vec![RootItem::Tab(tab_a.clone()), RootItem::Tab(tab_b.clone())],
+            atc_rules: vec![],
+            is_active: true,
+            created_at: maho_types::common::DateTime::now(),
+            last_active_tab_id: None,
+        };
+
+        manager.restore_spaces(vec![restored], space_id.clone());
+
+        let mut favorited = std::collections::HashSet::new();
+        favorited.insert(tab_a.clone());
+
+        manager.strip_favorited_tabs_from_root_orders(&favorited);
+
+        let order = manager.get_root_order(&space_id);
+        assert!(!order.contains(&RootItem::Tab(tab_a)), "favorited tab must be absent");
+        assert!(order.contains(&RootItem::Tab(tab_b)), "non-favorited tab must remain");
+    }
+
+    #[test]
+    fn is_tab_in_folder_returns_true_when_tab_in_folder() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+        let tab_id = TabId::generate();
+
+        manager.add_tab_to_space(&space_id, tab_id.clone(), None);
+        let folder = manager.create_folder(&space_id, "F", false).unwrap();
+        manager.add_tab_to_folder(&space_id, &folder.id, tab_id.clone());
+
+        assert!(manager.is_tab_in_folder(&space_id, &tab_id));
+    }
+
+    #[test]
+    fn is_tab_in_folder_returns_false_when_tab_at_root() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+        let tab_id = TabId::generate();
+
+        manager.add_tab_to_space(&space_id, tab_id.clone(), None);
+
+        assert!(!manager.is_tab_in_folder(&space_id, &tab_id));
+    }
+
+    #[test]
+    fn apply_tab_residency_favorite_removes_from_root_order() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+        let tab_id = TabId::generate();
+
+        manager.add_tab_to_space(&space_id, tab_id.clone(), None);
+        assert!(manager.get_root_order(&space_id).contains(&RootItem::Tab(tab_id.clone())));
+
+        manager.apply_tab_residency(&space_id, &tab_id, true, false);
+
+        assert!(!manager.get_root_order(&space_id).contains(&RootItem::Tab(tab_id)));
+    }
+
+    #[test]
+    fn apply_tab_residency_non_favorite_root_adds_to_root_order() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+        let tab_id = TabId::generate();
+
+        manager.add_tab_to_space(&space_id, tab_id.clone(), None);
+        manager.remove_tab_from_root_order(&space_id, &tab_id);
+        assert!(!manager.get_root_order(&space_id).contains(&RootItem::Tab(tab_id.clone())));
+
+        manager.apply_tab_residency(&space_id, &tab_id, false, false);
+
+        assert!(manager.get_root_order(&space_id).contains(&RootItem::Tab(tab_id)));
+    }
+
+    #[test]
+    fn apply_tab_residency_folder_resident_removes_from_root_order() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+        let tab_id = TabId::generate();
+
+        manager.add_tab_to_space(&space_id, tab_id.clone(), None);
+        assert!(manager.get_root_order(&space_id).contains(&RootItem::Tab(tab_id.clone())));
+
+        manager.apply_tab_residency(&space_id, &tab_id, false, true);
+
+        assert!(!manager.get_root_order(&space_id).contains(&RootItem::Tab(tab_id)));
+    }
+
+    #[test]
+    fn apply_tab_residency_non_favorite_root_is_idempotent() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+        let tab_id = TabId::generate();
+
+        manager.add_tab_to_space(&space_id, tab_id.clone(), None);
+        manager.apply_tab_residency(&space_id, &tab_id, false, false);
+        manager.apply_tab_residency(&space_id, &tab_id, false, false);
+
+        let count = manager.get_root_order(&space_id)
+            .iter()
+            .filter(|i| *i == &RootItem::Tab(tab_id.clone()))
+            .count();
+        assert_eq!(count, 1, "tab must appear exactly once after idempotent residency calls");
+    }
+
+    #[test]
+    fn move_folder_in_space_does_not_affect_same_folder_id_in_other_space() {
+        let mut manager = SpaceManager::new();
+        let space_a = manager.get_active_space_id().clone();
+
+        let folder_a = manager.create_folder(&space_a, "FA", false).unwrap();
+
+        let space_b = manager
+            .create_space("SpaceB", maho_types::space::SpaceColor { hue: 1.0, saturation: 0.5, brightness: 0.5, grain: 0.0 }, maho_types::identifiers::ProfileId::new(""))
+            .id;
+
+        let parent_b = manager.create_folder(&space_b, "Parent", false).unwrap();
+
+        manager.move_folder_in_space(&space_a, &folder_a.id, Some(parent_b.id.clone()));
+
+        let space_a_data = manager.spaces.get(&space_a).unwrap();
+        let folder_in_a = space_a_data.folders.iter().find(|f| f.id == folder_a.id).unwrap();
+        assert_eq!(
+            folder_in_a.parent_folder_id,
+            Some(parent_b.id.clone()),
+            "folder in space_a should have new parent"
+        );
+
+        let space_b_data = manager.spaces.get(&space_b).unwrap();
+        let parent_in_b = space_b_data.folders.iter().find(|f| f.id == parent_b.id).unwrap();
+        assert!(
+            parent_in_b.parent_folder_id.is_none(),
+            "parent folder in space_b must be unaffected"
+        );
+    }
 }
 
 impl std::fmt::Display for SpaceUpdateError {
@@ -928,6 +1292,62 @@ impl SpaceManager {
             .unwrap_or_default()
     }
 
+    pub fn remove_tab_from_root_order(&mut self, space_id: &SpaceId, tab_id: &TabId) {
+        if let Some(space) = self.spaces.get_mut(space_id) {
+            space.root_order.retain(|item| item != &RootItem::Tab(tab_id.clone()));
+        }
+    }
+
+    pub fn add_tab_to_root_order_if_absent(&mut self, space_id: &SpaceId, tab_id: &TabId) {
+        if let Some(space) = self.spaces.get_mut(space_id) {
+            let item = RootItem::Tab(tab_id.clone());
+            if !space.root_order.iter().any(|i| i == &item) {
+                space.root_order.push(item);
+            }
+        }
+    }
+
+    pub fn strip_favorited_tabs_from_root_orders(&mut self, favorited_tab_ids: &HashSet<TabId>) {
+        for space in self.spaces.values_mut() {
+            space.root_order.retain(|item| match item {
+                RootItem::Tab(tid) => !favorited_tab_ids.contains(tid),
+                RootItem::Folder(_) => true,
+            });
+        }
+    }
+
+    /// Centralized residency helper: enforces "favorites XOR root_order" for a single tab.
+    ///
+    /// Rules:
+    /// - `is_favorite = true`  → remove from root_order (favorites live in their own bucket).
+    /// - `is_favorite = false, is_in_folder = false` → ensure present in root_order once.
+    /// - `is_favorite = false, is_in_folder = true`  → remove from root_order (folder owns it).
+    ///
+    /// This is the single authoritative seam for bucket placement.  All event paths that
+    /// change a tab's favorite status or move it across spaces must call this after the move.
+    pub fn apply_tab_residency(
+        &mut self,
+        space_id: &SpaceId,
+        tab_id: &TabId,
+        is_favorite: bool,
+        is_in_folder: bool,
+    ) {
+        if is_favorite || is_in_folder {
+            // Must not appear in root_order.
+            self.remove_tab_from_root_order(space_id, tab_id);
+        } else {
+            // Non-favorite, root-level tab: ensure it is present exactly once.
+            self.add_tab_to_root_order_if_absent(space_id, tab_id);
+        }
+    }
+
+    pub fn is_tab_in_folder(&self, space_id: &SpaceId, tab_id: &TabId) -> bool {
+        self.spaces
+            .get(space_id)
+            .map(|s| s.folders.iter().any(|f| f.tab_ids.contains(tab_id)))
+            .unwrap_or(false)
+    }
+
     pub fn to_view_model(&self, space: &Space) -> SpaceViewModel {
         SpaceViewModel {
             id: space.id.clone(),
@@ -1088,6 +1508,24 @@ impl SpaceManager {
         }
     }
 
+    pub fn move_folder_in_space(
+        &mut self,
+        space_id: &SpaceId,
+        folder_id: &FolderId,
+        new_parent: Option<FolderId>,
+    ) {
+        if let Some(space) = self.spaces.get_mut(space_id) {
+            if let Some(folder) = space.folders.iter_mut().find(|f| f.id == *folder_id) {
+                folder.parent_folder_id = new_parent.clone();
+                if new_parent.is_some() {
+                    space
+                        .root_order
+                        .retain(|item| item != &RootItem::Folder(folder_id.clone()));
+                }
+            }
+        }
+    }
+
     pub fn get_subfolders(&self, space_id: &SpaceId, parent_id: Option<&FolderId>) -> Vec<&Folder> {
         self.spaces
             .get(space_id)
@@ -1145,13 +1583,17 @@ impl SpaceManager {
                 space.name = normalized.clone();
                 applied.name = Some(normalized);
             }
+            if let Some(ref theme) = changes.theme {
+                space.theme = Some(theme.clone());
+                space.color = theme.base_color();
+                applied.theme = Some(theme.clone());
+                if changes.color.is_none() {
+                    applied.color = Some(space.color.clone());
+                }
+            }
             if let Some(ref c) = changes.color {
                 space.color = c.clone();
                 applied.color = Some(c.clone());
-            }
-            if let Some(ref theme) = changes.theme {
-                space.theme = Some(theme.clone());
-                applied.theme = Some(theme.clone());
             }
             if let Some(ref i) = changes.icon {
                 space.icon = i.clone();

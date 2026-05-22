@@ -1,0 +1,215 @@
+.compact-composer {
+  display: grid;
+  gap: var(--maho-ai-space-4);
+  padding: var(--maho-ai-space-4);
+  border-color: var(--maho-ai-border);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 24%),
+      var(--maho-ai-bg-card-strong);
+}
+
+.compact-composer--docked {
+  position: relative;
+  gap: var(--maho-ai-space-3);
+  padding: var(--maho-ai-space-3);
+  border-color: var(--maho-ai-border-strong);
+  border-radius: calc(var(--maho-ai-radius-xl) - var(--maho-ai-space-1));
+  background:
+      linear-gradient(180deg, rgba(178, 194, 235, 0.08), transparent 44%),
+      var(--maho-ai-bg-card-dock);
+  box-shadow: var(--maho-ai-shadow-dock);
+}
+
+.compact-composer--docked::before {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: var(--maho-ai-border-width) solid rgba(255, 255, 255, 0.03);
+  pointer-events: none;
+  content: '';
+}
+
+.compact-composer--read-only {
+  border-color: var(--maho-ai-border);
+}
+
+.compact-composer__page-row,
+.compact-composer__footer {
+  justify-content: space-between;
+  gap: var(--maho-ai-space-3);
+}
+
+.compact-composer__page-row {
+  align-items: flex-start;
+}
+
+.compact-composer__body {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  border: var(--maho-ai-border-width) solid var(--maho-ai-border-soft);
+  border-radius: calc(var(--maho-ai-radius-lg) - var(--maho-ai-space-1));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent 34%),
+      var(--maho-ai-bg-input-well);
+}
+
+.compact-composer__page-chip {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: var(--maho-ai-space-3);
+  padding: calc(var(--maho-ai-space-1) + 2px) var(--maho-ai-space-3);
+  border-radius: var(--maho-ai-radius-md);
+  background: var(--maho-ai-bg-chip-quiet);
+}
+
+.compact-composer__page-chip-icon {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: var(--maho-ai-radius-pill);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--maho-ai-text-primary);
+}
+
+.compact-composer__page-chip-icon .maho-ai-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.compact-composer__page-chip-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.compact-composer__page-chip-title {
+  display: block;
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compact-composer__input {
+  width: 100%;
+  min-height: var(--maho-ai-composer-min-height);
+  padding: var(--maho-ai-space-3) var(--maho-ai-space-4);
+  border: 0;
+  resize: none;
+  background: transparent;
+  color: var(--maho-ai-text-primary);
+  font-size: var(--maho-ai-text-lg);
+  line-height: var(--maho-ai-leading-relaxed);
+}
+
+.compact-composer__input::placeholder {
+  color: var(--maho-ai-text-faint);
+}
+
+.compact-composer__input:focus {
+  outline: none;
+}
+
+.compact-composer__input:disabled {
+  cursor: default;
+  opacity: 0.76;
+}
+
+.compact-composer__footer-actions {
+  gap: var(--maho-ai-space-2);
+  min-width: 0;
+}
+
+.compact-composer__icon-button {
+  flex-shrink: 0;
+}
+
+.compact-composer__hint {
+  min-width: 0;
+  color: var(--maho-ai-text-faint);
+  font-size: var(--maho-ai-text-xs);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.compact-composer__send {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--maho-ai-space-2);
+  min-height: 42px;
+  padding: 0 var(--maho-ai-space-4);
+  border-radius: var(--maho-ai-radius-pill);
+  background: var(--maho-ai-bg-send);
+  color: var(--maho-ai-text-dark);
+  cursor: pointer;
+  box-shadow: var(--maho-ai-shadow-action);
+}
+
+.compact-composer__send--icon-only {
+  justify-content: center;
+  min-width: 42px;
+  padding: 0;
+}
+
+.compact-composer__send-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.compact-composer__send:disabled {
+  background: var(--maho-ai-bg-send-disabled);
+  color: var(--maho-ai-text-send-disabled);
+  box-shadow: none;
+}
+
+.compact-composer__send:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.compact-composer__send-label {
+  font-size: var(--maho-ai-text-sm);
+  font-weight: 700;
+}
+
+.compact-composer__icon-button--context-on {
+  border-color: var(--maho-ai-border-strong);
+  background: var(--maho-ai-accent-soft);
+  color: var(--maho-ai-text-primary);
+}
+
+.compact-composer__icon-button--context-on:hover {
+  background: var(--maho-ai-bg-panel-strong);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .compact-composer__send {
+    transition: none !important;
+  }
+}
+
+@media (max-width: 520px) {
+  .compact-composer__page-row,
+  .compact-composer__footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .compact-composer__body {
+    min-height: var(--maho-ai-composer-min-height);
+  }
+
+  .compact-composer__footer-actions {
+    justify-content: space-between;
+  }
+
+  .compact-composer__send {
+    justify-content: center;
+  }
+
+  .compact-composer__hint {
+    white-space: normal;
+  }
+}

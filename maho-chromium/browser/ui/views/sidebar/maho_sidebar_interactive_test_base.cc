@@ -19,8 +19,11 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
+#include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/base/test/ui_controls.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/views/test/menu_test_utils.h"
+#include "ui/views/view.h"
 #include "ui/views/view_utils.h"
 
 namespace maho {
@@ -48,6 +51,9 @@ MahoSidebarInteractiveTestBase::~MahoSidebarInteractiveTestBase() = default;
 void MahoSidebarInteractiveTestBase::SetUpOnMainThread() {
   InteractiveBrowserTest::SetUpOnMainThread();
   SetShellEventObserverForTesting(&observer_);
+  // Disable Mac menu closure animation so that ExecuteCommand runs within
+  // RunUntilIdle() instead of after a 450ms real-time animation.
+  views::test::DisableMenuClosureAnimations();
 
   // Seed the 2-state sidebar prefs used by the refactor.
   SeedSidebarPrefs(/*layout_enabled=*/true, /*panel_expanded=*/true);
@@ -111,14 +117,6 @@ MahoSidebarViewStateModel MahoSidebarInteractiveTestBase::GetViewState() {
     state.favorites =
         MahoSidebarStateAdapter::BuildFavoritesModelForSpaceIdJson(
             active_space_id_json);
-    if (state.favorites.items.empty()) {
-      (void)base::test::RunUntil([&]() {
-        state.favorites =
-            MahoSidebarStateAdapter::BuildFavoritesModelForSpaceIdJson(
-                active_space_id_json);
-        return !state.favorites.items.empty();
-      });
-    }
   }
   return state;
 }
@@ -126,6 +124,14 @@ MahoSidebarViewStateModel MahoSidebarInteractiveTestBase::GetViewState() {
 std::string MahoSidebarInteractiveTestBase::GetActiveSpaceId() {
   auto* bridge = MahoSpaceProfileBridge::GetInstance();
   if (bridge) {
+    // Prefer the browser-scoped active space so tests observe the same state
+    // the product code (MahoSidebarView, MahoSidebarStateAdapter) uses when
+    // switching spaces via SwitchToSpace(browser_, ...). Fall back to the
+    // global bridge value only if the browser-scoped call returns empty.
+    const std::string browser_space_id = bridge->GetActiveSpaceId(browser());
+    if (!browser_space_id.empty()) {
+      return browser_space_id;
+    }
     return bridge->GetActiveSpaceId();
   }
   return GetViewState().tab_list.active_space_id;
@@ -162,8 +168,7 @@ void MahoSidebarInteractiveTestBase::SeedProfile(int seed_number) {
     ResolveViews();
     const MahoSidebarViewStateModel state = GetViewState();
     return !state.tab_list.pinned_tree.empty() ||
-           !state.tab_list.normal_tree.empty() ||
-           !state.tab_list.pinned_tabs.empty() || !state.tab_list.tabs.empty();
+           !state.tab_list.normal_tree.empty();
   }));
 
   ResolveViews();
@@ -174,6 +179,12 @@ void MahoSidebarInteractiveTestBase::SeedSidebarPrefs(bool layout_enabled,
   auto* prefs = browser()->profile()->GetPrefs();
   prefs->SetBoolean(sidebar_prefs::kSidebarLayoutEnabled, layout_enabled);
   prefs->SetBoolean(sidebar_prefs::kSidebarPanelExpanded, panel_expanded);
+}
+
+void MahoSidebarInteractiveTestBase::ShowContextMenuOnView(views::View* view) {
+  ASSERT_TRUE(view);
+  const gfx::Point center = view->GetBoundsInScreen().CenterPoint();
+  view->ShowContextMenu(center, ui::mojom::MenuSourceType::kMouse);
 }
 
 void MahoSidebarInteractiveTestBase::DragViewToView(views::View* source,

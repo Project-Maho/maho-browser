@@ -6,22 +6,25 @@
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/ui/browser.h"
+#include "maho/browser/ui/context_menu/maho_address_bar_context_menu.h"
+#include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
-#include "chrome/browser/ui/views/location_bar/location_icon_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_view_views.h"
 #include "chrome/browser/ui/views/page_info/page_info_bubble_view.h"
-#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
+#include "ui/views/test/button_test_api.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
+#include "maho/browser/ui/views/boost/maho_boost_bubble_coordinator.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_provider.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_view.h"
+#include "maho/browser/ui/views/shields/maho_shield_bubble_coordinator.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "components/prefs/pref_service.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -29,12 +32,33 @@
 #include "ui/events/event.h"
 #include "ui/events/event_utils.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/view.h"
 #include "ui/views/view_utils.h"
 #include "ui/views/widget/widget_observer.h"
 #include "ui/views/widget/widget.h"
 
 namespace {
+
+views::Label* FindDescendantLabelWithText(views::View* root,
+                                          const std::u16string& text) {
+  if (!root) {
+    return nullptr;
+  }
+
+  for (views::View* child : root->children()) {
+    if (auto* label = views::AsViewClass<views::Label>(child);
+        label && label->GetText() == text) {
+      return label;
+    }
+
+    if (views::Label* descendant = FindDescendantLabelWithText(child, text)) {
+      return descendant;
+    }
+  }
+
+  return nullptr;
+}
 
 class UtilityPanelHostView : public views::View,
                              public views::WidgetObserver {
@@ -44,18 +68,96 @@ class UtilityPanelHostView : public views::View,
   UtilityPanelHostView() {
     SetPreferredSize(gfx::Size(200, 120));
 
-    maho::MahoLocationBarUtilityPanelAction quick_action;
-    quick_action.title = u"Screenshot";
-    quick_action.subtitle = u"Open utility panel";
-    quick_action.accessible_name = u"Screenshot — Open utility panel";
-    quick_action.enabled = true;
-    quick_action.data_state = maho::MahoLocationBarUtilityPanelDataState::kLive;
-    model_.quick_actions.push_back(quick_action);
+    maho::MahoUtilityPanelZone toolbar_zone;
+    toolbar_zone.id = maho::MahoUtilityPanelZoneId::kToolbar;
+    toolbar_zone.style = maho::MahoUtilityPanelZoneStyle::kToolbarRow;
+
+    maho::MahoLocationBarUtilityPanelAction share_action;
+    share_action.title = u"Share";
+    share_action.subtitle = u"Share this page";
+    share_action.accessible_name = u"Share — Share this page";
+    share_action.sf_symbol_name = "square.and.arrow.up";
+    share_action.enabled = true;
+    share_action.data_state = maho::MahoLocationBarUtilityPanelDataState::kLive;
+    toolbar_zone.items.push_back(share_action);
+
+    maho::MahoLocationBarUtilityPanelAction magic_action;
+    magic_action.title = u"Magic";
+    magic_action.accessible_name = u"Magic";
+    magic_action.sf_symbol_name = "wand.and.stars";
+    magic_action.enabled = false;
+    magic_action.data_state = maho::MahoLocationBarUtilityPanelDataState::kUnavailable;
+    toolbar_zone.items.push_back(magic_action);
+
+    maho::MahoLocationBarUtilityPanelAction camera_action;
+    camera_action.title = u"Camera";
+    camera_action.accessible_name = u"Camera";
+    camera_action.sf_symbol_name = "camera";
+    camera_action.enabled = false;
+    camera_action.data_state = maho::MahoLocationBarUtilityPanelDataState::kUnavailable;
+    toolbar_zone.items.push_back(camera_action);
+
+    maho::MahoLocationBarUtilityPanelAction viewfinder_action;
+    viewfinder_action.title = u"Viewfinder";
+    viewfinder_action.accessible_name = u"Viewfinder";
+    viewfinder_action.sf_symbol_name = "viewfinder";
+    viewfinder_action.enabled = false;
+    viewfinder_action.data_state = maho::MahoLocationBarUtilityPanelDataState::kUnavailable;
+    toolbar_zone.items.push_back(viewfinder_action);
+
+    model_.zones.push_back(toolbar_zone);
+
+    maho::MahoUtilityPanelZone extensions_zone;
+    extensions_zone.id = maho::MahoUtilityPanelZoneId::kExtensions;
+    extensions_zone.style = maho::MahoUtilityPanelZoneStyle::kChipRow;
+    extensions_zone.header_label = u"Extensions";
+
+    maho::MahoLocationBarUtilityPanelAction extension_action;
+    extension_action.title = u"Sample extension";
+    extension_action.subtitle = u"Enabled";
+    extension_action.accessible_name = u"Sample extension — Enabled";
+    extension_action.sf_symbol_name = "puzzlepiece.extension";
+    extension_action.enabled = true;
+    extension_action.data_state = maho::MahoLocationBarUtilityPanelDataState::kLive;
+    extensions_zone.items.push_back(extension_action);
+
+    maho::MahoLocationBarUtilityPanelAction add_extension_action;
+    add_extension_action.title = u"+";
+    add_extension_action.accessible_name = u"Add extension";
+    add_extension_action.sf_symbol_name = "plus";
+    add_extension_action.enabled = true;
+    add_extension_action.data_state = maho::MahoLocationBarUtilityPanelDataState::kLive;
+    extensions_zone.items.push_back(add_extension_action);
+
+    model_.zones.push_back(extensions_zone);
+
+    maho::MahoUtilityPanelZone settings_zone;
+    settings_zone.id = maho::MahoUtilityPanelZoneId::kSettings;
+    settings_zone.style = maho::MahoUtilityPanelZoneStyle::kSettingsList;
+    settings_zone.header_label = u"Settings";
+
+    maho::MahoLocationBarUtilityPanelAction developer_mode_action;
+    developer_mode_action.title = u"Developer mode";
+    developer_mode_action.subtitle = u"Disabled";
+    developer_mode_action.accessible_name = u"Developer mode — Disabled";
+    developer_mode_action.sf_symbol_name = "hammer";
+    developer_mode_action.enabled = false;
+    developer_mode_action.data_state = maho::MahoLocationBarUtilityPanelDataState::kLive;
+    settings_zone.items.push_back(developer_mode_action);
+
+    maho::MahoLocationBarUtilityPanelAction block_ads_action;
+    block_ads_action.title = u"Block Ads & Trackers";
+    block_ads_action.subtitle = u"Allowed on every visit";
+    block_ads_action.accessible_name = u"Block Ads & Trackers — Allowed on every visit";
+    block_ads_action.sf_symbol_name = "shield.lefthalf.filled";
+    block_ads_action.enabled = true;
+    block_ads_action.data_state = maho::MahoLocationBarUtilityPanelDataState::kLive;
+    settings_zone.items.push_back(block_ads_action);
+
+    model_.zones.push_back(settings_zone);
 
     model_.footer.title = u"Security state available";
     model_.footer.subtitle = u"Page security";
-    model_.footer.primary_action_label = u"Close";
-    model_.footer.close_after_primary_action = true;
 
     icon_ = AddChildView(std::make_unique<maho::MahoLocationBarUtilityIconView>(
         base::BindRepeating(&UtilityPanelHostView::ShowPanel,
@@ -130,6 +232,89 @@ class LocationBarUtilityPanelInteractiveUiTest : public InProcessBrowserTest {
  protected:
   LocationBarView* GetLocationBarView() {
     return BrowserView::GetBrowserViewForBrowser(browser())->GetLocationBarView();
+  }
+
+  void NotifyButtonClick(views::Button* button) {
+    ASSERT_TRUE(button);
+
+    ui::MouseEvent released_event(ui::EventType::kMouseReleased, gfx::PointF(),
+                                  gfx::PointF(), ui::EventTimeForNow(),
+                                  ui::EF_LEFT_MOUSE_BUTTON,
+                                  ui::EF_LEFT_MOUSE_BUTTON);
+    views::test::ButtonTestApi(button).NotifyClick(released_event);
+    base::RunLoop().RunUntilIdle();
+  }
+
+  void ClickViewCenter(views::View* view) {
+    ASSERT_TRUE(view);
+    ASSERT_FALSE(view->GetBoundsInScreen().IsEmpty());
+
+    scoped_refptr<content::MessageLoopRunner> runner =
+        new content::MessageLoopRunner;
+    ui_test_utils::MoveMouseToCenterAndClick(
+        view, ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
+        runner->QuitClosure());
+    runner->Run();
+    base::RunLoop().RunUntilIdle();
+  }
+
+  maho::MahoLocationBarUtilityPanelView* OpenUtilityPanelFromRealLocationBar(
+      LocationBarView* location_bar_view) {
+    if (!location_bar_view) {
+      ADD_FAILURE() << "Location bar view was null";
+      return nullptr;
+    }
+
+    auto* utility_icon = location_bar_view->GetUtilityIconViewForTesting();
+    if (!utility_icon) {
+      ADD_FAILURE() << "Utility icon view was null";
+      return nullptr;
+    }
+
+    location_bar_view->SimulateOmniboxHoveredForTesting(true);
+    auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+    if (!browser_view) {
+      ADD_FAILURE() << "Browser view was null";
+      return nullptr;
+    }
+    if (!base::test::RunUntil([&]() {
+      browser_view->GetWidget()->LayoutRootViewIfNecessary();
+      return utility_icon->GetVisible() &&
+             utility_icon->IsHoverVisibleForTesting() &&
+             !utility_icon->GetBoundsInScreen().IsEmpty();
+    })) {
+      ADD_FAILURE() << "Utility icon did not become visible";
+      return nullptr;
+    }
+
+    NotifyButtonClick(utility_icon);
+
+    if (!base::test::RunUntil([&]() {
+      return utility_icon->IsPanelOpenForTesting();
+    })) {
+      ADD_FAILURE() << "Panel did not open after clicking the utility icon";
+      return nullptr;
+    }
+
+    views::Widget* panel_widget = location_bar_view->ShowUtilityPanel();
+    if (!panel_widget) {
+      ADD_FAILURE() << "Utility panel widget was null";
+      return nullptr;
+    }
+    if (!base::test::RunUntil([&]() {
+      return panel_widget->IsVisible() && panel_widget->IsActive();
+    })) {
+      ADD_FAILURE() << "Utility panel widget did not become active";
+      return nullptr;
+    }
+
+    auto* panel_view = static_cast<maho::MahoLocationBarUtilityPanelView*>(
+        panel_widget->widget_delegate());
+    if (!panel_view) {
+      ADD_FAILURE() << "Utility panel delegate was null";
+      return nullptr;
+    }
+    return panel_view;
   }
 };
 
@@ -217,28 +402,14 @@ IN_PROC_BROWSER_TEST_F(LocationBarUtilityPanelInteractiveUiTest,
       browser(), embedded_test_server()->GetURL("/title1.html")));
   base::RunLoop().RunUntilIdle();
 
-  maho::MahoLocationBarUtilityIconView* utility_icon = nullptr;
-  for (views::View* child : location_bar_view->children()) {
-    utility_icon = views::AsViewClass<maho::MahoLocationBarUtilityIconView>(child);
-    if (utility_icon) {
-      break;
-    }
-  }
+  maho::MahoLocationBarUtilityIconView* utility_icon =
+      location_bar_view->GetUtilityIconViewForTesting();
   ASSERT_TRUE(utility_icon);
 
   EXPECT_FALSE(utility_icon->IsHoverVisibleForTesting());
 
-  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
+  location_bar_view->SimulateOmniboxHoveredForTesting(true);
 
-  const gfx::Point location_bar_origin =
-      location_bar_view->GetBoundsInScreen().origin();
-  ASSERT_TRUE(ui_test_utils::SendMouseMoveSync(location_bar_origin,
-                                               browser()->window()->GetNativeWindow()));
-
-  const gfx::Point omnibox_center =
-      ui_test_utils::GetCenterInScreenCoordinates(location_bar_view->omnibox_view());
-  ASSERT_TRUE(ui_test_utils::SendMouseMoveSync(
-      omnibox_center, browser()->window()->GetNativeWindow()));
   ASSERT_TRUE(base::test::RunUntil([&]() {
     return utility_icon->GetVisible() &&
            utility_icon->IsHoverVisibleForTesting();
@@ -255,4 +426,196 @@ IN_PROC_BROWSER_TEST_F(LocationBarUtilityPanelInteractiveUiTest,
   EXPECT_EQ(PageInfoBubbleView::BUBBLE_NONE,
             PageInfoBubbleView::GetShownBubbleType());
   EXPECT_TRUE(utility_icon->GetVisible());
+}
+
+IN_PROC_BROWSER_TEST_F(LocationBarUtilityPanelInteractiveUiTest,
+                       CoordinatorDismissesBubbleOnTabSwitch) {
+  LocationBarView* location_bar_view = GetLocationBarView();
+  ASSERT_TRUE(location_bar_view);
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/title1.html")));
+  base::RunLoop().RunUntilIdle();
+
+  maho::MahoLocationBarUtilityIconView* utility_icon =
+      location_bar_view->GetUtilityIconViewForTesting();
+  ASSERT_TRUE(utility_icon);
+
+  location_bar_view->SimulateOmniboxHoveredForTesting(true);
+
+  auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    browser_view->GetWidget()->LayoutRootViewIfNecessary();
+    return utility_icon->GetVisible() &&
+           utility_icon->IsHoverVisibleForTesting() &&
+           !utility_icon->GetBoundsInScreen().IsEmpty();
+  }));
+
+  ui::MouseEvent released_event(ui::EventType::kMouseReleased, gfx::PointF(),
+                                 gfx::PointF(), ui::EventTimeForNow(),
+                                 ui::EF_LEFT_MOUSE_BUTTON,
+                                 ui::EF_LEFT_MOUSE_BUTTON);
+  views::test::ButtonTestApi(utility_icon).NotifyClick(released_event);
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return utility_icon->IsPanelOpenForTesting();
+  })) << "Panel did not open after clicking the utility icon";
+
+  ui_test_utils::NavigateToURLWithDisposition(
+      browser(), embedded_test_server()->GetURL("/title2.html"),
+      WindowOpenDisposition::NEW_FOREGROUND_TAB,
+      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return !utility_icon->IsPanelOpenForTesting();
+  }));
+  EXPECT_FALSE(utility_icon->IsPanelOpenForTesting());
+}
+
+IN_PROC_BROWSER_TEST_F(LocationBarUtilityPanelInteractiveUiTest,
+                       UtilityPanelBoostQuickActionShowsBoostBubbleAndClosesPanel) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/title1.html")));
+  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
+
+  LocationBarView* location_bar_view = GetLocationBarView();
+  ASSERT_TRUE(location_bar_view);
+  auto* utility_icon = location_bar_view->GetUtilityIconViewForTesting();
+  ASSERT_TRUE(utility_icon);
+
+  maho::MahoBoostBubbleCoordinator& boost_coordinator =
+      maho::MahoBoostBubbleCoordinator::GetForBrowser(browser());
+  EXPECT_FALSE(boost_coordinator.IsShowing());
+
+  maho::MahoLocationBarUtilityPanelView* panel_view =
+      OpenUtilityPanelFromRealLocationBar(location_bar_view);
+  ASSERT_TRUE(panel_view);
+
+  views::View* boost_action = panel_view->GetActionViewForTesting(u"Boost");
+  ASSERT_TRUE(boost_action);
+
+  ClickViewCenter(boost_action);
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return boost_coordinator.IsShowing();
+  }));
+  EXPECT_TRUE(boost_coordinator.IsShowing());
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return !utility_icon->IsPanelOpenForTesting();
+  }));
+  EXPECT_FALSE(utility_icon->IsPanelOpenForTesting());
+
+  boost_coordinator.Hide();
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return !boost_coordinator.IsShowing();
+  }));
+}
+
+IN_PROC_BROWSER_TEST_F(LocationBarUtilityPanelInteractiveUiTest,
+                       UtilityPanelShieldsPrimaryActionShowsShieldBubbleAndClosesPanel) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/title1.html")));
+  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
+
+  LocationBarView* location_bar_view = GetLocationBarView();
+  ASSERT_TRUE(location_bar_view);
+  auto* utility_icon = location_bar_view->GetUtilityIconViewForTesting();
+  ASSERT_TRUE(utility_icon);
+
+  maho::MahoShieldBubbleCoordinator& shield_coordinator =
+      maho::MahoShieldBubbleCoordinator::GetForBrowser(browser());
+  EXPECT_FALSE(shield_coordinator.IsShowing());
+
+  maho::MahoLocationBarUtilityPanelView* panel_view =
+      OpenUtilityPanelFromRealLocationBar(location_bar_view);
+  ASSERT_TRUE(panel_view);
+
+  views::View* shields_action = panel_view->GetActionViewForTesting(u"Shields");
+  ASSERT_TRUE(shields_action);
+
+  ClickViewCenter(shields_action);
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return shield_coordinator.IsShowing();
+  }));
+  EXPECT_TRUE(shield_coordinator.IsShowing());
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return !utility_icon->IsPanelOpenForTesting();
+  }));
+  EXPECT_FALSE(utility_icon->IsPanelOpenForTesting());
+
+  shield_coordinator.Hide();
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return !shield_coordinator.IsShowing();
+  }));
+}
+
+IN_PROC_BROWSER_TEST_F(
+    LocationBarUtilityPanelInteractiveUiTest,
+    UtilityPanelShieldsPrimaryActionTitleLabelClickShowsShieldBubbleAndClosesPanel) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/title1.html")));
+  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
+
+  LocationBarView* location_bar_view = GetLocationBarView();
+  ASSERT_TRUE(location_bar_view);
+  auto* utility_icon = location_bar_view->GetUtilityIconViewForTesting();
+  ASSERT_TRUE(utility_icon);
+
+  maho::MahoShieldBubbleCoordinator& shield_coordinator =
+      maho::MahoShieldBubbleCoordinator::GetForBrowser(browser());
+  EXPECT_FALSE(shield_coordinator.IsShowing());
+
+  maho::MahoLocationBarUtilityPanelView* panel_view =
+      OpenUtilityPanelFromRealLocationBar(location_bar_view);
+  ASSERT_TRUE(panel_view);
+
+  views::View* shields_action = panel_view->GetActionViewForTesting(u"Shields");
+  ASSERT_TRUE(shields_action);
+
+  views::Label* title_label =
+      FindDescendantLabelWithText(shields_action, u"Shields");
+  ASSERT_TRUE(title_label);
+  ASSERT_FALSE(title_label->GetBoundsInScreen().IsEmpty());
+
+  ClickViewCenter(title_label);
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return shield_coordinator.IsShowing();
+  }));
+  EXPECT_TRUE(shield_coordinator.IsShowing());
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return !utility_icon->IsPanelOpenForTesting();
+  }));
+  EXPECT_FALSE(utility_icon->IsPanelOpenForTesting());
+
+  shield_coordinator.Hide();
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return !shield_coordinator.IsShowing();
+  }));
+}
+
+// Verifies the address-bar copy-command enabled-state with a real Browser
+// object (the gap identified in the Wave 1 audit: unit tests note they cannot
+// safely exercise IsCommandIdEnabled for copy commands without a real Browser).
+IN_PROC_BROWSER_TEST_F(LocationBarUtilityPanelInteractiveUiTest,
+                       AddressBarCopyCommandsEnabledStateWithRealBrowser) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/title1.html")));
+  base::RunLoop().RunUntilIdle();
+
+  MahoAddressBarContextMenu menu(browser());
+
+  EXPECT_TRUE(menu.IsCommandIdEnabled(IDC_MAHO_ADDR_COPY_URL))
+      << "IDC_MAHO_ADDR_COPY_URL should be enabled when a page is loaded";
+  EXPECT_TRUE(menu.IsCommandIdEnabled(IDC_MAHO_ADDR_COPY_MARKDOWN))
+      << "IDC_MAHO_ADDR_COPY_MARKDOWN should be enabled when a page is loaded";
+
+  EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_ADDR_EDIT))
+      << "IDC_MAHO_ADDR_EDIT should be disabled without a callback";
 }

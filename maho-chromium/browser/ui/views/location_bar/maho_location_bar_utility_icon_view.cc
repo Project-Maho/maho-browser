@@ -9,6 +9,7 @@
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/views/animation/ink_drop.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/view_class_properties.h"
@@ -68,6 +69,7 @@ MahoLocationBarUtilityIconView::MahoLocationBarUtilityIconView(
   SetImageHorizontalAlignment(ALIGN_CENTER);
   SetImageVerticalAlignment(ALIGN_MIDDLE);
   SetInstallFocusRingOnFocus(false);
+  views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::OFF);
   UpdateUtilityButtonImages(this);
   UpdateButtonChrome();
 }
@@ -144,23 +146,14 @@ void MahoLocationBarUtilityIconView::TogglePanel() {
 void MahoLocationBarUtilityIconView::UpdateButtonChrome() {
   const bool active = GetToggled() || GetState() == STATE_HOVERED ||
                       GetState() == STATE_PRESSED;
-  SetBackground(nullptr);
-  // Bottom padding (4px) optically centers the icon within the taller pill,
-  // compensating for the pill's internal top padding applied elsewhere.
-  SetBorder(views::CreatePaddedBorder(
-      views::CreateRoundedRectBorder(
-          1, kUtilityButtonCornerRadius,
-          active ? ui::kColorSysNeutralOutline
-                 : ui::kColorSysSurfaceVariant),
-      gfx::Insets::TLBR(0, 0, 4, 0)));
+  SetBorder(views::CreateEmptyBorder(gfx::Insets()));
+  SetBackground(active ? views::CreateRoundedRectBackground(
+                             ui::kColorSysSurfaceVariant,
+                             kUtilityButtonCornerRadius)
+                       : nullptr);
 }
 
 void MahoLocationBarUtilityIconView::UpdateVisibilityState() {
-  // The icon is shown when ANY of these three conditions hold:
-  //  - affordance_visible_: the pill's trailing area is expanded (e.g. focused).
-  //  - hover_visible_: the user is hovering the pill region.
-  //  - panel_widget_: the utility panel is currently open (keep icon visible
-  //    so the user can dismiss it).
   const bool should_show = affordance_visible_ || hover_visible_ || panel_widget_;
   SetVisible(should_show);
   SetToggled(panel_widget_ != nullptr);

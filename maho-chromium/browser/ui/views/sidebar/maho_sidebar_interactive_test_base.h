@@ -96,6 +96,8 @@ class MahoSidebarInteractiveTestBase : public InteractiveBrowserTest {
   void ExpectSidebarLayoutEnabled(bool enabled);
   void ExpectSidebarPanelExpanded(bool expanded);
 
+  void ShowContextMenuOnView(views::View* view);
+
   // DnD helpers (real mouse simulation).
   void DragViewToView(views::View* source, views::View* target);
   void DragViewToPoint(views::View* source, const gfx::Point& screen_point);

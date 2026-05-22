@@ -5,6 +5,8 @@
 
 #include <string>
 
+#include "url/gurl.h"
+
 class Browser;
 
 namespace views {
@@ -15,10 +17,13 @@ class MahoPageInfoUI {
  public:
   MahoPageInfoUI() = delete;
 
-  static void CustomizePageInfo();
+  static void ShowBoostBubble(Browser* browser);
+  static void ShowShieldBubble(Browser* browser);
   static void ShowShieldBubble(views::View* anchor_view,
                                Browser* browser,
                                const std::string& origin);
+  static void ShowSiteSettings(Browser* browser, const GURL& url);
+  static void ShowCookiesSettings(Browser* browser);
 };
 
 #endif  // MAHO_BROWSER_UI_SITE_CONTROL_MAHO_PAGE_INFO_UI_H_

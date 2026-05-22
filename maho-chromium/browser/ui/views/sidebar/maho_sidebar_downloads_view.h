@@ -8,12 +8,14 @@
 
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/view.h"
 
 namespace views {
 class Button;
+class Label;
 class ScrollView;
 }  // namespace views
 
@@ -57,14 +59,17 @@ class MahoSidebarDownloadsView : public views::View {
  private:
   void BuildUi();
   void HandleDownloadAction(const std::string& download_id,
-                              DownloadActionKind action);
+                            DownloadActionKind action);
 
   base::RepeatingCallback<void(const std::string&, DownloadActionKind)>
       download_file_action_callback_for_testing_;
 
   raw_ptr<views::ScrollView> scroll_view_ = nullptr;
   raw_ptr<views::View> list_container_ = nullptr;
-  raw_ptr<views::Label> empty_state_view_ = nullptr;
+  raw_ptr<views::View> empty_state_view_ = nullptr;
+  raw_ptr<views::Label> header_summary_label_ = nullptr;
+
+  base::WeakPtrFactory<MahoSidebarDownloadsView> weak_factory_{this};
 };
 
 }  // namespace maho

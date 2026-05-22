@@ -12,7 +12,8 @@ use maho_types::traits::shell_renderer::{
 };
 
 pub trait TabManagerInterface {
-    fn create_tab(&mut self, space_id: SpaceId, url: Option<Url>, parent_id: Option<TabId>) -> Tab;
+    fn create_tab(&mut self, space_id: SpaceId, url: Option<Url>, parent_id: Option<TabId>, window_id: Option<i64>) -> Tab;
+    fn create_tab_with_id(&mut self, tab_id: TabId, space_id: SpaceId, url: Option<Url>, parent_id: Option<TabId>, window_id: Option<i64>) -> Tab;
     fn close_tab(&mut self, tab_id: &TabId) -> Option<Tab>;
     fn activate_tab(&mut self, tab_id: &TabId);
     fn duplicate_tab(&mut self, tab_id: &TabId) -> Option<Tab>;
@@ -55,6 +56,7 @@ pub trait TabManagerInterface {
     fn close_tabs_to_right(&mut self, space_id: &SpaceId, tab_id: &TabId) -> Vec<TabId>;
     fn close_tabs_to_left(&mut self, space_id: &SpaceId, tab_id: &TabId) -> Vec<TabId>;
     fn toggle_freeze(&mut self, tab_id: &TabId);
+    fn release_window_tabs(&mut self, window_id: i64) -> Vec<TabId>;
 }
 
 pub trait SpaceManagerInterface {
@@ -103,6 +105,12 @@ pub trait SpaceManagerInterface {
     fn pin_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId);
     fn unpin_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId);
     fn move_folder(&mut self, folder_id: &FolderId, new_parent: Option<FolderId>);
+    fn move_folder_in_space(
+        &mut self,
+        space_id: &SpaceId,
+        folder_id: &FolderId,
+        new_parent: Option<FolderId>,
+    );
     fn get_folder_view_models(
         &self,
         space_id: &SpaceId,
@@ -115,6 +123,15 @@ pub trait SpaceManagerInterface {
     );
     fn set_last_active_tab(&mut self, space_id: &SpaceId, tab_id: Option<TabId>);
     fn get_last_active_tab(&self, space_id: &SpaceId) -> Option<&TabId>;
+    fn is_tab_in_folder(&self, space_id: &SpaceId, tab_id: &TabId) -> bool;
+    fn apply_tab_residency(
+        &mut self,
+        space_id: &SpaceId,
+        tab_id: &TabId,
+        is_favorite: bool,
+        is_in_folder: bool,
+    );
+    fn remove_tab_from_root_order(&mut self, space_id: &SpaceId, tab_id: &TabId);
 }
 
 pub trait CommandBarInterface {
@@ -241,8 +258,18 @@ impl EventDispatcher {
                 space_id,
                 url,
                 parent_id,
+                tab_id,
+                window_id,
             } => {
-                let tab = tab_mgr.create_tab(space_id.clone(), url, parent_id);
+                // In the Chromium-facing path every tab must have an explicit URL so the
+                // browser knows which page to load. Substitute None with the canonical NTP
+                // URL rather than letting about:blank silently create a ghost/url-less tab.
+                let resolved_url = Some(url.unwrap_or_else(|| Url::new("chrome://newtab")));
+                let tab = if let Some(explicit_id) = tab_id {
+                    tab_mgr.create_tab_with_id(explicit_id, space_id.clone(), resolved_url, parent_id, window_id)
+                } else {
+                    tab_mgr.create_tab(space_id.clone(), resolved_url, parent_id, window_id)
+                };
                 space_mgr.add_tab_to_space(&space_id, tab.id.clone(), None);
                 space_mgr.set_last_active_tab(&space_id, Some(tab.id.clone()));
                 vec![CoreUpdate::TabCreated {
@@ -270,10 +297,7 @@ impl EventDispatcher {
                     space_mgr.set_last_active_tab(&sid, Some(tab_id.clone()));
                 }
                 tab_mgr.activate_tab(&tab_id);
-                vec![CoreUpdate::TabUpdated {
-                    tab_id,
-                    changes: TabStateUpdate::default(),
-                }]
+                vec![]
             }
             ShellEvent::DuplicateTab { tab_id } => {
                 if let Some(tab) = tab_mgr.duplicate_tab(&tab_id) {
@@ -334,35 +358,31 @@ impl EventDispatcher {
                     },
                 }]
             }
-            ShellEvent::FavoriteTab { tab_id } => {
-                tab_mgr.favorite_tab(&tab_id);
-                vec![CoreUpdate::TabUpdated {
-                    tab_id,
-                    changes: TabStateUpdate {
-                        custom_title: None,
-                        is_favorite: Some(true),
-                        ..Default::default()
-                    },
-                }]
+            ShellEvent::FavoriteTab { .. } => {
+                unreachable!("FavoriteTab is handled by MahoCore::handle_event before dispatch; this branch must never be reached")
             }
-            ShellEvent::UnfavoriteTab { tab_id } => {
-                tab_mgr.unfavorite_tab(&tab_id);
-                vec![CoreUpdate::TabUpdated {
-                    tab_id,
-                    changes: TabStateUpdate {
-                        custom_title: None,
-                        is_favorite: Some(false),
-                        ..Default::default()
-                    },
-                }]
+            ShellEvent::UnfavoriteTab { .. } => {
+                unreachable!("UnfavoriteTab is handled by MahoCore::handle_event before dispatch; this branch must never be reached")
             }
             ShellEvent::MuteTab { tab_id } => {
                 tab_mgr.mute_tab(&tab_id);
-                vec![]
+                vec![CoreUpdate::TabUpdated {
+                    tab_id,
+                    changes: TabStateUpdate {
+                        is_muted: Some(true),
+                        ..Default::default()
+                    },
+                }]
             }
             ShellEvent::UnmuteTab { tab_id } => {
                 tab_mgr.unmute_tab(&tab_id);
-                vec![]
+                vec![CoreUpdate::TabUpdated {
+                    tab_id,
+                    changes: TabStateUpdate {
+                        is_muted: Some(false),
+                        ..Default::default()
+                    },
+                }]
             }
             ShellEvent::FreezeTab { tab_id } => {
                 tab_mgr.toggle_freeze(&tab_id);
@@ -373,11 +393,14 @@ impl EventDispatcher {
                 target_space,
                 position,
             } => {
+                let is_favorite = tab_mgr.get_tab(&tab_id).map(|t| t.is_favorite).unwrap_or(false);
                 if let Some(source_space) =
                     tab_mgr.move_tab(&tab_id, target_space.clone(), position)
                 {
                     space_mgr.remove_tab_from_space(&source_space, &tab_id);
-                    space_mgr.add_tab_to_space(&target_space, tab_id, Some(position));
+                    let is_in_folder = space_mgr.is_tab_in_folder(&target_space, &tab_id);
+                    space_mgr.add_tab_to_space(&target_space, tab_id.clone(), Some(position));
+                    space_mgr.apply_tab_residency(&target_space, &tab_id, is_favorite, is_in_folder);
                     vec![
                         CoreUpdate::TabOrderChanged {
                             space_id: source_space,
@@ -385,6 +408,32 @@ impl EventDispatcher {
                         },
                         CoreUpdate::TabOrderChanged {
                             space_id: target_space,
+                            order: vec![],
+                        },
+                    ]
+                } else {
+                    vec![]
+                }
+            }
+            ShellEvent::MoveTabToSpace {
+                tab_id,
+                target_space_id,
+                section: _,
+            } => {
+                if let Some(source_space) = tab_mgr.get_tab(&tab_id).map(|t| t.space_id.clone()) {
+                    let is_favorite = tab_mgr.get_tab(&tab_id).map(|t| t.is_favorite).unwrap_or(false);
+                    tab_mgr.move_tab(&tab_id, target_space_id.clone(), 0);
+                    space_mgr.remove_tab_from_space(&source_space, &tab_id);
+                    space_mgr.add_tab_to_space(&target_space_id, tab_id.clone(), None);
+                    let is_in_folder = space_mgr.is_tab_in_folder(&target_space_id, &tab_id);
+                    space_mgr.apply_tab_residency(&target_space_id, &tab_id, is_favorite, is_in_folder);
+                    vec![
+                        CoreUpdate::TabOrderChanged {
+                            space_id: source_space,
+                            order: vec![],
+                        },
+                        CoreUpdate::TabOrderChanged {
+                            space_id: target_space_id,
                             order: vec![],
                         },
                     ]
@@ -440,7 +489,9 @@ impl EventDispatcher {
             }
             ShellEvent::ReopenLastClosed => {
                 if let Some(tab) = tab_mgr.reopen_last_closed() {
+                    let is_in_folder = space_mgr.is_tab_in_folder(&tab.space_id, &tab.id);
                     space_mgr.add_tab_to_space(&tab.space_id, tab.id.clone(), None);
+                    space_mgr.apply_tab_residency(&tab.space_id, &tab.id, tab.is_favorite, is_in_folder);
                     vec![CoreUpdate::TabCreated {
                         tab: tab_mgr.to_tab_view_model(&tab),
                     }]
@@ -639,6 +690,8 @@ impl EventDispatcher {
                 tab_id,
             } => {
                 space_mgr.remove_tab_from_folder(&space_id, &folder_id, &tab_id);
+                let is_favorite = tab_mgr.get_tab(&tab_id).map(|t| t.is_favorite).unwrap_or(false);
+                space_mgr.apply_tab_residency(&space_id, &tab_id, is_favorite, false);
                 vec![CoreUpdate::FolderUpdated {
                     folder_id,
                     changes: FolderUpdate {
@@ -691,11 +744,11 @@ impl EventDispatcher {
                 }]
             }
             ShellEvent::MoveFolderIntoFolder {
-                space_id: _,
+                space_id,
                 folder_id,
                 target_folder_id,
             } => {
-                space_mgr.move_folder(&folder_id, Some(target_folder_id));
+                space_mgr.move_folder_in_space(&space_id, &folder_id, Some(target_folder_id));
                 vec![CoreUpdate::FolderUpdated {
                     folder_id,
                     changes: FolderUpdate {
@@ -1073,10 +1126,15 @@ impl EventDispatcher {
             }
             ShellEvent::ReorderFavorite { tab_id, new_index } => {
                 tab_mgr.reorder_favorite(&tab_id, new_index);
+                let favorite_order = tab_mgr
+                    .get_tab(&tab_id)
+                    .and_then(|t| t.favorite_order)
+                    .map(Some);
                 vec![CoreUpdate::TabUpdated {
                     tab_id,
                     changes: TabStateUpdate {
                         is_favorite: Some(true),
+                        favorite_order,
                         ..Default::default()
                     },
                 }]

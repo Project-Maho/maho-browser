@@ -16,12 +16,13 @@
 #include "ui/webui/webui_util.h"
 
 MahoEaselUIConfig::MahoEaselUIConfig()
-    : DefaultWebUIConfig(content::kChromeUIScheme, maho::kMahoEaselHost) {}
+    : DefaultTopChromeWebUIConfig(content::kChromeUIScheme,
+                                  maho::kMahoEaselHost) {}
 
 WEB_UI_CONTROLLER_TYPE_IMPL(MahoEaselUI)
 
 MahoEaselUI::MahoEaselUI(content::WebUI* web_ui)
-    : ui::MojoWebUIController(web_ui) {
+    : TopChromeWebUIController(web_ui) {
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       Profile::FromWebUI(web_ui), maho::kMahoEaselHost);
   webui::SetupWebUIDataSource(source, kMahoEaselResources,
