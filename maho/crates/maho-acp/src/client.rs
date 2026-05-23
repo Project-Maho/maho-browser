@@ -9,6 +9,7 @@ use crate::events::{
     PermissionToolCall, PromptResult, StopReason,
 };
 use crate::jsonrpc::Router;
+use crate::process;
 use crate::process::AcpProcess;
 use crate::session::{CloseSessionParams, McpServer, NewSessionParams, NewSessionResult};
 use crate::transport::LineTransport;
@@ -31,7 +32,11 @@ pub struct AcpClient {
 
 impl AcpClient {
     pub async fn start(command_path: &str) -> Result<Self, Error> {
-        let (process, stdin, stdout) = AcpProcess::spawn(command_path)?;
+        Self::start_with_auth(command_path, None).await
+    }
+
+    pub async fn start_with_auth(command_path: &str, auth: Option<&process::AuthConfig>) -> Result<Self, Error> {
+        let (process, stdin, stdout) = AcpProcess::spawn(command_path, auth)?;
 
         let router = Arc::new(Router::new());
         let (write_tx, mut write_rx) = mpsc::channel::<Value>(64);

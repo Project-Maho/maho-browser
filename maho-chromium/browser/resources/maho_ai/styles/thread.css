@@ -583,6 +583,123 @@
   }
 }
 
+.compact-thread__bubble--thinking {
+  padding: var(--maho-ai-space-2) var(--maho-ai-space-3);
+  border-radius: var(--maho-ai-radius-md);
+  border-color: var(--maho-ai-border-soft);
+  background: var(--maho-ai-bg-panel-soft);
+  box-shadow: none;
+  cursor: pointer;
+  user-select: text;
+}
+
+.compact-thread__thinking-label {
+  display: block;
+  color: var(--maho-ai-text-faint);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
+.compact-thread__thinking-text {
+  display: block;
+  color: var(--maho-ai-text-muted);
+  font-size: 12px;
+  font-style: italic;
+  line-height: var(--maho-ai-leading-normal);
+  white-space: pre-wrap;
+}
+
+.compact-thread__thinking-chevron {
+  display: inline-block;
+  margin-left: var(--maho-ai-space-1);
+  color: var(--maho-ai-text-faint);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.compact-thread__bubble--tool {
+  display: flex;
+  align-items: center;
+  gap: var(--maho-ai-space-2);
+  padding: var(--maho-ai-space-2) var(--maho-ai-space-3);
+  border-radius: var(--maho-ai-radius-md);
+  border-color: var(--maho-ai-border-soft);
+  background: var(--maho-ai-bg-panel-soft);
+  box-shadow: none;
+  font-size: var(--maho-ai-text-sm);
+  color: var(--maho-ai-text-secondary);
+  cursor: pointer;
+}
+
+.compact-thread__tool-indicator {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--maho-ai-text-faint);
+  border-top-color: transparent;
+  animation: compact-thread__tool-spin 800ms linear infinite;
+}
+
+.compact-thread__tool-indicator[data-status='completed'] {
+  border: 0;
+  animation: none;
+  color: rgba(112, 205, 168, 0.9);
+}
+
+.compact-thread__tool-indicator[data-status='completed']::after {
+  content: '✓';
+  font-size: 12px;
+}
+
+.compact-thread__tool-indicator[data-status='failed'] {
+  border: 0;
+  animation: none;
+  color: rgba(219, 120, 131, 0.9);
+}
+
+.compact-thread__tool-indicator[data-status='failed']::after {
+  content: '✗';
+  font-size: 12px;
+}
+
+.compact-thread__tool-name {
+  font-weight: 600;
+  color: var(--maho-ai-text-primary);
+}
+
+.compact-thread__tool-status {
+  color: var(--maho-ai-text-faint);
+  font-size: var(--maho-ai-text-xs);
+}
+
+.compact-thread__tool-output {
+  display: none;
+  margin-top: var(--maho-ai-space-2);
+  padding: var(--maho-ai-space-2);
+  border-radius: var(--maho-ai-radius-sm);
+  background: var(--maho-ai-bg-pre);
+  color: var(--maho-ai-text-muted);
+  font-size: var(--maho-ai-text-xs);
+  line-height: var(--maho-ai-leading-normal);
+  white-space: pre-wrap;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.compact-thread__tool-output[data-visible='true'] {
+  display: block;
+}
+
+@keyframes compact-thread__tool-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .compact-thread__row,
   .compact-thread__row--thinking,

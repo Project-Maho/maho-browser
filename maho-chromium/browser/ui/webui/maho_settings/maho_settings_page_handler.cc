@@ -1517,24 +1517,27 @@ void MahoSettingsPageHandler::ToggleATCRule(const std::string& rule_id,
 void MahoSettingsPageHandler::GetAISettings(GetAISettingsCallback callback) {
   auto settings = maho_settings::mojom::AISettings::New();
   settings->has_api_key = !prefs_->GetString(ai::kApiKey).empty();
-  settings->endpoint = prefs_->GetString(ai::kEndpoint);
+  settings->provider = prefs_->GetString(ai::kProvider);
+  settings->base_url = prefs_->GetString(ai::kBaseUrl);
   settings->model = prefs_->GetString(ai::kModel);
   settings->opencode_runtime_enabled =
       prefs_->GetBoolean(ai::kOpenCodeRuntimeEnabled);
   settings->approval_policy = prefs_->GetString(ai::kApprovalPolicy);
   settings->session_persistence_enabled =
       prefs_->GetBoolean(ai::kSessionPersistenceEnabled);
-  settings->runtime_endpoint = prefs_->GetString(ai::kRuntimeEndpoint);
-  settings->runtime_model = prefs_->GetString(ai::kRuntimeModel);
   std::move(callback).Run(std::move(settings));
+}
+
+void MahoSettingsPageHandler::SetAIProvider(const std::string& provider) {
+  prefs_->SetString(ai::kProvider, provider);
+}
+
+void MahoSettingsPageHandler::SetAIBaseUrl(const std::string& url) {
+  prefs_->SetString(ai::kBaseUrl, url);
 }
 
 void MahoSettingsPageHandler::SetAIApiKey(const std::string& key) {
   prefs_->SetString(ai::kApiKey, key);
-}
-
-void MahoSettingsPageHandler::SetAIEndpoint(const std::string& endpoint) {
-  prefs_->SetString(ai::kEndpoint, endpoint);
 }
 
 void MahoSettingsPageHandler::SetAIModel(const std::string& model) {
@@ -1547,15 +1550,6 @@ void MahoSettingsPageHandler::SetAIApprovalPolicy(const std::string& policy) {
 
 void MahoSettingsPageHandler::SetAISessionPersistence(bool enabled) {
   prefs_->SetBoolean(ai::kSessionPersistenceEnabled, enabled);
-}
-
-void MahoSettingsPageHandler::SetAIRuntimeEndpoint(
-    const std::string& endpoint) {
-  prefs_->SetString(ai::kRuntimeEndpoint, endpoint);
-}
-
-void MahoSettingsPageHandler::SetAIRuntimeModel(const std::string& model) {
-  prefs_->SetString(ai::kRuntimeModel, model);
 }
 
 // ── Shortcuts domain ──

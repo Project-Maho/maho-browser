@@ -172,6 +172,13 @@ source_set("maho_context_menus") {
 
 source_set("maho_location_bar_views") {
   sources = [
+    "ui/views/location_bar/maho_dom_screenshot_action_dialog_view.cc",
+    "ui/views/location_bar/maho_dom_screenshot_action_dialog_view.h",
+    "ui/views/location_bar/maho_dom_screenshot_handler.cc",
+    "ui/views/location_bar/maho_dom_screenshot_handler.h",
+    "ui/views/location_bar/maho_dom_screenshot_script_string.h",
+    "ui/views/location_bar/maho_full_page_capture_client.cc",
+    "ui/views/location_bar/maho_full_page_capture_client.h",
     "ui/views/location_bar/maho_location_bar_utility_bubble_coordinator.cc",
     "ui/views/location_bar/maho_location_bar_utility_bubble_coordinator.h",
     "ui/views/location_bar/maho_location_bar_utility_icon_view.cc",
@@ -185,10 +192,14 @@ source_set("maho_location_bar_views") {
     ":maho_core_holder",
     "//base",
     "//chrome/browser/content_settings:content_settings_factory",
+    "//chrome/browser/image_editor",
     "//chrome/browser/page_info",
     "//chrome/browser/permissions",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui:ui",
     "//chrome/browser/ui/location_bar",
+    "//chrome/browser/ui/sharing_hub:sharing_hub",
+    "//chrome/browser/ui/sharing_hub:impl",
     "//chrome/browser/ui/toolbar",
     "//components/content_settings/core/browser",
     "//components/content_settings/core/common",
@@ -197,11 +208,14 @@ source_set("maho_location_bar_views") {
     "//components/security_state/core",
     "//components/vector_icons",
     "//content/public/browser",
+    "//content/public/common",
     "//maho/browser/ui/site_control:maho_site_control",
     "//maho/third_party/maho:maho_core_prebuilt",
     "//maho/third_party/maho:maho_ffi_headers",
+    "//net",
     "//ui/base",
     "//ui/color",
+    "//ui/display",
     "//ui/gfx",
     "//ui/views",
   ]
@@ -210,6 +224,7 @@ source_set("maho_location_bar_views") {
 source_set("maho_location_bar_views_unittests") {
   testonly = true
   sources = [
+    "ui/views/location_bar/maho_dom_screenshot_action_dialog_view_unittest.cc",
     "ui/views/location_bar/maho_location_bar_utility_panel_provider_unittest.cc",
   ]
   deps = [
@@ -224,6 +239,7 @@ source_set("maho_location_bar_views_unittests") {
     "//components/security_state/core",
     "//content/public/browser",
     "//testing/gtest",
+    "//ui/views:test_support",
     "//url",
   ]
 }

@@ -53,13 +53,12 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler {
   void ToggleATCRule(const std::string& rule_id, bool enabled) override;
 
   void GetAISettings(GetAISettingsCallback callback) override;
+  void SetAIProvider(const std::string& provider) override;
+  void SetAIBaseUrl(const std::string& url) override;
   void SetAIApiKey(const std::string& key) override;
-  void SetAIEndpoint(const std::string& endpoint) override;
   void SetAIModel(const std::string& model) override;
   void SetAIApprovalPolicy(const std::string& policy) override;
   void SetAISessionPersistence(bool enabled) override;
-  void SetAIRuntimeEndpoint(const std::string& endpoint) override;
-  void SetAIRuntimeModel(const std::string& model) override;
 
   void GetShortcuts(GetShortcutsCallback callback) override;
   void SetShortcut(const std::string& action,

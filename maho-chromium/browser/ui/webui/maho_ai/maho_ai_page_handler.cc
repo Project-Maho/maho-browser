@@ -6,7 +6,9 @@
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/logging.h"
 #include "base/rand_util.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
 #include "chrome/browser/ui/browser.h"
@@ -25,6 +27,7 @@ namespace {
 
 namespace ai = maho::ai_prefs;
 
+static constexpr size_t kMaxPageContextChars = 8000;
 constexpr size_t kMaxHistory = 200;
 constexpr size_t kMaxPersistedEvents = 500;
 
@@ -239,6 +242,8 @@ maho_ai::mojom::RuntimeEventKind InternalToMojoEventKind(
   switch (type) {
     case MahoAiRuntimeEventType::kAssistantToken:
       return maho_ai::mojom::RuntimeEventKind::kAssistantToken;
+    case MahoAiRuntimeEventType::kAssistantThinking:
+      return maho_ai::mojom::RuntimeEventKind::kAssistantThinking;
     case MahoAiRuntimeEventType::kTurnComplete:
       return maho_ai::mojom::RuntimeEventKind::kTurnComplete;
     case MahoAiRuntimeEventType::kError:
@@ -419,6 +424,9 @@ void MahoAIPageHandler::OnRuntimeEvent(MahoAiRuntimeEvent event) {
       break;
 
     case MahoAiRuntimeEventType::kBrowserContextInjected:
+      break;
+
+    case MahoAiRuntimeEventType::kAssistantThinking:
       break;
   }
 }
@@ -725,9 +733,61 @@ void MahoAIPageHandler::SubmitPrompt(const std::string& session_id,
     return;
   }
 
+  if (attach_browser_context) {
+    page_context_extractor_.GetPageContext(
+        base::BindOnce(&MahoAIPageHandler::OnContextExtractedThenSubmit,
+                       weak_factory_.GetWeakPtr(), prompt, mode));
+    return;
+  }
+
   adapter->SubmitMessage(
       prompt, maho_ai::mojom::ChatIntent::kFreeform,
       attach_browser_context, mode,
+      base::BindRepeating(&MahoAIPageHandler::OnRuntimeEvent,
+                          weak_factory_.GetWeakPtr()));
+}
+
+void MahoAIPageHandler::OnContextExtractedThenSubmit(
+    std::string user_prompt,
+    maho_ai::mojom::InteractionMode mode,
+    MahoAiPageContextExtractor::PageContextResult ctx) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  MahoAiRuntimeAdapter* adapter = runtime_router_.GetActiveAdapter();
+  MahoAiRuntimeEvent ctx_event;
+  ctx_event.type = MahoAiRuntimeEventType::kBrowserContextInjected;
+
+  std::string final_prompt;
+  if (!ctx.HasUsableContent()) {
+    DVLOG(1) << "MahoAIPageHandler: page context extraction failed ("
+             << ctx.GetExtractionStatusString() << "); sending original prompt";
+    final_prompt = user_prompt;
+    ctx_event.payload.Set("status", "extraction_failed");
+    ctx_event.text =
+        "Page content could not be extracted; sending prompt without page "
+        "context.";
+  } else {
+    std::string clipped_text = ctx.main_text;
+    if (clipped_text.size() > kMaxPageContextChars) {
+      clipped_text = clipped_text.substr(0, kMaxPageContextChars) + "...";
+    }
+    final_prompt = base::StrCat({"[Current Page Context]\nTitle: ", ctx.title,
+                                 "\nURL: ", ctx.url, "\nContent: ", clipped_text,
+                                 "\n\nUser Question:\n", user_prompt});
+    ctx_event.payload.Set("status", "ok");
+    ctx_event.payload.Set("url", ctx.url);
+    ctx_event.payload.Set("title", ctx.title);
+    ctx_event.payload.Set("content_length",
+                          static_cast<int>(ctx.main_text.size()));
+    ctx_event.text =
+        base::StrCat({"Attached page context: ", ctx.title});
+  }
+
+  OnRuntimeEvent(std::move(ctx_event));
+
+  adapter->SubmitMessage(
+      final_prompt, maho_ai::mojom::ChatIntent::kFreeform,
+      /*attach_browser_context=*/false, mode,
       base::BindRepeating(&MahoAIPageHandler::OnRuntimeEvent,
                           weak_factory_.GetWeakPtr()));
 }

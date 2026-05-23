@@ -13,9 +13,11 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
+#include "components/prefs/pref_service.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "maho/browser/ai/maho_acp_event_decoder.h"
 #include "maho/browser/ui/webui/maho_ai/maho_ai.mojom.h"
+#include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/third_party/maho/maho_ffi.h"
 
 MahoOpenCodeAcpAdapter::FfiUserData::FfiUserData() = default;
@@ -62,15 +64,10 @@ void MahoOpenCodeAcpAdapter::SubmitMessage(
   current_on_event_ = on_event;
   accumulated_text_.clear();
 
-  if (!attach_browser_context) {
-    MahoAiRuntimeEvent ctx_event;
-    ctx_event.type = MahoAiRuntimeEventType::kBrowserContextInjected;
-    ctx_event.payload.Set("status", "not_requested");
-    ctx_event.text = "Browser context not requested.";
-    EmitEvent(std::move(ctx_event));
+  if (attach_browser_context) {
+    DVLOG(1) << "MahoOpenCodeAcpAdapter: attach_browser_context=true should be "
+                "resolved upstream by page handler; ignoring at adapter layer";
   }
-  // TODO(Phase 5+): When attach_browser_context is true, inject browser
-  // context. This is an AI-behavior concern that stays in C++.
 
   if (state_ == State::kReady) {
     state_ = State::kSubmitting;
@@ -100,6 +97,19 @@ void MahoOpenCodeAcpAdapter::SubmitMessage(
     if (rc != MAHO_ACP_OK) {
       TransitionToError("Failed to set event callback.");
       return;
+    }
+
+    {
+      namespace ai = maho::ai_prefs;
+      base::DictValue auth_dict;
+      auth_dict.Set("provider", prefs_->GetString(ai::kProvider));
+      auth_dict.Set("base_url", prefs_->GetString(ai::kBaseUrl));
+      auth_dict.Set("api_key", prefs_->GetString(ai::kApiKey));
+      auth_dict.Set("model", prefs_->GetString(ai::kModel));
+      std::string auth_json;
+      base::JSONWriter::Write(auth_dict, &auth_json);
+      int32_t auth_rc = maho_acp_set_auth_config(acp_handle_, auth_json.c_str());
+      DVLOG(1) << "maho_acp_set_auth_config returned " << auth_rc;
     }
 
     rc = maho_acp_start(acp_handle_, nullptr);
@@ -279,7 +289,7 @@ void MahoOpenCodeAcpAdapter::DriveStateMachine(const std::string& kind,
     const std::string* text = data.FindString("text");
     if (text && !text->empty()) {
       MahoAiRuntimeEvent event;
-      event.type = MahoAiRuntimeEventType::kAssistantToken;
+      event.type = MahoAiRuntimeEventType::kAssistantThinking;
       event.text = *text;
       EmitEvent(std::move(event));
     }
@@ -374,9 +384,20 @@ void MahoOpenCodeAcpAdapter::DriveStateMachine(const std::string& kind,
 
   if (kind == "PromptErr") {
     const std::string* msg = data.FindString("message");
+    const std::string* auth_cmd = data.FindString("auth_setup_command");
     MahoAiRuntimeEvent event;
     event.type = MahoAiRuntimeEventType::kError;
-    event.text = msg ? *msg : "Prompt error.";
+    if (auth_cmd && !auth_cmd->empty()) {
+      event.text =
+          "Authentication required. To set up provider auth for Maho's "
+          "opencode, run this in your terminal:\n\n" +
+          *auth_cmd +
+          "\n\nThen restart Maho and retry your prompt.";
+      event.payload.Set("auth_setup_command", *auth_cmd);
+      event.payload.Set("error_kind", "auth_required");
+    } else {
+      event.text = msg ? *msg : "Prompt error.";
+    }
     state_ = State::kReady;
     EmitEvent(std::move(event));
     return;

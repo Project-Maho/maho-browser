@@ -95,6 +95,9 @@ enum RuntimeConnectionState {
 enum RuntimeEventKind {
   // Incremental text token from the assistant.
   kAssistantToken,
+  // Incremental thinking/reasoning content from the model (separate from
+  // visible assistant reply).
+  kAssistantThinking,
   // The assistant turn completed successfully.
   kTurnComplete,
   // An error occurred during the turn.

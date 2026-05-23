@@ -265,6 +265,7 @@ export function isRenderableTimelineEvent(event: RuntimeEventRecord): boolean {
     case RuntimeEventKind.kUserPrompt:
     case RuntimeEventKind.kSessionStatus:
     case RuntimeEventKind.kAssistantToken:
+    case RuntimeEventKind.kAssistantThinking:
     case RuntimeEventKind.kTurnComplete:
     case RuntimeEventKind.kToolRequest:
     case RuntimeEventKind.kToolResult:

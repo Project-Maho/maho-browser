@@ -5,8 +5,9 @@
 
 namespace maho::ai_prefs {
 
+inline constexpr char kProvider[] = "maho.ai.provider";
+inline constexpr char kBaseUrl[] = "maho.ai.base_url";
 inline constexpr char kApiKey[] = "maho.ai.api_key";
-inline constexpr char kEndpoint[] = "maho.ai.endpoint";
 inline constexpr char kModel[] = "maho.ai.model";
 inline constexpr char kStructuredContextV2Enabled[] =
     "maho.ai.structured_context_v2_enabled";
@@ -25,8 +26,6 @@ inline constexpr char kSessionPersistenceEnabled[] =
     "maho.ai.session_persistence_enabled";
 inline constexpr char kSessionEventLogs[] =
     "maho.ai.session_event_logs";
-inline constexpr char kRuntimeEndpoint[] = "maho.ai.runtime_endpoint";
-inline constexpr char kRuntimeModel[] = "maho.ai.runtime_model";
 inline constexpr char kRuntimeCommand[] = "maho.ai.runtime_command";
 
 }  // namespace maho::ai_prefs

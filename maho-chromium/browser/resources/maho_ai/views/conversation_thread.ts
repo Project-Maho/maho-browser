@@ -26,7 +26,7 @@ export interface ConversationItem {
     status: 'approved'|'denied'|'pending';
   };
   chips?: ConversationChip[];
-  kind?: 'activity'|'approval';
+  kind?: 'activity'|'approval'|'thinking';
   key: string;
   markdown: boolean;
   note?: string;
@@ -241,15 +241,20 @@ function getToolStatusChip(status?: ToolCallStatus): ConversationChip {
 export function collectConversationItems(entries: TimelineEntry[]): ConversationItem[] {
   const items: ConversationItem[] = [];
   const toolCallsById = new Map<string, ToolCallInfo>();
+  const toolItemIndexByCallId = new Map<string, number>();
   const approvalItemIndexById = new Map<string, number>();
   let replaceableAssistantIndex: number|null = null;
   let assistantText = '';
   let committedAssistantLength = 0;
+  let replaceableThinkingIndex: number|null = null;
+  let thinkingText = '';
 
   const clearAssistantState = () => {
     replaceableAssistantIndex = null;
     assistantText = '';
     committedAssistantLength = 0;
+    replaceableThinkingIndex = null;
+    thinkingText = '';
   };
 
   const splitAssistantState = () => {
@@ -283,6 +288,7 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
         if (!text) {
           break;
         }
+        replaceableThinkingIndex = null;
         assistantText += text;
         const assistantSegmentText = assistantText.slice(committedAssistantLength);
         if (!assistantSegmentText) {
@@ -304,6 +310,33 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
           markdown: true,
           role: 'assistant',
           text: assistantSegmentText,
+          timestamp: event.timestamp,
+        };
+        break;
+      case RuntimeEventKind.kAssistantThinking:
+        if (!text) {
+          break;
+        }
+        if (replaceableThinkingIndex === null) {
+          replaceableThinkingIndex = items.length;
+          thinkingText = text;
+          items.push({
+            kind: 'thinking',
+            key,
+            markdown: false,
+            role: 'system',
+            text: thinkingText,
+            timestamp: event.timestamp,
+          });
+          break;
+        }
+        thinkingText += text;
+        items[replaceableThinkingIndex] = {
+          kind: 'thinking',
+          key,
+          markdown: false,
+          role: 'system',
+          text: thinkingText,
           timestamp: event.timestamp,
         };
         break;
@@ -342,6 +375,7 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
         splitAssistantState();
         if (event.toolCall?.callId) {
           toolCallsById.set(event.toolCall.callId, event.toolCall);
+          toolItemIndexByCallId.set(event.toolCall.callId, items.length);
         }
         items.push({
           chips: event.toolCall?.status === ToolCallStatus.kFailed ?
@@ -356,24 +390,42 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
           tone: 'accent',
         });
         break;
-      case RuntimeEventKind.kToolResult:
+      case RuntimeEventKind.kToolResult: {
         splitAssistantState();
         const toolCall = event.toolResult?.callId ?
             toolCallsById.get(event.toolResult.callId) :
             undefined;
-        items.push({
-          kind: 'activity',
-          key,
-          markdown: false,
-          note: !event.toolResult?.success ?
-              summarizeInlineText(event.toolResult?.errorMessage || event.toolResult?.output || '', 72) :
-              undefined,
-          role: 'system',
-          text: humanizeToolResult(toolCall, event.toolResult),
-          timestamp: event.timestamp,
-          tone: event.toolResult?.success ? 'success' : 'danger',
-        });
+        const existingToolIndex = event.toolResult?.callId ?
+            toolItemIndexByCallId.get(event.toolResult.callId) :
+            undefined;
+        const resultText = humanizeToolResult(toolCall, event.toolResult);
+        const resultTone = event.toolResult?.success ? 'success' : 'danger';
+        const resultNote = !event.toolResult?.success ?
+            summarizeInlineText(event.toolResult?.errorMessage || event.toolResult?.output || '', 72) :
+            (event.toolResult?.output ? summarizeInlineText(event.toolResult.output, 120) : undefined);
+        if (existingToolIndex !== undefined && items[existingToolIndex]) {
+          items[existingToolIndex] = {
+            ...items[existingToolIndex],
+            chips: [getToolStatusChip(event.toolResult?.success ? ToolCallStatus.kCompleted : ToolCallStatus.kFailed)],
+            text: resultText,
+            note: resultNote,
+            tone: resultTone,
+            timestamp: event.timestamp,
+          };
+        } else {
+          items.push({
+            kind: 'activity',
+            key,
+            markdown: false,
+            note: resultNote,
+            role: 'system',
+            text: resultText,
+            timestamp: event.timestamp,
+            tone: resultTone,
+          });
+        }
         break;
+      }
       case RuntimeEventKind.kApprovalRequest:
         splitAssistantState();
         const approvalIndex = items.length;

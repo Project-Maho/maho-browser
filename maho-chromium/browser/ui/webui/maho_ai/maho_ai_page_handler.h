@@ -78,6 +78,14 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   // remote. Also maintains chat history for the simple chat UI.
   void OnRuntimeEvent(MahoAiRuntimeEvent event);
 
+  // Async continuation: called once page-context extraction completes. Builds
+  // the augmented prompt (or falls back to the original) and forwards to the
+  // active adapter.
+  void OnContextExtractedThenSubmit(
+      std::string user_prompt,
+      maho_ai::mojom::InteractionMode mode,
+      MahoAiPageContextExtractor::PageContextResult ctx);
+
   // Builds a Mojo RuntimeEvent from an internal event struct.
   maho_ai::mojom::RuntimeEventPtr ToMojoEvent(
       const MahoAiRuntimeEvent& event);

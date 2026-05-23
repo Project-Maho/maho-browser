@@ -304,6 +304,18 @@ export class MahoAiStore {
       return;
     }
 
+    // Thinking events accumulate separately from assistant tokens.
+    if (event.kind === RuntimeEventKind.kAssistantThinking && previous?.event.kind === RuntimeEventKind.kAssistantThinking) {
+      previous.event = {
+        ...previous.event,
+        text: `${previous.event.text || ''}${event.text || ''}`,
+        timestamp: event.timestamp,
+        sequence: event.sequence,
+      };
+      state.eventsBySessionId[sessionId] = [...existing.slice(0, -1), previous];
+      return;
+    }
+
     const nextEntry: TimelineEntry = {sessionId, event};
     state.eventsBySessionId[sessionId] = [...existing, nextEntry];
   }
@@ -319,6 +331,10 @@ export class MahoAiStore {
   }
 
   private patch(mutator: (state: AppState) => void) {
+    // Each Mojo IPC event triggers an individual patch+notify cycle.
+    // useSyncExternalStore re-renders synchronously per notify, so tokens
+    // paint progressively. If tokens appear batched visually, it's because
+    // the model emits faster than the 16ms frame budget — not a batching bug.
     const draft = cloneState(this.state);
     mutator(draft);
     this.state = draft;

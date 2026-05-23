@@ -20,6 +20,7 @@ source_set("maho_command_overlay") {
   deps = [
     "//cc/paint",
     "//base",
+    "//chrome/browser/favicon",
     "//chrome/browser/devtools",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/ui:browser_navigator_params_headers",
@@ -45,5 +46,55 @@ source_set("maho_command_overlay") {
     "//ui/gfx",
     "//ui/views",
     "//url",
+  ]
+}
+
+source_set("unit_tests") {
+  testonly = true
+  sources = [
+    "maho_command_model_unittest.cc",
+    "maho_command_overlay_controller_unittest.cc",
+    "maho_command_overlay_view_unittest.cc",
+    "maho_command_result_row_view_unittest.cc",
+    "maho_unified_click_path_behavior_unittest.cc",
+  ]
+
+  deps = [
+    ":maho_command_overlay",
+    "//base",
+    "//base/test:test_support",
+    "//maho/browser:maho_features",
+    "//testing/gtest",
+    "//ui/base",
+    "//ui/events",
+    "//ui/views",
+    "//ui/views:test_support",
+  ]
+}
+
+source_set("interactive_tests") {
+  testonly = true
+  sources = [ "maho_command_overlay_interactive_uitest.cc" ]
+
+  defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+
+  deps = [
+    ":maho_command_overlay",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser",
+    "//chrome/browser/ui",
+    "//chrome/test:test_support",
+    "//chrome/test:test_support_ui",
+    "//content/public/browser",
+    "//content/test:test_support",
+    "//maho/browser:maho_features",
+    "//testing/gtest",
+    "//ui/base",
+    "//ui/base:test_support",
+    "//ui/events:events_base",
+    "//ui/gfx",
+    "//ui/views",
+    "//ui/views:test_support",
   ]
 }

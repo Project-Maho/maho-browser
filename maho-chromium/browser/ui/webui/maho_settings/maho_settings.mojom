@@ -24,13 +24,12 @@ struct ATCRule {
 
 struct AISettings {
   bool has_api_key;
-  string endpoint;
+  string provider;
+  string base_url;
   string model;
   bool opencode_runtime_enabled;
   string approval_policy;
   bool session_persistence_enabled;
-  string runtime_endpoint;
-  string runtime_model;
 };
 
 struct ShortcutBinding {
@@ -173,13 +172,12 @@ interface PageHandler {
   ToggleATCRule(string rule_id, bool enabled);
 
   GetAISettings() => (AISettings settings);
+  SetAIProvider(string provider);
+  SetAIBaseUrl(string url);
   SetAIApiKey(string key);
-  SetAIEndpoint(string endpoint);
   SetAIModel(string model);
   SetAIApprovalPolicy(string policy);
   SetAISessionPersistence(bool enabled);
-  SetAIRuntimeEndpoint(string endpoint);
-  SetAIRuntimeModel(string model);
 
   GetShortcuts() => (array<ShortcutBinding> shortcuts);
   SetShortcut(string action, string key_combo) => (bool success);

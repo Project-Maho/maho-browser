@@ -20,6 +20,23 @@ class Replacement:
 
 
 REPLACEMENTS: dict[str, list[Replacement]] = {
+    # ── parse_html_subset.ts ──────────────────────────────────────────────────
+    "ui/webui/resources/js/parse_html_subset.ts": [
+        Replacement(
+            old=(
+                "const allowedOptionalTags: Set<string> = new Set(['IMG', 'LI', 'UL', 'OL']);\n"
+            ),
+            new=(
+                "const allowedOptionalTags: Set<string> = new Set(['IMG', 'LI', 'UL', 'OL', 'CODE', 'BLOCKQUOTE', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HR', 'DEL']);\n"
+            ),
+            description=(
+                "Whitelist all markdown-safe tags (code, blockquote, h1-h6, hr, del) "
+                "in parseHtmlSubset so renderTrustedMarkdown's output never throws "
+                "'X is not supported' on persisted assistant messages — fixes blank "
+                "panel triggered by any markdown element beyond the upstream default whitelist"
+            ),
+        ),
+    ],
     # ── app-Info.plist ────────────────────────────────────────────────────────
     "chrome/app/app-Info.plist": [
         Replacement(
@@ -272,6 +289,233 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Remove [maho-cmdl-trace] LOG(WARNING) calls from ShowMahoCommandOverlayForCurrentTab",
             idempotent=True,
+        ),
+    ],
+    # ── browser.cc ───────────────────────────────────────────────────────────
+    "chrome/browser/ui/browser.cc": [
+        Replacement(
+            old=(
+                "void Browser::TabStripEmpty() {\n"
+                "  // Note: even though the tab strip is empty, the call to Close() may not\n"
+                "  // result in closing this Browser. This can happen in the case of closing\n"
+                "  // the last Browser with ongoing downloads.\n"
+                "  window_->Close();\n"
+                "}"
+            ),
+            new=(
+                "void Browser::TabStripEmpty() {\n"
+                "  // Maho: normal browser windows support zero-tab state.  Only close the\n"
+                "  // window when we are already in an explicit close flow (i.e.\n"
+                "  // UnloadController has already set is_attempting_to_close_browser_ via\n"
+                "  // TryToCloseWindow / GetBrowserClosingStatus).  For every other browser\n"
+                "  // type the original behaviour is preserved.\n"
+                "  if (is_type_normal() &&\n"
+                "      !unload_controller_.is_attempting_to_close_browser()) {\n"
+                "    return;\n"
+                "  }\n"
+                "  // Note: even though the tab strip is empty, the call to Close() may not\n"
+                "  // result in closing this Browser. This can happen in the case of closing\n"
+                "  // the last Browser with ongoing downloads.\n"
+                "  window_->Close();\n"
+                "}"
+            ),
+            description=(
+                "Maho zero-tab: do not close a normal browser window when the last tab is "
+                "removed unless an explicit close flow is already in progress "
+                "(is_attempting_to_close_browser_ == true)"
+            ),
+        ),
+    ],
+    # ── unload_controller.cc ─────────────────────────────────────────────────
+    "chrome/browser/ui/unload_controller.cc": [
+        Replacement(
+            old=(
+                "void UnloadController::TabStripEmpty() {\n"
+                "  // Set is_attempting_to_close_browser_ here, so that extensions, etc, do not\n"
+                "  // attempt to add tabs to the browser before it closes.\n"
+                "  is_attempting_to_close_browser_ = true;\n"
+                "}"
+            ),
+            new=(
+                "void UnloadController::TabStripEmpty() {\n"
+                "  // Maho zero-tab: for normal browser windows the tab strip becoming empty\n"
+                "  // does not mean the window is closing — the window survives with zero tabs\n"
+                "  // so new tabs can be inserted again.  Skip marking the browser as\n"
+                "  // attempting-to-close so that extensions and other callers can still open\n"
+                "  // new tabs.  The flag is already set by TryToCloseWindow /\n"
+                "  // GetBrowserClosingStatus when the user actually closes the window, so\n"
+                "  // unload events are still fired correctly in that path.\n"
+                "  if (browser_->is_type_normal() && !is_attempting_to_close_browser_) {\n"
+                "    return;\n"
+                "  }\n"
+                "  // Set is_attempting_to_close_browser_ here, so that extensions, etc, do not\n"
+                "  // attempt to add tabs to the browser before it closes.\n"
+                "  is_attempting_to_close_browser_ = true;\n"
+                "}"
+            ),
+            description=(
+                "Maho zero-tab: do not set is_attempting_to_close_browser_ in TabStripEmpty() "
+                "for a normal browser that is not already in an explicit close flow, so the "
+                "empty window stays open and accepts new tabs"
+            ),
+        ),
+    ],
+    # ── startup_browser_creator_impl.cc ──────────────────────────────────────
+    "chrome/browser/ui/startup/startup_browser_creator_impl.cc": [
+        Replacement(
+            old="  bool prefs_tabs_originally_empty = prefs_tabs.empty();\n",
+            new="",
+            description=(
+                "Maho zero-tab: remove the now-unused prefs_tabs_originally_empty tracking "
+                "variable whose only consumer (the NTP-append block) was deleted by the "
+                "zero-tab patch, suppressing the -Wunused-variable build error"
+            ),
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "    // Potentially add the New Tab Page.\n"
+                "    // Note that URLs from preferences are explicitly meant to override showing\n"
+                "    // the NTP.\n"
+                "    if (prefs_tabs_originally_empty) {\n"
+                "      AppendTabs(provider.GetNewTabPageTabs(*command_line_, profile_), &tabs);\n"
+                "    }\n"
+            ),
+            new=(
+                "    // Maho zero-tab: suppress the default NTP tab that upstream appends when\n"
+                "    // the prefs tab list is empty.  Leaving |tabs| empty here lets the caller\n"
+                "    // (RestoreOrCreateBrowser) open a zero-tab window instead of navigating\n"
+                "    // to chrome://newtab.\n"
+            ),
+            description=(
+                "Maho zero-tab: in DetermineStartupTabs(), do not append GetNewTabPageTabs() "
+                "when prefs_tabs_originally_empty so the tab list stays empty and the "
+                "zero-tab RestoreOrCreateBrowser branch can fire"
+            ),
+        ),
+        Replacement(
+            old=(
+                "  base::AutoReset<bool> synchronous_launch_resetter(\n"
+                "      &StartupBrowserCreator::in_synchronous_profile_launch_, true);\n"
+                "\n"
+                "  // OpenTabsInBrowser requires at least one tab be passed. As a fallback to\n"
+                "  // prevent a crash, use the NTP if |tabs| is empty. This could happen if\n"
+                "  // we expected a session restore to happen but it did not occur/succeed.\n"
+                "  browser = OpenTabsInBrowser(\n"
+                "      browser, process_startup,\n"
+                "      (tabs.empty()\n"
+                "           ? StartupTabs({StartupTab(chrome::ChromeUINewTabURLAsGURL())})\n"
+                "           : tabs),\n"
+                "      (behavior == BrowserOpenBehavior::USE_EXISTING_AND_OVERWRITE_ACTIVE_TAB\n"
+                "           ? (TabOverWrite::kYes)\n"
+                "           : (TabOverWrite::kNo)));"
+            ),
+            new=(
+                "  base::AutoReset<bool> synchronous_launch_resetter(\n"
+                "      &StartupBrowserCreator::in_synchronous_profile_launch_, true);\n"
+                "\n"
+                "  // Maho zero-tab: when the tab list is empty and we are targeting a normal\n"
+                "  // browser window, create/show the browser without synthesising an NTP tab.\n"
+                "  // OpenTabsInBrowser DCHECKs on an empty tab list, so we must not call it\n"
+                "  // in this path.\n"
+                "  if (tabs.empty()) {\n"
+                "    // Ensure we have a browser to show.  Reuse the existing one if\n"
+                "    // USE_EXISTING selected one above, otherwise create a fresh normal window.\n"
+                "    if (!browser || !browser->is_type_normal()) {\n"
+                "      CHECK(profile_);\n"
+                "      if (Browser::GetCreationStatusForProfile(profile_) ==\n"
+                "          Browser::CreationStatus::kOk) {\n"
+                "        Browser::CreateParams params =\n"
+                "            Browser::CreateParams(profile_, false);\n"
+                "        params.creation_source =\n"
+                "            Browser::CreationSource::kStartupCreator;\n"
+                "        browser = Browser::Create(params);\n"
+                "      }\n"
+                "    }\n"
+                "    if (browser) {\n"
+                "      browser->window()->Show();\n"
+                "    }\n"
+                "  } else {\n"
+                "  // OpenTabsInBrowser requires at least one tab be passed. As a fallback to\n"
+                "  // prevent a crash, use the NTP if |tabs| is empty. This could happen if\n"
+                "  // we expected a session restore to happen but it did not occur/succeed.\n"
+                "  browser = OpenTabsInBrowser(\n"
+                "      browser, process_startup,\n"
+                "      tabs,\n"
+                "      (behavior == BrowserOpenBehavior::USE_EXISTING_AND_OVERWRITE_ACTIVE_TAB\n"
+                "           ? (TabOverWrite::kYes)\n"
+                "           : (TabOverWrite::kNo)));\n"
+                "  }"
+            ),
+            description=(
+                "Maho zero-tab: in RestoreOrCreateBrowser, when tabs is empty create/show a "
+                "normal browser window directly instead of synthesising an NTP tab via "
+                "OpenTabsInBrowser (which DCHECKs on empty input)"
+            ),
+        ),
+        Replacement(
+            old=(
+                "  if (!browser->tab_strip_model()->GetActiveWebContents() &&\n"
+                "      !process_headless_commands) {\n"
+                "    // TODO(sky): this is a work around for 110909. Figure out why it's needed.\n"
+                "    if (!browser->tab_strip_model()->count()) {\n"
+                "      chrome::AddTabAt(browser, GURL(), -1, true);\n"
+                "    } else {\n"
+                "      browser->tab_strip_model()->ActivateTabAt(0);\n"
+                "    }\n"
+                "  }"
+            ),
+            new=(
+                "  if (!browser->tab_strip_model()->GetActiveWebContents() &&\n"
+                "      !process_headless_commands) {\n"
+                "    // TODO(sky): this is a work around for 110909. Figure out why it's needed.\n"
+                "    if (!browser->tab_strip_model()->count()) {\n"
+                "      // Maho zero-tab: normal browser windows are allowed to start with zero\n"
+                "      // tabs; do not synthesise a blank/NTP fallback tab for them.\n"
+                "      if (!browser->is_type_normal()) {\n"
+                "        chrome::AddTabAt(browser, GURL(), -1, true);\n"
+                "      }\n"
+                "    } else {\n"
+                "      browser->tab_strip_model()->ActivateTabAt(0);\n"
+                "    }\n"
+                "  }"
+            ),
+            description=(
+                "Maho zero-tab: suppress the chrome::AddTabAt() empty-tab fallback in "
+                "OpenTabsInBrowser() for normal browser windows so they can start with "
+                "zero tabs"
+            ),
+        ),
+    ],
+    # ── session_restore.cc ───────────────────────────────────────────────────
+    "chrome/browser/sessions/session_restore.cc": [
+        Replacement(
+            old=(
+                "      if (startup_tabs_.empty() ||\n"
+                "          (startup_tabs_.size() == 1 && whats_new::IsEnabled() &&\n"
+                "           startup_tabs_[0].url == whats_new::GetWebUIStartupURL())) {\n"
+                "        // No tab browsers were created and no URLs were supplied on the command\n"
+                "        // line, or only the What's New page is specified at startup and may or\n"
+                "        // may not add a tab. Open the new tab page.\n"
+                "        startup_tabs_.emplace_back(chrome::ChromeUINewTabURLAsGURL());\n"
+                "      }\n"
+                "      AppendURLsToBrowser(browser, startup_tabs_);"
+            ),
+            new=(
+                "      // Maho zero-tab: do not synthesise an NTP tab when the session restore\n"
+                "      // produces no tabbed browser.  If |startup_tabs_| already contains real\n"
+                "      // URLs (e.g. command-line URLs) append them; otherwise leave the window\n"
+                "      // open with zero tabs so the Maho empty-window UX can take over.\n"
+                "      if (!startup_tabs_.empty()) {\n"
+                "        AppendURLsToBrowser(browser, startup_tabs_);\n"
+                "      }"
+            ),
+            description=(
+                "Maho zero-tab: in SessionRestore::FinishedTabCreation(), suppress the NTP "
+                "synthesis that fires when startup_tabs_ is empty (or only What's New) so "
+                "that a returning-user session restore with no restored tabs starts with a "
+                "zero-tab window instead of an unwanted chrome://newtab"
+            ),
         ),
     ],
     # ── chrome_content_browser_client.cc ─────────────────────────────────────

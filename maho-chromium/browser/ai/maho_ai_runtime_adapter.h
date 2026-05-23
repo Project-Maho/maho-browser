@@ -33,6 +33,8 @@ enum class InteractionMode;
 enum class MahoAiRuntimeEventType {
   // Incremental text content from the assistant.
   kAssistantToken,
+  // Incremental thinking/reasoning content from the model.
+  kAssistantThinking,
   // The assistant turn is complete.
   kTurnComplete,
   // An error occurred during the turn.

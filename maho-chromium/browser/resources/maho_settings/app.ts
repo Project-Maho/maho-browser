@@ -565,16 +565,22 @@ function createAIContent(container: HTMLElement) {
     rows.className = 'preferences-card__rows';
 
     rows.appendChild(createAIRow(
+        'Provider',
+        settings.provider,
+        'text',
+        (value: string) => { pageHandler.setAIProvider(value); }));
+
+    rows.appendChild(createAIRow(
+        'Base URL',
+        settings.baseUrl,
+        'text',
+        (value: string) => { pageHandler.setAIBaseUrl(value); }));
+
+    rows.appendChild(createAIRow(
         'API Key',
         settings.hasApiKey ? 'Configured' : 'Not set',
         'password',
         (value: string) => { pageHandler.setAIApiKey(value); }));
-
-    rows.appendChild(createAIRow(
-        'Endpoint',
-        settings.endpoint,
-        'text',
-        (value: string) => { pageHandler.setAIEndpoint(value); }));
 
     rows.appendChild(createAIRow(
         'Model',
@@ -592,18 +598,6 @@ function createAIContent(container: HTMLElement) {
         'Session Persistence',
         settings.sessionPersistenceEnabled,
         (enabled: boolean) => { pageHandler.setAISessionPersistence(enabled); }));
-
-    rows.appendChild(createAIRow(
-        'Runtime Endpoint',
-        settings.runtimeEndpoint,
-        'text',
-        (value: string) => { pageHandler.setAIRuntimeEndpoint(value); }));
-
-    rows.appendChild(createAIRow(
-        'Runtime Model',
-        settings.runtimeModel,
-        'text',
-        (value: string) => { pageHandler.setAIRuntimeModel(value); }));
 
     container.appendChild(rows);
   }).catch(() => showDomainError(container, 'Failed to load AI settings.'));

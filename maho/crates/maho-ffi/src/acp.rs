@@ -45,7 +45,7 @@
 //! | 6 | Internal error |
 
 use std::ffi::{c_char, c_void, CStr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -121,6 +121,7 @@ pub enum FfiEvent {
         session_id: String,
         code: i64,
         message: String,
+        auth_setup_command: Option<String>,
     },
     TransportError {
         message: String,
@@ -247,6 +248,30 @@ fn acp_update_to_ffi(update: &AcpUpdate) -> FfiAcpUpdate {
     }
 }
 
+/// Returns a copy-pasteable shell command for setting up provider auth in the
+/// isolated opencode instance, if the error message indicates a missing/invalid
+/// auth credential. Returns `None` for unrelated errors.
+fn detect_auth_command(message: &str, xdg_root: &Path) -> Option<String> {
+    let lower = message.to_lowercase();
+    let is_auth_error = lower.contains("auth")
+        || lower.contains("unauthorized")
+        || lower.contains("credentials")
+        || lower.contains("api key")
+        || lower.contains("not authenticated")
+        || lower.contains("401");
+    if !is_auth_error {
+        return None;
+    }
+    let root = xdg_root.display();
+    Some(format!(
+        "XDG_CONFIG_HOME='{root}/config' \\\n\
+         XDG_DATA_HOME='{root}/data' \\\n\
+         XDG_STATE_HOME='{root}/state' \\\n\
+         XDG_CACHE_HOME='{root}/cache' \\\n\
+         opencode auth login"
+    ))
+}
+
 /// Encode an [`FfiEvent`] into the length-prefixed blob format.
 ///
 /// Format: `[4 bytes LE u32 length][JSON payload]`
@@ -295,8 +320,8 @@ struct HandleInner {
     runtime: Runtime,
     client: Mutex<Option<AcpClient>>,
     callback: StdMutex<Option<CallbackState>>,
-    /// Active session id for prompt/cancel operations.
     active_session: StdMutex<Option<String>>,
+    auth_config: StdMutex<Option<maho_acp::process::AuthConfig>>,
 }
 
 /// Opaque handle exposed to C. Created by [`maho_acp_create`], freed by
@@ -328,6 +353,7 @@ pub extern "C" fn maho_acp_create() -> *mut MahoAcpHandle {
             client: Mutex::new(None),
             callback: StdMutex::new(None),
             active_session: StdMutex::new(None),
+            auth_config: StdMutex::new(None),
         }),
     };
     Box::into_raw(Box::new(handle))
@@ -411,7 +437,8 @@ pub unsafe extern "C" fn maho_acp_start(
         if guard.is_some() {
             return MAHO_ACP_ERR_ALREADY_STARTED;
         }
-        match AcpClient::start(&cmd).await {
+        let auth = inner.auth_config.lock().unwrap().clone();
+        match AcpClient::start_with_auth(&cmd, auth.as_ref()).await {
             Ok(client) => {
                 *guard = Some(client);
                 MAHO_ACP_OK
@@ -419,6 +446,45 @@ pub unsafe extern "C" fn maho_acp_start(
             Err(_) => MAHO_ACP_ERR_SPAWN,
         }
     })
+}
+
+/// # Safety
+/// `handle` must be valid. `json_str` must be a valid C string or null.
+#[no_mangle]
+pub unsafe extern "C" fn maho_acp_set_auth_config(
+    handle: *mut MahoAcpHandle,
+    json_str: *const c_char,
+) -> i32 {
+    if handle.is_null() {
+        return MAHO_ACP_ERR_NULL_HANDLE;
+    }
+    let h = &*handle;
+
+    if json_str.is_null() {
+        let mut guard = h.inner.auth_config.lock().unwrap();
+        *guard = None;
+        return MAHO_ACP_OK;
+    }
+
+    let s = match CStr::from_ptr(json_str).to_str() {
+        Ok(s) => s,
+        Err(_) => return MAHO_ACP_ERR_INVALID_ARG,
+    };
+
+    if s.is_empty() {
+        let mut guard = h.inner.auth_config.lock().unwrap();
+        *guard = None;
+        return MAHO_ACP_OK;
+    }
+
+    match serde_json::from_str::<maho_acp::process::AuthConfig>(s) {
+        Ok(config) => {
+            let mut guard = h.inner.auth_config.lock().unwrap();
+            *guard = Some(config);
+            MAHO_ACP_OK
+        }
+        Err(_) => MAHO_ACP_ERR_INVALID_ARG,
+    }
 }
 
 /// Graceful shutdown: close stdin, SIGTERM, SIGKILL.
@@ -637,10 +703,14 @@ pub unsafe extern "C" fn maho_acp_submit_prompt(
         let client = match guard.as_ref() {
             Some(c) => c,
             None => {
+                let msg = "client not started".to_string();
+                let xdg_root = maho_acp::process::maho_opencode_xdg_root()
+                    .unwrap_or_else(|_| PathBuf::from(""));
                 inner.fire_event(&FfiEvent::PromptErr {
                     session_id: sid,
                     code: MAHO_ACP_ERR_NOT_STARTED as i64,
-                    message: "client not started".to_string(),
+                    message: msg.clone(),
+                    auth_setup_command: detect_auth_command(&msg, &xdg_root),
                 });
                 return;
             }
@@ -653,10 +723,13 @@ pub unsafe extern "C" fn maho_acp_submit_prompt(
                     maho_acp::Error::JsonRpc { code, message } => (*code, message.clone()),
                     other => (-1, other.to_string()),
                 };
+                let xdg_root = maho_acp::process::maho_opencode_xdg_root()
+                    .unwrap_or_else(|_| PathBuf::from(""));
                 inner.fire_event(&FfiEvent::PromptErr {
                     session_id: sid,
                     code,
-                    message,
+                    message: message.clone(),
+                    auth_setup_command: detect_auth_command(&message, &xdg_root),
                 });
                 return;
             }
@@ -722,17 +795,24 @@ pub unsafe extern "C" fn maho_acp_submit_prompt(
                     maho_acp::Error::JsonRpc { code, message } => (*code, message.clone()),
                     other => (-1, other.to_string()),
                 };
+                let xdg_root = maho_acp::process::maho_opencode_xdg_root()
+                    .unwrap_or_else(|_| PathBuf::from(""));
                 inner.fire_event(&FfiEvent::PromptErr {
                     session_id: sid_events,
                     code,
-                    message,
+                    message: message.clone(),
+                    auth_setup_command: detect_auth_command(&message, &xdg_root),
                 });
             }
             Err(_join_err) => {
+                let msg = "prompt task panicked".to_string();
+                let xdg_root = maho_acp::process::maho_opencode_xdg_root()
+                    .unwrap_or_else(|_| PathBuf::from(""));
                 inner.fire_event(&FfiEvent::PromptErr {
                     session_id: sid_events,
                     code: MAHO_ACP_ERR_INTERNAL as i64,
-                    message: "prompt task panicked".to_string(),
+                    message: msg.clone(),
+                    auth_setup_command: detect_auth_command(&msg, &xdg_root),
                 });
             }
         }
@@ -949,6 +1029,7 @@ mod tests {
                 session_id: "s1".to_string(),
                 code: -1,
                 message: "fail".to_string(),
+                auth_setup_command: None,
             },
             FfiEvent::TransportError {
                 message: "broken".to_string(),
@@ -962,6 +1043,74 @@ mod tests {
             let decoded = decode_ffi_event(&blob).unwrap();
             // Just verify it round-trips without panic
             let _ = format!("{:?}", decoded);
+        }
+    }
+
+    #[test]
+    fn detect_auth_command_auth_keywords() {
+        let root = PathBuf::from("/tmp/test-xdg");
+        assert!(detect_auth_command("Unauthorized", &root).is_some());
+        assert!(detect_auth_command("Invalid API key provided", &root).is_some());
+        assert!(detect_auth_command("Auth required", &root).is_some());
+        assert!(detect_auth_command("Not authenticated", &root).is_some());
+        assert!(detect_auth_command("HTTP 401 error", &root).is_some());
+        assert!(detect_auth_command("Missing credentials", &root).is_some());
+    }
+
+    #[test]
+    fn detect_auth_command_non_auth_returns_none() {
+        let root = PathBuf::from("/tmp/test-xdg");
+        assert!(detect_auth_command("Network timeout", &root).is_none());
+        assert!(detect_auth_command("Model not found", &root).is_none());
+    }
+
+    #[test]
+    fn detect_auth_command_contains_xdg_vars() {
+        let root = PathBuf::from("/home/user/Library/Application Support/Maho/opencode");
+        let cmd = detect_auth_command("Unauthorized", &root).unwrap();
+        assert!(cmd.contains("XDG_CONFIG_HOME="));
+        assert!(cmd.contains("XDG_DATA_HOME="));
+        assert!(cmd.contains("XDG_STATE_HOME="));
+        assert!(cmd.contains("XDG_CACHE_HOME="));
+        assert!(cmd.contains("opencode auth login"));
+    }
+
+    #[test]
+    fn set_auth_config_valid_json() {
+        let handle = maho_acp_create();
+        assert!(!handle.is_null());
+        let json = std::ffi::CString::new(
+            r#"{"provider":"anthropic","base_url":"","api_key":"sk-test","model":"claude-sonnet-4-20250514"}"#,
+        ).unwrap();
+        unsafe {
+            let rc = maho_acp_set_auth_config(handle, json.as_ptr());
+            assert_eq!(rc, MAHO_ACP_OK);
+            maho_acp_destroy(handle);
+        }
+    }
+
+    #[test]
+    fn set_auth_config_null_clears() {
+        let handle = maho_acp_create();
+        let json = std::ffi::CString::new(
+            r#"{"provider":"openai","base_url":"","api_key":"k","model":""}"#,
+        ).unwrap();
+        unsafe {
+            maho_acp_set_auth_config(handle, json.as_ptr());
+            let rc = maho_acp_set_auth_config(handle, std::ptr::null());
+            assert_eq!(rc, MAHO_ACP_OK);
+            maho_acp_destroy(handle);
+        }
+    }
+
+    #[test]
+    fn set_auth_config_invalid_json() {
+        let handle = maho_acp_create();
+        let json = std::ffi::CString::new("not json").unwrap();
+        unsafe {
+            let rc = maho_acp_set_auth_config(handle, json.as_ptr());
+            assert_eq!(rc, MAHO_ACP_ERR_INVALID_ARG);
+            maho_acp_destroy(handle);
         }
     }
 }

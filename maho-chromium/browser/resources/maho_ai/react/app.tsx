@@ -29,6 +29,7 @@ function getPendingThreadLabel(entries: TimelineEntry[], pending: boolean): stri
     }
 
     if (event.kind === RuntimeEventKind.kAssistantToken ||
+        event.kind === RuntimeEventKind.kAssistantThinking ||
         event.kind === RuntimeEventKind.kTurnComplete) {
       return null;
     }

@@ -599,20 +599,35 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
       ) : null}
       {state.status === 'loaded' ? (
         <div className="preferences-card__rows">
+          <AiSelectRow
+            label="Provider"
+            initialValue={state.data.provider}
+            options={[
+              {value: '', label: '(not set)'},
+              {value: 'anthropic', label: 'Anthropic'},
+              {value: 'openai', label: 'OpenAI'},
+              {value: 'openai-compatible', label: 'OpenAI-compatible (custom URL)'},
+              {value: 'google', label: 'Google (Gemini)'},
+            ]}
+            onCommit={value => commit(async () => handler.setAIProvider(value))}
+          />
           <AiFieldRow
-            initialValue={state.data.hasApiKey ? 'Configured' : 'Not set'}
+            initialValue={state.data.baseUrl}
+            label="Base URL"
+            placeholder="(provider default)"
+            onCommit={value => commit(async () => handler.setAIBaseUrl(value))}
+          />
+          <AiFieldRow
+            initialValue={state.data.hasApiKey ? '••••••••' : ''}
             label="API Key"
+            placeholder="Paste your API key"
             type="password"
             onCommit={value => commit(async () => handler.setAIApiKey(value))}
           />
           <AiFieldRow
-            initialValue={state.data.endpoint}
-            label="Endpoint"
-            onCommit={value => commit(async () => handler.setAIEndpoint(value))}
-          />
-          <AiFieldRow
             initialValue={state.data.model}
             label="Model"
+            placeholder="e.g. claude-sonnet-4-20250514 or gpt-4o"
             onCommit={value => commit(async () => handler.setAIModel(value))}
           />
           <AiFieldRow
@@ -629,16 +644,6 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
               onToggle={enabled => commit(async () => handler.setAISessionPersistence(enabled))}
             />
           </ManagedSettingRow>
-          <AiFieldRow
-            initialValue={state.data.runtimeEndpoint}
-            label="Runtime Endpoint"
-            onCommit={value => commit(async () => handler.setAIRuntimeEndpoint(value))}
-          />
-          <AiFieldRow
-            initialValue={state.data.runtimeModel}
-            label="Runtime Model"
-            onCommit={value => commit(async () => handler.setAIRuntimeModel(value))}
-          />
         </div>
       ) : null}
     </DomainPaneSection>
@@ -646,10 +651,11 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
 }
 
 function AiFieldRow(
-    {initialValue, label, onCommit, type = 'text'}: {
+    {initialValue, label, onCommit, placeholder, type = 'text'}: {
       initialValue: string;
       label: string;
       onCommit: (value: string) => Promise<void>;
+      placeholder?: string;
       type?: string;
     }) {
   const [draft, setDraft] = useState(initialValue);
@@ -660,8 +666,39 @@ function AiFieldRow(
 
   return (
     <ManagedSettingRow description="" title={label}>
-      <TextFieldShell ariaLabel={label} placeholder={label} type={type} value={draft} onChange={setDraft} />
+      <TextFieldShell ariaLabel={label} placeholder={placeholder ?? label} type={type} value={draft} onChange={setDraft} />
       <ActionButton label="Save" onClick={() => onCommit(draft)} />
+    </ManagedSettingRow>
+  );
+}
+
+function AiSelectRow(
+    {initialValue, label, onCommit, options}: {
+      initialValue: string;
+      label: string;
+      onCommit: (value: string) => Promise<void>;
+      options: Array<{value: string; label: string}>;
+    }) {
+  const [draft, setDraft] = useState(initialValue);
+
+  useEffect(() => {
+    setDraft(initialValue);
+  }, [initialValue]);
+
+  return (
+    <ManagedSettingRow description="" title={label}>
+      <select
+        aria-label={label}
+        className="text-field-shell"
+        value={draft}
+        onChange={e => {
+          setDraft(e.target.value);
+          void onCommit(e.target.value);
+        }}>
+        {options.map(o => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
     </ManagedSettingRow>
   );
 }
