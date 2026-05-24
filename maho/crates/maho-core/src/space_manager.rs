@@ -822,6 +822,52 @@ mod tests {
     }
 
     #[test]
+    fn reorder_folder_nested_to_root_updates_parent_and_root_order() {
+        // Regression: promoting a nested folder to root via reorder_folder(_, None, Some(&before))
+        // must both clear parent_folder_id and insert the folder into root_order at the
+        // correct position.  Previously the root_order insertion was skipped when the folder
+        // was not already in root_order.
+
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+
+        let anchor = manager.create_folder(&space_id, "Anchor", false).unwrap();
+        let parent = manager.create_folder(&space_id, "Parent", false).unwrap();
+        let nested = manager.create_folder(&space_id, "Nested", false).unwrap();
+
+        if let Some(space) = manager.spaces.get_mut(&space_id) {
+            if let Some(f) = space.folders.iter_mut().find(|f| f.id == nested.id) {
+                f.parent_folder_id = Some(parent.id.clone());
+            }
+            space.root_order.retain(|item| item != &RootItem::Folder(nested.id.clone()));
+        }
+
+        assert!(
+            !manager.get_root_order(&space_id).contains(&RootItem::Folder(nested.id.clone())),
+            "precondition: nested must not be in root_order before promotion"
+        );
+
+        manager.reorder_folder(&space_id, &nested.id, None, Some(&anchor.id));
+
+        let space = manager.spaces.get(&space_id).unwrap();
+        let promoted = space.folders.iter().find(|f| f.id == nested.id).unwrap();
+        assert!(
+            promoted.parent_folder_id.is_none(),
+            "promoted folder must have no parent"
+        );
+
+        let root_order = manager.get_root_order(&space_id);
+        let nested_pos = root_order.iter().position(|i| i == &RootItem::Folder(nested.id.clone()));
+        let anchor_pos = root_order.iter().position(|i| i == &RootItem::Folder(anchor.id.clone()));
+        assert!(nested_pos.is_some(), "promoted folder must be present in root_order");
+        assert!(anchor_pos.is_some(), "anchor folder must still be in root_order");
+        assert!(
+            nested_pos.unwrap() < anchor_pos.unwrap(),
+            "promoted folder must appear before anchor in root_order"
+        );
+    }
+
+    #[test]
     fn move_folder_in_space_does_not_affect_same_folder_id_in_other_space() {
         let mut manager = SpaceManager::new();
         let space_a = manager.get_active_space_id().clone();
@@ -1170,45 +1216,56 @@ impl SpaceManager {
         parent_folder_id: Option<&FolderId>,
         before_folder_id: Option<&FolderId>,
     ) {
-        let space = match self.spaces.get_mut(space_id) {
-            Some(s) => s,
-            None => return,
-        };
+        {
+            let space = match self.spaces.get_mut(space_id) {
+                Some(s) => s,
+                None => return,
+            };
 
-        if let Some(folder) = space.folders.iter_mut().find(|f| f.id == *folder_id) {
-            folder.parent_folder_id = parent_folder_id.cloned();
-        }
-        if parent_folder_id.is_some() {
-            space
-                .root_order
-                .retain(|item| item != &RootItem::Folder(folder_id.clone()));
-        }
+            if let Some(folder) = space.folders.iter_mut().find(|f| f.id == *folder_id) {
+                folder.parent_folder_id = parent_folder_id.cloned();
+            }
+            if parent_folder_id.is_some() {
+                space
+                    .root_order
+                    .retain(|item| item != &RootItem::Folder(folder_id.clone()));
+            }
 
-        let folder_pos = match space.folders.iter().position(|f| f.id == *folder_id) {
-            Some(p) => p,
-            None => return,
-        };
-        let folder = space.folders.remove(folder_pos);
+            let folder_pos = match space.folders.iter().position(|f| f.id == *folder_id) {
+                Some(p) => p,
+                None => return,
+            };
+            let folder = space.folders.remove(folder_pos);
 
-        let insert_at = match before_folder_id {
-            Some(before_id) => space
-                .folders
-                .iter()
-                .position(|f| f.id == *before_id)
-                .unwrap_or(space.folders.len()),
-            None => {
-                let last_sibling = space
+            let insert_at = match before_folder_id {
+                Some(before_id) => space
                     .folders
                     .iter()
-                    .rposition(|f| f.parent_folder_id.as_ref() == parent_folder_id);
-                match last_sibling {
-                    Some(pos) => pos + 1,
-                    None => space.folders.len(),
+                    .position(|f| f.id == *before_id)
+                    .unwrap_or(space.folders.len()),
+                None => {
+                    let last_sibling = space
+                        .folders
+                        .iter()
+                        .rposition(|f| f.parent_folder_id.as_ref() == parent_folder_id);
+                    match last_sibling {
+                        Some(pos) => pos + 1,
+                        None => space.folders.len(),
+                    }
                 }
-            }
-        };
+            };
 
-        space.folders.insert(insert_at, folder);
+            space.folders.insert(insert_at, folder);
+        }
+
+        if parent_folder_id.is_none() {
+            let insertion_point = before_folder_id
+                .map(|target| RootInsertionPoint::Before {
+                    target: RootItem::Folder(target.clone()),
+                })
+                .unwrap_or(RootInsertionPoint::Append);
+            self.reorder_root_item(space_id, &RootItem::Folder(folder_id.clone()), &insertion_point);
+        }
     }
 
     pub fn move_folder_to_root(

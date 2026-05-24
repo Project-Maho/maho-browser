@@ -95,6 +95,9 @@ impl TabLifecycleManager {
         parent_id: Option<TabId>,
         window_id: Option<i64>,
     ) -> Tab {
+        if let Some(existing) = self.tabs.get(&tab_id) {
+            return existing.clone();
+        }
         self.create_tab_inner(tab_id, space_id, url, parent_id, window_id)
     }
 
