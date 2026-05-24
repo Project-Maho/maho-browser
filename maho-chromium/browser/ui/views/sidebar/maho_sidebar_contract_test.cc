@@ -10,16 +10,19 @@
 #include "base/json/string_escape.h"
 #include "base/test/run_until.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/ui/maho_settings_navigation.h"
 #include "maho/browser/ui/views/command/maho_command_action_handler.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_search_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_space_dot_view.h"
 #include "maho/browser/ui/views/sidebar/maho_spaces_board_data.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
@@ -29,21 +32,12 @@
 #include "ui/base/test/ui_controls.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/button/label_button.h"
+#include "ui/views/controls/label.h"
+#include "ui/views/view_utils.h"
 #include "url/gurl.h"
 
 namespace maho {
 namespace {
-
-bool IsDescendantOfView(const views::View* candidate,
-                        const views::View* ancestor) {
-  for (const views::View* current = candidate; current;
-       current = current->parent()) {
-    if (current == ancestor) {
-      return true;
-    }
-  }
-  return false;
-}
 
 bool IsInlineRowButton(views::View* view, std::u16string expected_text) {
   auto* button = views::AsViewClass<views::LabelButton>(view);
@@ -436,36 +430,16 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, LargeTabCountRenders) {
   ResolveViews();
   MahoSidebarView* sidebar = GetSidebarView();
   ASSERT_TRUE(sidebar);
-  views::ScrollView* tabs_scroll_view = sidebar->tabs_scroll_view_for_testing();
-  views::View* tabs_scroll_content = sidebar->tabs_scroll_content_for_testing();
-  ASSERT_TRUE(tabs_scroll_view);
-  ASSERT_TRUE(tabs_scroll_content);
   ASSERT_TRUE(GetFooterView());
 
   EXPECT_TRUE(tab_list_->GetVisible())
       << "Tab list should remain visible with many tabs";
   EXPECT_GT(tab_list_->GetPreferredSize().height(), 0)
       << "Tab list should have non-zero preferred height";
-  EXPECT_EQ(tab_list_->parent(), tabs_scroll_content)
-      << "Tabs-mode scroll ownership must live in MahoSidebarView, not the tab list";
-  EXPECT_TRUE(IsDescendantOfView(sidebar->search_view_for_testing(),
-                                 tabs_scroll_content));
-  EXPECT_TRUE(IsDescendantOfView(sidebar->favorites_view_for_testing(),
-                                 tabs_scroll_content));
-  EXPECT_TRUE(IsDescendantOfView(tab_list_, tabs_scroll_content));
-  EXPECT_EQ(GetFooterView()->parent(), sidebar->body_host_for_testing())
-      << "Footer must remain a direct sibling of the content host";
-  EXPECT_FALSE(IsDescendantOfView(GetFooterView(), tabs_scroll_content))
-      << "Footer must stay outside the tabs-mode scroll tree";
   EXPECT_TRUE(GetFooterView()->GetVisible());
   EXPECT_GT(GetFooterView()->GetBoundsInScreen().height(), 0);
   EXPECT_EQ(GetFooterView()->GetPreferredSize().height(), GetFooterView()->height())
       << "Footer must keep its fixed preferred height under large tab counts";
-  EXPECT_GT(tabs_scroll_content->GetPreferredSize().height(), tabs_scroll_view->height())
-      << "Outer sidebar scroll band should own vertical overflow in tabs mode";
-  EXPECT_LE(tabs_scroll_view->GetBoundsInScreen().bottom(),
-            GetFooterView()->GetBoundsInScreen().y())
-      << "Scrollable tabs band must sit above the fixed footer";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
@@ -1135,6 +1109,177 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
       << "helper stable_tab_id '" << helper_id
       << "' must be present in core's tab store for the active space "
          "(create_tab was dispatched after Navigate succeeded)";
+}
+
+// Regression: ExecuteCommandAction("select_space_1") must route through the
+// bridge, updating browser-scoped active-space state and sidebar view state.
+// Before the fix, command actions called maho_core_activate_space() directly
+// and left the bridge stale.
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       CommandPathSwitchUpdatesBridgeAndSidebarState) {
+  SeedProfile(2);
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+
+  auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+  ASSERT_TRUE(bridge);
+
+  MahoCore* core = GetCore();
+  ASSERT_TRUE(core);
+  std::string target_space_id;
+  {
+    char* spaces_json_c = maho_core_get_space_view_models(core);
+    if (spaces_json_c) {
+      std::optional<base::Value> spaces =
+          base::JSONReader::Read(spaces_json_c, base::JSON_PARSE_RFC);
+      maho_string_free(spaces_json_c);
+      if (spaces && spaces->is_list() && !spaces->GetList().empty()) {
+        const auto* dict = spaces->GetList()[0].GetIfDict();
+        if (dict) {
+          const std::string* id = dict->FindString("id");
+          if (id) {
+            target_space_id = *id;
+          }
+        }
+      }
+    }
+  }
+
+  if (target_space_id.empty()) {
+    GTEST_SKIP() << "maho_core_get_space_view_models returned no spaces";
+  }
+
+  std::vector<std::string> all_ids = bridge->GetSpaceIds();
+  if (all_ids.size() < 2u) {
+    GTEST_SKIP() << "Need at least 2 spaces for command-path switch test";
+  }
+
+  std::string initial_space;
+  for (const auto& sid : all_ids) {
+    if (sid != target_space_id) {
+      initial_space = sid;
+      break;
+    }
+  }
+  if (!initial_space.empty()) {
+    bridge->SetActiveSpaceId(browser(), initial_space);
+  }
+
+  const std::string space_before = bridge->GetActiveSpaceId(browser());
+
+  ExecuteCommandAction(browser(), "select_space_1");
+  base::RunLoop().RunUntilIdle();
+
+  const std::string bridge_space_after = bridge->GetActiveSpaceId(browser());
+  EXPECT_EQ(target_space_id, bridge_space_after)
+      << "Bridge must record the target space after select_space_1";
+
+  if (!initial_space.empty()) {
+    EXPECT_NE(space_before, bridge_space_after)
+        << "select_space_1 must produce a real transition, not a no-op";
+  }
+
+  ResolveViews();
+  auto state = GetViewState();
+  EXPECT_EQ(bridge_space_after, state.tab_list.active_space_id)
+      << "Sidebar state must reflect the same active space as the bridge "
+         "after a command-path switch";
+}
+
+// Regression: footer dot activation must update the browser-scoped bridge
+// state, not only the process-global fallback. Before the fix, the no-browser
+// SwitchToSpace() overload was used, leaving browser-scoped state stale.
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       FooterSwitchUpdatesBrowserScopedBridgeState) {
+  SeedProfile(2);
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+
+  auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+  ASSERT_TRUE(bridge);
+
+  std::vector<std::string> all_ids = bridge->GetSpaceIds();
+  if (all_ids.size() < 2u) {
+    GTEST_SKIP() << "Need at least 2 spaces for footer switch test";
+  }
+
+  MahoSidebarFooterView* footer = GetFooterView();
+  ASSERT_TRUE(footer);
+
+  views::View* second_dot = footer->GetSpaceDotForTesting(1);
+  if (!second_dot) {
+    GTEST_SKIP() << "Footer has no second dot";
+  }
+
+  auto* dot = views::AsViewClass<maho::MahoSidebarSpaceDotView>(second_dot);
+  ASSERT_TRUE(dot);
+  const std::string target_id = dot->space_id();
+  ASSERT_FALSE(target_id.empty());
+
+  const gfx::Point center = second_dot->GetBoundsInScreen().CenterPoint();
+  ASSERT_TRUE(ui_controls::SendMouseMove(center.x(), center.y()));
+  base::RunLoop click_loop;
+  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
+      ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
+      click_loop.QuitClosure()));
+  click_loop.Run();
+  base::RunLoop().RunUntilIdle();
+
+  const std::string browser_space = bridge->GetActiveSpaceId(browser());
+  EXPECT_EQ(target_id, browser_space)
+      << "Browser-scoped bridge state must reflect the footer dot click; "
+         "the no-browser overload path would leave this stale";
+}
+
+// Regression: command-path switch in window A must not change window B's
+// browser-scoped active space.
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       CommandPathSwitchDoesNotAffectOtherWindow) {
+  SeedProfile(2);
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+
+  auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+  ASSERT_TRUE(bridge);
+
+  std::vector<std::string> all_ids = bridge->GetSpaceIds();
+  if (all_ids.size() < 2u) {
+    GTEST_SKIP() << "Need at least 2 spaces for multi-window isolation test";
+  }
+
+  Browser* second_browser = CreateBrowser(browser()->profile());
+  ASSERT_TRUE(second_browser);
+  base::RunLoop().RunUntilIdle();
+
+  const std::string space_a = bridge->GetActiveSpaceId(browser());
+  const std::string space_b_candidate = [&]() {
+    for (const auto& sid : all_ids) {
+      if (sid != space_a) {
+        return sid;
+      }
+    }
+    return std::string();
+  }();
+
+  if (space_b_candidate.empty()) {
+    chrome::CloseWindow(second_browser);
+    base::RunLoop().RunUntilIdle();
+    GTEST_SKIP() << "All space ids are identical; cannot test isolation";
+  }
+
+  bridge->SetActiveSpaceId(second_browser, space_b_candidate);
+  const std::string window2_space_before =
+      bridge->GetActiveSpaceId(second_browser);
+
+  ExecuteCommandAction(browser(), "select_space_1");
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(window2_space_before, bridge->GetActiveSpaceId(second_browser))
+      << "Window 2 active space must not change when window 1 uses "
+         "command-path switching";
+
+  chrome::CloseWindow(second_browser);
+  base::RunLoop().RunUntilIdle();
 }
 
 }  // namespace

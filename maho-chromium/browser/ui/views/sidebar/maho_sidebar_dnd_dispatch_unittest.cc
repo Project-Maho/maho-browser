@@ -226,6 +226,83 @@ TEST_F(SidebarDnDDispatchTest,
 }
 
 TEST_F(SidebarDnDDispatchTest,
+       RootTabDropOnFolderChildRowDispatchesReorderRootItem) {
+  SidebarTreeNode target_node =
+      MakeFolderChildTabNode("target-tab", 1, "folder-2", 0);
+  SidebarTabRowView row(
+      target_node, ui::ImageModel(), /*browser=*/nullptr,
+      MahoSidebarTabSection::kNormal, "space-1", u"Target tab",
+      NoOpPressedCallback(), NoOpPressedCallback(), base::DoNothing(),
+      base::BindRepeating([](const std::string&) { return -1; }),
+      base::DoNothing(), base::DoNothing());
+  row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeTabPayload("source-tab", SidebarDragOrigin::kNormalSection),
+                &data);
+  ui::DropTargetEvent event = MakeDropEvent(data, gfx::Point(5, 5));
+  auto callback = row.GetDropCallbackForTesting(event);
+
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
+  ASSERT_EQ(observer_.events.size(), 1u);
+  EXPECT_EQ(observer_.events[0].kind, "reorder_root_item");
+  EXPECT_NE(observer_.events[0].json.find("\"kind\":\"tab\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"id\":\"source-tab\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"kind\":\"before\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"id\":\"target-tab\""),
+            std::string::npos);
+}
+
+TEST_F(
+    SidebarDnDDispatchTest,
+    RootTabDropBeforeFolderChildRowBodyDispatchesReorderRootItemNotMoveTabToRoot) {
+  SidebarTreeNode target_node =
+      MakeFolderChildTabNode("target-tab", 1, "folder-2", 0);
+  SidebarTabRowView row(
+      target_node, ui::ImageModel(), /*browser=*/nullptr,
+      MahoSidebarTabSection::kNormal, "space-1", u"Target tab",
+      NoOpPressedCallback(), NoOpPressedCallback(), base::DoNothing(),
+      base::BindRepeating([](const std::string&) { return -1; }),
+      base::DoNothing(), base::DoNothing());
+  row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeTabPayload("source-tab", SidebarDragOrigin::kNormalSection),
+                &data);
+  ui::DropTargetEvent event = MakeDropEvent(data, gfx::Point(5, 2));
+
+  EXPECT_EQ(row.OnDragUpdated(event),
+            static_cast<int>(ui::mojom::DragOperation::kMove));
+  EXPECT_EQ(row.drop_zone_for_testing(),
+            SidebarTabRowView::SidebarTabDropZone::kBefore);
+
+  auto callback = row.GetDropCallbackForTesting(event);
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
+  ASSERT_EQ(observer_.events.size(), 1u);
+  EXPECT_EQ(observer_.events[0].kind, "reorder_root_item");
+  EXPECT_NE(observer_.events[0].json.find("\"kind\":\"tab\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"id\":\"source-tab\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"kind\":\"before\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"id\":\"target-tab\""),
+            std::string::npos);
+  EXPECT_EQ(observer_.events[0].json.find("move_tab_to_root"),
+            std::string::npos)
+      << "row-body before drop for a root tab must not dispatch move_tab_to_root";
+}
+
+TEST_F(SidebarDnDDispatchTest,
        SameFolderTabInsertionLaneBeforeTargetDispatchesReorderTabInFolder) {
   MahoSidebarTabListView list(/*browser=*/nullptr);
   MahoSidebarTabListModel model;
@@ -322,7 +399,7 @@ TEST_F(SidebarDnDDispatchTest, SameFolderTabSelfDropReturnsNoOp) {
   ui::mojom::DragOperation output = ui::mojom::DragOperation::kMove;
   std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
 
-  EXPECT_EQ(output, ui::mojom::DragOperation::kMove);
+  EXPECT_EQ(output, ui::mojom::DragOperation::kNone);
   EXPECT_TRUE(observer_.events.empty());
 }
 
@@ -350,6 +427,10 @@ TEST_F(SidebarDnDDispatchTest,
   ASSERT_EQ(observer_.events.size(), 1u);
   EXPECT_NE(observer_.events[0].kind, "reorder_tab");
   EXPECT_EQ(observer_.events[0].kind, "move_tab_to_root");
+  EXPECT_NE(observer_.events[0].json.find("\"folder_id\":\"folder-1\""),
+            std::string::npos)
+      << "Cross-folder child-tab drops must preserve the dragged tab's source "
+         "folder id rather than the target row's folder context";
 }
 
 TEST_F(SidebarDnDDispatchTest, TabDropToPinnedSectionDispatchesPinTab) {
@@ -461,7 +542,7 @@ TEST_F(SidebarDnDDispatchTest, FavoriteReorderDispatchesReorderFavorite) {
   SCOPED_TRACE(observer_.events[0].json);
   EXPECT_NE(observer_.events[0].json.find("\"tab_id\":\"fav-2\""),
             std::string::npos);
-  EXPECT_NE(observer_.events[0].json.find("\"new_index\":1"),
+  EXPECT_NE(observer_.events[0].json.find("\"new_index\":0"),
             std::string::npos);
 
   auto parsed = ParseJson(observer_.events[0].json);
@@ -491,7 +572,8 @@ TEST_F(SidebarDnDDispatchTest, FolderRowDropIndicatorResetsOnDragExit) {
   EXPECT_FALSE(folder_row.is_drop_indicator_visible_for_testing());
 }
 
-TEST_F(SidebarDnDDispatchTest, RootFolderDropTopZoneDispatchesReorderBefore) {
+TEST_F(SidebarDnDDispatchTest,
+       FolderRowTopZoneDispatchesReorderBeforeTargetFolder) {
   MahoSidebarTabListView list(/*browser=*/nullptr);
   MahoSidebarTabListModel model;
   model.active_space_id = "space-1";
@@ -582,6 +664,91 @@ TEST_F(SidebarDnDDispatchTest,
   EXPECT_NE(observer_.events[0].json.find("\"folder_id\":\"source-folder\""),
             std::string::npos);
   EXPECT_NE(observer_.events[0].json.find("\"target_folder_id\":\"target-folder\""),
+            std::string::npos);
+}
+
+TEST_F(SidebarDnDDispatchTest, RootFolderDropTopZoneDispatchesReorderBefore) {
+  SidebarFolderRowView folder_row(MakeFolderNode("target-folder"),
+                                  MahoSidebarTabSection::kNormal, "space-1",
+                                  nullptr, NoOpPressedCallback(),
+                                  base::DoNothing(), "next-folder");
+  folder_row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeFolderPayload("source-folder"), &data);
+  ui::DropTargetEvent event = MakeDropEvent(data, gfx::Point(5, 2));
+
+  auto callback = folder_row.GetDropCallback(event);
+  EXPECT_EQ(folder_row.OnDragUpdated(event),
+            static_cast<int>(ui::mojom::DragOperation::kMove));
+  EXPECT_EQ(folder_row.drop_zone_for_testing(),
+            SidebarFolderRowView::SidebarFolderDropZone::kBefore);
+
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
+  ASSERT_EQ(observer_.events.size(), 1u);
+  EXPECT_EQ(observer_.events[0].kind, "reorder_folder");
+  EXPECT_NE(observer_.events[0].json.find("\"folder_id\":\"source-folder\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"before_folder_id\":\"target-folder\""),
+            std::string::npos);
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       RootFolderDropBottomZoneDispatchesReorderBeforeNextSibling) {
+  SidebarFolderRowView folder_row(MakeFolderNode("target-folder"),
+                                  MahoSidebarTabSection::kNormal, "space-1",
+                                  nullptr, NoOpPressedCallback(),
+                                  base::DoNothing(), "next-folder");
+  folder_row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeFolderPayload("source-folder"), &data);
+  ui::DropTargetEvent event = MakeDropEvent(data, gfx::Point(5, 39));
+
+  auto callback = folder_row.GetDropCallback(event);
+  EXPECT_EQ(folder_row.OnDragUpdated(event),
+            static_cast<int>(ui::mojom::DragOperation::kMove));
+  EXPECT_EQ(folder_row.drop_zone_for_testing(),
+            SidebarFolderRowView::SidebarFolderDropZone::kAfter);
+
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
+  ASSERT_EQ(observer_.events.size(), 1u);
+  EXPECT_EQ(observer_.events[0].kind, "reorder_folder");
+  EXPECT_NE(observer_.events[0].json.find("\"folder_id\":\"source-folder\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"before_folder_id\":\"next-folder\""),
+            std::string::npos);
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       RootFolderDropBottomZoneWithoutNextSiblingDispatchesAppendReorder) {
+  SidebarFolderRowView folder_row(MakeFolderNode("target-folder"),
+                                  MahoSidebarTabSection::kNormal, "space-1",
+                                  nullptr, NoOpPressedCallback(),
+                                  base::DoNothing());
+  folder_row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeFolderPayload("source-folder"), &data);
+  ui::DropTargetEvent event = MakeDropEvent(data, gfx::Point(5, 39));
+
+  auto callback = folder_row.GetDropCallback(event);
+
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
+  ASSERT_EQ(observer_.events.size(), 1u);
+  EXPECT_EQ(observer_.events[0].kind, "reorder_folder");
+  EXPECT_NE(observer_.events[0].json.find("\"folder_id\":\"source-folder\""),
+            std::string::npos);
+  EXPECT_EQ(observer_.events[0].json.find("\"before_folder_id\":"),
             std::string::npos);
 }
 
@@ -686,7 +853,7 @@ TEST_F(SidebarDnDDispatchTest,
 }
 
 TEST_F(SidebarDnDDispatchTest,
-       CrossParentNestedFolderTopZoneDoesNotDispatchIncorrectReorder) {
+       CrossParentNestedFolderTopZoneDispatchesReorderIntoTargetParent) {
   SidebarFolderRowView folder_row(
       MakeNestedFolderNode("target-folder", "target-parent"),
       MahoSidebarTabSection::kNormal, "space-1", nullptr, NoOpPressedCallback(),
@@ -705,13 +872,15 @@ TEST_F(SidebarDnDDispatchTest,
 
   ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
   ASSERT_EQ(observer_.events.size(), 1u);
-  EXPECT_EQ(observer_.events[0].kind, "move_folder_into_folder");
-  EXPECT_EQ(observer_.events[0].json.find("\"parent_folder_id\":"),
+  EXPECT_EQ(observer_.events[0].kind, "reorder_folder");
+  EXPECT_NE(observer_.events[0].json.find("\"parent_folder_id\":\"target-parent\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"before_folder_id\":\"target-folder\""),
             std::string::npos);
 }
 
 TEST_F(SidebarDnDDispatchTest,
-       CrossParentNestedFolderBottomZoneDoesNotDispatchIncorrectReorder) {
+       CrossParentNestedFolderBottomZoneDispatchesReorderBeforeNextSibling) {
   SidebarFolderRowView folder_row(
       MakeNestedFolderNode("target-folder", "target-parent"),
       MahoSidebarTabSection::kNormal, "space-1", nullptr, NoOpPressedCallback(),
@@ -730,8 +899,10 @@ TEST_F(SidebarDnDDispatchTest,
 
   ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
   ASSERT_EQ(observer_.events.size(), 1u);
-  EXPECT_EQ(observer_.events[0].kind, "move_folder_into_folder");
-  EXPECT_EQ(observer_.events[0].json.find("\"parent_folder_id\":"),
+  EXPECT_EQ(observer_.events[0].kind, "reorder_folder");
+  EXPECT_NE(observer_.events[0].json.find("\"parent_folder_id\":\"target-parent\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"before_folder_id\":\"next-folder\""),
             std::string::npos);
 }
 
@@ -764,6 +935,95 @@ TEST_F(SidebarDnDDispatchTest,
   EXPECT_EQ(*dict.FindString("space_id"), "space-1");
   EXPECT_EQ(*dict.FindString("folder_id"), "target-folder");
   EXPECT_EQ(*dict.FindString("tab_id"), "source-tab");
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       TabDropOnFolderTopZoneDispatchesReorderBeforeFolder) {
+  SidebarFolderRowView folder_row(MakeFolderNode("target-folder"),
+                                  MahoSidebarTabSection::kNormal, "space-1",
+                                  nullptr, NoOpPressedCallback(),
+                                  base::DoNothing(), "next-folder");
+  folder_row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeTabPayload("source-tab", SidebarDragOrigin::kNormalSection),
+                &data);
+  ui::DropTargetEvent event = MakeDropEvent(data, gfx::Point(5, 2));
+
+  auto callback = folder_row.GetDropCallback(event);
+  EXPECT_EQ(folder_row.OnDragUpdated(event),
+            static_cast<int>(ui::mojom::DragOperation::kMove));
+  EXPECT_EQ(folder_row.drop_zone_for_testing(),
+            SidebarFolderRowView::SidebarFolderDropZone::kBefore);
+
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
+  ASSERT_EQ(observer_.events.size(), 1u);
+  EXPECT_EQ(observer_.events[0].kind, "reorder_root_item");
+  EXPECT_NE(observer_.events[0].json.find("\"kind\":\"tab\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"id\":\"source-tab\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"kind\":\"before\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"id\":\"target-folder\""),
+            std::string::npos);
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       TabDropOnFolderBottomZoneWithoutNextSiblingDispatchesAppendReorder) {
+  SidebarFolderRowView folder_row(MakeFolderNode("target-folder"),
+                                  MahoSidebarTabSection::kNormal, "space-1",
+                                  nullptr, NoOpPressedCallback(),
+                                  base::DoNothing());
+  folder_row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeTabPayload("source-tab", SidebarDragOrigin::kNormalSection),
+                &data);
+  ui::DropTargetEvent event = MakeDropEvent(data, gfx::Point(5, 39));
+
+  auto callback = folder_row.GetDropCallback(event);
+  EXPECT_EQ(folder_row.OnDragUpdated(event),
+            static_cast<int>(ui::mojom::DragOperation::kMove));
+  EXPECT_EQ(folder_row.drop_zone_for_testing(),
+            SidebarFolderRowView::SidebarFolderDropZone::kAfter);
+
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
+  ASSERT_EQ(observer_.events.size(), 1u);
+  EXPECT_EQ(observer_.events[0].kind, "reorder_root_item");
+  EXPECT_NE(observer_.events[0].json.find("\"kind\":\"append\""),
+            std::string::npos);
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       FolderDropOnBottomZoneWhenDraggedFolderIsNextSiblingReturnsNoOp) {
+  SidebarFolderRowView folder_row(MakeFolderNode("target-folder"),
+                                  MahoSidebarTabSection::kNormal, "space-1",
+                                  nullptr, NoOpPressedCallback(),
+                                  base::DoNothing(), "next-folder");
+  folder_row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeFolderPayload("next-folder"), &data);
+  ui::DropTargetEvent event = MakeDropEvent(data, gfx::Point(5, 39));
+
+  auto callback = folder_row.GetDropCallback(event);
+  EXPECT_EQ(folder_row.OnDragUpdated(event),
+            static_cast<int>(ui::mojom::DragOperation::kNone));
+  EXPECT_EQ(folder_row.drop_zone_for_testing(),
+            SidebarFolderRowView::SidebarFolderDropZone::kNone);
+
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kMove;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  EXPECT_EQ(output, ui::mojom::DragOperation::kNone);
+  EXPECT_TRUE(observer_.events.empty());
 }
 
 TEST_F(SidebarDnDDispatchTest,
@@ -986,6 +1246,36 @@ TEST_F(SidebarDnDDispatchTest,
 }
 
 TEST_F(SidebarDnDDispatchTest,
+       EmptyPinnedLaneRevealedWhenInternalDragHoversNormalTabRow) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+  model.normal_tree.push_back(MakeTabNode("target-tab", 0));
+  list.Update(model, /*browser=*/nullptr);
+
+  auto* row = list.FindTabRowByIdForTesting("target-tab");
+  ASSERT_TRUE(row);
+  row->SetBoundsRect(gfx::Rect(0, 0, 220, 40));
+
+  ui::OSExchangeData data;
+  WriteDropData(
+      MakeTabPayload("source-tab", SidebarDragOrigin::kNormalSection), &data);
+  ui::DropTargetEvent event = MakeDropEvent(data, gfx::Point(5, 5));
+
+  EXPECT_FALSE(list.is_pinned_drop_lane_revealed_for_testing());
+  EXPECT_EQ(row->OnDragUpdated(event),
+            static_cast<int>(ui::mojom::DragOperation::kMove));
+  EXPECT_TRUE(list.is_pinned_drop_lane_revealed_for_testing())
+      << "Dragging over a child tab row must reveal the empty pinned lane so "
+         "the pinned drop target stays reachable during internal drags";
+
+  auto* pinned_target =
+      list.FindSectionDropTargetForTesting(MahoSidebarTabSection::kPinned);
+  ASSERT_TRUE(pinned_target);
+  EXPECT_TRUE(pinned_target->GetVisible());
+}
+
+TEST_F(SidebarDnDDispatchTest,
        EmptyPinnedLaneNotRevealedForExternalUrlDrag) {
   MahoSidebarTabListView list(/*browser=*/nullptr);
   MahoSidebarTabListModel model;
@@ -1127,6 +1417,169 @@ TEST_F(SidebarDnDDispatchTest, FolderOnTabBodyIsNoOp) {
   EXPECT_EQ(row.drop_zone_for_testing(),
             SidebarTabRowView::SidebarTabDropZone::kNone);
   EXPECT_FALSE(row.is_drop_indicator_visible_for_testing());
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       FolderOnTabTopZoneDispatchesBeforeTargetTab) {
+  SidebarTreeNode target_node = MakeTabNode("target-tab", 1);
+  SidebarTabRowView row(
+      target_node, ui::ImageModel(), /*browser=*/nullptr,
+      MahoSidebarTabSection::kNormal, "space-1", u"Target tab",
+      NoOpPressedCallback(), NoOpPressedCallback(), base::DoNothing(),
+      base::BindRepeating([](const std::string&) { return -1; }),
+      base::DoNothing(), base::DoNothing());
+  row.SetBoundsRect(gfx::Rect(0, 0, 220, 30));
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeFolderPayload("source-folder"), &data);
+  ui::DropTargetEvent event = MakeDropEvent(data, gfx::Point(5, 2));
+
+  EXPECT_EQ(row.OnDragUpdated(event),
+            static_cast<int>(ui::mojom::DragOperation::kMove));
+  EXPECT_EQ(row.drop_zone_for_testing(),
+            SidebarTabRowView::SidebarTabDropZone::kBefore);
+  EXPECT_TRUE(row.is_drop_indicator_visible_for_testing());
+
+  auto callback = row.GetDropCallbackForTesting(event);
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
+  ASSERT_EQ(observer_.events.size(), 1u);
+  EXPECT_EQ(observer_.events[0].kind, "reorder_root_item");
+  EXPECT_NE(observer_.events[0].json.find("\"kind\":\"folder\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"id\":\"source-folder\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"kind\":\"before\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"id\":\"target-tab\""),
+            std::string::npos);
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       FolderDropOnTabRowTopThirdResolvesAndDispatchesBeforeTargetBehavior) {
+  SidebarTreeNode target_node = MakeTabNode("target-tab", 1);
+  SidebarTabRowView row(
+      target_node, ui::ImageModel(), /*browser=*/nullptr,
+      MahoSidebarTabSection::kNormal, "space-1", u"Target tab",
+      NoOpPressedCallback(), NoOpPressedCallback(), base::DoNothing(),
+      base::BindRepeating([](const std::string&) { return -1; }),
+      base::DoNothing(), base::DoNothing());
+  row.SetBoundsRect(gfx::Rect(0, 0, 220, 30));
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeFolderPayload("source-folder"), &data);
+  ui::DropTargetEvent event = MakeDropEvent(data, gfx::Point(5, 2));
+
+  EXPECT_EQ(row.OnDragUpdated(event),
+            static_cast<int>(ui::mojom::DragOperation::kMove));
+  EXPECT_EQ(row.drop_zone_for_testing(),
+            SidebarTabRowView::SidebarTabDropZone::kBefore);
+  EXPECT_TRUE(row.is_drop_indicator_visible_for_testing());
+
+  auto callback = row.GetDropCallbackForTesting(event);
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
+  ASSERT_EQ(observer_.events.size(), 1u);
+  EXPECT_EQ(observer_.events[0].kind, "reorder_root_item");
+  EXPECT_NE(observer_.events[0].json.find("\"kind\":\"folder\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"id\":\"source-folder\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"kind\":\"before\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"id\":\"target-tab\""),
+            std::string::npos);
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       NestedFolderOnTabTopZoneDispatchesRootExtractionThenPositionedReorder) {
+  SidebarTreeNode target_node = MakeTabNode("target-tab", 1);
+  SidebarTabRowView row(
+      target_node, ui::ImageModel(), /*browser=*/nullptr,
+      MahoSidebarTabSection::kNormal, "space-1", u"Target tab",
+      NoOpPressedCallback(), NoOpPressedCallback(), base::DoNothing(),
+      base::BindRepeating([](const std::string&) { return -1; }),
+      base::DoNothing(), base::DoNothing());
+  row.SetBoundsRect(gfx::Rect(0, 0, 220, 30));
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeNestedFolderPayload("source-folder", "parent-folder"),
+                &data);
+  ui::DropTargetEvent event = MakeDropEvent(data, gfx::Point(5, 2));
+
+  EXPECT_EQ(row.OnDragUpdated(event),
+            static_cast<int>(ui::mojom::DragOperation::kMove));
+  EXPECT_EQ(row.drop_zone_for_testing(),
+            SidebarTabRowView::SidebarTabDropZone::kBefore);
+
+  auto callback = row.GetDropCallbackForTesting(event);
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
+  ASSERT_EQ(observer_.events.size(), 2u);
+  EXPECT_EQ(observer_.events[0].kind, "move_folder_to_root");
+  EXPECT_NE(observer_.events[0].json.find("\"space_id\":\"space-1\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"folder_id\":\"source-folder\""),
+            std::string::npos);
+  EXPECT_EQ(observer_.events[1].kind, "reorder_root_item");
+  EXPECT_NE(observer_.events[1].json.find("\"kind\":\"folder\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[1].json.find("\"id\":\"source-folder\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[1].json.find("\"kind\":\"before\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[1].json.find("\"id\":\"target-tab\""),
+            std::string::npos);
+}
+
+TEST_F(
+    SidebarDnDDispatchTest,
+    NestedFolderDropBeforeTabRowBodyDispatchesMoveFolderToRootThenReorder) {
+  SidebarTreeNode target_node = MakeTabNode("target-tab", 1);
+  SidebarTabRowView row(
+      target_node, ui::ImageModel(), /*browser=*/nullptr,
+      MahoSidebarTabSection::kNormal, "space-1", u"Target tab",
+      NoOpPressedCallback(), NoOpPressedCallback(), base::DoNothing(),
+      base::BindRepeating([](const std::string&) { return -1; }),
+      base::DoNothing(), base::DoNothing());
+  row.SetBoundsRect(gfx::Rect(0, 0, 220, 30));
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeNestedFolderPayload("source-folder", "parent-folder"),
+                &data);
+  ui::DropTargetEvent event = MakeDropEvent(data, gfx::Point(5, 2));
+
+  EXPECT_EQ(row.OnDragUpdated(event),
+            static_cast<int>(ui::mojom::DragOperation::kMove));
+  EXPECT_EQ(row.drop_zone_for_testing(),
+            SidebarTabRowView::SidebarTabDropZone::kBefore);
+
+  auto callback = row.GetDropCallbackForTesting(event);
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
+  ASSERT_EQ(observer_.events.size(), 2u);
+  EXPECT_EQ(observer_.events[0].kind, "move_folder_to_root");
+  EXPECT_NE(observer_.events[0].json.find("\"space_id\":\"space-1\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"folder_id\":\"source-folder\""),
+            std::string::npos);
+  EXPECT_EQ(observer_.events[1].kind, "reorder_root_item");
+  EXPECT_NE(observer_.events[1].json.find("\"kind\":\"folder\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[1].json.find("\"id\":\"source-folder\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[1].json.find("\"kind\":\"before\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[1].json.find("\"id\":\"target-tab\""),
+            std::string::npos);
 }
 
 TEST_F(SidebarDnDDispatchTest, FolderOnTabLaneDispatchesReorder) {
@@ -2542,7 +2995,7 @@ TEST_F(SidebarDnDDispatchTest,
 }
 
 // (b) Pinned root tab dropped on the favorites grid must produce
-//     [unpin_tab, favorite_tab] — not just favorite_tab.
+//     [unpin_tab, favorite_tab, reorder_favorite] — not just favorite_tab.
 TEST_F(SidebarDnDDispatchTest,
        PinnedTabDropToFavoritesGridDispatchesUnpinThenFavorite) {
   MahoSidebarFavoritesGridView favorites(/*browser=*/nullptr);
@@ -2560,17 +3013,22 @@ TEST_F(SidebarDnDDispatchTest,
   std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
 
   ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
-  ASSERT_EQ(observer_.events.size(), 2u);
+  ASSERT_EQ(observer_.events.size(), 3u);
   EXPECT_EQ(observer_.events[0].kind, "unpin_tab");
   EXPECT_NE(observer_.events[0].json.find("\"tab_id\":\"pinned-tab\""),
             std::string::npos);
   EXPECT_EQ(observer_.events[1].kind, "favorite_tab");
   EXPECT_NE(observer_.events[1].json.find("\"tab_id\":\"pinned-tab\""),
             std::string::npos);
+  EXPECT_EQ(observer_.events[2].kind, "reorder_favorite");
+  EXPECT_NE(observer_.events[2].json.find("\"tab_id\":\"pinned-tab\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[2].json.find("\"new_index\":0"),
+            std::string::npos);
 }
 
 // (c) Normal folder-child tab dropped on the favorites grid must produce
-//     [move_tab_to_root, favorite_tab].
+//     [move_tab_to_root, favorite_tab, reorder_favorite].
 TEST_F(SidebarDnDDispatchTest,
        NormalFolderChildDropToFavoritesGridDispatchesMoveToRootThenFavorite) {
   MahoSidebarFavoritesGridView favorites(/*browser=*/nullptr);
@@ -2589,19 +3047,111 @@ TEST_F(SidebarDnDDispatchTest,
   std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
 
   ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
-  ASSERT_EQ(observer_.events.size(), 2u);
+  ASSERT_EQ(observer_.events.size(), 3u);
   EXPECT_EQ(observer_.events[0].kind, "move_tab_to_root");
   EXPECT_NE(observer_.events[0].json.find("\"folder_id\":\"folder-1\""),
             std::string::npos);
   EXPECT_EQ(observer_.events[1].kind, "favorite_tab");
   EXPECT_NE(observer_.events[1].json.find("\"tab_id\":\"child-tab\""),
             std::string::npos);
+  EXPECT_EQ(observer_.events[2].kind, "reorder_favorite");
+  EXPECT_NE(observer_.events[2].json.find("\"tab_id\":\"child-tab\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[2].json.find("\"new_index\":0"),
+            std::string::npos);
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       NormalRootTabDropToEmptyFavoritesGridDispatchesFavoriteThenPlacement) {
+  MahoSidebarFavoritesGridView favorites(/*browser=*/nullptr);
+  MahoSidebarFavoritesModel model;
+  favorites.SetBoundsRect(gfx::Rect(0, 0, 220, 80));
+  favorites.Update(model);
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeTabPayload("root-tab", SidebarDragOrigin::kNormalSection),
+                &data);
+  ui::DropTargetEvent event = MakeDropEvent(data, gfx::Point(5, 5));
+
+  EXPECT_EQ(favorites.OnDragUpdated(event),
+            static_cast<int>(ui::mojom::DragOperation::kMove));
+  auto callback = favorites.GetDropCallbackForTesting(event);
+
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
+  ASSERT_EQ(observer_.events.size(), 2u);
+  EXPECT_EQ(observer_.events[0].kind, "favorite_tab");
+  EXPECT_NE(observer_.events[0].json.find("\"tab_id\":\"root-tab\""),
+            std::string::npos);
+  EXPECT_EQ(observer_.events[1].kind, "reorder_favorite");
+  EXPECT_NE(observer_.events[1].json.find("\"tab_id\":\"root-tab\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[1].json.find("\"new_index\":0"),
+            std::string::npos)
+      << "Empty favorites drops must still place the newly favorited tab at "
+         "index 0";
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       NormalRootTabDropToFavoritesAppendDispatchesFavoriteThenAppendPlacement) {
+  MahoSidebarFavoritesGridView favorites(/*browser=*/nullptr);
+  MahoSidebarFavoritesModel model;
+
+  MahoSidebarFavoriteItemModel first;
+  first.tab_id = "fav-1";
+  first.url = GURL("https://one.example");
+  first.title = u"One";
+  model.items.push_back(first);
+
+  MahoSidebarFavoriteItemModel second;
+  second.tab_id = "fav-2";
+  second.url = GURL("https://two.example");
+  second.title = u"Two";
+  model.items.push_back(second);
+
+  favorites.SetBoundsRect(gfx::Rect(0, 0, 220, 80));
+  favorites.Update(model);
+  favorites.DeprecatedLayoutImmediately();
+
+  views::Button* last_tile = favorites.GetTileForTesting(1);
+  ASSERT_TRUE(last_tile);
+  gfx::Point append_point = last_tile->bounds().CenterPoint();
+  views::View::ConvertPointToTarget(last_tile->parent(), &favorites,
+                                    &append_point);
+  append_point.Offset(sidebar_layout::kFavoriteTileSpacingDp +
+                          (last_tile->width() / 2),
+                      0);
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeTabPayload("root-tab", SidebarDragOrigin::kNormalSection),
+                &data);
+  ui::DropTargetEvent event = MakeDropEvent(data, append_point);
+
+  EXPECT_EQ(favorites.OnDragUpdated(event),
+            static_cast<int>(ui::mojom::DragOperation::kMove));
+  auto callback = favorites.GetDropCallbackForTesting(event);
+
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
+  ASSERT_EQ(observer_.events.size(), 2u);
+  EXPECT_EQ(observer_.events[0].kind, "favorite_tab");
+  EXPECT_EQ(observer_.events[1].kind, "reorder_favorite");
+  EXPECT_NE(observer_.events[1].json.find("\"tab_id\":\"root-tab\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[1].json.find("\"new_index\":2"),
+            std::string::npos)
+      << "Append drops must still emit reorder_favorite with the resolved "
+         "append index";
 }
 
 // (d) Pinned folder-child tab dropped on the favorites grid must produce
-//     [move_tab_to_root, unpin_tab, favorite_tab].
+//     [move_tab_to_root, unpin_tab, favorite_tab, reorder_favorite].
 TEST_F(SidebarDnDDispatchTest,
-       PinnedFolderChildDropToFavoritesGridDispatchesThreeSteps) {
+       PinnedFolderChildDropToFavoritesGridDispatchesFourSteps) {
   MahoSidebarFavoritesGridView favorites(/*browser=*/nullptr);
   MahoSidebarFavoritesModel model;
   favorites.SetBoundsRect(gfx::Rect(0, 0, 220, 80));
@@ -2619,13 +3169,16 @@ TEST_F(SidebarDnDDispatchTest,
   std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
 
   ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
-  ASSERT_EQ(observer_.events.size(), 3u);
+  ASSERT_EQ(observer_.events.size(), 4u);
   EXPECT_EQ(observer_.events[0].kind, "move_tab_to_root");
   EXPECT_NE(observer_.events[0].json.find("\"folder_id\":\"pinned-folder-1\""),
             std::string::npos);
   EXPECT_EQ(observer_.events[1].kind, "unpin_tab");
   EXPECT_EQ(observer_.events[2].kind, "favorite_tab");
   EXPECT_NE(observer_.events[2].json.find("\"tab_id\":\"pinned-child\""),
+            std::string::npos);
+  EXPECT_EQ(observer_.events[3].kind, "reorder_favorite");
+  EXPECT_NE(observer_.events[3].json.find("\"tab_id\":\"pinned-child\""),
             std::string::npos);
 }
 
@@ -2915,6 +3468,49 @@ TEST_F(SidebarDnDDispatchTest,
 // cross-section drops that constant doesn't matter — plan.steps.empty() is
 // false for all three cross-section cases regardless of live-index values.
 // ---------------------------------------------------------------------------
+
+TEST_F(
+    SidebarDnDDispatchTest,
+    PinnedFolderChildDropBeforeNormalTabRowBodyDispatchesMoveToRootThenUnpin) {
+  SidebarTreeNode target_node = MakeTabNode("target-tab", 1);
+  SidebarTabRowView row(
+      target_node, ui::ImageModel(), /*browser=*/nullptr,
+      MahoSidebarTabSection::kNormal, "space-1", u"Target",
+      NoOpPressedCallback(), NoOpPressedCallback(), base::DoNothing(),
+      base::BindRepeating([](const std::string&) { return 1; }),
+      base::DoNothing(), base::DoNothing());
+  row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
+
+  SidebarDragPayload payload = MakeTabPayload(
+      "pinned-child", SidebarDragOrigin::kPinnedSection);
+  payload.source_parent_folder_id = "pinned-folder-1";
+  ui::OSExchangeData data;
+  WriteDropData(payload, &data);
+  ui::DropTargetEvent event = MakeDropEvent(data, gfx::Point(5, 2));
+
+  EXPECT_EQ(row.OnDragUpdated(event),
+            static_cast<int>(ui::mojom::DragOperation::kMove));
+  EXPECT_EQ(row.drop_zone_for_testing(),
+            SidebarTabRowView::SidebarTabDropZone::kBefore);
+
+  auto callback = row.GetDropCallbackForTesting(event);
+
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
+  ASSERT_EQ(observer_.events.size(), 2u);
+  EXPECT_EQ(observer_.events[0].kind, "move_tab_to_root");
+  EXPECT_NE(observer_.events[0].json.find("\"folder_id\":\"pinned-folder-1\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"tab_id\":\"pinned-child\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"before_tab_id\":\"target-tab\""),
+            std::string::npos);
+  EXPECT_EQ(observer_.events[1].kind, "unpin_tab");
+  EXPECT_NE(observer_.events[1].json.find("\"tab_id\":\"pinned-child\""),
+            std::string::npos);
+}
 
 // (1) Pinned root tab dropped on the middle body of a normal tab row must
 //     dispatch [unpin_tab] via the planner path.  ResolveDropPlan for a
