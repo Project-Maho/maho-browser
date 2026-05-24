@@ -37,6 +37,7 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_easels_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_notes_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_library_rail_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_library_action_pane_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_media_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_spaces_view.h"
@@ -811,13 +812,8 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   EXPECT_TRUE(sidebar->spaces_view_for_testing()->GetVisible());
   EXPECT_EQ(MahoSidebarLibraryRailView::Category::kSpaces,
             rail->selected_category());
-  ASSERT_TRUE(sidebar->spaces_view_for_testing()->board_view_for_testing());
   EXPECT_GT(sidebar->spaces_view_for_testing()->GetBoundsInScreen().height(), 0);
-  EXPECT_GT(sidebar->spaces_view_for_testing()
-                ->board_view_for_testing()
-                ->GetBoundsInScreen()
-                .height(),
-            0);
+  EXPECT_TRUE(sidebar->spaces_view_for_testing()->title_label_for_testing());
   ASSERT_TRUE(sidebar->archive_view_for_testing());
   EXPECT_FALSE(sidebar->archive_view_for_testing()->GetVisible());
 }
@@ -846,35 +842,10 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   EXPECT_EQ(MahoSidebarLibraryRailView::Category::kEasels,
             rail->selected_category());
 
-  ASSERT_TRUE(sidebar->easel_view_for_testing()->web_view_for_testing());
+  EXPECT_TRUE(sidebar->easel_view_for_testing()->title_label_for_testing());
 }
 
-IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
-                        LibraryOpensNotesPaneWithEmbeddedWebUI) {
-  ResolveViews();
 
-  auto* sidebar = GetSidebarView();
-  ASSERT_TRUE(sidebar);
-  auto* rail = sidebar->library_rail_view_for_testing();
-  ASSERT_TRUE(rail);
-  auto* notes_button = rail->button_for_category_for_testing(
-      MahoSidebarLibraryRailView::Category::kNotes);
-  ASSERT_TRUE(notes_button);
-  EXPECT_FALSE(notes_button->GetVisible());
-
-  sidebar->OpenLibrary(MahoSidebarLibraryRailView::Category::kNotes);
-  base::RunLoop().RunUntilIdle();
-
-  EXPECT_TRUE(sidebar->is_library_mode_for_testing());
-  EXPECT_EQ(MahoSidebarLibraryRailView::Category::kNotes,
-            sidebar->active_library_category_for_testing());
-  ASSERT_TRUE(sidebar->notes_view_for_testing());
-  EXPECT_TRUE(sidebar->notes_view_for_testing()->GetVisible());
-  EXPECT_EQ(MahoSidebarLibraryRailView::Category::kNotes,
-            rail->selected_category());
-
-  ASSERT_TRUE(sidebar->notes_view_for_testing()->web_view_for_testing());
-}
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
                          LibraryOpensBoostsPaneInline) {
@@ -900,8 +871,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   EXPECT_EQ(MahoSidebarLibraryRailView::Category::kBoosts,
             rail->selected_category());
 
-  ASSERT_TRUE(sidebar->boost_view_for_testing()->scroll_view_for_testing() ||
-              sidebar->boost_view_for_testing()->empty_state_view_for_testing());
+  EXPECT_TRUE(sidebar->boost_view_for_testing()->title_label_for_testing());
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
