@@ -3071,6 +3071,11 @@ impl MahoCore {
             .collect()
     }
 
+    pub fn get_space_theme(&self, space_id: &SpaceId) -> Option<maho_types::space::SpaceTheme> {
+        self.space_manager.get_space(space_id).and_then(|s| s.theme.clone())
+    }
+
+
     pub fn get_active_space_id(&self) -> SpaceId {
         self.space_manager.get_active_space_id().clone()
     }

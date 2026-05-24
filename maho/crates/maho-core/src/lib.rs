@@ -34,3 +34,5 @@ pub mod sync_manager;
 pub mod sync_models;
 pub mod tab_lifecycle;
 pub mod tab_preview_manager;
+pub mod oscrypt;
+pub mod chat_session;

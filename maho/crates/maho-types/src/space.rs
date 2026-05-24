@@ -121,7 +121,15 @@ impl<'de> Deserialize<'de> for ThemeColor {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeScheme {
+    Auto,
+    Light,
+    Dark,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ColorHarmony {
     Complementary,
@@ -130,6 +138,7 @@ pub enum ColorHarmony {
     Analogous,
     Triadic,
     Custom,
+    Floating,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -146,6 +155,8 @@ pub enum SpaceTheme {
         #[serde(rename = "gradientColors")]
         colors: Vec<ThemeColor>,
         harmony: ColorHarmony,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scheme: Option<ThemeScheme>,
         opacity: f64,
         texture: f64,
         #[serde(rename = "schemaVersion", default, skip_serializing_if = "is_zero_u32")]
@@ -157,12 +168,43 @@ pub enum SpaceTheme {
         colors: Vec<ThemeColor>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         harmony: Option<ColorHarmony>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scheme: Option<ThemeScheme>,
         opacity: f64,
         texture: f64,
         #[serde(rename = "schemaVersion", default, skip_serializing_if = "is_zero_u32")]
         schema_version: u32,
     },
 }
+
+impl SpaceTheme {
+    pub fn validate(&self) -> bool {
+        match self {
+            SpaceTheme::Solid { .. } => true,
+            SpaceTheme::Gradient { colors, harmony, scheme, .. } => {
+                if colors.is_empty() {
+                    return false;
+                }
+                if matches!(harmony, ColorHarmony::Floating) && scheme.is_none() {
+                    return false;
+                }
+                true
+            }
+            SpaceTheme::Zen { colors, harmony, scheme, .. } => {
+                if colors.is_empty() {
+                    return false;
+                }
+                if let Some(ColorHarmony::Floating) = harmony {
+                    if scheme.is_none() {
+                        return false;
+                    }
+                }
+                true
+            }
+        }
+    }
+}
+
 
 impl SpaceTheme {
     pub fn base_color(&self) -> SpaceColor {
@@ -350,6 +392,7 @@ mod tests {
                 ThemeColor { hue: 0.0, saturation: 0.8, brightness: 0.9, is_custom: false, is_primary: false, c_raw: None },
             ],
             harmony: ColorHarmony::Complementary,
+            scheme: None,
             opacity: 0.85,
             texture: 0.3,
             schema_version: 0,
@@ -390,6 +433,7 @@ mod tests {
                 ThemeColor { hue: 0.6, saturation: 0.8, brightness: 0.7, is_custom: false, is_primary: true, c_raw: None },
             ],
             harmony: ColorHarmony::Analogous,
+            scheme: None,
             opacity: 1.0,
             texture: 0.0,
             schema_version: 0,
@@ -425,6 +469,7 @@ mod tests {
                 },
             ],
             harmony: None,
+            scheme: None,
             opacity: 1.0,
             texture: 0.2,
             schema_version: 0,
@@ -455,6 +500,7 @@ mod tests {
                 c_raw: Some(CValue::Hex("#ff6b35".to_string())),
             }],
             harmony: Some(ColorHarmony::Analogous),
+            scheme: None,
             opacity: 0.9,
             texture: 0.1,
             schema_version: 0,
@@ -479,6 +525,7 @@ mod tests {
                 ThemeColor { hue: 0.7, saturation: 0.9, brightness: 0.5, is_custom: false, is_primary: true, c_raw: None },
             ],
             harmony: None,
+            scheme: None,
             opacity: 1.0,
             texture: 0.0,
             schema_version: 0,

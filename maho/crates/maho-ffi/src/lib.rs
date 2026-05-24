@@ -410,6 +410,75 @@ pub unsafe extern "C" fn maho_core_get_installed_extensions(ptr: *mut MahoCore) 
 
 /// # Safety
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_is_native_password_provider_active(ptr: *mut MahoCore) -> bool {
+    if ptr.is_null() {
+        return true;
+    }
+    let core = &*ptr;
+    core.get_settings().autofill.password_provider == maho_types::passwords::PasswordProviderKind::MahoNative
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_is_bitwarden_extension_available(ptr: *mut MahoCore) -> bool {
+    if ptr.is_null() {
+        return false;
+    }
+    let core = &*ptr;
+    core.get_installed_extensions().iter().any(|ext| {
+        ext.enabled && ext.name.to_lowercase().contains("bitwarden")
+    })
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_is_onepassword_extension_available(ptr: *mut MahoCore) -> bool {
+    if ptr.is_null() {
+        return false;
+    }
+    let core = &*ptr;
+    core.get_installed_extensions().iter().any(|ext| {
+        ext.enabled && (ext.name.to_lowercase().contains("1password") || ext.name.to_lowercase().contains("onepassword"))
+    })
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer to a MahoCore.
+/// `mode` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_is_password_provider_available(
+    ptr: *mut MahoCore,
+    mode: *const c_char,
+) -> bool {
+    if ptr.is_null() || mode.is_null() {
+        return false;
+    }
+    let core = &*ptr;
+    let mode_str = match CStr::from_ptr(mode).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    if mode_str == "chromium" || mode_str == "builtin" || mode_str == "disabled" || mode_str == "system" || mode_str == "maho_native" {
+        true
+    } else if mode_str == "bitwarden" {
+        core.get_installed_extensions().iter().any(|ext| {
+            ext.enabled && ext.name.to_lowercase().contains("bitwarden")
+        })
+    } else if mode_str == "onepassword" {
+        core.get_installed_extensions().iter().any(|ext| {
+            ext.enabled && (ext.name.to_lowercase().contains("1password") || ext.name.to_lowercase().contains("onepassword"))
+        })
+    } else {
+        true
+    }
+}
+
+/// # Safety
+
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
 /// `query` must be a valid null-terminated C string.
 /// Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
@@ -3982,4 +4051,496 @@ pub unsafe extern "C" fn maho_core_join_shared_collection(
         Err(_) => return false,
     };
     core.join_shared_collection(link_str)
+}
+
+/// # Safety
+/// `path_utf8` must be a valid null-terminated C string.
+/// `out_key` must be a writable buffer of 16 bytes.
+/// `out_status` must be a writable pointer to a u32.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_derive_oscrypt_key(
+    path_utf8: *const c_char,
+    out_key: *mut u8,
+    out_status: *mut u32,
+) -> bool {
+    if path_utf8.is_null() || out_key.is_null() || out_status.is_null() {
+        return false;
+    }
+    let path_str = match CStr::from_ptr(path_utf8).to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            *out_status = 2; // InvalidArg
+            return false;
+        }
+    };
+    let out_key_slice = std::slice::from_raw_parts_mut(out_key, 16);
+    let mut key = [0u8; 16];
+    let ok = maho_core::oscrypt::derive_key(path_str, &mut key, &mut *out_status);
+    if ok {
+        out_key_slice.copy_from_slice(&key);
+    }
+    ok
+}
+
+/// # Safety
+/// `path_utf8` must be a valid null-terminated C string.
+/// `out_status` must be a writable pointer to a u32.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_oscrypt_key_path_is_secure(
+    path_utf8: *const c_char,
+    out_status: *mut u32,
+) -> bool {
+    if path_utf8.is_null() || out_status.is_null() {
+        return false;
+    }
+    let path_str = match CStr::from_ptr(path_utf8).to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            *out_status = 2; // InvalidArg
+            return false;
+        }
+    };
+    maho_core::oscrypt::key_path_is_secure(path_str, &mut *out_status)
+}
+
+/// # Safety
+/// `path_utf8` must be a valid null-terminated C string.
+/// `out_status` must be a writable pointer to a u32.
+/// The caller is responsible for freeing the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_read_validated_theme_json(
+    path_utf8: *const c_char,
+    out_status: *mut u32,
+) -> *mut c_char {
+    if path_utf8.is_null() || out_status.is_null() {
+        return ptr::null_mut();
+    }
+    *out_status = 1; // IoError
+
+    let path_str = match CStr::from_ptr(path_utf8).to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            *out_status = 2; // InvalidArg
+            return ptr::null_mut();
+        }
+    };
+    let path = Path::new(path_str);
+    let contents = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return ptr::null_mut(),
+    };
+
+    let theme: maho_types::space::SpaceTheme = match serde_json::from_str(&contents) {
+        Ok(t) => t,
+        Err(_) => {
+            *out_status = 4; // ValidationError
+            return ptr::null_mut();
+        }
+    };
+
+    if !theme.validate() {
+        *out_status = 4; // ValidationError
+        return ptr::null_mut();
+    }
+
+    *out_status = 0; // Ok
+    match CString::new(contents) {
+        Ok(c) => c.into_raw(),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer to a MahoCore.
+/// `space_id` must be a valid null-terminated C string.
+/// `theme_json` must be a valid null-terminated C string.
+/// `out_status` must be a writable pointer to a u32.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_apply_space_theme_json(
+    ptr: *mut MahoCore,
+    space_id: *const c_char,
+    theme_json: *const c_char,
+    out_status: *mut u32,
+) -> bool {
+    if ptr.is_null() || space_id.is_null() || theme_json.is_null() || out_status.is_null() {
+        return false;
+    }
+    *out_status = 1; // IoError
+
+    let core = &mut *ptr;
+    let space_id_str = match CStr::from_ptr(space_id).to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            *out_status = 2; // InvalidArg
+            return false;
+        }
+    };
+    let theme_json_str = match CStr::from_ptr(theme_json).to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            *out_status = 2; // InvalidArg
+            return false;
+        }
+    };
+
+    let theme: maho_types::space::SpaceTheme = match serde_json::from_str(theme_json_str) {
+        Ok(t) => t,
+        Err(_) => {
+            *out_status = 4; // ValidationError
+            return false;
+        }
+    };
+
+    if !theme.validate() {
+        *out_status = 4; // ValidationError
+        return false;
+    }
+
+    let parsed_space_id = maho_types::identifiers::SpaceId::new(space_id_str);
+
+    let update = maho_types::space::SpaceConfigUpdate {
+        space_id: parsed_space_id,
+        theme: Some(theme),
+        ..Default::default()
+    };
+
+    core.update_space_config(update);
+    *out_status = 0; // Ok
+    true
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer to a MahoCore.
+/// `space_id` must be a valid null-terminated C string.
+/// `path_utf8` must be a valid null-terminated C string.
+/// `out_status` must be a writable pointer to a u32.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_export_space_theme(
+    ptr: *mut MahoCore,
+    space_id: *const c_char,
+    path_utf8: *const c_char,
+    out_status: *mut u32,
+) -> bool {
+    if ptr.is_null() || space_id.is_null() || path_utf8.is_null() || out_status.is_null() {
+        return false;
+    }
+    *out_status = 1; // IoError
+
+    let core = &*ptr;
+    let space_id_str = match CStr::from_ptr(space_id).to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            *out_status = 2; // InvalidArg
+            return false;
+        }
+    };
+    let path_str = match CStr::from_ptr(path_utf8).to_str() {
+        Ok(s) => s,
+        Err(_) => {
+            *out_status = 2; // InvalidArg
+            return false;
+        }
+    };
+    let path = Path::new(path_str);
+
+    let parsed_space_id = maho_types::identifiers::SpaceId::new(space_id_str);
+
+    let theme = match core.get_space_theme(&parsed_space_id) {
+        Some(t) => t,
+        None => {
+            *out_status = 4;
+            return false;
+        }
+    };
+
+    let json = match serde_json::to_string_pretty(&theme) {
+        Ok(j) => j,
+        Err(_) => {
+            *out_status = 4;
+            return false;
+        }
+    };
+
+    let parent = match path.parent() {
+        Some(p) => p,
+        None => return false,
+    };
+    let temp_name = format!(
+        "{}.tmp.{}",
+        path.file_name().unwrap_or_default().to_string_lossy(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let temp_path = parent.join(temp_name);
+
+    if let Err(_) = std::fs::write(&temp_path, json.as_bytes()) {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&temp_path, std::fs::Permissions::from_mode(0o600));
+    }
+
+    if let Err(_) = std::fs::rename(&temp_path, path) {
+        let _ = std::fs::remove_file(&temp_path);
+        return false;
+    }
+
+    *out_status = 0; // Ok
+    true
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer to a MahoCore.
+/// `space_id` must be a valid null-terminated C string.
+/// `out_status` must be a writable pointer to a u32.
+/// The caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_serialize_space_theme(
+    ptr: *mut MahoCore,
+    space_id: *const c_char,
+    out_status: *mut u32,
+) -> *mut c_char {
+    if ptr.is_null() || space_id.is_null() || out_status.is_null() {
+        return ptr::null_mut();
+    }
+    *out_status = 1; // Error
+
+    let core = &*ptr;
+    let space_id_str = match CStr::from_ptr(space_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+
+    let parsed_space_id = maho_types::identifiers::SpaceId::new(space_id_str);
+    let theme = match core.get_space_theme(&parsed_space_id) {
+        Some(t) => t,
+        None => {
+            *out_status = 4;
+            return ptr::null_mut();
+        }
+    };
+
+    let json = match serde_json::to_string_pretty(&theme) {
+        Ok(j) => j,
+        Err(_) => {
+            *out_status = 4;
+            return ptr::null_mut();
+        }
+    };
+
+    *out_status = 0; // Ok
+    match CString::new(json) {
+        Ok(c) => c.into_raw(),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+#[repr(C)]
+pub struct MahoChatConfig {
+    pub api_key: *const c_char,
+    pub endpoint: *const c_char,
+    pub model: *const c_char,
+    pub system_instruction: *const c_char,
+}
+
+/// # Safety
+/// All pointers in `config` must be null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_chat_session_new(
+    config: *const MahoChatConfig,
+) -> *mut maho_core::chat_session::ChatSession {
+    if config.is_null() {
+        return std::ptr::null_mut();
+    }
+    let config = &*config;
+    let api_key = if config.api_key.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(config.api_key).to_string_lossy().into_owned()
+    };
+    let endpoint = if config.endpoint.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(config.endpoint).to_string_lossy().into_owned()
+    };
+    let model = if config.model.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(config.model).to_string_lossy().into_owned()
+    };
+    let system_instruction = if config.system_instruction.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(config.system_instruction).to_string_lossy().into_owned()
+    };
+
+    let chat_config = maho_core::chat_session::ChatConfig {
+        api_key,
+        endpoint,
+        model,
+        system_instruction,
+    };
+
+    Box::into_raw(Box::new(maho_core::chat_session::ChatSession::new(chat_config)))
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_chat_session_new`, or null.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_chat_session_free(
+    ptr: *mut maho_core::chat_session::ChatSession,
+) {
+    if !ptr.is_null() {
+        drop(Box::from_raw(ptr));
+    }
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer to a `ChatSession`.
+/// `name`, `description`, and `schema_json` must be null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_chat_register_tool(
+    ptr: *mut maho_core::chat_session::ChatSession,
+    name: *const c_char,
+    description: *const c_char,
+    schema_json: *const c_char,
+) -> bool {
+    if ptr.is_null() || name.is_null() || description.is_null() || schema_json.is_null() {
+        return false;
+    }
+    let session = &mut *ptr;
+    let name_str = match CStr::from_ptr(name).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let desc_str = match CStr::from_ptr(description).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let schema_str = match CStr::from_ptr(schema_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    session.register_tool(name_str, desc_str, schema_str)
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer to a `ChatSession`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_chat_set_event_sink(
+    ptr: *mut maho_core::chat_session::ChatSession,
+    on_token: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, token: *const c_char)>,
+    on_complete: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, full_text: *const c_char, tool_calls_json: *const c_char)>,
+    on_error: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, error: *const c_char)>,
+    user_data: *mut std::ffi::c_void,
+) {
+    if ptr.is_null() {
+        return;
+    }
+    let session = &mut *ptr;
+    let sink = maho_core::chat_session::MahoChatEventSink {
+        on_token,
+        on_complete,
+        on_error,
+        user_data,
+    };
+    session.set_event_sink(sink);
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer to a `ChatSession`.
+/// `message` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_chat_send_user_turn(
+    ptr: *mut maho_core::chat_session::ChatSession,
+    message: *const c_char,
+) -> bool {
+    if ptr.is_null() || message.is_null() {
+        return false;
+    }
+    let session = &mut *ptr;
+    let msg_str = match CStr::from_ptr(message).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    session.send_user_turn(msg_str)
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer to a `ChatSession`.
+/// `tool_call_id`, `tool_name`, and `result` must be null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_chat_send_tool_result(
+    ptr: *mut maho_core::chat_session::ChatSession,
+    tool_call_id: *const c_char,
+    tool_name: *const c_char,
+    result: *const c_char,
+    trigger: bool,
+) -> bool {
+    if ptr.is_null() || tool_call_id.is_null() || tool_name.is_null() || result.is_null() {
+        return false;
+    }
+    let session = &mut *ptr;
+    let tc_id = match CStr::from_ptr(tool_call_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let t_name = match CStr::from_ptr(tool_name).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let res = match CStr::from_ptr(result).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    session.send_tool_result(tc_id, t_name, res, trigger)
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer to a `ChatSession`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_chat_cancel(
+    ptr: *mut maho_core::chat_session::ChatSession,
+) {
+    if !ptr.is_null() {
+        let session = &mut *ptr;
+        session.cancel();
+    }
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer to a `ChatSession`.
+/// `content` and `tool_calls_json` must be null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_chat_append_assistant_message(
+    ptr: *mut maho_core::chat_session::ChatSession,
+    content: *const c_char,
+    tool_calls_json: *const c_char,
+) {
+    if ptr.is_null() {
+        return;
+    }
+    let session = &mut *ptr;
+    let content_str = if content.is_null() {
+        ""
+    } else {
+        match CStr::from_ptr(content).to_str() {
+            Ok(s) => s,
+            Err(_) => return,
+        }
+    };
+    let tcs_str = if tool_calls_json.is_null() {
+        ""
+    } else {
+        match CStr::from_ptr(tool_calls_json).to_str() {
+            Ok(s) => s,
+            Err(_) => return,
+        }
+    };
+    session.append_assistant_message(content_str, tcs_str);
 }

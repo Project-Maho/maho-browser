@@ -506,6 +506,7 @@ mod tests {
         let theme = SpaceTheme::Gradient {
             colors: vec![primary_color],
             harmony: ColorHarmony::Analogous,
+            scheme: None,
             opacity: 0.5,
             texture: 0.0,
             schema_version: 0,
@@ -545,6 +546,7 @@ mod tests {
         let theme = SpaceTheme::Gradient {
             colors: vec![primary_color],
             harmony: ColorHarmony::Analogous,
+            scheme: None,
             opacity: 0.5,
             texture: 0.0,
             schema_version: 0,
@@ -583,6 +585,7 @@ mod tests {
         let theme = SpaceTheme::Zen {
             colors: vec![primary_color],
             harmony: None,
+            scheme: None,
             opacity: 0.8,
             texture: 0.1,
             schema_version: 0,
