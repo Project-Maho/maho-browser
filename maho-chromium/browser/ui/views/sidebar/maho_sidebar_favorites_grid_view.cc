@@ -914,7 +914,7 @@ views::View::DropCallback MahoSidebarFavoritesGridView::GetDropCallback(
           DispatchShellEventEx("reorder_favorite", {
               ShellEventField("tab_id", payload.node_id),
               ShellEventField("new_index", target_index)});
-        } else if (target_index < static_cast<int>(favorite_count)) {
+        } else if (target_index <= static_cast<int>(favorite_count)) {
           DispatchShellEventEx("reorder_favorite", {
               ShellEventField("tab_id", payload.node_id),
               ShellEventField("new_index", target_index)});
