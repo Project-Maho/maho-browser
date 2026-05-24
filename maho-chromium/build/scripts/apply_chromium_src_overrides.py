@@ -17,6 +17,11 @@ class Replacement:
     # new is present in the file.  Use this for removals whose target content
     # may have been cleaned up independently of this script.
     idempotent: bool = False
+    # If set, skip this replacement (treat as already applied) when this
+    # string is found anywhere in the file.  Use this when the injected
+    # content may already be present at a different location than the anchor
+    # used in `old`, which would otherwise cause a duplicate insertion.
+    guard: str | None = None
 
 
 REPLACEMENTS: dict[str, list[Replacement]] = {
@@ -253,6 +258,20 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     "chrome/browser/ui/BUILD.gn": [
         Replacement(
             old=(
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h",\n'
+                '      "//maho/browser/ui/tab_preview/maho_tab_preview_controller.cc",\n'
+                '      "//maho/browser/ui/tab_preview/maho_tab_preview_controller.h",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_state_models.cc",\n'
+            ),
+            new=(
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_state_models.cc",\n'
+            ),
+            description="Remove duplicate maho_tab_preview_controller.cc/.h pair that appears after maho_sidebar_state_adapter.h in BUILD.gn",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
                 '      "//maho/browser/ui/views/sidebar/maho_sidebar_state_models.cc",\n'
                 '      "//maho/browser/ui/views/sidebar/maho_sidebar_state_models.h",\n'
                 '      "//maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.cc",\n'
@@ -265,6 +284,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '      "//maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.cc",\n'
             ),
             description="Include Maho tab preview controller sources in Chromium browser UI build",
+            guard='      "//maho/browser/ui/tab_preview/maho_tab_preview_controller.cc",\n',
         ),
     ],
     # ── browser_view.cc ───────────────────────────────────────────────────────
@@ -627,6 +647,10 @@ def apply_replacements(target_file: Path, replacements: list[Replacement]) -> tu
 
     for replacement in replacements:
         if replacement.new in text:
+            applied.append(f"already: {replacement.description}")
+            continue
+
+        if replacement.guard is not None and replacement.guard in text:
             applied.append(f"already: {replacement.description}")
             continue
 
