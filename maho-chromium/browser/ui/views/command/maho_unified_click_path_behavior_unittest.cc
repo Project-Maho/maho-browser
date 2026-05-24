@@ -529,5 +529,86 @@ TEST_F(MahoUnifiedClickPathBehaviorTest,
   ReleaseController(*controller);
 }
 
+// ---------------------------------------------------------------------------
+// Phase 3 (flag-gate parity): kMahoUnifiedClickPath default state and
+// flag-gating invariants for the SetFocusToLocationBar() intercept.
+//
+// The intercept in the chromium_src overlay is:
+//   if (is_user_initiated && maho_sidebar_container_ &&
+//       base::FeatureList::IsEnabled(kMahoUnifiedClickPath)) { ... }
+//
+// These tests verify that:
+//   a) The flag is enabled by default; disabling it is a kill-switch that
+//      restores the upstream location-bar focus path.
+//   b) When the flag is disabled, direct Show() calls still open the overlay
+//      (non-intercept callers — Cmd+L, Cmd+T — are unaffected by the flag).
+//   c) When the flag is enabled, direct Show() calls still open the overlay.
+//   d) A null sidebar container (maho_sidebar_container_ == nullptr) is safe
+//      because the flag check is short-circuited.
+// ---------------------------------------------------------------------------
+
+TEST_F(MahoUnifiedClickPathBehaviorTest,
+       FlagOn_DefaultState_IsEnabled) {
+  EXPECT_TRUE(base::FeatureList::IsEnabled(features::kMahoUnifiedClickPath))
+      << "kMahoUnifiedClickPath must be enabled by default; it is retained as "
+         "a kill-switch for the SetFocusToLocationBar() intercept";
+}
+
+TEST_F(MahoUnifiedClickPathBehaviorTest,
+       FlagOff_DirectShowCurrentTab_StillOpensOverlay) {
+  base::test::ScopedFeatureList scoped;
+  scoped.InitAndDisableFeature(features::kMahoUnifiedClickPath);
+
+  auto parent = MakeParentWidget();
+  auto controller = MakeController();
+
+  CallShowCurrentTab(*controller, parent.get(), "https://example.com");
+
+  EXPECT_TRUE(controller->IsVisible())
+      << "Flag-off must not block direct Show() — only the OnFocus() intercept "
+         "is gated, not the controller itself";
+
+  ReleaseController(*controller);
+}
+
+TEST_F(MahoUnifiedClickPathBehaviorTest,
+       FlagOn_DirectShowCurrentTab_OpensOverlay) {
+  base::test::ScopedFeatureList scoped;
+  scoped.InitAndEnableFeature(features::kMahoUnifiedClickPath);
+
+  auto parent = MakeParentWidget();
+  auto controller = MakeController();
+
+  CallShowCurrentTab(*controller, parent.get(), "https://example.com");
+
+  EXPECT_TRUE(controller->IsVisible())
+      << "Flag-on must allow direct Show() to open the overlay";
+
+  ReleaseController(*controller);
+}
+
+TEST_F(MahoUnifiedClickPathBehaviorTest,
+       FlagOnOff_NullSidebarContainer_DirectShowDoesNotCrash) {
+  for (bool flag_on : {false, true}) {
+    SCOPED_TRACE(testing::Message() << "flag_on=" << flag_on);
+
+    base::test::ScopedFeatureList scoped;
+    if (flag_on)
+      scoped.InitAndEnableFeature(features::kMahoUnifiedClickPath);
+    else
+      scoped.InitAndDisableFeature(features::kMahoUnifiedClickPath);
+
+    auto parent = MakeParentWidget();
+    auto controller = MakeController();
+
+    ASSERT_NO_FATAL_FAILURE(
+        CallShowCurrentTab(*controller, parent.get(), "https://example.com"))
+        << "Show() must not crash regardless of flag state or sidebar presence";
+
+    EXPECT_TRUE(controller->IsVisible());
+    ReleaseController(*controller);
+  }
+}
+
 }  // namespace
 }  // namespace maho

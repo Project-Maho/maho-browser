@@ -174,6 +174,8 @@ source_set("maho_location_bar_views") {
   sources = [
     "ui/views/location_bar/maho_dom_screenshot_action_dialog_view.cc",
     "ui/views/location_bar/maho_dom_screenshot_action_dialog_view.h",
+    "ui/views/location_bar/maho_dom_screenshot_features.cc",
+    "ui/views/location_bar/maho_dom_screenshot_features.h",
     "ui/views/location_bar/maho_dom_screenshot_handler.cc",
     "ui/views/location_bar/maho_dom_screenshot_handler.h",
     "ui/views/location_bar/maho_dom_screenshot_script_string.h",
@@ -196,7 +198,6 @@ source_set("maho_location_bar_views") {
     "//chrome/browser/page_info",
     "//chrome/browser/permissions",
     "//chrome/browser/profiles:profile",
-    "//chrome/browser/ui:ui",
     "//chrome/browser/ui/location_bar",
     "//chrome/browser/ui/sharing_hub:sharing_hub",
     "//chrome/browser/ui/sharing_hub:impl",
@@ -375,6 +376,8 @@ source_set("maho_browser_main_extra_parts") {
   ]
   deps = [
     ":maho_core_holder",
+    ":maho_space_profile_bridge",
+    ":maho_tab_registry",
     ":maho_theme_support",
     "//base",
     "//chrome/browser:main_extra_parts",
@@ -419,6 +422,27 @@ source_set("maho_tab_id_helper") {
   public_deps = [
     "//base",
     "//content/public/browser",
+  ]
+}
+
+source_set("maho_tab_registry") {
+  sources = [
+    "maho_tab_registry.cc",
+    "maho_tab_registry.h",
+  ]
+  deps = [
+    ":maho_core_holder",
+    ":maho_space_profile_bridge",
+    ":maho_tab_id_helper",
+    "//base",
+    "//chrome/browser:browser_process",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/tab_list:tab_list",
+    "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//content/public/browser",
+    "//maho/third_party/maho:maho_bridge",
+    "//url",
   ]
 }
 

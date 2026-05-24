@@ -317,6 +317,28 @@ TEST_F(MahoCommandResultRowViewTest,
 }
 
 TEST_F(MahoCommandResultRowViewTest,
+       SeededRow_SetIconUpgradesFallbackGlyphToFaviconView) {
+  CommandSuggestion suggestion;
+  suggestion.title = "Current Page";
+  suggestion.subtitle = "https://example.com/some/path?q=1";
+  suggestion.type = CommandSuggestionType::kNavigation;
+
+  auto* row = CreateRow(
+      suggestion,
+      MahoCommandResultRowView::PresentationStyle::kCurrentTabSeeded);
+
+  EXPECT_TRUE(row->UsesFallbackGlyphForTesting());
+  EXPECT_EQ(nullptr, row->GetFaviconImageForTesting());
+
+  row->SetIcon(MakeTestFaviconImageData());
+
+  EXPECT_FALSE(row->UsesFallbackGlyphForTesting());
+  ASSERT_NE(nullptr, row->GetFaviconImageForTesting());
+  EXPECT_EQ(gfx::Size(16, 16),
+            row->GetFaviconImageForTesting()->GetPreferredSize());
+}
+
+TEST_F(MahoCommandResultRowViewTest,
        SelectedDefaultRowsUseFillOnlyTreatmentWithoutBorder) {
   CommandSuggestion suggestion;
   suggestion.title = "Example Page";

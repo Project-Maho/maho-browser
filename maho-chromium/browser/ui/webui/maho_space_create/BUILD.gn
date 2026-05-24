@@ -25,6 +25,7 @@ source_set("maho_space_create") {
     "//chrome/browser/ui/browser_window",
     "//maho/browser:maho_theme_support",
     "//maho/browser/resources/maho_space_create:resources",
+    "//maho/browser/ui/views/space_create:maho_space_theme_picker_dialog",
     "//maho/components/constants",
     "//mojo/public/cpp/bindings",
     "//ui/color",

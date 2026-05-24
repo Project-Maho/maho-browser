@@ -70,6 +70,7 @@ maho-chromium/
 - No raw string WebUI URLs — use `components/constants/webui_url_constants.h`
 - No skipping Mojo IDL for new WebUI features
 - No modifying upstream Chromium files directly — always use `chromium_src/` overrides
+- **Theme picker is permanently `chrome://maho-space-create`** — Do NOT migrate it to `maho_space_config`. Do NOT resurrect a native Views theme picker. Do NOT introduce a second production WebUI for theme selection. See `.sisyphus/plans/theme-picker-architecture-decision.md` (ADR, 2026-05-22) — this decision is permanent and supersedes all prior plans proposing migration.
 - **빌드 실패 시 GN 파일 강제 수정 금지** — `build_maho.py` 가 GN regen (`gn gen` / `Regenerating ninja files`) 단계 또는 그 이후 단계에서 실패하면 즉시 중단하고 사용자에게 보고. `BUILD.gn`, `chromium/src/chrome/test/BUILD.gn`, override 파일 등을 GN 통과를 위해 임의로 편집하지 말 것. unresolved deps / missing target 류 에러는 다른 세션 미완 작업·working tree dirty state 가 원인인 경우가 대부분이며, 임의 cleanup 은 추후 충돌과 데이터 손실을 부른다. **사용자 명시 승인 없이는 GN 편집 금지.**
 
 ## WEBUI SURFACES (13)
@@ -82,11 +83,14 @@ maho-chromium/
 | Notes | `chrome://maho-notes` | `maho_notes.mojom` |
 | Easel | `chrome://maho-easel` | `maho_easel.mojom` |
 | Space Config | `chrome://maho-space-config` | `maho_space_config.mojom` |
+| **Space Create (Theme Picker)** | **`chrome://maho-space-create`** | **`maho_space_create.mojom`** |
 | Space Manage | `chrome://maho-space-manage` | `maho_space_manage.mojom` |
 | Sync | `chrome://maho-sync` | `maho_sync.mojom` |
 | Live Folders | `chrome://maho-live-folders` | `maho_live_folders.mojom` |
 | Inline Edit | `chrome://maho-inline-edit` | `maho_inline_edit.mojom` |
 | Test | `chrome://maho-test` | — |
+
+> **Space Create note**: Despite the directory name, this surface is the **theme picker** (sparkle/sun/moon mode chips, color swatches, brightness dial). It is the only production theme picker — invoked from the native sidebar "Choose a Theme" row via `MahoSpaceThemePickerDialog::Open` which hosts the WebUI in a `views::Widget` dialog. See ADR at `.sisyphus/plans/theme-picker-architecture-decision.md`.
 
 ## COMMANDS
 ```bash

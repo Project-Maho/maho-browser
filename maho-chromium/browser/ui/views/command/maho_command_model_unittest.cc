@@ -7,6 +7,8 @@
 #include <vector>
 
 #include "base/strings/string_number_conversions.h"
+#include "base/test/task_environment.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -360,6 +362,91 @@ TEST_F(SessionIdParsingTest,
       << "A tab entry built for browser 100 must not match browser 200; "
          "this guards the production-code cross-browser activation bypass "
          "in OpenCommandSuggestion";
+}
+
+// ---------------------------------------------------------------------------
+// MahoCommandModel::Search — empty-query timing behavior
+//
+// These tests use a real MahoCommandModel with browser=nullptr.  The
+// empty-query path in Search() only touches internal fields (query_, mode_,
+// results_, pending_callback_, debounce_timer_) and never dereferences
+// browser_, so nullptr is safe here.
+//
+// FireSearch() would crash on browser_->profile() if allowed to run, so the
+// kNewTab tests must call model.Cancel() before the debounce timer fires.
+// kDebounceDelay is 150 ms (private constant in maho_command_model.cc).
+// ---------------------------------------------------------------------------
+
+namespace {
+constexpr base::TimeDelta kModelDebounceDelay = base::Milliseconds(150);
+}  // namespace
+
+class SearchEmptyQueryTest : public ::testing::Test {
+ protected:
+  base::test::TaskEnvironment task_env_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+};
+
+TEST_F(SearchEmptyQueryTest,
+       EmptyQueryInNewTabMode_CallbackNotFiredSynchronously) {
+  MahoCommandModel model(/*browser=*/nullptr);
+
+  int callback_count = 0;
+  auto cb = base::BindRepeating(
+      [](int* count, std::vector<CommandSuggestion>) { ++(*count); },
+      &callback_count);
+
+  model.Search("", CommandOverlayMode::kNewTab, cb);
+
+  EXPECT_EQ(0, callback_count)
+      << "kNewTab empty-query must not fire the callback synchronously; "
+         "it must schedule a debounced FireSearch via OneShotTimer";
+
+  model.Cancel();
+}
+
+TEST_F(SearchEmptyQueryTest,
+       EmptyQueryInNewTabMode_CallbackNotFiredBeforeDebounceDelay) {
+  MahoCommandModel model(/*browser=*/nullptr);
+
+  int callback_count = 0;
+  auto cb = base::BindRepeating(
+      [](int* count, std::vector<CommandSuggestion>) { ++(*count); },
+      &callback_count);
+
+  model.Search("", CommandOverlayMode::kNewTab, cb);
+  ASSERT_EQ(0, callback_count);
+
+  task_env_.FastForwardBy(kModelDebounceDelay - base::Milliseconds(1));
+
+  EXPECT_EQ(0, callback_count)
+      << "kNewTab empty-query callback must not fire until the full "
+      << kModelDebounceDelay.InMilliseconds() << " ms debounce delay elapses";
+
+  model.Cancel();
+}
+
+TEST_F(SearchEmptyQueryTest,
+       EmptyQueryInCurrentTabMode_CallbackFiredSynchronouslyWithEmptyResults) {
+  MahoCommandModel model(/*browser=*/nullptr);
+
+  int callback_count = 0;
+  std::vector<CommandSuggestion> received_results;
+  auto cb = base::BindRepeating(
+      [](int* count, std::vector<CommandSuggestion>* out,
+         std::vector<CommandSuggestion> results) {
+        ++(*count);
+        *out = std::move(results);
+      },
+      &callback_count, &received_results);
+
+  model.Search("", CommandOverlayMode::kCurrentTab, cb);
+
+  EXPECT_EQ(1, callback_count)
+      << "kCurrentTab empty-query must fire the callback synchronously, "
+         "not via the debounce timer";
+  EXPECT_TRUE(received_results.empty())
+      << "kCurrentTab empty-query callback must deliver an empty result vector";
 }
 
 }  // namespace

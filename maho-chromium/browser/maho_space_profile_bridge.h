@@ -4,7 +4,9 @@
 #define MAHO_BROWSER_MAHO_SPACE_PROFILE_BRIDGE_H_
 
 #include <cstddef>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/containers/flat_map.h"
@@ -55,6 +57,8 @@ class MahoSpaceProfileBridge : public BrowserCollectionObserver {
   void RemoveObserver(Observer* observer);
 
   const std::string& GetActiveSpaceId() const;
+  // The per-browser map is the canonical UI active-space state; the global
+  // active_space_id_ value exists only as a seed and as a no-browser-context fallback.
   const std::string& GetActiveSpaceId(Browser* browser) const;
   size_t GetRegisteredSpaceCount() const;
   int GetActiveSpaceIndex() const;
@@ -63,6 +67,11 @@ class MahoSpaceProfileBridge : public BrowserCollectionObserver {
   void ClearBrowserActiveSpace(Browser* browser);
 
   std::vector<std::string> GetSpaceIds() const;
+  base::FilePath GetProfilePathForTesting(const std::string& space_id) const;
+
+  static constexpr size_t kMahoProfileIdMaxLen = 64;
+  static std::optional<base::FilePath> ProfileBasenameForId(
+      std::string_view profile_id);
 
  private:
   friend class base::NoDestructor<MahoSpaceProfileBridge>;
@@ -70,6 +79,7 @@ class MahoSpaceProfileBridge : public BrowserCollectionObserver {
   ~MahoSpaceProfileBridge() override;
 
   // BrowserCollectionObserver:
+  void OnBrowserCreated(BrowserWindowInterface* browser) override;
   void OnBrowserClosed(BrowserWindowInterface* browser) override;
 
   base::flat_map<std::string, base::FilePath> space_to_profile_;

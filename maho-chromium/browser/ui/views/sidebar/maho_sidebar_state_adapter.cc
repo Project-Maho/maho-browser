@@ -553,6 +553,7 @@ void BuildTreeSection(
     std::optional<base::Value> parsed_tabs,
     const std::string& space_id_json,
     bool is_pinned,
+    const std::string& active_stable_id,
     TabStripModel* model,
     const std::map<std::string, int>& stable_id_map,
     const std::vector<FolderInfo>& all_folders,
@@ -564,14 +565,21 @@ void BuildTreeSection(
   std::map<std::string, SidebarTreeNode> tab_nodes_by_id;
   std::vector<SidebarTreeNode> all_tab_nodes;
 
+  auto is_active_entry = [&active_stable_id](const base::Value::Dict& d) {
+    if (active_stable_id.empty()) return false;
+    const std::string* id = d.FindString("id");
+    return id && *id == active_stable_id;
+  };
+
   for (const auto& item : parsed_tabs->GetList()) {
     const auto* dict = item.GetIfDict();
     if (!dict) {
       continue;
     }
+    const bool is_active = is_active_entry(*dict);
     const std::string* raw_url = dict->FindString("url");
     if (raw_url) {
-      if (IsSidebarIneligibleUrl(GURL(*raw_url))) {
+      if (IsSidebarIneligibleUrl(GURL(*raw_url)) && !is_active) {
         continue;
       }
     }
@@ -580,7 +588,7 @@ void BuildTreeSection(
     const std::u16string title_str = raw_title
         ? base::UTF8ToUTF16(*raw_title)
         : std::u16string();
-    if (MahoDisplayPolicy::IsGhostTab(url_str, title_str)) {
+    if (MahoDisplayPolicy::IsGhostTab(url_str, title_str) && !is_active) {
       continue;
     }
     SidebarTreeNode tab_node =
@@ -688,40 +696,6 @@ bool FindAndOverlayActiveTabInTree(std::vector<SidebarTreeNode>& nodes,
     }
   }
   return false;
-}
-
-// Builds a SidebarTreeNode for the live active tab, bypassing
-// IsSidebarIneligibleUrl so the active row is always surfaced.  All live
-// fields are populated directly from the TabStripModel and WebContents; no
-// maho-core round-trip is needed.
-SidebarTreeNode SynthesizeActiveTabNode(TabStripModel* model,
-                                        int active_index,
-                                        content::WebContents* contents) {
-  DCHECK(model);
-  DCHECK(model->ContainsIndex(active_index));
-
-  SidebarTreeNode node;
-  node.kind = SidebarNodeKind::kTab;
-  node.tab_strip_index = active_index;
-  node.is_active = true;
-  node.is_pinned = model->IsTabPinned(active_index);
-  node.title = GetTabTitle(model, active_index);
-  node.host = GetTabHost(model, active_index);
-  node.depth = 0;
-
-  if (contents) {
-    const GURL& live_url = GetVisibleOrCommittedUrl(contents);
-    node.url = live_url.is_valid() ? live_url.spec() : std::string();
-    node.is_loading = contents->IsLoading();
-    node.is_audible = contents->IsCurrentlyAudible();
-    node.is_muted = contents->IsAudioMuted();
-    if (auto* helper = MahoTabIdHelper::FromWebContents(contents);
-        helper && !helper->stable_tab_id().empty()) {
-      node.tab_id = helper->stable_tab_id();
-    }
-  }
-
-  return node;
 }
 
 }  // namespace
@@ -1000,15 +974,30 @@ MahoSidebarTabListModel MahoSidebarStateAdapter::BuildTabListModel(
   };
 
   if (tree_requested) {
+    std::string active_stable_id;
+    if (tab_strip_model) {
+      const int active_index = tab_strip_model->active_index();
+      if (active_index != TabStripModel::kNoTab &&
+          tab_strip_model->ContainsIndex(active_index)) {
+        if (auto* active_contents =
+                tab_strip_model->GetWebContentsAt(active_index)) {
+          if (auto* helper = MahoTabIdHelper::FromWebContents(active_contents);
+              helper && !helper->stable_tab_id().empty()) {
+            active_stable_id = helper->stable_tab_id();
+          }
+        }
+      }
+    }
+
     auto pinned_parsed = CallCoreFfi(maho_core_get_pinned_tabs, space_id_json);
     BuildTreeSection(std::move(pinned_parsed), space_id_json, true,
-                     tab_strip_model, stable_id_map, all_folders,
-                     model.pinned_tree);
+                     active_stable_id, tab_strip_model, stable_id_map,
+                     all_folders, model.pinned_tree);
 
     auto normal_parsed = CallCoreFfi(maho_core_get_space_tabs, space_id_json, nullptr);
     BuildTreeSection(std::move(normal_parsed), space_id_json, false,
-                     tab_strip_model, stable_id_map, all_folders,
-                     model.normal_tree);
+                     active_stable_id, tab_strip_model, stable_id_map,
+                     all_folders, model.normal_tree);
 
     // When tree_requested is true, respect the core's result even if both
     // trees are empty.  Falling back to the tab-strip here would silently
@@ -1017,15 +1006,11 @@ MahoSidebarTabListModel MahoSidebarStateAdapter::BuildTabListModel(
     build_tree_from_tab_strip();
   }
 
-  // Active-tab normalization: ensure the live active tab always has a row in
-  // one of the two trees with up-to-date live fields.  The active row can be
-  // absent because:
-  //   (a) maho-core hasn't persisted the tab yet (startup race), or
-  //   (b) the tab URL is ineligible per IsSidebarIneligibleUrl — the active
-  //       tab bypasses that filter so content is never left without a row.
-  // When a matching row IS found, we still overlay live fields onto it so that
-  // stale persisted state (e.g. customTitle="newtab") never wins over the real
-  // page title/host.
+  // Active-tab live overlay: refresh live fields (URL/title/loading/audio) on
+  // the active tab's row so that stale persisted state (e.g. customTitle from
+  // a previous navigation) never wins over the real page state. The row is
+  // guaranteed to exist in the tree because BuildTreeSection exempts the
+  // active entry from URL/ghost filters via active_stable_id.
   if (tab_strip_model) {
     const int active_index = tab_strip_model->active_index();
     if (active_index != TabStripModel::kNoTab &&
@@ -1041,23 +1026,12 @@ MahoSidebarTabListModel MahoSidebarStateAdapter::BuildTabListModel(
         }
       }
 
-      const bool overlaid_in_pinned = FindAndOverlayActiveTabInTree(
-          model.pinned_tree, active_index, active_stable_id, tab_strip_model,
-          active_contents);
-      const bool overlaid_in_normal =
-          !overlaid_in_pinned &&
-          FindAndOverlayActiveTabInTree(model.normal_tree, active_index,
-                                        active_stable_id, tab_strip_model,
-                                        active_contents);
-
-      if (!overlaid_in_pinned && !overlaid_in_normal) {
-        SidebarTreeNode active_node =
-            SynthesizeActiveTabNode(tab_strip_model, active_index, active_contents);
-        if (tab_strip_model->IsTabPinned(active_index)) {
-          model.pinned_tree.push_back(std::move(active_node));
-        } else {
-          model.normal_tree.push_back(std::move(active_node));
-        }
+      if (!FindAndOverlayActiveTabInTree(
+              model.pinned_tree, active_index, active_stable_id,
+              tab_strip_model, active_contents)) {
+        FindAndOverlayActiveTabInTree(model.normal_tree, active_index,
+                                      active_stable_id, tab_strip_model,
+                                      active_contents);
       }
     }
   }

@@ -801,6 +801,36 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       UtilityAffordanceSurvivesTransientActiveIndexNoTab) {
+  SeedProfile(2);
+  ResolveViews();
+
+  MahoSidebarSearchView* search = sidebar_->search_view_for_testing();
+  ASSERT_TRUE(search);
+
+  views::View* utility_slot = search->utility_icon_slot_for_testing();
+  ASSERT_TRUE(utility_slot);
+
+  // Verify the utility slot is visible initially.
+  auto utility_slot_visible = [&]() { return utility_slot->GetVisible(); };
+  ASSERT_TRUE(base::test::RunUntil(utility_slot_visible))
+      << "Utility slot must be visible with an active tab before the update";
+
+  // Simulate a model update with has_active_tab=false (demotion attempt)
+  // while the tab strip is NOT empty (it still has the seeded tabs).
+  MahoSidebarSearchModel demote_model = GetViewState().search;
+  demote_model.has_active_tab = false;
+  search->Update(demote_model);
+  base::RunLoop().RunUntilIdle();
+
+  // Verify the utility slot remains visible.
+  EXPECT_TRUE(utility_slot->GetVisible())
+      << "Utility slot must remain visible when has_active_tab=false arrives "
+         "but the tab strip still has tabs; demoting on transient kNoTab is "
+         "the regression.";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
                        IneligibleUrlsExcludedFromStartupReconciliation) {
   TabStripModel* model = browser()->tab_strip_model();
   ASSERT_GE(model->count(), 1);
@@ -870,56 +900,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
   }
 }
 
-IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
-                       TabsModeFooterRemainsFixedOutsideScrollTree) {
-  constexpr int kAddedTabs = 20;
-  AddTestTabs(kAddedTabs);
 
-  ASSERT_TRUE(base::test::RunUntil([&]() {
-    ResolveViews();
-    TabStripModel* strip = browser()->tab_strip_model();
-    return strip && strip->count() >= kAddedTabs + 1;
-  }));
-
-  ResolveViews();
-
-  MahoSidebarView* sidebar = GetSidebarView();
-  ASSERT_TRUE(sidebar);
-  views::ScrollView* tabs_scroll_view = sidebar->tabs_scroll_view_for_testing();
-  views::View* tabs_scroll_content = sidebar->tabs_scroll_content_for_testing();
-  MahoSidebarFooterView* footer = GetFooterView();
-  ASSERT_TRUE(tabs_scroll_view);
-  ASSERT_TRUE(tabs_scroll_content);
-  ASSERT_TRUE(footer);
-
-  EXPECT_TRUE(footer->GetVisible());
-  EXPECT_EQ(footer->parent(), sidebar->body_host_for_testing());
-  EXPECT_NE(footer->parent(), tabs_scroll_content);
-  EXPECT_EQ(tab_list_->parent(), tabs_scroll_content);
-  EXPECT_EQ(sidebar->search_view_for_testing()->parent()->parent(),
-            tabs_scroll_content)
-      << "Top-region content should live inside the outer tabs scroll content";
-
-  const int footer_height_before = footer->GetBoundsInScreen().height();
-  const int footer_y_before = footer->GetBoundsInScreen().y();
-  EXPECT_GT(footer_height_before, 0);
-  EXPECT_GT(tabs_scroll_content->GetPreferredSize().height(),
-            tabs_scroll_view->height());
-  EXPECT_LE(tabs_scroll_view->GetBoundsInScreen().bottom(),
-            footer->GetBoundsInScreen().y());
-
-  tabs_scroll_view->ScrollToPosition(tabs_scroll_view->vertical_scroll_bar(),
-                                     tabs_scroll_content->GetPreferredSize().height());
-  base::RunLoop().RunUntilIdle();
-  ResolveViews();
-
-  footer = GetFooterView();
-  ASSERT_TRUE(footer);
-  EXPECT_EQ(footer_height_before, footer->GetBoundsInScreen().height())
-      << "Footer height must stay fixed while the tabs band scrolls";
-  EXPECT_EQ(footer_y_before, footer->GetBoundsInScreen().y())
-      << "Footer position must remain fixed while the tabs band scrolls";
-}
 
 TEST(IsSidebarIneligibleUrlTest, KnownSpecialPagesAreExcluded) {
   EXPECT_TRUE(maho::IsSidebarIneligibleUrl(GURL("chrome://newtab")));

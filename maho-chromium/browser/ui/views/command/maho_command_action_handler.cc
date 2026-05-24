@@ -17,6 +17,7 @@
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/chrome_pages.h"
@@ -34,6 +35,8 @@
 #include "content/public/browser/web_contents.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/maho_tab_id_helper.h"
+#include "maho/browser/ui/maho_settings_navigation.h"
 #include "maho/browser/ui/views/command/maho_command_model.h"
 #include "maho/browser/ui/views/little_arc/maho_little_arc_window.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
@@ -98,6 +101,57 @@ int FindTabIndexForStableId(BrowserWindowInterface* browser,
       return i;
   }
 
+  return TabStripModel::kNoTab;
+}
+
+// Locate any same-profile browser whose TabStripModel contains a WebContents
+// whose MahoTabIdHelper carries the given stable_id. Used for the Rust-emitted
+// `tab:{stable_id}` key shape where browser/tab session IDs are absent.
+BrowserWindowInterface* FindBrowserForHelperStableId(
+    Browser* origin_browser,
+    const std::string& stable_id) {
+  if (stable_id.empty()) {
+    return nullptr;
+  }
+  Profile* origin_profile = origin_browser ? origin_browser->profile() : nullptr;
+  BrowserWindowInterface* match = nullptr;
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [&match, &stable_id, origin_profile](BrowserWindowInterface* candidate) {
+        if (!candidate || !candidate->GetTabStripModel()) {
+          return true;
+        }
+        if (origin_profile && candidate->GetProfile() != origin_profile) {
+          return true;
+        }
+        TabStripModel* model = candidate->GetTabStripModel();
+        for (int i = 0; i < model->count(); ++i) {
+          auto* contents = model->GetWebContentsAt(i);
+          if (!contents) continue;
+          auto* helper = MahoTabIdHelper::FromWebContents(contents);
+          if (helper && helper->stable_tab_id() == stable_id) {
+            match = candidate;
+            return false;  // stop iteration
+          }
+        }
+        return true;
+      });
+  return match;
+}
+
+int FindTabIndexForHelperStableId(BrowserWindowInterface* browser,
+                                   const std::string& stable_id) {
+  if (!browser || stable_id.empty()) {
+    return TabStripModel::kNoTab;
+  }
+  TabStripModel* model = browser->GetTabStripModel();
+  for (int i = 0; i < model->count(); ++i) {
+    auto* contents = model->GetWebContentsAt(i);
+    if (!contents) continue;
+    auto* helper = MahoTabIdHelper::FromWebContents(contents);
+    if (helper && helper->stable_tab_id() == stable_id) {
+      return i;
+    }
+  }
   return TabStripModel::kNoTab;
 }
 
@@ -206,6 +260,9 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
   } else if (action_id == "new_incognito") {
     chrome::NewIncognitoWindow(browser->profile());
   } else if (action_id == "focus_url_bar") {
+    // When kMahoUnifiedClickPath is enabled, SetFocusToLocationBar(true) in
+    // the chromium_src overlay intercepts this and routes to
+    // ShowMahoCommandOverlayForCurrentTab() instead of the upstream omnibox.
     chrome::FocusLocationBar(browser);
   } else if (action_id == "add_split_view") {
     MahoSplitViewController(browser).AddSplit();
@@ -298,25 +355,26 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
     LOG(WARNING) << kShortcutTracePrefix << " execute action=ai_panel";
     ToggleMahoAiPanel(browser);
   } else if (action_id.starts_with("open_space:")) {
-    MahoCore* core = maho::GetCore();
-    if (core) {
-      std::string space_id = action_id.substr(std::string("open_space:").size());
-      if (!space_id.empty()) {
-        maho_core_activate_space(core, space_id.c_str());
+    std::string space_id = action_id.substr(std::string("open_space:").size());
+    if (!space_id.empty()) {
+      auto* bridge = MahoSpaceProfileBridge::GetInstance();
+      if (bridge) {
+        bridge->SwitchToSpace(browser, space_id);
       }
     }
   } else if (action_id == "little_arc") {
     MahoLittleArcWindow::Open(browser, GURL());
   } else if (action_id == "next_space" || action_id == "prev_space") {
     MahoCore* core = maho::GetCore();
-    if (core) {
+    auto* bridge = MahoSpaceProfileBridge::GetInstance();
+    if (core && bridge) {
       char* spaces_json = maho_core_get_space_view_models(core);
-      char* active_json = maho_core_get_active_space_id(core);
-      if (spaces_json && active_json) {
+      if (spaces_json) {
         std::optional<base::Value> spaces =
             base::JSONReader::Read(spaces_json, base::JSON_PARSE_RFC);
-        std::string active_id(active_json);
-        if (spaces && spaces->is_list()) {
+        maho_string_free(spaces_json);
+        const std::string active_id = bridge->GetActiveSpaceId(browser);
+        if (spaces && spaces->is_list() && !active_id.empty()) {
           const auto& list = spaces->GetList();
           for (size_t i = 0; i < list.size(); ++i) {
             const auto* dict = list[i].GetIfDict();
@@ -332,10 +390,9 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
               }
               const auto* target_dict = list[target].GetIfDict();
               if (target_dict) {
-                const std::string* target_id =
-                    target_dict->FindString("id");
+                const std::string* target_id = target_dict->FindString("id");
                 if (target_id) {
-                  maho_core_activate_space(core, target_id->c_str());
+                  bridge->SwitchToSpace(browser, *target_id);
                 }
               }
               break;
@@ -343,10 +400,6 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
           }
         }
       }
-      if (spaces_json)
-        maho_string_free(spaces_json);
-      if (active_json)
-        maho_string_free(active_json);
     }
   } else if (action_id.starts_with("select_space_")) {
     int space_num = 0;
@@ -355,11 +408,13 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
     }
     if (space_num >= 1 && space_num <= 9) {
       MahoCore* core = maho::GetCore();
-      if (core) {
+      auto* bridge = MahoSpaceProfileBridge::GetInstance();
+      if (core && bridge) {
         char* spaces_json = maho_core_get_space_view_models(core);
         if (spaces_json) {
           std::optional<base::Value> spaces =
               base::JSONReader::Read(spaces_json, base::JSON_PARSE_RFC);
+          maho_string_free(spaces_json);
           if (spaces && spaces->is_list()) {
             const auto& list = spaces->GetList();
             int idx = space_num - 1;
@@ -368,12 +423,11 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
               if (dict) {
                 const std::string* id = dict->FindString("id");
                 if (id) {
-                  maho_core_activate_space(core, id->c_str());
+                  bridge->SwitchToSpace(browser, *id);
                 }
               }
             }
           }
-          maho_string_free(spaces_json);
         }
       }
     }
@@ -458,17 +512,18 @@ void OpenCommandSuggestion(Browser* browser,
     GURL gurl(search_url);
     maho_string_free(search_url);
 
-    if (disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB) {
-      auto* bridge = MahoSpaceProfileBridge::GetInstance();
-      const std::string space_id =
-          bridge ? bridge->GetActiveSpaceId() : std::string();
-      if (!space_id.empty()) {
-        DispatchShellEvent("create_tab", {
-            {"space_id", space_id},
-            {"url", gurl.spec()}});
-      }
-    }
+    NavigateParams params(browser, gurl, ui::PAGE_TRANSITION_GENERATED);
+    params.disposition = disposition;
+    Navigate(&params);
+    return;
+  }
 
+  if (suggestion.type == CommandSuggestionType::kSearch) {
+    if (suggestion.execution_payload.empty())
+      return;
+    GURL gurl(suggestion.execution_payload);
+    if (!gurl.SchemeIsHTTPOrHTTPS())
+      return;
     NavigateParams params(browser, gurl, ui::PAGE_TRANSITION_GENERATED);
     params.disposition = disposition;
     Navigate(&params);
@@ -503,6 +558,26 @@ void OpenCommandSuggestion(Browser* browser,
       }
       int tab_index =
           FindTabIndexForStableId(target_browser, suggestion.tab_session_id);
+      if (tab_index >= 0) {
+        target_browser->GetTabStripModel()->ActivateTabAt(tab_index);
+        return;
+      }
+    }
+  }
+
+  // Fallback: kTab suggestions emitted by Rust use key="tab:{stable_id}" with
+  // no browser/tab session IDs. Resolve via MahoTabIdHelper UUID match.
+  if (suggestion.type == CommandSuggestionType::kTab &&
+      !suggestion.stable_tab_id.empty()) {
+    BrowserWindowInterface* target_browser =
+        FindBrowserForHelperStableId(browser, suggestion.stable_tab_id);
+    if (target_browser) {
+      if (target_browser->GetBrowserForMigrationOnly() != browser) {
+        target_browser->GetWindow()->Show();
+        target_browser->GetWindow()->Activate();
+      }
+      int tab_index = FindTabIndexForHelperStableId(
+          target_browser, suggestion.stable_tab_id);
       if (tab_index >= 0) {
         target_browser->GetTabStripModel()->ActivateTabAt(tab_index);
         return;
@@ -556,17 +631,6 @@ void OpenCommandSuggestion(Browser* browser,
         {"space_id", space_id},
         {"folder_id", suggestion.folder_id}});
     return;
-  }
-
-  if (disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB) {
-    auto* bridge = MahoSpaceProfileBridge::GetInstance();
-    const std::string space_id =
-        bridge ? bridge->GetActiveSpaceId() : std::string();
-    if (!space_id.empty()) {
-      DispatchShellEvent("create_tab", {
-          {"space_id", space_id},
-          {"url", gurl.spec()}});
-    }
   }
 
   NavigateParams params(browser, gurl, ui::PAGE_TRANSITION_GENERATED);

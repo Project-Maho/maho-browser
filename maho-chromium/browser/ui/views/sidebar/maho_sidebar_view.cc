@@ -349,7 +349,7 @@ void MahoSidebarView::UpdateSpacesPaneActions() {
     return;
   }
   auto* bridge = MahoSpaceProfileBridge::GetInstance();
-  const bool has_active_space = bridge && !bridge->GetActiveSpaceId().empty();
+  const bool has_active_space = bridge && !bridge->GetActiveSpaceId(browser_).empty();
   spaces_view_->SetActionEnabled(1, has_active_space);
 }
 
@@ -390,7 +390,7 @@ void MahoSidebarView::HideCreateSpace() {
 void MahoSidebarView::OpenSpaceConfigSurface() {
   auto* bridge = MahoSpaceProfileBridge::GetInstance();
   const std::string active_space_id =
-      bridge ? bridge->GetActiveSpaceId() : std::string();
+      bridge ? bridge->GetActiveSpaceId(browser_) : std::string();
   if (active_space_id.empty()) {
     return;
   }
@@ -631,7 +631,7 @@ void MahoSidebarView::ScheduleRefreshAll() {
 void MahoSidebarView::RefreshFavoritesAndViewState() {
   std::string active_space_id_json;
   if (auto* bridge = MahoSpaceProfileBridge::GetInstance(); bridge) {
-    const std::string& active_space_id = bridge->GetActiveSpaceId();
+    const std::string& active_space_id = bridge->GetActiveSpaceId(browser_);
     if (!active_space_id.empty()) {
       active_space_id_json = base::GetQuotedJSONString(active_space_id);
     }

@@ -20,7 +20,15 @@ namespace maho::features {
 // state; the context menu path does not call OnFocus() with a user-initiated
 // reason in a way that should open the overlay.
 //
-// Phase 4 of the click-path unification plan. Disabled by default pending
+// The SetFocusToLocationBar() intercept in the chromium_src overlay reads this
+// flag at runtime:
+//   if (is_user_initiated && maho_sidebar_container_ &&
+//       base::FeatureList::IsEnabled(kMahoUnifiedClickPath)) { ... }
+// Direct callers (Cmd+L shortcut interceptor, Cmd+T sidebar button) are not
+// gated by this flag and always open the overlay.
+//
+// Enabled by default; disabling it restores the upstream location-bar
+// mouse/keyboard focus path. The flag is retained as a kill-switch pending
 // end-to-end QA sign-off.
 BASE_DECLARE_FEATURE(kMahoUnifiedClickPath);
 

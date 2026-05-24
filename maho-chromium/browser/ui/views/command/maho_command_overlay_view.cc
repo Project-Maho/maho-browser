@@ -11,6 +11,7 @@
 
 #include "base/check.h"
 #include "base/containers/span.h"
+#include "base/logging.h"
 #include "base/functional/bind.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_refptr.h"
@@ -28,6 +29,7 @@
 #include "chrome/browser/ui/browser.h"  // nogncheck
 #include "base/strings/escape.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/ui/tab_ui_helper.h"
 #include "components/tabs/public/tab_interface.h"
 #include "chrome/browser/ui/browser_navigator.h"
@@ -41,6 +43,8 @@
 #include "content/public/browser/web_contents.h"
 #include "components/favicon/content/content_favicon_driver.h"
 #include "components/favicon/core/favicon_driver.h"
+#include "components/favicon/core/favicon_service.h"
+#include "components/favicon_base/favicon_types.h"
 #include "components/prefs/pref_service.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -73,6 +77,7 @@
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/layout/flex_layout_types.h"
 #include "ui/views/style/typography.h"
+#include "ui/views/view_utils.h"
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 
@@ -225,6 +230,11 @@ std::optional<ImageData> SyncCachedFaviconForCurrentTab(content::WebContents* co
     return std::nullopt;
   }
   return BuildImageDataFromFavicon(helper->GetFavicon());
+}
+
+bool IsEligibleSeededCurrentTabHistoryEntry(const CommandSuggestion& entry) {
+  return !entry.execution_payload.empty() &&
+         !MahoDisplayPolicy::IsInternalBrowserPage(GURL(entry.execution_payload));
 }
 
 std::string EntryDisplayTitle(const content::NavigationEntry* entry) {
@@ -675,6 +685,7 @@ MahoCommandOverlayView::MahoCommandOverlayView(
 }
 
 MahoCommandOverlayView::~MahoCommandOverlayView() {
+  seeded_favicon_task_tracker_.TryCancelAll();
   if (model_)
     model_->Cancel();
 }
@@ -726,11 +737,6 @@ gfx::Insets MahoCommandOverlayView::GetDividerInsetsForTesting() {
                              kDividerBottomGapDp, kDividerHorizontalInsetDp);
 }
 
-// static
-int MahoCommandOverlayView::GetTrailingAccessoryTrailingInsetForTesting() {
-  return kTrailingAccessoryTrailingInsetDp;
-}
-
 size_t MahoCommandOverlayView::GetRenderedResultCountForTesting() const {
   if (!results_container_) {
     return 0u;
@@ -780,6 +786,10 @@ bool MahoCommandOverlayView::TextfieldIsExpandedForTesting() const {
   ui::AXNodeData data;
   textfield_->GetViewAccessibility().GetAccessibleNodeData(&data);
   return data.HasState(ax::mojom::State::kExpanded);
+}
+
+bool MahoCommandOverlayView::IsDividerVisibleForTesting() const {
+  return divider_ && divider_->GetVisible();
 }
 
 views::ViewAccessibility* MahoCommandOverlayView::GetActiveDescendantForTesting() const {
@@ -855,6 +865,10 @@ MahoCommandOverlayView::BuildCurrentTabSeedResultsFromHistory(
       BuildCurrentTabSeed(current_url, current_title, current_icon));
 
   for (const auto& entry : history_entries) {
+    if (!IsEligibleSeededCurrentTabHistoryEntry(entry)) {
+      continue;
+    }
+
     const std::string& entry_url = entry.execution_payload;
     if (entry_url.empty() ||
         std::find(seen_urls.begin(), seen_urls.end(), entry_url) !=
@@ -925,6 +939,9 @@ void MahoCommandOverlayView::InitializeCurrentTabSeedState(
     return;
   }
 
+  seeded_favicon_task_tracker_.TryCancelAll();
+  ++seeded_favicon_hydration_generation_;
+
   if (MahoDisplayPolicy::IsInternalBrowserPage(GURL(initial_text))) {
     return;
   }
@@ -932,18 +949,113 @@ void MahoCommandOverlayView::InitializeCurrentTabSeedState(
   initial_url_ = initial_text;
   seeded_results_ = BuildCurrentTabSeedResults(browser_, initial_text);
 
-  seeded_results_.erase(
-      std::remove_if(seeded_results_.begin(), seeded_results_.end(),
-                     [](const CommandSuggestion& s) {
-                       return MahoDisplayPolicy::IsInternalBrowserPage(
-                           GURL(s.execution_payload));
-                     }),
-      seeded_results_.end());
-
   is_seeded_state_ = !seeded_results_.empty();
   UpdateSearchLeadingAccessory();
   if (is_seeded_state_) {
     UpdateResultViews({});
+    StartSeededFaviconHydration();
+  }
+}
+
+void MahoCommandOverlayView::StartSeededFaviconHydration() {
+  seeded_favicon_task_tracker_.TryCancelAll();
+  ++seeded_favicon_hydration_generation_;
+
+  if (!browser_ || !browser_->profile() || seeded_results_.empty()) {
+    return;
+  }
+
+  favicon::FaviconService* favicon_service =
+      FaviconServiceFactory::GetForProfile(browser_->profile(),
+                                           ServiceAccessType::EXPLICIT_ACCESS);
+  if (!favicon_service) {
+    return;
+  }
+
+  for (size_t i = 0; i < seeded_results_.size(); ++i) {
+    if (seeded_results_[i].icon.has_value()) {
+      continue;
+    }
+
+    const GURL url(seeded_results_[i].execution_payload);
+    if (!url.is_valid() || MahoDisplayPolicy::IsInternalBrowserPage(url)) {
+      continue;
+    }
+
+    SeededResultHydration hydration;
+    hydration.result_index = i;
+    hydration.url = url;
+    favicon_service->GetFaviconImageForPageURL(
+        url,
+        base::BindOnce(&MahoCommandOverlayView::OnSeededFaviconHydrated,
+                       weak_factory_.GetWeakPtr(),
+                       seeded_favicon_hydration_generation_, hydration),
+        &seeded_favicon_task_tracker_);
+  }
+}
+
+void MahoCommandOverlayView::OnSeededFaviconHydrated(
+    uint32_t hydration_generation,
+    SeededResultHydration hydration,
+    const favicon_base::FaviconImageResult& image_result) {
+  if (hydration_generation != seeded_favicon_hydration_generation_ ||
+      hydration.result_index >= seeded_results_.size() ||
+      seeded_results_[hydration.result_index].execution_payload !=
+          hydration.url.spec() ||
+      seeded_results_[hydration.result_index].icon.has_value() ||
+      image_result.image.IsEmpty()) {
+    return;
+  }
+
+  std::optional<ImageData> icon = BuildImageDataFromImage(image_result.image);
+  if (!icon.has_value()) {
+    return;
+  }
+
+  ApplyHydratedSeededIcon(hydration.result_index, *icon);
+}
+
+void MahoCommandOverlayView::ApplyHydratedSeededIcon(size_t result_index,
+                                                     const ImageData& icon) {
+  if (result_index >= seeded_results_.size()) {
+    return;
+  }
+
+  seeded_results_[result_index].icon = icon;
+  if (model_) {
+    std::vector<CommandSuggestion> updated_results = model_->results();
+    if (result_index < updated_results.size() &&
+        updated_results[result_index].execution_payload ==
+            seeded_results_[result_index].execution_payload) {
+      updated_results[result_index].icon = icon;
+      model_->set_results(std::move(updated_results));
+    }
+  }
+
+  if (!is_seeded_state_ || !results_container_) {
+    if (result_index == 0u) {
+      UpdateSearchLeadingAccessory();
+    }
+    return;
+  }
+
+  auto children = results_container_->children();
+  if (result_index >= children.size()) {
+    if (result_index == 0u) {
+      UpdateSearchLeadingAccessory();
+    }
+    return;
+  }
+
+  auto* row = views::AsViewClass<MahoCommandResultRowView>(
+      children[result_index].get());
+  if (!row) {
+    return;
+  }
+
+  row->SetIcon(icon);
+  if (result_index == 0u) {
+    UpdateSearchLeadingAccessory();
   }
 }
 
@@ -1276,8 +1388,10 @@ void MahoCommandOverlayView::UpdateResultViews(
         model_->set_results(seeded_results_);
         model_->set_selected_index(0);
       }
+      // Seeded kCurrentTab rows must not show the divider (frozen no-divider
+      // rule for the ordinary-site Cmd+L acceptance path).
       if (divider_)
-        divider_->SetVisible(true);
+        divider_->SetVisible(false);
       InvalidateLayout();
       ResizeWidgetToContents();
       textfield_->GetViewAccessibility().SetIsExpanded();
@@ -1450,6 +1564,9 @@ void MahoCommandOverlayView::ActivateSelected() {
       model_->SaveRecentSearch(model_->query());
     }
     Dismiss();
+    VLOG(1) << "[maho-command-trace] ActivateSelected: index=" << index
+            << " type=" << static_cast<int>(suggestion.type)
+            << " payload=" << suggestion.execution_payload;
     OpenCommandSuggestion(browser_, suggestion, DispositionForMode());
     return;
   }
@@ -1465,6 +1582,8 @@ void MahoCommandOverlayView::ActivateFirstNavigation() {
         model_->SaveRecentSearch(model_->query());
       }
       Dismiss();
+      VLOG(1) << "[maho-command-trace] ActivateFirstNavigation:"
+              << " payload=" << s.execution_payload;
       OpenCommandSuggestion(browser_, s, DispositionForMode());
       return;
     }
@@ -1517,6 +1636,10 @@ void MahoCommandOverlayView::NavigateTypedText() {
     model_->SaveRecentSearch(model_->query());
   }
   Dismiss();
+
+  VLOG(1) << "[maho-command-trace] NavigateTypedText:"
+          << " url=" << gurl.spec()
+          << " text=" << text;
 
   // Use DispositionForMode() as the single authoritative source for the
   // intended open disposition.  This already accounts for sub-modes

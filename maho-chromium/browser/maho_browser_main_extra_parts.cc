@@ -15,6 +15,7 @@
 #include "content/public/browser/browser_thread.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/maho_tab_registry.h"
 #include "maho/browser/ui/theme/maho_color_mixer.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/third_party/maho/maho_bridge.h"
@@ -77,17 +78,17 @@ void PopulateBridgeFromCore(MahoCore* core) {
     if (!id) {
       continue;
     }
-
-    base::FilePath profile_path =
-        base::FilePath::FromASCII("Default");
-
     const std::string* profile_id = dict->FindString("profile_id");
-    if (profile_id && !profile_id->empty() && *profile_id != "default") {
-      profile_path =
-          base::FilePath::FromASCII("MahoProfile_" + *profile_id);
+    std::string pid_str = profile_id ? *profile_id : std::string();
+    std::optional<base::FilePath> resolved_path =
+        maho::MahoSpaceProfileBridge::ProfileBasenameForId(pid_str);
+    if (!resolved_path) {
+      LOG(WARNING) << "Maho: Skipping hydration for space id: " << *id
+                   << " due to invalid profile_id: " << pid_str;
+      continue;
     }
 
-    bridge->RegisterSpace(*id, profile_path);
+    bridge->RegisterSpace(*id, *resolved_path);
   }
 
   bridge->SetActiveSpaceId(
@@ -126,6 +127,7 @@ void MahoBrowserMainExtraParts::PostEarlyInitialization() {
     maho::core::LoadState(core_);
     LOG(INFO) << "Maho core initialized, version: " << maho::core::Version();
     PopulateBridgeFromCore(core_);
+    maho::MahoTabRegistry::Get();
   } else {
     LOG(ERROR) << "Maho core initialization failed";
   }

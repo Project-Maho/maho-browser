@@ -1,8 +1,4 @@
-export interface ChatMessage {
-  role: string;
-  content: string;
-  timestamp: number;
-}
+
 
 export enum ChatIntent {
   kFreeform,
@@ -46,6 +42,7 @@ export enum RuntimeConnectionState {
 
 export enum RuntimeEventKind {
   kAssistantToken,
+  kAssistantThinking,
   kTurnComplete,
   kError,
   kToolRequest,
@@ -134,12 +131,6 @@ export class PageCallbackRouter {
   $: {
     bindNewPipeAndPassRemote(): unknown;
   };
-  onStreamingResponse: {
-    addListener(listener: (partialContent: string) => void): void;
-  };
-  onStreamingComplete: {
-    addListener(listener: (response: ChatMessage) => void): void;
-  };
   onRuntimeEvent: {
     addListener(listener: (event: RuntimeEvent) => void): void;
   };
@@ -155,12 +146,6 @@ export class PageHandlerRemote {
   $: {
     bindNewPipeAndPassReceiver(): unknown;
   };
-  sendMessage(intent: ChatIntent, message: string): Promise<void>;
-  getPageContent(): Promise<{title: string; url: string; textContent: string}>;
-  getChatHistory(): Promise<{messages: ChatMessage[]}>;
-  clearHistory(): Promise<void>;
-  setApiKey(key: string): Promise<void>;
-  getApiKeyStatus(): Promise<{hasKey: boolean}>;
   getConnectionState(): Promise<{
     state: RuntimeConnectionState;
     activeAdapterName: string;

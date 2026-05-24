@@ -12,7 +12,9 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/task/cancelable_task_tracker.h"
 #include "maho/browser/ui/views/command/maho_command_model.h"
+#include "url/gurl.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/events/keycodes/keyboard_codes.h"
@@ -22,6 +24,10 @@
 #include "ui/views/view.h"
 
 class Browser;
+
+namespace favicon_base {
+struct FaviconImageResult;
+}
 
 namespace views {
 class ImageView;
@@ -75,6 +81,7 @@ class MahoCommandOverlayView : public views::View,
   bool IsModeChipVisibleForTesting() const {
     return mode_chip_ && mode_chip_->GetVisible();
   }
+  bool IsDividerVisibleForTesting() const;
   bool TextfieldControlsResultsContainerForTesting() const;
   bool TextfieldIsCollapsedForTesting() const;
   bool TextfieldIsExpandedForTesting() const;
@@ -83,14 +90,15 @@ class MahoCommandOverlayView : public views::View,
   views::View* GetTrailingAccessoryForTesting() const {
     return trailing_accessory_;
   }
-  views::Label* GetTrailingAccessoryLabelForTesting() const {
-    return trailing_accessory_label_;
-  }
   void UpdateResultViewsForTesting(
       const std::vector<CommandSuggestion>& results);
   void UpdateSelectionA11yForTesting(int old_index, int new_index);
   void InitializeSeededStateForTesting(
       std::vector<CommandSuggestion> seeds);
+  void ApplyHydratedSeededIconForTesting(size_t result_index,
+                                         const ImageData& icon) {
+    ApplyHydratedSeededIcon(result_index, icon);
+  }
   WindowOpenDisposition DispositionForModeForTesting() const {
     return DispositionForMode();
   }
@@ -115,7 +123,6 @@ class MahoCommandOverlayView : public views::View,
   static int GetPanelSectionSpacingForTesting();
   static int GetResultRowSpacingForTesting();
   static gfx::Insets GetDividerInsetsForTesting();
-  static int GetTrailingAccessoryTrailingInsetForTesting();
 
   // views::TextfieldController:
   void ContentsChanged(views::Textfield* sender,
@@ -129,6 +136,11 @@ class MahoCommandOverlayView : public views::View,
   void OnThemeChanged() override;
 
  private:
+  struct SeededResultHydration {
+    size_t result_index = 0u;
+    GURL url;
+  };
+
   void OnSearchResults(std::vector<CommandSuggestion> results);
   void TriggerSearchForCurrentText();
   void UpdateResultViews(const std::vector<CommandSuggestion>& results);
@@ -146,6 +158,12 @@ class MahoCommandOverlayView : public views::View,
   void UpdateTrailingAccessoryPresentation();
   void UpdateSearchRowChrome();
   void InitializeCurrentTabSeedState(const std::string& initial_text);
+  void StartSeededFaviconHydration();
+  void OnSeededFaviconHydrated(
+      uint32_t hydration_generation,
+      SeededResultHydration hydration,
+      const favicon_base::FaviconImageResult& image_result);
+  void ApplyHydratedSeededIcon(size_t result_index, const ImageData& icon);
   bool ShouldClearSeededStateForText(std::u16string_view text) const;
 
   raw_ptr<Browser> browser_;
@@ -202,6 +220,8 @@ class MahoCommandOverlayView : public views::View,
   std::vector<CommandSuggestion> seeded_results_;
   bool is_seeded_state_ = false;
   std::string initial_url_;
+  base::CancelableTaskTracker seeded_favicon_task_tracker_;
+  uint32_t seeded_favicon_hydration_generation_ = 0;
 
   base::WeakPtrFactory<MahoCommandOverlayView> weak_factory_{this};
 };

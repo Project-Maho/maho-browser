@@ -119,10 +119,6 @@ void MahoAIUI::RedirectTabHostedNavigationToSidePanel() {
               return;
             }
 
-            if (browser->tab_strip_model()->count() <= 1) {
-              return;
-            }
-
             browser->tab_strip_model()->CloseWebContentsAt(
                 current_index, TabCloseTypes::CLOSE_USER_GESTURE);
           },

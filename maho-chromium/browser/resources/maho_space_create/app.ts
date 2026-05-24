@@ -1,5 +1,5 @@
 const policy = window.trustedTypes!.createPolicy(
-    'maho-space-create-app-bundle',
+    'static-types',
     {createScriptURL: (input: string): string => input});
 
 const bundleScript = document.createElement('script');
