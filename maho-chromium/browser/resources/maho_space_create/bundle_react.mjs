@@ -16,6 +16,15 @@ if (!sourceDirArg || !outputFileArg) {
 const sourceDir = path.resolve(process.cwd(), sourceDirArg);
 const outputFile = path.resolve(process.cwd(), outputFileArg);
 
+const mojomExternalPlugin = {
+  name: 'maho-space-create-mojom-external',
+  setup(build) {
+    build.onResolve({filter: /maho_space_create\.mojom-webui\.js$/}, () => {
+      return {path: './maho_space_create.mojom-webui.js', external: true};
+    });
+  },
+};
+
 await build({
   absWorkingDir: sourceDir,
   bundle: true,
@@ -31,11 +40,10 @@ await build({
   nodePaths: [websiteNodeModules],
   outfile: outputFile,
   platform: 'browser',
-  plugins: [nodeModulesGuardPlugin(websiteNodeModules)],
+  plugins: [nodeModulesGuardPlugin(websiteNodeModules), mojomExternalPlugin],
   sourcemap: false,
   target: ['chrome120'],
   external: [
-    './maho_space_create.mojom-webui.js',
     '//resources/maho_common/*',
     'chrome://resources/js/*',
   ],
