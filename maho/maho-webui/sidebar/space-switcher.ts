@@ -28,15 +28,15 @@ export class SpaceSwitcher extends CrLitElement {
 
     .space-dot {
       position: relative;
-      width: 28px;
-      height: 28px;
+      width: 32px;
+      height: 32px;
       border-radius: 8px;
       border: 2px solid transparent;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 12px;
+      font-size: 16px;
       transition: border-color 0.15s, transform 0.1s;
     }
 
@@ -49,13 +49,13 @@ export class SpaceSwitcher extends CrLitElement {
     }
 
     .all-btn {
-      width: 28px;
-      height: 28px;
+      width: 32px;
+      height: 32px;
       border-radius: 8px;
       border: 1px solid var(--maho-border, #333);
       background: transparent;
       color: var(--maho-text-secondary, #999);
-      font-size: 11px;
+      font-size: 12px;
       font-weight: 600;
       cursor: pointer;
       transition: border-color 0.15s;
@@ -114,6 +114,7 @@ export class SpaceSwitcher extends CrLitElement {
               @click=${() => this.onSpaceClick(space.id)}
               title=${space.name}
             >
+              <span>${space.icon || '📁'}</span>
               <span class="badge">${space.tabIds.length}</span>
             </div>
           `;
