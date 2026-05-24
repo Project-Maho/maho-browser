@@ -21,7 +21,7 @@ function getPendingThreadLabel(entries: TimelineEntry[], pending: boolean): stri
     return null;
   }
 
-  let latestToolName: string | null = null;
+  let latestToolName: string | undefined = undefined;
   for (let index = entries.length - 1; index >= 0; index--) {
     const event = entries[index]?.event;
     if (!event) {
@@ -35,7 +35,7 @@ function getPendingThreadLabel(entries: TimelineEntry[], pending: boolean): stri
     }
 
     if (!latestToolName && event.kind === RuntimeEventKind.kToolRequest) {
-      latestToolName = event.toolCall?.toolName || null;
+      latestToolName = event.toolCall?.toolName || undefined;
     }
 
     if (event.kind === RuntimeEventKind.kUserPrompt) {

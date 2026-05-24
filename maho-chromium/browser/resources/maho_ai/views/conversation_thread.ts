@@ -244,16 +244,20 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
   const toolItemIndexByCallId = new Map<string, number>();
   const approvalItemIndexById = new Map<string, number>();
   let replaceableAssistantIndex: number|null = null;
+  let replaceableAssistantKey: string|null = null;
   let assistantText = '';
   let committedAssistantLength = 0;
   let replaceableThinkingIndex: number|null = null;
+  let replaceableThinkingKey: string|null = null;
   let thinkingText = '';
 
   const clearAssistantState = () => {
     replaceableAssistantIndex = null;
+    replaceableAssistantKey = null;
     assistantText = '';
     committedAssistantLength = 0;
     replaceableThinkingIndex = null;
+    replaceableThinkingKey = null;
     thinkingText = '';
   };
 
@@ -263,6 +267,7 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
     }
     committedAssistantLength = assistantText.length;
     replaceableAssistantIndex = null;
+    replaceableAssistantKey = null;
   };
 
   for (const [index, entry] of entries.entries()) {
@@ -289,6 +294,7 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
           break;
         }
         replaceableThinkingIndex = null;
+        replaceableThinkingKey = null;
         assistantText += text;
         const assistantSegmentText = assistantText.slice(committedAssistantLength);
         if (!assistantSegmentText) {
@@ -296,8 +302,9 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
         }
         if (replaceableAssistantIndex === null) {
           replaceableAssistantIndex = items.length;
+          replaceableAssistantKey = key;
           items.push({
-            key,
+            key: replaceableAssistantKey,
             markdown: true,
             role: 'assistant',
             text: assistantSegmentText,
@@ -306,7 +313,7 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
           break;
         }
         items[replaceableAssistantIndex] = {
-          key,
+          key: replaceableAssistantKey!,
           markdown: true,
           role: 'assistant',
           text: assistantSegmentText,
@@ -319,10 +326,11 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
         }
         if (replaceableThinkingIndex === null) {
           replaceableThinkingIndex = items.length;
+          replaceableThinkingKey = key;
           thinkingText = text;
           items.push({
             kind: 'thinking',
-            key,
+            key: replaceableThinkingKey,
             markdown: false,
             role: 'system',
             text: thinkingText,
@@ -333,7 +341,7 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
         thinkingText += text;
         items[replaceableThinkingIndex] = {
           kind: 'thinking',
-          key,
+          key: replaceableThinkingKey!,
           markdown: false,
           role: 'system',
           text: thinkingText,
@@ -353,7 +361,7 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
         }
         if (replaceableAssistantIndex !== null) {
           items[replaceableAssistantIndex] = {
-            key,
+            key: replaceableAssistantKey ?? key,
             markdown: true,
             role: 'assistant',
             text: finalAssistantSegmentText,

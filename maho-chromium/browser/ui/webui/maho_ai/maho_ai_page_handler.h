@@ -42,14 +42,7 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
 
   static void RegisterProfilePrefs(PrefRegistrySimple* registry);
 
-  // maho_ai::mojom::PageHandler — legacy chat methods:
-  void SendMessage(maho_ai::mojom::ChatIntent chat_intent,
-                   const std::string& message) override;
-  void GetPageContent(GetPageContentCallback callback) override;
-  void GetChatHistory(GetChatHistoryCallback callback) override;
-  void clearHistory() override;
-  void SetApiKey(const std::string& key) override;
-  void GetApiKeyStatus(GetApiKeyStatusCallback callback) override;
+
 
   // maho_ai::mojom::PageHandler — session-oriented methods:
   void GetConnectionState(GetConnectionStateCallback callback) override;
@@ -108,11 +101,13 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   // Updates the session status and emits appropriate events.
   void SetSessionStatus(maho_ai::mojom::SessionStatus status);
 
-  void PersistSessionList();
+  void PersistSessionList(bool synchronous = false);
   void LoadPersistedSessions();
-  void PersistEventLog(const std::string& session_id);
+  void PersistEventLog(const std::string& session_id, bool synchronous = false);
   std::vector<maho_ai::mojom::RuntimeEventPtr> LoadPersistedEventLog(
       const std::string& session_id);
+  void OnEventLogSerialized(const std::string& session_id, std::string json);
+  void OnSessionListSerialized(std::vector<std::string> kept_ids, std::string json);
   void ClearPersistedEventLog(const std::string& session_id);
   void UpdateSessionTitle(const std::string& text);
 
@@ -124,7 +119,7 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   raw_ptr<PrefService> prefs_;
   MahoAiRuntimeRouter runtime_router_;
   MahoAiPageContextExtractor page_context_extractor_;
-  std::vector<maho_ai::mojom::ChatMessagePtr> chat_history_;
+
 
   // Session state for the new contract.
   std::string active_session_id_;
@@ -143,6 +138,8 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   std::vector<maho_ai::mojom::SessionInfoPtr> persisted_sessions_;
 
   base::WeakPtrFactory<MahoAIPageHandler> weak_factory_{this};
+  base::WeakPtrFactory<MahoAIPageHandler> session_list_weak_factory_{this};
+  base::WeakPtrFactory<MahoAIPageHandler> event_log_weak_factory_{this};
 };
 
 #endif  // MAHO_BROWSER_UI_WEBUI_MAHO_AI_MAHO_AI_PAGE_HANDLER_H_

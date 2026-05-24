@@ -1,7 +1,8 @@
 import type {AppState, TimelineEntry} from '../../../types.js';
-import {CompactHeader} from './compact-header.js';
+import {CompactTopbar} from './compact-topbar.js';
 import {CompactStage} from './compact-stage.js';
 import {ConversationThread} from './conversation-thread.js';
+import {ViewMode} from '../../maho_ai.mojom-webui.js';
 
 export function CompactShell(
     {
@@ -10,6 +11,10 @@ export function CompactShell(
       onRespondToApproval,
       onSetDeveloperMode,
       onStartSession,
+      onClosePanel,
+      onOpenSettings,
+      onSetViewMode,
+      onGetViewMode,
       readOnly,
       state,
       thinkingLabel,
@@ -19,15 +24,21 @@ export function CompactShell(
       onRespondToApproval: (approvalId: string, approved: boolean) => void;
       onSetDeveloperMode: (enabled: boolean) => void;
       onStartSession: () => void;
+      onClosePanel: () => void;
+      onOpenSettings: () => void;
+      onSetViewMode: (mode: ViewMode) => void;
+      onGetViewMode: () => Promise<ViewMode>;
       readOnly: boolean;
       state: AppState;
       thinkingLabel: string | null;
     }) {
   return (
     <>
-      <CompactHeader
-        hasMessages={hasMessages}
-        onSetDeveloperMode={onSetDeveloperMode}
+      <CompactTopbar
+        onClosePanel={onClosePanel}
+        onOpenSettings={onOpenSettings}
+        onSetViewMode={onSetViewMode}
+        onGetViewMode={onGetViewMode}
         onStartSession={onStartSession}
       />
       {hasMessages || thinkingLabel ? (
@@ -41,3 +52,4 @@ export function CompactShell(
     </>
   );
 }
+
