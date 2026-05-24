@@ -31,26 +31,52 @@ source_set("maho_bridge") {
 config("maho_core_prebuilt_config") {
   if (target_cpu == "arm64") {
     lib_dirs = [ "prebuilt/arm64" ]
-    inputs = [ "prebuilt/arm64/libmaho_ffi.a" ]
+    if (is_win) {
+      inputs = [ "prebuilt/arm64/maho_ffi.lib" ]
+    } else {
+      inputs = [ "prebuilt/arm64/libmaho_ffi.a" ]
+    }
   } else if (target_cpu == "x64") {
     lib_dirs = [ "prebuilt/x64" ]
-    inputs = [ "prebuilt/x64/libmaho_ffi.a" ]
+    if (is_win) {
+      inputs = [ "prebuilt/x64/maho_ffi.lib" ]
+    } else {
+      inputs = [ "prebuilt/x64/libmaho_ffi.a" ]
+    }
   }
-  libs = [
-    "maho_ffi",
-  ]
 
-  # Rust std dependencies needed when linking a Rust static lib
-  if (is_mac) {
-    frameworks = [
-      "CoreFoundation.framework",
-      "Security.framework",
-      "SystemConfiguration.framework",
+  if (is_win) {
+    libs = [
+      "maho_ffi.lib",
+      "ws2_32.lib",
+      "userenv.lib",
+      "ntdll.lib",
+      "iphlpapi.lib",
+      "bcrypt.lib",
     ]
-    libs += [
-      "resolv",
-      "c++",
+  } else {
+    libs = [
+      "maho_ffi",
     ]
+    # Rust std dependencies needed when linking a Rust static lib
+    if (is_mac) {
+      frameworks = [
+        "CoreFoundation.framework",
+        "Security.framework",
+        "SystemConfiguration.framework",
+      ]
+      libs += [
+        "resolv",
+        "c++",
+      ]
+    } else if (is_linux) {
+      libs += [
+        "dl",
+        "rt",
+        "pthread",
+        "m",
+      ]
+    }
   }
 }
 

@@ -693,6 +693,9 @@ def main() -> int:
     for relative_path, replacements in REPLACEMENTS.items():
         target_file = chromium_src / relative_path
         if not target_file.exists():
+            if relative_path == "chrome/app/app-Info.plist" and sys.platform != "darwin":
+                print(f"Skipping macOS-only override: {relative_path} (not on macOS)")
+                continue
             print(f"target file not found: {target_file}", file=sys.stderr)
             return 1
 

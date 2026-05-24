@@ -4,13 +4,45 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
 import os
 import subprocess
 import sys
 import time
 from contextlib import contextmanager
 from typing import Iterator
+
+if os.name == 'nt':
+    import msvcrt
+
+    def _lock(file) -> bool:
+        try:
+            file.seek(0)
+            msvcrt.locking(file.fileno(), msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+
+    def _unlock(file) -> None:
+        try:
+            file.seek(0)
+            msvcrt.locking(file.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+else:
+    import fcntl
+
+    def _lock(file) -> bool:
+        try:
+            fcntl.flock(file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            return False
+
+    def _unlock(file) -> None:
+        try:
+            fcntl.flock(file.fileno(), fcntl.LOCK_UN)
+        except (BlockingIOError, OSError):
+            pass
 
 _SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 _WAIT_INTERVAL_SECONDS = 0.25
@@ -39,20 +71,18 @@ def build_lock(timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS) -> Iterator[No
     warned = False
     try:
         while True:
-            try:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if _lock(lock_file):
                 break
-            except BlockingIOError:
-                if timeout_seconds is not None and time.monotonic() - start >= timeout_seconds:
-                    raise TimeoutError(f'timed out waiting for build lock after {timeout_seconds:.0f}s: {LOCK_PATH}')
-                if not warned:
-                    print(f'Waiting for build lock: {LOCK_PATH}', file=sys.stderr)
-                    warned = True
-                time.sleep(_WAIT_INTERVAL_SECONDS)
+            if timeout_seconds is not None and time.monotonic() - start >= timeout_seconds:
+                raise TimeoutError(f'timed out waiting for build lock after {timeout_seconds:.0f}s: {LOCK_PATH}')
+            if not warned:
+                print(f'Waiting for build lock: {LOCK_PATH}', file=sys.stderr)
+                warned = True
+            time.sleep(_WAIT_INTERVAL_SECONDS)
         yield
     finally:
         try:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            _unlock(lock_file)
         finally:
             lock_file.close()
 
