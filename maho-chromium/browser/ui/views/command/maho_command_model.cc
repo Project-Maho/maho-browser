@@ -618,6 +618,8 @@ CommandSuggestionType MahoCommandModel::ParseType(const std::string& kind) {
     return CommandSuggestionType::kAction;
   if (kind == "navigation")
     return CommandSuggestionType::kNavigation;
+  if (kind == "search")
+    return CommandSuggestionType::kSearch;
   if (kind == "calculator")
     return CommandSuggestionType::kCalculator;
   if (kind == "unitconversion")

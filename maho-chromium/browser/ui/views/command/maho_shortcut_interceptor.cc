@@ -241,15 +241,16 @@ bool MahoShortcutInterceptor::MaybeHandleKeyEvent(
         browser_view->maho_sidebar_container());
     if (!sidebar_container) {
       if (trace_shortcut) {
-        LogShortcutTrace(event, key_combo_json, "command_bar", false, false,
-                         "cmd_t_no_sidebar_container");
+        LogShortcutTrace(event, key_combo_json, "new_tab", false, true,
+                         "cmd_t_no_sidebar_container_fallback");
       }
-      return false;
+      browser_view->ShowMahoCommandOverlayForNewTab();
+      return true;
     }
 
     sidebar_container->ShowCommandOverlayForNewTab();
     if (trace_shortcut) {
-      LogShortcutTrace(event, key_combo_json, "command_bar", false, true,
+      LogShortcutTrace(event, key_combo_json, "new_tab", false, true,
                        "cmd_t_special_case_executed");
     }
     return true;
