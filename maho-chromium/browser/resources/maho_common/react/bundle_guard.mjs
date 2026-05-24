@@ -9,7 +9,12 @@ const WEBSITE_ONLY_PACKAGES = [
 ];
 
 export function nodeModulesGuardPlugin(websiteNodeModules) {
-  const normalizedBase = path.resolve(websiteNodeModules);
+  let normalizedBase;
+  try {
+    normalizedBase = fs.realpathSync(websiteNodeModules);
+  } catch {
+    normalizedBase = path.resolve(websiteNodeModules);
+  }
   return {
     name: 'maho-node-modules-guard',
     setup(esbuild) {
