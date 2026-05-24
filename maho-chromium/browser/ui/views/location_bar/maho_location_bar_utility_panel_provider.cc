@@ -1,6 +1,8 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/ui/maho_settings_navigation.h"
+#include "maho/browser/ui/views/location_bar/maho_dom_screenshot_handler.h"
+#include "maho/browser/ui/views/location_bar/maho_full_page_capture_client.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_provider.h"
 
 #include "base/functional/bind.h"
@@ -18,9 +20,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/share/share_attempt.h"
 #include "chrome/browser/ui/browser.h"
-#include "components/zoom/page_zoom.h"
-#include "components/zoom/zoom_controller.h"
-#include "third_party/blink/public/common/page/page_zoom.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/sharing_hub/sharing_hub_bubble_controller.h"
@@ -33,10 +32,14 @@
 #include "chrome/browser/ssl/chrome_security_state_tab_helper.h"
 #include "components/security_state/content/security_state_tab_helper.h"
 #include "components/security_state/core/security_state.h"
+#include "components/zoom/page_zoom.h"
+#include "components/zoom/zoom_controller.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/blink/public/common/page/page_zoom.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/ui/site_control/maho_page_info_ui.h"
 #include "maho/third_party/maho/maho_ffi.h"
+#include "maho/third_party/maho/maho_bridge.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -203,6 +206,14 @@ void ShowShieldBubbleForBrowser(Browser* browser) {
   }
 
   MahoPageInfoUI::ShowShieldBubble(browser);
+}
+
+void ShowBoostBubbleForBrowser(Browser* browser) {
+  if (!browser) {
+    return;
+  }
+
+  MahoPageInfoUI::ShowBoostBubble(browser);
 }
 
 std::string GetSecuritySFSymbolNameForLevel(int security_level) {
@@ -379,6 +390,23 @@ MahoLocationBarUtilityPanelAction BuildShareAction(Browser* browser) {
   return action;
 }
 
+MahoLocationBarUtilityPanelAction BuildBoostAction(Browser* browser) {
+  const bool has_active_page = HasActivePageForSiteControls(browser);
+  MahoLocationBarUtilityPanelAction action = MakeAction(
+      u"Boost",
+      has_active_page ? u"Customize this site" : u"Current page unavailable",
+      kMagicWandSymbolName,
+      has_active_page ? MahoLocationBarUtilityPanelDataState::kLive
+                      : MahoLocationBarUtilityPanelDataState::kUnavailable,
+      has_active_page);
+  action.close_after_activate = true;
+  if (has_active_page && browser) {
+    action.callback = base::BindRepeating(&ShowBoostBubbleForBrowser,
+                                          base::Unretained(browser));
+  }
+  return action;
+}
+
 bool IsOriginExceptedInSiteExceptions(const std::string& exceptions_json,
                                       const std::string& origin) {
   if (origin.empty()) {
@@ -483,6 +511,43 @@ MahoLocationBarUtilityPanelAction BuildShieldsAction(Browser* browser) {
   return action;
 }
 
+MahoLocationBarUtilityPanelAction BuildBlockAdsAndTrackersRowForState(
+    bool blocking_enabled) {
+  MahoLocationBarUtilityPanelAction action =
+      MakeAction(u"Block Ads & Trackers",
+                 blocking_enabled ? u"Blocked on every visit"
+                                  : u"Allowed on this site",
+                 kBlockAdsAndTrackersSymbolName,
+                 MahoLocationBarUtilityPanelDataState::kLive,
+                 true);
+  action.has_toggle = true;
+  action.toggle_is_on = blocking_enabled;
+  action.toggle_on_subtitle = u"Blocked on every visit";
+  action.toggle_off_subtitle = u"Allowed on this site";
+  action.accessible_name = BuildAccessibleName(action.title, action.subtitle);
+  action.close_after_activate = false;
+  return action;
+}
+
+void SetBlockAdsAndTrackersEnabledForOrigin(const std::string& origin,
+                                            bool blocking_enabled) {
+  if (origin.empty()) {
+    return;
+  }
+
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return;
+  }
+
+  if (blocking_enabled) {
+    maho::core::RemoveSiteException(core, origin.c_str());
+    return;
+  }
+
+  maho::core::AddSiteException(core, origin.c_str());
+}
+
 MahoLocationBarUtilityPanelAction BuildBlockAdsAndTrackersRow(Browser* browser) {
   const std::optional<std::string> origin = GetActiveOrigin(browser);
   if (!origin.has_value()) {
@@ -510,17 +575,10 @@ MahoLocationBarUtilityPanelAction BuildBlockAdsAndTrackersRow(Browser* browser) 
   // is_excepted means this origin is in the exceptions list, i.e. blocking is
   // disabled for this site (ads allowed). Not excepted means blocking is on.
   MahoLocationBarUtilityPanelAction action =
-      MakeAction(u"Block Ads & Trackers",
-                 is_excepted ? u"Allowed on this site"
-                             : u"Blocked on every visit",
-                 kBlockAdsAndTrackersSymbolName,
-                 MahoLocationBarUtilityPanelDataState::kLive,
-                 browser != nullptr);
-  action.close_after_activate = true;
-  if (browser) {
-    action.callback = base::BindRepeating(&ShowShieldBubbleForBrowser,
-                                          base::Unretained(browser));
-  }
+      BuildBlockAdsAndTrackersRowForState(!is_excepted);
+  action.enabled = true;
+  action.toggle_callback = base::BindRepeating(
+      &SetBlockAdsAndTrackersEnabledForOrigin, *origin);
   return action;
 }
 
@@ -550,17 +608,70 @@ MahoLocationBarUtilityPanelAction BuildExtensionsSummaryAction(
                     MahoLocationBarUtilityPanelDataState::kLive, false);
 }
 
+void TriggerCameraScreenshot(Browser* browser) {
+  if (!browser) {
+    return;
+  }
+  content::WebContents* web_contents = GetActiveWebContents(browser);
+  if (!web_contents) {
+    return;
+  }
+  MahoDomScreenshotHandler::TriggerCapture(web_contents);
+}
+
+void TriggerViewfinderCapture(Browser* browser) {
+  if (!browser) {
+    return;
+  }
+  content::WebContents* web_contents = GetActiveWebContents(browser);
+  if (!web_contents) {
+    return;
+  }
+  MahoFullPageCaptureClient::TriggerCapture(web_contents);
+}
+
+MahoLocationBarUtilityPanelAction BuildCameraAction(Browser* browser) {
+  const bool has_active_page = HasActivePageForSiteControls(browser);
+  MahoLocationBarUtilityPanelAction action = MakeAction(
+      u"Screenshot",
+      has_active_page ? u"Capture visible area" : u"Current page unavailable",
+      kCameraSymbolName,
+      has_active_page ? MahoLocationBarUtilityPanelDataState::kLive
+                      : MahoLocationBarUtilityPanelDataState::kUnavailable,
+      has_active_page);
+  action.close_after_activate = true;
+  if (has_active_page && browser) {
+    action.callback = base::BindRepeating(&TriggerCameraScreenshot,
+                                          base::Unretained(browser));
+  }
+  return action;
+}
+
+MahoLocationBarUtilityPanelAction BuildViewfinderAction(Browser* browser) {
+  const bool has_active_page = HasActivePageForSiteControls(browser);
+  MahoLocationBarUtilityPanelAction action = MakeAction(
+      u"Full-Page Screenshot",
+      has_active_page ? u"Capture full page" : u"Current page unavailable",
+      kViewfinderSymbolName,
+      has_active_page ? MahoLocationBarUtilityPanelDataState::kLive
+                      : MahoLocationBarUtilityPanelDataState::kUnavailable,
+      has_active_page);
+  action.close_after_activate = true;
+  if (has_active_page && browser) {
+    action.callback = base::BindRepeating(&TriggerViewfinderCapture,
+                                          base::Unretained(browser));
+  }
+  return action;
+}
+
 MahoUtilityPanelZone BuildToolbarZone(Browser* browser) {
   MahoUtilityPanelZone zone;
   zone.id = MahoUtilityPanelZoneId::kToolbar;
   zone.style = MahoUtilityPanelZoneStyle::kToolbarRow;
   zone.items.push_back(BuildShareAction(browser));
-  zone.items.push_back(
-      MakeDisabledStubAction(u"Unavailable action", kMagicWandSymbolName));
-  zone.items.push_back(
-      MakeDisabledStubAction(u"Unavailable action", kCameraSymbolName));
-  zone.items.push_back(
-      MakeDisabledStubAction(u"Unavailable action", kViewfinderSymbolName));
+  zone.items.push_back(BuildBoostAction(browser));
+  zone.items.push_back(BuildCameraAction(browser));
+  zone.items.push_back(BuildViewfinderAction(browser));
   return zone;
 }
 

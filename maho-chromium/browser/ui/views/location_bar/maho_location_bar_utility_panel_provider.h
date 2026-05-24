@@ -46,6 +46,11 @@ struct MahoLocationBarUtilityPanelAction {
   MahoLocationBarUtilityPanelDataState data_state =
       MahoLocationBarUtilityPanelDataState::kLive;
   base::RepeatingClosure callback;
+  bool has_toggle = false;
+  bool toggle_is_on = false;
+  std::u16string toggle_on_subtitle;
+  std::u16string toggle_off_subtitle;
+  base::RepeatingCallback<void(bool)> toggle_callback;
   bool close_after_activate = false;
 };
 
@@ -113,9 +118,21 @@ MahoLocationBarUtilityPanelAction BuildDeveloperModeAction(
 
 MahoLocationBarUtilityPanelAction BuildShareAction(Browser* browser);
 
+MahoLocationBarUtilityPanelAction BuildBoostAction(Browser* browser);
+
+MahoLocationBarUtilityPanelAction BuildCameraAction(Browser* browser);
+
+MahoLocationBarUtilityPanelAction BuildViewfinderAction(Browser* browser);
+
 MahoLocationBarUtilityPanelAction BuildShieldsAction(Browser* browser);
 
 MahoLocationBarUtilityPanelAction BuildBlockAdsAndTrackersRow(Browser* browser);
+
+MahoLocationBarUtilityPanelAction BuildBlockAdsAndTrackersRowForState(
+    bool blocking_enabled);
+
+void SetBlockAdsAndTrackersEnabledForOrigin(const std::string& origin,
+                                            bool blocking_enabled);
 
 std::vector<MahoLocationBarUtilityPanelAction> BuildInstalledExtensions(
     const std::string& json);
