@@ -29,6 +29,7 @@ source_set("maho_command_overlay") {
     "//chrome/browser/ui/tabs:tab_strip",
     "//content/public/browser",
     "//maho/browser:maho_core_holder",
+    "//maho/browser:maho_tab_id_helper",
     "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",
     # split_view dep intentionally omitted: adding it creates a dependency
     # cycle (command → split_view → chrome/browser/ui → command). The header

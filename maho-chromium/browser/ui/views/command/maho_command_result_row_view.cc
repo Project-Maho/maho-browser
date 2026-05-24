@@ -204,6 +204,8 @@ SkColor GlyphForegroundColor(CommandSuggestionType type) {
       return SkColorSetRGB(0xC8, 0x92, 0xFF);
     case CommandSuggestionType::kNavigation:
       return SkColorSetRGB(0x86, 0xE0, 0xCB);
+    case CommandSuggestionType::kSearch:
+      return SkColorSetRGB(0xA8, 0xC4, 0xF0);  // soft blue (search)
     case CommandSuggestionType::kCalculator:
       return SkColorSetRGB(0xFF, 0xA3, 0x7E);
     case CommandSuggestionType::kUnitConversion:
@@ -298,6 +300,20 @@ void DrawLineIcon(gfx::Canvas* canvas,
                                    rect.y() + rect.height() * 0.74f),
                        gfx::PointF(rect.x() + rect.width() * 0.78f, rect.CenterPoint().y()),
                        stroke_flags);
+      break;
+    }
+    case CommandSuggestionType::kSearch: {
+      // Magnifying glass: circle + handle.
+      const float r = rect.width() * 0.28f;
+      const auto center = gfx::PointF(
+          rect.x() + rect.width() * 0.42f,
+          rect.y() + rect.height() * 0.42f);
+      canvas->DrawCircle(center, r, stroke_flags);
+      canvas->DrawLine(
+          gfx::PointF(center.x() + r * 0.7f, center.y() + r * 0.7f),
+          gfx::PointF(rect.x() + rect.width() * 0.78f,
+                      rect.y() + rect.height() * 0.78f),
+          stroke_flags);
       break;
     }
     case CommandSuggestionType::kCalculator: {
@@ -494,7 +510,8 @@ MahoCommandResultRowView::MahoCommandResultRowView(
     HoverCallback hover_callback,
     ActivateCallback activate_callback,
     PresentationStyle presentation_style)
-    : presentation_style_(presentation_style),
+    : suggestion_type_(suggestion.type),
+      presentation_style_(presentation_style),
       title_text_(base::UTF8ToUTF16(suggestion.title)),
       subtitle_text_(base::UTF8ToUTF16(suggestion.subtitle)),
       compact_metadata_text_(presentation_style == PresentationStyle::kCurrentTabSeeded
@@ -550,37 +567,7 @@ MahoCommandResultRowView::MahoCommandResultRowView(
                 presentation_style_ == PresentationStyle::kCurrentTabSeeded
                     ? kCurrentTabSeededGlyphTileSizeDp
                     : kGlyphTileSizeDp));
-
-  const gfx::Image favicon_image =
-      icon_.has_value() ? DecodeFaviconImage(*icon_) : gfx::Image();
-  if (!favicon_image.IsEmpty()) {
-    uses_fallback_glyph_ = false;
-    auto* glyph_layout = glyph_container_->SetLayoutManager(
-        std::make_unique<views::BoxLayout>(
-            views::BoxLayout::Orientation::kHorizontal));
-    glyph_layout->set_main_axis_alignment(
-        views::BoxLayout::MainAxisAlignment::kCenter);
-    glyph_layout->set_cross_axis_alignment(
-        views::BoxLayout::CrossAxisAlignment::kCenter);
-    favicon_image_ =
-        glyph_container_->AddChildView(std::make_unique<views::ImageView>());
-    favicon_image_->SetImage(
-        ui::ImageModel::FromImageSkia(favicon_image.AsImageSkia()));
-    const int favicon_size = PreferredFaviconSize(
-        icon_, presentation_style_ == PresentationStyle::kCurrentTabSeeded
-                   ? kCurrentTabSeededGlyphIconSizeDp
-                   : kGlyphIconSizeDp);
-    favicon_image_->SetImageSize(gfx::Size(favicon_size, favicon_size));
-    favicon_image_->SetPreferredSize(gfx::Size(favicon_size, favicon_size));
-    favicon_image_->SetCanProcessEventsWithinSubtree(false);
-    glyph_image_ = favicon_image_;
-  } else {
-    uses_fallback_glyph_ = true;
-    glyph_container_->SetLayoutManager(std::make_unique<views::FillLayout>());
-    glyph_image_ = glyph_container_->AddChildView(
-        std::make_unique<CommandIconView>(suggestion.type));
-    glyph_image_->SetCanProcessEventsWithinSubtree(false);
-  }
+  RebuildGlyph();
 
   text_container_ = content_view_->AddChildView(std::make_unique<views::View>());
   auto* text_container_layout = text_container_->SetLayoutManager(
@@ -652,6 +639,13 @@ MahoCommandResultRowView::MahoCommandResultRowView(
 }
 
 MahoCommandResultRowView::~MahoCommandResultRowView() = default;
+
+void MahoCommandResultRowView::SetIcon(std::optional<ImageData> icon) {
+  icon_ = std::move(icon);
+  RebuildGlyph();
+  UpdateLayout();
+  UpdateColors();
+}
 
 // static
 gfx::Insets MahoCommandResultRowView::GetSelectionInsetsForTesting(
@@ -746,6 +740,45 @@ void MahoCommandResultRowView::SetSelected(bool selected) {
       selected_ ? ax::mojom::Event::kSelectionAdd
                 : ax::mojom::Event::kSelectionRemove,
       true);
+}
+
+void MahoCommandResultRowView::RebuildGlyph() {
+  glyph_container_->RemoveAllChildViews();
+  glyph_image_ = nullptr;
+  favicon_image_ = nullptr;
+
+  const gfx::Image favicon_image =
+      icon_.has_value() ? DecodeFaviconImage(*icon_) : gfx::Image();
+  if (!favicon_image.IsEmpty()) {
+    uses_fallback_glyph_ = false;
+    auto* glyph_layout = glyph_container_->SetLayoutManager(
+        std::make_unique<views::BoxLayout>(
+            views::BoxLayout::Orientation::kHorizontal));
+    glyph_layout->set_main_axis_alignment(
+        views::BoxLayout::MainAxisAlignment::kCenter);
+    glyph_layout->set_cross_axis_alignment(
+        views::BoxLayout::CrossAxisAlignment::kCenter);
+    favicon_image_ =
+        glyph_container_->AddChildView(std::make_unique<views::ImageView>());
+    favicon_image_->SetImage(
+        ui::ImageModel::FromImageSkia(favicon_image.AsImageSkia()));
+    const int favicon_size = PreferredFaviconSize(
+        icon_, presentation_style_ == PresentationStyle::kCurrentTabSeeded
+                   ? kCurrentTabSeededGlyphIconSizeDp
+                   : kGlyphIconSizeDp);
+    favicon_image_->SetImageSize(gfx::Size(favicon_size, favicon_size));
+    favicon_image_->SetPreferredSize(gfx::Size(favicon_size, favicon_size));
+    favicon_image_->SetCanProcessEventsWithinSubtree(false);
+    glyph_image_ = favicon_image_;
+    return;
+  }
+
+  uses_fallback_glyph_ = true;
+  glyph_container_->SetLayoutManager(std::make_unique<views::FillLayout>());
+  glyph_image_ = glyph_container_->AddChildView(
+      std::make_unique<CommandIconView>(suggestion_type_));
+  glyph_image_->SetCanProcessEventsWithinSubtree(false);
+  static_cast<CommandIconView*>(glyph_image_)->SetSelected(selected_);
 }
 
 void MahoCommandResultRowView::UpdateLayout() {
