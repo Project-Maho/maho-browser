@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "maho/browser/ui/views/maho_mac_sf_symbol_helper.h"
@@ -25,6 +26,7 @@
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/controls/image_view.h"
+#include "ui/views/controls/button/toggle_button.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
@@ -88,6 +90,14 @@ std::u16string BuildAccessibleName(
   return action.title + u" — " + action.subtitle;
 }
 
+std::u16string ComposeAccessibleName(const std::u16string& title,
+                                     const std::u16string& subtitle) {
+  if (subtitle.empty()) {
+    return title;
+  }
+  return title + u" — " + subtitle;
+}
+
 bool IsDisabledAction(const MahoLocationBarUtilityPanelAction& action) {
   return !action.enabled;
 }
@@ -109,9 +119,10 @@ class MahoLocationBarUtilityPanelActionView : public views::View {
     const bool is_toolbar = display_mode_ == DisplayMode::kToolbarButton;
     const bool is_chip = display_mode_ == DisplayMode::kExtensionChip;
     const bool is_settings = display_mode_ == DisplayMode::kSettingsRow;
+    const bool has_inline_toggle = HasInlineToggle();
     const bool show_settings_subtitle = is_settings && !action_.subtitle.empty();
-    SetFocusBehavior(action_.enabled ? FocusBehavior::ALWAYS
-                                     : FocusBehavior::NEVER);
+    SetFocusBehavior(action_.enabled && !has_inline_toggle ? FocusBehavior::ALWAYS
+                                                           : FocusBehavior::NEVER);
     SetLayoutManager(std::make_unique<views::FillLayout>());
     if (is_toolbar) {
       SetPreferredSize(gfx::Size(kToolbarRowHeight, kToolbarRowHeight));
@@ -142,7 +153,9 @@ class MahoLocationBarUtilityPanelActionView : public views::View {
         corner_radius));
 
     auto* content = AddChildView(std::make_unique<views::View>());
-    content->SetCanProcessEventsWithinSubtree(false);
+    if (!has_inline_toggle) {
+      content->SetCanProcessEventsWithinSubtree(false);
+    }
     auto* layout = content->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kHorizontal,
         gfx::Insets::VH(0, is_toolbar   ? 0
@@ -153,6 +166,10 @@ class MahoLocationBarUtilityPanelActionView : public views::View {
         : is_chip     ? kToolbarIconSpacing
         : is_settings ? kToolbarIconSpacing
                       : 0));
+    if (is_toolbar) {
+      layout->set_main_axis_alignment(
+          views::BoxLayout::MainAxisAlignment::kCenter);
+    }
     layout->set_cross_axis_alignment(
         views::BoxLayout::CrossAxisAlignment::kCenter);
 
@@ -192,19 +209,29 @@ class MahoLocationBarUtilityPanelActionView : public views::View {
       title_label->SetElideBehavior(gfx::ELIDE_TAIL);
 
         if (show_settings_subtitle) {
-          auto* subtitle_label = text_column->AddChildView(
+          subtitle_label_ = text_column->AddChildView(
               std::make_unique<views::Label>(action_.subtitle,
                                              views::style::CONTEXT_LABEL,
-                                           views::style::STYLE_BODY_5));
-        subtitle_label->SetAutoColorReadabilityEnabled(false);
-        subtitle_label->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
-        subtitle_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-        subtitle_label->SetMultiLine(false);
-         subtitle_label->SetElideBehavior(gfx::ELIDE_TAIL);
-       }
+                                             views::style::STYLE_BODY_5));
+          subtitle_label_->SetAutoColorReadabilityEnabled(false);
+          subtitle_label_->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
+          subtitle_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+          subtitle_label_->SetMultiLine(false);
+          subtitle_label_->SetElideBehavior(gfx::ELIDE_TAIL);
+        }
     }
 
-    GetViewAccessibility().SetRole(ax::mojom::Role::kButton);
+    if (has_inline_toggle) {
+      toggle_button_ = content->AddChildView(std::make_unique<views::ToggleButton>(
+          base::BindRepeating(
+              &MahoLocationBarUtilityPanelActionView::OnInlineTogglePressed,
+              base::Unretained(this))));
+      toggle_button_->SetAccessibleName(BuildAccessibleName(action_));
+      toggle_button_->SetIsOn(action_.toggle_is_on);
+    }
+
+    GetViewAccessibility().SetRole(has_inline_toggle ? ax::mojom::Role::kGroup
+                                                     : ax::mojom::Role::kButton);
     GetViewAccessibility().SetName(BuildAccessibleName(action_));
     SetTooltipText(ActionTooltip(action_));
     SetEnabled(action_.enabled);
@@ -238,8 +265,21 @@ class MahoLocationBarUtilityPanelActionView : public views::View {
   }
 
   bool OnMousePressed(const ui::MouseEvent& event) override {
-    if (!action_.enabled || !event.IsOnlyLeftMouseButton() ||
-        action_.callback.is_null()) {
+    if (!action_.enabled || !event.IsOnlyLeftMouseButton()) {
+      return false;
+    }
+
+    if (HasInlineToggle()) {
+      if (!toggle_button_) {
+        return false;
+      }
+
+      toggle_button_->SetIsOn(!toggle_button_->GetIsOn());
+      OnInlineTogglePressed();
+      return true;
+    }
+
+    if (action_.callback.is_null()) {
       return false;
     }
 
@@ -254,7 +294,7 @@ class MahoLocationBarUtilityPanelActionView : public views::View {
   }
 
   bool OnKeyPressed(const ui::KeyEvent& event) override {
-    if (!action_.enabled || action_.callback.is_null()) {
+    if (HasInlineToggle() || !action_.enabled || action_.callback.is_null()) {
       return false;
     }
 
@@ -276,9 +316,51 @@ class MahoLocationBarUtilityPanelActionView : public views::View {
   }
 
  private:
+  bool HasInlineToggle() const {
+    return display_mode_ == DisplayMode::kSettingsRow && action_.has_toggle;
+  }
+
+  std::u16string GetSubtitleForCurrentToggleState() const {
+    return action_.toggle_is_on ? action_.toggle_on_subtitle
+                                : action_.toggle_off_subtitle;
+  }
+
+  void UpdateInlineTogglePresentation() {
+    if (!HasInlineToggle()) {
+      return;
+    }
+
+    action_.subtitle = GetSubtitleForCurrentToggleState();
+    action_.accessible_name =
+        ComposeAccessibleName(action_.title, action_.subtitle);
+    if (subtitle_label_) {
+      subtitle_label_->SetText(action_.subtitle);
+    }
+    if (toggle_button_) {
+      toggle_button_->SetIsOn(action_.toggle_is_on);
+      toggle_button_->SetAccessibleName(action_.accessible_name);
+    }
+    GetViewAccessibility().SetName(action_.accessible_name);
+    SetTooltipText(ActionTooltip(action_));
+  }
+
+  void OnInlineTogglePressed() {
+    if (!HasInlineToggle() || !toggle_button_) {
+      return;
+    }
+
+    action_.toggle_is_on = toggle_button_->GetIsOn();
+    UpdateInlineTogglePresentation();
+    if (!action_.toggle_callback.is_null()) {
+      action_.toggle_callback.Run(action_.toggle_is_on);
+    }
+  }
+
   MahoLocationBarUtilityPanelAction action_;
   DisplayMode display_mode_;
   raw_ptr<views::View> selection_background_ = nullptr;
+  raw_ptr<views::Label> subtitle_label_ = nullptr;
+  raw_ptr<views::ToggleButton> toggle_button_ = nullptr;
 };
 
 BEGIN_METADATA(MahoLocationBarUtilityPanelActionView)

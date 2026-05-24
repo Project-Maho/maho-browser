@@ -14,6 +14,7 @@
 #include "components/omnibox/browser/location_bar_model.h"
 #include "components/security_state/core/security_state.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/vector_icon_types.h"
@@ -122,6 +123,11 @@ void ExpectActionsEquivalent(const MahoLocationBarUtilityPanelAction& actual,
   EXPECT_EQ(actual.sf_symbol_name, expected.sf_symbol_name);
   EXPECT_EQ(actual.enabled, expected.enabled);
   EXPECT_EQ(actual.data_state, expected.data_state);
+  EXPECT_EQ(actual.has_toggle, expected.has_toggle);
+  EXPECT_EQ(actual.toggle_is_on, expected.toggle_is_on);
+  EXPECT_EQ(actual.toggle_on_subtitle, expected.toggle_on_subtitle);
+  EXPECT_EQ(actual.toggle_off_subtitle, expected.toggle_off_subtitle);
+  EXPECT_EQ(actual.toggle_callback.is_null(), expected.toggle_callback.is_null());
   EXPECT_EQ(actual.close_after_activate, expected.close_after_activate);
   EXPECT_EQ(actual.callback.is_null(), expected.callback.is_null());
 }
@@ -285,18 +291,84 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
   EXPECT_FALSE(zone.items[0].callback);
   EXPECT_FALSE(zone.items[0].enabled);
 
-  EXPECT_EQ(zone.items[1].title, u"Unavailable action");
+  EXPECT_EQ(zone.items[1].title, u"Boost");
   EXPECT_EQ(zone.items[1].sf_symbol_name, "wand.and.stars");
   EXPECT_FALSE(zone.items[1].enabled);
   EXPECT_FALSE(zone.items[1].callback);
-  EXPECT_EQ(zone.items[2].title, u"Unavailable action");
+  EXPECT_EQ(zone.items[2].title, u"Screenshot");
   EXPECT_EQ(zone.items[2].sf_symbol_name, "camera");
   EXPECT_FALSE(zone.items[2].enabled);
   EXPECT_FALSE(zone.items[2].callback);
-  EXPECT_EQ(zone.items[3].title, u"Unavailable action");
+  EXPECT_EQ(zone.items[3].title, u"Full-Page Screenshot");
   EXPECT_EQ(zone.items[3].sf_symbol_name, "viewfinder");
   EXPECT_FALSE(zone.items[3].enabled);
   EXPECT_FALSE(zone.items[3].callback);
+}
+
+TEST(MahoLocationBarUtilityPanelProviderInternalTest,
+     BoostActionIsUnavailableWithNullBrowser) {
+  MahoLocationBarUtilityPanelAction boost = internal::BuildBoostAction(nullptr);
+  EXPECT_EQ(boost.title, u"Boost");
+  EXPECT_EQ(boost.subtitle, u"Current page unavailable");
+  EXPECT_EQ(boost.sf_symbol_name, "wand.and.stars");
+  EXPECT_EQ(boost.data_state,
+            MahoLocationBarUtilityPanelDataState::kUnavailable);
+  EXPECT_FALSE(boost.enabled);
+  EXPECT_FALSE(boost.callback);
+  EXPECT_TRUE(boost.close_after_activate);
+}
+
+TEST(MahoLocationBarUtilityPanelProviderInternalTest,
+     CameraActionIsUnavailableWithNullBrowser) {
+  MahoLocationBarUtilityPanelAction action =
+      internal::BuildCameraAction(nullptr);
+  EXPECT_EQ(action.title, u"Screenshot");
+  EXPECT_EQ(action.subtitle, u"Current page unavailable");
+  EXPECT_EQ(action.sf_symbol_name, "camera");
+  EXPECT_EQ(action.data_state,
+            MahoLocationBarUtilityPanelDataState::kUnavailable);
+  EXPECT_FALSE(action.enabled);
+  EXPECT_FALSE(action.callback);
+  EXPECT_TRUE(action.close_after_activate);
+}
+
+TEST(MahoLocationBarUtilityPanelProviderInternalTest,
+     CameraActionSubtitleDescribesDomAwareCapture) {
+  MahoLocationBarUtilityPanelAction action =
+      internal::BuildCameraAction(nullptr);
+  EXPECT_EQ(action.title, u"Screenshot");
+  EXPECT_NE(action.title, u"Full-Page Screenshot");
+  EXPECT_NE(action.subtitle, u"Capture full page");
+  EXPECT_TRUE(action.close_after_activate);
+}
+
+TEST(MahoLocationBarUtilityPanelProviderInternalTest,
+     CameraAndViewfinderActionsHaveDistinctSymbolsAndTitles) {
+  MahoLocationBarUtilityPanelAction camera =
+      internal::BuildCameraAction(nullptr);
+  MahoLocationBarUtilityPanelAction viewfinder =
+      internal::BuildViewfinderAction(nullptr);
+
+  EXPECT_EQ(camera.title, u"Screenshot");
+  EXPECT_EQ(viewfinder.title, u"Full-Page Screenshot");
+  EXPECT_EQ(camera.sf_symbol_name, "camera");
+  EXPECT_EQ(viewfinder.sf_symbol_name, "viewfinder");
+  EXPECT_NE(camera.sf_symbol_name, viewfinder.sf_symbol_name);
+  EXPECT_NE(camera.title, viewfinder.title);
+}
+
+TEST(MahoLocationBarUtilityPanelProviderInternalTest,
+     ViewfinderActionIsUnavailableWithNullBrowser) {
+  MahoLocationBarUtilityPanelAction action =
+      internal::BuildViewfinderAction(nullptr);
+  EXPECT_EQ(action.title, u"Full-Page Screenshot");
+  EXPECT_EQ(action.subtitle, u"Current page unavailable");
+  EXPECT_EQ(action.sf_symbol_name, "viewfinder");
+  EXPECT_EQ(action.data_state,
+            MahoLocationBarUtilityPanelDataState::kUnavailable);
+  EXPECT_FALSE(action.enabled);
+  EXPECT_FALSE(action.callback);
+  EXPECT_TRUE(action.close_after_activate);
 }
 
 TEST(MahoLocationBarUtilityPanelProviderInternalTest,
@@ -387,6 +459,56 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
   EXPECT_EQ(row.data_state,
             MahoLocationBarUtilityPanelDataState::kUnavailable);
   EXPECT_FALSE(row.enabled);
+  EXPECT_FALSE(row.has_toggle);
+  EXPECT_FALSE(row.toggle_callback);
+}
+
+TEST(MahoLocationBarUtilityPanelProviderInternalTest,
+     BlockAdsAndTrackersRowForStateExposesInlineToggleMetadata) {
+  MahoLocationBarUtilityPanelAction enabled =
+      internal::BuildBlockAdsAndTrackersRowForState(/*blocking_enabled=*/true);
+  EXPECT_EQ(enabled.title, u"Block Ads & Trackers");
+  EXPECT_EQ(enabled.subtitle, u"Blocked on every visit");
+  EXPECT_EQ(enabled.accessible_name,
+            u"Block Ads & Trackers — Blocked on every visit");
+  EXPECT_TRUE(enabled.enabled);
+  EXPECT_TRUE(enabled.has_toggle);
+  EXPECT_TRUE(enabled.toggle_is_on);
+  EXPECT_EQ(enabled.toggle_on_subtitle, u"Blocked on every visit");
+  EXPECT_EQ(enabled.toggle_off_subtitle, u"Allowed on this site");
+  EXPECT_FALSE(enabled.callback);
+  EXPECT_TRUE(enabled.toggle_callback.is_null());
+  EXPECT_FALSE(enabled.close_after_activate);
+
+  MahoLocationBarUtilityPanelAction disabled =
+      internal::BuildBlockAdsAndTrackersRowForState(/*blocking_enabled=*/false);
+  EXPECT_TRUE(disabled.has_toggle);
+  EXPECT_FALSE(disabled.toggle_is_on);
+  EXPECT_EQ(disabled.subtitle, u"Allowed on this site");
+  EXPECT_EQ(disabled.accessible_name,
+            u"Block Ads & Trackers — Allowed on this site");
+}
+
+TEST(MahoLocationBarUtilityPanelProviderInternalTest,
+     SetBlockAdsAndTrackersEnabledForOriginWritesSiteExceptionsDirectly) {
+  MahoCore* core = maho_core_new();
+  ASSERT_TRUE(core);
+
+  {
+    ScopedCoreOverride scoped_core(core);
+    const std::string origin = "https://example.com";
+
+    internal::SetBlockAdsAndTrackersEnabledForOrigin(
+        origin, /*blocking_enabled=*/false);
+    EXPECT_EQ(maho::core::GetSiteExceptions(core),
+              std::string("[\"") + origin + "\"]");
+
+    internal::SetBlockAdsAndTrackersEnabledForOrigin(
+        origin, /*blocking_enabled=*/true);
+    EXPECT_EQ(maho::core::GetSiteExceptions(core), "[]");
+  }
+
+  maho_core_free(core);
 }
 
 TEST(MahoLocationBarUtilityPanelProviderInternalTest,
