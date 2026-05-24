@@ -16,11 +16,7 @@
   width: 100%;
   max-width: 100%;
   min-height: 100%;
-  padding: var(--maho-ai-panel-padding);
-  border: var(--maho-ai-border-width) solid var(--maho-ai-border);
-  border-radius: var(--maho-ai-radius-xl);
-  background: var(--maho-ai-bg-panel);
-  box-shadow: var(--maho-ai-shadow-shell);
+  padding: var(--maho-ai-space-2);
   overflow: hidden;
 }
 
@@ -28,14 +24,6 @@
   width: 100%;
   max-width: none;
   padding: var(--maho-ai-space-3);
-}
-
-.compact-panel::before {
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  pointer-events: none;
-  content: '';
 }
 
 .compact-panel__stage-host,
@@ -76,30 +64,30 @@
   flex-direction: column;
 }
 
-.compact-panel__header {
+.compact-panel__topbar {
   display: flex;
-  align-items: center;
   justify-content: space-between;
-  min-height: var(--maho-ai-header-height);
-  gap: var(--maho-ai-space-3);
+  align-items: center;
+  gap: var(--maho-ai-space-2);
+  padding: var(--maho-ai-space-2);
+  /* No background, border, or box-shadow — bar is invisible. */
 }
 
-.compact-panel__brand,
-.compact-panel__header-actions,
+.compact-panel__topbar-left,
+.compact-panel__topbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--maho-ai-space-1);
+}
+
 .compact-composer__page-row,
 .compact-composer__footer,
 .compact-composer__footer-actions,
-.compact-panel__header-cluster,
 .compact-panel__status-meta {
   display: flex;
   align-items: center;
 }
 
-.compact-panel__brand {
-  gap: var(--maho-ai-space-3);
-}
-
-.compact-panel__brand-mark,
 .compact-icon-button,
 .compact-composer__icon-button,
 .compact-composer__page-chip-icon,
@@ -109,31 +97,18 @@
   justify-content: center;
 }
 
-.compact-panel__brand-mark,
 .compact-icon-button {
   width: var(--maho-ai-icon-size);
   height: var(--maho-ai-icon-size);
   border-radius: var(--maho-ai-radius-pill);
 }
 
-.compact-panel__brand-mark {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
-  color: var(--maho-ai-text-primary);
-  box-shadow: var(--maho-ai-shadow-soft);
-}
-
-.compact-panel__brand-mark .maho-ai-icon,
 .compact-panel__center-mark .maho-ai-icon,
 .compact-icon-button .maho-ai-icon,
 .compact-composer__icon-button .maho-ai-icon,
 .compact-composer__send-icon .maho-ai-icon {
   width: var(--maho-ai-space-4);
   height: var(--maho-ai-space-4);
-}
-
-.compact-panel__brand-copy {
-  display: grid;
-  gap: 2px;
 }
 
 .compact-panel__eyebrow,
@@ -149,26 +124,6 @@
 .compact-panel__status-title,
 .compact-composer__page-chip-title {
   color: var(--maho-ai-text-primary);
-  font-size: var(--maho-ai-text-sm);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-.compact-panel__header-actions {
-  gap: var(--maho-ai-space-2);
-}
-
-.compact-panel__header-actions--quiet {
-  position: relative;
-  gap: var(--maho-ai-space-1);
-}
-
-.compact-panel__brand--quiet {
-  gap: var(--maho-ai-space-2);
-}
-
-.compact-panel__quiet-title {
-  color: var(--maho-ai-text-secondary);
   font-size: var(--maho-ai-text-sm);
   font-weight: 600;
   letter-spacing: -0.01em;
@@ -240,45 +195,6 @@
   cursor: default;
   opacity: 0.42;
   transform: none;
-}
-
-.compact-panel__header--empty {
-  min-height: var(--maho-ai-space-8);
-  gap: var(--maho-ai-space-2);
-  padding-bottom: var(--maho-ai-space-2);
-}
-
-.compact-panel__header--empty .compact-panel__brand {
-  gap: var(--maho-ai-space-2);
-}
-
-.compact-panel__header--empty .compact-panel__brand-mark,
-.compact-panel__header--empty .compact-icon-button {
-  width: var(--maho-ai-space-6);
-  height: var(--maho-ai-space-6);
-}
-
-.compact-panel__header--empty .compact-panel__brand-mark {
-  border: var(--maho-ai-border-width) solid var(--maho-ai-border-soft);
-  background: var(--maho-ai-bg-panel-soft);
-  color: var(--maho-ai-text-secondary);
-  box-shadow: none;
-}
-
-.compact-panel__header--empty .compact-panel__brand-mark .maho-ai-icon,
-.compact-panel__header--empty .compact-icon-button .maho-ai-icon {
-  width: var(--maho-ai-space-3);
-  height: var(--maho-ai-space-3);
-}
-
-.compact-panel__header--empty .compact-panel__header-actions {
-  gap: var(--maho-ai-space-1);
-}
-
-.compact-panel__header--empty .compact-icon-button {
-  border-color: transparent;
-  background: transparent;
-  color: var(--maho-ai-text-faint);
 }
 
 .compact-panel__halo {
@@ -478,8 +394,7 @@
   }
 
   .compact-panel {
-    padding: var(--maho-ai-space-3);
-    border-radius: var(--maho-ai-radius-lg);
+    padding: var(--maho-ai-space-2);
   }
 
   .compact-panel__center {

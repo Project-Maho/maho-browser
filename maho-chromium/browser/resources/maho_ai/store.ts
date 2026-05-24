@@ -7,6 +7,7 @@ import {
   RuntimeEvent,
   RuntimeEventKind,
   SessionInfo,
+  ViewMode,
 } from './maho_ai.mojom-webui.js';
 import {
   AppState,
@@ -234,6 +235,23 @@ export class MahoAiStore {
     }
 
     await this.pageHandler.respondToApproval(sessionId, approvalId, approved);
+  }
+
+  async closePanel(): Promise<void> {
+    await this.pageHandler.closePanel();
+  }
+
+  async openSettings(): Promise<void> {
+    await this.pageHandler.openSettings();
+  }
+
+  async getViewMode(): Promise<ViewMode> {
+    const {mode} = await this.pageHandler.getViewMode();
+    return mode;
+  }
+
+  async setViewMode(mode: ViewMode): Promise<void> {
+    await this.pageHandler.setViewMode(mode);
   }
 
   private bindCallbacks() {

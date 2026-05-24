@@ -1,6 +1,7 @@
 #include "maho/browser/ui/webui/maho_ai/maho_ai_page_handler.h"
 
 #include <string>
+#include <unordered_set>
 #include <utility>
 
 #include "base/functional/bind.h"
@@ -11,6 +12,7 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
+#include "base/task/thread_pool.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
@@ -32,8 +34,11 @@ namespace {
 namespace ai = maho::ai_prefs;
 
 static constexpr size_t kMaxPageContextChars = 8000;
-constexpr size_t kMaxHistory = 200;
+
 constexpr size_t kMaxPersistedEvents = 500;
+// Capped at 100 sessions to keep profile prefs loading fast on startup
+// while providing sufficient history size for regular usage.
+constexpr size_t kMaxPersistedSessions = 100;
 
 std::string GetRuntimeUnavailableMessage() {
   return "OpenCode runtime is not available. "
@@ -71,6 +76,12 @@ std::string DeriveTitle(const std::string& text) {
     title += "...";
   }
   return title;
+}
+
+std::string SerializeValueToJson(base::Value value) {
+  std::string json;
+  base::JSONWriter::Write(value, &json);
+  return json;
 }
 
 base::DictValue RuntimeEventToDict(
@@ -297,8 +308,8 @@ MahoAIPageHandler::~MahoAIPageHandler() {
         session_status_ == maho_ai::mojom::SessionStatus::kPausedForApproval) {
       SetSessionStatus(maho_ai::mojom::SessionStatus::kCompleted);
     }
-    PersistEventLog(active_session_id_);
-    PersistSessionList();
+    PersistEventLog(active_session_id_, /*synchronous=*/true);
+    PersistSessionList(/*synchronous=*/true);
   }
 }
 
@@ -307,56 +318,7 @@ void MahoAIPageHandler::RegisterProfilePrefs(PrefRegistrySimple* registry) {
   maho::ai::RegisterProfilePrefs(registry);
 }
 
-void MahoAIPageHandler::SetApiKey(const std::string& key) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  prefs_->SetString(ai::kApiKey, key);
-}
 
-void MahoAIPageHandler::GetApiKeyStatus(GetApiKeyStatusCallback callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  std::move(callback).Run(runtime_router_.IsAvailable());
-}
-
-void MahoAIPageHandler::clearHistory() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  chat_history_.clear();
-  runtime_router_.GetActiveAdapter()->Reset();
-}
-
-void MahoAIPageHandler::SendMessage(maho_ai::mojom::ChatIntent chat_intent,
-                                    const std::string& message) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  double now = base::Time::Now().InSecondsFSinceUnixEpoch();
-
-  auto user_msg = maho_ai::mojom::ChatMessage::New();
-  user_msg->role = "user";
-  user_msg->content = message;
-  user_msg->timestamp = now;
-  chat_history_.push_back(user_msg->Clone());
-
-  while (chat_history_.size() > kMaxHistory) {
-    chat_history_.erase(chat_history_.begin());
-  }
-
-  MahoAiRuntimeAdapter* adapter = runtime_router_.GetActiveAdapter();
-
-  if (!adapter->IsAvailable()) {
-    auto error_msg = maho_ai::mojom::ChatMessage::New();
-    error_msg->role = "assistant";
-    error_msg->content = GetRuntimeUnavailableMessage();
-    error_msg->timestamp = now + 0.001;
-    chat_history_.push_back(error_msg->Clone());
-    page_->OnStreamingComplete(std::move(error_msg));
-    return;
-  }
-
-  adapter->SubmitMessage(
-      message, chat_intent, /*attach_browser_context=*/false,
-      maho_ai::mojom::InteractionMode::kAssistant,
-      base::BindRepeating(&MahoAIPageHandler::OnRuntimeEvent,
-                          weak_factory_.GetWeakPtr()));
-}
 
 void MahoAIPageHandler::OnRuntimeEvent(MahoAiRuntimeEvent event) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -373,47 +335,22 @@ void MahoAIPageHandler::OnRuntimeEvent(MahoAiRuntimeEvent event) {
   auto mojo_event = ToMojoEvent(event);
   session_event_log_.push_back(mojo_event->Clone());
   page_->OnRuntimeEvent(std::move(mojo_event));
-
   switch (event.type) {
-    case MahoAiRuntimeEventType::kAssistantToken:
-      page_->OnStreamingResponse(event.text);
-      break;
-
-    case MahoAiRuntimeEventType::kTurnComplete: {
-      auto response = maho_ai::mojom::ChatMessage::New();
-      response->role = "assistant";
-      response->content = event.text;
-      response->timestamp = base::Time::Now().InSecondsFSinceUnixEpoch();
-      chat_history_.push_back(response->Clone());
-      page_->OnStreamingComplete(std::move(response));
-      // The turn finished but the session remains live — the user can send
-      // more prompts. Use kIdle (not kCompleted) to avoid lying about
-      // session lifecycle.
+    case MahoAiRuntimeEventType::kTurnComplete:
       SetSessionStatus(maho_ai::mojom::SessionStatus::kIdle);
       PersistEventLog(active_session_id_);
       PersistSessionList();
       EmitSessionUpdated();
       break;
-    }
 
-    case MahoAiRuntimeEventType::kError: {
-      auto error_msg = maho_ai::mojom::ChatMessage::New();
-      error_msg->role = "assistant";
-      error_msg->content = event.text;
-      error_msg->timestamp = base::Time::Now().InSecondsFSinceUnixEpoch();
-      chat_history_.push_back(error_msg->Clone());
-      page_->OnStreamingComplete(std::move(error_msg));
+    case MahoAiRuntimeEventType::kError:
       SetSessionStatus(maho_ai::mojom::SessionStatus::kError);
       PersistEventLog(active_session_id_);
       PersistSessionList();
       break;
-    }
 
     case MahoAiRuntimeEventType::kToolRequest:
-    case MahoAiRuntimeEventType::kToolResult:
-      if (event.type == MahoAiRuntimeEventType::kToolRequest) {
-        ++tool_call_count_;
-      }
+      ++tool_call_count_;
       break;
 
     case MahoAiRuntimeEventType::kApprovalRequest:
@@ -435,6 +372,10 @@ void MahoAIPageHandler::OnRuntimeEvent(MahoAiRuntimeEvent event) {
       break;
 
     case MahoAiRuntimeEventType::kAssistantThinking:
+      break;
+
+    case MahoAiRuntimeEventType::kAssistantToken:
+    case MahoAiRuntimeEventType::kToolResult:
       break;
   }
 }
@@ -633,6 +574,9 @@ void MahoAIPageHandler::StartSession(
     // Insert at front so most recent historical session comes first.
     persisted_sessions_.insert(persisted_sessions_.begin(),
                                std::move(old_info));
+    if (persisted_sessions_.size() > kMaxPersistedSessions) {
+      persisted_sessions_.resize(kMaxPersistedSessions);
+    }
   }
 
   active_session_id_ = GenerateSessionId();
@@ -1013,57 +957,28 @@ void MahoAIPageHandler::SetSessionStatus(
   EmitSessionUpdated();
 }
 
-void MahoAIPageHandler::GetPageContent(GetPageContentCallback callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  page_context_extractor_.GetPageContext(base::BindOnce(
-      [](GetPageContentCallback callback,
-         MahoAiPageContextExtractor::PageContextResult page_context) {
-        std::string text_content;
-        switch (page_context.extraction_status) {
-          case MahoAiPageContextExtractor::PageContextResult::Status::kSuccess:
-          case MahoAiPageContextExtractor::PageContextResult::Status::kPartial:
-            text_content = page_context.GetLegacyText();
-            break;
-          case MahoAiPageContextExtractor::PageContextResult::Status::
-              kNoActiveTab:
-            text_content = "No active tab";
-            break;
-          case MahoAiPageContextExtractor::PageContextResult::Status::
-              kCannotAccess:
-            text_content = "Cannot access page content";
-            break;
-          case MahoAiPageContextExtractor::PageContextResult::Status::
-              kExtractionFailed:
-            text_content = "Unable to extract page content";
-            break;
-        }
-        std::move(callback).Run(page_context.title, page_context.url,
-                                text_content);
-      },
-      std::move(callback)));
-}
 
-void MahoAIPageHandler::GetChatHistory(GetChatHistoryCallback callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  std::vector<maho_ai::mojom::ChatMessagePtr> history;
-  for (const auto& msg : chat_history_) {
-    history.push_back(msg->Clone());
-  }
-  std::move(callback).Run(std::move(history));
-}
-
-void MahoAIPageHandler::PersistSessionList() {
+void MahoAIPageHandler::PersistSessionList(bool synchronous) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (!prefs_->GetBoolean(ai::kSessionPersistenceEnabled)) {
     return;
   }
 
+  // Trim `persisted_sessions_` in-memory to prevent unbounded growth.
+  // The total number of sessions persisted on disk is capped at kMaxPersistedSessions.
+  // If there is an active session, it takes 1 slot, leaving kMaxPersistedSessions - 1 slots for historical sessions.
+  size_t max_historical = active_session_id_.empty() ? kMaxPersistedSessions : (kMaxPersistedSessions - 1);
+  if (persisted_sessions_.size() > max_historical) {
+    persisted_sessions_.resize(max_historical);
+  }
+
   base::ListValue list;
+  std::vector<std::string> kept_ids;
 
   if (!active_session_id_.empty()) {
+    kept_ids.push_back(active_session_id_);
     base::DictValue entry;
     entry.Set("session_id", active_session_id_);
     entry.Set("created_at", session_created_at_);
@@ -1085,7 +1000,6 @@ void MahoAIPageHandler::PersistSessionList() {
     list.Append(std::move(entry));
   }
 
-  constexpr size_t kMaxPersistedSessions = 50;
   for (const auto& s : persisted_sessions_) {
     if (list.size() >= kMaxPersistedSessions) {
       break;
@@ -1093,6 +1007,7 @@ void MahoAIPageHandler::PersistSessionList() {
     if (s->session_id == active_session_id_) {
       continue;
     }
+    kept_ids.push_back(s->session_id);
     base::DictValue entry;
     entry.Set("session_id", s->session_id);
     entry.Set("created_at", s->created_at);
@@ -1115,9 +1030,46 @@ void MahoAIPageHandler::PersistSessionList() {
     list.Append(std::move(entry));
   }
 
-  std::string json;
-  base::JSONWriter::Write(base::Value(std::move(list)), &json);
+  if (synchronous) {
+    std::string json = SerializeValueToJson(base::Value(std::move(list)));
+    prefs_->SetString(ai::kSessionListJson, json);
+
+    ScopedDictPrefUpdate update(prefs_, ai::kSessionEventLogs);
+    std::vector<std::string> orphans_to_remove;
+    std::unordered_set<std::string> kept_set(kept_ids.begin(), kept_ids.end());
+    for (auto it : update.Get()) {
+      if (kept_set.find(it.first) == kept_set.end()) {
+        orphans_to_remove.push_back(it.first);
+      }
+    }
+    for (const auto& orphan : orphans_to_remove) {
+      update->Remove(orphan);
+    }
+  } else {
+    session_list_weak_factory_.InvalidateWeakPtrs();
+    base::ThreadPool::PostTaskAndReplyWithResult(
+        FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
+        base::BindOnce(&SerializeValueToJson, base::Value(std::move(list))),
+        base::BindOnce(&MahoAIPageHandler::OnSessionListSerialized,
+                       session_list_weak_factory_.GetWeakPtr(), std::move(kept_ids)));
+  }
+}
+
+void MahoAIPageHandler::OnSessionListSerialized(std::vector<std::string> kept_ids, std::string json) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   prefs_->SetString(ai::kSessionListJson, json);
+
+  ScopedDictPrefUpdate update(prefs_, ai::kSessionEventLogs);
+  std::vector<std::string> orphans_to_remove;
+  std::unordered_set<std::string> kept_set(kept_ids.begin(), kept_ids.end());
+  for (auto it : update.Get()) {
+    if (kept_set.find(it.first) == kept_set.end()) {
+      orphans_to_remove.push_back(it.first);
+    }
+  }
+  for (const auto& orphan : orphans_to_remove) {
+    update->Remove(orphan);
+  }
 }
 
 void MahoAIPageHandler::LoadPersistedSessions() {
@@ -1136,6 +1088,9 @@ void MahoAIPageHandler::LoadPersistedSessions() {
   }
 
   for (const auto& item : parsed->GetList()) {
+    if (persisted_sessions_.size() >= kMaxPersistedSessions) {
+      break;
+    }
     if (!item.is_dict()) {
       continue;
     }
@@ -1180,9 +1135,35 @@ void MahoAIPageHandler::LoadPersistedSessions() {
 
     persisted_sessions_.push_back(std::move(info));
   }
+
+  // Orphan event logs cleanup on startup.
+  {
+    std::unordered_set<std::string> valid_ids;
+    if (!active_session_id_.empty()) {
+      valid_ids.insert(active_session_id_);
+    }
+    for (const auto& s : persisted_sessions_) {
+      valid_ids.insert(s->session_id);
+    }
+    std::vector<std::string> orphans_to_remove;
+    {
+      const auto& dict = prefs_->GetDict(ai::kSessionEventLogs);
+      for (auto it : dict) {
+        if (valid_ids.find(it.first) == valid_ids.end()) {
+          orphans_to_remove.push_back(it.first);
+        }
+      }
+    }
+    if (!orphans_to_remove.empty()) {
+      ScopedDictPrefUpdate update(prefs_, ai::kSessionEventLogs);
+      for (const auto& orphan : orphans_to_remove) {
+        update->Remove(orphan);
+      }
+    }
+  }
 }
 
-void MahoAIPageHandler::PersistEventLog(const std::string& session_id) {
+void MahoAIPageHandler::PersistEventLog(const std::string& session_id, bool synchronous) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (session_id.empty() ||
@@ -1199,13 +1180,36 @@ void MahoAIPageHandler::PersistEventLog(const std::string& session_id) {
     list.Append(RuntimeEventToDict(*session_event_log_[i]));
   }
 
-  std::string json;
-  base::JSONWriter::Write(base::Value(std::move(list)), &json);
-
-  {
+  if (synchronous) {
+    std::string json = SerializeValueToJson(base::Value(std::move(list)));
     ScopedDictPrefUpdate update(prefs_, ai::kSessionEventLogs);
     update->Set(session_id, json);
+  } else {
+    event_log_weak_factory_.InvalidateWeakPtrs();
+    base::ThreadPool::PostTaskAndReplyWithResult(
+        FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
+        base::BindOnce(&SerializeValueToJson, base::Value(std::move(list))),
+        base::BindOnce(&MahoAIPageHandler::OnEventLogSerialized,
+                       event_log_weak_factory_.GetWeakPtr(), session_id));
   }
+}
+
+void MahoAIPageHandler::OnEventLogSerialized(const std::string& session_id, std::string json) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  bool session_still_valid = (session_id == active_session_id_);
+  if (!session_still_valid) {
+    for (const auto& s : persisted_sessions_) {
+      if (s->session_id == session_id) {
+        session_still_valid = true;
+        break;
+      }
+    }
+  }
+  if (!session_still_valid) {
+    return;
+  }
+  ScopedDictPrefUpdate update(prefs_, ai::kSessionEventLogs);
+  update->Set(session_id, json);
 }
 
 std::vector<maho_ai::mojom::RuntimeEventPtr>
