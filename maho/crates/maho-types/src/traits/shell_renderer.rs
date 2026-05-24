@@ -117,6 +117,7 @@ pub enum SuggestionType {
     History,
     Action,
     Navigation,
+    Search,
     Calculator,
     UnitConversion,
     ArchivedTab,

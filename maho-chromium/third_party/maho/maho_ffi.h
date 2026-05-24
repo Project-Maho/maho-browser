@@ -1339,6 +1339,12 @@ int32_t maho_acp_set_event_callback(struct MahoAcpHandle *handle,
 int32_t maho_acp_start(struct MahoAcpHandle *handle, const char *command_path);
 
 /**
+ * # Safety
+ * `handle` must be valid. `json_str` must be a valid C string or null.
+ */
+int32_t maho_acp_set_auth_config(struct MahoAcpHandle *handle, const char *json_str);
+
+/**
  * Graceful shutdown: close stdin, SIGTERM, SIGKILL.
  *
  * # Safety
