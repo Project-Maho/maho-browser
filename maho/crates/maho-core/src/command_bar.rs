@@ -366,6 +366,31 @@ impl CommandBarEngine {
             });
         }
 
+        // Always offer a "search the web for X" row when query is non-empty.
+        // Score 1.5 < Navigation (2.0) so URL input shows Navigation first.
+        // Above History/Bookmark fuzzy matches when query is non-URL.
+        if !query.trim().is_empty() {
+            let search_url = self.get_search_url(query);
+            let engine_name = self
+                .get_default_search_engine()
+                .map(|e| e.name.clone())
+                .unwrap_or_else(|| "Google".to_string());
+            results.push(SearchResult {
+                suggestion: SuggestionViewModel {
+                    kind: SuggestionType::Search,
+                    key: format!("search:{}", query),
+                    title: format!("Search {} for \"{}\"", engine_name, query),
+                    subtitle: Some("Search".to_string()),
+                    execution_payload: Some(search_url),
+                    icon: None,
+                    relevance_score: 1.5,
+                    match_ranges: None,
+                    shortcut: None,
+                },
+                score: 1.5,
+            });
+        }
+
         // Search tabs
         for tab in &ctx.tabs {
             let target = format!("{} {}", tab.title, tab.url).to_lowercase();
@@ -658,16 +683,19 @@ impl CommandBarEngine {
                     "normal" => match result.suggestion.kind {
                         SuggestionType::Action => 0.5,
                         SuggestionType::Tab => 0.3,
+                        SuggestionType::Search => 0.2,    // ← NEW
                         SuggestionType::Folder => 0.2,
                         _ => 0.0,
                     },
                     "addressBar" => match result.suggestion.kind {
                         SuggestionType::Navigation => 0.5,
+                        SuggestionType::Search => 0.3,    // ← NEW
                         SuggestionType::History => 0.3,
                         _ => 0.0,
                     },
                     "newTab" => match result.suggestion.kind {
                         SuggestionType::Navigation => 0.5,
+                        SuggestionType::Search => 0.3,    // ← NEW (less than Navigation)
                         SuggestionType::Action => 0.2,
                         _ => 0.0,
                     },
@@ -777,11 +805,12 @@ impl CommandBarEngine {
             SuggestionType::ArchivedTab => 3,
             SuggestionType::History => 4,
             SuggestionType::Navigation => 5,
-            SuggestionType::Action => 6,
-            SuggestionType::Folder => 7,
-            SuggestionType::Calculator => 8,
-            SuggestionType::UnitConversion => 9,
-            _ => 10,
+            SuggestionType::Search => 6,        // ← NEW
+            SuggestionType::Action => 7,        // shifted
+            SuggestionType::Folder => 8,        // shifted
+            SuggestionType::Calculator => 9,    // shifted
+            SuggestionType::UnitConversion => 10, // shifted
+            _ => 11,
         }
     }
 

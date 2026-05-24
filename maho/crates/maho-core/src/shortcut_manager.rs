@@ -135,11 +135,11 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
         KeyCombo::new("l", vec![primary_modifier()]),
     ));
 
-    // === Tabs (Arc-style: ⌘T = Command Bar, ⌘D = Pin) ===
+    // === Tabs (Arc-style: ⌘T = New Tab, ⌘D = Pin) ===
     let tabs = ShortcutCategory::Tabs;
     bindings.push(ShortcutBinding::new(
-        "command_bar",
-        "Command Bar",
+        "new_tab",
+        "New Tab",
         tabs.clone(),
         KeyCombo::new("t", vec![primary_modifier()]),
     ));
