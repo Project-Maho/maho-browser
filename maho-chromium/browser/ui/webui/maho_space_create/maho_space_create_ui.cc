@@ -4,6 +4,7 @@
 
 #include <memory>
 
+#include "base/functional/bind.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/grit/maho_space_create_resources.h"
@@ -11,6 +12,8 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
+#include "content/public/common/url_constants.h"
+#include "maho/browser/ui/views/space_create/maho_space_theme_picker_dialog.h"
 #include "maho/browser/ui/webui/maho_space_create/maho_space_create_page_handler.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "ui/webui/webui_util.h"
@@ -55,4 +58,7 @@ void MahoSpaceCreateUI::CreatePageHandler(
   page_handler_ = std::make_unique<MahoSpaceCreatePageHandler>(
       std::move(receiver), std::move(page), browser,
       web_ui()->GetWebContents());
+  page_handler_->SetDialogCallbacks(
+      base::BindOnce(&MahoSpaceThemePickerDialog::DispatchCommitToActive),
+      base::BindOnce(&MahoSpaceThemePickerDialog::DispatchCancelToActive));
 }
