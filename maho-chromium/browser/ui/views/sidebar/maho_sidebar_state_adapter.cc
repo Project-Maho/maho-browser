@@ -565,7 +565,7 @@ void BuildTreeSection(
   std::map<std::string, SidebarTreeNode> tab_nodes_by_id;
   std::vector<SidebarTreeNode> all_tab_nodes;
 
-  auto is_active_entry = [&active_stable_id](const base::Value::Dict& d) {
+  auto is_active_entry = [&active_stable_id](const base::DictValue& d) {
     if (active_stable_id.empty()) return false;
     const std::string* id = d.FindString("id");
     return id && *id == active_stable_id;

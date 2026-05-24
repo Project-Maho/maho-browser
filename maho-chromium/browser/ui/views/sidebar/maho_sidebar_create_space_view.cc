@@ -1306,7 +1306,7 @@ void MahoSidebarCreateSpaceView::OnSpaceCreated(bool success,
   SetVisible(false);
 }
 
-}  // namespace maho
-
-BEGIN_METADATA(MahoSidebarCreateSpaceView, views::View)
+BEGIN_METADATA(MahoSidebarCreateSpaceView)
 END_METADATA
+
+}  // namespace maho

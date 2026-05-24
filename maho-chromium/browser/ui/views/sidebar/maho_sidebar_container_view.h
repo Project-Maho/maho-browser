@@ -56,6 +56,7 @@ class MahoSidebarContainerView : public views::View,
   void Layout(PassKey) override;
   void OnMouseEntered(const ui::MouseEvent& event) override;
   void OnMouseExited(const ui::MouseEvent& event) override;
+  void OnThemeChanged() override;
 
   // views::ResizeAreaDelegate:
   void OnResize(int resize_amount, bool done_resizing) override;
