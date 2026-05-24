@@ -171,9 +171,17 @@ source_set("maho_context_menus") {
 }
 
 source_set("maho_location_bar_views") {
+  # check_includes = false avoids the cycle:
+  #   ui -> internal -> location_bar:impl -> maho_location_bar_views -> ui
+  # Browser/BrowserWindow includes are still reachable at compile time via
+  # the transitive graph; only the GN dependency edge is narrowed here.
+  check_includes = false
+
   sources = [
     "ui/views/location_bar/maho_dom_screenshot_action_dialog_view.cc",
     "ui/views/location_bar/maho_dom_screenshot_action_dialog_view.h",
+    "ui/views/location_bar/maho_dom_screenshot_features.cc",
+    "ui/views/location_bar/maho_dom_screenshot_features.h",
     "ui/views/location_bar/maho_dom_screenshot_handler.cc",
     "ui/views/location_bar/maho_dom_screenshot_handler.h",
     "ui/views/location_bar/maho_dom_screenshot_script_string.h",
@@ -196,7 +204,7 @@ source_set("maho_location_bar_views") {
     "//chrome/browser/page_info",
     "//chrome/browser/permissions",
     "//chrome/browser/profiles:profile",
-    "//chrome/browser/ui:ui",
+    "//chrome/browser/ui/tabs:tab_strip",
     "//chrome/browser/ui/location_bar",
     "//chrome/browser/ui/sharing_hub:sharing_hub",
     "//chrome/browser/ui/sharing_hub:impl",
