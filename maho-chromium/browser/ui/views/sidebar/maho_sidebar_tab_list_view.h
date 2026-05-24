@@ -241,6 +241,11 @@ class SidebarTabRowView : public views::View,
     favorites_drop_accepted_callback_ = std::move(callback);
   }
 
+  void SetRevealEmptyPinnedDropLaneCallback(
+      base::RepeatingClosure callback) {
+    reveal_empty_pinned_drop_lane_callback_ = std::move(callback);
+  }
+
   views::View::DropCallback GetDropCallbackForTesting(
       const ui::DropTargetEvent& event) {
     return GetDropCallback(event);
@@ -305,6 +310,7 @@ class SidebarTabRowView : public views::View,
   base::RepeatingClosure preview_hide_callback_;
   base::RepeatingCallback<void(const std::string&)>
       favorites_drop_accepted_callback_;
+  base::RepeatingClosure reveal_empty_pinned_drop_lane_callback_;
   bool drag_over_drop_target_ = false;
   SidebarTabDropZone active_drop_zone_ = SidebarTabDropZone::kNone;
   bool activate_pending_ = false;
@@ -367,6 +373,11 @@ class SidebarFolderRowView : public views::View,
     favorites_drop_accepted_callback_ = std::move(callback);
   }
 
+  void SetRevealEmptyPinnedDropLaneCallback(
+      base::RepeatingClosure callback) {
+    reveal_empty_pinned_drop_lane_callback_ = std::move(callback);
+  }
+
   bool is_drop_indicator_visible_for_testing() const {
     return drag_over_drop_target_;
   }
@@ -376,7 +387,9 @@ class SidebarFolderRowView : public views::View,
 
   enum class SidebarFolderDropZone {
     kNone,
+    kBefore,
     kInto,
+    kAfter,
   };
 
   SidebarFolderDropZone drop_zone_for_testing() const {
@@ -402,6 +415,7 @@ class SidebarFolderRowView : public views::View,
       rename_callback_;
   base::RepeatingCallback<void(const std::string&)>
       favorites_drop_accepted_callback_;
+  base::RepeatingClosure reveal_empty_pinned_drop_lane_callback_;
   std::u16string committed_name_;
   bool is_editing_name_ = false;
   raw_ptr<views::ImageView> chevron_ = nullptr;

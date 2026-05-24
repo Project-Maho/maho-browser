@@ -617,7 +617,7 @@ void MahoSidebarFooterView::OnSpaceDotActivated(
   UpdateDotSelectionState();
   auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
   if (bridge && !dot->space_id().empty()) {
-    bridge->SwitchToSpace(dot->space_id());
+    bridge->SwitchToSpace(browser_, dot->space_id());
   }
 }
 
@@ -841,7 +841,7 @@ bool MahoSidebarFooterView::OnKeyPressed(const ui::KeyEvent& event) {
         children[selected_dot_index_]);
     auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
     if (bridge && !dot->space_id().empty()) {
-      bridge->SwitchToSpace(dot->space_id());
+      bridge->SwitchToSpace(browser_, dot->space_id());
     }
     ScrollToActiveSpace();
     UpdateFadeMask();
@@ -858,7 +858,7 @@ bool MahoSidebarFooterView::OnKeyPressed(const ui::KeyEvent& event) {
         children[selected_dot_index_]);
     auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
     if (bridge && !dot->space_id().empty()) {
-      bridge->SwitchToSpace(dot->space_id());
+      bridge->SwitchToSpace(browser_, dot->space_id());
     }
     ScrollToActiveSpace();
     UpdateFadeMask();
@@ -872,7 +872,7 @@ bool MahoSidebarFooterView::OnKeyPressed(const ui::KeyEvent& event) {
           children[selected_dot_index_]);
       auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
       if (bridge && !dot->space_id().empty()) {
-        bridge->SwitchToSpace(dot->space_id());
+        bridge->SwitchToSpace(browser_, dot->space_id());
       }
     }
     return true;

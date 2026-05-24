@@ -288,13 +288,18 @@ void MahoSidebarSearchView::Update(const MahoSidebarSearchModel& model) {
     }
   }
 
-  // Cold-start safety: once has_active_tab has been observed as true for this
-  // sidebar instance, never allow a transient startup refresh to demote it back
-  // to false. Tab state is not yet trustworthy when the sidebar is first
-  // created; subsequent refreshes that arrive before first paint can carry a
-  // stale false value and would hide the utility icon unnecessarily.
-  if (model_.has_active_tab && !patched.has_active_tab) {
-    patched.has_active_tab = true;
+  // Cold-start safety: once has_active_tab has been observed as true, do not
+  // demote it back to false on a transient refresh unless the tab strip is
+  // genuinely empty (zero tabs). Genuine zero-tab is `!tsm || tsm->count() == 0`.
+  // A transient `active_index() == kNoTab` while the strip still has tabs is
+  // not zero-tab; demoting on it would hide the utility affordance during
+  // normal tab-activation transitions.
+  if (model_.has_active_tab && !patched.has_active_tab && browser_) {
+    TabStripModel* tsm = browser_->tab_strip_model();
+    const bool strip_is_empty = !tsm || tsm->count() == 0;
+    if (!strip_is_empty) {
+      patched.has_active_tab = true;
+    }
   }
   model_ = patched;
   UpdateSearchChrome();

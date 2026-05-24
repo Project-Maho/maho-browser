@@ -5,11 +5,12 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <iomanip>
+#include <memory>
 #include <optional>
-#include <sstream>
 #include <string>
+#include <vector>
 
+#include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
@@ -19,29 +20,36 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
 #include "base/values.h"
+#include "cc/paint/paint_flags.h"
+#include "cc/paint/path_effect.h"
 #include "chrome/browser/ui/browser.h"
+#include "components/vector_icons/vector_icons.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
-#include "maho/browser/ui/theme/maho_space_theme_io.h"
-#include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
+#include "ui/gfx/canvas.h"
+#include "maho/browser/ui/theme/maho_space_theme_io.h"
 #include "maho/browser/ui/views/space_create/maho_space_theme_picker_dialog.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/mojom/menu_source_type.mojom-shared.h"
+#include "ui/menus/simple_menu_model.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/color/color_id.h"
-#include "ui/color/color_provider_manager.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/button.h"
+#include "ui/views/controls/image_view.h"
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/label.h"
+#include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/layout/fill_layout.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/widget/widget.h"
@@ -51,18 +59,22 @@ namespace maho {
 namespace {
 
 constexpr int kCreatePanelCornerRadius = 18;
-constexpr int kHeroBadgeSize = 48;
-constexpr int kHeroBadgeCornerRadius = 14;
-constexpr int kCardCornerRadius = 18;
-constexpr int kInputCornerRadius = 12;
-constexpr int kInputHeight = 44;
-constexpr int kSectionGlyphSize = 32;
-constexpr int kSectionGlyphCornerRadius = 11;
-constexpr int kBottomDotSize = 6;
-constexpr int kBottomDotCornerRadius = 3;
-constexpr int kThemePreviewDotSize = 14;
 constexpr int kThemePreviewDotCornerRadius = 7;
 constexpr char kDefaultProfileId[] = "default";
+constexpr int kProfileMenuCommandIdBase = 1000;
+constexpr char kSetSpaceIconKind[] = "set_space_icon";
+constexpr int kProfileChipCornerRadius = 11;
+constexpr int kProfileChipHeight = 24;
+constexpr int kProfileChipHorizontalInset = 10;
+constexpr int kProfileChipSpacing = 6;
+constexpr int kProfileDisclosureIconSize = 12;
+constexpr int kThemeRowCornerRadius = 12;
+constexpr int kThemeRowHeight = 40;
+constexpr int kThemeRowHorizontalInset = 10;
+constexpr int kThemeRowSpacing = 10;
+constexpr int kThemeTileSize = 22;
+constexpr int kThemeTileCornerRadius = 7;
+constexpr int kThemeDisclosureIconSize = 12;
 
 struct ColorPreset {
   double hue;
@@ -107,15 +119,41 @@ struct CreateResult {
   std::string space_id;
 };
 
+struct ProfileListingItem {
+  std::string id;
+  std::string name;
+  bool is_default = false;
+  bool is_active = false;
+};
+
 const gfx::Insets kCreateSurfaceInsets = gfx::Insets();
 const gfx::Insets kContentInsets = gfx::Insets::TLBR(24, 24, 20, 24);
-const gfx::Insets kHeroBadgeInsets = gfx::Insets::VH(0, 14);
-const gfx::Insets kCardInsets = gfx::Insets::TLBR(14, 14, 14, 14);
-const gfx::Insets kInputInsets = gfx::Insets::VH(0, 12);
 const gfx::Insets kBottomRegionInsets = gfx::Insets::TLBR(14, 0, 0, 0);
 
 MahoSidebarCreateSpaceThemeSelection DefaultThemeSelection() {
   return MahoSidebarCreateSpaceThemeSelection();
+}
+
+void ApplySpaceIconOnPool(const std::string& space_id, const std::string& icon) {
+  if (space_id.empty() || icon.empty()) {
+    return;
+  }
+
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return;
+  }
+
+  base::DictValue event;
+  event.Set("kind", kSetSpaceIconKind);
+  event.Set("space_id", space_id);
+  event.Set("icon", icon);
+  std::string event_json;
+  base::JSONWriter::Write(event, &event_json);
+  char* result = maho_core_handle_event(core, event_json.c_str());
+  if (result) {
+    maho_string_free(result);
+  }
 }
 
 const ColorPreset& GetColorPresetForSelection(
@@ -133,6 +171,27 @@ int ClampGrain(int grain) {
   return std::clamp(grain, kChooserGrainMin, kChooserGrainMax);
 }
 
+double CircularHueDistance(double lhs, double rhs) {
+  const double direct = std::abs(lhs - rhs);
+  return std::min(direct, 1.0 - direct);
+}
+
+int FindNearestPresetIndex(double hue, double saturation, int fallback_index) {
+  const double normalized_hue = std::fmod(hue + 1.0, 1.0);
+  double best_dist = 1e9;
+  int best_index = fallback_index;
+  for (int i = 0; i < static_cast<int>(std::size(kColorPresets)); ++i) {
+    const ColorPreset& p = kColorPresets[i];
+    const double d = CircularHueDistance(p.hue, normalized_hue) +
+                     std::abs(p.saturation - saturation) * 0.5;
+    if (d < best_dist) {
+      best_dist = d;
+      best_index = i;
+    }
+  }
+  return best_index;
+}
+
 SkColor BuildSkColorForSelection(
     const MahoSidebarCreateSpaceThemeSelection& selection) {
   const ColorPreset& preset = GetColorPresetForSelection(selection);
@@ -143,32 +202,46 @@ SkColor BuildSkColorForSelection(
   return SkHSVToColor(hsv);
 }
 
-std::string BuildColorHexForSelection(
-    const MahoSidebarCreateSpaceThemeSelection& selection) {
-  const SkColor color = BuildSkColorForSelection(selection);
-  std::ostringstream stream;
-  stream << '#'
-         << std::uppercase << std::hex << std::setfill('0')
-         << std::setw(2) << static_cast<int>(SkColorGetR(color))
-         << std::setw(2) << static_cast<int>(SkColorGetG(color))
-         << std::setw(2) << static_cast<int>(SkColorGetB(color));
-  return stream.str();
-}
-
 std::string BuildThemeJsonForSelection(
     const MahoSidebarCreateSpaceThemeSelection& selection) {
   const ColorPreset& preset = GetColorPresetForSelection(selection);
+  const double brightness = ClampBrightness(selection.brightness) / 100.0;
+  const double grain = ClampGrain(selection.grain) / 100.0;
   base::DictValue color_dict;
   color_dict.Set("hue", preset.hue);
   color_dict.Set("saturation", preset.saturation);
-  color_dict.Set("brightness", ClampBrightness(selection.brightness) / 100.0);
-  color_dict.Set("grain", ClampGrain(selection.grain) / 100.0);
+  color_dict.Set("brightness", brightness);
+  color_dict.Set("grain", grain);
+
+  if (selection.mode == MahoSidebarCreateSpaceThemeMode::kSolid) {
+    base::DictValue theme_dict;
+    theme_dict.Set("type", "solid");
+    theme_dict.Set("color", std::move(color_dict));
+
+    std::string theme_json;
+    base::JSONWriter::Write(theme_dict, &theme_json);
+    return theme_json;
+  }
+
+  base::ListValue gradient_colors;
+  for (double offset : {-50.0 / 360.0, 0.0, 50.0 / 360.0}) {
+    base::DictValue stop_dict;
+    const double hue = std::fmod(preset.hue + offset + 1.0, 1.0);
+    stop_dict.Set("hue", hue);
+    stop_dict.Set("saturation", preset.saturation);
+    stop_dict.Set("brightness", brightness);
+    stop_dict.Set("isCustom", false);
+    stop_dict.Set("isPrimary", offset == 0.0);
+    gradient_colors.Append(std::move(stop_dict));
+  }
 
   base::DictValue theme_dict;
-  theme_dict.Set("type", selection.mode == MahoSidebarCreateSpaceThemeMode::kSolid
-                             ? "solid"
-                             : "gradient");
-  theme_dict.Set("color", std::move(color_dict));
+  theme_dict.Set("type", "zen");
+  theme_dict.Set("gradientColors", std::move(gradient_colors));
+  theme_dict.Set("harmony", "analogous");
+  theme_dict.Set("opacity", 1.0);
+  theme_dict.Set("texture", grain);
+  theme_dict.Set("scheme", selection.zen_scheme);
 
   std::string theme_json;
   base::JSONWriter::Write(theme_dict, &theme_json);
@@ -193,8 +266,12 @@ MahoSidebarCreateSpaceThemeSelection BuildSelectionFromThemeJson(
                          ? MahoSidebarCreateSpaceThemeMode::kSolid
                          : MahoSidebarCreateSpaceThemeMode::kZen;
   }
+  if (const std::string* scheme = root.FindString("scheme")) {
+    selection.zen_scheme = *scheme;
+  }
 
   if (const auto* color = root.FindDict("color")) {
+    selection.zen_scheme = "auto";
     if (auto brightness = color->FindDouble("brightness")) {
       selection.brightness = static_cast<int>(*brightness * 100.0);
     }
@@ -204,30 +281,48 @@ MahoSidebarCreateSpaceThemeSelection BuildSelectionFromThemeJson(
     auto hue = color->FindDouble("hue");
     auto saturation = color->FindDouble("saturation");
     if (hue && saturation) {
-      double best_dist = 1e9;
-      int best_index = selection.preset_index;
-      for (int i = 0; i < static_cast<int>(std::size(kColorPresets)); ++i) {
-        const ColorPreset& p = kColorPresets[i];
-        const double d = std::abs(p.hue - *hue) +
-                         std::abs(p.saturation - *saturation) * 0.5;
-        if (d < best_dist) {
-          best_dist = d;
-          best_index = i;
-        }
-      }
-      selection.preset_index = best_index;
+      selection.preset_index =
+          FindNearestPresetIndex(*hue, *saturation, selection.preset_index);
+    }
+    return selection;
+  }
+
+  const auto* gradient_colors = root.FindList("gradientColors");
+  if (!gradient_colors || gradient_colors->empty()) {
+    return selection;
+  }
+
+  const base::DictValue* primary_stop = nullptr;
+  for (const auto& stop : *gradient_colors) {
+    const auto* stop_dict = stop.GetIfDict();
+    if (!stop_dict) {
+      continue;
+    }
+    if (stop_dict->FindBool("isPrimary").value_or(false)) {
+      primary_stop = stop_dict;
+      break;
     }
   }
-  return selection;
-}
+  if (!primary_stop) {
+    primary_stop = (*gradient_colors)[0].GetIfDict();
+  }
+  if (!primary_stop) {
+    return selection;
+  }
 
-std::u16string BuildThemeSummaryForSelection(
-    const MahoSidebarCreateSpaceThemeSelection& selection) {
-  const std::u16string mode_label =
-      selection.mode == MahoSidebarCreateSpaceThemeMode::kSolid ? u"Solid"
-                                                                : u"Zen";
-  return mode_label + u" · " +
-         base::UTF8ToUTF16(BuildColorHexForSelection(selection));
+  if (auto brightness = primary_stop->FindDouble("brightness")) {
+    selection.brightness = static_cast<int>(*brightness * 100.0);
+  }
+  if (auto texture = root.FindDouble("texture")) {
+    selection.grain = static_cast<int>(*texture * 100.0);
+  }
+  auto hue = primary_stop->FindDouble("hue");
+  auto saturation = primary_stop->FindDouble("saturation");
+  if (hue && saturation) {
+    selection.preset_index =
+        FindNearestPresetIndex(*hue, *saturation, selection.preset_index);
+  }
+  return selection;
 }
 
 views::Label* AddLabel(views::View* parent,
@@ -246,27 +341,11 @@ views::Label* AddLabel(views::View* parent,
   return parent->AddChildView(std::move(label));
 }
 
-views::View* CreateGlyphBadge(views::View* parent, const std::u16string& glyph) {
-  auto* badge = parent->AddChildView(std::make_unique<views::View>());
-  badge->SetPreferredSize(gfx::Size(kSectionGlyphSize, kSectionGlyphSize));
-  badge->SetBackground(views::CreateRoundedRectBackground(
-      ui::kColorSysSurface3, kSectionGlyphCornerRadius));
-  badge->SetBorder(views::CreateRoundedRectBorder(
-      1, kSectionGlyphCornerRadius, ui::kColorSysSurfaceVariant));
-  auto* layout = badge->SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 0));
-  layout->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kCenter);
-  layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
-
-  auto* label = AddLabel(badge, glyph, views::style::STYLE_BODY_4_MEDIUM,
-                         ui::kColorSysOnSurfaceSubtle);
-  label->SetHorizontalAlignment(gfx::ALIGN_CENTER);
-  return badge;
-}
-
 CreateResult CreateSpaceOnPool(const std::string& name,
                                const MahoSidebarCreateSpaceThemeSelection&
-                                   theme_selection) {
+                                    theme_selection,
+                               const std::string& profile_id,
+                               const std::string& selected_icon) {
   CreateResult result;
   MahoCore* core = maho::GetCore();
   if (!core) {
@@ -274,18 +353,23 @@ CreateResult CreateSpaceOnPool(const std::string& name,
     return result;
   }
 
+  const ColorPreset& preset = GetColorPresetForSelection(theme_selection);
   base::DictValue color_dict;
-  color_dict.Set("color", BuildColorHexForSelection(theme_selection));
+  color_dict.Set("hue", preset.hue);
+  color_dict.Set("saturation", preset.saturation);
+  color_dict.Set("brightness",
+                 ClampBrightness(theme_selection.brightness) / 100.0);
+  color_dict.Set("grain", ClampGrain(theme_selection.grain) / 100.0);
   std::string color_json;
   base::JSONWriter::Write(color_dict, &color_json);
 
   char* ffi_result = maho_core_create_space(core, name.c_str(),
                                             color_json.c_str(),
-                                            kDefaultProfileId);
+                                            profile_id.c_str());
   if (!ffi_result) {
     DLOG(WARNING)
         << "Sidebar create-space failed: maho_core_create_space returned null"
-        << " for profile_id='" << kDefaultProfileId << "'";
+        << " for profile_id='" << profile_id << "'";
     return result;
   }
 
@@ -311,10 +395,326 @@ CreateResult CreateSpaceOnPool(const std::string& name,
   if (!theme_json.empty()) {
     maho_theme::ApplyThemeJsonToSpace(core, result.space_id, theme_json);
   }
+  ApplySpaceIconOnPool(result.space_id, selected_icon);
   result.success = true;
   maho_string_free(ffi_result);
   return result;
 }
+
+std::vector<ProfileListingItem> BuildProfilesOnPool() {
+  std::vector<ProfileListingItem> profiles;
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return profiles;
+  }
+
+  char* json_str = maho_core_list_profiles(core);
+  if (!json_str) {
+    return profiles;
+  }
+  std::string json(json_str);
+  maho_string_free(json_str);
+
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_list()) {
+    return profiles;
+  }
+
+  // maho_core_get_active_profile_id() may return a JSON-encoded string
+  // (e.g. "\"abc123\"") rather than a bare id — mirror the decode pattern
+  // used by DecodeActiveSpaceId in maho_browser_main_extra_parts.cc.
+  char* active_id_str = maho_core_get_active_profile_id(core);
+  std::string active_id;
+  if (active_id_str) {
+    std::string raw(active_id_str);
+    maho_string_free(active_id_str);
+    std::optional<base::Value> decoded =
+        base::JSONReader::Read(raw, base::JSON_PARSE_RFC);
+    active_id = (decoded && decoded->is_string()) ? decoded->GetString() : raw;
+  }
+
+  for (const auto& item : parsed->GetList()) {
+    const auto* dict = item.GetIfDict();
+    if (!dict) {
+      continue;
+    }
+    const std::string* id = dict->FindString("id");
+    const std::string* name = dict->FindString("name");
+    if (!id || !name) {
+      continue;
+    }
+
+    ProfileListingItem profile;
+    profile.id = *id;
+    profile.name = *name;
+    profile.is_default = dict->FindBool("is_default").value_or(false);
+    profile.is_active = (*id == active_id);
+    profiles.push_back(std::move(profile));
+  }
+
+  return profiles;
+}
+
+class CreateSpaceHeroView : public views::View {
+  METADATA_HEADER(CreateSpaceHeroView, views::View)
+
+ public:
+  CreateSpaceHeroView() {
+    SetPreferredSize(gfx::Size(86, 60));
+  }
+  CreateSpaceHeroView(const CreateSpaceHeroView&) = delete;
+  CreateSpaceHeroView& operator=(const CreateSpaceHeroView&) = delete;
+  ~CreateSpaceHeroView() override = default;
+
+  void OnPaint(gfx::Canvas* canvas) override {
+    views::View::OnPaint(canvas);
+    const gfx::Rect b = GetContentsBounds();
+    if (b.IsEmpty()) {
+      return;
+    }
+    auto draw_card = [&](const gfx::RectF& rect, SkColor fill,
+                         float rotate_deg, float pivot_x, float pivot_y) {
+      cc::PaintFlags fill_flags;
+      fill_flags.setAntiAlias(true);
+      fill_flags.setStyle(cc::PaintFlags::kFill_Style);
+      fill_flags.setColor(fill);
+      cc::PaintFlags stroke_flags;
+      stroke_flags.setAntiAlias(true);
+      stroke_flags.setStyle(cc::PaintFlags::kStroke_Style);
+      stroke_flags.setStrokeWidth(1.0f);
+      stroke_flags.setColor(SkColorSetARGB(0xC8, 0x10, 0x10, 0x14));
+      canvas->Save();
+      canvas->sk_canvas()->translate(pivot_x, pivot_y);
+      canvas->sk_canvas()->rotate(rotate_deg);
+      canvas->sk_canvas()->translate(-pivot_x, -pivot_y);
+      canvas->DrawRoundRect(rect, 8.0f, fill_flags);
+      canvas->DrawRoundRect(rect, 8.0f, stroke_flags);
+      canvas->Restore();
+    };
+    const float cx = b.x() + b.width() / 2.0f;
+    const float cy = b.y() + b.height() / 2.0f;
+    draw_card(gfx::RectF(cx - 27.0f, cy - 16.0f, 26.0f, 34.0f),
+              SkColorSetARGB(0xF6, 0xB2, 0xAE, 0xA5), -8.0f,
+              cx - 14.0f, cy);
+    draw_card(gfx::RectF(cx + 1.0f, cy - 17.0f, 26.0f, 34.0f),
+              SkColorSetARGB(0xF6, 0xC8, 0xC4, 0xBC), 8.0f,
+              cx + 14.0f, cy);
+    draw_card(gfx::RectF(cx - 16.0f, cy - 19.0f, 32.0f, 38.0f),
+              SkColorSetARGB(0xFC, 0xF4, 0xF1, 0xEA), 0.0f, cx, cy);
+    cc::PaintFlags screen_flags;
+    screen_flags.setAntiAlias(true);
+    screen_flags.setStyle(cc::PaintFlags::kFill_Style);
+    screen_flags.setColor(SkColorSetARGB(0xEE, 0x2C, 0x2C, 0x34));
+    canvas->DrawRoundRect(gfx::RectF(cx - 9.0f, cy - 11.0f, 18.0f, 12.0f),
+                          3.0f, screen_flags);
+    cc::PaintFlags base_flags;
+    base_flags.setAntiAlias(true);
+    base_flags.setStyle(cc::PaintFlags::kStroke_Style);
+    base_flags.setStrokeWidth(1.4f);
+    base_flags.setStrokeCap(cc::PaintFlags::kRound_Cap);
+    base_flags.setColor(SkColorSetARGB(0xC8, 0x4A, 0x4A, 0x52));
+    canvas->DrawLine(gfx::PointF(cx - 11.0f, cy + 5.0f),
+                     gfx::PointF(cx + 11.0f, cy + 5.0f), base_flags);
+    cc::PaintFlags leaf_fill;
+    leaf_fill.setAntiAlias(true);
+    leaf_fill.setStyle(cc::PaintFlags::kFill_Style);
+    leaf_fill.setColor(SkColorSetARGB(0xE6, 0x55, 0xA8, 0x65));
+    cc::PaintFlags leaf_dark;
+    leaf_dark.setAntiAlias(true);
+    leaf_dark.setStyle(cc::PaintFlags::kFill_Style);
+    leaf_dark.setColor(SkColorSetARGB(0xE6, 0x36, 0x82, 0x4A));
+    auto draw_leaf = [&](float lx, float ly, float w, float h,
+                         float rotate_deg, const cc::PaintFlags& flags) {
+      canvas->Save();
+      canvas->sk_canvas()->translate(lx, ly);
+      canvas->sk_canvas()->rotate(rotate_deg);
+      canvas->DrawRoundRect(gfx::RectF(-w / 2.0f, -h / 2.0f, w, h),
+                            std::min(w, h) / 2.0f, flags);
+      canvas->Restore();
+    };
+    draw_leaf(cx - 22.0f, cy - 10.0f, 8.0f, 14.0f, -25.0f, leaf_dark);
+    draw_leaf(cx - 18.0f, cy - 16.0f, 9.0f, 16.0f, -10.0f, leaf_fill);
+    draw_leaf(cx - 12.0f, cy - 19.0f, 7.0f, 12.0f, 15.0f, leaf_dark);
+
+    cc::PaintFlags pencil_body;
+    pencil_body.setAntiAlias(true);
+    pencil_body.setStyle(cc::PaintFlags::kFill_Style);
+    pencil_body.setColor(SkColorSetARGB(0xEE, 0xE3, 0x6E, 0x4A));
+    canvas->DrawRoundRect(gfx::RectF(cx + 14.0f, cy + 2.0f, 14.0f, 4.5f),
+                          1.5f, pencil_body);
+    cc::PaintFlags pencil_tip;
+    pencil_tip.setAntiAlias(true);
+    pencil_tip.setStyle(cc::PaintFlags::kFill_Style);
+    pencil_tip.setColor(SkColorSetARGB(0xEE, 0x33, 0x33, 0x36));
+    canvas->DrawRoundRect(gfx::RectF(cx + 26.0f, cy + 2.5f, 3.0f, 3.5f),
+                          1.0f, pencil_tip);
+  }
+};
+
+class SpaceIconPickerButton : public views::Button {
+  METADATA_HEADER(SpaceIconPickerButton, views::Button)
+
+ public:
+  explicit SpaceIconPickerButton(PressedCallback callback)
+      : views::Button(std::move(callback)) {
+    SetAccessibleName(u"Choose space icon");
+    SetTooltipText(u"Choose space icon");
+    SetFocusBehavior(FocusBehavior::ALWAYS);
+    SetPreferredSize(gfx::Size(24, 24));
+    auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kVertical));
+    layout->set_main_axis_alignment(
+        views::BoxLayout::MainAxisAlignment::kCenter);
+    layout->set_cross_axis_alignment(
+        views::BoxLayout::CrossAxisAlignment::kCenter);
+
+    label_ = AddChildView(std::make_unique<views::Label>(u"+"));
+    label_->SetAutoColorReadabilityEnabled(false);
+    label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+    label_->SetTextStyle(views::style::STYLE_BODY_3_MEDIUM);
+    UpdateLabelColor();
+  }
+  SpaceIconPickerButton(const SpaceIconPickerButton&) = delete;
+  SpaceIconPickerButton& operator=(const SpaceIconPickerButton&) = delete;
+  ~SpaceIconPickerButton() override = default;
+
+  void SetSelectedIcon(const std::string& icon) {
+    selected_icon_ = icon;
+    label_->SetText(selected_icon_.empty() ? u"+"
+                                           : base::UTF8ToUTF16(selected_icon_));
+    UpdateLabelColor();
+    SchedulePaint();
+  }
+
+  void OnThemeChanged() override {
+    views::Button::OnThemeChanged();
+    UpdateLabelColor();
+    SchedulePaint();
+  }
+
+ protected:
+  void PaintButtonContents(gfx::Canvas* canvas) override {
+    const gfx::Rect bounds = GetContentsBounds();
+    if (bounds.IsEmpty()) {
+      return;
+    }
+
+    if (!GetColorProvider()) {
+      return;
+    }
+
+    if (!selected_icon_.empty()) {
+      cc::PaintFlags fill_flags;
+      fill_flags.setAntiAlias(true);
+      fill_flags.setStyle(cc::PaintFlags::kFill_Style);
+      fill_flags.setColor(GetColorProvider()->GetColor(ui::kColorSysSurface3));
+
+      cc::PaintFlags stroke_flags;
+      stroke_flags.setAntiAlias(true);
+      stroke_flags.setStyle(cc::PaintFlags::kStroke_Style);
+      stroke_flags.setStrokeWidth(1.0f);
+      stroke_flags.setColor(GetColorProvider()->GetColor(ui::kColorSysOutline));
+
+      gfx::RectF rect(bounds);
+      rect.Inset(0.5f);
+      canvas->DrawRoundRect(rect, 7.0f, fill_flags);
+      canvas->DrawRoundRect(rect, 7.0f, stroke_flags);
+      return;
+    }
+
+    cc::PaintFlags flags;
+    flags.setAntiAlias(true);
+    flags.setStyle(cc::PaintFlags::kStroke_Style);
+    flags.setStrokeWidth(1.0f);
+    flags.setColor(GetColorProvider()->GetColor(ui::kColorSysOutline));
+    const float intervals[] = {2.5f, 2.0f};
+    flags.setPathEffect(cc::PathEffect::MakeDash(intervals, 2, 0));
+    gfx::RectF rect(bounds);
+    rect.Inset(0.5f);
+    canvas->DrawRoundRect(rect, 5.0f, flags);
+  }
+
+ private:
+  void UpdateLabelColor() {
+    if (!label_ || !GetColorProvider()) {
+      return;
+    }
+    label_->SetEnabledColor(
+        selected_icon_.empty() ? ui::kColorSysOnSurfaceSubtle
+                               : ui::kColorSysOnSurface);
+  }
+
+  raw_ptr<views::Label> label_ = nullptr;
+  std::string selected_icon_;
+};
+BEGIN_METADATA(SpaceIconPickerButton)
+END_METADATA
+
+class SidebarCreateSpaceRowButton : public views::Button {
+  METADATA_HEADER(SidebarCreateSpaceRowButton, views::Button)
+
+ public:
+  SidebarCreateSpaceRowButton(PressedCallback callback,
+                              int corner_radius,
+                              ui::ColorId background_color_id)
+      : views::Button(std::move(callback)),
+        corner_radius_(corner_radius),
+        background_color_id_(background_color_id) {
+    SetFocusBehavior(FocusBehavior::ALWAYS);
+  }
+  SidebarCreateSpaceRowButton(const SidebarCreateSpaceRowButton&) = delete;
+  SidebarCreateSpaceRowButton& operator=(const SidebarCreateSpaceRowButton&) =
+      delete;
+  ~SidebarCreateSpaceRowButton() override = default;
+
+  void OnThemeChanged() override {
+    views::Button::OnThemeChanged();
+    RefreshBackground();
+  }
+
+  void StateChanged(ButtonState old_state) override {
+    views::Button::StateChanged(old_state);
+    RefreshBackground();
+  }
+
+  void OnFocus() override {
+    views::Button::OnFocus();
+    RefreshBackground();
+  }
+
+  void OnBlur() override {
+    views::Button::OnBlur();
+    RefreshBackground();
+  }
+
+ private:
+  void RefreshBackground() {
+    if (!GetColorProvider()) {
+      return;
+    }
+
+    const ui::ColorId fill_color_id = GetState() == STATE_PRESSED
+                                          ? ui::kColorSysSurface4
+                                          : GetState() == STATE_HOVERED || HasFocus()
+                                                ? ui::kColorSysSurface3
+                                                : background_color_id_;
+    SetBackground(views::CreateRoundedRectBackground(fill_color_id,
+                                                     corner_radius_));
+  }
+
+  const int corner_radius_;
+  const ui::ColorId background_color_id_;
+};
+BEGIN_METADATA(SidebarCreateSpaceRowButton)
+END_METADATA
+
+[[maybe_unused]] bool IsDefaultProfileSentinel(const std::string& profile_id) {
+  return profile_id.empty() || profile_id == "default" || profile_id == "Default";
+}
+
+BEGIN_METADATA(CreateSpaceHeroView)
+END_METADATA
 
 }  // namespace
 
@@ -345,33 +745,16 @@ MahoSidebarCreateSpaceView::MahoSidebarCreateSpaceView(Browser* browser)
   hero_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
-  auto* hero_badge = hero->AddChildView(std::make_unique<views::View>());
-  hero_badge->SetPreferredSize(gfx::Size(kHeroBadgeSize, kHeroBadgeSize));
-  hero_badge->SetBackground(views::CreateRoundedRectBackground(
-      ui::kColorSysSurface3, kHeroBadgeCornerRadius));
-  hero_badge->SetBorder(views::CreateRoundedRectBorder(
-      1, kHeroBadgeCornerRadius, ui::kColorSysSurfaceVariant));
-  hero_badge->SetProperty(views::kMarginsKey, kHeroBadgeInsets);
-  auto* hero_badge_layout = hero_badge->SetLayoutManager(
-      std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal,
-                                         gfx::Insets(), 0));
-  hero_badge_layout->set_main_axis_alignment(
-      views::BoxLayout::MainAxisAlignment::kCenter);
-  hero_badge_layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kCenter);
-  auto* hero_badge_label = AddLabel(hero_badge, u"✦",
-                                    views::style::STYLE_HEADLINE_5,
-                                    ui::kColorSysOnSurfaceSubtle);
-  hero_badge_label->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+  hero->AddChildView(std::make_unique<CreateSpaceHeroView>());
 
-  auto* title_label = AddLabel(hero, u"Create a new space",
+  auto* title_label = AddLabel(hero, u"Create a Space",
                                views::style::STYLE_HEADLINE_4,
                                ui::kColorSysOnSurface, true);
   title_label->SetMaximumWidth(360);
 
   auto* subtitle_label = AddLabel(
       hero,
-      u"Set up a focused home for tabs, notes, and future personalizations.",
+      u"Separate your tabs for life, work, projects, and more.",
       views::style::STYLE_BODY_5, ui::kColorSysOnSurfaceSubtle, true);
   subtitle_label->SetMaximumWidth(360);
 
@@ -382,89 +765,122 @@ MahoSidebarCreateSpaceView::MahoSidebarCreateSpaceView(Browser* browser)
   card_stack_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
-  auto* name_card = card_stack->AddChildView(std::make_unique<views::View>());
-  auto* name_card_layout = name_card->SetLayoutManager(
-      std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical,
-                                         kCardInsets, 10));
-  name_card_layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kStretch);
-  name_card->SetBackground(
-      views::CreateRoundedRectBackground(ui::kColorSysSurface1, kCardCornerRadius));
-  name_card->SetBorder(views::CreateRoundedRectBorder(
-      1, kCardCornerRadius, ui::kColorSysSurfaceVariant));
-
-  auto* name_header = name_card->AddChildView(std::make_unique<views::View>());
-  auto* name_header_layout = name_header->SetLayoutManager(
+  auto* name_row = card_stack->AddChildView(std::make_unique<views::View>());
+  auto* name_row_layout = name_row->SetLayoutManager(
       std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal,
-                                         gfx::Insets(), 10));
-  name_header_layout->set_cross_axis_alignment(
+                                         gfx::Insets::VH(0, 10), 10));
+  name_row_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
-  CreateGlyphBadge(name_header, u"Aa");
+  name_row->SetPreferredSize(gfx::Size(0, 44));
+  name_row->SetBackground(views::CreateRoundedRectBackground(
+      ui::kColorSysSurface1, 12));
+  name_row->SetBorder(views::CreateRoundedRectBorder(
+      1, 12, ui::kColorSysSurfaceVariant));
 
-  auto* name_header_text =
-      name_header->AddChildView(std::make_unique<views::View>());
-  auto* name_header_text_layout = name_header_text->SetLayoutManager(
-      std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical,
-                                         gfx::Insets(), 2));
-  name_header_text_layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kStretch);
-  name_header_layout->SetFlexForView(name_header_text, 1);
-  AddLabel(name_header_text, u"Space name", views::style::STYLE_BODY_3_MEDIUM,
-           ui::kColorSysOnSurface);
-  AddLabel(name_header_text, u"Choose a label you’ll recognize at a glance.",
-           views::style::STYLE_BODY_5, ui::kColorSysOnSurfaceSubtle, true);
+  name_leading_icon_button_ = name_row->AddChildView(
+      std::make_unique<SpaceIconPickerButton>(base::BindRepeating(
+          &MahoSidebarCreateSpaceView::OnIconPressed,
+          weak_factory_.GetWeakPtr())));
 
-  name_field_ = name_card->AddChildView(std::make_unique<views::Textfield>());
+  name_field_ = name_row->AddChildView(std::make_unique<views::Textfield>());
   name_field_->SetPlaceholderText(u"Space name");
   name_field_->SetAccessibleName(u"Space name");
+  name_field_->SetBorder(nullptr);
+  name_field_->SetBackgroundColor(SK_ColorTRANSPARENT);
   name_field_->set_controller(this);
+  name_row_layout->SetFlexForView(name_field_, 1);
 
-  theme_button_ = card_stack->AddChildView(std::make_unique<views::Button>(
-      base::BindRepeating(&MahoSidebarCreateSpaceView::OnThemePressed,
-                          weak_factory_.GetWeakPtr())));
-  auto* theme_card_layout = theme_button_->SetLayoutManager(
+  auto* profile_row = card_stack->AddChildView(std::make_unique<views::View>());
+  auto* profile_row_layout = profile_row->SetLayoutManager(
       std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal,
-                                         kCardInsets, 10));
-  theme_card_layout->set_cross_axis_alignment(
+                                         gfx::Insets::VH(0, 10), 8));
+  profile_row_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
+  profile_row->SetPreferredSize(gfx::Size(0, 40));
+  profile_row->SetBackground(views::CreateRoundedRectBackground(
+      ui::kColorSysSurface1, 12));
+
+  auto* profile_label = AddLabel(profile_row, u"Profile",
+                                 views::style::STYLE_BODY_3_MEDIUM,
+                                 ui::kColorSysOnSurface);
+  profile_row_layout->SetFlexForView(profile_label, 1);
+
+  profile_button_ = profile_row->AddChildView(
+      std::make_unique<SidebarCreateSpaceRowButton>(
+          base::BindRepeating(&MahoSidebarCreateSpaceView::OnProfilePressed,
+                              weak_factory_.GetWeakPtr()),
+          kProfileChipCornerRadius, ui::kColorSysSurface3));
+  profile_button_->SetAccessibleName(u"Choose profile");
+  auto* profile_button_layout =
+      profile_button_->SetLayoutManager(std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kHorizontal,
+          gfx::Insets::VH(0, kProfileChipHorizontalInset),
+          kProfileChipSpacing));
+  profile_button_layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kCenter);
+  profile_button_layout->set_minimum_cross_axis_size(kProfileChipHeight);
+
+  profile_button_label_ = profile_button_->AddChildView(
+      std::make_unique<views::Label>(u""));
+  profile_button_label_->SetAutoColorReadabilityEnabled(false);
+  profile_button_label_->SetEnabledColor(ui::kColorSysOnSurface);
+  profile_button_label_->SetTextStyle(views::style::STYLE_BODY_5);
+  profile_button_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+  profile_button_label_->SetElideBehavior(gfx::ELIDE_TAIL);
+
+  auto* profile_disclosure =
+      profile_button_->AddChildView(std::make_unique<views::ImageView>());
+  profile_disclosure->SetPreferredSize(
+      gfx::Size(kProfileDisclosureIconSize, kProfileDisclosureIconSize));
+  profile_disclosure->SetImage(ui::ImageModel::FromVectorIcon(
+      vector_icons::kExpandMoreIcon,
+      ui::kColorSysOnSurfaceSubtle, kProfileDisclosureIconSize));
+
+  theme_button_ = card_stack->AddChildView(
+      std::make_unique<SidebarCreateSpaceRowButton>(
+          base::BindRepeating(&MahoSidebarCreateSpaceView::OnThemePressed,
+                              weak_factory_.GetWeakPtr()),
+          kThemeRowCornerRadius, ui::kColorSysSurface1));
   theme_button_->SetAccessibleName(u"Choose theme");
-  theme_button_->SetBackground(
-      views::CreateRoundedRectBackground(ui::kColorSysSurface1, kCardCornerRadius));
-  theme_button_->SetBorder(views::CreateRoundedRectBorder(
-      1, kCardCornerRadius, ui::kColorSysSurfaceVariant));
+  theme_button_->SetPreferredSize(gfx::Size(0, kThemeRowHeight));
+  auto* theme_button_layout =
+      theme_button_->SetLayoutManager(std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kHorizontal,
+          gfx::Insets::VH(0, kThemeRowHorizontalInset), kThemeRowSpacing));
+  theme_button_layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kCenter);
 
-  CreateGlyphBadge(theme_button_, u"◐");
+  theme_preview_tile_ = theme_button_->AddChildView(std::make_unique<views::View>());
+  theme_preview_tile_->SetPreferredSize(gfx::Size(kThemeTileSize, kThemeTileSize));
+  theme_preview_tile_->SetBorder(views::CreateRoundedRectBorder(
+      1, kThemeTileCornerRadius, ui::kColorSysSurfaceVariant));
 
-  auto* theme_header_text =
-      theme_button_->AddChildView(std::make_unique<views::View>());
-  auto* theme_header_text_layout = theme_header_text->SetLayoutManager(
-      std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical,
-                                         gfx::Insets(), 2));
-  theme_header_text_layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kStretch);
-  theme_card_layout->SetFlexForView(theme_header_text, 1);
-  AddLabel(theme_header_text, u"Theme", views::style::STYLE_BODY_3_MEDIUM,
-           ui::kColorSysOnSurface);
-  theme_summary_label_ = AddLabel(theme_header_text, u"",
-                                  views::style::STYLE_BODY_5,
-                                  ui::kColorSysOnSurfaceSubtle, true);
+  auto* theme_label = theme_button_->AddChildView(
+      std::make_unique<views::Label>(u"Choose a Theme"));
+  theme_label->SetAutoColorReadabilityEnabled(false);
+  theme_label->SetEnabledColor(ui::kColorSysOnSurface);
+  theme_label->SetTextStyle(views::style::STYLE_BODY_3_MEDIUM);
+  theme_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+  theme_button_layout->SetFlexForView(theme_label, 1);
 
-  theme_preview_dot_ =
-      theme_button_->AddChildView(std::make_unique<views::View>());
-  theme_preview_dot_->SetPreferredSize(
-      gfx::Size(kThemePreviewDotSize, kThemePreviewDotSize));
+  auto* theme_disclosure =
+      theme_button_->AddChildView(std::make_unique<views::ImageView>());
+  theme_disclosure->SetPreferredSize(
+      gfx::Size(kThemeDisclosureIconSize, kThemeDisclosureIconSize));
+  theme_disclosure->SetImage(ui::ImageModel::FromVectorIcon(
+      vector_icons::kSubmenuArrowChromeRefreshIcon,
+      ui::kColorSysOnSurfaceSubtle, kThemeDisclosureIconSize));
 
-  auto* trailing = AddLabel(theme_button_, u"›",
-                            views::style::STYLE_BODY_3_MEDIUM,
-                            ui::kColorSysOnSurfaceSubtle);
-  trailing->SetHorizontalAlignment(gfx::ALIGN_CENTER);
-
-  auto* bottom_region = content->AddChildView(std::make_unique<views::View>());
+  auto* bottom_region = AddChildView(std::make_unique<views::View>());
   auto* bottom_layout = bottom_region->SetLayoutManager(
       std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical,
                                          kBottomRegionInsets, 8));
   bottom_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kStretch);
+
+  error_label_ = AddLabel(bottom_region, u"", views::style::STYLE_BODY_5,
+                          ui::kColorSysError, true);
+  error_label_->SetVisible(false);
 
   create_button_ = bottom_region->AddChildView(
       std::make_unique<views::MdTextButton>(
@@ -472,13 +888,9 @@ MahoSidebarCreateSpaceView::MahoSidebarCreateSpaceView(Browser* browser)
                               weak_factory_.GetWeakPtr()),
           u"Create Space"));
   create_button_->SetStyle(ui::ButtonStyle::kProminent);
-  create_button_->SetCornerRadius(16);
-  create_button_->SetMinSize(gfx::Size(0, 46));
+  create_button_->SetCornerRadius(26);
+  create_button_->SetMinSize(gfx::Size(0, 52));
   create_button_->SetAccessibleName(u"Create Space");
-
-  error_label_ = AddLabel(bottom_region, u"", views::style::STYLE_BODY_5,
-                          ui::kColorSysError, true);
-  error_label_->SetVisible(false);
 
   auto* cancel_row = bottom_region->AddChildView(std::make_unique<views::View>());
   auto* cancel_row_layout = cancel_row->SetLayoutManager(
@@ -495,20 +907,7 @@ MahoSidebarCreateSpaceView::MahoSidebarCreateSpaceView(Browser* browser)
   cancel_button_->SetStyle(ui::ButtonStyle::kText);
   cancel_button_->SetAccessibleName(u"Cancel create space");
 
-  auto* dots_row = bottom_region->AddChildView(std::make_unique<views::View>());
-  auto* dots_layout = dots_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 6));
-  dots_layout->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kCenter);
-  dots_layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
-
-  for (int i = 0; i < 3; ++i) {
-    auto* dot = dots_row->AddChildView(std::make_unique<views::View>());
-    dot->SetPreferredSize(gfx::Size(kBottomDotSize, kBottomDotSize));
-    dot->SetBackground(views::CreateRoundedRectBackground(
-        i == 0 ? ui::kColorSysOnSurfaceSubtle : ui::kColorSysSurfaceVariant,
-        kBottomDotCornerRadius));
-  }
-
+  RefreshProfiles();
   ResetFormState();
 }
 
@@ -530,6 +929,7 @@ void MahoSidebarCreateSpaceView::OnThemeChanged() {
   name_field_->SetTextColor(GetColorProvider()->GetColor(ui::kColorSysOnSurface));
   name_field_->set_placeholder_text_color(
       GetColorProvider()->GetColor(ui::kColorSysOnSurfaceSubtle));
+  UpdateNameLeadingIconButton();
 }
 
 void MahoSidebarCreateSpaceView::SetCloseCallback(
@@ -538,6 +938,7 @@ void MahoSidebarCreateSpaceView::SetCloseCallback(
 }
 
 void MahoSidebarCreateSpaceView::PrepareForOpen() {
+  RefreshProfiles();
   ResetFormState();
 }
 
@@ -549,12 +950,50 @@ void MahoSidebarCreateSpaceView::RequestNameFocus() {
   name_field_->SelectAll(false);
 }
 
+void MahoSidebarCreateSpaceView::ExecuteCommand(int command_id,
+                                                 int event_flags) {
+  (void)event_flags;
+  const int index = command_id - kProfileMenuCommandIdBase;
+  if (index < 0 || index >= static_cast<int>(profile_menu_items_.size())) {
+    return;
+  }
+  SetSelectedProfile(profile_menu_items_[index]);
+}
+
+bool MahoSidebarCreateSpaceView::IsCommandIdChecked(int command_id) const {
+  const int index = command_id - kProfileMenuCommandIdBase;
+  if (index < 0 || index >= static_cast<int>(profile_menu_items_.size())) {
+    return false;
+  }
+  return profile_menu_items_[index].id == selected_profile_id_;
+}
+
 void MahoSidebarCreateSpaceView::ContentsChanged(
     views::Textfield* sender,
     const std::u16string& new_contents) {
   if (sender != name_field_) {
     return;
   }
+
+  if (restoring_name_text_) {
+    restoring_name_text_ = false;
+    return;
+  }
+
+  if (awaiting_icon_input_) {
+    awaiting_icon_input_ = false;
+
+    std::u16string selected_icon_text = new_contents;
+    base::TrimWhitespace(selected_icon_text, base::TRIM_ALL, &selected_icon_text);
+    if (!selected_icon_text.empty()) {
+      selected_icon_ = base::UTF16ToUTF8(selected_icon_text);
+      UpdateNameLeadingIconButton();
+    }
+
+    RestoreSavedNameText();
+    return;
+  }
+
   if (error_label_) {
     error_label_->SetVisible(false);
   }
@@ -565,6 +1004,10 @@ bool MahoSidebarCreateSpaceView::HandleKeyEvent(views::Textfield* sender,
                                                 const ui::KeyEvent& event) {
   if (sender != name_field_ || event.type() != ui::EventType::kKeyPressed) {
     return false;
+  }
+
+  if (awaiting_icon_input_) {
+    awaiting_icon_input_ = false;
   }
 
   switch (event.key_code()) {
@@ -579,27 +1022,146 @@ bool MahoSidebarCreateSpaceView::HandleKeyEvent(views::Textfield* sender,
   }
 }
 
+void MahoSidebarCreateSpaceView::OnAfterUserAction(views::Textfield* sender) {
+  if (sender != name_field_ || !awaiting_icon_input_) {
+    return;
+  }
+
+  awaiting_icon_input_ = false;
+}
+
 void MahoSidebarCreateSpaceView::ResetFormState() {
   theme_selection_ = DefaultThemeSelection();
+  selected_icon_.clear();
+  awaiting_icon_input_ = false;
+  restoring_name_text_ = false;
+  saved_name_text_.clear();
   if (name_field_) {
     name_field_->SetText(u"");
   }
   if (error_label_) {
     error_label_->SetVisible(false);
   }
+  if (!profile_menu_items_.empty()) {
+    auto it = std::find_if(profile_menu_items_.begin(), profile_menu_items_.end(),
+                           [](const ProfileMenuItem& item) {
+                             return item.is_active;
+                           });
+    if (it == profile_menu_items_.end()) {
+      it = std::find_if(profile_menu_items_.begin(), profile_menu_items_.end(),
+                        [](const ProfileMenuItem& item) {
+                          return item.is_default;
+                        });
+    }
+    if (it == profile_menu_items_.end()) {
+      it = profile_menu_items_.begin();
+    }
+    SetSelectedProfile(*it);
+  }
   UpdateThemeSummary();
+  UpdateNameLeadingIconButton();
   UpdateCreateButtonState();
 }
 
-void MahoSidebarCreateSpaceView::UpdateThemeSummary() {
-  if (theme_summary_label_) {
-    theme_summary_label_->SetText(BuildThemeSummaryForSelection(theme_selection_));
+void MahoSidebarCreateSpaceView::RefreshProfiles() {
+  profile_menu_items_.clear();
+
+  for (const auto& profile : BuildProfilesOnPool()) {
+    ProfileMenuItem item;
+    item.id = profile.id;
+    item.label = base::UTF8ToUTF16(profile.name);
+    item.is_default = profile.is_default;
+    item.is_active = profile.is_active;
+    profile_menu_items_.push_back(std::move(item));
   }
-  if (theme_preview_dot_) {
-    theme_preview_dot_->SetBackground(views::CreateRoundedRectBackground(
+
+  if (profile_menu_items_.empty()) {
+    ProfileMenuItem fallback;
+    fallback.id = kDefaultProfileId;
+    fallback.label = u"Default";
+    fallback.is_default = true;
+    fallback.is_active = true;
+    profile_menu_items_.push_back(std::move(fallback));
+  }
+}
+
+void MahoSidebarCreateSpaceView::SetSelectedProfile(
+    const ProfileMenuItem& profile) {
+  selected_profile_id_ = profile.id;
+  selected_profile_label_ = profile.label;
+  UpdateProfileButtonLabel();
+}
+
+void MahoSidebarCreateSpaceView::UpdateProfileButtonLabel() {
+  if (!profile_button_label_) {
+    return;
+  }
+  profile_button_label_->SetText(selected_profile_label_);
+}
+
+void MahoSidebarCreateSpaceView::OnProfilePressed() {
+  if (!profile_button_) {
+    return;
+  }
+
+  profile_menu_model_ = std::make_unique<ui::SimpleMenuModel>(this);
+  for (size_t i = 0; i < profile_menu_items_.size(); ++i) {
+    profile_menu_model_->AddCheckItem(kProfileMenuCommandIdBase + i,
+                                      profile_menu_items_[i].label);
+  }
+
+  profile_menu_runner_ = std::make_unique<views::MenuRunner>(
+      profile_menu_model_.get(), views::MenuRunner::CONTEXT_MENU);
+
+  const gfx::Rect bounds = profile_button_->GetBoundsInScreen();
+  profile_menu_runner_->RunMenuAt(profile_button_->GetWidget(), nullptr, bounds,
+                                  views::MenuAnchorPosition::kTopRight,
+                                  ui::mojom::MenuSourceType::kNone);
+}
+
+void MahoSidebarCreateSpaceView::OnIconPressed() {
+  if (!name_field_) {
+    return;
+  }
+
+  views::Widget* widget = GetWidget();
+  if (!widget) {
+    return;
+  }
+
+  saved_name_text_ = name_field_->GetText();
+  awaiting_icon_input_ = true;
+  restoring_name_text_ = false;
+
+  name_field_->RequestFocus();
+  name_field_->SelectAll(false);
+  widget->ShowEmojiPanel();
+}
+
+void MahoSidebarCreateSpaceView::RestoreSavedNameText() {
+  if (!name_field_) {
+    return;
+  }
+
+  restoring_name_text_ = true;
+  name_field_->SetText(saved_name_text_);
+  name_field_->ClearSelection();
+}
+
+void MahoSidebarCreateSpaceView::UpdateThemeSummary() {
+  if (theme_preview_tile_) {
+    theme_preview_tile_->SetBackground(views::CreateRoundedRectBackground(
         BuildSkColorForSelection(theme_selection_),
         kThemePreviewDotCornerRadius));
   }
+}
+
+void MahoSidebarCreateSpaceView::UpdateNameLeadingIconButton() {
+  if (!name_leading_icon_button_) {
+    return;
+  }
+  static_cast<SpaceIconPickerButton*>(name_leading_icon_button_.get())
+      ->SetSelectedIcon(selected_icon_);
 }
 
 void MahoSidebarCreateSpaceView::UpdateCreateButtonState() {
@@ -630,15 +1192,16 @@ void MahoSidebarCreateSpaceView::OnCreatePressed() {
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
       base::BindOnce(&CreateSpaceOnPool, base::UTF16ToUTF8(trimmed_name),
-                     theme_selection_),
+                     theme_selection_, selected_profile_id_, selected_icon_),
       base::BindOnce(
           [](base::WeakPtr<MahoSidebarCreateSpaceView> view,
+             std::string profile_id,
              CreateResult result) {
             if (view) {
-              view->OnSpaceCreated(result.success, result.space_id);
+              view->OnSpaceCreated(result.success, result.space_id, profile_id);
             }
           },
-          weak_factory_.GetWeakPtr()));
+          weak_factory_.GetWeakPtr(), selected_profile_id_));
 }
 
 void MahoSidebarCreateSpaceView::OnThemePressed() {
@@ -721,7 +1284,6 @@ void MahoSidebarCreateSpaceView::OnSpaceCreated(bool success,
     }
     bridge->RegisterSpace(new_space_id, *profile_path);
     bridge->SwitchToSpace(browser_, new_space_id);
-
     views::View* ancestor = parent();
     MahoSidebarView* sidebar_view = nullptr;
     while (ancestor) {
