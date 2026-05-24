@@ -183,5 +183,5 @@ export function renderTrustedMarkdown(raw: string): TrustedHTML {
 }
 
 export function renderMarkdownInto(container: HTMLElement, raw: string): void {
-  container.innerHTML = renderTrustedMarkdown(raw);
+  container.innerHTML = renderTrustedMarkdown(raw) as unknown as string;
 }

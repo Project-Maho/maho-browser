@@ -2,16 +2,7 @@
 
 module maho_ai.mojom;
 
-// ==========================================================================
-// Legacy chat types — kept for migration safety. The legacy PageHandler
-// methods still use these until the frontend is rewritten.
-// ==========================================================================
 
-struct ChatMessage {
-  string role;
-  string content;
-  double timestamp;
-};
 
 enum ChatIntent {
   kFreeform,
@@ -253,14 +244,6 @@ interface PageHandlerFactory {
 
 // Browser-side handler for requests from WebUI page.
 interface PageHandler {
-  // --- Legacy chat methods (kept for migration fallback) ---
-  SendMessage(ChatIntent intent, string message);
-  GetPageContent() => (string title, string url, string text_content);
-  GetChatHistory() => (array<ChatMessage> messages);
-  clearHistory();
-  SetApiKey(string key);
-  GetApiKeyStatus() => (bool has_key);
-
   // --- Session-oriented methods (new contract) ---
 
   // Get the current runtime connection state.
@@ -307,10 +290,6 @@ interface PageHandler {
 
 // WebUI-side interface for browser-to-page push updates.
 interface Page {
-  // --- Legacy streaming callbacks (kept for migration fallback) ---
-  OnStreamingResponse(string partial_content);
-  OnStreamingComplete(ChatMessage response);
-
   // --- Session event push (new contract) ---
 
   // A runtime event occurred in the active session.
