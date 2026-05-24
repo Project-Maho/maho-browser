@@ -15,7 +15,7 @@ fn shortcut_manager_has_default_bindings() {
         .iter()
         .map(|b| b["action"].as_str().unwrap().to_string())
         .collect();
-    assert!(actions.contains(&"command_bar".to_string()));
+    assert!(actions.contains(&"new_tab".to_string()));
     assert!(actions.contains(&"close_tab".to_string()));
     assert!(actions.contains(&"reload_tab".to_string()));
     assert!(actions.contains(&"toggle_sidebar".to_string()));
@@ -26,7 +26,7 @@ fn shortcut_manager_has_default_bindings() {
 fn shortcut_manager_set_shortcut_works() {
     let mut core = MahoCore::new();
     let key_combo = r#"{"key":"p","modifiers":["meta","shift"]}"#;
-    let result = core.set_shortcut_json("command_bar", key_combo);
+    let result = core.set_shortcut_json("new_tab", key_combo);
     assert!(result.is_ok());
     let json = core.get_all_shortcuts_json();
     assert!(json.contains("\"key\":\"p\""));
@@ -45,16 +45,16 @@ fn shortcut_manager_reset_single() {
     let mut core = MahoCore::new();
     let original_json = core.get_all_shortcuts_json();
     let key_combo = r#"{"key":"k","modifiers":["meta","shift"]}"#;
-    let _ = core.set_shortcut_json("command_bar", key_combo);
-    core.reset_shortcut("command_bar");
+    let _ = core.set_shortcut_json("new_tab", key_combo);
+    core.reset_shortcut("new_tab");
     let after_reset = core.get_all_shortcuts_json();
     let original: Vec<serde_json::Value> = serde_json::from_str(&original_json).unwrap();
     let reset: Vec<serde_json::Value> = serde_json::from_str(&after_reset).unwrap();
     let orig_binding = original
         .iter()
-        .find(|b| b["action"] == "command_bar")
+        .find(|b| b["action"] == "new_tab")
         .unwrap();
-    let reset_binding = reset.iter().find(|b| b["action"] == "command_bar").unwrap();
+    let reset_binding = reset.iter().find(|b| b["action"] == "new_tab").unwrap();
     assert_eq!(orig_binding["keyCombo"], reset_binding["keyCombo"]);
 }
 
@@ -63,7 +63,7 @@ fn shortcut_manager_reset_all() {
     let mut core = MahoCore::new();
     let original_json = core.get_all_shortcuts_json();
     let key_combo = r#"{"key":"k","modifiers":["meta","shift"]}"#;
-    let _ = core.set_shortcut_json("command_bar", key_combo);
+    let _ = core.set_shortcut_json("new_tab", key_combo);
     core.reset_all_shortcuts();
     let after_reset = core.get_all_shortcuts_json();
     assert_eq!(original_json, after_reset);
