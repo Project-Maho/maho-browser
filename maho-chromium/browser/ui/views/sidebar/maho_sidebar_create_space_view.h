@@ -65,7 +65,8 @@ class MahoSidebarCreateSpaceView : public views::View,
   }
   void SetNameForTesting(const std::u16string& text);
   void CompleteCreateSpaceForTesting(bool success,
-                                     const std::string& new_space_id);
+                                     const std::string& new_space_id,
+                                     const std::string& profile_id = "default");
 
  private:
   void ContentsChanged(views::Textfield* sender,
@@ -79,7 +80,9 @@ class MahoSidebarCreateSpaceView : public views::View,
   void OnCancelPressed();
   void OnThemePressed();
   void ApplyThemeSelection(const MahoSidebarCreateSpaceThemeSelection& selection);
-  void OnSpaceCreated(bool success, const std::string& new_space_id);
+  void OnSpaceCreated(bool success,
+                      const std::string& new_space_id,
+                      const std::string& profile_id = "default");
 
   raw_ptr<Browser> browser_;
   raw_ptr<views::Textfield> name_field_ = nullptr;

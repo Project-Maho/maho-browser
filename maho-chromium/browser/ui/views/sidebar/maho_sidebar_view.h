@@ -91,6 +91,8 @@ class MahoSidebarView : public views::View,
 
   bool IsPositionInWindowCaption(const gfx::Point& point) const;
 
+  void ScheduleRefreshAll();
+
   // Test-only accessors for live browser tests. Keep minimal.
   MahoSidebarFavoritesGridView* favorites_view_for_testing() {
     return favorites_view_;
@@ -147,7 +149,6 @@ class MahoSidebarView : public views::View,
   void OpenSpaceCreateSurface();
   void OpenSpaceConfigSurface();
 
-  void ScheduleRefreshAll();
   void RefreshFavoritesAndViewState();
   static MahoSidebarFavoritesModel BuildFavoritesModelOnBackground(
       const std::string& active_space_id_json);

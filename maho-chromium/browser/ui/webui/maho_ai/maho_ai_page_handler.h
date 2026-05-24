@@ -72,6 +72,9 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
                          const std::string& approval_id,
                          bool approved) override;
   void ClosePanel() override;
+  void OpenSettings() override;
+  void GetViewMode(GetViewModeCallback callback) override;
+  void SetViewMode(maho_ai::mojom::ViewMode mode) override;
 
  private:
   // Translates internal runtime events into Mojo and pushes them to the Page

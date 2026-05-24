@@ -2238,7 +2238,8 @@ void MahoSidebarTabListView::UpdatePinnedDropLaneVisibility(bool visible) {
     pinned_section_target_->SetVisible(visible);
   }
   if (pinned_separator_) {
-    pinned_separator_->SetVisible(visible);
+    // Separator stays visible regardless of pinned-section drop-lane state.
+    pinned_separator_->SetVisible(true);
   }
 }
 
@@ -2275,7 +2276,7 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
           pinned_drop_target->SetMinDropTargetHeight(kRowHeightDp);
         }
         pinned_section_target_->SetVisible(pinned_visible);
-        pinned_separator_->SetVisible(pinned_visible);
+        pinned_separator_->SetVisible(true);
         new_tab_button_ = AddInlineRow(
             tab_rows_, u"+ New Tab",
             base::BindRepeating(&MahoSidebarTabListView::OpenNewTab,
@@ -2311,7 +2312,6 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
         base::BindRepeating(&MahoSidebarTabListView::OpenNewTab,
                             weak_factory_.GetWeakPtr()),
         false, true);
-    AddPlaceholderLabel(tab_rows_, u"No tabs open");
     return;
   }
 
@@ -2327,7 +2327,7 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
     pinned_drop_target->SetMinDropTargetHeight(kRowHeightDp);
   }
   pinned_section_target_->SetVisible(pinned_visible);
-  pinned_separator_->SetVisible(pinned_visible);
+  pinned_separator_->SetVisible(true);
   new_tab_button_ = AddInlineRow(
       tab_rows_, u"+ New Tab",
       base::BindRepeating(&MahoSidebarTabListView::OpenNewTab,

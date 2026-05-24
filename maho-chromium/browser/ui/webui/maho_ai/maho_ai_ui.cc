@@ -89,6 +89,10 @@ void MahoAIUI::RedirectTabHostedNavigationToSidePanel() {
     return;
   }
 
+  if (browser->is_type_popup()) {
+    return;
+  }
+
   auto* side_panel_ui =
       browser->GetFeatures().side_panel_ui();
   if (!side_panel_ui) {

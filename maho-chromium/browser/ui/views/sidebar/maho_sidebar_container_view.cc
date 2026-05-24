@@ -5,6 +5,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "base/logging.h"
 #include "components/prefs/pref_service.h"
 #include "base/time/time.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
@@ -99,6 +100,12 @@ void MahoSidebarContainerView::ShowCommandOverlayForSearch(
       browser_view->ShowMahoCommandOverlayForSearch(initial_query);
     }
   }
+}
+
+void MahoSidebarContainerView::OnThemeChanged() {
+  views::View::OnThemeChanged();
+  LOG(ERROR) << "MahoThemeDebug Container::OnThemeChanged fired this=" << this
+             << " sidebar_view_=" << sidebar_view_.get();
 }
 
 void MahoSidebarContainerView::Layout(PassKey) {

@@ -6,7 +6,8 @@
 
 export type IconSymbol =
     'arrowUpRight'|'composerSpark'|'copy'|'edit'|'ellipsis'|'globe'|
-    'panelSpark'|'plus'|'retry'|'stop'|'thumbDown'|'thumbUp'|'trash';
+    'panelSpark'|'plus'|'retry'|'settingsGear'|'stop'|'thumbDown'|
+    'thumbUp'|'trash'|'viewModeToggle'|'xmark';
 
 export function getSFSymbolUrl(_symbol: IconSymbol): string {
   return '';

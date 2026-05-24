@@ -29,7 +29,6 @@
 #include "ui/base/test/ui_controls.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/button/label_button.h"
-#include "ui/views/controls/label.h"
 #include "url/gurl.h"
 
 namespace maho {
@@ -51,11 +50,6 @@ bool IsInlineRowButton(views::View* view, std::u16string expected_text) {
   return button && button->GetText() == expected_text;
 }
 
-bool IsPlaceholderLabel(views::View* view, std::u16string expected_text) {
-  auto* label = views::AsViewClass<views::Label>(view);
-  return label && label->GetText() == expected_text;
-}
-
 void ExpectEmptyPinnedSectionLayout(views::View* rows) {
   ASSERT_TRUE(rows);
   ASSERT_EQ(4u, rows->children().size())
@@ -63,8 +57,8 @@ void ExpectEmptyPinnedSectionLayout(views::View* rows) {
 
   EXPECT_FALSE(rows->children()[0]->GetVisible())
       << "Pinned section should be hidden when empty";
-  EXPECT_FALSE(rows->children()[1]->GetVisible())
-      << "Pinned separator should be hidden when empty";
+  EXPECT_TRUE(rows->children()[1]->GetVisible())
+      << "Pinned separator should remain visible above + New Tab even when the pinned section is empty";
   EXPECT_TRUE(IsInlineRowButton(rows->children()[2], u"+ New Tab"))
       << "+ New Tab should follow the pinned section and separator";
   EXPECT_TRUE(rows->children()[2]->GetVisible())
@@ -77,12 +71,12 @@ void ExpectEmptyPinnedSectionLayout(views::View* rows) {
 
 void ExpectNoTabsRows(views::View* rows) {
   ASSERT_TRUE(rows);
-  ASSERT_EQ(2u, rows->children().size())
-      << "No-tabs layout should omit the separator and normal section";
+  ASSERT_EQ(1u, rows->children().size())
+      << "True zero-tab layout must render only the + New Tab CTA";
   EXPECT_TRUE(IsInlineRowButton(rows->children()[0], u"+ New Tab"))
-      << "+ New Tab should be first when no tabs are open";
-  EXPECT_TRUE(IsPlaceholderLabel(rows->children()[1], u"No tabs open"))
-      << "Placeholder should follow + New Tab in no-tabs layout";
+      << "+ New Tab should be the single CTA child";
+  EXPECT_TRUE(rows->children()[0]->GetVisible())
+      << "+ New Tab should be visible";
 }
 
 class MahoSidebarContractTest : public MahoSidebarInteractiveTestBase {};
@@ -490,7 +484,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
-                        SidebarRowOrderNoTabsKeepsPlaceholderWithoutSeparator) {
+                        SidebarRowOrderNoTabsRendersOnlyNewTabCta) {
   MahoSidebarTabListModel empty_model;
   tab_list_->Update(empty_model, browser());
 

@@ -14,6 +14,11 @@
 #include "ui/base/test/ui_controls.h"
 #include "ui/views/view_utils.h"
 #include "ui/views/widget/widget.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/browser_commands.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_create_space_view.h"
+#include "maho/browser/maho_space_profile_bridge.h"
 
 namespace maho {
 namespace {
@@ -40,16 +45,8 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
 
   base::RunLoop().RunUntilIdle();
 
-  content::WebContents* active_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-  bool navigated_to_spaces =
-      active_contents->GetVisibleURL().spec().find("maho-space") !=
-      std::string::npos;
-  bool popover_visible =
-      footer->command_overlay_controller_visible_for_testing();
-
-  EXPECT_TRUE(navigated_to_spaces || popover_visible)
-      << "Expected spaces surface to open via navigation or popover";
+  EXPECT_TRUE(footer->command_overlay_controller_visible_for_testing())
+      << "Expected spaces action popover to be visible after clicking the plus button";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
@@ -63,10 +60,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
   std::string space_id_before = state_before.tab_list.active_space_id;
 
   views::View* second_dot = footer->GetSpaceDotForTesting(1);
-  if (!second_dot) {
-    LOG(WARNING) << "Only one space in seed 2 — skipping space switch test";
-    return;
-  }
+  ASSERT_TRUE(second_dot) << "Expected second space dot to exist for SeedProfile(2)";
 
   const gfx::Point center = second_dot->GetBoundsInScreen().CenterPoint();
   ASSERT_TRUE(ui_controls::SendMouseMove(center.x(), center.y()));
@@ -88,6 +82,231 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
       << "Clicked space dot should become the active footer dot";
 }
 
+IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
+                       MultiWindowReadRegression) {
+  SeedProfile(2);
+
+  MahoSpaceProfileBridge* bridge = MahoSpaceProfileBridge::GetInstance();
+  ASSERT_TRUE(bridge);
+
+  Browser* browser_b = CreateBrowser(browser()->profile());
+  ASSERT_TRUE(browser_b);
+
+  const std::string space_a = bridge->GetActiveSpaceId(browser());
+  bridge->SetActiveSpaceId(browser_b, space_a);
+
+  std::vector<std::string> all_space_ids = bridge->GetSpaceIds();
+  std::string space_b;
+  for (const auto& sid : all_space_ids) {
+    if (sid != space_a) {
+      space_b = sid;
+      break;
+    }
+  }
+  ASSERT_FALSE(space_b.empty());
+
+  bridge->SwitchToSpace(browser(), space_b);
+  base::RunLoop().RunUntilIdle();
+
+  BrowserView* bv_b = BrowserView::GetBrowserViewForBrowser(browser_b);
+  ASSERT_TRUE(bv_b);
+  MahoSidebarView* sidebar_b = nullptr;
+  for (views::View* child : bv_b->children()) {
+    if (auto* container = views::AsViewClass<MahoSidebarContainerView>(child)) {
+      sidebar_b = views::AsViewClass<MahoSidebarView>(container->sidebar_view());
+      break;
+    }
+  }
+  ASSERT_TRUE(sidebar_b);
+
+  sidebar_b->ScheduleRefreshAll();
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(space_a, bridge->GetActiveSpaceId(browser_b));
+  EXPECT_EQ(space_b, bridge->GetActiveSpaceId(browser()));
+
+  chrome::CloseWindow(browser_b);
+  base::RunLoop().RunUntilIdle();
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
+                       CreateSpaceHandOffRegression) {
+  MahoSidebarView* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+
+  MahoSidebarCreateSpaceView* create_space_view = nullptr;
+  for (views::View* child : sidebar->children()) {
+    if (auto* candidate = views::AsViewClass<MahoSidebarCreateSpaceView>(child)) {
+      create_space_view = candidate;
+      break;
+    }
+  }
+  ASSERT_TRUE(create_space_view);
+
+  MahoSpaceProfileBridge* bridge = MahoSpaceProfileBridge::GetInstance();
+  ASSERT_TRUE(bridge);
+
+  const std::string new_space_id = "test_created_space_id";
+  create_space_view->CompleteCreateSpaceForTesting(true, new_space_id);
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(new_space_id, bridge->GetActiveSpaceId(browser()));
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
+                       EmptyIdGuardRegression) {
+  MahoSidebarView* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+
+  MahoSidebarCreateSpaceView* create_space_view = nullptr;
+  for (views::View* child : sidebar->children()) {
+    if (auto* candidate = views::AsViewClass<MahoSidebarCreateSpaceView>(child)) {
+      create_space_view = candidate;
+      break;
+    }
+  }
+  ASSERT_TRUE(create_space_view);
+
+  MahoSpaceProfileBridge* bridge = MahoSpaceProfileBridge::GetInstance();
+  ASSERT_TRUE(bridge);
+
+  const std::string initial_space = bridge->GetActiveSpaceId(browser());
+  size_t initial_count = bridge->GetRegisteredSpaceCount();
+
+  create_space_view->CompleteCreateSpaceForTesting(true, "");
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(initial_space, bridge->GetActiveSpaceId(browser()));
+  EXPECT_EQ(initial_count, bridge->GetRegisteredSpaceCount());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest,
+                       DefaultProfileSentinelRegression) {
+  MahoSidebarView* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+
+  MahoSidebarCreateSpaceView* create_space_view = nullptr;
+  for (views::View* child : sidebar->children()) {
+    if (auto* candidate = views::AsViewClass<MahoSidebarCreateSpaceView>(child)) {
+      create_space_view = candidate;
+      break;
+    }
+  }
+  ASSERT_TRUE(create_space_view);
+
+  MahoSpaceProfileBridge* bridge = MahoSpaceProfileBridge::GetInstance();
+  ASSERT_TRUE(bridge);
+
+  const std::string new_space_id = "test_default_profile_space";
+  create_space_view->CompleteCreateSpaceForTesting(true, new_space_id);
+  base::RunLoop().RunUntilIdle();
+
+  base::FilePath profile_path = bridge->GetProfilePathForTesting(new_space_id);
+  EXPECT_EQ(base::FilePath::FromASCII("Default"), profile_path);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest, ProfileBasenameForIdValidation) {
+  // Sentinel mapping: empty, default, and Default map to Default
+  EXPECT_EQ(base::FilePath::FromASCII("Default"),
+            MahoSpaceProfileBridge::ProfileBasenameForId(""));
+  EXPECT_EQ(base::FilePath::FromASCII("Default"),
+            MahoSpaceProfileBridge::ProfileBasenameForId("   "));
+  EXPECT_EQ(base::FilePath::FromASCII("Default"),
+            MahoSpaceProfileBridge::ProfileBasenameForId("default"));
+  EXPECT_EQ(base::FilePath::FromASCII("Default"),
+            MahoSpaceProfileBridge::ProfileBasenameForId("Default"));
+
+  // Non-default mapping
+  EXPECT_EQ(base::FilePath::FromASCII("MahoProfile_alpha"),
+            MahoSpaceProfileBridge::ProfileBasenameForId("alpha"));
+  EXPECT_EQ(base::FilePath::FromASCII("MahoProfile_Default-Like-But-Not"),
+            MahoSpaceProfileBridge::ProfileBasenameForId("Default-Like-But-Not"));
+
+  // Rejections (std::nullopt)
+  // contains / or \\ 
+  EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId("alpha/beta"));
+  EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId("alpha\\beta"));
+  // equals "." or ".."
+  EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId("."));
+  EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId(".."));
+  // contains a .. segment
+  EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId("foo..bar"));
+  EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId("..foo"));
+  // starts with .
+  EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId(".alpha"));
+  // non-ASCII
+  EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId("\xff\xfe"));
+  // exceeds kMahoProfileIdMaxLen (64)
+  std::string long_id(MahoSpaceProfileBridge::kMahoProfileIdMaxLen + 1, 'a');
+  EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId(long_id));
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest, ExplicitFailurePathNoMutation) {
+  MahoSidebarView* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+
+  MahoSidebarCreateSpaceView* create_space_view = nullptr;
+  for (views::View* child : sidebar->children()) {
+    if (auto* candidate = views::AsViewClass<MahoSidebarCreateSpaceView>(child)) {
+      create_space_view = candidate;
+      break;
+    }
+  }
+  ASSERT_TRUE(create_space_view);
+
+  MahoSpaceProfileBridge* bridge = MahoSpaceProfileBridge::GetInstance();
+  ASSERT_TRUE(bridge);
+
+  const std::string initial_space = bridge->GetActiveSpaceId(browser());
+  size_t initial_count = bridge->GetRegisteredSpaceCount();
+
+  // Failure path 1: successful-but-empty-id create result (should not mutate)
+  create_space_view->CompleteCreateSpaceForTesting(true, "", "default");
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(initial_space, bridge->GetActiveSpaceId(browser()));
+  EXPECT_EQ(initial_count, bridge->GetRegisteredSpaceCount());
+
+  // Failure path 2: non-empty space id but invalid profile id (should not mutate)
+  create_space_view->CompleteCreateSpaceForTesting(true, "valid_space_id", "invalid/profile/id");
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(initial_space, bridge->GetActiveSpaceId(browser()));
+  EXPECT_EQ(initial_count, bridge->GetRegisteredSpaceCount());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest, StartupHydrationParity) {
+  MahoSpaceProfileBridge* bridge = MahoSpaceProfileBridge::GetInstance();
+  ASSERT_TRUE(bridge);
+
+  // 1. Simulate PopulateBridgeFromCore behavior (direct registration after helper resolution)
+  const std::string space_id_hydration = "space_hydrated";
+  std::optional<base::FilePath> path_hydration =
+      MahoSpaceProfileBridge::ProfileBasenameForId("alpha");
+  ASSERT_TRUE(path_hydration.has_value());
+  bridge->RegisterSpace(space_id_hydration, *path_hydration);
+
+  // 2. Simulate OnSpaceCreated behavior by using the testing seam on the view
+  MahoSidebarView* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+  MahoSidebarCreateSpaceView* create_space_view = nullptr;
+  for (views::View* child : sidebar->children()) {
+    if (auto* candidate = views::AsViewClass<MahoSidebarCreateSpaceView>(child)) {
+      create_space_view = candidate;
+      break;
+    }
+  }
+  ASSERT_TRUE(create_space_view);
+
+  const std::string space_id_created = "space_created";
+  create_space_view->CompleteCreateSpaceForTesting(true, space_id_created, "alpha");
+  base::RunLoop().RunUntilIdle();
+
+  // Verify that the resulting profile paths stored in the bridge are identical
+  base::FilePath path_from_hydration = bridge->GetProfilePathForTesting(space_id_hydration);
+  base::FilePath path_from_creation = bridge->GetProfilePathForTesting(space_id_created);
+
+  EXPECT_FALSE(path_from_hydration.empty());
+  EXPECT_EQ(path_from_hydration, path_from_creation);
+}
+
 }  // namespace
 }  // namespace maho
-

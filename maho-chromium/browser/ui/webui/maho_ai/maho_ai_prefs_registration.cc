@@ -30,6 +30,7 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(ai_prefs::kSessionPersistenceEnabled, true);
   registry->RegisterDictionaryPref(ai_prefs::kSessionEventLogs);
   registry->RegisterStringPref(ai_prefs::kRuntimeCommand, std::string());
+  registry->RegisterStringPref(ai_prefs::kAiViewMode, "sidebar");
 }
 
 }  // namespace maho::ai

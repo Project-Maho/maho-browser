@@ -35,10 +35,13 @@ const base::flat_map<std::string_view, SFSymbolEntry>& GetAllowlist() {
           {"panelSpark",     {"sparkles.rectangle.stack"}},
           {"plus",           {"plus"}},
           {"retry",          {"arrow.clockwise"}},
+          {"settingsGear",   {"gearshape"}},
           {"stop",           {"stop.fill"}},
           {"thumbDown",      {"hand.thumbsdown"}},
           {"thumbUp",        {"hand.thumbsup"}},
           {"trash",          {"trash"}},
+          {"viewModeToggle", {"sidebar.right"}},
+          {"xmark",          {"xmark"}},
       });
   return *kAllowlist;
 }

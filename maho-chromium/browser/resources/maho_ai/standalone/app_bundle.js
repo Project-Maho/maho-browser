@@ -22582,6 +22582,7 @@ function isRenderableTimelineEvent(event) {
     case RuntimeEventKind.kUserPrompt:
     case RuntimeEventKind.kSessionStatus:
     case RuntimeEventKind.kAssistantToken:
+    case RuntimeEventKind.kAssistantThinking:
     case RuntimeEventKind.kTurnComplete:
     case RuntimeEventKind.kToolRequest:
     case RuntimeEventKind.kToolResult:
@@ -22771,14 +22772,19 @@ function getToolStatusChip(status) {
 function collectConversationItems(entries) {
   const items = [];
   const toolCallsById = /* @__PURE__ */ new Map();
+  const toolItemIndexByCallId = /* @__PURE__ */ new Map();
   const approvalItemIndexById = /* @__PURE__ */ new Map();
   let replaceableAssistantIndex = null;
   let assistantText = "";
   let committedAssistantLength = 0;
+  let replaceableThinkingIndex = null;
+  let thinkingText = "";
   const clearAssistantState = () => {
     replaceableAssistantIndex = null;
     assistantText = "";
     committedAssistantLength = 0;
+    replaceableThinkingIndex = null;
+    thinkingText = "";
   };
   const splitAssistantState = () => {
     if (replaceableAssistantIndex === null) {
@@ -22809,6 +22815,7 @@ function collectConversationItems(entries) {
         if (!text) {
           break;
         }
+        replaceableThinkingIndex = null;
         assistantText += text;
         const assistantSegmentText = assistantText.slice(committedAssistantLength);
         if (!assistantSegmentText) {
@@ -22830,6 +22837,33 @@ function collectConversationItems(entries) {
           markdown: true,
           role: "assistant",
           text: assistantSegmentText,
+          timestamp: event.timestamp
+        };
+        break;
+      case RuntimeEventKind.kAssistantThinking:
+        if (!text) {
+          break;
+        }
+        if (replaceableThinkingIndex === null) {
+          replaceableThinkingIndex = items.length;
+          thinkingText = text;
+          items.push({
+            kind: "thinking",
+            key,
+            markdown: false,
+            role: "system",
+            text: thinkingText,
+            timestamp: event.timestamp
+          });
+          break;
+        }
+        thinkingText += text;
+        items[replaceableThinkingIndex] = {
+          kind: "thinking",
+          key,
+          markdown: false,
+          role: "system",
+          text: thinkingText,
           timestamp: event.timestamp
         };
         break;
@@ -22868,6 +22902,7 @@ function collectConversationItems(entries) {
         splitAssistantState();
         if (event.toolCall?.callId) {
           toolCallsById.set(event.toolCall.callId, event.toolCall);
+          toolItemIndexByCallId.set(event.toolCall.callId, items.length);
         }
         items.push({
           chips: event.toolCall?.status === ToolCallStatus.kFailed ? [getToolStatusChip(event.toolCall.status)] : void 0,
@@ -22880,20 +22915,36 @@ function collectConversationItems(entries) {
           tone: "accent"
         });
         break;
-      case RuntimeEventKind.kToolResult:
+      case RuntimeEventKind.kToolResult: {
         splitAssistantState();
         const toolCall = event.toolResult?.callId ? toolCallsById.get(event.toolResult.callId) : void 0;
-        items.push({
-          kind: "activity",
-          key,
-          markdown: false,
-          note: !event.toolResult?.success ? summarizeInlineText(event.toolResult?.errorMessage || event.toolResult?.output || "", 72) : void 0,
-          role: "system",
-          text: humanizeToolResult(toolCall, event.toolResult),
-          timestamp: event.timestamp,
-          tone: event.toolResult?.success ? "success" : "danger"
-        });
+        const existingToolIndex = event.toolResult?.callId ? toolItemIndexByCallId.get(event.toolResult.callId) : void 0;
+        const resultText = humanizeToolResult(toolCall, event.toolResult);
+        const resultTone = event.toolResult?.success ? "success" : "danger";
+        const resultNote = !event.toolResult?.success ? summarizeInlineText(event.toolResult?.errorMessage || event.toolResult?.output || "", 72) : event.toolResult?.output ? summarizeInlineText(event.toolResult.output, 120) : void 0;
+        if (existingToolIndex !== void 0 && items[existingToolIndex]) {
+          items[existingToolIndex] = {
+            ...items[existingToolIndex],
+            chips: [getToolStatusChip(event.toolResult?.success ? ToolCallStatus.kCompleted : ToolCallStatus.kFailed)],
+            text: resultText,
+            note: resultNote,
+            tone: resultTone,
+            timestamp: event.timestamp
+          };
+        } else {
+          items.push({
+            kind: "activity",
+            key,
+            markdown: false,
+            note: resultNote,
+            role: "system",
+            text: resultText,
+            timestamp: event.timestamp,
+            tone: resultTone
+          });
+        }
         break;
+      }
       case RuntimeEventKind.kApprovalRequest:
         splitAssistantState();
         const approvalIndex = items.length;
@@ -23236,6 +23287,16 @@ var MahoAiStore = class {
     const existing = state.eventsBySessionId[sessionId] || [];
     const previous = existing[existing.length - 1];
     if (event.kind === RuntimeEventKind.kAssistantToken && previous?.event.kind === RuntimeEventKind.kAssistantToken) {
+      previous.event = {
+        ...previous.event,
+        text: `${previous.event.text || ""}${event.text || ""}`,
+        timestamp: event.timestamp,
+        sequence: event.sequence
+      };
+      state.eventsBySessionId[sessionId] = [...existing.slice(0, -1), previous];
+      return;
+    }
+    if (event.kind === RuntimeEventKind.kAssistantThinking && previous?.event.kind === RuntimeEventKind.kAssistantThinking) {
       previous.event = {
         ...previous.event,
         text: `${previous.event.text || ""}${event.text || ""}`,
@@ -29263,6 +29324,27 @@ function PendingThought({ label }) {
 
 // react/features/compact/conversation-thread.tsx
 var import_jsx_runtime26 = __toESM(require_jsx_runtime());
+function ThinkingBubble({ item }) {
+  const [expanded, setExpanded] = (0, import_react8.useState)(false);
+  const preview = item.text.length > 80 && !expanded ? `${item.text.slice(0, 80).trimEnd()}\u2026` : item.text;
+  return /* @__PURE__ */ (0, import_jsx_runtime26.jsx)("article", { className: "compact-thread__row compact-thread__row--system compact-thread__row--thinking-content", children: /* @__PURE__ */ (0, import_jsx_runtime26.jsxs)(
+    "div",
+    {
+      className: "compact-thread__bubble compact-thread__bubble--thinking",
+      onClick: () => setExpanded(!expanded),
+      role: "button",
+      tabIndex: 0,
+      onKeyDown: (e) => {
+        if (e.key === "Enter" || e.key === " ") setExpanded(!expanded);
+      },
+      children: [
+        /* @__PURE__ */ (0, import_jsx_runtime26.jsx)("span", { className: "compact-thread__thinking-label", children: "Thinking" }),
+        /* @__PURE__ */ (0, import_jsx_runtime26.jsx)("span", { className: "compact-thread__thinking-text", children: preview }),
+        item.text.length > 80 ? /* @__PURE__ */ (0, import_jsx_runtime26.jsx)("span", { className: "compact-thread__thinking-chevron", "data-expanded": expanded, children: expanded ? "\u25BE" : "\u25B8" }) : null
+      ]
+    }
+  ) });
+}
 function ConversationThread({
   entries,
   onRespondToApproval,
@@ -29272,22 +29354,30 @@ function ConversationThread({
   const items = (0, import_react8.useMemo)(() => collectConversationItems(entries), [entries]);
   const listRef = useAutoScroll(items);
   return /* @__PURE__ */ (0, import_jsx_runtime26.jsx)("main", { className: "compact-thread", children: /* @__PURE__ */ (0, import_jsx_runtime26.jsxs)("div", { ref: listRef, className: "compact-thread__list", children: [
-    items.map((item) => item.role === "system" ? /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(
-      ConversationSystemItem,
-      {
-        item,
-        readOnly,
-        onRespondToApproval
-      },
-      item.key
-    ) : /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(
-      ConversationMessage,
-      {
-        item,
-        label: item.role === "user" ? "You" : "Maho"
-      },
-      item.key
-    )),
+    items.map((item) => {
+      if (item.kind === "thinking") {
+        return /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(ThinkingBubble, { item }, item.key);
+      }
+      if (item.role === "system") {
+        return /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(
+          ConversationSystemItem,
+          {
+            item,
+            readOnly,
+            onRespondToApproval
+          },
+          item.key
+        );
+      }
+      return /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(
+        ConversationMessage,
+        {
+          item,
+          label: item.role === "user" ? "You" : "Maho"
+        },
+        item.key
+      );
+    }),
     thinkingLabel ? /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(PendingThought, { label: thinkingLabel }) : null
   ] }) });
 }
@@ -30036,7 +30126,7 @@ function getPendingThreadLabel(entries, pending) {
     if (!event) {
       continue;
     }
-    if (event.kind === RuntimeEventKind.kAssistantToken || event.kind === RuntimeEventKind.kTurnComplete) {
+    if (event.kind === RuntimeEventKind.kAssistantToken || event.kind === RuntimeEventKind.kAssistantThinking || event.kind === RuntimeEventKind.kTurnComplete) {
       return null;
     }
     if (!latestToolName && event.kind === RuntimeEventKind.kToolRequest) {

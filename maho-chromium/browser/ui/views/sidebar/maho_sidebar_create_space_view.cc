@@ -24,6 +24,7 @@
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/theme/maho_space_theme_io.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/browser/ui/views/space_create/maho_space_theme_picker_dialog.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -61,7 +62,7 @@ constexpr int kBottomDotSize = 6;
 constexpr int kBottomDotCornerRadius = 3;
 constexpr int kThemePreviewDotSize = 14;
 constexpr int kThemePreviewDotCornerRadius = 7;
-constexpr char kDefaultProfileId[] = "Default";
+constexpr char kDefaultProfileId[] = "default";
 
 struct ColorPreset {
   double hue;
@@ -120,8 +121,8 @@ MahoSidebarCreateSpaceThemeSelection DefaultThemeSelection() {
 const ColorPreset& GetColorPresetForSelection(
     const MahoSidebarCreateSpaceThemeSelection& selection) {
   const int max_index = static_cast<int>(std::size(kColorPresets) - 1);
-  const int clamped_index = std::clamp(selection.preset_index, 0, max_index);
-  return kColorPresets.at(clamped_index);
+  const int index = std::clamp(selection.preset_index, 0, max_index);
+  return kColorPresets[index];
 }
 
 int ClampBrightness(int brightness) {
@@ -135,10 +136,10 @@ int ClampGrain(int grain) {
 SkColor BuildSkColorForSelection(
     const MahoSidebarCreateSpaceThemeSelection& selection) {
   const ColorPreset& preset = GetColorPresetForSelection(selection);
-  SkScalar hsv[3] = {
-      static_cast<SkScalar>(preset.hue * 360.0),
-      static_cast<SkScalar>(preset.saturation),
-      static_cast<SkScalar>(ClampBrightness(selection.brightness) / 100.0)};
+  float hsv[3];
+  hsv[0] = static_cast<float>(preset.hue * 360.0);
+  hsv[1] = static_cast<float>(preset.saturation);
+  hsv[2] = static_cast<float>(ClampBrightness(selection.brightness) / 100.0);
   return SkHSVToColor(hsv);
 }
 
@@ -263,39 +264,6 @@ views::View* CreateGlyphBadge(views::View* parent, const std::u16string& glyph) 
   return badge;
 }
 
-views::View* CreateInfoCard(views::View* parent,
-                            const std::u16string& badge_glyph,
-                            const std::u16string& title,
-                            const std::u16string& subtitle) {
-  auto* card = parent->AddChildView(std::make_unique<views::View>());
-  auto* layout = card->SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::Orientation::kHorizontal, kCardInsets, 10));
-  layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
-  card->SetBackground(
-      views::CreateRoundedRectBackground(ui::kColorSysSurface1, kCardCornerRadius));
-  card->SetBorder(views::CreateRoundedRectBorder(
-      1, kCardCornerRadius, ui::kColorSysSurfaceVariant));
-
-  CreateGlyphBadge(card, badge_glyph);
-
-  auto* text_stack = card->AddChildView(std::make_unique<views::View>());
-  auto* text_layout = text_stack->SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::Orientation::kVertical, gfx::Insets(), 2));
-  text_layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kStretch);
-  layout->SetFlexForView(text_stack, 1);
-
-  AddLabel(text_stack, title, views::style::STYLE_BODY_3_MEDIUM,
-           ui::kColorSysOnSurface);
-  AddLabel(text_stack, subtitle, views::style::STYLE_BODY_5,
-           ui::kColorSysOnSurfaceSubtle, true);
-
-  auto* trailing = AddLabel(card, u"›", views::style::STYLE_BODY_3_MEDIUM,
-                            ui::kColorSysOnSurfaceSubtle);
-  trailing->SetHorizontalAlignment(gfx::ALIGN_CENTER);
-  return card;
-}
-
 CreateResult CreateSpaceOnPool(const std::string& name,
                                const MahoSidebarCreateSpaceThemeSelection&
                                    theme_selection) {
@@ -311,9 +279,6 @@ CreateResult CreateSpaceOnPool(const std::string& name,
   std::string color_json;
   base::JSONWriter::Write(color_dict, &color_json);
 
-  // The inline sidebar create-space flow always passes a concrete profile id.
-  // A null FFI result here is therefore a backend/contract failure, not the
-  // older nullptr-profile path captured in the original remediation plan.
   char* ffi_result = maho_core_create_space(core, name.c_str(),
                                             color_json.c_str(),
                                             kDefaultProfileId);
@@ -351,12 +316,7 @@ CreateResult CreateSpaceOnPool(const std::string& name,
   return result;
 }
 
-
 }  // namespace
-
-
-BEGIN_METADATA(MahoSidebarCreateSpaceView)
-END_METADATA
 
 MahoSidebarCreateSpaceView::MahoSidebarCreateSpaceView(Browser* browser)
     : browser_(browser) {
@@ -457,19 +417,11 @@ MahoSidebarCreateSpaceView::MahoSidebarCreateSpaceView(Browser* browser)
   name_field_ = name_card->AddChildView(std::make_unique<views::Textfield>());
   name_field_->SetPlaceholderText(u"Space name");
   name_field_->SetAccessibleName(u"Space name");
-  name_field_->SetPreferredSize(gfx::Size(0, kInputHeight));
-  name_field_->SetBorder(views::CreateRoundedRectBorder(
-      1, kInputCornerRadius, ui::kColorSysSurfaceVariant));
-  name_field_->SetExtraInsets(kInputInsets);
   name_field_->set_controller(this);
 
-  CreateInfoCard(card_stack, u"☺", u"Profile",
-                 u"Default profile selected for this space.");
-
-  theme_button_ = card_stack->AddChildView(std::make_unique<views::MdTextButton>(
+  theme_button_ = card_stack->AddChildView(std::make_unique<views::Button>(
       base::BindRepeating(&MahoSidebarCreateSpaceView::OnThemePressed,
-                          weak_factory_.GetWeakPtr()),
-      std::u16string()));
+                          weak_factory_.GetWeakPtr())));
   auto* theme_card_layout = theme_button_->SetLayoutManager(
       std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal,
                                          kCardInsets, 10));
@@ -732,10 +684,10 @@ void MahoSidebarCreateSpaceView::SetNameForTesting(const std::u16string& text) {
 
 void MahoSidebarCreateSpaceView::CompleteCreateSpaceForTesting(
     bool success,
-    const std::string& new_space_id) {
-  OnSpaceCreated(success, new_space_id);
+    const std::string& new_space_id,
+    const std::string& profile_id) {
+  OnSpaceCreated(success, new_space_id, profile_id);
 }
-
 
 void MahoSidebarCreateSpaceView::ApplyThemeSelection(
     const MahoSidebarCreateSpaceThemeSelection& selection) {
@@ -744,8 +696,9 @@ void MahoSidebarCreateSpaceView::ApplyThemeSelection(
 }
 
 void MahoSidebarCreateSpaceView::OnSpaceCreated(bool success,
-                                                const std::string& new_space_id) {
-  if (!success) {
+                                                const std::string& new_space_id,
+                                                const std::string& profile_id) {
+  if (!success || new_space_id.empty()) {
     if (error_label_) {
       error_label_->SetText(u"Couldn’t create space. Try again.");
       error_label_->SetVisible(true);
@@ -756,12 +709,32 @@ void MahoSidebarCreateSpaceView::OnSpaceCreated(bool success,
 
   auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
   if (bridge) {
-    bridge->RegisterSpace(new_space_id,
-                          base::FilePath::FromASCII(kDefaultProfileId));
-    bridge->SwitchToSpace(new_space_id);
+    std::optional<base::FilePath> profile_path =
+        maho::MahoSpaceProfileBridge::ProfileBasenameForId(profile_id);
+    if (!profile_path) {
+      if (error_label_) {
+        error_label_->SetText(u"Couldn’t create space. Try again.");
+        error_label_->SetVisible(true);
+      }
+      UpdateCreateButtonState();
+      return;
+    }
+    bridge->RegisterSpace(new_space_id, *profile_path);
+    bridge->SwitchToSpace(browser_, new_space_id);
+
+    views::View* ancestor = parent();
+    MahoSidebarView* sidebar_view = nullptr;
+    while (ancestor) {
+      if (auto* candidate = views::AsViewClass<MahoSidebarView>(ancestor)) {
+        sidebar_view = candidate;
+        break;
+      }
+      ancestor = ancestor->parent();
+    }
+    if (sidebar_view) {
+      sidebar_view->ScheduleRefreshAll();
+    }
   }
-  MahoSpaceThemeState::UpdateFromCore();
-  ui::ColorProviderManager::Get().ResetColorProviderCache();
 
   ResetFormState();
   if (close_callback_) {
@@ -772,3 +745,6 @@ void MahoSidebarCreateSpaceView::OnSpaceCreated(bool success,
 }
 
 }  // namespace maho
+
+BEGIN_METADATA(MahoSidebarCreateSpaceView, views::View)
+END_METADATA

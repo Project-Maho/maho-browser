@@ -27,6 +27,7 @@ inline constexpr char kSessionPersistenceEnabled[] =
 inline constexpr char kSessionEventLogs[] =
     "maho.ai.session_event_logs";
 inline constexpr char kRuntimeCommand[] = "maho.ai.runtime_command";
+inline constexpr char kAiViewMode[] = "maho.ai.view_mode";
 
 }  // namespace maho::ai_prefs
 

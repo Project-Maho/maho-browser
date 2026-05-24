@@ -13,6 +13,7 @@
 #include "base/task/thread_pool.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
+#include "maho/browser/ui/theme/maho_color_id.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_change_type.h"
@@ -100,7 +101,7 @@ MahoSidebarView::~MahoSidebarView() {
 void MahoSidebarView::OnThemeChanged() {
   views::View::OnThemeChanged();
   SetBackground(views::CreateRoundedRectBackground(
-      ui::kColorSysSurface, sidebar_layout::kRailCornerRadiusDp));
+      kMahoColorSidebarBackground, sidebar_layout::kRailCornerRadiusDp));
   SetBorder(views::CreateRoundedRectBorder(
       1, sidebar_layout::kRailCornerRadiusDp, ui::kColorSysSurfaceVariant));
   if (library_divider_) {
@@ -349,7 +350,7 @@ void MahoSidebarView::UpdateSpacesPaneActions() {
     return;
   }
   auto* bridge = MahoSpaceProfileBridge::GetInstance();
-  const bool has_active_space = bridge && !bridge->GetActiveSpaceId().empty();
+  const bool has_active_space = bridge && !bridge->GetActiveSpaceId(browser_).empty();
   spaces_view_->SetActionEnabled(1, has_active_space);
 }
 
@@ -390,7 +391,7 @@ void MahoSidebarView::HideCreateSpace() {
 void MahoSidebarView::OpenSpaceConfigSurface() {
   auto* bridge = MahoSpaceProfileBridge::GetInstance();
   const std::string active_space_id =
-      bridge ? bridge->GetActiveSpaceId() : std::string();
+      bridge ? bridge->GetActiveSpaceId(browser_) : std::string();
   if (active_space_id.empty()) {
     return;
   }
@@ -631,7 +632,7 @@ void MahoSidebarView::ScheduleRefreshAll() {
 void MahoSidebarView::RefreshFavoritesAndViewState() {
   std::string active_space_id_json;
   if (auto* bridge = MahoSpaceProfileBridge::GetInstance(); bridge) {
-    const std::string& active_space_id = bridge->GetActiveSpaceId();
+    const std::string& active_space_id = bridge->GetActiveSpaceId(browser_);
     if (!active_space_id.empty()) {
       active_space_id_json = base::GetQuotedJSONString(active_space_id);
     }

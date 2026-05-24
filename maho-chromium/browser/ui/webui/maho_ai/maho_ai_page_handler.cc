@@ -12,6 +12,8 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
@@ -19,6 +21,8 @@
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "content/public/browser/page_navigator.h"
+#include "ui/base/window_open_disposition.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "maho/browser/ui/webui/maho_ai/maho_ai_prefs_registration.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
@@ -278,6 +282,10 @@ MahoAIPageHandler::MahoAIPageHandler(
       runtime_router_(prefs, url_loader_factory),
       page_context_extractor_(browser) {
   DCHECK(prefs_);
+  if (prefs_->GetString(maho::ai_prefs::kAiViewMode) == "floating" &&
+      browser_ && !browser_->is_type_popup()) {
+    prefs_->SetString(maho::ai_prefs::kAiViewMode, "sidebar");
+  }
   LoadPersistedSessions();
 }
 
@@ -825,6 +833,11 @@ void MahoAIPageHandler::ClosePanel() {
     return;
   }
 
+  if (browser_->is_type_popup()) {
+    browser_->window()->Close();
+    return;
+  }
+
   auto* side_panel_ui = browser_->GetFeatures().side_panel_ui();
   if (!side_panel_ui) {
     return;
@@ -838,6 +851,60 @@ void MahoAIPageHandler::ClosePanel() {
   side_panel_ui->Close(SidePanelType::kContent,
                        SidePanelEntryHideReason::kSidePanelClosed,
                        /*suppress_animations=*/true);
+}
+
+void MahoAIPageHandler::OpenSettings() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!browser_) {
+    return;
+  }
+  content::OpenURLParams params(
+      GURL("chrome://maho-settings/"),
+      content::Referrer(),
+      WindowOpenDisposition::SINGLETON_TAB,
+      ui::PAGE_TRANSITION_AUTO_TOPLEVEL,
+      /*is_renderer_initiated=*/false);
+  browser_->OpenURL(params, /*navigation_handle_callback=*/{});
+}
+
+void MahoAIPageHandler::GetViewMode(GetViewModeCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  std::string pref_val = prefs_->GetString(maho::ai_prefs::kAiViewMode);
+  maho_ai::mojom::ViewMode mode = (pref_val == "floating" ?
+      maho_ai::mojom::ViewMode::kFloating : maho_ai::mojom::ViewMode::kSidebar);
+  std::move(callback).Run(mode);
+}
+
+void MahoAIPageHandler::SetViewMode(maho_ai::mojom::ViewMode mode) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  std::string new_pref = (mode == maho_ai::mojom::ViewMode::kFloating ? "floating" : "sidebar");
+  std::string current_pref = prefs_->GetString(maho::ai_prefs::kAiViewMode);
+  if (new_pref == current_pref) {
+    return;
+  }
+
+  prefs_->SetString(maho::ai_prefs::kAiViewMode, new_pref);
+
+  if (mode == maho_ai::mojom::ViewMode::kFloating) {
+    if (browser_ && !browser_->is_type_popup()) {
+      content::OpenURLParams params(
+          GURL("chrome://maho-ai/"),
+          content::Referrer(),
+          WindowOpenDisposition::NEW_POPUP,
+          ui::PAGE_TRANSITION_AUTO_TOPLEVEL,
+          /*is_renderer_initiated=*/false);
+      browser_->OpenURL(params, /*navigation_handle_callback=*/{});
+      ClosePanel();
+    }
+  } else {
+    if (browser_ && browser_->is_type_popup()) {
+      Browser* normal_browser = chrome::FindBrowserWithProfile(browser_->profile());
+      if (normal_browser && normal_browser->GetFeatures().side_panel_ui()) {
+        normal_browser->GetFeatures().side_panel_ui()->Show(SidePanelEntryId::kMahoAiPanel);
+      }
+      browser_->window()->Close();
+    }
+  }
 }
 
 void MahoAIPageHandler::GetSessionHistory(

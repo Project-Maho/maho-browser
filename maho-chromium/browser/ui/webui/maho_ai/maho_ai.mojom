@@ -29,6 +29,11 @@ enum InteractionMode {
   kDeveloper,
 };
 
+enum ViewMode {
+  kSidebar,
+  kFloating,
+};
+
 // ==========================================================================
 // Browser-context payload — typed contract for the actual page context
 // injected (or denied) by the adapter at submit time. This lets WebUI
@@ -303,6 +308,15 @@ interface PageHandler {
 
   // Close the AI side panel hosting this WebUI.
   ClosePanel();
+
+  // Open the settings page chrome://maho-settings/
+  OpenSettings();
+
+  // Get the current view mode (sidebar or floating)
+  GetViewMode() => (ViewMode mode);
+
+  // Set the view mode
+  SetViewMode(ViewMode mode);
 };
 
 // WebUI-side interface for browser-to-page push updates.
