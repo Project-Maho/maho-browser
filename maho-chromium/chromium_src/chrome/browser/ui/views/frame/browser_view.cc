@@ -16,16 +16,23 @@
 //      layout_views.maho_sidebar_container = maho_sidebar_container_;
 //
 // 4. In BrowserView::SetFocusToLocationBar(), BEFORE the original body:
-//      if (is_user_initiated && maho_sidebar_container_) {
+//      if (is_user_initiated && maho_sidebar_container_ &&
+//          base::FeatureList::IsEnabled(maho::features::kMahoUnifiedClickPath)) {
 //        ShowMahoCommandOverlayForCurrentTab();
 //        return;
 //      }
 //    Opens the palette in kCurrentTab mode with URL prefill + select-all.
 //    Delegates to ShowMahoCommandOverlayForCurrentTab() which fetches the
 //    active tab URL internally rather than receiving it as a parameter.
+//    The kMahoUnifiedClickPath check gates only this intercept; callers that
+//    reach ShowMahoCommandOverlayForCurrentTab() directly (Cmd+L shortcut
+//    interceptor, Cmd+T sidebar button) are unaffected by the flag.
+//    Enabled by default; disabling it restores the upstream location-bar
+//    mouse/keyboard focus path (kill-switch retained for QA sign-off).
 //
 // 5. Member fields in BrowserView class (public, in member section):
 //      raw_ptr<views::View> maho_sidebar_container_ = nullptr;
+//      raw_ptr<views::View> maho_create_space_blank_view_ = nullptr;
 //      std::unique_ptr<maho::MahoCommandOverlayController>
 //          maho_command_overlay_controller_;
 //

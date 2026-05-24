@@ -508,6 +508,57 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
 }
 
 IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
+                       CurrentTabSeed_InternalHistoryEntriesDoNotConsumeVisibleCap) {
+  const GURL ordinary_url = embedded_test_server()->GetURL("/title1.html");
+  const GURL favicon_url = embedded_test_server()->GetURL("/favicon/title2_with_favicon.html");
+  const GURL page3_url = embedded_test_server()->GetURL("/title3.html");
+  const GURL page4_url = embedded_test_server()->GetURL("/button.html");
+  const GURL page5_url = embedded_test_server()->GetURL("/click.html");
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), ordinary_url));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("chrome://history/")));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), favicon_url));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), page3_url));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), page4_url));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), page5_url));
+  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
+
+  TriggerUserInitiatedFocus();
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    maho::MahoCommandOverlayController* c = GetController();
+    return c && c->IsVisible();
+  }));
+
+  maho::MahoCommandOverlayController* controller = GetController();
+  ASSERT_TRUE(controller);
+  maho::MahoCommandOverlayView* overlay_view =
+      controller->GetOverlayViewForTesting();
+  ASSERT_TRUE(overlay_view);
+
+  const auto& seeds = overlay_view->GetSeededResultsForTesting();
+  const size_t visible_cap =
+      maho::MahoCommandOverlayView::GetMaxSeededVisibleResultsForTesting();
+  ASSERT_EQ(visible_cap, seeds.size());
+  EXPECT_EQ(visible_cap, overlay_view->GetRenderedResultCountForTesting());
+
+  for (const auto& seed : seeds) {
+    EXPECT_FALSE(seed.execution_payload.starts_with("chrome://"))
+        << "Internal pages must remain suppressed from seeded current-tab rows";
+  }
+
+  EXPECT_EQ(page5_url.spec(), seeds[0].execution_payload);
+  EXPECT_EQ(page4_url.spec(), seeds[1].execution_payload);
+  EXPECT_EQ(page3_url.spec(), seeds[2].execution_payload);
+  EXPECT_EQ(favicon_url.spec(), seeds[3].execution_payload);
+  EXPECT_EQ(ordinary_url.spec(), seeds[4].execution_payload);
+
+  controller->Hide();
+  ASSERT_TRUE(base::test::RunUntil([&]() { return !controller->IsVisible(); }));
+}
+
+IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
                        CurrentTabSeed_RowContentMatchesNavigation) {
   const std::vector<GURL> urls = {
       embedded_test_server()->GetURL("/title1.html"),
@@ -810,6 +861,151 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayUnifiedClickPathEnabledTest,
 
 namespace {
 
+class MahoCommandOverlayFlagDisabledTest
+    : public MahoCommandOverlayInteractiveUiTest {
+ public:
+  MahoCommandOverlayFlagDisabledTest() {
+    scoped_feature_list_.InitAndDisableFeature(
+        maho::features::kMahoUnifiedClickPath);
+  }
+  MahoCommandOverlayFlagDisabledTest(
+      const MahoCommandOverlayFlagDisabledTest&) = delete;
+  MahoCommandOverlayFlagDisabledTest& operator=(
+      const MahoCommandOverlayFlagDisabledTest&) = delete;
+  ~MahoCommandOverlayFlagDisabledTest() override = default;
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+}  // namespace
+
+IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
+                       FocusPath_EscapeRestoresFocusToPreviousView) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/title1.html")));
+  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
+
+  LocationBarView* location_bar = GetLocationBarView();
+  ASSERT_TRUE(location_bar);
+  location_bar->RequestFocus();
+  base::RunLoop().RunUntilIdle();
+
+  BrowserView* bv = GetBrowserView();
+  ASSERT_TRUE(bv);
+  views::FocusManager* fm = bv->GetWidget()->GetFocusManager();
+  ASSERT_TRUE(fm);
+  views::View* pre_show_focused = fm->GetFocusedView();
+  ASSERT_TRUE(pre_show_focused)
+      << "A view must hold focus before opening the overlay";
+
+  TriggerUserInitiatedFocus();
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    maho::MahoCommandOverlayController* c = GetController();
+    return c && c->IsVisible();
+  })) << "Precondition: overlay must open";
+
+  maho::MahoCommandOverlayController* controller = GetController();
+  ASSERT_TRUE(controller);
+
+  ASSERT_TRUE(ui_test_utils::SendKeyPressSync(browser(), ui::VKEY_ESCAPE,
+                                              /*control=*/false,
+                                              /*shift=*/false,
+                                              /*alt=*/false,
+                                              /*command=*/false))
+      << "Failed to dispatch Escape";
+
+  ASSERT_TRUE(base::test::RunUntil([&]() { return !controller->IsVisible(); }))
+      << "Escape must dismiss the overlay";
+
+  // After hide the FocusManager must have focus on the pre-show view (or on
+  // some view within the same widget, since the exact focused view may have
+  // been reassigned by the platform).  The key contract is that focus returned
+  // to the parent browser window rather than staying orphaned on the dismissed
+  // overlay widget.
+  EXPECT_EQ(pre_show_focused, fm->GetFocusedView())
+      << "Escape must restore focus to the view that was focused before Show()";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
+                       FocusPath_DeactivationRestoresFocusToPreviousView) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/title1.html")));
+  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
+
+  LocationBarView* location_bar = GetLocationBarView();
+  ASSERT_TRUE(location_bar);
+  location_bar->RequestFocus();
+  base::RunLoop().RunUntilIdle();
+
+  BrowserView* bv = GetBrowserView();
+  ASSERT_TRUE(bv);
+  views::FocusManager* fm = bv->GetWidget()->GetFocusManager();
+  ASSERT_TRUE(fm);
+  views::View* pre_show_focused = fm->GetFocusedView();
+  ASSERT_TRUE(pre_show_focused);
+
+  TriggerUserInitiatedFocus();
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    maho::MahoCommandOverlayController* c = GetController();
+    return c && c->IsVisible();
+  })) << "Precondition: overlay must open";
+
+  maho::MahoCommandOverlayController* controller = GetController();
+  ASSERT_TRUE(controller);
+
+  Browser* second_browser = CreateBrowser(browser()->profile());
+  ASSERT_TRUE(second_browser);
+  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(second_browser));
+
+  ASSERT_TRUE(base::test::RunUntil([&]() { return !controller->IsVisible(); }))
+      << "Overlay must hide on window deactivation";
+
+  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(pre_show_focused, fm->GetFocusedView())
+      << "Deactivation-triggered hide must restore focus to the pre-show view";
+
+  {
+    base::RunLoop drain;
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, drain.QuitClosure(), base::Milliseconds(300));
+    drain.Run();
+  }
+  CloseBrowserSynchronously(second_browser);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoCommandOverlayFlagDisabledTest,
+                       FocusPath_FlagDisabledLocationBarFocusDoesNotOpenOverlay) {
+  ASSERT_FALSE(
+      base::FeatureList::IsEnabled(maho::features::kMahoUnifiedClickPath));
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/title1.html")));
+  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
+
+  ASSERT_EQ(nullptr, GetController())
+      << "Controller must be null before any Show() call (lazy-init contract)";
+
+  BrowserView* bv = GetBrowserView();
+  ASSERT_TRUE(bv);
+  bv->SetFocusToLocationBar(/*is_user_initiated=*/true);
+  base::RunLoop().RunUntilIdle();
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(nullptr, GetController())
+      << "With kMahoUnifiedClickPath disabled, SetFocusToLocationBar(true) "
+         "must not open the overlay; the controller must remain null.";
+}
+
+namespace {
+
 class MahoLittleArcInteractiveTest : public InProcessBrowserTest {
  public:
   MahoLittleArcInteractiveTest() = default;
@@ -934,9 +1130,10 @@ IN_PROC_BROWSER_TEST_F(MahoLittleArcInteractiveTest,
       << "The promoted tab must carry the URL that was loaded in the popup";
 }
 
-// Regression tests for the new-tab submit path bug:
-// Opening the command palette in kNewTab mode and pressing Enter must always
-// create a new foreground tab rather than reusing / activating an existing tab.
+// Regression tests for the new-tab submit path:
+// Typed navigation in kNewTab mode always opens a new foreground tab.
+// Selecting an existing-tab result in kNewTab mode activates the existing tab
+// (the tab-activate branch in OpenCommandSuggestion wins over disposition).
 
 IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
                        NewTab_EnterOnTypedUrlOpensNewTab) {
@@ -1000,7 +1197,7 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
 }
 
 IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
-                       NewTab_SelectingExistingTabResultOpensNewTab) {
+                       NewTab_SelectingExistingTabResultActivatesExistingTab) {
   const GURL page1 = embedded_test_server()->GetURL("/title1.html");
   const GURL page2 = embedded_test_server()->GetURL("/title2.html");
 
@@ -1050,19 +1247,106 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
   ASSERT_TRUE(base::test::RunUntil([&]() {
     maho::MahoCommandOverlayController* c = GetController();
     return !c || !c->IsVisible();
-  })) << "Pressing Enter on an existing-tab result in new-tab mode must "
-         "dismiss the overlay";
+  })) << "Pressing Enter on an existing-tab result must dismiss the overlay";
+
+  EXPECT_EQ(tab_count_before, browser()->tab_strip_model()->count())
+      << "Tab count must not increase: selecting an existing tab activates it, "
+         "never duplicates it";
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return GetActiveWebContents()->GetLastCommittedURL() == page2;
+  })) << "The existing tab at index 1 must become the active tab";
+
+  EXPECT_EQ(page2, GetActiveWebContents()->GetLastCommittedURL())
+      << "Active tab must be page2 (the activated existing tab)";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
+                       NewTab_SelectingNavigationSuggestionOpensNewTab) {
+  const GURL initial_url = embedded_test_server()->GetURL("/title1.html");
+  const GURL nav_url = embedded_test_server()->GetURL("/title2.html");
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), initial_url));
+  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
+
+  const int tab_count_before = browser()->tab_strip_model()->count();
+
+  BrowserView* bv = GetBrowserView();
+  ASSERT_TRUE(bv);
+  bv->ShowMahoCommandOverlayForNewTab();
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    maho::MahoCommandOverlayController* c = GetController();
+    return c && c->IsVisible();
+  })) << "ShowMahoCommandOverlayForNewTab must open the overlay";
+
+  maho::MahoCommandOverlayController* controller = GetController();
+  ASSERT_TRUE(controller);
+  maho::MahoCommandOverlayView* overlay_view =
+      controller->GetOverlayViewForTesting();
+  ASSERT_TRUE(overlay_view);
+
+  maho::CommandSuggestion nav_suggestion;
+  nav_suggestion.type = maho::CommandSuggestionType::kNavigation;
+  nav_suggestion.title = "Title 2";
+  nav_suggestion.execution_payload = nav_url.spec();
+  overlay_view->UpdateResultViewsForTesting({nav_suggestion});
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(ui_test_utils::SendKeyPressSync(browser(), ui::VKEY_RETURN,
+                                              false, false, false, false))
+      << "Failed to dispatch Return key event";
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    maho::MahoCommandOverlayController* c = GetController();
+    return !c || !c->IsVisible();
+  })) << "Pressing Enter on a navigation result in new-tab mode must dismiss "
+         "the overlay";
 
   ASSERT_TRUE(base::test::RunUntil([&]() {
     return browser()->tab_strip_model()->count() > tab_count_before;
-  })) << "Selecting an existing-tab result in new-tab mode must open a NEW "
-         "tab, not activate the existing one";
+  })) << "Selecting a navigation suggestion in new-tab mode must open a NEW "
+         "tab, not reuse the current one";
 
   EXPECT_EQ(tab_count_before + 1, browser()->tab_strip_model()->count())
       << "Tab count must increase by exactly 1";
 
-  EXPECT_EQ(page1, browser()->tab_strip_model()
-                       ->GetWebContentsAt(0)
-                       ->GetLastCommittedURL())
+  EXPECT_EQ(initial_url, browser()->tab_strip_model()
+                              ->GetWebContentsAt(0)
+                              ->GetLastCommittedURL())
       << "The original tab must remain at its original URL";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
+                       CurrentTabSeed_DividerHiddenOnOrdinarySiteFocusPath) {
+  const GURL ordinary_url = embedded_test_server()->GetURL("/title1.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), ordinary_url));
+  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
+
+  TriggerUserInitiatedFocus();
+
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    maho::MahoCommandOverlayController* c = GetController();
+    return c && c->IsVisible();
+  })) << "Overlay must open via the real user-initiated focus path";
+
+  maho::MahoCommandOverlayController* controller = GetController();
+  ASSERT_TRUE(controller);
+  maho::MahoCommandOverlayView* overlay_view =
+      controller->GetOverlayViewForTesting();
+  ASSERT_TRUE(overlay_view);
+
+  ASSERT_TRUE(overlay_view->IsSeededStateForTesting())
+      << "Ordinary-site navigation must produce seeded state on open";
+  ASSERT_GE(overlay_view->GetSeededResultsForTesting().size(), 1u)
+      << "At least one seeded result must be present";
+
+  EXPECT_FALSE(overlay_view->IsDividerVisibleForTesting())
+      << "Divider must be hidden in the seeded kCurrentTab path on an "
+         "ordinary site (Cmd+L acceptance path invariant)";
+
+  controller->Hide();
+  ASSERT_TRUE(base::test::RunUntil([&]() { return !controller->IsVisible(); }));
 }

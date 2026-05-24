@@ -10,6 +10,7 @@
 #include "base/functional/callback.h"
 #include "base/strings/utf_string_conversions.h"
 #include "maho/browser/ui/views/command/maho_command_model.h"
+#include "maho/browser/ui/views/command/maho_command_result_row_view.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
@@ -24,6 +25,25 @@
 
 namespace maho {
 namespace {
+
+ImageData MakeTestFaviconImageData() {
+  constexpr uint8_t kPngBytes[] = {
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00,
+      0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+      0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89,
+      0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63,
+      0xF8, 0xCF, 0xC0, 0xF0, 0x1F, 0x00, 0x05, 0x00, 0x01, 0xFF, 0x89,
+      0x99, 0x3D, 0x1D, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
+      0xAE, 0x42, 0x60, 0x82,
+  };
+
+  ImageData image_data;
+  image_data.data.assign(std::begin(kPngBytes), std::end(kPngBytes));
+  image_data.width = 16;
+  image_data.height = 16;
+  image_data.format = "png";
+  return image_data;
+}
 
 size_t SeededVisibleResultCap() {
   return MahoCommandOverlayView::GetMaxSeededVisibleResultsForTesting();
@@ -711,6 +731,29 @@ TEST_F(MahoCommandOverlayViewTest,
 }
 
 TEST_F(MahoCommandOverlayViewTest,
+       CurrentTabSeedSkipsInternalHistoryEntriesBeforeVisibleCap) {
+  const std::vector<std::pair<std::string, std::string>> history_entries = {
+      {"chrome://history/", "History"},
+      {"https://prev1.test/", "Prev One"},
+      {"chrome://settings/", "Settings"},
+      {"https://prev2.test/", "Prev Two"},
+      {"https://prev3.test/", "Prev Three"},
+      {"https://prev4.test/", "Prev Four"},
+  };
+
+  const auto seeds =
+      MahoCommandOverlayView::BuildCurrentTabSeedResultsFromHistoryForTesting(
+          "https://current.test/", "Current Page", history_entries);
+
+  ASSERT_EQ(SeededVisibleResultCap(), seeds.size());
+  EXPECT_EQ("https://current.test/", seeds[0].execution_payload);
+  EXPECT_EQ("https://prev1.test/", seeds[1].execution_payload);
+  EXPECT_EQ("https://prev2.test/", seeds[2].execution_payload);
+  EXPECT_EQ("https://prev3.test/", seeds[3].execution_payload);
+  EXPECT_EQ("https://prev4.test/", seeds[4].execution_payload);
+}
+
+TEST_F(MahoCommandOverlayViewTest,
        CurrentTabSeedRowTitleComesFromNavigationEntry) {
   const std::string url = "https://entry.test/";
   const std::string title = "Entry Page Title";
@@ -812,6 +855,68 @@ TEST_F(MahoCommandOverlayViewTest,
   EXPECT_EQ(visible_cap, view->GetRenderedResultCountForTesting())
       << "Backend empty-result response must not evict seeded rows at the "
          "visible cap";
+}
+
+TEST_F(MahoCommandOverlayViewTest,
+       SeededCurrentTabHydratedIconUpdatesLeadingAccessoryAndRow) {
+  auto* view = CreateView(CommandOverlayMode::kCurrentTab,
+                          "https://current.test/", true);
+
+  CommandSuggestion current =
+      MahoCommandOverlayView::BuildCurrentTabSeedForTesting(
+          "https://current.test/", "Current");
+  current.icon = MakeTestFaviconImageData();
+
+  CommandSuggestion history =
+      MahoCommandOverlayView::BuildCurrentTabSeedForTesting(
+          "https://prev.test/", "Previous");
+  history.icon.reset();
+
+  view->InitializeSeededStateForTesting({current, history});
+
+  auto children = view->GetResultsContainerForTesting()->children();
+  ASSERT_EQ(2u, children.size());
+  auto* history_row = static_cast<MahoCommandResultRowView*>(children[1].get());
+  ASSERT_TRUE(history_row->UsesFallbackGlyphForTesting());
+  EXPECT_EQ(nullptr, history_row->GetFaviconImageForTesting());
+
+  view->ApplyHydratedSeededIconForTesting(1u, MakeTestFaviconImageData());
+
+  children = view->GetResultsContainerForTesting()->children();
+  history_row = static_cast<MahoCommandResultRowView*>(children[1].get());
+  EXPECT_FALSE(history_row->UsesFallbackGlyphForTesting());
+  EXPECT_NE(nullptr, history_row->GetFaviconImageForTesting());
+}
+
+// ---------------------------------------------------------------------------
+// Divider visibility contract
+// ---------------------------------------------------------------------------
+
+TEST_F(MahoCommandOverlayViewTest,
+       SeededCurrentTabKeepsDividerHidden) {
+  const std::string url = "https://example.com/page";
+  auto* view = CreateView(CommandOverlayMode::kCurrentTab, url, true);
+
+  ASSERT_TRUE(view->IsSeededStateForTesting());
+  view->UpdateResultViewsForTesting({});
+
+  EXPECT_FALSE(view->IsDividerVisibleForTesting())
+      << "Divider must remain hidden in seeded kCurrentTab state";
+}
+
+TEST_F(MahoCommandOverlayViewTest,
+       NonSeededResultsPathShowsDividerWhenResultsPresent) {
+  auto* view = CreateView(CommandOverlayMode::kSearch);
+
+  CommandSuggestion s;
+  s.title = "History Result";
+  s.subtitle = "https://visited.com/";
+  s.type = CommandSuggestionType::kHistory;
+
+  view->UpdateResultViewsForTesting({s});
+
+  EXPECT_TRUE(view->IsDividerVisibleForTesting())
+      << "Divider must be visible when non-seeded results are present";
 }
 
 // ---------------------------------------------------------------------------
@@ -933,6 +1038,132 @@ TEST_F(MahoCommandOverlayViewTest,
   EXPECT_EQ(WindowOpenDisposition::CURRENT_TAB,
             view->DispositionForModeForTesting())
       << "After exiting kAI back to kSearch, disposition must be CURRENT_TAB";
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1 (Zen parity): empty-query view-layer behavior per mode
+// ---------------------------------------------------------------------------
+
+TEST_F(MahoCommandOverlayViewTest,
+       EmptyQueryInCurrentTabModeWithNoSeedShowsHintLabel) {
+  auto* view = CreateView(CommandOverlayMode::kCurrentTab);
+  ASSERT_FALSE(view->IsSeededStateForTesting());
+
+  view->UpdateResultViewsForTesting({});
+
+  auto children = view->GetResultsContainerForTesting()->children();
+  ASSERT_EQ(1u, children.size())
+      << "Empty kCurrentTab with no seed must show hint label only";
+  EXPECT_EQ(0u, view->GetRenderedResultCountForTesting());
+}
+
+TEST_F(MahoCommandOverlayViewTest,
+       EmptyQueryInSearchModeShowsHintLabel) {
+  auto* view = CreateView(CommandOverlayMode::kSearch);
+
+  view->UpdateResultViewsForTesting({});
+
+  auto children = view->GetResultsContainerForTesting()->children();
+  ASSERT_EQ(1u, children.size())
+      << "Empty kSearch must show hint label only, not seeded rows";
+  EXPECT_EQ(0u, view->GetRenderedResultCountForTesting());
+}
+
+TEST_F(MahoCommandOverlayViewTest,
+       EmptyQueryInNewTabModeShowsHintLabel) {
+  auto* view = CreateView(CommandOverlayMode::kNewTab);
+
+  view->UpdateResultViewsForTesting({});
+
+  auto children = view->GetResultsContainerForTesting()->children();
+  ASSERT_EQ(1u, children.size())
+      << "Empty kNewTab must show hint label (backend results not yet arrived)";
+  EXPECT_EQ(0u, view->GetRenderedResultCountForTesting());
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 (Zen parity): four-state agreement and disposition at activation
+// ---------------------------------------------------------------------------
+
+TEST_F(MahoCommandOverlayViewTest,
+       FourStateAgreement_CurrentTabModeDispositionIsCurrentTab) {
+  auto* view = CreateView(CommandOverlayMode::kCurrentTab,
+                          "https://example.test/", true);
+
+  ASSERT_TRUE(view->IsSeededStateForTesting());
+  EXPECT_EQ(WindowOpenDisposition::CURRENT_TAB,
+            view->DispositionForModeForTesting())
+      << "kCurrentTab mode must always resolve to CURRENT_TAB disposition";
+}
+
+TEST_F(MahoCommandOverlayViewTest,
+       FourStateAgreement_NewTabModeDispositionIsNewForegroundTab) {
+  auto* view = CreateView(CommandOverlayMode::kNewTab);
+
+  CommandSuggestion s;
+  s.title = "Result";
+  s.subtitle = "https://example.test/";
+  s.type = CommandSuggestionType::kHistory;
+  s.execution_payload = "https://example.test/";
+  view->UpdateResultViewsForTesting({s});
+
+  EXPECT_EQ(WindowOpenDisposition::NEW_FOREGROUND_TAB,
+            view->DispositionForModeForTesting())
+      << "kNewTab mode must always resolve to NEW_FOREGROUND_TAB disposition";
+}
+
+TEST_F(MahoCommandOverlayViewTest,
+       FourStateAgreement_SearchModeDispositionIsCurrentTab) {
+  auto* view = CreateView(CommandOverlayMode::kSearch);
+
+  CommandSuggestion s;
+  s.title = "Result";
+  s.type = CommandSuggestionType::kHistory;
+  view->UpdateResultViewsForTesting({s});
+
+  EXPECT_EQ(WindowOpenDisposition::CURRENT_TAB,
+            view->DispositionForModeForTesting())
+      << "kSearch mode must always resolve to CURRENT_TAB disposition";
+}
+
+TEST_F(MahoCommandOverlayViewTest,
+       OriginModeRoundTrip_CurrentTabEntersAiAndKeepsCurrentTabDisposition) {
+  auto* view = CreateView(CommandOverlayMode::kCurrentTab,
+                          "https://example.test/", true);
+
+  view->textfield()->SetText(u"ai");
+  SendKey(view, ui::VKEY_TAB);
+
+  ASSERT_EQ(CommandOverlayMode::kAI, view->CurrentModeForTesting());
+  EXPECT_EQ(CommandOverlayMode::kCurrentTab, view->OriginModeForTesting())
+      << "origin_mode_ must be kCurrentTab after entering kAI from kCurrentTab";
+  EXPECT_EQ(WindowOpenDisposition::CURRENT_TAB,
+            view->DispositionForModeForTesting())
+      << "kAI entered from kCurrentTab must yield CURRENT_TAB";
+}
+
+TEST_F(MahoCommandOverlayViewTest,
+       EmptyTextAfterSeededClearShowsHintNotSeededRows) {
+  const std::string url = "https://seeded.test/page";
+  auto* view = CreateView(CommandOverlayMode::kCurrentTab, url, true);
+  ASSERT_TRUE(view->IsSeededStateForTesting());
+  ASSERT_EQ(1u, view->GetRenderedResultCountForTesting());
+
+  view->textfield()->SetText(u"x");
+  view->ContentsChanged(view->textfield(), u"x");
+  ASSERT_FALSE(view->IsSeededStateForTesting());
+
+  view->textfield()->SetText(u"");
+  view->ContentsChanged(view->textfield(), u"");
+
+  view->UpdateResultViewsForTesting({});
+
+  EXPECT_EQ(0u, view->GetRenderedResultCountForTesting())
+      << "After seeded state is cleared and text is emptied, "
+         "no seeded rows must appear";
+  auto children = view->GetResultsContainerForTesting()->children();
+  EXPECT_GE(children.size(), 1u)
+      << "Hint label must be present after seeded clear";
 }
 
 }  // namespace

@@ -39,6 +39,7 @@ enum class CommandSuggestionType {
   kHistory,
   kAction,
   kNavigation,
+  kSearch,
   kCalculator,
   kUnitConversion,
   kArchivedTab,

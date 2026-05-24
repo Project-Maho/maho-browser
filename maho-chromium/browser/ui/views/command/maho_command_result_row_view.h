@@ -59,6 +59,7 @@ class MahoCommandResultRowView : public views::View {
   void OnMouseReleased(const ui::MouseEvent& event) override;
 
   void SetSelected(bool selected);
+  void SetIcon(std::optional<ImageData> icon);
 
   static gfx::Insets GetSelectionInsetsForTesting(PresentationStyle style);
   static int GetSelectionCornerRadiusForTesting(PresentationStyle style);
@@ -71,17 +72,21 @@ class MahoCommandResultRowView : public views::View {
     return compact_metadata_label_;
   }
   views::View* GetContentViewForTesting() const { return content_view_; }
+  bool UsesFallbackGlyphForTesting() const { return uses_fallback_glyph_; }
+  views::ImageView* GetFaviconImageForTesting() const { return favicon_image_; }
 
  private:
   void ApplyTitleStyles(SkColor title_color);
+  void RebuildGlyph();
   void UpdateColors();
   void UpdateLayout();
 
+  const CommandSuggestionType suggestion_type_;
   const PresentationStyle presentation_style_;
   const std::u16string title_text_;
   const std::u16string subtitle_text_;
   const std::u16string compact_metadata_text_;
-  const std::optional<ImageData> icon_;
+  std::optional<ImageData> icon_;
   const int row_index_;
   const int set_size_;
   const HoverCallback hover_callback_;
