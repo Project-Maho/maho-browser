@@ -915,9 +915,10 @@ void MahoSidebarTabListView::ShowTabRowContextMenu(
     views::View* source,
     int live_index,
     const gfx::Point& point,
-    ui::mojom::MenuSourceType source_type) {
+    ui::mojom::MenuSourceType source_type,
+    MahoTabContextMenu::Delegate* delegate) {
   active_context_menu_ =
-      std::make_unique<MahoTabContextMenu>(browser_, live_index, nullptr);
+      std::make_unique<MahoTabContextMenu>(browser_, live_index, delegate);
   active_menu_model_ = active_context_menu_->BuildMenuModel();
   active_menu_runner_ = std::make_unique<views::MenuRunner>(
       active_menu_model_.get(),
@@ -1220,6 +1221,10 @@ void SidebarTabRowView::ActivateTabAndOpenBoostBubble(int tab_index) {
       anchor_view, browser_, active_contents);
 }
 
+void SidebarTabRowView::RenameTab(int /*tab_index*/) {
+  BeginTitleEditing();
+}
+
 void SidebarTabRowView::OnThemeChanged() {
   views::View::OnThemeChanged();
   UpdateAppearance();
@@ -1311,7 +1316,7 @@ void SidebarTabRowView::ShowContextMenuForViewImpl(
   if (!list_view) {
     return;
   }
-  list_view->ShowTabRowContextMenu(list_view, live_index, point, source_type);
+  list_view->ShowTabRowContextMenu(list_view, live_index, point, source_type, this);
 }
 
 bool SidebarTabRowView::GetDropFormats(
@@ -2353,6 +2358,14 @@ void MahoSidebarTabListView::UpdatePinnedDropLaneVisibility(bool visible) {
 void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
                                            Browser* browser) {
   HandleTabRowHoverEnd();
+  // Tear down any active tab context-menu state before destroying the row
+  // views.  The menu runner holds a raw pointer to active_menu_model_, and
+  // active_context_menu_ holds a raw pointer to the SidebarTabRowView delegate.
+  // Resetting in this order (runner → model → context menu) ensures none of
+  // those raw pointers can dangle once RemoveAllChildViews() runs below.
+  active_menu_runner_.reset();
+  active_menu_model_.reset();
+  active_context_menu_.reset();
   tab_rows_->RemoveAllChildViews();
   pinned_section_target_ = nullptr;
   normal_section_target_ = nullptr;

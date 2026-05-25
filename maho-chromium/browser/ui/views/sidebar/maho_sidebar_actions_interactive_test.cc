@@ -23,6 +23,7 @@
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/views/accessibility/view_accessibility.h"
+#include "maho/browser/ui/views/boost/maho_boost_bubble_coordinator.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/focus/focus_manager.h"
@@ -770,6 +771,98 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
       EXPECT_TRUE(node.is_muted == true || node.is_muted == false)
           << "is_muted field must be a valid boolean";
     }
+  }
+}
+
+// Menu item positions in the tab context menu (maho_tab_context_menu.cc).
+// DOWN presses needed to reach each item from the menu's initial focus state:
+//   DOWN×1=Copy Link, DOWN×2=Share, [separator], DOWN×3=Change Icon,
+//   DOWN×4=Rename, DOWN×5=Mute Tab, DOWN×6=Customize Page (submenu root)
+constexpr int kContextMenuDownsToRename = 4;
+constexpr int kContextMenuDownsToCustomizePage = 6;
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                        ContextMenuRenameTab) {
+  SeedProfile(2);
+  observer_.Clear();
+
+  auto state = GetViewState();
+  std::string tab_id;
+  for (const auto& node : state.tab_list.normal_tree) {
+    if (node.kind == SidebarNodeKind::kTab) {
+      tab_id = node.tab_id;
+      break;
+    }
+  }
+  ASSERT_FALSE(tab_id.empty());
+
+  auto* tab_row = tab_list_->FindTabRowByIdForTesting(tab_id);
+  ASSERT_TRUE(tab_row);
+  ASSERT_TRUE(tab_row->GetVisible());
+
+  ShowContextMenuOnView(tab_row);
+  base::RunLoop().RunUntilIdle();
+
+  for (int i = 0; i < kContextMenuDownsToRename; ++i) {
+    SendKeyPressToWindow(browser()->window()->GetNativeWindow(), ui::VKEY_DOWN);
+  }
+
+  SendKeyPressToWindow(browser()->window()->GetNativeWindow(), ui::VKEY_RETURN);
+
+  views::Textfield* field = tab_row->title_field_for_testing();
+  ASSERT_TRUE(field) << "title_field_for_testing() must exist after Rename — delegate wiring is broken";
+  ASSERT_TRUE(field->GetVisible()) << "Inline rename field must be visible after context-menu Rename";
+
+  field->SetText(u"Context Menu Renamed");
+
+  SendKeyPressToWindow(browser()->window()->GetNativeWindow(), ui::VKEY_RETURN);
+
+  EXPECT_TRUE(observer_.HasEvent("rename_tab"))
+      << "Expected rename_tab event after context-menu Rename commit";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                        ContextMenuBoostMyBoost) {
+  SeedProfile(2);
+  observer_.Clear();
+
+  auto state = GetViewState();
+  std::string tab_id;
+  for (const auto& node : state.tab_list.normal_tree) {
+    if (node.kind == SidebarNodeKind::kTab) {
+      tab_id = node.tab_id;
+      break;
+    }
+  }
+  ASSERT_FALSE(tab_id.empty());
+
+  auto* tab_row = tab_list_->FindTabRowByIdForTesting(tab_id);
+  ASSERT_TRUE(tab_row);
+  ASSERT_TRUE(tab_row->GetVisible());
+
+  ShowContextMenuOnView(tab_row);
+  base::RunLoop().RunUntilIdle();
+
+  for (int i = 0; i < kContextMenuDownsToCustomizePage; ++i) {
+    SendKeyPressToWindow(browser()->window()->GetNativeWindow(), ui::VKEY_DOWN);
+  }
+
+  SendKeyPressToWindow(browser()->window()->GetNativeWindow(), ui::VKEY_RIGHT);
+
+  // Submenu opens with first item (My Boost) already focused; press RETURN
+  // immediately to activate it without moving to the second item.
+  SendKeyPressToWindow(browser()->window()->GetNativeWindow(), ui::VKEY_RETURN);
+
+  auto& coordinator =
+      maho::MahoBoostBubbleCoordinator::GetForBrowser(browser());
+  EXPECT_TRUE(base::test::RunUntil(
+      [&coordinator] { return coordinator.IsShowing(); }))
+      << "Boost bubble must appear after context-menu 'My Boost' action";
+
+  if (coordinator.IsShowing()) {
+    coordinator.Hide();
+    EXPECT_TRUE(base::test::RunUntil(
+        [&coordinator] { return !coordinator.IsShowing(); }));
   }
 }
 

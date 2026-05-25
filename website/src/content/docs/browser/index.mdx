@@ -1,0 +1,149 @@
+---
+title: Maho Browser
+description: A modern, privacy-first browser built with Rust
+sidebar:
+  order: 1
+---
+
+## Overview
+
+Maho Browser is a modern web browser built around a Rust core engine. It combines privacy-first browsing with workspace management, native shell integration, and built-in AI features.
+
+The browser is designed to keep the core browsing stack portable while letting each platform present the native interface users expect. That split gives Maho a shared engine model without forcing a shared UI layer.
+
+## Platform support
+
+Maho Browser is available on:
+
+| Platform | UI shell | Notes |
+| --- | --- | --- |
+| macOS | AppKit | Native desktop shell for macOS users |
+| iOS | SwiftUI | Mobile shell built for Apple devices |
+| Android | Native Android | Android-specific interface and integration |
+
+The browser behavior is shared through the Rust core, while platform shells handle presentation and device-specific interaction patterns.
+
+## Architecture
+
+Maho uses a layered architecture:
+
+- `maho-core` contains the browser engine and shared behavior.
+- Native shells provide the platform UI and app lifecycle integration.
+- Shared data types and contracts live in dedicated crates so the engine and shells agree on the same model.
+
+This architecture keeps browser logic centralized and reduces divergence across platforms.
+
+### Core and shell split
+
+The Rust core owns browser state, tab behavior, and workspace logic. Platform shells are responsible for rendering views, wiring shortcuts, and exposing the native controls for each operating system.
+
+### Why this matters
+
+- Engine behavior stays consistent across macOS, iOS, and Android.
+- Platform shells can follow native conventions without duplicating browser logic.
+- Shared data models make sync, spaces, and tab state easier to reason about.
+
+## Key features
+
+The browser includes a set of core features that work together around the workspace model.
+
+| Feature | Summary |
+| --- | --- |
+| [Spaces](./spaces) | Persistent workspaces for organizing tabs by project or context |
+| AI Features | Built-in AI with tidy titles, page previews, slash commands, and BYOK support |
+| Extensions | Manifest V3 Chrome extension compatibility |
+| Sync | Cross-device sync with end-to-end encryption |
+| Boosts | Per-site CSS and JavaScript customization |
+
+### Spaces
+
+Spaces are persistent workspaces that group tabs, folders, and rules around a project or context. They are the main organizing unit in Maho Browser. See the [Spaces documentation](./spaces) for the full model and behavior.
+
+### AI Features
+
+Maho includes built-in AI support for page understanding and browsing assistance. The feature set includes tidy titles, page previews, slash commands, and bring your own key support.
+
+### Extensions
+
+Maho supports Manifest V3 Chrome extensions. That keeps the extension surface familiar for users who rely on existing browser tooling.
+
+### Sync
+
+Sync keeps browser data aligned across devices and protects it with end-to-end encryption. This makes it possible to move between devices without losing the current workspace context.
+
+### Boosts
+
+Boosts let users apply per-site CSS and JavaScript customizations. They are useful for site-specific tweaks that should stay scoped to a single origin.
+
+## Additional browser features
+
+Maho also includes several supporting tools that make day-to-day browsing more structured.
+
+### Split View
+
+Split View lets users open tabs side by side inside a space. It supports vertical, horizontal, and grid layouts, plus configurable ratios and a focus mode for more controlled reading or comparison workflows.
+
+### Notes
+
+Notes are markdown documents attached to spaces. They support code blocks, checklists, and auto-save, which makes them practical for quick research notes or project tracking.
+
+### Reading List
+
+The Reading List stores pages for later review. It tracks read and unread status and can auto-archive items after they have been read.
+
+### Easel
+
+Easel is a visual canvas for spatial note-taking. It supports cards, images, links, drawings, and auto-layout for more freeform research and planning.
+
+### Auto Tab Close
+
+Auto Tab Close, or ATC, cleans up tabs automatically using per-space rules. Rules can close tabs after a time threshold, close duplicates, or enforce a tab count limit.
+
+### Content Blocker
+
+The built-in content blocker handles ad and tracker blocking. It supports customizable filter lists and EasyList format rules.
+
+### Bookmarks
+
+Bookmarks are organized in a hierarchical manager with folders, tags, and search. The structure is designed for both long-term reference and quick retrieval.
+
+### Downloads
+
+The download manager tracks progress, supports pause and resume, and can auto-organize files by type.
+
+### Profiles
+
+Profiles provide separate browsing contexts with isolated cookies, history, and extensions. They are useful when different accounts or work identities need to stay separate.
+
+### Import and export
+
+Maho can import data from Chrome, Firefox, Arc, Brave, and Edge. Safari import is not yet supported.
+
+## Settings
+
+Maho exposes a broad set of settings so users can tune the browser around their workflow.
+
+| Settings area | What it covers |
+| --- | --- |
+| General | Core application behavior |
+| Appearance | Visual styling and layout preferences |
+| Privacy | Browsing privacy controls |
+| Reader Mode | Reading-focused presentation options |
+| Keyboard Shortcuts | Shortcut customization |
+| Per-site Settings | Origin-specific behavior |
+| Toolbar Items | Visible toolbar controls |
+| Max | AI feature configuration |
+| Advanced | Lower-level browser options |
+| Notifications | Browser notification behavior |
+| App Icon | Application icon selection |
+
+## Browser model
+
+Maho is built to support a browser workflow that starts with tabs, then adds structure on top of tabs through spaces, folders, notes, and rules.
+
+That makes it suitable for both general browsing and heavier project-based work where the browser becomes part of the work environment.
+
+## What to read next
+
+- [Spaces](./spaces) for workspace structure and space behavior
+- Browser feature pages for AI, extensions, sync, and boosts

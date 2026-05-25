@@ -22,9 +22,12 @@ interface PageHandler {
   SetCssRules(string domain, string css) => (bool success);
   ToggleJs(string domain, bool enabled) => (bool success);
   ToggleAds(string domain, bool blocked) => (bool success);
+  EnterZapMode(string boost_id) => (bool success);
+  RemoveZapSelector(string boost_id, string selector) => (bool success);
 };
 
 // WebUI-side interface for browser-to-page push updates.
 interface Page {
   RulesChanged(SiteRule rule);
+  OnZapSelectorPicked(string boost_id, string selector);
 };

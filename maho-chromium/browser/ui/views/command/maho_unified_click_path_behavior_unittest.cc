@@ -204,8 +204,8 @@ TEST_F(MahoUnifiedClickPathBehaviorTest,
   // The entire URL must be selected so the user can immediately type a
   // replacement — matching select_initial_text=true in the production call.
   const gfx::Range sel = overlay->textfield()->GetSelectedRange();
-  EXPECT_EQ(0u, sel.start());
-  EXPECT_EQ(static_cast<uint32_t>(url.size()), sel.end())
+  EXPECT_EQ(0u, sel.GetMin());
+  EXPECT_EQ(url.size(), sel.GetMax())
       << "select_initial_text=true must produce a full select-all selection";
 
   ReleaseController(*controller);
@@ -311,8 +311,8 @@ TEST_F(MahoUnifiedClickPathBehaviorTest,
 
   // (c) Full selection — user can immediately type a new URL.
   const gfx::Range sel = overlay->textfield()->GetSelectedRange();
-  EXPECT_EQ(0u, sel.start());
-  EXPECT_EQ(static_cast<uint32_t>(current_url.size()), sel.end());
+  EXPECT_EQ(0u, sel.GetMin());
+  EXPECT_EQ(current_url.size(), sel.GetMax());
 
   ReleaseController(*controller);
 }

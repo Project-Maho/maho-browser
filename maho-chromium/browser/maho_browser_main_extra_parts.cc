@@ -15,10 +15,10 @@
 #include "content/public/browser/browser_thread.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/maho_tab_registry.h"
 #include "maho/browser/ui/theme/maho_color_mixer.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/third_party/maho/maho_bridge.h"
-#include "maho/browser/ui/theme/maho_color_mixer.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "ui/color/color_provider_manager.h"
 
@@ -126,6 +126,7 @@ void MahoBrowserMainExtraParts::PostEarlyInitialization() {
     maho::core::LoadState(core_);
     LOG(INFO) << "Maho core initialized, version: " << maho::core::Version();
     PopulateBridgeFromCore(core_);
+    maho::MahoTabRegistry::Get();
   } else {
     LOG(ERROR) << "Maho core initialization failed";
   }

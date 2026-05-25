@@ -1,0 +1,101 @@
+---
+title: FAQ
+description: Frequently asked questions about Maho Browser
+sidebar:
+  order: 7
+---
+
+## What makes Maho different from other browsers?
+
+Maho is built on a Rust core engine with native UI shells for each platform — AppKit on macOS, SwiftUI on iOS, and native Android. This is not an Electron wrapper or a Chromium fork. The Rust core handles browser logic, tab state, sync, and AI, while each platform shell delivers the interface users expect from a native app.
+
+The browser is workspace-first. Spaces, folders, and auto-tab-close rules are central to how Maho organizes browsing, not bolted-on features. Built-in AI uses a bring-your-own-key model so you control the provider and your data. Sync is end-to-end encrypted, and the relay server never sees plaintext.
+
+## Is Maho available on Windows or Linux?
+
+Not yet. Maho currently supports macOS, iOS, and Android. Windows and Linux are on the roadmap, but there is no confirmed timeline.
+
+If you need a cross-platform browser today, Zen Browser is worth considering. It is Firefox-based, open source under MPL-2.0, and available on macOS, Windows, and Linux. It does not have iOS or Android builds.
+
+## How does Maho compare to Arc Browser?
+
+Maho's space system was designed with direct feature parity to Arc. Both browsers offer Spaces, Boosts, Split View, and a canvas feature (Easels in Arc, Easel in Maho). Maho also includes pinned tabs, folder support, and space-specific favorites that match Arc's workspace model.
+
+The key difference is trajectory. Arc's developer, The Browser Company, has pivoted to a new product called Dia. Arc is still downloadable for Mac and Windows but is no longer actively developed. Maho is actively maintained and adds capabilities Arc did not ship, including cross-device sync with end-to-end encryption, mobile apps for iOS and Android, and built-in AI with BYOK support.
+
+## Can I use Chrome extensions in Maho?
+
+Yes. Maho supports Manifest V3 Chrome extensions. Most MV3 extensions work with minimal or no modification as long as they stay within the APIs Maho bridges.
+
+Currently, extensions are installed from unpacked directories only. There is no Chrome Web Store integration. You load an extension by pointing Maho at its directory containing a valid `manifest.json`.
+
+For comparison: Zen uses Firefox Add-ons, which is a different extension ecosystem. Nook has no extension support. Arc supported Chrome extensions through its Chromium base.
+
+## How does Maho handle privacy?
+
+Maho takes a privacy-first approach across several layers:
+
+- **No telemetry by default.** The browser does not phone home unless you opt in.
+- **End-to-end encrypted sync.** The relay server stores only encrypted blobs and cannot read your data.
+- **Built-in content blocker.** Ad and tracker blocking with EasyList-format filter support.
+- **Local AI option.** Run models on your own machine through Ollama or any OpenAI-compatible local server. No data leaves your device.
+- **Per-site permissions.** Control camera, microphone, location, and notification access per origin.
+- **Profiles.** Isolate cookies, history, and extensions across separate browsing contexts.
+
+Nook shares a similar privacy-first stance — it is WebKit-based, open source, and requires no account. Zen inherits Firefox's Enhanced Tracking Protection. Arc had less emphasis on privacy as a core design goal.
+
+## What AI features does Maho include?
+
+Maho includes four automatic AI features and six on-demand slash skills.
+
+**Automatic features:**
+
+- Tidy Tab Titles — generates concise, meaningful tab names from page content
+- Tidy Downloads — renames downloaded files to descriptive names based on content
+- Page Preview — shows a 2-3 sentence summary when hovering over a link or tab
+- Tidy Tabs — suggests grouping, closing, or reorganizing tabs by topic
+
+**Slash skills** (invoked from the command bar with `/`):
+
+- `/summarize` — summarize the current page or selected text
+- `/translate` — translate content to a target language
+- `/explain` — explain selected text in simpler terms
+- `/rewrite` — rewrite text with a different tone or style
+- `/fact-check` — verify claims against web sources
+- `/code-review` — review code snippets for bugs and improvements
+
+Maho uses a BYOK model. You provide your own API key for OpenAI or Anthropic, or point the browser at a local server running Ollama, llama.cpp, or similar. No data is sent to Maho's servers.
+
+Arc introduced AI features under the "Max" brand before pivoting to Dia. Zen and Nook do not include built-in AI.
+
+## Is my data synced through Maho's servers?
+
+Sync uses a relay server at `wss://sync.maho.app`, but all data is end-to-end encrypted before it reaches the relay. The server stores encrypted blobs only — it cannot read your browsing data, bookmarks, notes, or any other synced content.
+
+When you are offline, changes queue locally and sync automatically when the connection returns. You can also use Maho without sync entirely.
+
+## How do Maho Boosts compare to Zen Mods?
+
+Both Maho Boosts and Zen Mods let you customize websites with CSS and JavaScript. They solve the same problem — persistent per-site tweaks — but take different approaches.
+
+Maho Boosts include a built-in UI for color and font overrides, 10 preset templates (Dark Mode, Hide Ads, Large Text, Sepia Mode, and others), URL pattern matching with glob and regex support, and space scoping so a boost in your Work space does not affect your Personal space.
+
+Zen Mods are community-driven and installable from a marketplace. The ecosystem is more open-ended but relies on community contributions for templates and presets.
+
+## Can I import my data from another browser?
+
+Yes. Maho imports bookmarks, history, and passwords from:
+
+- Chrome
+- Firefox
+- Arc
+- Brave
+- Edge
+
+Safari import is not yet supported. The import wizard runs on first launch and is also available anytime from Settings.
+
+## Is Maho open source?
+
+No. Maho's core engine and platform shells are proprietary.
+
+If open source is important to you, both Nook and Zen are open source alternatives. Nook is fully open and macOS-only. Zen is licensed under MPL-2.0, community-driven, and available on macOS, Windows, and Linux.

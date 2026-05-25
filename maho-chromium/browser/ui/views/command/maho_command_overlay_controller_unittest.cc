@@ -59,6 +59,11 @@ class MahoCommandOverlayControllerTest : public views::ViewsTestBase {
     controller.parent_widget_ = parent;
     auto owned = CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
     owned->Show();
+    auto* root_view = owned->GetRootView();
+    if (root_view) {
+      root_view->SetPaintToLayer();
+      root_view->layer()->SetFillsBoundsOpaquely(false);
+    }
     controller.widget_ = std::move(owned);
     controller.is_hiding_ = false;
   }
@@ -364,6 +369,9 @@ TEST_F(MahoCommandOverlayControllerTest,
 
   controller->OnWidgetDestroying(overlay_raw);
 
+  // OnWidgetDestroying releases (not resets) widget_ — test owns the raw ptr.
+  overlay_raw->CloseNow();
+
   EXPECT_FALSE(controller->IsVisible());
   EXPECT_FALSE(GetIsHiding(*controller));
   EXPECT_EQ(GetOverlayWidget(*controller), nullptr);
@@ -388,6 +396,7 @@ TEST_F(MahoCommandOverlayControllerTest,
 
   views::Widget* overlay_raw = GetOverlayWidget(*controller);
   controller->OnWidgetDestroying(overlay_raw);
+  overlay_raw->CloseNow();
 
   EXPECT_FALSE(DeactivationTimerIsRunning(*controller));
   EXPECT_FALSE(GetIsHiding(*controller));

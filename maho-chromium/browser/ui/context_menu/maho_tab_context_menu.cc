@@ -9,19 +9,19 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
 #include "base/values.h"
-#include "maho/browser/maho_core_holder.h"
-#include "maho/browser/maho_space_profile_bridge.h"
-#include "maho/browser/maho_tab_id_helper.h"
-#include "maho/third_party/maho/maho_ffi.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
+#include "maho/browser/maho_core_holder.h"
+#include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
+#include "maho/third_party/maho/maho_ffi.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/menus/simple_menu_model.h"
@@ -47,43 +47,55 @@ MahoTabContextMenu::~MahoTabContextMenu() = default;
 
 std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
   auto model = std::make_unique<ui::SimpleMenuModel>(this);
+
   const TabStripModel* tab_strip_model =
       browser_ ? browser_->tab_strip_model() : nullptr;
-  const bool has_valid_tab_index =
-      tab_strip_model && tab_index_ >= 0 && tab_index_ < tab_strip_model->count();
+  const bool has_valid_tab_index = tab_strip_model && tab_index_ >= 0 &&
+                                   tab_index_ < tab_strip_model->count();
 
   content::WebContents* contents =
-      has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_) : nullptr;
+      has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_)
+                          : nullptr;
 
-  model->AddItem(IDC_MAHO_TAB_CLOSE, u"Close Tab");
-  model->AddItem(IDC_MAHO_TAB_CLOSE_OTHERS, u"Close Other Tabs");
-
-  model->AddSeparator(ui::NORMAL_SEPARATOR);
-
-  model->AddItem(IDC_MAHO_TAB_DUPLICATE, u"Duplicate Tab");
-  model->AddItem(IDC_MAHO_TAB_OPEN_SPLIT, u"Open in Split View");
-
-  model->AddSeparator(ui::NORMAL_SEPARATOR);
-
+  //  0  Copy Link
   model->AddItem(IDC_MAHO_TAB_COPY_URL, u"Copy Link");
+
+  //  1  Share
+  model->AddItem(IDC_MAHO_TAB_SHARE, u"Share");
+
+  //  2  [separator]
+  model->AddSeparator(ui::NORMAL_SEPARATOR);
+
+  //  3  Change Icon…
+  model->AddItem(IDC_MAHO_TAB_CHANGE_ICON, u"Change Icon...");
+
+  //  4  Rename…
+  model->AddItem(IDC_MAHO_TAB_RENAME, u"Rename...");
+
+  //  5  Mute
   if (contents && contents->IsAudioMuted()) {
     model->AddItem(IDC_MAHO_TAB_UNMUTE, u"Unmute Tab");
   } else {
     model->AddItem(IDC_MAHO_TAB_MUTE, u"Mute Tab");
   }
 
+  //  6  Customize Page… (submenu)
+  boost_submenu_ = std::make_unique<ui::SimpleMenuModel>(this);
+  boost_submenu_->AddItem(IDC_MAHO_TAB_BOOST_MY_BOOST, u"My Boost");
+  boost_submenu_->AddItem(IDC_MAHO_TAB_BOOST_EDIT, u"Edit\u2026");
+  model->AddSubMenu(IDC_MAHO_TAB_CUSTOMIZE_PAGE, u"Customize Page\u2026",
+                    boost_submenu_.get());
+
+  //  7  [separator]
   model->AddSeparator(ui::NORMAL_SEPARATOR);
 
-  if (has_valid_tab_index && tab_strip_model->IsTabPinned(tab_index_)) {
-    model->AddItem(IDC_MAHO_TAB_UNPIN, u"Unpin Tab");
-  } else {
-    model->AddItem(IDC_MAHO_TAB_PIN, u"Pin Tab");
-  }
-  model->AddItem(IDC_MAHO_TAB_CLOSE_RIGHT, u"Close Tabs to the Right");
-  model->AddItem(IDC_MAHO_TAB_CLOSE_LEFT, u"Close Tabs to the Left");
+  //  8  Open in Split View
+  model->AddItem(IDC_MAHO_TAB_OPEN_SPLIT, u"Open in Split View");
 
-  model->AddSeparator(ui::NORMAL_SEPARATOR);
+  //  9  Duplicate
+  model->AddItem(IDC_MAHO_TAB_DUPLICATE, u"Duplicate Tab");
 
+  // 10  Move to (submenu)
   move_to_space_submenu_ = std::make_unique<ui::SimpleMenuModel>(this);
   space_entries_.clear();
 
@@ -145,11 +157,15 @@ std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
   }
 
   model->AddSubMenu(IDC_MAHO_TAB_MOVE_TO_SPACE, u"Move to Space",
-                     move_to_space_submenu_.get());
+                    move_to_space_submenu_.get());
 
+  // 11  [separator]
   model->AddSeparator(ui::NORMAL_SEPARATOR);
 
+  // 12  Archive Tab
   model->AddItem(IDC_MAHO_TAB_ARCHIVE, u"Archive Tab");
+
+  // 13  Archive Tabs Below
   model->AddItem(IDC_MAHO_TAB_ARCHIVE_BELOW, u"Archive Tabs Below");
 
   return model;
@@ -158,8 +174,8 @@ std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
 void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
   TabStripModel* tab_strip_model =
       browser_ ? browser_->tab_strip_model() : nullptr;
-  const bool has_valid_tab_index =
-      tab_strip_model && tab_index_ >= 0 && tab_index_ < tab_strip_model->count();
+  const bool has_valid_tab_index = tab_strip_model && tab_index_ >= 0 &&
+                                   tab_index_ < tab_strip_model->count();
 
   switch (command_id) {
     case IDC_MAHO_TAB_CLOSE:
@@ -170,13 +186,13 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
               tab_strip_model->GetWebContentsAt(tab_index_)) {
         if (auto* helper = MahoTabIdHelper::FromWebContents(wc);
             helper && !helper->stable_tab_id().empty()) {
-          maho::DispatchShellEvent("close_tab", {{"tab_id", helper->stable_tab_id()}});
+          maho::DispatchShellEvent("close_tab",
+                                   {{"tab_id", helper->stable_tab_id()}});
         }
       }
       tab_strip_model->CloseWebContentsAt(
-          tab_index_,
-          TabCloseTypes::CLOSE_USER_GESTURE |
-              TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
+          tab_index_, TabCloseTypes::CLOSE_USER_GESTURE |
+                          TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
       break;
     case IDC_MAHO_TAB_CLOSE_OTHERS: {
       if (!has_valid_tab_index) {
@@ -263,8 +279,7 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
                               : nullptr;
       if (contents) {
         ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
-        writer.WriteText(
-            base::UTF8ToUTF16(contents->GetVisibleURL().spec()));
+        writer.WriteText(base::UTF8ToUTF16(contents->GetVisibleURL().spec()));
       }
       break;
     }
@@ -274,8 +289,7 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
                               : nullptr;
       if (contents) {
         ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
-        writer.WriteText(
-            base::UTF8ToUTF16(contents->GetVisibleURL().spec()));
+        writer.WriteText(base::UTF8ToUTF16(contents->GetVisibleURL().spec()));
       }
       break;
     }
@@ -337,11 +351,12 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
         int index = MoveToSpaceIndex(command_id);
         if (index >= 0 && index < static_cast<int>(space_entries_.size())) {
           const auto& entry = space_entries_[index];
-          std::string section = IsMoveToSpacePinned(command_id) ? "pinned"
-                                                                 : "today";
+          std::string section =
+              IsMoveToSpacePinned(command_id) ? "pinned" : "today";
           content::WebContents* contents =
-              has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_)
-                                  : nullptr;
+              has_valid_tab_index
+                  ? tab_strip_model->GetWebContentsAt(tab_index_)
+                  : nullptr;
           if (contents) {
             std::string target_space_id = entry.id;
             std::string tab_id;
@@ -354,7 +369,8 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
             base::ThreadPool::PostTask(
                 FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
                 base::BindOnce(
-                    [](std::string space_id, std::string sec, std::string t_id) {
+                    [](std::string space_id, std::string sec,
+                       std::string t_id) {
                       MahoCore* core = maho::GetCore();
                       if (!core) {
                         return;
@@ -382,8 +398,8 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
 bool MahoTabContextMenu::IsCommandIdEnabled(int command_id) const {
   const TabStripModel* tab_strip_model =
       browser_ ? browser_->tab_strip_model() : nullptr;
-  const bool has_valid_tab_index =
-      tab_strip_model && tab_index_ >= 0 && tab_index_ < tab_strip_model->count();
+  const bool has_valid_tab_index = tab_strip_model && tab_index_ >= 0 &&
+                                   tab_index_ < tab_strip_model->count();
 
   switch (command_id) {
     case IDC_MAHO_TAB_CLOSE:
@@ -405,8 +421,7 @@ bool MahoTabContextMenu::IsCommandIdEnabled(int command_id) const {
     case IDC_MAHO_TAB_CLOSE_OTHERS:
       return has_valid_tab_index && tab_strip_model->count() > 1;
     case IDC_MAHO_TAB_CLOSE_RIGHT:
-      return has_valid_tab_index &&
-             tab_index_ < tab_strip_model->count() - 1;
+      return has_valid_tab_index && tab_index_ < tab_strip_model->count() - 1;
     case IDC_MAHO_TAB_CLOSE_LEFT:
       return has_valid_tab_index && tab_index_ > 0;
     case IDC_MAHO_TAB_ADD_FAVORITE:

@@ -1,0 +1,311 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Nav from '../../components/Nav.astro';
+import Footer from '../../components/Footer.astro';
+
+const title = "Maho Mail vs Thunderbird: Which Email Client Is Better in 2026?";
+const description = "Comparing Maho Mail to Thunderbird. A modern email client with CLI and AI vs the legacy open-source desktop client.";
+
+const faqs = [
+  {
+    q: "Does Maho Mail have a calendar like Thunderbird?",
+    a: "No. Maho Mail is focused on email. Thunderbird includes a full calendar (Lightning), contacts manager, and RSS reader. If you need a personal information manager (PIM) suite, Thunderbird covers more ground. Maho Mail trades breadth for depth in email automation."
+  },
+  {
+    q: "Is Maho Mail as feature-complete as Thunderbird?",
+    a: "Not yet. Thunderbird has over 20 years of development with features like add-ons, mail filters, advanced search folders, S/MIME and PGP encryption, and more. Maho Mail is newer and focuses on a different set of capabilities — CLI access, MCP server for AI agents, and built-in AI. For sheer feature count, Thunderbird wins."
+  },
+  {
+    q: "Can I use Thunderbird with AI tools?",
+    a: "Thunderbird has no built-in AI features and no MCP or agent integration. There are some community add-ons that add limited AI functionality, but nothing comparable to Maho Mail's native AI summarization, drafting, classification, and MCP server."
+  },
+  {
+    q: "Is Thunderbird still actively maintained?",
+    a: "Yes. Thunderbird has undergone a significant modernization effort since 2023, including a UI overhaul (Supernova) and the transition to an independent subsidiary of MZLA Technologies. It receives regular updates and has a large contributor base."
+  },
+  {
+    q: "Can I script Thunderbird from the command line?",
+    a: "Thunderbird has limited command-line options (launching with specific profiles, compose windows), but it does not have a full CLI for searching, reading, or managing email. Maho Mail's CLI lets you search, read, compose, and pipe email data through Unix tools."
+  },
+];
+
+const schema = {
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Article",
+      "headline": title,
+      "description": description,
+      "datePublished": "2026-04-12",
+      "dateModified": "2026-04-12",
+      "author": { "@type": "Organization", "name": "Maho", "url": "https://maho.app" },
+      "publisher": { "@type": "Organization", "name": "Maho", "url": "https://maho.app" },
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        { "@type": "ListItem", "position": 1, "name": "Home", "item": "https://maho.app" },
+        { "@type": "ListItem", "position": 2, "name": "Compare", "item": "https://maho.app/compare" },
+        { "@type": "ListItem", "position": 3, "name": "Maho Mail vs Thunderbird" },
+      ],
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": faqs.map(f => ({
+        "@type": "Question",
+        "name": f.q,
+        "acceptedAnswer": { "@type": "Answer", "text": f.a },
+      })),
+    },
+  ],
+};
+---
+
+<BaseLayout title={title} description={description}>
+  <script is:inline type="application/ld+json" set:html={JSON.stringify(schema)} />
+  <Nav />
+  <main class="min-h-screen bg-background text-foreground">
+
+    <section class="relative flex flex-col justify-center px-6 pt-32 pb-24">
+      <div class="max-w-6xl mx-auto">
+        <nav aria-label="Breadcrumb" class="text-sm text-muted-foreground mb-8">
+          <a href="/" class="hover:text-foreground transition-colors">Home</a>
+          <span class="mx-2">/</span>
+          <a href="/compare" class="hover:text-foreground transition-colors">Compare</a>
+          <span class="mx-2">/</span>
+          <span class="text-foreground">vs Thunderbird</span>
+        </nav>
+        <h1 class="heading-serif text-4xl sm:text-5xl lg:text-6xl leading-[1.1] mb-6">
+          Maho Mail vs Thunderbird
+        </h1>
+        <p class="text-lg text-muted-foreground max-w-2xl leading-relaxed">
+          The legacy desktop client vs the modern one. Two open-source email clients with very different philosophies.
+        </p>
+      </div>
+    </section>
+
+    <section class="py-24 px-6 border-t border-border">
+      <div class="max-w-6xl mx-auto">
+        <div class="max-w-3xl">
+          <span class="inline-block border border-border text-muted-foreground text-xs px-3 py-1 rounded-full mb-6">Quick Verdict</span>
+          <p class="text-lg text-muted-foreground leading-relaxed">
+            <strong class="text-foreground">Choose Thunderbird</strong> if you need a full personal information manager with calendar, contacts, add-ons, and decades of stability. <strong class="text-foreground">Choose Maho Mail</strong> if you want a focused email client with CLI access, AI agent integration, and modern automation capabilities.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="py-24 px-6 border-t border-border">
+      <div class="max-w-6xl mx-auto">
+        <span class="inline-block border border-border text-muted-foreground text-xs px-3 py-1 rounded-full mb-6">At a Glance</span>
+        <h2 class="heading-serif text-3xl sm:text-4xl mb-10">Side-by-side comparison</h2>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-border">
+                <th class="text-left py-3 pr-6 text-muted-foreground font-medium">Feature</th>
+                <th class="text-left py-3 px-6 text-foreground font-medium">Maho Mail</th>
+                <th class="text-left py-3 pl-6 text-muted-foreground font-medium">Thunderbird</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-border">
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">Desktop GUI</td>
+                <td class="py-3 px-6 text-foreground">Yes — modern, minimal interface</td>
+                <td class="py-3 pl-6 text-muted-foreground">Yes — feature-rich, recently redesigned</td>
+              </tr>
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">CLI</td>
+                <td class="py-3 px-6 text-foreground">Yes — full email CLI with JSON output</td>
+                <td class="py-3 pl-6 text-muted-foreground">No — limited command-line flags only</td>
+              </tr>
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">MCP Server</td>
+                <td class="py-3 px-6 text-foreground">Yes — AI agents connect via stdio</td>
+                <td class="py-3 pl-6 text-muted-foreground">No</td>
+              </tr>
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">AI Built In</td>
+                <td class="py-3 px-6 text-foreground">Yes — summarize, draft, classify</td>
+                <td class="py-3 pl-6 text-muted-foreground">No</td>
+              </tr>
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">Calendar</td>
+                <td class="py-3 px-6 text-foreground">No</td>
+                <td class="py-3 pl-6 text-muted-foreground">Yes — built-in Lightning calendar</td>
+              </tr>
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">Add-ons</td>
+                <td class="py-3 px-6 text-foreground">Not yet</td>
+                <td class="py-3 pl-6 text-muted-foreground">Yes — large add-on ecosystem</td>
+              </tr>
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">Open Source</td>
+                <td class="py-3 px-6 text-foreground">Yes</td>
+                <td class="py-3 pl-6 text-muted-foreground">Yes — Mozilla Public License</td>
+              </tr>
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">Platform</td>
+                <td class="py-3 px-6 text-foreground">macOS (more coming)</td>
+                <td class="py-3 pl-6 text-muted-foreground">Windows, macOS, Linux</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="py-24 px-6 border-t border-border">
+      <div class="max-w-6xl mx-auto">
+        <span class="inline-block border border-border text-muted-foreground text-xs px-3 py-1 rounded-full mb-6">Deep Dive</span>
+        <h2 class="heading-serif text-3xl sm:text-4xl mb-10">Category comparison</h2>
+
+        <div class="space-y-16 max-w-3xl">
+          <div>
+            <h3 class="text-xl font-medium text-foreground mb-4">Interface & Design</h3>
+            <p class="text-muted-foreground leading-relaxed mb-4">
+              Thunderbird underwent a major redesign with Supernova, modernizing its interface while keeping the dense, feature-packed layout that power users expect. It supports tabs, multiple panes, and extensive customization through themes and add-ons. It is a traditional desktop email client in every sense.
+            </p>
+            <p class="text-muted-foreground leading-relaxed">
+              Maho Mail takes a minimal approach to the GUI — a clean interface focused on reading and composing email with keyboard shortcuts and dark mode. It is intentionally simpler because the heavy lifting happens through the CLI and MCP server. If you want a GUI that does everything, Thunderbird is more complete. If you want a GUI that does email well and defers automation to the terminal, Maho fits better.
+            </p>
+          </div>
+
+          <div>
+            <h3 class="text-xl font-medium text-foreground mb-4">Developer Tooling</h3>
+            <p class="text-muted-foreground leading-relaxed mb-4">
+              Thunderbird was not built for developers. It has no CLI for email operations, no structured API for programmatic access, and no way for AI agents to interact with your inbox. You can write add-ons using its extension API, but that is a very different model from command-line automation.
+            </p>
+            <p class="text-muted-foreground leading-relaxed">
+              Maho Mail was built for developers from the start. The CLI gives you <code class="text-foreground text-sm bg-card px-1.5 py-0.5 rounded">maho search</code>, <code class="text-foreground text-sm bg-card px-1.5 py-0.5 rounded">maho get</code>, <code class="text-foreground text-sm bg-card px-1.5 py-0.5 rounded">maho list</code> with JSON output that pipes into any tool. The MCP server lets AI agents operate on your inbox. This is a fundamentally different approach to email.
+            </p>
+          </div>
+
+          <div>
+            <h3 class="text-xl font-medium text-foreground mb-4">PIM Features (Calendar, Contacts, RSS)</h3>
+            <p class="text-muted-foreground leading-relaxed mb-4">
+              This is where Thunderbird has a commanding lead. It includes a calendar with CalDAV support, a contacts manager with CardDAV, an RSS/Atom feed reader, and chat integration. For users who want one application for all their communication and scheduling, Thunderbird is hard to beat.
+            </p>
+            <p class="text-muted-foreground leading-relaxed">
+              Maho Mail is email-only by design. It does not include a calendar, contacts manager, or feed reader. The philosophy is to do email exceptionally well across three interfaces rather than be a mediocre everything-app. If you need PIM features, Thunderbird is the clear winner.
+            </p>
+          </div>
+
+          <div>
+            <h3 class="text-xl font-medium text-foreground mb-4">AI & Automation</h3>
+            <p class="text-muted-foreground leading-relaxed mb-4">
+              Thunderbird has no native AI capabilities. Some community add-ons offer limited integration, but there is no built-in summarization, drafting assistance, or agent protocol.
+            </p>
+            <p class="text-muted-foreground leading-relaxed">
+              Maho Mail has AI across all three interfaces. Summarize a thread in the GUI, pipe messages to an LLM from the CLI, or let an AI agent triage your inbox through the MCP server. You choose your provider — OpenAI, Anthropic, or Ollama — and everything runs locally.
+            </p>
+          </div>
+
+          <div>
+            <h3 class="text-xl font-medium text-foreground mb-4">Maturity & Ecosystem</h3>
+            <p class="text-muted-foreground leading-relaxed">
+              Thunderbird has been around since 2004. It has millions of users, a large add-on ecosystem, extensive documentation, and cross-platform support. Maho Mail is a newer project with a smaller community. If you need guaranteed stability, broad platform support, and a proven track record, Thunderbird has earned that trust over two decades.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="py-24 px-6 border-t border-border">
+      <div class="max-w-6xl mx-auto">
+        <div class="grid gap-12 md:grid-cols-2">
+          <div>
+            <h2 class="text-xl font-medium text-foreground mb-6">Choose Maho Mail if you...</h2>
+            <ul class="space-y-3">
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Want CLI access to your inbox alongside a GUI
+              </li>
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Need AI agents to read, search, and draft email
+              </li>
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Prefer a lightweight, email-focused client
+              </li>
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Want built-in AI summarization, drafting, and classification
+              </li>
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Are a developer who wants to script email workflows
+              </li>
+            </ul>
+          </div>
+          <div>
+            <h2 class="text-xl font-medium text-foreground mb-6">Choose Thunderbird if you...</h2>
+            <ul class="space-y-3">
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Need calendar, contacts, and RSS in your email client
+              </li>
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Want a large add-on ecosystem for customization
+              </li>
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Need cross-platform support (Windows, Linux, macOS)
+              </li>
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Prioritize a battle-tested client with 20+ years of development
+              </li>
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Manage multiple email accounts with complex filter rules
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="py-24 px-6 border-t border-border">
+      <div class="max-w-6xl mx-auto">
+        <span class="inline-block border border-border text-muted-foreground text-xs px-3 py-1 rounded-full mb-6">FAQ</span>
+        <h2 class="heading-serif text-3xl sm:text-4xl mb-10">Frequently asked questions</h2>
+        <div class="max-w-3xl space-y-4">
+          {faqs.map((faq) => (
+            <details class="group border border-border rounded-lg">
+              <summary class="flex items-center justify-between cursor-pointer px-6 py-4 text-foreground font-medium">
+                {faq.q}
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4 shrink-0 ml-4 transition-transform group-open:rotate-180"><path d="m6 9 6 6 6-6"/></svg>
+              </summary>
+              <div class="px-6 pb-4 text-muted-foreground leading-relaxed">{faq.a}</div>
+            </details>
+          ))}
+        </div>
+      </div>
+    </section>
+
+    <section class="py-24 px-6 border-t border-border">
+      <div class="max-w-6xl mx-auto text-center">
+        <h2 class="heading-serif text-4xl sm:text-5xl mb-6">
+          Ready to try Maho Mail?
+        </h2>
+        <p class="text-muted-foreground mb-8 max-w-xl mx-auto">
+          GUI for humans. CLI for developers. MCP for agents.
+        </p>
+        <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
+          <a href="/mail" class="inline-flex items-center gap-2 px-6 py-3 bg-foreground text-background rounded-md text-sm font-medium hover:opacity-90 transition-opacity">
+            Learn more about Maho Mail
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+          </a>
+          <a href="/compare" class="inline-flex items-center gap-2 px-6 py-3 border border-border rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:border-muted-foreground transition-colors">
+            See all comparisons
+          </a>
+        </div>
+      </div>
+    </section>
+
+  </main>
+  <Footer />
+</BaseLayout>

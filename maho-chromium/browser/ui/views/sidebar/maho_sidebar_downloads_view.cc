@@ -22,6 +22,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
+#include "base/i18n/case_conversion.h"
 #include "chrome/browser/platform_util.h"
 #include "components/vector_icons/vector_icons.h"
 #include "maho/browser/maho_core_holder.h"
@@ -47,6 +48,7 @@
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/scroll_view.h"
+#include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/style/typography.h"
@@ -908,13 +910,16 @@ void MahoSidebarDownloadsView::BuildUi() {
       vector_icons::kSearchIcon, kMahoColorSecondaryText,
       kHeaderSearchIconSizeDp));
 
-  auto* placeholder = search_shell->AddChildView(
-      std::make_unique<views::Label>(u"Search downloads..."));
-  placeholder->SetTextStyle(views::style::STYLE_BODY_5);
-  placeholder->SetEnabledColor(kMahoColorSecondaryText);
-  placeholder->SetAutoColorReadabilityEnabled(false);
-  placeholder->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-  placeholder->GetViewAccessibility().SetIsIgnored(true);
+  auto search_field = std::make_unique<views::Textfield>();
+  search_field_ = search_shell->AddChildView(std::move(search_field));
+  search_field_->SetPlaceholderText(u"Search downloads...");
+  search_field_->set_controller(this);
+  search_field_->SetPreferredSize(gfx::Size(0, kHeaderSearchHeightDp));
+  search_field_->SetBackgroundColor(SK_ColorTRANSPARENT);
+  search_field_->SetBorder(nullptr);
+  search_field_->SetTextColor(kMahoColorPrimaryText);
+  search_field_->SetAccessibleName(u"Search Downloads");
+  search_layout->SetFlexForView(search_field_, 1);
   search_shell->GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
   search_shell->GetViewAccessibility().SetName(u"Search downloads header");
 
@@ -961,6 +966,21 @@ void MahoSidebarDownloadsView::BuildUi() {
 
 void MahoSidebarDownloadsView::ReloadDownloads() {
   std::vector<DownloadItem> downloads = ParseDownloads();
+
+  if (search_field_) {
+    std::u16string query = base::i18n::FoldCase(search_field_->GetText());
+    if (!query.empty()) {
+      downloads.erase(
+          std::remove_if(downloads.begin(), downloads.end(),
+                         [&query](const DownloadItem& item) {
+                           std::u16string name = base::i18n::FoldCase(item.filename);
+                           std::u16string url = base::i18n::FoldCase(base::UTF8ToUTF16(item.url));
+                           return name.find(query) == std::u16string::npos &&
+                                  url.find(query) == std::u16string::npos;
+                         }),
+          downloads.end());
+    }
+  }
 
   list_container_->RemoveAllChildViews();
   if (header_summary_label_) {
@@ -1069,6 +1089,19 @@ void MahoSidebarDownloadsView::HandleDownloadAction(
       break;
   }
 
+  ReloadDownloads();
+}
+
+void MahoSidebarDownloadsView::ContentsChanged(
+    views::Textfield* sender,
+    const std::u16string& new_contents) {
+  search_debounce_timer_.Start(
+      FROM_HERE, base::Milliseconds(200),
+      base::BindOnce(&MahoSidebarDownloadsView::ApplySearchFilter,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void MahoSidebarDownloadsView::ApplySearchFilter() {
   ReloadDownloads();
 }
 

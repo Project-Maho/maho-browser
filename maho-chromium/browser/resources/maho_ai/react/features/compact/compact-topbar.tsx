@@ -6,7 +6,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../ui/dropdown-menu.js';
-import {ViewMode} from '../../../maho_ai.mojom-webui.js';
+import {ViewMode} from '../../../types.js';
 
 export function CompactTopbar(
     {

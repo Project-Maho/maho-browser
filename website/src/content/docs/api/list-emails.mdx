@@ -1,0 +1,29 @@
+---
+title: list_emails
+description: List emails in a specific folder
+---
+
+List emails in a specific folder. Returns email summaries sorted by date descending.
+
+## Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `account_id` | string | Yes | — | Account ID |
+| `folder_id` | string | Yes | — | Folder ID. Use `list_folders` to find IDs. |
+| `limit` | integer | No | 20 | Maximum number of emails to return |
+| `offset` | integer | No | 0 | Number of emails to skip |
+
+## Example
+
+```json
+{
+  "tool": "list_emails",
+  "arguments": {
+    "account_id": "acc1",
+    "folder_id": "fold1",
+    "limit": 20,
+    "offset": 0
+  }
+}
+```

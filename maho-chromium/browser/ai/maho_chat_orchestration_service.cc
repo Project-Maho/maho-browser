@@ -12,7 +12,12 @@
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/string_util.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
+#if defined(__APPLE__)
+#include <CoreFoundation/CoreFoundation.h>
+#include "base/strings/sys_string_conversions.h"
+#endif
 #include "components/prefs/pref_service.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "maho/browser/ai/maho_browser_tool_executor.h"
@@ -31,6 +36,104 @@ const char kCannotAccessPageMessage[] =
     "Maho AI couldn't access the current page content. Try again once the page finishes loading.";
 const char kExtractionFailedMessage[] =
     "Maho AI couldn't extract readable content from the current page.";
+
+#if defined(MAHO_RUST_AI)
+struct LocalServerConfig {
+  std::string endpoint;
+  std::string model;
+};
+
+bool IsLocalServerProvider(const std::string& provider) {
+  return provider == "Local Server" || provider == "Custom";
+}
+
+std::string GetMacOSAppDefaultsString(const char* key) {
+#if defined(__APPLE__)
+  auto key_ref = base::SysUTF8ToCFStringRef(key);
+  CFPropertyListRef value_ref =
+      CFPreferencesCopyAppValue(key_ref.get(), CFSTR("com.maho.browser"));
+  if (!value_ref) {
+    return std::string();
+  }
+  if (CFGetTypeID(value_ref) != CFStringGetTypeID()) {
+    CFRelease(value_ref);
+    return std::string();
+  }
+  std::string value =
+      base::SysCFStringRefToUTF8(static_cast<CFStringRef>(value_ref));
+  CFRelease(value_ref);
+  return value;
+#else
+  return std::string();
+#endif
+}
+
+std::optional<LocalServerConfig> GetLocalServerConfig() {
+  const std::string provider = GetMacOSAppDefaultsString("maho.ai.provider");
+  if (!IsLocalServerProvider(provider)) {
+    return std::nullopt;
+  }
+
+  std::string endpoint =
+      GetMacOSAppDefaultsString("maho.ai.localServer.endpoint");
+  if (endpoint.empty()) {
+    endpoint = GetMacOSAppDefaultsString("maho.ai.custom.endpoint");
+  }
+  if (endpoint.empty()) {
+    endpoint = "http://localhost:11434/v1";
+  }
+
+  std::string model = GetMacOSAppDefaultsString("maho.ai.localServer.model");
+  if (model.empty()) {
+    model = GetMacOSAppDefaultsString("maho.ai.custom.model");
+  }
+  if (model.empty()) {
+    return std::nullopt;
+  }
+
+  return LocalServerConfig{.endpoint = std::move(endpoint),
+                           .model = std::move(model)};
+}
+
+std::string GetConfiguredApiKey(PrefService* prefs) {
+  std::string api_key = prefs->GetString("maho.ai.api_key");
+  if (!api_key.empty()) {
+    return api_key;
+  }
+  return GetMacOSAppDefaultsString("maho.ai.api_key");
+}
+
+std::string ResolveEndpoint(PrefService* prefs) {
+  const std::optional<LocalServerConfig> local_server_config =
+      GetLocalServerConfig();
+  std::string endpoint = local_server_config.has_value()
+                             ? local_server_config->endpoint
+                             : prefs->GetString("maho.ai.endpoint");
+  if (endpoint.empty()) {
+    endpoint = "https://api.openai.com/v1";
+  }
+  if (!base::EndsWith(endpoint, "chat/completions",
+                      base::CompareCase::INSENSITIVE_ASCII)) {
+    if (!base::EndsWith(endpoint, "/", base::CompareCase::SENSITIVE)) {
+      endpoint.push_back('/');
+    }
+    endpoint.append("chat/completions");
+  }
+  return endpoint;
+}
+
+std::string ResolveModel(PrefService* prefs) {
+  const std::optional<LocalServerConfig> local_server_config =
+      GetLocalServerConfig();
+  std::string model = local_server_config.has_value()
+                          ? local_server_config->model
+                          : prefs->GetString("maho.ai.model");
+  if (model.empty()) {
+    model = "gpt-4o-mini";
+  }
+  return model;
+}
+#endif
 
 }  // namespace
 
@@ -66,6 +169,14 @@ MahoChatOrchestrationService::ConversationRoundState::~ConversationRoundState() 
 
 MahoChatOrchestrationService::~MahoChatOrchestrationService() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+#if defined(MAHO_RUST_AI)
+  if (rust_session_) {
+    maho_core_chat_set_event_sink(rust_session_, nullptr, nullptr, nullptr, nullptr);
+    maho_core_chat_cancel(rust_session_);
+    maho_core_chat_session_free(rust_session_);
+    rust_session_ = nullptr;
+  }
+#endif
 }
 
 bool MahoChatOrchestrationService::HasConfiguredCredential() const {
@@ -75,6 +186,12 @@ bool MahoChatOrchestrationService::HasConfiguredCredential() const {
 void MahoChatOrchestrationService::Reset() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   weak_factory_.InvalidateWeakPtrs();
+#if defined(MAHO_RUST_AI)
+  if (rust_session_) {
+    maho_core_chat_cancel(rust_session_);
+  }
+  active_round_state_.reset();
+#endif
   llm_client_.Reset();
   received_llm_content_ = false;
   current_request_id_.clear();
@@ -89,6 +206,76 @@ void MahoChatOrchestrationService::HandleMessage(
     ErrorCallback on_error) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+#if defined(MAHO_RUST_AI)
+  if (!rust_session_) {
+    MahoChatConfig config;
+    std::string api_key = GetConfiguredApiKey(prefs_);
+    std::string endpoint = ResolveEndpoint(prefs_);
+    std::string model = ResolveModel(prefs_);
+    std::string system_instruction = "";
+
+    config.api_key = api_key.c_str();
+    config.endpoint = endpoint.c_str();
+    config.model = model.c_str();
+    config.system_instruction = system_instruction.c_str();
+
+    rust_session_ = maho_core_chat_session_new(&config);
+    if (!rust_session_) {
+      std::move(on_error).Run("Failed to create Rust chat session.");
+      return;
+    }
+
+    if (browser_tools_v1_enabled_) {
+      for (const auto& tool : MahoBrowserToolRegistry::GetPhase1ToolSchemas()) {
+        std::string schema_json;
+        base::JSONWriter::Write(tool.input_schema, &schema_json);
+        maho_core_chat_register_tool(rust_session_, tool.name.c_str(),
+                                     tool.description.c_str(), schema_json.c_str());
+      }
+    }
+
+    ffi_user_data_ = std::make_unique<FfiUserData>();
+    ffi_user_data_->weak_service = weak_factory_.GetWeakPtr();
+    ffi_user_data_->task_runner = base::SequencedTaskRunner::GetCurrentDefault();
+
+    maho_core_chat_set_event_sink(
+        rust_session_,
+        &MahoChatOrchestrationService::OnRustTokenCallback,
+        &MahoChatOrchestrationService::OnRustCompleteCallback,
+        &MahoChatOrchestrationService::OnRustErrorCallback,
+        ffi_user_data_.get());
+  }
+
+  RequestClassification classification = ClassifyRequest(message, chat_intent);
+  if (force_page_context) {
+    classification.requires_page_context = true;
+  }
+  if (!chat_orchestrator_v2_enabled_ &&
+      (classification.request_mode == RequestMode::kBrowserAction ||
+       classification.request_mode == RequestMode::kToolAssistedTask)) {
+    classification.request_mode = classification.requires_page_context
+                                     ? RequestMode::kPageQuestion
+                                     : RequestMode::kGeneralChat;
+  }
+
+  weak_factory_.InvalidateWeakPtrs();
+  ffi_user_data_->weak_service = weak_factory_.GetWeakPtr();
+
+  auto state = std::make_shared<ConversationRoundState>();
+  state->message = message;
+  state->chat_intent = chat_intent;
+  state->classification = classification;
+  state->on_token = std::move(on_token);
+  state->on_complete = std::move(on_complete);
+  state->on_error = std::move(on_error);
+
+  active_round_state_ = state;
+
+  page_context_extractor_.GetPageContext(base::BindOnce(
+      &MahoChatOrchestrationService::OnPageContextReady,
+      weak_factory_.GetWeakPtr(), message, chat_intent, classification,
+      base::NullCallback(), base::NullCallback(), base::NullCallback()));
+#else
   RequestClassification classification = ClassifyRequest(message, chat_intent);
   if (force_page_context) {
     classification.requires_page_context = true;
@@ -106,6 +293,7 @@ void MahoChatOrchestrationService::HandleMessage(
       &MahoChatOrchestrationService::OnPageContextReady,
       weak_factory_.GetWeakPtr(), message, chat_intent, classification,
       std::move(on_token), std::move(on_complete), std::move(on_error)));
+#endif
 }
 
 void MahoChatOrchestrationService::OnPageContextReady(
@@ -118,6 +306,35 @@ void MahoChatOrchestrationService::OnPageContextReady(
     PageContextResult page_context) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+#if defined(MAHO_RUST_AI)
+  if (!active_round_state_) {
+    return;
+  }
+  if (RequestModeRequiresPageContext(classification.request_mode) &&
+      !page_context.HasUsableContent()) {
+    std::move(active_round_state_->on_error).Run(
+        GetPageContextFailureMessage(page_context.extraction_status));
+    active_round_state_.reset();
+    return;
+  }
+
+  active_round_state_->page_context = std::move(page_context);
+
+  std::string final_message = message;
+  bool include_context = classification.requires_page_context &&
+                         active_round_state_->page_context.HasUsableContent();
+  if (include_context) {
+    final_message = std::string("Title: ") + active_round_state_->page_context.title +
+                    "\nURL: " + active_round_state_->page_context.url +
+                    "\nContent:\n" + active_round_state_->page_context.GetLegacyText() +
+                    "\n\nUser Question:\n" + message;
+  }
+
+  if (!maho_core_chat_send_user_turn(rust_session_, final_message.c_str())) {
+    std::move(active_round_state_->on_error).Run("Failed to send user turn.");
+    active_round_state_.reset();
+  }
+#else
   if (RequestModeRequiresPageContext(classification.request_mode) &&
       !page_context.HasUsableContent()) {
     std::move(on_error).Run(
@@ -138,6 +355,7 @@ void MahoChatOrchestrationService::OnPageContextReady(
                      classification, std::move(page_context),
                      std::move(on_token), std::move(on_complete),
                      std::move(on_error)));
+#endif
 }
 
 // static
@@ -398,6 +616,23 @@ void MahoChatOrchestrationService::OnToolInvocationComplete(
     return;
   }
 
+#if defined(MAHO_RUST_AI)
+  std::string result_json = SerializeJsonValue(result);
+  bool is_last_tool =
+      (state->pending_tool_index >= state->pending_tool_calls.size());
+  if (!maho_core_chat_send_tool_result(rust_session_,
+                                       tool_invocation.id.c_str(),
+                                       tool_invocation.name.c_str(),
+                                       result_json.c_str(), is_last_tool)) {
+    std::move(state->on_error).Run("Failed to send tool result to Rust.");
+    active_round_state_.reset();
+    return;
+  }
+
+  if (!is_last_tool) {
+    ExecuteNextToolInvocation(std::move(state));
+  }
+#else
   AppendToolResultMessage(&state->prompt_messages, tool_invocation, result);
 
   if (state->pending_tool_index < state->pending_tool_calls.size()) {
@@ -412,6 +647,7 @@ void MahoChatOrchestrationService::OnToolInvocationComplete(
   }
 
   StartConversationRound(std::move(state));
+#endif
 }
 
 void MahoChatOrchestrationService::AppendAssistantToolCallMessage(
@@ -663,3 +899,111 @@ std::string MahoChatOrchestrationService::GetPageContextFailureMessage(
   }
   return kExtractionFailedMessage;
 }
+
+#if defined(MAHO_RUST_AI)
+MahoChatOrchestrationService::FfiUserData::FfiUserData() = default;
+MahoChatOrchestrationService::FfiUserData::~FfiUserData() = default;
+
+// static
+void MahoChatOrchestrationService::OnRustTokenCallback(void* user_data, const char* token) {
+  auto* ud = static_cast<FfiUserData*>(user_data);
+  std::string token_str(token);
+  ud->task_runner->PostTask(
+      FROM_HERE,
+      base::BindOnce(&MahoChatOrchestrationService::OnRustToken,
+                     ud->weak_service, std::move(token_str)));
+}
+
+// static
+void MahoChatOrchestrationService::OnRustCompleteCallback(
+    void* user_data,
+    const char* full_text,
+    const char* tool_calls_json) {
+  auto* ud = static_cast<FfiUserData*>(user_data);
+  std::string full_text_str(full_text);
+  std::string tool_calls_json_str(tool_calls_json);
+  ud->task_runner->PostTask(
+      FROM_HERE,
+      base::BindOnce(&MahoChatOrchestrationService::OnRustComplete,
+                     ud->weak_service, std::move(full_text_str),
+                     std::move(tool_calls_json_str)));
+}
+
+// static
+void MahoChatOrchestrationService::OnRustErrorCallback(void* user_data, const char* error) {
+  auto* ud = static_cast<FfiUserData*>(user_data);
+  std::string error_str(error);
+  ud->task_runner->PostTask(
+      FROM_HERE,
+      base::BindOnce(&MahoChatOrchestrationService::OnRustError,
+                     ud->weak_service, std::move(error_str)));
+}
+
+void MahoChatOrchestrationService::OnRustToken(const std::string& token) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!active_round_state_) {
+    return;
+  }
+  active_round_state_->on_token.Run(token);
+}
+
+void MahoChatOrchestrationService::OnRustComplete(
+    const std::string& full_text,
+    const std::string& tool_calls_json) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!active_round_state_) {
+    return;
+  }
+
+  maho_core_chat_append_assistant_message(rust_session_, full_text.c_str(),
+                                           tool_calls_json.c_str());
+
+  if (tool_calls_json.empty()) {
+    std::move(active_round_state_->on_complete).Run(full_text);
+    active_round_state_.reset();
+    return;
+  }
+
+  auto parsed = base::JSONReader::Read(tool_calls_json, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_list()) {
+    std::move(active_round_state_->on_error).Run(
+        "Failed to parse tool calls from Rust.");
+    active_round_state_.reset();
+    return;
+  }
+
+  active_round_state_->assistant_text = full_text;
+  active_round_state_->pending_tool_calls.clear();
+  active_round_state_->pending_tool_index = 0;
+
+  for (const auto& item : parsed->GetList()) {
+    const base::DictValue* dict = item.GetIfDict();
+    if (!dict) {
+      continue;
+    }
+    MahoAiLlmClient::ToolCall tc;
+    if (const std::string* id = dict->FindString("id")) {
+      tc.id = *id;
+    }
+    if (const std::string* name = dict->FindString("name")) {
+      tc.name = *name;
+    }
+    if (const std::string* args = dict->FindString("arguments_json")) {
+      tc.arguments_json = *args;
+    }
+    active_round_state_->pending_tool_calls.push_back(std::move(tc));
+  }
+
+  ExecuteNextToolInvocation(active_round_state_);
+}
+
+void MahoChatOrchestrationService::OnRustError(const std::string& error) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!active_round_state_) {
+    return;
+  }
+  std::move(active_round_state_->on_error).Run(error);
+  active_round_state_.reset();
+}
+#endif
+

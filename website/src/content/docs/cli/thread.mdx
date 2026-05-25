@@ -1,0 +1,38 @@
+---
+title: maho thread
+description: List all emails in a thread
+---
+
+Retrieve all emails in a conversation thread by Message-ID.
+
+## Usage
+
+```bash
+maho thread <account_id> <message_id> [flags]
+```
+
+## Arguments
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `account_id` | string | Account ID |
+| `message_id` | string | Message-ID header value of any email in the thread |
+
+## Flags
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Output as JSON |
+
+## Examples
+
+```bash
+# View a thread
+maho thread acc1 "<msg1@example.com>"
+
+# Get thread as JSON
+maho thread acc1 "<msg1@example.com>" --json
+
+# Summarize a thread with AI
+maho thread acc1 "<msg1@example.com>" --json | llm 'summarize this email thread'
+```

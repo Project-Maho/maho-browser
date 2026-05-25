@@ -49,6 +49,10 @@ class MahoSidebarMediaView;
 class MahoSidebarSearchView;
 class MahoSidebarTabListView;
 class MahoSidebarTopBarView;
+class MahoSidebarNotesView;
+class MahoSidebarEaselsView;
+class MahoSidebarBoostsView;
+class MahoSidebarSpacesView;
 
 enum class MahoSidebarBodyMode {
   kTabs,
@@ -120,14 +124,17 @@ class MahoSidebarView : public views::View,
   bool is_library_mode_for_testing() const {
     return current_body_mode_ == MahoSidebarBodyMode::kLibrary;
   }
-  MahoSidebarLibraryActionPaneView* spaces_view_for_testing() {
+  MahoSidebarSpacesView* spaces_view_for_testing() {
     return spaces_view_;
   }
-  MahoSidebarLibraryActionPaneView* easel_view_for_testing() {
+  MahoSidebarEaselsView* easel_view_for_testing() {
     return easel_view_;
   }
-  MahoSidebarLibraryActionPaneView* boost_view_for_testing() {
+  MahoSidebarBoostsView* boost_view_for_testing() {
     return boost_view_;
+  }
+  MahoSidebarNotesView* notes_view_for_testing() {
+    return notes_view_;
   }
   MahoSidebarLibraryRailView::Category active_library_category_for_testing()
       const;
@@ -188,9 +195,10 @@ class MahoSidebarView : public views::View,
   raw_ptr<MahoSidebarArchiveView> archive_view_ = nullptr;
   raw_ptr<MahoSidebarDownloadsView> downloads_view_ = nullptr;
   raw_ptr<MahoSidebarMediaView> media_view_ = nullptr;
-  raw_ptr<MahoSidebarLibraryActionPaneView> spaces_view_ = nullptr;
-  raw_ptr<MahoSidebarLibraryActionPaneView> easel_view_ = nullptr;
-  raw_ptr<MahoSidebarLibraryActionPaneView> boost_view_ = nullptr;
+  raw_ptr<MahoSidebarSpacesView> spaces_view_ = nullptr;
+  raw_ptr<MahoSidebarEaselsView> easel_view_ = nullptr;
+  raw_ptr<MahoSidebarBoostsView> boost_view_ = nullptr;
+  raw_ptr<MahoSidebarNotesView> notes_view_ = nullptr;
   raw_ptr<MahoSidebarLibraryRailView> library_rail_view_ = nullptr;
   raw_ptr<MahoSidebarTopBarView> top_bar_view_ = nullptr;
   raw_ptr<MahoSidebarSearchView> search_view_ = nullptr;

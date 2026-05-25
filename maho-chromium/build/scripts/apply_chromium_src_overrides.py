@@ -192,6 +192,166 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         ),
     ],
     "chrome/browser/ui/views/side_panel/BUILD.gn": [
+        # Self-healing deduplication: collapse any previously double-injected
+        # source_set("interactive_tests") blocks down to one.  Two passes are
+        # needed because apply_replacements uses replace(..., 1): the first
+        # entry fires when three identical contiguous blocks exist (3→2) and
+        # the second fires when two identical contiguous blocks exist (2→1).
+        # Both entries are idempotent so they silently no-op once clean.
+        Replacement(
+            old=(
+                "\nsource_set(\"interactive_tests\") {\n"
+                "  testonly = true\n"
+                "\n"
+                "  sources = [ \"//maho/browser/ui/views/side_panel/maho_ai_side_panel_interactive_uitest.cc\" ]\n"
+                "\n"
+                "  defines = [ \"HAS_OUT_OF_PROC_TEST_RUNNER\" ]\n"
+                "\n"
+                "  deps = [\n"
+                "    \":side_panel\",\n"
+                "    \"//base\",\n"
+                "    \"//base/test:test_support\",\n"
+                "    \"//chrome/browser:browser\",\n"
+                "    \"//chrome/browser/ui:ui\",\n"
+                "    \"//chrome/test:test_support\",\n"
+                "    \"//chrome/test:test_support_ui\",\n"
+                "    \"//content/public/browser:browser\",\n"
+                "    \"//content/test:test_support\",\n"
+                "    \"//net:test_support\",\n"
+                "    \"//testing/gtest:gtest\",\n"
+                "    \"//ui/views:views\",\n"
+                "    \"//ui/views:test_support\",\n"
+                "  ]\n"
+                "}\n"
+                "\nsource_set(\"interactive_tests\") {\n"
+                "  testonly = true\n"
+                "\n"
+                "  sources = [ \"//maho/browser/ui/views/side_panel/maho_ai_side_panel_interactive_uitest.cc\" ]\n"
+                "\n"
+                "  defines = [ \"HAS_OUT_OF_PROC_TEST_RUNNER\" ]\n"
+                "\n"
+                "  deps = [\n"
+                "    \":side_panel\",\n"
+                "    \"//base\",\n"
+                "    \"//base/test:test_support\",\n"
+                "    \"//chrome/browser:browser\",\n"
+                "    \"//chrome/browser/ui:ui\",\n"
+                "    \"//chrome/test:test_support\",\n"
+                "    \"//chrome/test:test_support_ui\",\n"
+                "    \"//content/public/browser:browser\",\n"
+                "    \"//content/test:test_support\",\n"
+                "    \"//net:test_support\",\n"
+                "    \"//testing/gtest:gtest\",\n"
+                "    \"//ui/views:views\",\n"
+                "    \"//ui/views:test_support\",\n"
+                "  ]\n"
+                "}\n"
+            ),
+            new=(
+                "\nsource_set(\"interactive_tests\") {\n"
+                "  testonly = true\n"
+                "\n"
+                "  sources = [ \"//maho/browser/ui/views/side_panel/maho_ai_side_panel_interactive_uitest.cc\" ]\n"
+                "\n"
+                "  defines = [ \"HAS_OUT_OF_PROC_TEST_RUNNER\" ]\n"
+                "\n"
+                "  deps = [\n"
+                "    \":side_panel\",\n"
+                "    \"//base\",\n"
+                "    \"//base/test:test_support\",\n"
+                "    \"//chrome/browser:browser\",\n"
+                "    \"//chrome/browser/ui:ui\",\n"
+                "    \"//chrome/test:test_support\",\n"
+                "    \"//chrome/test:test_support_ui\",\n"
+                "    \"//content/public/browser:browser\",\n"
+                "    \"//content/test:test_support\",\n"
+                "    \"//net:test_support\",\n"
+                "    \"//testing/gtest:gtest\",\n"
+                "    \"//ui/views:views\",\n"
+                "    \"//ui/views:test_support\",\n"
+                "  ]\n"
+                "}\n"
+            ),
+            description="Dedup side-panel interactive_tests blocks (pass 1 of 2: 3→2)",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "\nsource_set(\"interactive_tests\") {\n"
+                "  testonly = true\n"
+                "\n"
+                "  sources = [ \"//maho/browser/ui/views/side_panel/maho_ai_side_panel_interactive_uitest.cc\" ]\n"
+                "\n"
+                "  defines = [ \"HAS_OUT_OF_PROC_TEST_RUNNER\" ]\n"
+                "\n"
+                "  deps = [\n"
+                "    \":side_panel\",\n"
+                "    \"//base\",\n"
+                "    \"//base/test:test_support\",\n"
+                "    \"//chrome/browser:browser\",\n"
+                "    \"//chrome/browser/ui:ui\",\n"
+                "    \"//chrome/test:test_support\",\n"
+                "    \"//chrome/test:test_support_ui\",\n"
+                "    \"//content/public/browser:browser\",\n"
+                "    \"//content/test:test_support\",\n"
+                "    \"//net:test_support\",\n"
+                "    \"//testing/gtest:gtest\",\n"
+                "    \"//ui/views:views\",\n"
+                "    \"//ui/views:test_support\",\n"
+                "  ]\n"
+                "}\n"
+                "\nsource_set(\"interactive_tests\") {\n"
+                "  testonly = true\n"
+                "\n"
+                "  sources = [ \"//maho/browser/ui/views/side_panel/maho_ai_side_panel_interactive_uitest.cc\" ]\n"
+                "\n"
+                "  defines = [ \"HAS_OUT_OF_PROC_TEST_RUNNER\" ]\n"
+                "\n"
+                "  deps = [\n"
+                "    \":side_panel\",\n"
+                "    \"//base\",\n"
+                "    \"//base/test:test_support\",\n"
+                "    \"//chrome/browser:browser\",\n"
+                "    \"//chrome/browser/ui:ui\",\n"
+                "    \"//chrome/test:test_support\",\n"
+                "    \"//chrome/test:test_support_ui\",\n"
+                "    \"//content/public/browser:browser\",\n"
+                "    \"//content/test:test_support\",\n"
+                "    \"//net:test_support\",\n"
+                "    \"//testing/gtest:gtest\",\n"
+                "    \"//ui/views:views\",\n"
+                "    \"//ui/views:test_support\",\n"
+                "  ]\n"
+                "}\n"
+            ),
+            new=(
+                "\nsource_set(\"interactive_tests\") {\n"
+                "  testonly = true\n"
+                "\n"
+                "  sources = [ \"//maho/browser/ui/views/side_panel/maho_ai_side_panel_interactive_uitest.cc\" ]\n"
+                "\n"
+                "  defines = [ \"HAS_OUT_OF_PROC_TEST_RUNNER\" ]\n"
+                "\n"
+                "  deps = [\n"
+                "    \":side_panel\",\n"
+                "    \"//base\",\n"
+                "    \"//base/test:test_support\",\n"
+                "    \"//chrome/browser:browser\",\n"
+                "    \"//chrome/browser/ui:ui\",\n"
+                "    \"//chrome/test:test_support\",\n"
+                "    \"//chrome/test:test_support_ui\",\n"
+                "    \"//content/public/browser:browser\",\n"
+                "    \"//content/test:test_support\",\n"
+                "    \"//net:test_support\",\n"
+                "    \"//testing/gtest:gtest\",\n"
+                "    \"//ui/views:views\",\n"
+                "    \"//ui/views:test_support\",\n"
+                "  ]\n"
+                "}\n"
+            ),
+            description="Dedup side-panel interactive_tests blocks (pass 2 of 2: 2→1)",
+            idempotent=True,
+        ),
         Replacement(
             old=(
                 "  allow_circular_includes_from = [\n"
@@ -236,6 +396,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "}\n"
             ),
             description="Add Maho AI side-panel interactive test target to Chromium side-panel BUILD.gn",
+            guard="  sources = [ \"//maho/browser/ui/views/side_panel/maho_ai_side_panel_interactive_uitest.cc\" ]\n",
         ),
     ],
     "chrome/browser/ui/webui_browser/webui_browser_ui.cc": [
@@ -291,6 +452,196 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     "chrome/browser/ui/views/frame/browser_view.cc": [
         Replacement(
             old=(
+                "  void OnThemeChanged() override {\n"
+                "    views::View::OnThemeChanged();\n"
+                "    const ui::ColorProvider* color_provider = GetColorProvider();\n"
+                "    if (color_provider && layer()) {\n"
+                "      layer()->SetColor(color_provider->GetColor(kMahoColorContentBackground));\n"
+                "    }\n"
+                "    SchedulePaint();\n"
+                "  }\n"
+            ),
+            new=(
+                "  void OnThemeChanged() override {\n"
+                "    views::View::OnThemeChanged();\n"
+                "    SchedulePaint();\n"
+                "  }\n"
+            ),
+            description=(
+                "Migrate old MahoCreateSpaceBlankView::OnThemeChanged() body "
+                "(unsafe layer()->SetColor path) to the new safe 3-line version "
+                "that only calls SchedulePaint()"
+            ),
+            idempotent=True,
+        ),
+        Replacement(
+            old='#include "maho/browser/ui/theme/maho_color_id.h"\n',
+            new=(
+                '#include "maho/browser/ui/theme/maho_color_id.h"\n'
+                '#include "cc/paint/paint_flags.h"\n'
+                '#include "cc/paint/paint_shader.h"\n'
+            ),
+            description="Include cc paint headers in browser_view.cc for space theme blank view custom gradient",
+        ),
+        Replacement(
+            old=(
+                "\n"
+                "class MahoCreateSpaceBlankView : public views::View {\n"
+                " public:\n"
+                "  MahoCreateSpaceBlankView() {\n"
+                "    SetPaintToLayer();\n"
+                "    layer()->SetName(\"MahoCreateSpaceBlankView\");\n"
+                "    layer()->SetFillsBoundsOpaquely(true);\n"
+                "  }\n"
+                "  ~MahoCreateSpaceBlankView() override = default;\n"
+                "\n"
+                "  void OnThemeChanged() override {\n"
+                "    views::View::OnThemeChanged();\n"
+                "    const ui::ColorProvider* color_provider = GetColorProvider();\n"
+                "    if (color_provider && layer()) {\n"
+                "      layer()->SetColor(color_provider->GetColor(kMahoColorContentBackground));\n"
+                "    }\n"
+                "    SchedulePaint();\n"
+                "  }\n"
+                "\n"
+                "  void OnPaint(gfx::Canvas* canvas) override {\n"
+                "    const gfx::Rect bounds = GetContentsBounds();\n"
+                "    if (bounds.IsEmpty()) {\n"
+                "      return;\n"
+                "    }\n"
+                "\n"
+                "    const ui::ColorProvider* color_provider = GetColorProvider();\n"
+                "    if (!color_provider) {\n"
+                "      return;\n"
+                "    }\n"
+                "\n"
+                "    const SkColor color_top = color_provider->GetColor(kMahoColorContentGradientTop);\n"
+                "    const SkColor color_bottom = color_provider->GetColor(kMahoColorContentGradientBottom);\n"
+                "\n"
+                "    const SkPoint points[2] = {\n"
+                "        {0, 0},\n"
+                "        {0, static_cast<float>(bounds.height())}};\n"
+                "    const SkColor4f colors[2] = {\n"
+                "        SkColor4f::FromColor(color_top),\n"
+                "        SkColor4f::FromColor(color_bottom)};\n"
+                "\n"
+                "    cc::PaintFlags flags;\n"
+                "    flags.setAntiAlias(true);\n"
+                "    flags.setStyle(cc::PaintFlags::kFill_Style);\n"
+                "    flags.setShader(cc::PaintShader::MakeLinearGradient(\n"
+                "        points, colors, nullptr, 2, SkTileMode::kClamp));\n"
+                "    canvas->DrawRect(bounds, flags);\n"
+                "  }\n"
+                "};\n"
+            ),
+            new="",
+            description=(
+                "Remove legacy MahoCreateSpaceBlankView block (no METADATA_HEADER) "
+                "that was injected by an earlier version of this script; the current "
+                "version injects the block with METADATA_HEADER instead"
+            ),
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "using web_modal::WebContentsModalDialogHost;\n"
+                "\n"
+                "namespace {\n"
+            ),
+            new=(
+                "using web_modal::WebContentsModalDialogHost;\n"
+                "\n"
+                "namespace {\n"
+                "\n"
+                "class MahoCreateSpaceBlankView : public views::View {\n"
+                "  METADATA_HEADER(MahoCreateSpaceBlankView, views::View)\n"
+                " public:\n"
+                "  MahoCreateSpaceBlankView() {\n"
+                "    SetPaintToLayer();\n"
+                "    layer()->SetName(\"MahoCreateSpaceBlankView\");\n"
+                "    layer()->SetFillsBoundsOpaquely(true);\n"
+                "  }\n"
+                "  ~MahoCreateSpaceBlankView() override = default;\n"
+                "\n"
+                "  void OnThemeChanged() override {\n"
+                "    views::View::OnThemeChanged();\n"
+                "    SchedulePaint();\n"
+                "  }\n"
+                "\n"
+                "  void OnPaint(gfx::Canvas* canvas) override {\n"
+                "    const gfx::Rect bounds = GetContentsBounds();\n"
+                "    if (bounds.IsEmpty()) {\n"
+                "      return;\n"
+                "    }\n"
+                "\n"
+                "    const ui::ColorProvider* color_provider = GetColorProvider();\n"
+                "    if (!color_provider) {\n"
+                "      return;\n"
+                "    }\n"
+                "\n"
+                "    const SkColor color_top = color_provider->GetColor(kMahoColorContentGradientTop);\n"
+                "    const SkColor color_bottom = color_provider->GetColor(kMahoColorContentGradientBottom);\n"
+                "\n"
+                "    const SkPoint points[2] = {\n"
+                "        {0, 0},\n"
+                "        {0, static_cast<float>(bounds.height())}};\n"
+                "    const SkColor4f colors[2] = {\n"
+                "        SkColor4f::FromColor(color_top),\n"
+                "        SkColor4f::FromColor(color_bottom)};\n"
+                "\n"
+                "    cc::PaintFlags flags;\n"
+                "    flags.setAntiAlias(true);\n"
+                "    flags.setStyle(cc::PaintFlags::kFill_Style);\n"
+                "    flags.setShader(cc::PaintShader::MakeLinearGradient(\n"
+                "        points, colors, nullptr, 2, SkTileMode::kClamp));\n"
+                "    canvas->DrawRect(bounds, flags);\n"
+                "  }\n"
+                "};\n"
+                "\n"
+                "BEGIN_METADATA(MahoCreateSpaceBlankView)\n"
+                "END_METADATA\n"
+            ),
+            description="Add MahoCreateSpaceBlankView subclass for gradient background rendering",
+            guard="  METADATA_HEADER(MahoCreateSpaceBlankView, views::View)\n",
+        ),
+        Replacement(
+            old=(
+                "    canvas->DrawRect(bounds, flags);\n"
+                "  }\n"
+                "};\n"
+            ),
+            new=(
+                "    canvas->DrawRect(bounds, flags);\n"
+                "  }\n"
+                "};\n"
+                "\n"
+                "BEGIN_METADATA(MahoCreateSpaceBlankView)\n"
+                "END_METADATA\n"
+            ),
+            description="Add BEGIN_METADATA/END_METADATA for MahoCreateSpaceBlankView (required by METADATA_HEADER)",
+            guard="BEGIN_METADATA(MahoCreateSpaceBlankView)\n",
+        ),
+        Replacement(
+            old=(
+                "    maho_create_space_blank_view_ =\n"
+                "        AddChildView(std::make_unique<views::View>());\n"
+                "    maho_create_space_blank_view_->SetPaintToLayer();\n"
+                "    maho_create_space_blank_view_->layer()->SetName(\n"
+                "        \"MahoCreateSpaceBlankView\");\n"
+                "    maho_create_space_blank_view_->layer()->SetFillsBoundsOpaquely(true);\n"
+                "    maho_create_space_blank_view_->SetBackground(\n"
+                "        views::CreateSolidBackground(kMahoColorContentBackground));\n"
+                "    maho_create_space_blank_view_->SetVisible(false);\n"
+            ),
+            new=(
+                "    maho_create_space_blank_view_ =\n"
+                "        AddChildView(std::make_unique<MahoCreateSpaceBlankView>());\n"
+                "    maho_create_space_blank_view_->SetVisible(false);\n"
+            ),
+            description="Use MahoCreateSpaceBlankView for blank view instead of generic views::View",
+        ),
+        Replacement(
+            old=(
                 "    LOG(WARNING) << \"[maho-cmdl-trace] BrowserView::ShowMahoCommandOverlayForCurrentTab\"\n"
                 "                 << \" url=\" << url.spec()\n"
                 "                 << \" scheme=\" << url.scheme()\n"
@@ -309,6 +660,76 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Remove [maho-cmdl-trace] LOG(WARNING) calls from ShowMahoCommandOverlayForCurrentTab",
             idempotent=True,
+        ),
+        # ── key-hook cleanup: remove stale AddPreTargetHandler/RemovePreTargetHandler
+        # and own the OnKeyEvent Maho shortcut interception ────────────────────────
+        Replacement(
+            old=(
+                "  views::ClientView::AddedToWidget();\n"
+                "  GetWidget()->AddPreTargetHandler(this);\n"
+            ),
+            new=(
+                "  views::ClientView::AddedToWidget();\n"
+            ),
+            description=(
+                "Remove stale GetWidget()->AddPreTargetHandler(this) from "
+                "AddedToWidget (API removed from views::Widget)"
+            ),
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "void BrowserView::RemovedFromWidget() {\n"
+                "  CHECK(GetFocusManager());\n"
+                "  focus_manager_observation_.Reset();\n"
+                "  if (GetWidget()) {\n"
+                "    GetWidget()->RemovePreTargetHandler(this);\n"
+                "  }\n"
+                "}\n"
+            ),
+            new=(
+                "void BrowserView::RemovedFromWidget() {\n"
+                "  CHECK(GetFocusManager());\n"
+                "  focus_manager_observation_.Reset();\n"
+                "}\n"
+            ),
+            description=(
+                "Remove stale RemovePreTargetHandler from RemovedFromWidget "
+                "(API removed from views::Widget)"
+            ),
+            idempotent=True,
+        ),
+        Replacement(
+            old="  if (event->type() == ui::ET_KEY_PRESSED) {\n",
+            new="  if (event->type() == ui::EventType::kKeyPressed) {\n",
+            description=(
+                "Update stale ui::ET_KEY_PRESSED to ui::EventType::kKeyPressed "
+                "in BrowserView::OnKeyEvent"
+            ),
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "void BrowserView::OnKeyEvent(ui::KeyEvent* event) {\n"
+                "  views::ClientView::OnKeyEvent(event);\n"
+                "}\n"
+            ),
+            new=(
+                "void BrowserView::OnKeyEvent(ui::KeyEvent* event) {\n"
+                "  if (event->type() == ui::EventType::kKeyPressed) {\n"
+                "    std::string action_id =\n"
+                "        maho::MahoShortcutInterceptor::ResolveActionForKeyEvent(*event);\n"
+                "    if (!action_id.empty()) {\n"
+                "      maho::ExecuteCommandAction(browser(), action_id);\n"
+                "      event->SetHandled();\n"
+                "      return;\n"
+                "    }\n"
+                "  }\n"
+                "  views::ClientView::OnKeyEvent(event);\n"
+                "}\n"
+            ),
+            description="Add Maho shortcut interceptor to BrowserView::OnKeyEvent",
+            guard="maho::MahoShortcutInterceptor::ResolveActionForKeyEvent",
         ),
     ],
     # ── browser.cc ───────────────────────────────────────────────────────────
@@ -552,6 +973,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "Insert BrowserURLHandler include into "
                 "chrome_content_browser_client.cc"
             ),
+            guard='#include "content/public/browser/browser_url_handler.h"',
         ),
         Replacement(
             old=(
@@ -577,6 +999,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "Insert MahoRewriteNewTabToBlank helper into the existing anonymous "
                 "namespace of chrome_content_browser_client.cc"
             ),
+            guard="bool MahoRewriteNewTabToBlank(",
         ),
         Replacement(
             old=(
@@ -595,6 +1018,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "Register MahoRewriteNewTabToBlank handler before "
                 "HandleChromeAboutAndChromeSyncRewrite in BrowserURLHandlerCreated()"
             ),
+            guard="&MahoRewriteNewTabToBlank,",
         ),
     ],
     "chrome/test/BUILD.gn": [
@@ -646,7 +1070,9 @@ def apply_replacements(target_file: Path, replacements: list[Replacement]) -> tu
     applied: list[str] = []
 
     for replacement in replacements:
-        if replacement.new in text:
+        if replacement.new and replacement.new in text and (
+            replacement.old not in text or replacement.old in replacement.new
+        ):
             applied.append(f"already: {replacement.description}")
             continue
 

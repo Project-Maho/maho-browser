@@ -107,29 +107,31 @@ gfx::Size MahoSidebarSpaceDotView::CalculatePreferredSize(
 void MahoSidebarSpaceDotView::OnPaint(gfx::Canvas* canvas) {
   views::View::OnPaint(canvas);
 
-  if (dot_opacity_ <= 0.0f) {
-    return;
-  }
-
-  const float dot_size = GetCurrentDotSize();
-  const float radius = dot_size / 2.0f;
   const gfx::PointF center(kViewSize / 2.0f, kViewSize / 2.0f);
 
-  const auto* cp = GetColorProvider();
-  const SkColor fill = is_active_
-                           ? SkColorSetRGB(0xE8, 0xEF, 0xFB)
-                           : (cp ? cp->GetColor(ui::kColorSysOnSurfaceSubtle)
-                                 : SkColorSetRGB(0xA2, 0xA8, 0xB6));
-  const int alpha = is_active_ ? static_cast<int>(dot_opacity_ * 212)
-                               : static_cast<int>(dot_opacity_ * 72);
+  if (dot_opacity_ > 0.0f) {
+    const float dot_size = GetCurrentDotSize();
+    const float radius = dot_size / 2.0f;
 
-  cc::PaintFlags flags;
-  flags.setAntiAlias(true);
-  flags.setStyle(cc::PaintFlags::kFill_Style);
-  flags.setColor(SkColorSetA(fill, alpha));
-  canvas->DrawCircle(center, radius, flags);
+    const auto* cp = GetColorProvider();
+    const SkColor fill = is_active_
+                             ? SkColorSetRGB(0xE8, 0xEF, 0xFB)
+                             : (cp ? cp->GetColor(ui::kColorSysOnSurfaceSubtle)
+                                   : SkColorSetRGB(0xA2, 0xA8, 0xB6));
+    const int alpha = is_active_ ? static_cast<int>(dot_opacity_ * 212)
+                                 : static_cast<int>(dot_opacity_ * 72);
+
+    cc::PaintFlags flags;
+    flags.setAntiAlias(true);
+    flags.setStyle(cc::PaintFlags::kFill_Style);
+    flags.setColor(SkColorSetA(fill, alpha));
+    canvas->DrawCircle(center, radius, flags);
+  }
 
   if (is_active_) {
+    const float dot_size = GetCurrentDotSize();
+    const float radius = dot_size / 2.0f;
+
     cc::PaintFlags halo_flags;
     halo_flags.setAntiAlias(true);
     halo_flags.setStyle(cc::PaintFlags::kStroke_Style);
@@ -228,7 +230,7 @@ float MahoSidebarSpaceDotView::GetCurrentDotSize() const {
 }
 
 void MahoSidebarSpaceDotView::UpdateAppearance() {
-  const bool show_icon = is_hovered_ && has_icon_;
+  const bool show_icon = has_icon_;
   const float target_icon_opacity = show_icon ? 1.0f : 0.0f;
 
   dot_opacity_ = show_icon ? 0.0f : 1.0f;

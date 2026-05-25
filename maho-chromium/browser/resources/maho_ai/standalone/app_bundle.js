@@ -1328,7 +1328,7 @@ var require_react_dom_development = __commonJS({
         return dispatcher;
       }
       "undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ && "function" === typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart && __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart(Error());
-      var React37 = require_react(), Internals = {
+      var React38 = require_react(), Internals = {
         d: {
           f: noop3,
           r: function() {
@@ -1346,7 +1346,7 @@ var require_react_dom_development = __commonJS({
         },
         p: 0,
         findDOMNode: null
-      }, REACT_PORTAL_TYPE = /* @__PURE__ */ Symbol.for("react.portal"), ReactSharedInternals = React37.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
+      }, REACT_PORTAL_TYPE = /* @__PURE__ */ Symbol.for("react.portal"), ReactSharedInternals = React38.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
       "function" === typeof Map && null != Map.prototype && "function" === typeof Map.prototype.forEach && "function" === typeof Set && null != Set.prototype && "function" === typeof Set.prototype.clear && "function" === typeof Set.prototype.forEach || console.error(
         "React depends on Map and Set built-in types. Make sure that you load a polyfill in older browsers. https://reactjs.org/link/react-polyfills"
       );
@@ -2881,7 +2881,7 @@ var require_react_dom_client_development = __commonJS({
         "number" === type && getActiveElement(node.ownerDocument) === node || node.defaultValue === "" + value || (node.defaultValue = "" + value);
       }
       function validateOptionProps(element, props) {
-        null == props.value && ("object" === typeof props.children && null !== props.children ? React37.Children.forEach(props.children, function(child) {
+        null == props.value && ("object" === typeof props.children && null !== props.children ? React38.Children.forEach(props.children, function(child) {
           null == child || "string" === typeof child || "number" === typeof child || "bigint" === typeof child || didWarnInvalidChild || (didWarnInvalidChild = true, console.error(
             "Cannot infer the option value of complex children. Pass a `value` prop or use a plain string as children to <option>."
           ));
@@ -18513,14 +18513,14 @@ var require_react_dom_client_development = __commonJS({
         ));
       }
       "undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ && "function" === typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart && __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStart(Error());
-      var Scheduler = require_scheduler(), React37 = require_react(), ReactDOM4 = require_react_dom(), assign = Object.assign, REACT_LEGACY_ELEMENT_TYPE = /* @__PURE__ */ Symbol.for("react.element"), REACT_ELEMENT_TYPE = /* @__PURE__ */ Symbol.for("react.transitional.element"), REACT_PORTAL_TYPE = /* @__PURE__ */ Symbol.for("react.portal"), REACT_FRAGMENT_TYPE = /* @__PURE__ */ Symbol.for("react.fragment"), REACT_STRICT_MODE_TYPE = /* @__PURE__ */ Symbol.for("react.strict_mode"), REACT_PROFILER_TYPE = /* @__PURE__ */ Symbol.for("react.profiler"), REACT_CONSUMER_TYPE = /* @__PURE__ */ Symbol.for("react.consumer"), REACT_CONTEXT_TYPE = /* @__PURE__ */ Symbol.for("react.context"), REACT_FORWARD_REF_TYPE = /* @__PURE__ */ Symbol.for("react.forward_ref"), REACT_SUSPENSE_TYPE = /* @__PURE__ */ Symbol.for("react.suspense"), REACT_SUSPENSE_LIST_TYPE = /* @__PURE__ */ Symbol.for("react.suspense_list"), REACT_MEMO_TYPE = /* @__PURE__ */ Symbol.for("react.memo"), REACT_LAZY_TYPE = /* @__PURE__ */ Symbol.for("react.lazy");
+      var Scheduler = require_scheduler(), React38 = require_react(), ReactDOM4 = require_react_dom(), assign = Object.assign, REACT_LEGACY_ELEMENT_TYPE = /* @__PURE__ */ Symbol.for("react.element"), REACT_ELEMENT_TYPE = /* @__PURE__ */ Symbol.for("react.transitional.element"), REACT_PORTAL_TYPE = /* @__PURE__ */ Symbol.for("react.portal"), REACT_FRAGMENT_TYPE = /* @__PURE__ */ Symbol.for("react.fragment"), REACT_STRICT_MODE_TYPE = /* @__PURE__ */ Symbol.for("react.strict_mode"), REACT_PROFILER_TYPE = /* @__PURE__ */ Symbol.for("react.profiler"), REACT_CONSUMER_TYPE = /* @__PURE__ */ Symbol.for("react.consumer"), REACT_CONTEXT_TYPE = /* @__PURE__ */ Symbol.for("react.context"), REACT_FORWARD_REF_TYPE = /* @__PURE__ */ Symbol.for("react.forward_ref"), REACT_SUSPENSE_TYPE = /* @__PURE__ */ Symbol.for("react.suspense"), REACT_SUSPENSE_LIST_TYPE = /* @__PURE__ */ Symbol.for("react.suspense_list"), REACT_MEMO_TYPE = /* @__PURE__ */ Symbol.for("react.memo"), REACT_LAZY_TYPE = /* @__PURE__ */ Symbol.for("react.lazy");
       /* @__PURE__ */ Symbol.for("react.scope");
       var REACT_ACTIVITY_TYPE = /* @__PURE__ */ Symbol.for("react.activity");
       /* @__PURE__ */ Symbol.for("react.legacy_hidden");
       /* @__PURE__ */ Symbol.for("react.tracing_marker");
       var REACT_MEMO_CACHE_SENTINEL = /* @__PURE__ */ Symbol.for("react.memo_cache_sentinel");
       /* @__PURE__ */ Symbol.for("react.view_transition");
-      var MAYBE_ITERATOR_SYMBOL = Symbol.iterator, REACT_CLIENT_REFERENCE = /* @__PURE__ */ Symbol.for("react.client.reference"), isArrayImpl = Array.isArray, ReactSharedInternals = React37.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE, ReactDOMSharedInternals = ReactDOM4.__DOM_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE, NotPending = Object.freeze({
+      var MAYBE_ITERATOR_SYMBOL = Symbol.iterator, REACT_CLIENT_REFERENCE = /* @__PURE__ */ Symbol.for("react.client.reference"), isArrayImpl = Array.isArray, ReactSharedInternals = React38.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE, ReactDOMSharedInternals = ReactDOM4.__DOM_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE, NotPending = Object.freeze({
         pending: false,
         data: null,
         method: null,
@@ -21308,7 +21308,7 @@ var require_react_dom_client_development = __commonJS({
         }
       };
       (function() {
-        var isomorphicReactPackageVersion = React37.version;
+        var isomorphicReactPackageVersion = React38.version;
         if ("19.2.5" !== isomorphicReactPackageVersion)
           throw Error(
             'Incompatible React versions: The "react" and "react-dom" packages must have the exact same version. Instead got:\n  - react:      ' + (isomorphicReactPackageVersion + "\n  - react-dom:  19.2.5\nLearn more: https://react.dev/warnings/version-mismatch")
@@ -21662,18 +21662,18 @@ var require_react_jsx_runtime_development = __commonJS({
       function isValidElement2(object) {
         return "object" === typeof object && null !== object && object.$$typeof === REACT_ELEMENT_TYPE;
       }
-      var React37 = require_react(), REACT_ELEMENT_TYPE = /* @__PURE__ */ Symbol.for("react.transitional.element"), REACT_PORTAL_TYPE = /* @__PURE__ */ Symbol.for("react.portal"), REACT_FRAGMENT_TYPE = /* @__PURE__ */ Symbol.for("react.fragment"), REACT_STRICT_MODE_TYPE = /* @__PURE__ */ Symbol.for("react.strict_mode"), REACT_PROFILER_TYPE = /* @__PURE__ */ Symbol.for("react.profiler"), REACT_CONSUMER_TYPE = /* @__PURE__ */ Symbol.for("react.consumer"), REACT_CONTEXT_TYPE = /* @__PURE__ */ Symbol.for("react.context"), REACT_FORWARD_REF_TYPE = /* @__PURE__ */ Symbol.for("react.forward_ref"), REACT_SUSPENSE_TYPE = /* @__PURE__ */ Symbol.for("react.suspense"), REACT_SUSPENSE_LIST_TYPE = /* @__PURE__ */ Symbol.for("react.suspense_list"), REACT_MEMO_TYPE = /* @__PURE__ */ Symbol.for("react.memo"), REACT_LAZY_TYPE = /* @__PURE__ */ Symbol.for("react.lazy"), REACT_ACTIVITY_TYPE = /* @__PURE__ */ Symbol.for("react.activity"), REACT_CLIENT_REFERENCE = /* @__PURE__ */ Symbol.for("react.client.reference"), ReactSharedInternals = React37.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE, hasOwnProperty = Object.prototype.hasOwnProperty, isArrayImpl = Array.isArray, createTask = console.createTask ? console.createTask : function() {
+      var React38 = require_react(), REACT_ELEMENT_TYPE = /* @__PURE__ */ Symbol.for("react.transitional.element"), REACT_PORTAL_TYPE = /* @__PURE__ */ Symbol.for("react.portal"), REACT_FRAGMENT_TYPE = /* @__PURE__ */ Symbol.for("react.fragment"), REACT_STRICT_MODE_TYPE = /* @__PURE__ */ Symbol.for("react.strict_mode"), REACT_PROFILER_TYPE = /* @__PURE__ */ Symbol.for("react.profiler"), REACT_CONSUMER_TYPE = /* @__PURE__ */ Symbol.for("react.consumer"), REACT_CONTEXT_TYPE = /* @__PURE__ */ Symbol.for("react.context"), REACT_FORWARD_REF_TYPE = /* @__PURE__ */ Symbol.for("react.forward_ref"), REACT_SUSPENSE_TYPE = /* @__PURE__ */ Symbol.for("react.suspense"), REACT_SUSPENSE_LIST_TYPE = /* @__PURE__ */ Symbol.for("react.suspense_list"), REACT_MEMO_TYPE = /* @__PURE__ */ Symbol.for("react.memo"), REACT_LAZY_TYPE = /* @__PURE__ */ Symbol.for("react.lazy"), REACT_ACTIVITY_TYPE = /* @__PURE__ */ Symbol.for("react.activity"), REACT_CLIENT_REFERENCE = /* @__PURE__ */ Symbol.for("react.client.reference"), ReactSharedInternals = React38.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE, hasOwnProperty = Object.prototype.hasOwnProperty, isArrayImpl = Array.isArray, createTask = console.createTask ? console.createTask : function() {
         return null;
       };
-      React37 = {
+      React38 = {
         react_stack_bottom_frame: function(callStackForError) {
           return callStackForError();
         }
       };
       var specialPropKeyWarningShown;
       var didWarnAboutElementRef = {};
-      var unknownOwnerDebugStack = React37.react_stack_bottom_frame.bind(
-        React37,
+      var unknownOwnerDebugStack = React38.react_stack_bottom_frame.bind(
+        React38,
         UnknownOwner
       )();
       var unknownOwnerDebugTask = createTask(getTaskName(UnknownOwner));
@@ -21718,7 +21718,7 @@ var require_jsx_runtime = __commonJS({
 });
 
 // react/app.tsx
-var import_react11 = __toESM(require_react());
+var import_react12 = __toESM(require_react());
 var import_client = __toESM(require_client());
 
 // standalone/maho_ai.mojom-webui.js
@@ -22775,15 +22775,19 @@ function collectConversationItems(entries) {
   const toolItemIndexByCallId = /* @__PURE__ */ new Map();
   const approvalItemIndexById = /* @__PURE__ */ new Map();
   let replaceableAssistantIndex = null;
+  let replaceableAssistantKey = null;
   let assistantText = "";
   let committedAssistantLength = 0;
   let replaceableThinkingIndex = null;
+  let replaceableThinkingKey = null;
   let thinkingText = "";
   const clearAssistantState = () => {
     replaceableAssistantIndex = null;
+    replaceableAssistantKey = null;
     assistantText = "";
     committedAssistantLength = 0;
     replaceableThinkingIndex = null;
+    replaceableThinkingKey = null;
     thinkingText = "";
   };
   const splitAssistantState = () => {
@@ -22792,6 +22796,7 @@ function collectConversationItems(entries) {
     }
     committedAssistantLength = assistantText.length;
     replaceableAssistantIndex = null;
+    replaceableAssistantKey = null;
   };
   for (const [index2, entry] of entries.entries()) {
     const { event } = entry;
@@ -22816,6 +22821,7 @@ function collectConversationItems(entries) {
           break;
         }
         replaceableThinkingIndex = null;
+        replaceableThinkingKey = null;
         assistantText += text;
         const assistantSegmentText = assistantText.slice(committedAssistantLength);
         if (!assistantSegmentText) {
@@ -22823,8 +22829,9 @@ function collectConversationItems(entries) {
         }
         if (replaceableAssistantIndex === null) {
           replaceableAssistantIndex = items.length;
+          replaceableAssistantKey = key;
           items.push({
-            key,
+            key: replaceableAssistantKey,
             markdown: true,
             role: "assistant",
             text: assistantSegmentText,
@@ -22833,7 +22840,7 @@ function collectConversationItems(entries) {
           break;
         }
         items[replaceableAssistantIndex] = {
-          key,
+          key: replaceableAssistantKey,
           markdown: true,
           role: "assistant",
           text: assistantSegmentText,
@@ -22846,10 +22853,11 @@ function collectConversationItems(entries) {
         }
         if (replaceableThinkingIndex === null) {
           replaceableThinkingIndex = items.length;
+          replaceableThinkingKey = key;
           thinkingText = text;
           items.push({
             kind: "thinking",
-            key,
+            key: replaceableThinkingKey,
             markdown: false,
             role: "system",
             text: thinkingText,
@@ -22860,7 +22868,7 @@ function collectConversationItems(entries) {
         thinkingText += text;
         items[replaceableThinkingIndex] = {
           kind: "thinking",
-          key,
+          key: replaceableThinkingKey,
           markdown: false,
           role: "system",
           text: thinkingText,
@@ -22880,7 +22888,7 @@ function collectConversationItems(entries) {
         }
         if (replaceableAssistantIndex !== null) {
           items[replaceableAssistantIndex] = {
-            key,
+            key: replaceableAssistantKey ?? key,
             markdown: true,
             role: "assistant",
             text: finalAssistantSegmentText,
@@ -23236,6 +23244,19 @@ var MahoAiStore = class {
     }
     await this.pageHandler.respondToApproval(sessionId, approvalId, approved);
   }
+  async closePanel() {
+    await this.pageHandler.closePanel();
+  }
+  async openSettings() {
+    await this.pageHandler.openSettings();
+  }
+  async getViewMode() {
+    const { mode } = await this.pageHandler.getViewMode();
+    return mode;
+  }
+  async setViewMode(mode) {
+    await this.pageHandler.setViewMode(mode);
+  }
   bindCallbacks() {
     this.callbackRouter.onRuntimeEvent.addListener((event) => {
       const sessionId = this.state.currentSessionId;
@@ -23337,47 +23358,19 @@ async function bootstrapStore(store2) {
   await store2.bootstrap(readPendingAiQuery() || void 0);
 }
 
-// ../../../../website/node_modules/clsx/dist/clsx.mjs
-function r(e) {
-  var t, f, n = "";
-  if ("string" == typeof e || "number" == typeof e) n += e;
-  else if ("object" == typeof e) if (Array.isArray(e)) {
-    var o = e.length;
-    for (t = 0; t < o; t++) e[t] && (f = r(e[t])) && (n && (n += " "), n += f);
-  } else for (f in e) e[f] && (n && (n += " "), n += f);
-  return n;
-}
-function clsx() {
-  for (var e, t, f = 0, n = "", o = arguments.length; f < o; f++) (e = arguments[f]) && (t = r(e)) && (n && (n += " "), n += t);
-  return n;
-}
-
-// react/lib/cn.ts
-function cn(...inputs) {
-  return clsx(inputs);
-}
-
-// standalone/icons_stub.ts
-function getSFSymbolUrl(_symbol) {
-  return "";
-}
-
-// react/ui/icon.tsx
+// react/features/compact/compact-stage.tsx
 var import_jsx_runtime = __toESM(require_jsx_runtime());
-function Icon({ symbol }) {
-  const style = {
-    "--maho-ai-icon-url": `url("${getSFSymbolUrl(symbol)}")`
-  };
-  return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
-    "span",
-    {
-      "aria-hidden": "true",
-      className: "maho-ai-icon",
-      "data-symbol": symbol,
-      style
-    }
-  );
+function CompactStage({ state }) {
+  const label = state.currentSessionId ? "Live session ready" : "Ready when you are";
+  const description = state.currentSessionId ? "Ask anything about this page to start the conversation." : "Start with a prompt below and Maho AI will open a live session in this thread.";
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("main", { className: "compact-thread compact-thread--empty", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "compact-thread__list compact-thread__list--empty", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", { className: "compact-thread__row compact-thread__row--empty", "aria-labelledby": "compact-stage-title", children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "compact-thread__welcome", children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "compact-thread__welcome-copy", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { className: "compact-thread__welcome-title", id: "compact-stage-title", children: label }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { className: "compact-thread__welcome-text", children: description })
+  ] }) }) }) }) });
 }
+
+// react/features/compact/compact-topbar.tsx
+var import_react6 = __toESM(require_react());
 
 // react/ui/icon-button.tsx
 var import_react = __toESM(require_react());
@@ -23508,6 +23501,21 @@ function getElementRef(element) {
   return element.props.ref || element.ref;
 }
 
+// ../../../../website/node_modules/clsx/dist/clsx.mjs
+function r(e) {
+  var t, f, n = "";
+  if ("string" == typeof e || "number" == typeof e) n += e;
+  else if ("object" == typeof e) if (Array.isArray(e)) {
+    var o = e.length;
+    for (t = 0; t < o; t++) e[t] && (f = r(e[t])) && (n && (n += " "), n += f);
+  } else for (f in e) e[f] && (n && (n += " "), n += f);
+  return n;
+}
+function clsx() {
+  for (var e, t, f = 0, n = "", o = arguments.length; f < o; f++) (e = arguments[f]) && (t = r(e)) && (n && (n += " "), n += t);
+  return n;
+}
+
 // ../../../../website/node_modules/class-variance-authority/dist/index.mjs
 var falsyToString = (value) => typeof value === "boolean" ? `${value}` : value === 0 ? "0" : value;
 var cx = clsx;
@@ -23552,6 +23560,13 @@ var cva = (base, config) => (props) => {
 
 // react/ui/button.tsx
 var React3 = __toESM(require_react());
+
+// react/lib/cn.ts
+function cn(...inputs) {
+  return clsx(inputs);
+}
+
+// react/ui/button.tsx
 var import_jsx_runtime3 = __toESM(require_jsx_runtime());
 var buttonVariants = cva("", {
   variants: {
@@ -23597,10 +23612,32 @@ var Button = React3.forwardRef(function Button2({ asChild, className, size: size
 });
 Button.displayName = "Button";
 
-// react/ui/icon-button.tsx
+// standalone/icons_stub.ts
+function getSFSymbolUrl(_symbol) {
+  return "";
+}
+
+// react/ui/icon.tsx
 var import_jsx_runtime4 = __toESM(require_jsx_runtime());
+function Icon({ symbol }) {
+  const style = {
+    "--maho-ai-icon-url": `url("${getSFSymbolUrl(symbol)}")`
+  };
+  return /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+    "span",
+    {
+      "aria-hidden": "true",
+      className: "maho-ai-icon",
+      "data-symbol": symbol,
+      style
+    }
+  );
+}
+
+// react/ui/icon-button.tsx
+var import_jsx_runtime5 = __toESM(require_jsx_runtime());
 var IconButton = (0, import_react.forwardRef)(function IconButton2({ ariaLabel, symbol, ...props }, ref) {
-  return /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(Button, { ref, "aria-label": ariaLabel, ...props, children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(Icon, { symbol }) });
+  return /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(Button, { ref, "aria-label": ariaLabel, ...props, children: /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(Icon, { symbol }) });
 });
 IconButton.displayName = "IconButton";
 
@@ -23620,7 +23657,7 @@ function composeEventHandlers(originalEventHandler, ourEventHandler, { checkForD
 
 // ../../../../website/node_modules/@radix-ui/react-context/dist/index.mjs
 var React4 = __toESM(require_react(), 1);
-var import_jsx_runtime5 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime6 = __toESM(require_jsx_runtime(), 1);
 function createContextScope(scopeName, createContextScopeDeps = []) {
   let defaultContexts = [];
   function createContext32(rootComponentName, defaultContext) {
@@ -23631,7 +23668,7 @@ function createContextScope(scopeName, createContextScopeDeps = []) {
       const { scope, children, ...context } = props;
       const Context = scope?.[scopeName]?.[index2] || BaseContext;
       const value = React4.useMemo(() => context, Object.values(context));
-      return /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(Context.Provider, { value, children });
+      return /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Context.Provider, { value, children });
     };
     Provider.displayName = rootComponentName + "Provider";
     function useContext22(consumerName, scope) {
@@ -23757,7 +23794,7 @@ function isFunction(value) {
 // ../../../../website/node_modules/@radix-ui/react-primitive/dist/index.mjs
 var React7 = __toESM(require_react(), 1);
 var ReactDOM = __toESM(require_react_dom(), 1);
-var import_jsx_runtime6 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime7 = __toESM(require_jsx_runtime(), 1);
 var NODES = [
   "a",
   "button",
@@ -23785,7 +23822,7 @@ var Primitive = NODES.reduce((primitive, node) => {
     if (typeof window !== "undefined") {
       window[/* @__PURE__ */ Symbol.for("radix-ui")] = true;
     }
-    return /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Comp, { ...primitiveProps, ref: forwardedRef });
+    return /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Comp, { ...primitiveProps, ref: forwardedRef });
   });
   Node2.displayName = `Primitive.${node}`;
   return { ...primitive, [node]: Node2 };
@@ -23799,9 +23836,9 @@ var React33 = __toESM(require_react(), 1);
 
 // ../../../../website/node_modules/@radix-ui/react-collection/dist/index.mjs
 var import_react2 = __toESM(require_react(), 1);
-var import_jsx_runtime7 = __toESM(require_jsx_runtime(), 1);
-var import_react3 = __toESM(require_react(), 1);
 var import_jsx_runtime8 = __toESM(require_jsx_runtime(), 1);
+var import_react3 = __toESM(require_react(), 1);
+var import_jsx_runtime9 = __toESM(require_jsx_runtime(), 1);
 function createCollection(name) {
   const PROVIDER_NAME = name + "CollectionProvider";
   const [createCollectionContext, createCollectionScope3] = createContextScope(PROVIDER_NAME);
@@ -23813,7 +23850,7 @@ function createCollection(name) {
     const { scope, children } = props;
     const ref = import_react2.default.useRef(null);
     const itemMap = import_react2.default.useRef(/* @__PURE__ */ new Map()).current;
-    return /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(CollectionProviderImpl, { scope, itemMap, collectionRef: ref, children });
+    return /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(CollectionProviderImpl, { scope, itemMap, collectionRef: ref, children });
   };
   CollectionProvider.displayName = PROVIDER_NAME;
   const COLLECTION_SLOT_NAME = name + "CollectionSlot";
@@ -23823,7 +23860,7 @@ function createCollection(name) {
       const { scope, children } = props;
       const context = useCollectionContext(COLLECTION_SLOT_NAME, scope);
       const composedRefs = useComposedRefs(forwardedRef, context.collectionRef);
-      return /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(CollectionSlotImpl, { ref: composedRefs, children });
+      return /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(CollectionSlotImpl, { ref: composedRefs, children });
     }
   );
   CollectionSlot.displayName = COLLECTION_SLOT_NAME;
@@ -23840,7 +23877,7 @@ function createCollection(name) {
         context.itemMap.set(ref, { ref, ...itemData });
         return () => void context.itemMap.delete(ref);
       });
-      return /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(CollectionItemSlotImpl, { ...{ [ITEM_DATA_ATTR]: "" }, ref: composedRefs, children });
+      return /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(CollectionItemSlotImpl, { ...{ [ITEM_DATA_ATTR]: "" }, ref: composedRefs, children });
     }
   );
   CollectionItemSlot.displayName = ITEM_SLOT_NAME;
@@ -23867,7 +23904,7 @@ function createCollection(name) {
 
 // ../../../../website/node_modules/@radix-ui/react-direction/dist/index.mjs
 var React9 = __toESM(require_react(), 1);
-var import_jsx_runtime9 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime10 = __toESM(require_jsx_runtime(), 1);
 var DirectionContext = React9.createContext(void 0);
 function useDirection(localDir) {
   const globalDir = React9.useContext(DirectionContext);
@@ -23903,7 +23940,7 @@ function useEscapeKeydown(onEscapeKeyDownProp, ownerDocument = globalThis?.docum
 }
 
 // ../../../../website/node_modules/@radix-ui/react-dismissable-layer/dist/index.mjs
-var import_jsx_runtime10 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime11 = __toESM(require_jsx_runtime(), 1);
 var DISMISSABLE_LAYER_NAME = "DismissableLayer";
 var CONTEXT_UPDATE = "dismissableLayer.update";
 var POINTER_DOWN_OUTSIDE = "dismissableLayer.pointerDownOutside";
@@ -23991,7 +24028,7 @@ var DismissableLayer = React12.forwardRef(
       document.addEventListener(CONTEXT_UPDATE, handleUpdate);
       return () => document.removeEventListener(CONTEXT_UPDATE, handleUpdate);
     }, []);
-    return /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(
+    return /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
       Primitive.div,
       {
         ...layerProps,
@@ -24025,7 +24062,7 @@ var DismissableLayerBranch = React12.forwardRef((props, forwardedRef) => {
       };
     }
   }, [context.branches]);
-  return /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(Primitive.div, { ...props, ref: composedRefs });
+  return /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(Primitive.div, { ...props, ref: composedRefs });
 });
 DismissableLayerBranch.displayName = BRANCH_NAME;
 function usePointerDownOutside(onPointerDownOutside, ownerDocument = globalThis?.document) {
@@ -24137,7 +24174,7 @@ function createFocusGuard() {
 
 // ../../../../website/node_modules/@radix-ui/react-focus-scope/dist/index.mjs
 var React14 = __toESM(require_react(), 1);
-var import_jsx_runtime11 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime12 = __toESM(require_jsx_runtime(), 1);
 var AUTOFOCUS_ON_MOUNT = "focusScope.autoFocusOnMount";
 var AUTOFOCUS_ON_UNMOUNT = "focusScope.autoFocusOnUnmount";
 var EVENT_OPTIONS = { bubbles: false, cancelable: true };
@@ -24256,7 +24293,7 @@ var FocusScope = React14.forwardRef((props, forwardedRef) => {
     },
     [loop, trapped, focusScope.paused]
   );
-  return /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(Primitive.div, { tabIndex: -1, ...scopeProps, ref: composedRefs, onKeyDown: handleKeyDown });
+  return /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(Primitive.div, { tabIndex: -1, ...scopeProps, ref: composedRefs, onKeyDown: handleKeyDown });
 });
 FocusScope.displayName = FOCUS_SCOPE_NAME;
 function focusFirst(candidates, { select = false } = {}) {
@@ -26284,11 +26321,11 @@ var arrow3 = (options, deps) => {
 
 // ../../../../website/node_modules/@radix-ui/react-arrow/dist/index.mjs
 var React17 = __toESM(require_react(), 1);
-var import_jsx_runtime12 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime13 = __toESM(require_jsx_runtime(), 1);
 var NAME = "Arrow";
 var Arrow = React17.forwardRef((props, forwardedRef) => {
   const { children, width = 10, height = 5, ...arrowProps } = props;
-  return /* @__PURE__ */ (0, import_jsx_runtime12.jsx)(
+  return /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
     Primitive.svg,
     {
       ...arrowProps,
@@ -26297,7 +26334,7 @@ var Arrow = React17.forwardRef((props, forwardedRef) => {
       height,
       viewBox: "0 0 30 10",
       preserveAspectRatio: "none",
-      children: props.asChild ? children : /* @__PURE__ */ (0, import_jsx_runtime12.jsx)("polygon", { points: "0,0 30,0 15,10" })
+      children: props.asChild ? children : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("polygon", { points: "0,0 30,0 15,10" })
     }
   );
 });
@@ -26342,14 +26379,14 @@ function useSize(element) {
 }
 
 // ../../../../website/node_modules/@radix-ui/react-popper/dist/index.mjs
-var import_jsx_runtime13 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime14 = __toESM(require_jsx_runtime(), 1);
 var POPPER_NAME = "Popper";
 var [createPopperContext, createPopperScope] = createContextScope(POPPER_NAME);
 var [PopperProvider, usePopperContext] = createPopperContext(POPPER_NAME);
 var Popper = (props) => {
   const { __scopePopper, children } = props;
   const [anchor, setAnchor] = React19.useState(null);
-  return /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(PopperProvider, { scope: __scopePopper, anchor, onAnchorChange: setAnchor, children });
+  return /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(PopperProvider, { scope: __scopePopper, anchor, onAnchorChange: setAnchor, children });
 };
 Popper.displayName = POPPER_NAME;
 var ANCHOR_NAME = "PopperAnchor";
@@ -26367,7 +26404,7 @@ var PopperAnchor = React19.forwardRef(
         context.onAnchorChange(anchorRef.current);
       }
     });
-    return virtualRef ? null : /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(Primitive.div, { ...anchorProps, ref: composedRefs });
+    return virtualRef ? null : /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Primitive.div, { ...anchorProps, ref: composedRefs });
   }
 );
 PopperAnchor.displayName = ANCHOR_NAME;
@@ -26460,7 +26497,7 @@ var PopperContent = React19.forwardRef(
     useLayoutEffect2(() => {
       if (content) setContentZIndex(window.getComputedStyle(content).zIndex);
     }, [content]);
-    return /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
+    return /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
       "div",
       {
         ref: refs.setFloating,
@@ -26484,7 +26521,7 @@ var PopperContent = React19.forwardRef(
           }
         },
         dir: props.dir,
-        children: /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
+        children: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
           PopperContentProvider,
           {
             scope: __scopePopper,
@@ -26493,7 +26530,7 @@ var PopperContent = React19.forwardRef(
             arrowX,
             arrowY,
             shouldHideArrow: cannotCenterArrow,
-            children: /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
+            children: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
               Primitive.div,
               {
                 "data-side": placedSide,
@@ -26530,7 +26567,7 @@ var PopperArrow = React19.forwardRef(function PopperArrow2(props, forwardedRef) 
     // we have to use an extra wrapper because `ResizeObserver` (used by `useSize`)
     // doesn't report size as we'd expect on SVG elements.
     // it reports their bounding box which is effectively the largest path inside the SVG.
-    /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
+    /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
       "span",
       {
         ref: contentContext.onArrowChange,
@@ -26553,7 +26590,7 @@ var PopperArrow = React19.forwardRef(function PopperArrow2(props, forwardedRef) 
           }[contentContext.placedSide],
           visibility: contentContext.shouldHideArrow ? "hidden" : void 0
         },
-        children: /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
+        children: /* @__PURE__ */ (0, import_jsx_runtime14.jsx)(
           Root,
           {
             ...arrowProps,
@@ -26616,14 +26653,14 @@ var Arrow2 = PopperArrow;
 // ../../../../website/node_modules/@radix-ui/react-portal/dist/index.mjs
 var React20 = __toESM(require_react(), 1);
 var import_react_dom2 = __toESM(require_react_dom(), 1);
-var import_jsx_runtime14 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime15 = __toESM(require_jsx_runtime(), 1);
 var PORTAL_NAME = "Portal";
 var Portal = React20.forwardRef((props, forwardedRef) => {
   const { container: containerProp, ...portalProps } = props;
   const [mounted, setMounted] = React20.useState(false);
   useLayoutEffect2(() => setMounted(true), []);
   const container = containerProp || mounted && globalThis?.document?.body;
-  return container ? import_react_dom2.default.createPortal(/* @__PURE__ */ (0, import_jsx_runtime14.jsx)(Primitive.div, { ...portalProps, ref: forwardedRef }), container) : null;
+  return container ? import_react_dom2.default.createPortal(/* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Primitive.div, { ...portalProps, ref: forwardedRef }), container) : null;
 });
 Portal.displayName = PORTAL_NAME;
 
@@ -26755,7 +26792,7 @@ function getElementRef2(element) {
 
 // ../../../../website/node_modules/@radix-ui/react-roving-focus/dist/index.mjs
 var React25 = __toESM(require_react(), 1);
-var import_jsx_runtime15 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime16 = __toESM(require_jsx_runtime(), 1);
 var ENTRY_FOCUS = "rovingFocusGroup.onEntryFocus";
 var EVENT_OPTIONS2 = { bubbles: false, cancelable: true };
 var GROUP_NAME = "RovingFocusGroup";
@@ -26767,7 +26804,7 @@ var [createRovingFocusGroupContext, createRovingFocusGroupScope] = createContext
 var [RovingFocusProvider, useRovingFocusContext] = createRovingFocusGroupContext(GROUP_NAME);
 var RovingFocusGroup = React25.forwardRef(
   (props, forwardedRef) => {
-    return /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Collection.Provider, { scope: props.__scopeRovingFocusGroup, children: /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(Collection.Slot, { scope: props.__scopeRovingFocusGroup, children: /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(RovingFocusGroupImpl, { ...props, ref: forwardedRef }) }) });
+    return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Collection.Provider, { scope: props.__scopeRovingFocusGroup, children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Collection.Slot, { scope: props.__scopeRovingFocusGroup, children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(RovingFocusGroupImpl, { ...props, ref: forwardedRef }) }) });
   }
 );
 RovingFocusGroup.displayName = GROUP_NAME;
@@ -26805,7 +26842,7 @@ var RovingFocusGroupImpl = React25.forwardRef((props, forwardedRef) => {
       return () => node.removeEventListener(ENTRY_FOCUS, handleEntryFocus);
     }
   }, [handleEntryFocus]);
-  return /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(
+  return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
     RovingFocusProvider,
     {
       scope: __scopeRovingFocusGroup,
@@ -26826,7 +26863,7 @@ var RovingFocusGroupImpl = React25.forwardRef((props, forwardedRef) => {
         () => setFocusableItemsCount((prevCount) => prevCount - 1),
         []
       ),
-      children: /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(
+      children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
         Primitive.div,
         {
           tabIndex: isTabbingBackOut || focusableItemsCount === 0 ? -1 : 0,
@@ -26884,14 +26921,14 @@ var RovingFocusGroupItem = React25.forwardRef(
         return () => onFocusableItemRemove();
       }
     }, [focusable, onFocusableItemAdd, onFocusableItemRemove]);
-    return /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(
+    return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
       Collection.ItemSlot,
       {
         scope: __scopeRovingFocusGroup,
         id,
         focusable,
         active,
-        children: /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(
+        children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
           Primitive.span,
           {
             tabIndex: isCurrentTabStop ? 0 : -1,
@@ -27808,7 +27845,7 @@ ReactRemoveScroll.classNames = RemoveScroll.classNames;
 var Combination_default = ReactRemoveScroll;
 
 // ../../../../website/node_modules/@radix-ui/react-menu/dist/index.mjs
-var import_jsx_runtime16 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime17 = __toESM(require_jsx_runtime(), 1);
 var SELECTION_KEYS = ["Enter", " "];
 var FIRST_KEYS = ["ArrowDown", "PageUp", "Home"];
 var LAST_KEYS = ["ArrowUp", "PageDown", "End"];
@@ -27853,7 +27890,7 @@ var Menu = (props) => {
       document.removeEventListener("pointermove", handlePointer, { capture: true });
     };
   }, []);
-  return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Root2, { ...popperScope, children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
+  return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Root2, { ...popperScope, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
     MenuProvider,
     {
       scope: __scopeMenu,
@@ -27861,7 +27898,7 @@ var Menu = (props) => {
       onOpenChange: handleOpenChange,
       content,
       onContentChange: setContent,
-      children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
+      children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
         MenuRootProvider,
         {
           scope: __scopeMenu,
@@ -27881,7 +27918,7 @@ var MenuAnchor = React33.forwardRef(
   (props, forwardedRef) => {
     const { __scopeMenu, ...anchorProps } = props;
     const popperScope = usePopperScope(__scopeMenu);
-    return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Anchor, { ...popperScope, ...anchorProps, ref: forwardedRef });
+    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Anchor, { ...popperScope, ...anchorProps, ref: forwardedRef });
   }
 );
 MenuAnchor.displayName = ANCHOR_NAME2;
@@ -27892,7 +27929,7 @@ var [PortalProvider, usePortalContext] = createMenuContext(PORTAL_NAME2, {
 var MenuPortal = (props) => {
   const { __scopeMenu, forceMount, children, container } = props;
   const context = useMenuContext(PORTAL_NAME2, __scopeMenu);
-  return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(PortalProvider, { scope: __scopeMenu, forceMount, children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Presence, { present: forceMount || context.open, children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Portal, { asChild: true, container, children }) }) });
+  return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(PortalProvider, { scope: __scopeMenu, forceMount, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Presence, { present: forceMount || context.open, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Portal, { asChild: true, container, children }) }) });
 };
 MenuPortal.displayName = PORTAL_NAME2;
 var CONTENT_NAME2 = "MenuContent";
@@ -27903,7 +27940,7 @@ var MenuContent = React33.forwardRef(
     const { forceMount = portalContext.forceMount, ...contentProps } = props;
     const context = useMenuContext(CONTENT_NAME2, props.__scopeMenu);
     const rootContext = useMenuRootContext(CONTENT_NAME2, props.__scopeMenu);
-    return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Collection2.Provider, { scope: props.__scopeMenu, children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Presence, { present: forceMount || context.open, children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Collection2.Slot, { scope: props.__scopeMenu, children: rootContext.modal ? /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(MenuRootContentModal, { ...contentProps, ref: forwardedRef }) : /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(MenuRootContentNonModal, { ...contentProps, ref: forwardedRef }) }) }) });
+    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Collection2.Provider, { scope: props.__scopeMenu, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Presence, { present: forceMount || context.open, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Collection2.Slot, { scope: props.__scopeMenu, children: rootContext.modal ? /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(MenuRootContentModal, { ...contentProps, ref: forwardedRef }) : /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(MenuRootContentNonModal, { ...contentProps, ref: forwardedRef }) }) }) });
   }
 );
 var MenuRootContentModal = React33.forwardRef(
@@ -27915,7 +27952,7 @@ var MenuRootContentModal = React33.forwardRef(
       const content = ref.current;
       if (content) return hideOthers(content);
     }, []);
-    return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
+    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
       MenuContentImpl,
       {
         ...props,
@@ -27935,7 +27972,7 @@ var MenuRootContentModal = React33.forwardRef(
 );
 var MenuRootContentNonModal = React33.forwardRef((props, forwardedRef) => {
   const context = useMenuContext(CONTENT_NAME2, props.__scopeMenu);
-  return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
+  return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
     MenuContentImpl,
     {
       ...props,
@@ -28007,7 +28044,7 @@ var MenuContentImpl = React33.forwardRef(
       const isMovingTowards = pointerDirRef.current === pointerGraceIntentRef.current?.side;
       return isMovingTowards && isPointerInGraceArea(event, pointerGraceIntentRef.current?.area);
     }, []);
-    return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
+    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
       MenuContentProvider,
       {
         scope: __scopeMenu,
@@ -28036,7 +28073,7 @@ var MenuContentImpl = React33.forwardRef(
         onPointerGraceIntentChange: React33.useCallback((intent) => {
           pointerGraceIntentRef.current = intent;
         }, []),
-        children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(ScrollLockWrapper, { ...scrollLockWrapperProps, children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
+        children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(ScrollLockWrapper, { ...scrollLockWrapperProps, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
           FocusScope,
           {
             asChild: true,
@@ -28046,7 +28083,7 @@ var MenuContentImpl = React33.forwardRef(
               contentRef.current?.focus({ preventScroll: true });
             }),
             onUnmountAutoFocus: onCloseAutoFocus,
-            children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
+            children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
               DismissableLayer,
               {
                 asChild: true,
@@ -28056,7 +28093,7 @@ var MenuContentImpl = React33.forwardRef(
                 onFocusOutside,
                 onInteractOutside,
                 onDismiss,
-                children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
+                children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
                   Root3,
                   {
                     asChild: true,
@@ -28070,7 +28107,7 @@ var MenuContentImpl = React33.forwardRef(
                       if (!rootContext.isUsingKeyboardRef.current) event.preventDefault();
                     }),
                     preventScrollOnEntryFocus: true,
-                    children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
+                    children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
                       Content,
                       {
                         role: "menu",
@@ -28135,7 +28172,7 @@ var GROUP_NAME2 = "MenuGroup";
 var MenuGroup = React33.forwardRef(
   (props, forwardedRef) => {
     const { __scopeMenu, ...groupProps } = props;
-    return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Primitive.div, { role: "group", ...groupProps, ref: forwardedRef });
+    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Primitive.div, { role: "group", ...groupProps, ref: forwardedRef });
   }
 );
 MenuGroup.displayName = GROUP_NAME2;
@@ -28143,7 +28180,7 @@ var LABEL_NAME = "MenuLabel";
 var MenuLabel = React33.forwardRef(
   (props, forwardedRef) => {
     const { __scopeMenu, ...labelProps } = props;
-    return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Primitive.div, { ...labelProps, ref: forwardedRef });
+    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Primitive.div, { ...labelProps, ref: forwardedRef });
   }
 );
 MenuLabel.displayName = LABEL_NAME;
@@ -28170,7 +28207,7 @@ var MenuItem = React33.forwardRef(
         }
       }
     };
-    return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
+    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
       MenuItemImpl,
       {
         ...itemProps,
@@ -28212,13 +28249,13 @@ var MenuItemImpl = React33.forwardRef(
         setTextContent((menuItem.textContent ?? "").trim());
       }
     }, [itemProps.children]);
-    return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
+    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
       Collection2.ItemSlot,
       {
         scope: __scopeMenu,
         disabled,
         textValue: textValue ?? textContent,
-        children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Item, { asChild: true, ...rovingFocusGroupScope, focusable: !disabled, children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
+        children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Item, { asChild: true, ...rovingFocusGroupScope, focusable: !disabled, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
           Primitive.div,
           {
             role: "menuitem",
@@ -28257,7 +28294,7 @@ var CHECKBOX_ITEM_NAME = "MenuCheckboxItem";
 var MenuCheckboxItem = React33.forwardRef(
   (props, forwardedRef) => {
     const { checked = false, onCheckedChange, ...checkboxItemProps } = props;
-    return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(ItemIndicatorProvider, { scope: props.__scopeMenu, checked, children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
+    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(ItemIndicatorProvider, { scope: props.__scopeMenu, checked, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
       MenuItem,
       {
         role: "menuitemcheckbox",
@@ -28285,7 +28322,7 @@ var MenuRadioGroup = React33.forwardRef(
   (props, forwardedRef) => {
     const { value, onValueChange, ...groupProps } = props;
     const handleValueChange = useCallbackRef(onValueChange);
-    return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(RadioGroupProvider, { scope: props.__scopeMenu, value, onValueChange: handleValueChange, children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(MenuGroup, { ...groupProps, ref: forwardedRef }) });
+    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(RadioGroupProvider, { scope: props.__scopeMenu, value, onValueChange: handleValueChange, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(MenuGroup, { ...groupProps, ref: forwardedRef }) });
   }
 );
 MenuRadioGroup.displayName = RADIO_GROUP_NAME;
@@ -28295,7 +28332,7 @@ var MenuRadioItem = React33.forwardRef(
     const { value, ...radioItemProps } = props;
     const context = useRadioGroupContext(RADIO_ITEM_NAME, props.__scopeMenu);
     const checked = value === context.value;
-    return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(ItemIndicatorProvider, { scope: props.__scopeMenu, checked, children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
+    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(ItemIndicatorProvider, { scope: props.__scopeMenu, checked, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
       MenuItem,
       {
         role: "menuitemradio",
@@ -28322,11 +28359,11 @@ var MenuItemIndicator = React33.forwardRef(
   (props, forwardedRef) => {
     const { __scopeMenu, forceMount, ...itemIndicatorProps } = props;
     const indicatorContext = useItemIndicatorContext(ITEM_INDICATOR_NAME, __scopeMenu);
-    return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
+    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
       Presence,
       {
         present: forceMount || isIndeterminate(indicatorContext.checked) || indicatorContext.checked === true,
-        children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
+        children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
           Primitive.span,
           {
             ...itemIndicatorProps,
@@ -28343,7 +28380,7 @@ var SEPARATOR_NAME = "MenuSeparator";
 var MenuSeparator = React33.forwardRef(
   (props, forwardedRef) => {
     const { __scopeMenu, ...separatorProps } = props;
-    return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
+    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
       Primitive.div,
       {
         role: "separator",
@@ -28360,7 +28397,7 @@ var MenuArrow = React33.forwardRef(
   (props, forwardedRef) => {
     const { __scopeMenu, ...arrowProps } = props;
     const popperScope = usePopperScope(__scopeMenu);
-    return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Arrow2, { ...popperScope, ...arrowProps, ref: forwardedRef });
+    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Arrow2, { ...popperScope, ...arrowProps, ref: forwardedRef });
   }
 );
 MenuArrow.displayName = ARROW_NAME2;
@@ -28377,7 +28414,7 @@ var MenuSub = (props) => {
     if (parentMenuContext.open === false) handleOpenChange(false);
     return () => handleOpenChange(false);
   }, [parentMenuContext.open, handleOpenChange]);
-  return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Root2, { ...popperScope, children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
+  return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Root2, { ...popperScope, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
     MenuProvider,
     {
       scope: __scopeMenu,
@@ -28385,7 +28422,7 @@ var MenuSub = (props) => {
       onOpenChange: handleOpenChange,
       content,
       onContentChange: setContent,
-      children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
+      children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
         MenuSubProvider,
         {
           scope: __scopeMenu,
@@ -28422,7 +28459,7 @@ var MenuSubTrigger = React33.forwardRef(
         onPointerGraceIntentChange(null);
       };
     }, [pointerGraceTimerRef, onPointerGraceIntentChange]);
-    return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(MenuAnchor, { asChild: true, ...scope, children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
+    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(MenuAnchor, { asChild: true, ...scope, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
       MenuItemImpl,
       {
         id: subContext.triggerId,
@@ -28511,7 +28548,7 @@ var MenuSubContent = React33.forwardRef(
     const subContext = useMenuSubContext(SUB_CONTENT_NAME, props.__scopeMenu);
     const ref = React33.useRef(null);
     const composedRefs = useComposedRefs(forwardedRef, ref);
-    return /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Collection2.Provider, { scope: props.__scopeMenu, children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Presence, { present: forceMount || context.open, children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(Collection2.Slot, { scope: props.__scopeMenu, children: /* @__PURE__ */ (0, import_jsx_runtime16.jsx)(
+    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Collection2.Provider, { scope: props.__scopeMenu, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Presence, { present: forceMount || context.open, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Collection2.Slot, { scope: props.__scopeMenu, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
       MenuContentImpl,
       {
         id: subContext.contentId,
@@ -28621,7 +28658,7 @@ var SubTrigger = MenuSubTrigger;
 var SubContent = MenuSubContent;
 
 // ../../../../website/node_modules/@radix-ui/react-dropdown-menu/dist/index.mjs
-var import_jsx_runtime17 = __toESM(require_jsx_runtime(), 1);
+var import_jsx_runtime18 = __toESM(require_jsx_runtime(), 1);
 var DROPDOWN_MENU_NAME = "DropdownMenu";
 var [createDropdownMenuContext, createDropdownMenuScope] = createContextScope(
   DROPDOWN_MENU_NAME,
@@ -28647,7 +28684,7 @@ var DropdownMenu = (props) => {
     onChange: onOpenChange,
     caller: DROPDOWN_MENU_NAME
   });
-  return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
+  return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(
     DropdownMenuProvider,
     {
       scope: __scopeDropdownMenu,
@@ -28658,7 +28695,7 @@ var DropdownMenu = (props) => {
       onOpenChange: setOpen,
       onOpenToggle: React34.useCallback(() => setOpen((prevOpen) => !prevOpen), [setOpen]),
       modal,
-      children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Root32, { ...menuScope, open, onOpenChange: setOpen, dir, modal, children })
+      children: /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(Root32, { ...menuScope, open, onOpenChange: setOpen, dir, modal, children })
     }
   );
 };
@@ -28669,7 +28706,7 @@ var DropdownMenuTrigger = React34.forwardRef(
     const { __scopeDropdownMenu, disabled = false, ...triggerProps } = props;
     const context = useDropdownMenuContext(TRIGGER_NAME, __scopeDropdownMenu);
     const menuScope = useMenuScope(__scopeDropdownMenu);
-    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Anchor2, { asChild: true, ...menuScope, children: /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
+    return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(Anchor2, { asChild: true, ...menuScope, children: /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(
       Primitive.button,
       {
         type: "button",
@@ -28703,7 +28740,7 @@ var PORTAL_NAME3 = "DropdownMenuPortal";
 var DropdownMenuPortal = (props) => {
   const { __scopeDropdownMenu, ...portalProps } = props;
   const menuScope = useMenuScope(__scopeDropdownMenu);
-  return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Portal2, { ...menuScope, ...portalProps });
+  return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(Portal2, { ...menuScope, ...portalProps });
 };
 DropdownMenuPortal.displayName = PORTAL_NAME3;
 var CONTENT_NAME3 = "DropdownMenuContent";
@@ -28713,7 +28750,7 @@ var DropdownMenuContent = React34.forwardRef(
     const context = useDropdownMenuContext(CONTENT_NAME3, __scopeDropdownMenu);
     const menuScope = useMenuScope(__scopeDropdownMenu);
     const hasInteractedOutsideRef = React34.useRef(false);
-    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
+    return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(
       Content2,
       {
         id: context.contentId,
@@ -28753,7 +28790,7 @@ var DropdownMenuGroup = React34.forwardRef(
   (props, forwardedRef) => {
     const { __scopeDropdownMenu, ...groupProps } = props;
     const menuScope = useMenuScope(__scopeDropdownMenu);
-    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Group, { ...menuScope, ...groupProps, ref: forwardedRef });
+    return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(Group, { ...menuScope, ...groupProps, ref: forwardedRef });
   }
 );
 DropdownMenuGroup.displayName = GROUP_NAME3;
@@ -28762,7 +28799,7 @@ var DropdownMenuLabel = React34.forwardRef(
   (props, forwardedRef) => {
     const { __scopeDropdownMenu, ...labelProps } = props;
     const menuScope = useMenuScope(__scopeDropdownMenu);
-    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Label, { ...menuScope, ...labelProps, ref: forwardedRef });
+    return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(Label, { ...menuScope, ...labelProps, ref: forwardedRef });
   }
 );
 DropdownMenuLabel.displayName = LABEL_NAME2;
@@ -28771,7 +28808,7 @@ var DropdownMenuItem = React34.forwardRef(
   (props, forwardedRef) => {
     const { __scopeDropdownMenu, ...itemProps } = props;
     const menuScope = useMenuScope(__scopeDropdownMenu);
-    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Item2, { ...menuScope, ...itemProps, ref: forwardedRef });
+    return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(Item2, { ...menuScope, ...itemProps, ref: forwardedRef });
   }
 );
 DropdownMenuItem.displayName = ITEM_NAME3;
@@ -28779,35 +28816,35 @@ var CHECKBOX_ITEM_NAME2 = "DropdownMenuCheckboxItem";
 var DropdownMenuCheckboxItem = React34.forwardRef((props, forwardedRef) => {
   const { __scopeDropdownMenu, ...checkboxItemProps } = props;
   const menuScope = useMenuScope(__scopeDropdownMenu);
-  return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(CheckboxItem, { ...menuScope, ...checkboxItemProps, ref: forwardedRef });
+  return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(CheckboxItem, { ...menuScope, ...checkboxItemProps, ref: forwardedRef });
 });
 DropdownMenuCheckboxItem.displayName = CHECKBOX_ITEM_NAME2;
 var RADIO_GROUP_NAME2 = "DropdownMenuRadioGroup";
 var DropdownMenuRadioGroup = React34.forwardRef((props, forwardedRef) => {
   const { __scopeDropdownMenu, ...radioGroupProps } = props;
   const menuScope = useMenuScope(__scopeDropdownMenu);
-  return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(RadioGroup, { ...menuScope, ...radioGroupProps, ref: forwardedRef });
+  return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(RadioGroup, { ...menuScope, ...radioGroupProps, ref: forwardedRef });
 });
 DropdownMenuRadioGroup.displayName = RADIO_GROUP_NAME2;
 var RADIO_ITEM_NAME2 = "DropdownMenuRadioItem";
 var DropdownMenuRadioItem = React34.forwardRef((props, forwardedRef) => {
   const { __scopeDropdownMenu, ...radioItemProps } = props;
   const menuScope = useMenuScope(__scopeDropdownMenu);
-  return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(RadioItem, { ...menuScope, ...radioItemProps, ref: forwardedRef });
+  return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(RadioItem, { ...menuScope, ...radioItemProps, ref: forwardedRef });
 });
 DropdownMenuRadioItem.displayName = RADIO_ITEM_NAME2;
 var INDICATOR_NAME = "DropdownMenuItemIndicator";
 var DropdownMenuItemIndicator = React34.forwardRef((props, forwardedRef) => {
   const { __scopeDropdownMenu, ...itemIndicatorProps } = props;
   const menuScope = useMenuScope(__scopeDropdownMenu);
-  return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(ItemIndicator, { ...menuScope, ...itemIndicatorProps, ref: forwardedRef });
+  return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(ItemIndicator, { ...menuScope, ...itemIndicatorProps, ref: forwardedRef });
 });
 DropdownMenuItemIndicator.displayName = INDICATOR_NAME;
 var SEPARATOR_NAME2 = "DropdownMenuSeparator";
 var DropdownMenuSeparator = React34.forwardRef((props, forwardedRef) => {
   const { __scopeDropdownMenu, ...separatorProps } = props;
   const menuScope = useMenuScope(__scopeDropdownMenu);
-  return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Separator, { ...menuScope, ...separatorProps, ref: forwardedRef });
+  return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(Separator, { ...menuScope, ...separatorProps, ref: forwardedRef });
 });
 DropdownMenuSeparator.displayName = SEPARATOR_NAME2;
 var ARROW_NAME3 = "DropdownMenuArrow";
@@ -28815,7 +28852,7 @@ var DropdownMenuArrow = React34.forwardRef(
   (props, forwardedRef) => {
     const { __scopeDropdownMenu, ...arrowProps } = props;
     const menuScope = useMenuScope(__scopeDropdownMenu);
-    return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(Arrow22, { ...menuScope, ...arrowProps, ref: forwardedRef });
+    return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(Arrow22, { ...menuScope, ...arrowProps, ref: forwardedRef });
   }
 );
 DropdownMenuArrow.displayName = ARROW_NAME3;
@@ -28823,14 +28860,14 @@ var SUB_TRIGGER_NAME2 = "DropdownMenuSubTrigger";
 var DropdownMenuSubTrigger = React34.forwardRef((props, forwardedRef) => {
   const { __scopeDropdownMenu, ...subTriggerProps } = props;
   const menuScope = useMenuScope(__scopeDropdownMenu);
-  return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(SubTrigger, { ...menuScope, ...subTriggerProps, ref: forwardedRef });
+  return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(SubTrigger, { ...menuScope, ...subTriggerProps, ref: forwardedRef });
 });
 DropdownMenuSubTrigger.displayName = SUB_TRIGGER_NAME2;
 var SUB_CONTENT_NAME2 = "DropdownMenuSubContent";
 var DropdownMenuSubContent = React34.forwardRef((props, forwardedRef) => {
   const { __scopeDropdownMenu, ...subContentProps } = props;
   const menuScope = useMenuScope(__scopeDropdownMenu);
-  return /* @__PURE__ */ (0, import_jsx_runtime17.jsx)(
+  return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(
     SubContent,
     {
       ...menuScope,
@@ -28859,7 +28896,7 @@ var Item22 = DropdownMenuItem;
 
 // react/ui/dropdown-menu.tsx
 var React35 = __toESM(require_react());
-var import_jsx_runtime18 = __toESM(require_jsx_runtime());
+var import_jsx_runtime19 = __toESM(require_jsx_runtime());
 var DropdownMenu2 = Root22;
 var DropdownMenuTrigger2 = Trigger;
 var DropdownMenuContent2 = React35.forwardRef(
@@ -28871,7 +28908,7 @@ var DropdownMenuContent2 = React35.forwardRef(
     ...props
   }, ref) {
     const container = typeof document === "undefined" ? void 0 : document.getElementById("app") || void 0;
-    return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(Portal22, { container, children: /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(
+    return /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(Portal22, { container, children: /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(
       Content22,
       {
         ...props,
@@ -28887,7 +28924,7 @@ var DropdownMenuContent2 = React35.forwardRef(
 DropdownMenuContent2.displayName = Content22.displayName;
 var DropdownMenuItem2 = React35.forwardRef(
   function DropdownMenuItem3({ className, ...props }, ref) {
-    return /* @__PURE__ */ (0, import_jsx_runtime18.jsx)(
+    return /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(
       Item22,
       {
         ...props,
@@ -28899,99 +28936,102 @@ var DropdownMenuItem2 = React35.forwardRef(
 );
 DropdownMenuItem2.displayName = Item22.displayName;
 
-// react/features/compact/overflow-menu.tsx
-var import_jsx_runtime19 = __toESM(require_jsx_runtime());
-function OverflowMenu({
-  onNewSession,
-  onOpenDeveloperMode
-}) {
-  return /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)(DropdownMenu2, { children: [
-    /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(DropdownMenuTrigger2, { asChild: true, children: /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(
-      IconButton,
-      {
-        ariaLabel: "More options",
-        symbol: "ellipsis",
-        variant: "compact-icon"
-      }
-    ) }),
-    /* @__PURE__ */ (0, import_jsx_runtime19.jsxs)(DropdownMenuContent2, { children: [
-      /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(
-        DropdownMenuItem2,
-        {
-          onSelect: () => {
-            onNewSession();
-          },
-          children: "New chat"
-        }
-      ),
-      /* @__PURE__ */ (0, import_jsx_runtime19.jsx)(
-        DropdownMenuItem2,
-        {
-          onSelect: () => {
-            onOpenDeveloperMode();
-          },
-          children: "Developer mode"
-        }
-      )
-    ] })
-  ] });
-}
-
-// react/features/compact/compact-header.tsx
+// react/features/compact/compact-topbar.tsx
 var import_jsx_runtime20 = __toESM(require_jsx_runtime());
-function CompactHeader({
-  hasMessages,
-  onSetDeveloperMode,
+function CompactTopbar({
+  onClosePanel,
+  onOpenSettings,
+  onSetViewMode,
+  onGetViewMode,
   onStartSession
 }) {
-  return /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("header", { className: cn(
-    "compact-panel__header",
-    !hasMessages && "compact-panel__header--empty"
-  ), children: [
-    /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("div", { className: "compact-panel__brand compact-panel__brand--quiet", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("div", { className: "compact-panel__brand-mark", children: /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(Icon, { symbol: "panelSpark" }) }),
-      /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("span", { className: "compact-panel__quiet-title", children: "Maho AI" })
-    ] }),
-    /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("div", { className: "compact-panel__header-actions compact-panel__header-actions--quiet", children: [
+  const [currentMode, setCurrentMode] = (0, import_react6.useState)(ViewMode3.kSidebar);
+  (0, import_react6.useEffect)(() => {
+    onGetViewMode().then((mode) => {
+      setCurrentMode(mode);
+    }).catch((err) => {
+      console.error("[maho-ai] Failed to get view mode:", err);
+    });
+  }, [onGetViewMode]);
+  const handleModeSelect = (mode) => {
+    setCurrentMode(mode);
+    onSetViewMode(mode);
+  };
+  return /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("div", { className: "compact-panel__topbar", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime20.jsx)("div", { className: "compact-panel__topbar-left", children: /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(
+      IconButton,
+      {
+        ariaLabel: "Start new session",
+        symbol: "edit",
+        variant: "compact-icon-ghost",
+        onClick: onStartSession
+      }
+    ) }),
+    /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)("div", { className: "compact-panel__topbar-right", children: [
       /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(
         IconButton,
         {
-          ariaLabel: "Start new session",
-          symbol: "plus",
+          ariaLabel: "Open settings",
+          symbol: "settingsGear",
           variant: "compact-icon-ghost",
-          onClick: onStartSession
+          onClick: onOpenSettings
         }
       ),
+      /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)(DropdownMenu2, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(DropdownMenuTrigger2, { asChild: true, children: /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(
+          IconButton,
+          {
+            ariaLabel: "View mode",
+            symbol: "viewModeToggle",
+            variant: "compact-icon-ghost"
+          }
+        ) }),
+        /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)(DropdownMenuContent2, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)(
+            DropdownMenuItem2,
+            {
+              disabled: currentMode === ViewMode3.kSidebar,
+              onSelect: () => handleModeSelect(ViewMode3.kSidebar),
+              children: [
+                "Sidebar Mode ",
+                currentMode === ViewMode3.kSidebar && "\u2713"
+              ]
+            }
+          ),
+          /* @__PURE__ */ (0, import_jsx_runtime20.jsxs)(
+            DropdownMenuItem2,
+            {
+              disabled: currentMode === ViewMode3.kFloating,
+              onSelect: () => handleModeSelect(ViewMode3.kFloating),
+              children: [
+                "Floating ",
+                currentMode === ViewMode3.kFloating && "\u2713"
+              ]
+            }
+          )
+        ] })
+      ] }),
       /* @__PURE__ */ (0, import_jsx_runtime20.jsx)(
-        OverflowMenu,
+        IconButton,
         {
-          onNewSession: onStartSession,
-          onOpenDeveloperMode: () => onSetDeveloperMode(true)
+          ariaLabel: "Close panel",
+          symbol: "xmark",
+          variant: "compact-icon-ghost",
+          onClick: onClosePanel
         }
       )
     ] })
   ] });
 }
 
-// react/features/compact/compact-stage.tsx
-var import_jsx_runtime21 = __toESM(require_jsx_runtime());
-function CompactStage({ state }) {
-  const label = state.currentSessionId ? "Live session ready" : "Ready when you are";
-  const description = state.currentSessionId ? "Ask anything about this page to start the conversation." : "Start with a prompt below and Maho AI will open a live session in this thread.";
-  return /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("main", { className: "compact-thread compact-thread--empty", children: /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("div", { className: "compact-thread__list compact-thread__list--empty", children: /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("section", { className: "compact-thread__row compact-thread__row--empty", "aria-labelledby": "compact-stage-title", children: /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("div", { className: "compact-thread__welcome", children: /* @__PURE__ */ (0, import_jsx_runtime21.jsxs)("div", { className: "compact-thread__welcome-copy", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("h2", { className: "compact-thread__welcome-title", id: "compact-stage-title", children: label }),
-    /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("p", { className: "compact-thread__welcome-text", children: description })
-  ] }) }) }) }) });
-}
-
 // react/features/compact/conversation-thread.tsx
-var import_react8 = __toESM(require_react());
+var import_react9 = __toESM(require_react());
 
 // react/hooks/use-auto-scroll.ts
-var import_react6 = __toESM(require_react());
+var import_react7 = __toESM(require_react());
 function useAutoScroll(dependency) {
-  const ref = (0, import_react6.useRef)(null);
-  (0, import_react6.useEffect)(() => {
+  const ref = (0, import_react7.useRef)(null);
+  (0, import_react7.useEffect)(() => {
     const element = ref.current;
     if (!element) {
       return;
@@ -29010,7 +29050,7 @@ function formatTimestamp(timestamp) {
 }
 
 // react/ui/markdown.tsx
-var import_react7 = __toESM(require_react());
+var import_react8 = __toESM(require_react());
 
 // standalone/parse_html_subset.js
 function sanitizeInnerHtml(html, { tags = [] } = {}) {
@@ -29215,25 +29255,25 @@ function renderTrustedMarkdown(raw) {
 }
 
 // react/ui/markdown.tsx
-var import_jsx_runtime22 = __toESM(require_jsx_runtime());
+var import_jsx_runtime21 = __toESM(require_jsx_runtime());
 function Markdown({ className, text }) {
-  const html = (0, import_react7.useMemo)(() => renderTrustedMarkdown(text), [text]);
-  return /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("div", { className, dangerouslySetInnerHTML: { __html: html } });
+  const html = (0, import_react8.useMemo)(() => renderTrustedMarkdown(text), [text]);
+  return /* @__PURE__ */ (0, import_jsx_runtime21.jsx)("div", { className, dangerouslySetInnerHTML: { __html: html } });
 }
 
 // react/features/compact/conversation-message.tsx
-var import_jsx_runtime23 = __toESM(require_jsx_runtime());
+var import_jsx_runtime22 = __toESM(require_jsx_runtime());
 function UserControls() {
   const actions = [
     { ariaLabel: "Edit your message", symbol: "edit" },
     { ariaLabel: "Delete your message", symbol: "trash" }
   ];
-  return /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("div", { className: "compact-thread__hover-controls", children: actions.map((action) => /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(
+  return /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("div", { className: "compact-thread__hover-controls", children: actions.map((action) => /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(
     Button,
     {
       "aria-label": action.ariaLabel,
       variant: "thread-action",
-      children: /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(Icon, { symbol: action.symbol })
+      children: /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(Icon, { symbol: action.symbol })
     },
     action.ariaLabel
   )) });
@@ -29243,18 +29283,18 @@ function ConversationMessage({ item, label }) {
     "compact-thread__bubble",
     item.markdown && "compact-thread__bubble--markdown"
   );
-  return /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)("article", { className: `compact-thread__row compact-thread__row--${item.role}`, children: [
-    /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)("div", { className: "compact-thread__meta", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { className: "compact-thread__meta-label", children: label }),
-      /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { className: "compact-thread__meta-time", children: formatTimestamp(item.timestamp) })
+  return /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)("article", { className: `compact-thread__row compact-thread__row--${item.role}`, children: [
+    /* @__PURE__ */ (0, import_jsx_runtime22.jsxs)("div", { className: "compact-thread__meta", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("span", { className: "compact-thread__meta-label", children: label }),
+      /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("span", { className: "compact-thread__meta-time", children: formatTimestamp(item.timestamp) })
     ] }),
-    item.markdown ? /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(Markdown, { className: bubbleClassName, text: item.text }) : /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("div", { className: bubbleClassName, children: item.text }),
-    item.role === "user" ? /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(UserControls, {}) : null
+    item.markdown ? /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(Markdown, { className: bubbleClassName, text: item.text }) : /* @__PURE__ */ (0, import_jsx_runtime22.jsx)("div", { className: bubbleClassName, children: item.text }),
+    item.role === "user" ? /* @__PURE__ */ (0, import_jsx_runtime22.jsx)(UserControls, {}) : null
   ] });
 }
 
 // react/features/compact/conversation-system-item.tsx
-var import_jsx_runtime24 = __toESM(require_jsx_runtime());
+var import_jsx_runtime23 = __toESM(require_jsx_runtime());
 function ConversationSystemItem({
   item,
   onRespondToApproval,
@@ -29264,11 +29304,11 @@ function ConversationSystemItem({
   const isApproval = item.kind === "approval" && approval;
   const isPendingApproval = approval?.status === "pending";
   const approvalTone = approval?.status === "approved" ? "success" : approval?.status === "denied" ? "danger" : "warning";
-  return /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("article", { className: cn(
+  return /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("article", { className: cn(
     "compact-thread__row",
     "compact-thread__row--system",
     isApproval && "compact-thread__row--approval"
-  ), children: /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)(
+  ), children: /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)(
     "div",
     {
       className: cn(
@@ -29277,21 +29317,21 @@ function ConversationSystemItem({
       ),
       "data-tone": isApproval ? approvalTone : item.tone,
       children: [
-        /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)("div", { className: "compact-thread__system-meta", children: [
-          isApproval ? /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)("div", { className: "compact-thread__system-copy", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("span", { className: "compact-thread__system-label", children: "Approval" }),
-            /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("span", { className: "compact-thread__system-text", children: item.text })
-          ] }) : /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)("div", { className: "compact-thread__system-copy", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("span", { className: "compact-thread__system-label", children: item.tone === "danger" ? "Issue" : "Activity" }),
-            /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("span", { className: "compact-thread__system-text", children: item.text })
+        /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)("div", { className: "compact-thread__system-meta", children: [
+          isApproval ? /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)("div", { className: "compact-thread__system-copy", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { className: "compact-thread__system-label", children: "Approval" }),
+            /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { className: "compact-thread__system-text", children: item.text })
+          ] }) : /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)("div", { className: "compact-thread__system-copy", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { className: "compact-thread__system-label", children: item.tone === "danger" ? "Issue" : "Activity" }),
+            /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { className: "compact-thread__system-text", children: item.text })
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("span", { className: "compact-thread__meta-time", children: formatTimestamp(item.timestamp) })
+          /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { className: "compact-thread__meta-time", children: formatTimestamp(item.timestamp) })
         ] }),
-        !isApproval && item.note ? /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("div", { className: "compact-thread__system-note", children: item.note }) : null,
-        isApproval ? /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)(import_jsx_runtime24.Fragment, { children: [
-          approval.reason ? /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("div", { className: "compact-thread__system-note compact-thread__system-note--approval", children: approval.reason }) : null,
-          /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("div", { className: "compact-thread__approval-actions", children: isPendingApproval ? /* @__PURE__ */ (0, import_jsx_runtime24.jsxs)(import_jsx_runtime24.Fragment, { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(
+        !isApproval && item.note ? /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("div", { className: "compact-thread__system-note", children: item.note }) : null,
+        isApproval ? /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)(import_jsx_runtime23.Fragment, { children: [
+          approval.reason ? /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("div", { className: "compact-thread__system-note compact-thread__system-note--approval", children: approval.reason }) : null,
+          /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("div", { className: "compact-thread__approval-actions", children: isPendingApproval ? /* @__PURE__ */ (0, import_jsx_runtime23.jsxs)(import_jsx_runtime23.Fragment, { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(
               Button,
               {
                 disabled: readOnly,
@@ -29300,7 +29340,7 @@ function ConversationSystemItem({
                 children: "Accept"
               }
             ),
-            /* @__PURE__ */ (0, import_jsx_runtime24.jsx)(
+            /* @__PURE__ */ (0, import_jsx_runtime23.jsx)(
               Button,
               {
                 disabled: readOnly,
@@ -29309,7 +29349,7 @@ function ConversationSystemItem({
                 children: "Reject"
               }
             )
-          ] }) : /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("span", { className: "compact-thread__approval-state", children: approval.status === "approved" ? "Approved" : "Rejected" }) })
+          ] }) : /* @__PURE__ */ (0, import_jsx_runtime23.jsx)("span", { className: "compact-thread__approval-state", children: approval.status === "approved" ? "Approved" : "Rejected" }) })
         ] }) : null
       ]
     }
@@ -29317,17 +29357,17 @@ function ConversationSystemItem({
 }
 
 // react/features/compact/pending-thought.tsx
-var import_jsx_runtime25 = __toESM(require_jsx_runtime());
+var import_jsx_runtime24 = __toESM(require_jsx_runtime());
 function PendingThought({ label }) {
-  return /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("article", { className: "compact-thread__row compact-thread__row--system compact-thread__row--thinking", children: /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("div", { className: "compact-thread__pending", children: label }) });
+  return /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("article", { className: "compact-thread__row compact-thread__row--system compact-thread__row--thinking", children: /* @__PURE__ */ (0, import_jsx_runtime24.jsx)("div", { className: "compact-thread__pending", children: label }) });
 }
 
 // react/features/compact/conversation-thread.tsx
-var import_jsx_runtime26 = __toESM(require_jsx_runtime());
+var import_jsx_runtime25 = __toESM(require_jsx_runtime());
 function ThinkingBubble({ item }) {
-  const [expanded, setExpanded] = (0, import_react8.useState)(false);
+  const [expanded, setExpanded] = (0, import_react9.useState)(false);
   const preview = item.text.length > 80 && !expanded ? `${item.text.slice(0, 80).trimEnd()}\u2026` : item.text;
-  return /* @__PURE__ */ (0, import_jsx_runtime26.jsx)("article", { className: "compact-thread__row compact-thread__row--system compact-thread__row--thinking-content", children: /* @__PURE__ */ (0, import_jsx_runtime26.jsxs)(
+  return /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("article", { className: "compact-thread__row compact-thread__row--system compact-thread__row--thinking-content", children: /* @__PURE__ */ (0, import_jsx_runtime25.jsxs)(
     "div",
     {
       className: "compact-thread__bubble compact-thread__bubble--thinking",
@@ -29338,9 +29378,9 @@ function ThinkingBubble({ item }) {
         if (e.key === "Enter" || e.key === " ") setExpanded(!expanded);
       },
       children: [
-        /* @__PURE__ */ (0, import_jsx_runtime26.jsx)("span", { className: "compact-thread__thinking-label", children: "Thinking" }),
-        /* @__PURE__ */ (0, import_jsx_runtime26.jsx)("span", { className: "compact-thread__thinking-text", children: preview }),
-        item.text.length > 80 ? /* @__PURE__ */ (0, import_jsx_runtime26.jsx)("span", { className: "compact-thread__thinking-chevron", "data-expanded": expanded, children: expanded ? "\u25BE" : "\u25B8" }) : null
+        /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("span", { className: "compact-thread__thinking-label", children: "Thinking" }),
+        /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("span", { className: "compact-thread__thinking-text", children: preview }),
+        item.text.length > 80 ? /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("span", { className: "compact-thread__thinking-chevron", "data-expanded": expanded, children: expanded ? "\u25BE" : "\u25B8" }) : null
       ]
     }
   ) });
@@ -29351,15 +29391,15 @@ function ConversationThread({
   readOnly,
   thinkingLabel
 }) {
-  const items = (0, import_react8.useMemo)(() => collectConversationItems(entries), [entries]);
+  const items = (0, import_react9.useMemo)(() => collectConversationItems(entries), [entries]);
   const listRef = useAutoScroll(items);
-  return /* @__PURE__ */ (0, import_jsx_runtime26.jsx)("main", { className: "compact-thread", children: /* @__PURE__ */ (0, import_jsx_runtime26.jsxs)("div", { ref: listRef, className: "compact-thread__list", children: [
+  return /* @__PURE__ */ (0, import_jsx_runtime25.jsx)("main", { className: "compact-thread", children: /* @__PURE__ */ (0, import_jsx_runtime25.jsxs)("div", { ref: listRef, className: "compact-thread__list", children: [
     items.map((item) => {
       if (item.kind === "thinking") {
-        return /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(ThinkingBubble, { item }, item.key);
+        return /* @__PURE__ */ (0, import_jsx_runtime25.jsx)(ThinkingBubble, { item }, item.key);
       }
       if (item.role === "system") {
-        return /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(
+        return /* @__PURE__ */ (0, import_jsx_runtime25.jsx)(
           ConversationSystemItem,
           {
             item,
@@ -29369,7 +29409,7 @@ function ConversationThread({
           item.key
         );
       }
-      return /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(
+      return /* @__PURE__ */ (0, import_jsx_runtime25.jsx)(
         ConversationMessage,
         {
           item,
@@ -29378,32 +29418,37 @@ function ConversationThread({
         item.key
       );
     }),
-    thinkingLabel ? /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(PendingThought, { label: thinkingLabel }) : null
+    thinkingLabel ? /* @__PURE__ */ (0, import_jsx_runtime25.jsx)(PendingThought, { label: thinkingLabel }) : null
   ] }) });
 }
 
 // react/features/compact/compact-shell.tsx
-var import_jsx_runtime27 = __toESM(require_jsx_runtime());
+var import_jsx_runtime26 = __toESM(require_jsx_runtime());
 function CompactShell({
   entries,
   hasMessages,
+  onClosePanel,
+  onGetViewMode,
+  onOpenSettings,
   onRespondToApproval,
-  onSetDeveloperMode,
+  onSetViewMode,
   onStartSession,
   readOnly,
   state,
   thinkingLabel
 }) {
-  return /* @__PURE__ */ (0, import_jsx_runtime27.jsxs)(import_jsx_runtime27.Fragment, { children: [
-    /* @__PURE__ */ (0, import_jsx_runtime27.jsx)(
-      CompactHeader,
+  return /* @__PURE__ */ (0, import_jsx_runtime26.jsxs)(import_jsx_runtime26.Fragment, { children: [
+    /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(
+      CompactTopbar,
       {
-        hasMessages,
-        onSetDeveloperMode,
+        onClosePanel,
+        onGetViewMode,
+        onOpenSettings,
+        onSetViewMode,
         onStartSession
       }
     ),
-    hasMessages || thinkingLabel ? /* @__PURE__ */ (0, import_jsx_runtime27.jsx)(
+    hasMessages || thinkingLabel ? /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(
       ConversationThread,
       {
         entries,
@@ -29411,12 +29456,12 @@ function CompactShell({
         readOnly,
         thinkingLabel
       }
-    ) : /* @__PURE__ */ (0, import_jsx_runtime27.jsx)(CompactStage, { state })
+    ) : /* @__PURE__ */ (0, import_jsx_runtime26.jsx)(CompactStage, { state })
   ] });
 }
 
 // react/ui/textarea.tsx
-var import_react9 = __toESM(require_react());
+var import_react10 = __toESM(require_react());
 
 // react/lib/editable-snapshot.ts
 function captureEditableState(editable) {
@@ -29445,7 +29490,7 @@ function restoreEditableState(editable, snapshot, restoreFocus) {
 }
 
 // react/ui/textarea.tsx
-var import_jsx_runtime28 = __toESM(require_jsx_runtime());
+var import_jsx_runtime27 = __toESM(require_jsx_runtime());
 function ComposerTextarea({
   className = "compact-composer__input",
   onSubmit,
@@ -29455,11 +29500,11 @@ function ComposerTextarea({
   rows,
   value
 }) {
-  const textareaRef = (0, import_react9.useRef)(null);
-  const compositionActiveRef = (0, import_react9.useRef)(false);
-  const pendingSnapshotRef = (0, import_react9.useRef)(null);
-  const pendingValueRef = (0, import_react9.useRef)(null);
-  (0, import_react9.useLayoutEffect)(() => {
+  const textareaRef = (0, import_react10.useRef)(null);
+  const compositionActiveRef = (0, import_react10.useRef)(false);
+  const pendingSnapshotRef = (0, import_react10.useRef)(null);
+  const pendingValueRef = (0, import_react10.useRef)(null);
+  (0, import_react10.useLayoutEffect)(() => {
     const textarea = textareaRef.current;
     if (!textarea || textarea.value === value) {
       return;
@@ -29474,7 +29519,7 @@ function ComposerTextarea({
     textarea.value = value;
     restoreEditableState(textarea, snapshot, restoreFocus);
   }, [value]);
-  const commitPendingValue = (0, import_react9.useCallback)(() => {
+  const commitPendingValue = (0, import_react10.useCallback)(() => {
     const textarea = textareaRef.current;
     if (!textarea || pendingValueRef.current === null) {
       return;
@@ -29485,7 +29530,7 @@ function ComposerTextarea({
     pendingSnapshotRef.current = null;
     pendingValueRef.current = null;
   }, []);
-  return /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(
+  return /* @__PURE__ */ (0, import_jsx_runtime27.jsx)(
     "textarea",
     {
       ref: textareaRef,
@@ -29522,17 +29567,17 @@ function ComposerTextarea({
 }
 
 // react/features/compact/composer.tsx
-var import_jsx_runtime29 = __toESM(require_jsx_runtime());
+var import_jsx_runtime28 = __toESM(require_jsx_runtime());
 function Composer({ handlers, state }) {
   const session = state.currentSessionId ? state.sessionsById[state.currentSessionId] : null;
   const readOnly = isSessionReadOnly(session);
   const canCancel = !readOnly && !!state.currentSessionId && !!state.turnPendingBySessionId[state.currentSessionId];
-  return /* @__PURE__ */ (0, import_jsx_runtime29.jsxs)("section", { className: cn(
+  return /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)("section", { className: cn(
     "compact-composer",
     "compact-composer--docked",
     readOnly && "compact-composer--read-only"
   ), children: [
-    /* @__PURE__ */ (0, import_jsx_runtime29.jsx)("div", { className: "compact-composer__body", children: /* @__PURE__ */ (0, import_jsx_runtime29.jsx)(
+    /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("div", { className: "compact-composer__body", children: /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(
       ComposerTextarea,
       {
         onSubmit: handlers.onSubmit,
@@ -29543,9 +29588,9 @@ function Composer({ handlers, state }) {
         value: state.composer.prompt
       }
     ) }),
-    /* @__PURE__ */ (0, import_jsx_runtime29.jsxs)("div", { className: "compact-composer__footer", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime29.jsxs)("div", { className: "compact-composer__footer-actions", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime29.jsx)(
+    /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)("div", { className: "compact-composer__footer", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)("div", { className: "compact-composer__footer-actions", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(
           IconButton,
           {
             ariaLabel: "Start new session",
@@ -29554,7 +29599,7 @@ function Composer({ handlers, state }) {
             onClick: handlers.onStartSession
           }
         ),
-        /* @__PURE__ */ (0, import_jsx_runtime29.jsx)(
+        /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(
           IconButton,
           {
             ariaLabel: "Cancel current turn",
@@ -29564,7 +29609,7 @@ function Composer({ handlers, state }) {
             onClick: handlers.onCancel
           }
         ),
-        /* @__PURE__ */ (0, import_jsx_runtime29.jsx)(
+        /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(
           IconButton,
           {
             ariaLabel: state.composer.attachBrowserContext ? "Page context on \u2014 click to disable" : "Page context off \u2014 click to enable",
@@ -29577,9 +29622,9 @@ function Composer({ handlers, state }) {
             onClick: handlers.onToggleBrowserContext
           }
         ),
-        /* @__PURE__ */ (0, import_jsx_runtime29.jsx)("span", { className: "compact-composer__hint", children: readOnly ? "Start a new live session to continue" : state.currentSessionId ? "Enter send \xB7 Shift+Enter newline" : "Enter start \xB7 Shift+Enter newline" })
+        /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("span", { className: "compact-composer__hint", children: readOnly ? "Start a new live session to continue" : state.currentSessionId ? "Enter send \xB7 Shift+Enter newline" : "Enter start \xB7 Shift+Enter newline" })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime29.jsxs)(
+      /* @__PURE__ */ (0, import_jsx_runtime28.jsxs)(
         Button,
         {
           "aria-label": state.currentSessionId ? "Send prompt" : "Start session",
@@ -29587,8 +29632,8 @@ function Composer({ handlers, state }) {
           variant: "composer-send",
           onClick: handlers.onSubmit,
           children: [
-            /* @__PURE__ */ (0, import_jsx_runtime29.jsx)("span", { className: "compact-composer__send-icon", children: /* @__PURE__ */ (0, import_jsx_runtime29.jsx)(Icon, { symbol: "composerSpark" }) }),
-            /* @__PURE__ */ (0, import_jsx_runtime29.jsx)("span", { className: "compact-composer__send-label", children: state.currentSessionId ? "Send" : "Start" })
+            /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("span", { className: "compact-composer__send-icon", children: /* @__PURE__ */ (0, import_jsx_runtime28.jsx)(Icon, { symbol: "composerSpark" }) }),
+            /* @__PURE__ */ (0, import_jsx_runtime28.jsx)("span", { className: "compact-composer__send-label", children: state.currentSessionId ? "Send" : "Start" })
           ]
         }
       )
@@ -29597,7 +29642,7 @@ function Composer({ handlers, state }) {
 }
 
 // react/ui/pill.tsx
-var import_jsx_runtime30 = __toESM(require_jsx_runtime());
+var import_jsx_runtime29 = __toESM(require_jsx_runtime());
 var pillVariants = cva("console-pill", {
   variants: {
     tone: {
@@ -29613,38 +29658,38 @@ var pillVariants = cva("console-pill", {
   }
 });
 function Pill({ className, text, tone }) {
-  return /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("span", { className: cn(pillVariants({ tone }), className), children: text });
+  return /* @__PURE__ */ (0, import_jsx_runtime29.jsx)("span", { className: cn(pillVariants({ tone }), className), children: text });
 }
 
 // react/ui/empty-state.tsx
-var import_jsx_runtime31 = __toESM(require_jsx_runtime());
+var import_jsx_runtime30 = __toESM(require_jsx_runtime());
 function EmptyState({ className, description, title }) {
-  return /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("section", { className: cn("empty-panel", className), children: [
-    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("h2", { children: title }),
-    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("p", { children: description })
+  return /* @__PURE__ */ (0, import_jsx_runtime30.jsxs)("section", { className: cn("empty-panel", className), children: [
+    /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("h2", { children: title }),
+    /* @__PURE__ */ (0, import_jsx_runtime30.jsx)("p", { children: description })
   ] });
 }
 
 // react/features/developer/inspector.tsx
-var import_jsx_runtime32 = __toESM(require_jsx_runtime());
+var import_jsx_runtime31 = __toESM(require_jsx_runtime());
 function SectionLabel({ text }) {
-  return /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("div", { className: "console-section-label", children: text });
+  return /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("div", { className: "console-section-label", children: text });
 }
 function KeyValueRow({ label, value }) {
-  return /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)("div", { className: "inspector-row", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("span", { className: "inspector-row__label", children: label }),
-    /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("span", { className: "inspector-row__value", children: value })
+  return /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("div", { className: "inspector-row", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("span", { className: "inspector-row__label", children: label }),
+    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("span", { className: "inspector-row__value", children: value })
   ] });
 }
 function SessionSummaryCard({ session }) {
-  return /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)("section", { className: "inspector-card", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(SectionLabel, { text: "Session" }),
-    /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(KeyValueRow, { label: "Status", value: getStatusLabel(session.status) }),
-    /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(KeyValueRow, { label: "Access", value: getSessionAccessLabel(session) }),
-    /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(KeyValueRow, { label: "Adapter", value: session.adapterName }),
-    /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(KeyValueRow, { label: "Events", value: String(session.eventCount) }),
-    /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(KeyValueRow, { label: "Tools", value: String(session.toolCallCount) }),
-    isSessionReadOnly(session) ? /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Pill, { text: "Historical session", tone: "warning" }) : null
+  return /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("section", { className: "inspector-card", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(SectionLabel, { text: "Session" }),
+    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Status", value: getStatusLabel(session.status) }),
+    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Access", value: getSessionAccessLabel(session) }),
+    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Adapter", value: session.adapterName }),
+    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Events", value: String(session.eventCount) }),
+    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Tools", value: String(session.toolCallCount) }),
+    isSessionReadOnly(session) ? /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(Pill, { text: "Historical session", tone: "warning" }) : null
   ] });
 }
 function Inspector({
@@ -29656,12 +29701,12 @@ function Inspector({
   const session = currentSessionId ? state.sessionsById[currentSessionId] : null;
   const readOnly = isSessionReadOnly(session);
   const tabDefs = ["session", "context", "tool", "approval"];
-  return /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)("aside", { className: "console-inspector", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)("div", { className: "console-panel-header", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("h2", { children: "Inspector" }),
-      /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("p", { children: "Session, context, tool, and approval details." })
+  return /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("aside", { className: "console-inspector", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("div", { className: "console-panel-header", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("h2", { children: "Inspector" }),
+      /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("p", { children: "Session, context, tool, and approval details." })
     ] }),
-    /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("div", { className: "inspector-tabs", children: tabDefs.map((kind) => /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
+    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("div", { className: "inspector-tabs", children: tabDefs.map((kind) => /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
       Button,
       {
         className: cn(state.selectedInspector.kind === kind && "is-active"),
@@ -29671,26 +29716,26 @@ function Inspector({
       },
       kind
     )) }),
-    /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("div", { className: "inspector-body", children: !session || !currentSessionId ? /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
+    /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("div", { className: "inspector-body", children: !session || !currentSessionId ? /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
       EmptyState,
       {
         description: "Start a session to inspect runtime state.",
         title: "Nothing selected"
       }
-    ) : state.selectedInspector.kind === "session" ? /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)(import_jsx_runtime32.Fragment, { children: [
-      /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(SessionSummaryCard, { session }),
-      /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)("section", { className: "inspector-card", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(SectionLabel, { text: "Context" }),
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(KeyValueRow, { label: "Session", value: getSessionTitle(session) }),
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(KeyValueRow, { label: "Access", value: getSessionAccessLabel(session) }),
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
+    ) : state.selectedInspector.kind === "session" ? /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)(import_jsx_runtime31.Fragment, { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(SessionSummaryCard, { session }),
+      /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("section", { className: "inspector-card", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(SectionLabel, { text: "Context" }),
+        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Session", value: getSessionTitle(session) }),
+        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Access", value: getSessionAccessLabel(session) }),
+        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
           KeyValueRow,
           {
             label: "Runtime session",
             value: session.runtimeSessionId || "Pending assignment"
           }
         ),
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
+        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
           KeyValueRow,
           {
             label: "Last runtime state",
@@ -29700,51 +29745,51 @@ function Inspector({
       ] })
     ] }) : state.selectedInspector.kind === "context" ? (() => {
       const lastContext = state.lastContextBySessionId[currentSessionId];
-      return /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("section", { className: "inspector-card", children: lastContext ? /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)(import_jsx_runtime32.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(SectionLabel, { text: "Injected context" }),
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
+      return /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("section", { className: "inspector-card", children: lastContext ? /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)(import_jsx_runtime31.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(SectionLabel, { text: "Injected context" }),
+        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
           Pill,
           {
             text: getBrowserContextStatusLabel(lastContext.status),
             tone: getBrowserContextStatusTone(lastContext.status)
           }
         ),
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(KeyValueRow, { label: "URL", value: lastContext.url }),
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(KeyValueRow, { label: "Title", value: lastContext.title }),
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
+        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "URL", value: lastContext.url }),
+        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Title", value: lastContext.title }),
+        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
           KeyValueRow,
           {
             label: "Content size",
             value: `${lastContext.contentLength.toLocaleString()} chars`
           }
         ),
-        lastContext.contentSnippet ? /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("pre", { className: "inspector-pre", children: lastContext.contentSnippet }) : null,
-        lastContext.warnings.length ? /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(KeyValueRow, { label: "Warnings", value: lastContext.warnings.join("\n") }) : null
-      ] }) : /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)(import_jsx_runtime32.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(SectionLabel, { text: "Attached context" }),
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
+        lastContext.contentSnippet ? /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("pre", { className: "inspector-pre", children: lastContext.contentSnippet }) : null,
+        lastContext.warnings.length ? /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Warnings", value: lastContext.warnings.join("\n") }) : null
+      ] }) : /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)(import_jsx_runtime31.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(SectionLabel, { text: "Attached context" }),
+        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
           KeyValueRow,
           {
             label: "Page context",
             value: readOnly ? "Historical snapshot only" : state.composer.attachBrowserContext ? "On \u2014 injected at send time" : "Off"
           }
         ),
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(KeyValueRow, { label: "Composer mode", value: state.composer.modeLabel }),
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
+        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Composer mode", value: state.composer.modeLabel }),
+        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
           KeyValueRow,
           {
             label: "Pending turn",
             value: state.turnPendingBySessionId[currentSessionId] ? "Yes" : "No"
           }
         ),
-        !readOnly ? /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("p", { className: "inspector-note", children: "Page context (URL, title, content) is assembled and injected by the browser runtime at send time. The actual payload will appear here after the first submission." }) : null
+        !readOnly ? /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("p", { className: "inspector-note", children: "Page context (URL, title, content) is assembled and injected by the browser runtime at send time. The actual payload will appear here after the first submission." }) : null
       ] }) });
     })() : state.selectedInspector.kind === "tool" ? (() => {
       const toolId = state.selectedInspector.id || Object.keys(state.toolCallsById).at(-1);
       const tool = toolId ? state.toolCallsById[toolId] : null;
       const result = toolId ? state.toolResultsByCallId[toolId] : null;
       if (!tool && !result) {
-        return /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
+        return /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
           EmptyState,
           {
             description: "Tool requests and results will appear here.",
@@ -29752,16 +29797,16 @@ function Inspector({
           }
         );
       }
-      return /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)("section", { className: "inspector-card", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(SectionLabel, { text: "Tool details" }),
-        tool ? /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)(import_jsx_runtime32.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(KeyValueRow, { label: "Tool", value: tool.toolName }),
-          /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(KeyValueRow, { label: "Call ID", value: tool.callId }),
-          /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(KeyValueRow, { label: "Arguments", value: tool.argumentsJson || "{}" })
+      return /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("section", { className: "inspector-card", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(SectionLabel, { text: "Tool details" }),
+        tool ? /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)(import_jsx_runtime31.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Tool", value: tool.toolName }),
+          /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Call ID", value: tool.callId }),
+          /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Arguments", value: tool.argumentsJson || "{}" })
         ] }) : null,
-        result ? /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)(import_jsx_runtime32.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Pill, { text: result.success ? "Success" : "Failure", tone: result.success ? "success" : "danger" }),
-          /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("pre", { className: "inspector-pre", children: result.errorMessage || result.output || "No output" })
+        result ? /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)(import_jsx_runtime31.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(Pill, { text: result.success ? "Success" : "Failure", tone: result.success ? "success" : "danger" }),
+          /* @__PURE__ */ (0, import_jsx_runtime31.jsx)("pre", { className: "inspector-pre", children: result.errorMessage || result.output || "No output" })
         ] }) : null
       ] });
     })() : (() => {
@@ -29769,7 +29814,7 @@ function Inspector({
       const approval = approvalId ? state.approvalsById[approvalId] : null;
       const result = approvalId ? state.approvalResultsById[approvalId] : null;
       if (!approval) {
-        return /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
+        return /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
           EmptyState,
           {
             description: "Approval requests will appear here when the runtime pauses.",
@@ -29777,17 +29822,17 @@ function Inspector({
           }
         );
       }
-      return /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)("section", { className: "inspector-card", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(SectionLabel, { text: "Approval request" }),
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(KeyValueRow, { label: "Approval ID", value: approval.approvalId }),
-        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(KeyValueRow, { label: "Description", value: approval.description }),
-        approval.relatedToolCall ? /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(KeyValueRow, { label: "Related tool", value: approval.relatedToolCall.toolName }) : null,
-        result ? /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)(import_jsx_runtime32.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Pill, { text: result.approved ? "Approved" : "Denied", tone: result.approved ? "success" : "danger" }),
-          result.reason ? /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(KeyValueRow, { label: "Reason", value: result.reason }) : null
-        ] }) : /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)(import_jsx_runtime32.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)("div", { className: "inspector-actions", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
+      return /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("section", { className: "inspector-card", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(SectionLabel, { text: "Approval request" }),
+        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Approval ID", value: approval.approvalId }),
+        /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Description", value: approval.description }),
+        approval.relatedToolCall ? /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Related tool", value: approval.relatedToolCall.toolName }) : null,
+        result ? /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)(import_jsx_runtime31.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(Pill, { text: result.approved ? "Approved" : "Denied", tone: result.approved ? "success" : "danger" }),
+          result.reason ? /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(KeyValueRow, { label: "Reason", value: result.reason }) : null
+        ] }) : /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)(import_jsx_runtime31.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime31.jsxs)("div", { className: "inspector-actions", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
               Button,
               {
                 disabled: readOnly,
@@ -29796,7 +29841,7 @@ function Inspector({
                 children: "Approve"
               }
             ),
-            /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
+            /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
               Button,
               {
                 disabled: readOnly,
@@ -29806,7 +29851,7 @@ function Inspector({
               }
             )
           ] }),
-          readOnly ? /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
+          readOnly ? /* @__PURE__ */ (0, import_jsx_runtime31.jsx)(
             EmptyState,
             {
               description: "This approval is shown from stored session history only and can no longer be answered from this view.",
@@ -29820,7 +29865,7 @@ function Inspector({
 }
 
 // react/features/developer/left-rail.tsx
-var import_jsx_runtime33 = __toESM(require_jsx_runtime());
+var import_jsx_runtime32 = __toESM(require_jsx_runtime());
 function LeftRail({
   onNewSession,
   onResumeSession,
@@ -29838,16 +29883,16 @@ function LeftRail({
     }
     return [{ sessionId, session }];
   });
-  return /* @__PURE__ */ (0, import_jsx_runtime33.jsxs)("aside", { className: "console-left-rail", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime33.jsxs)("div", { className: "console-left-rail__top", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime33.jsx)("h1", { className: "console-app-title", children: "Maho AI Console" }),
-      /* @__PURE__ */ (0, import_jsx_runtime33.jsxs)("div", { className: "runtime-status", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime33.jsx)(Pill, { text: getConnectionStateLabel(state.connectionState), tone: getConnectionStateTone(state.connectionState) }),
-        /* @__PURE__ */ (0, import_jsx_runtime33.jsx)(Pill, { text: state.activeAdapterName || "OpenCode", tone: "neutral" })
+  return /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)("aside", { className: "console-left-rail", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)("div", { className: "console-left-rail__top", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("h1", { className: "console-app-title", children: "Maho AI Console" }),
+      /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)("div", { className: "runtime-status", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Pill, { text: getConnectionStateLabel(state.connectionState), tone: getConnectionStateTone(state.connectionState) }),
+        /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Pill, { text: state.activeAdapterName || "OpenCode", tone: "neutral" })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime33.jsx)(Button, { variant: "console-primary", onClick: onNewSession, children: "New session" }),
-      /* @__PURE__ */ (0, import_jsx_runtime33.jsx)("div", { className: "console-section-label", children: "Sessions" }),
-      /* @__PURE__ */ (0, import_jsx_runtime33.jsx)(
+      /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(Button, { variant: "console-primary", onClick: onNewSession, children: "New session" }),
+      /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("div", { className: "console-section-label", children: "Sessions" }),
+      /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
         "input",
         {
           className: "console-input",
@@ -29857,17 +29902,17 @@ function LeftRail({
         }
       )
     ] }),
-    /* @__PURE__ */ (0, import_jsx_runtime33.jsx)("div", { className: "session-list", children: !filteredSessions.length ? /* @__PURE__ */ (0, import_jsx_runtime33.jsx)("p", { className: "session-list__empty", children: "No sessions yet. Start a task to create one." }) : filteredSessions.map(({ sessionId, session }) => /* @__PURE__ */ (0, import_jsx_runtime33.jsxs)(
+    /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("div", { className: "session-list", children: !filteredSessions.length ? /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("p", { className: "session-list__empty", children: "No sessions yet. Start a task to create one." }) : filteredSessions.map(({ sessionId, session }) => /* @__PURE__ */ (0, import_jsx_runtime32.jsxs)(
       Button,
       {
         className: cn(sessionId === state.currentSessionId && "is-active"),
         variant: "session-list-item",
         onClick: () => onResumeSession(sessionId),
         children: [
-          /* @__PURE__ */ (0, import_jsx_runtime33.jsx)("div", { className: "session-list__title", children: getSessionTitle(session) }),
-          /* @__PURE__ */ (0, import_jsx_runtime33.jsx)("div", { className: "session-list__summary", children: getSessionSubtitle(session) }),
-          /* @__PURE__ */ (0, import_jsx_runtime33.jsx)("div", { className: "session-list__meta", children: `${getStatusLabel(session.status)} \u2022 ${session.eventCount} events \u2022 ${session.toolCallCount} tools` }),
-          /* @__PURE__ */ (0, import_jsx_runtime33.jsx)("div", { className: "session-list__access", children: /* @__PURE__ */ (0, import_jsx_runtime33.jsx)(
+          /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("div", { className: "session-list__title", children: getSessionTitle(session) }),
+          /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("div", { className: "session-list__summary", children: getSessionSubtitle(session) }),
+          /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("div", { className: "session-list__meta", children: `${getStatusLabel(session.status)} \u2022 ${session.eventCount} events \u2022 ${session.toolCallCount} tools` }),
+          /* @__PURE__ */ (0, import_jsx_runtime32.jsx)("div", { className: "session-list__access", children: /* @__PURE__ */ (0, import_jsx_runtime32.jsx)(
             Pill,
             {
               text: getSessionAccessLabel(session),
@@ -29882,14 +29927,14 @@ function LeftRail({
 }
 
 // react/features/developer/mode-toggle.tsx
-var import_jsx_runtime34 = __toESM(require_jsx_runtime());
+var import_jsx_runtime33 = __toESM(require_jsx_runtime());
 function ModeToggle({
   developerMode,
   onSetDeveloperMode
 }) {
   const renderButton = (label, enabled) => {
     const active = developerMode === enabled;
-    return /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(
+    return /* @__PURE__ */ (0, import_jsx_runtime33.jsx)(
       Button,
       {
         "aria-pressed": active,
@@ -29902,152 +29947,152 @@ function ModeToggle({
       }
     );
   };
-  return /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("div", { "aria-label": "AI surface mode", className: "mode-toggle", role: "tablist", children: [
+  return /* @__PURE__ */ (0, import_jsx_runtime33.jsxs)("div", { "aria-label": "AI surface mode", className: "mode-toggle", role: "tablist", children: [
     renderButton("Assistant", false),
     renderButton("Developer", true)
   ] });
 }
 
 // react/features/developer/event-card.tsx
-var import_jsx_runtime35 = __toESM(require_jsx_runtime());
+var import_jsx_runtime34 = __toESM(require_jsx_runtime());
 function EventCard({ event }) {
   const meta = formatTimestamp(event.timestamp);
   if (event.kind === RuntimeEventKind.kUserPrompt) {
-    return /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("article", { className: "timeline-card", "data-kind": "user", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("div", { className: "timeline-card__header", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("h3", { className: "timeline-card__title", children: "User prompt" }),
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "timeline-card__meta", children: meta })
+    return /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("article", { className: "timeline-card", "data-kind": "user", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("div", { className: "timeline-card__header", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("h3", { className: "timeline-card__title", children: "User prompt" }),
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__meta", children: meta })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(Markdown, { className: "timeline-card__body", text: getEventText(event) })
+      /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(Markdown, { className: "timeline-card__body", text: getEventText(event) })
     ] });
   }
   if (event.kind === RuntimeEventKind.kSessionStatus) {
-    return /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("article", { className: "timeline-card", "data-kind": "session", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("div", { className: "timeline-card__header", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("h3", { className: "timeline-card__title", children: "Session status" }),
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "timeline-card__meta", children: meta })
+    return /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("article", { className: "timeline-card", "data-kind": "session", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("div", { className: "timeline-card__header", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("h3", { className: "timeline-card__title", children: "Session status" }),
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__meta", children: meta })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "timeline-card__body", children: getRuntimeStateLabel(getEventText(event)) })
+      /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__body", children: getRuntimeStateLabel(getEventText(event)) })
     ] });
   }
   if (event.kind === RuntimeEventKind.kAssistantToken) {
-    return /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("article", { className: "timeline-card", "data-kind": "assistant", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("div", { className: "timeline-card__header", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("h3", { className: "timeline-card__title", children: "Assistant streaming" }),
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "timeline-card__meta", children: meta })
+    return /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("article", { className: "timeline-card", "data-kind": "assistant", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("div", { className: "timeline-card__header", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("h3", { className: "timeline-card__title", children: "Assistant streaming" }),
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__meta", children: meta })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(Markdown, { className: "timeline-card__body", text: getEventText(event) })
+      /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(Markdown, { className: "timeline-card__body", text: getEventText(event) })
     ] });
   }
   if (event.kind === RuntimeEventKind.kTurnComplete) {
-    return /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("article", { className: "timeline-card", "data-kind": "assistant-final", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("div", { className: "timeline-card__header", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("h3", { className: "timeline-card__title", children: "Assistant response" }),
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "timeline-card__meta", children: meta })
+    return /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("article", { className: "timeline-card", "data-kind": "assistant-final", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("div", { className: "timeline-card__header", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("h3", { className: "timeline-card__title", children: "Assistant response" }),
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__meta", children: meta })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(Markdown, { className: "timeline-card__body", text: getEventText(event) })
+      /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(Markdown, { className: "timeline-card__body", text: getEventText(event) })
     ] });
   }
   if (event.kind === RuntimeEventKind.kToolRequest) {
-    return /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("article", { className: "timeline-card", "data-kind": "tool", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("div", { className: "timeline-card__header", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("h3", { className: "timeline-card__title", children: event.toolCall?.toolName || "Tool request" }),
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(Pill, { text: event.toolCall?.status !== void 0 ? ["Pending", "Running", "Completed", "Failed", "Cancelled"][event.toolCall.status] || "Pending" : "Pending", tone: "accent" }),
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "timeline-card__meta", children: meta })
+    return /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("article", { className: "timeline-card", "data-kind": "tool", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("div", { className: "timeline-card__header", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("h3", { className: "timeline-card__title", children: event.toolCall?.toolName || "Tool request" }),
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(Pill, { text: event.toolCall?.status !== void 0 ? ["Pending", "Running", "Completed", "Failed", "Cancelled"][event.toolCall.status] || "Pending" : "Pending", tone: "accent" }),
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__meta", children: meta })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "timeline-card__body", children: event.toolCall?.argumentsJson || "Waiting for tool arguments" })
+      /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__body", children: event.toolCall?.argumentsJson || "Waiting for tool arguments" })
     ] });
   }
   if (event.kind === RuntimeEventKind.kToolResult) {
     const success = !!event.toolResult?.success;
-    return /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("article", { className: "timeline-card", "data-kind": "tool-result", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("div", { className: "timeline-card__header", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("h3", { className: "timeline-card__title", children: "Tool result" }),
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(Pill, { text: success ? "Success" : "Error", tone: success ? "success" : "danger" }),
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "timeline-card__meta", children: meta })
+    return /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("article", { className: "timeline-card", "data-kind": "tool-result", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("div", { className: "timeline-card__header", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("h3", { className: "timeline-card__title", children: "Tool result" }),
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(Pill, { text: success ? "Success" : "Error", tone: success ? "success" : "danger" }),
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__meta", children: meta })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "timeline-card__body", children: event.toolResult?.errorMessage || event.toolResult?.output || "No tool output" })
+      /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__body", children: event.toolResult?.errorMessage || event.toolResult?.output || "No tool output" })
     ] });
   }
   if (event.kind === RuntimeEventKind.kApprovalRequest) {
-    return /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("article", { className: "timeline-card", "data-kind": "approval", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("div", { className: "timeline-card__header", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("h3", { className: "timeline-card__title", children: "Approval required" }),
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(Pill, { text: "Pending", tone: "warning" }),
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "timeline-card__meta", children: meta })
+    return /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("article", { className: "timeline-card", "data-kind": "approval", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("div", { className: "timeline-card__header", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("h3", { className: "timeline-card__title", children: "Approval required" }),
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(Pill, { text: "Pending", tone: "warning" }),
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__meta", children: meta })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "timeline-card__body", children: event.approvalRequest?.description || "The runtime is waiting for approval." })
+      /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__body", children: event.approvalRequest?.description || "The runtime is waiting for approval." })
     ] });
   }
   if (event.kind === RuntimeEventKind.kApprovalResult) {
     const approved = !!event.approvalResult?.approved;
-    return /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("article", { className: "timeline-card", "data-kind": "approval-result", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("div", { className: "timeline-card__header", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("h3", { className: "timeline-card__title", children: "Approval decision" }),
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(Pill, { text: approved ? "Approved" : "Denied", tone: approved ? "success" : "danger" }),
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "timeline-card__meta", children: meta })
+    return /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("article", { className: "timeline-card", "data-kind": "approval-result", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("div", { className: "timeline-card__header", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("h3", { className: "timeline-card__title", children: "Approval decision" }),
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(Pill, { text: approved ? "Approved" : "Denied", tone: approved ? "success" : "danger" }),
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__meta", children: meta })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "timeline-card__body", children: event.approvalResult?.reason || "Approval response recorded" })
+      /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__body", children: event.approvalResult?.reason || "Approval response recorded" })
     ] });
   }
   if (event.kind === RuntimeEventKind.kError) {
-    return /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("article", { className: "timeline-card", "data-kind": "error", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("div", { className: "timeline-card__header", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("h3", { className: "timeline-card__title", children: "Runtime error" }),
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(Pill, { text: "Error", tone: "danger" }),
-        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "timeline-card__meta", children: meta })
+    return /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("article", { className: "timeline-card", "data-kind": "error", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("div", { className: "timeline-card__header", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("h3", { className: "timeline-card__title", children: "Runtime error" }),
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)(Pill, { text: "Error", tone: "danger" }),
+        /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__meta", children: meta })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "timeline-card__body", children: getEventText(event) || "The runtime reported an error." })
+      /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__body", children: getEventText(event) || "The runtime reported an error." })
     ] });
   }
-  return /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("article", { className: "timeline-card", "data-kind": "connection", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("div", { className: "timeline-card__header", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("h3", { className: "timeline-card__title", children: "Connection state" }),
-      /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "timeline-card__meta", children: meta })
+  return /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("article", { className: "timeline-card", "data-kind": "connection", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime34.jsxs)("div", { className: "timeline-card__header", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("h3", { className: "timeline-card__title", children: "Connection state" }),
+      /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__meta", children: meta })
     ] }),
-    /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "timeline-card__body", children: getRuntimeStateLabel(event.text) })
+    /* @__PURE__ */ (0, import_jsx_runtime34.jsx)("div", { className: "timeline-card__body", children: getRuntimeStateLabel(event.text) })
   ] });
 }
 
 // react/features/developer/timeline.tsx
-var import_jsx_runtime36 = __toESM(require_jsx_runtime());
+var import_jsx_runtime35 = __toESM(require_jsx_runtime());
 function Timeline({ state }) {
   const events = state.currentSessionId ? state.eventsBySessionId[state.currentSessionId] || [] : [];
   const session = state.currentSessionId ? state.sessionsById[state.currentSessionId] : null;
   const streamRef = useAutoScroll(events);
-  return /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("main", { className: "console-timeline", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { className: "console-panel-header", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("h2", { children: "Timeline" }),
-      /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("p", { children: state.currentSessionId ? "Live runtime events, tool activity, and approval flow." : "Create or resume a session to begin streaming runtime activity." })
+  return /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("main", { className: "console-timeline", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("div", { className: "console-panel-header", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("h2", { children: "Timeline" }),
+      /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("p", { children: state.currentSessionId ? "Live runtime events, tool activity, and approval flow." : "Create or resume a session to begin streaming runtime activity." })
     ] }),
-    !state.currentSessionId ? /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(
+    !state.currentSessionId ? /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(
       EmptyState,
       {
         description: "Use the left rail to start a session or reopen recent work.",
         title: "No active session"
       }
-    ) : /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)(import_jsx_runtime36.Fragment, { children: [
-      session ? /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { className: "console-panel-status-row", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("div", { className: "console-section-label", children: "Session state" }),
-        /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("div", { className: "console-section-label", children: getStatusLabel(session.status) }),
-        /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("div", { className: "console-section-label", children: getSessionAccessLabel(session) })
+    ) : /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)(import_jsx_runtime35.Fragment, { children: [
+      session ? /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("div", { className: "console-panel-status-row", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "console-section-label", children: "Session state" }),
+        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "console-section-label", children: getStatusLabel(session.status) }),
+        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "console-section-label", children: getSessionAccessLabel(session) })
       ] }) : null,
-      /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { ref: streamRef, className: "timeline-stream", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("div", { className: "console-section-label", children: "Event stream" }),
+      /* @__PURE__ */ (0, import_jsx_runtime35.jsxs)("div", { ref: streamRef, className: "timeline-stream", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime35.jsx)("div", { className: "console-section-label", children: "Event stream" }),
         !events.length ? (() => {
           const history = state.currentSessionId ? state.historiesBySessionId[state.currentSessionId] : null;
           const isReadOnlySession = isSessionReadOnly(session);
           const title = history?.loaded ? isReadOnlySession ? "No historical events stored" : "No runtime events yet" : isReadOnlySession ? "Loading historical session" : "Connecting to session stream";
           const description = history?.loaded ? isReadOnlySession ? "This session is available as stored history only. The runtime did not return any persisted events." : "The session exists, but the runtime has not emitted any renderable events yet." : isReadOnlySession ? "Fetching persisted events for this read-only session." : "Waiting for replayed history or live runtime events.";
-          return /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(EmptyState, { description, title });
-        })() : events.map((entry) => /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(EventCard, { event: entry.event }, `${entry.event.sequence}-${entry.event.timestamp}`))
+          return /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(EmptyState, { description, title });
+        })() : events.map((entry) => /* @__PURE__ */ (0, import_jsx_runtime35.jsx)(EventCard, { event: entry.event }, `${entry.event.sequence}-${entry.event.timestamp}`))
       ] })
     ] })
   ] });
 }
 
 // react/features/developer/developer-workspace.tsx
-var import_jsx_runtime37 = __toESM(require_jsx_runtime());
+var import_jsx_runtime36 = __toESM(require_jsx_runtime());
 function DeveloperWorkspace({
   onNewSession,
   onRespondToApproval,
@@ -30058,32 +30103,32 @@ function DeveloperWorkspace({
   state
 }) {
   const session = state.currentSessionId ? state.sessionsById[state.currentSessionId] : null;
-  return /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)("div", { className: "developer-console", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)("header", { className: "developer-console__topbar", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)("div", { className: "developer-console__summary", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)("div", { className: "developer-console__brand", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("h1", { className: "developer-console__title", children: "Maho AI Console" }),
-          /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("p", { className: "developer-console__subtitle", children: state.currentSessionId ? "Console views for sessions, event flow, and runtime inspection." : "Switch back to Assistant for the compact single-thread surface." })
+  return /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { className: "developer-console", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("header", { className: "developer-console__topbar", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { className: "developer-console__summary", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { className: "developer-console__brand", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("h1", { className: "developer-console__title", children: "Maho AI Console" }),
+          /* @__PURE__ */ (0, import_jsx_runtime36.jsx)("p", { className: "developer-console__subtitle", children: state.currentSessionId ? "Console views for sessions, event flow, and runtime inspection." : "Switch back to Assistant for the compact single-thread surface." })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)("div", { className: "developer-console__pills", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(Pill, { text: getConnectionStateLabel(state.connectionState), tone: "neutral" }),
-          /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(Pill, { text: state.activeAdapterName || "OpenCode", tone: "accent" }),
-          session ? /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(Pill, { text: getStatusLabel(session.status), tone: "success" }) : null
+        /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { className: "developer-console__pills", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Pill, { text: getConnectionStateLabel(state.connectionState), tone: "neutral" }),
+          /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Pill, { text: state.activeAdapterName || "OpenCode", tone: "accent" }),
+          session ? /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Pill, { text: getStatusLabel(session.status), tone: "success" }) : null
         ] })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)("div", { className: "developer-console__actions", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(
+      /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { className: "developer-console__actions", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(
           ModeToggle,
           {
             developerMode: state.developerMode,
             onSetDeveloperMode
           }
         ),
-        /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(Button, { variant: "console-primary", onClick: onNewSession, children: "New session" })
+        /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Button, { variant: "console-primary", onClick: onNewSession, children: "New session" })
       ] })
     ] }),
-    /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)("div", { className: "developer-console__workspace", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(
+    /* @__PURE__ */ (0, import_jsx_runtime36.jsxs)("div", { className: "developer-console__workspace", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(
         LeftRail,
         {
           onNewSession,
@@ -30092,8 +30137,8 @@ function DeveloperWorkspace({
           state
         }
       ),
-      /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(Timeline, { state }),
-      /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(
+      /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(Timeline, { state }),
+      /* @__PURE__ */ (0, import_jsx_runtime36.jsx)(
         Inspector,
         {
           onRespondToApproval,
@@ -30106,21 +30151,21 @@ function DeveloperWorkspace({
 }
 
 // react/hooks/use-app-state.ts
-var import_react10 = __toESM(require_react());
+var import_react11 = __toESM(require_react());
 function useAppState(store2) {
-  return (0, import_react10.useSyncExternalStore)(
+  return (0, import_react11.useSyncExternalStore)(
     (listener) => store2.subscribe(listener),
     () => store2.getSnapshot()
   );
 }
 
 // react/app.tsx
-var import_jsx_runtime38 = __toESM(require_jsx_runtime());
+var import_jsx_runtime37 = __toESM(require_jsx_runtime());
 function getPendingThreadLabel(entries, pending) {
   if (!pending) {
     return null;
   }
-  let latestToolName = null;
+  let latestToolName = void 0;
   for (let index2 = entries.length - 1; index2 >= 0; index2--) {
     const event = entries[index2]?.event;
     if (!event) {
@@ -30130,7 +30175,7 @@ function getPendingThreadLabel(entries, pending) {
       return null;
     }
     if (!latestToolName && event.kind === RuntimeEventKind.kToolRequest) {
-      latestToolName = event.toolCall?.toolName || null;
+      latestToolName = event.toolCall?.toolName || void 0;
     }
     if (event.kind === RuntimeEventKind.kUserPrompt) {
       break;
@@ -30139,15 +30184,22 @@ function getPendingThreadLabel(entries, pending) {
   return getToolProgressLabel(latestToolName);
 }
 function BootErrorCard({ message }) {
-  return /* @__PURE__ */ (0, import_jsx_runtime38.jsxs)("section", { className: "boot-error", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime38.jsx)("h1", { children: "Maho AI failed to start" }),
-    /* @__PURE__ */ (0, import_jsx_runtime38.jsx)("pre", { children: message })
+  return /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)("section", { className: "boot-error", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("h1", { children: "Maho AI failed to start" }),
+    /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("pre", { children: message })
   ] });
+}
+function isEditableTarget(target) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  const tagName = target.tagName.toLowerCase();
+  return target.isContentEditable || tagName === "input" || tagName === "textarea" || tagName === "select";
 }
 function MahoAiApp({ store: store2 }) {
   const state = useAppState(store2);
-  const bootstrappedRef = (0, import_react11.useRef)(false);
-  (0, import_react11.useEffect)(() => {
+  const bootstrappedRef = (0, import_react12.useRef)(false);
+  (0, import_react12.useEffect)(() => {
     if (bootstrappedRef.current) {
       return;
     }
@@ -30156,7 +30208,22 @@ function MahoAiApp({ store: store2 }) {
       console.error("[maho-ai] Bootstrap failed:", error);
     });
   }, [store2]);
-  const composerHandlers = (0, import_react11.useMemo)(() => ({
+  (0, import_react12.useEffect)(() => {
+    const handleKeyDown = (event) => {
+      if (isEditableTarget(event.target)) {
+        return;
+      }
+      if (!event.shiftKey || !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "d") {
+        return;
+      }
+      event.preventDefault();
+      const snapshot = store2.getSnapshot();
+      store2.setDeveloperMode(!snapshot.developerMode);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [store2]);
+  const composerHandlers = (0, import_react12.useMemo)(() => ({
     onPromptChange: (value) => store2.setComposerPrompt(value),
     onCancel: () => {
       void store2.cancelTurn();
@@ -30173,10 +30240,17 @@ function MahoAiApp({ store: store2 }) {
       void store2.submitPrompt();
     }
   }), [store2]);
-  const modeHandlers = (0, import_react11.useMemo)(() => ({
+  const modeHandlers = (0, import_react12.useMemo)(() => ({
     onNewSession: () => {
       void store2.startSession();
     },
+    onClosePanel: () => {
+      void store2.closePanel();
+    },
+    onOpenSettings: () => {
+      void store2.openSettings();
+    },
+    onGetViewMode: () => store2.getViewMode(),
     onResumeSession: (sessionId) => {
       const snapshot = store2.getSnapshot();
       const session = snapshot.sessionsById[sessionId];
@@ -30187,7 +30261,10 @@ function MahoAiApp({ store: store2 }) {
     },
     onSearch: (query) => store2.setSessionSearchQuery(query),
     onSelectInspector: (kind, id) => store2.setSelectedInspector(kind, id),
-    onSetDeveloperMode: (enabled) => store2.setDeveloperMode(enabled)
+    onSetDeveloperMode: (enabled) => store2.setDeveloperMode(enabled),
+    onSetViewMode: (mode) => {
+      void store2.setViewMode(mode);
+    }
   }), [store2]);
   const sessionEvents = state.currentSessionId ? state.eventsBySessionId[state.currentSessionId] || [] : [];
   const hasMessages = sessionEvents.length > 0;
@@ -30195,8 +30272,8 @@ function MahoAiApp({ store: store2 }) {
   const readOnly = isSessionReadOnly(currentSession);
   const pendingTurn = !!(state.currentSessionId && state.turnPendingBySessionId[state.currentSessionId]);
   const thinkingLabel = getPendingThreadLabel(sessionEvents, pendingTurn);
-  return /* @__PURE__ */ (0, import_jsx_runtime38.jsx)("div", { className: cn("console-shell", state.developerMode && "console-shell--developer"), children: /* @__PURE__ */ (0, import_jsx_runtime38.jsx)("section", { className: cn("compact-panel", state.developerMode && "compact-panel--developer"), children: state.bootError ? /* @__PURE__ */ (0, import_jsx_runtime38.jsx)(BootErrorCard, { message: state.bootError }) : /* @__PURE__ */ (0, import_jsx_runtime38.jsxs)(import_jsx_runtime38.Fragment, { children: [
-    /* @__PURE__ */ (0, import_jsx_runtime38.jsx)("div", { className: "compact-panel__stage-host", children: state.developerMode ? /* @__PURE__ */ (0, import_jsx_runtime38.jsx)(
+  return /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("div", { className: cn("console-shell", state.developerMode && "console-shell--developer"), children: /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("section", { className: cn("compact-panel", state.developerMode && "compact-panel--developer"), children: state.bootError ? /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(BootErrorCard, { message: state.bootError }) : /* @__PURE__ */ (0, import_jsx_runtime37.jsxs)(import_jsx_runtime37.Fragment, { children: [
+    /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("div", { className: "compact-panel__stage-host", children: state.developerMode ? /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(
       DeveloperWorkspace,
       {
         onNewSession: modeHandlers.onNewSession,
@@ -30207,23 +30284,26 @@ function MahoAiApp({ store: store2 }) {
         onSetDeveloperMode: modeHandlers.onSetDeveloperMode,
         state
       }
-    ) : /* @__PURE__ */ (0, import_jsx_runtime38.jsx)(
+    ) : /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(
       CompactShell,
       {
         entries: sessionEvents,
         hasMessages,
+        onClosePanel: modeHandlers.onClosePanel,
+        onGetViewMode: modeHandlers.onGetViewMode,
+        onOpenSettings: modeHandlers.onOpenSettings,
         onRespondToApproval: modeHandlers.onRespondToApproval,
-        onSetDeveloperMode: modeHandlers.onSetDeveloperMode,
+        onSetViewMode: modeHandlers.onSetViewMode,
         onStartSession: modeHandlers.onNewSession,
         readOnly,
         state,
         thinkingLabel
       }
     ) }),
-    /* @__PURE__ */ (0, import_jsx_runtime38.jsx)("div", { className: cn(
+    /* @__PURE__ */ (0, import_jsx_runtime37.jsx)("div", { className: cn(
       "compact-panel__composer-host",
       state.developerMode && "console-composer-dock"
-    ), children: /* @__PURE__ */ (0, import_jsx_runtime38.jsx)(Composer, { handlers: composerHandlers, state }) })
+    ), children: /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(Composer, { handlers: composerHandlers, state }) })
   ] }) }) });
 }
 var rootElement = document.getElementById("app");
@@ -30232,6 +30312,6 @@ if (!rootElement) {
 }
 var store = createMahoAiStore();
 (0, import_client.createRoot)(rootElement).render(
-  /* @__PURE__ */ (0, import_jsx_runtime38.jsx)(import_react11.default.StrictMode, { children: /* @__PURE__ */ (0, import_jsx_runtime38.jsx)(MahoAiApp, { store }) })
+  /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(import_react12.default.StrictMode, { children: /* @__PURE__ */ (0, import_jsx_runtime37.jsx)(MahoAiApp, { store }) })
 );
 //# sourceMappingURL=app_bundle.js.map

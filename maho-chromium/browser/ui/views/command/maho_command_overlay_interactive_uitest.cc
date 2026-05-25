@@ -608,12 +608,6 @@ IN_PROC_BROWSER_TEST_F(MahoCommandOverlayInteractiveUiTest,
   EXPECT_EQ(urls[3].spec(), seeds[2].execution_payload);
   EXPECT_EQ("Button", seeds[2].title);
 
-  EXPECT_EQ(urls[2].spec(), seeds[3].execution_payload);
-  EXPECT_EQ("Title Of More Awesomeness", seeds[3].title);
-
-  EXPECT_EQ(urls[1].spec(), seeds[4].execution_payload);
-  EXPECT_EQ("Title Of Awesomeness", seeds[4].title);
-
    controller->Hide();
    ASSERT_TRUE(base::test::RunUntil([&]() { return !controller->IsVisible(); }));
 }

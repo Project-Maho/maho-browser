@@ -20,6 +20,7 @@
 class GlobalBrowserCollection;
 
 class Browser;
+class BrowserWindowInterface;
 
 namespace maho {
 
@@ -60,6 +61,7 @@ class MahoSpaceProfileBridge : public BrowserCollectionObserver {
   // The per-browser map is the canonical UI active-space state; the global
   // active_space_id_ value exists only as a seed and as a no-browser-context fallback.
   const std::string& GetActiveSpaceId(Browser* browser) const;
+  const std::string& GetActiveSpaceId(BrowserWindowInterface* browser) const;
   size_t GetRegisteredSpaceCount() const;
   int GetActiveSpaceIndex() const;
   int GetActiveSpaceIndex(Browser* browser) const;

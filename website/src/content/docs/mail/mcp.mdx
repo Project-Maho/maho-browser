@@ -1,0 +1,49 @@
+---
+title: MCP Server
+description: Connecting Maho Mail to AI agents via the Model Context Protocol
+sidebar:
+  order: 2
+---
+
+## Overview
+
+Maho Mail includes a built-in Model Context Protocol (MCP) server. This allows any MCP-compatible AI agent (like Claude Desktop, Cursor, or your own custom agents) to read, search, and draft emails directly from your inbox using standard `stdio` or SSE communication.
+
+## Why use MCP with Email?
+
+Instead of copying and pasting text between your email client and an AI, you can connect the AI directly to your inbox.
+- "Did I get an email from John about the invoice?"
+- "Summarize all threads in my project folder from this week."
+- "Draft a polite reply to the latest email saying I will review it by tomorrow."
+
+## Setup with Claude Desktop
+
+To connect Maho Mail to Claude Desktop, you need to edit your `claude_desktop_config.json` file.
+
+1. Open Claude Desktop preferences and navigate to the developer section to find your config file.
+2. Add Maho Mail to the `mcpServers` object:
+
+```json
+{
+  "mcpServers": {
+    "maho-mail": {
+      "command": "maho-mail",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+*Note: Make sure the `maho-mail` binary is in your system PATH, or provide the absolute path in the `command` field.*
+
+3. Restart Claude Desktop. You should now see a "plug" icon indicating that the `maho-mail` tools are available.
+
+## Available Tools
+
+The MCP server exposes the same underlying capabilities as the CLI:
+
+- `search_emails(query, limit)`
+- `get_thread(thread_id)`
+- `list_folders(account_id)`
+- `draft_reply(thread_id, content)`
+
+Because the MCP server connects to the exact same local SQLite database as the GUI, any changes made by the AI will immediately reflect in your Desktop app without syncing delays.

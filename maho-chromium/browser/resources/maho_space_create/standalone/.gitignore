@@ -1,0 +1,3 @@
+# Dev-only build artifacts — not committed
+app_bundle.js
+app_bundle.js.map

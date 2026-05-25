@@ -1,0 +1,64 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+---
+
+<BaseLayout title="Terms of Service — Maho" description="Terms of Service for Maho applications.">
+  <div class="min-h-screen bg-background text-foreground">
+    <Nav />
+    <main class="max-w-3xl mx-auto px-6 pt-32 pb-24">
+      <h1 class="heading-serif text-4xl sm:text-5xl mb-4">Terms of Service</h1>
+      <p class="text-muted-foreground text-sm mb-12">Effective: April 11, 2026</p>
+
+      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Agreement to Terms</h2>
+      <p class="text-muted-foreground leading-relaxed mb-4">
+        By downloading or using Maho applications, you agree to these terms. If you do not agree, you may not use our software.
+      </p>
+
+      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">License</h2>
+      <p class="text-muted-foreground leading-relaxed mb-4">
+        Maho grants you a non-exclusive, non-transferable license to use the software for personal or commercial use. This license does not grant you any rights to modify, distribute, or create derivative works unless explicitly permitted under the applicable open-source license.
+      </p>
+      <p class="text-muted-foreground leading-relaxed mb-4">
+        The software is provided as-is. We reserve the right to modify, suspend, or discontinue any aspect of the software at any time without notice.
+      </p>
+
+      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Open Source</h2>
+      <p class="text-muted-foreground leading-relaxed mb-4">
+        Maho Browser and Maho Mail are open-source software released under their respective licenses. The source code is available at github.com/aspect-apps. Your use of the software is also governed by the terms of the applicable open-source license.
+      </p>
+
+      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">User Data</h2>
+      <p class="text-muted-foreground leading-relaxed mb-4">
+        Maho applications run locally on your device. We do not collect, store, or transmit your personal data, emails, browsing history, or any other information to our servers. All data remains under your control on your device.
+      </p>
+
+      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Third-Party Services</h2>
+      <p class="text-muted-foreground leading-relaxed mb-4">
+        Maho Mail connects to email providers (IMAP/SMTP) and optional AI providers as configured by you. These connections are made directly from your device to the respective services. We are not responsible for the terms, privacy policies, or availability of these third-party services.
+      </p>
+
+      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Disclaimer of Warranties</h2>
+      <p class="text-muted-foreground leading-relaxed mb-4">
+        The software is provided "as is" without warranty of any kind, either express or implied, including but not limited to the implied warranties of merchantability, fitness for a particular purpose, or non-infringement. We do not warrant that the software will be error-free or uninterrupted.
+      </p>
+
+      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Limitation of Liability</h2>
+      <p class="text-muted-foreground leading-relaxed mb-4">
+        In no event shall Maho, its contributors, or affiliates be liable for any direct, indirect, incidental, special, consequential, or punitive damages arising out of or relating to your use of the software, even if advised of the possibility of such damages.
+      </p>
+
+      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Changes to Terms</h2>
+      <p class="text-muted-foreground leading-relaxed mb-4">
+        We may update these terms from time to time. Continued use of the software after any changes constitutes your acceptance of the revised terms. We encourage you to review these terms periodically.
+      </p>
+
+      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Contact</h2>
+      <p class="text-muted-foreground leading-relaxed mb-4">
+        Questions about these terms can be directed to hello@maho.app
+      </p>
+    </main>
+    <Footer />
+  </div>
+</BaseLayout>

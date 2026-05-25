@@ -120,7 +120,8 @@ class MahoSidebarTabListView : public views::View,
   void ShowTabRowContextMenu(views::View* source,
                              int live_index,
                              const gfx::Point& point,
-                             ui::mojom::MenuSourceType source_type);
+                             ui::mojom::MenuSourceType source_type,
+                             MahoTabContextMenu::Delegate* delegate = nullptr);
 
   void ShowContextMenuForViewImpl(views::View* source,
                                   const gfx::Point& point,
@@ -219,6 +220,7 @@ class SidebarTabRowView : public views::View,
 
   // MahoTabContextMenu::Delegate:
   void ActivateTabAndOpenBoostBubble(int tab_index) override;
+  void RenameTab(int tab_index) override;
 
   bool GetDropFormats(int* formats,
                       std::set<ui::ClipboardFormatType>* format_types) override;

@@ -41,5 +41,5 @@ void MahoBoostUI::CreatePageHandler(
     mojo::PendingRemote<maho_boost::mojom::Page> page,
     mojo::PendingReceiver<maho_boost::mojom::PageHandler> receiver) {
   page_handler_ = std::make_unique<MahoBoostPageHandler>(
-      std::move(receiver), std::move(page));
+      std::move(receiver), std::move(page), Profile::FromWebUI(web_ui()));
 }

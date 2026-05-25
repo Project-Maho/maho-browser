@@ -44,6 +44,10 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_archive_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_create_space_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_notes_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_easels_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_boosts_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_spaces_view.h"
 #include "net/base/url_util.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/compositor/layer_tree_owner.h"
@@ -346,12 +350,6 @@ void MahoSidebarView::HandleLibraryBack() {
 }
 
 void MahoSidebarView::UpdateSpacesPaneActions() {
-  if (!spaces_view_) {
-    return;
-  }
-  auto* bridge = MahoSpaceProfileBridge::GetInstance();
-  const bool has_active_space = bridge && !bridge->GetActiveSpaceId(browser_).empty();
-  spaces_view_->SetActionEnabled(1, has_active_space);
 }
 
 void MahoSidebarView::OpenSpaceCreateSurface() {
@@ -405,18 +403,6 @@ views::View* MahoSidebarView::GetOrCreateLibraryPane(
     return it->second;
   }
 
-  auto make_action_pane = [this](std::u16string title,
-                                 std::u16string description,
-                                 std::vector<MahoSidebarLibraryActionPaneView::ActionSpec> actions,
-                                 MahoSidebarLibraryActionPaneView::ActionCallback callback) {
-    auto* pane = library_content_host_->AddChildView(
-        std::make_unique<MahoSidebarLibraryActionPaneView>(
-            std::move(title), std::move(description), std::move(actions),
-            std::move(callback)));
-    pane->SetVisible(false);
-    return pane;
-  };
-
   views::View* pane = nullptr;
   switch (category) {
     case MahoSidebarLibraryRailView::Category::kArchivedTabs: {
@@ -466,60 +452,36 @@ views::View* MahoSidebarView::GetOrCreateLibraryPane(
     }
     case MahoSidebarLibraryRailView::Category::kSpaces: {
       if (!spaces_view_) {
-        spaces_view_ = make_action_pane(
-            u"Spaces",
-            u"Create a new space or edit the active space with the canonical flows.",
-            {{u"New Space", u"Create a fresh workspace", true},
-             {u"Edit Active Space", u"Edit the active space", true}},
-            base::BindRepeating([](base::WeakPtr<MahoSidebarView> sidebar,
-                                   size_t index) {
-              if (!sidebar) {
-                return;
-              }
-              if (index == 0) {
-                sidebar->OpenSpaceCreateSurface();
-                return;
-              }
-              sidebar->OpenSpaceConfigSurface();
-            }, weak_factory_.GetWeakPtr()));
+        spaces_view_ = library_content_host_->AddChildView(
+            std::make_unique<MahoSidebarSpacesView>(browser_));
+        spaces_view_->SetVisible(false);
       }
-      UpdateSpacesPaneActions();
       pane = spaces_view_;
       break;
     }
     case MahoSidebarLibraryRailView::Category::kNotes: {
+      if (!notes_view_) {
+        notes_view_ = library_content_host_->AddChildView(
+            std::make_unique<MahoSidebarNotesView>(browser_));
+        notes_view_->SetVisible(false);
+      }
+      pane = notes_view_;
       break;
     }
     case MahoSidebarLibraryRailView::Category::kEasels: {
       if (!easel_view_) {
-        easel_view_ = make_action_pane(
-            u"Easel",
-            u"Open the canonical Easel surface from the library.",
-            {{u"Open Easel", u"Open the canonical Easel surface", true}},
-            base::BindRepeating([](base::WeakPtr<MahoSidebarView> sidebar,
-                                   size_t index) {
-              if (!sidebar || index != 0) {
-                return;
-              }
-              sidebar->OpenWebUIInNewTab(GURL(maho::kMahoEaselURL));
-            }, weak_factory_.GetWeakPtr()));
+        easel_view_ = library_content_host_->AddChildView(
+            std::make_unique<MahoSidebarEaselsView>(browser_));
+        easel_view_->SetVisible(false);
       }
       pane = easel_view_;
       break;
     }
     case MahoSidebarLibraryRailView::Category::kBoosts: {
       if (!boost_view_) {
-        boost_view_ = make_action_pane(
-            u"Boost",
-            u"Open the canonical Boost surface from the library.",
-            {{u"Open Boost", u"Open the canonical Boost surface", true}},
-            base::BindRepeating([](base::WeakPtr<MahoSidebarView> sidebar,
-                                   size_t index) {
-              if (!sidebar || index != 0) {
-                return;
-              }
-              sidebar->OpenWebUIInNewTab(GURL(maho::kMahoBoostURL));
-            }, weak_factory_.GetWeakPtr()));
+        boost_view_ = library_content_host_->AddChildView(
+            std::make_unique<MahoSidebarBoostsView>());
+        boost_view_->SetVisible(false);
       }
       pane = boost_view_;
       break;
@@ -562,8 +524,18 @@ void MahoSidebarView::ShowLibraryPane(
   } else if (category == MahoSidebarLibraryRailView::Category::kMedia &&
               media_view_) {
     media_view_->ReloadMedia();
-  } else if (category == MahoSidebarLibraryRailView::Category::kSpaces) {
-    UpdateSpacesPaneActions();
+  } else if (category == MahoSidebarLibraryRailView::Category::kSpaces &&
+             spaces_view_) {
+    spaces_view_->ReloadSpaces();
+  } else if (category == MahoSidebarLibraryRailView::Category::kNotes &&
+             notes_view_) {
+    notes_view_->EnsureWebUILoaded();
+  } else if (category == MahoSidebarLibraryRailView::Category::kEasels &&
+             easel_view_) {
+    easel_view_->EnsureWebUILoaded();
+  } else if (category == MahoSidebarLibraryRailView::Category::kBoosts &&
+             boost_view_) {
+    boost_view_->ReloadBoosts();
   }
 }
 

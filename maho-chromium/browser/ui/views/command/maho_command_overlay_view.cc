@@ -2,6 +2,7 @@
 
 #include "maho/browser/ui/maho_settings_navigation.h"
 #include "maho/browser/ui/views/command/maho_command_overlay_view.h"
+#include "maho/browser/maho_features.h"
 
 #include <algorithm>
 #include <memory>
@@ -21,6 +22,11 @@
 #include "maho/browser/ui/views/command/maho_command_model.h"
 #include "maho/browser/ui/views/command/maho_command_sparkle_geometry.h"
 #include "maho/browser/ui/views/command/maho_command_result_row_view.h"
+#include "maho/browser/ui/views/command/maho_command_search_engine_picker_view.h"
+#include "ui/views/controls/button/md_text_button.h"
+#include "ui/views/animation/ink_drop.h"
+#include "base/json/json_writer.h"
+#include "base/values.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
@@ -85,22 +91,22 @@ namespace maho {
 
 namespace {
 
-constexpr int kPanelCornerRadiusDp = 16;
+constexpr int kPanelCornerRadiusDp = 20;
 constexpr int kPanelBorderWidthDp = 1;
 constexpr int kPanelPaddingTopDp = 10;
 constexpr int kPanelPaddingSideDp = 8;
 constexpr int kFieldShellSpacingDp = 6;
 constexpr int kTopbarHorizontalInsetDp = 12;
 constexpr int kPanelBottomInsetDp = 8;
-constexpr int kSearchRowHeightDp = 44;
-constexpr int kSearchRowCornerRadiusDp = 11;
+constexpr int kSearchRowHeightDp = 48;
+constexpr int kSearchRowCornerRadiusDp = 14;
 constexpr int kSearchRowPaddingHDp = 0;
-constexpr int kSearchIconLaneWidthDp = 20;
+constexpr int kSearchIconLaneWidthDp = 28;
 constexpr int kTrailingAccessoryTrailingInsetDp = 6;
-constexpr int kLeadingPageIconSizeDp = 16;
+constexpr int kLeadingPageIconSizeDp = 20;
 constexpr int kSparkToInputGapDp = 8;
 constexpr int kPanelSectionSpacingDp = 0;
-constexpr int kResultRowSpacingDp = 2;
+constexpr int kResultRowSpacingDp = 4;
 constexpr int kDividerTopGapDp = 4;
 constexpr int kDividerBottomGapDp = 2;
 constexpr int kDividerHorizontalInsetDp = 10;
@@ -121,7 +127,7 @@ constexpr int kEmptyStateBottomInsetDp = 4;
 constexpr int kNoResultsTopInsetDp = 6;
 constexpr int kNoResultsBottomInsetDp = 3;
 constexpr int kEmptyStateHorizontalInsetDp = 40;
-constexpr size_t kMaxSeededVisibleResults = 5;
+constexpr size_t kMaxSeededVisibleResults = 3;
 
 constexpr SkColor kSparkleOuterColor = SkColorSetRGB(0x73, 0x7C, 0xFF);
 constexpr SkColor kSparkleInnerColor = SkColorSetRGB(0xFF, 0xC7, 0x57);
@@ -411,10 +417,20 @@ MahoCommandOverlayView::MahoCommandOverlayView(
       u"", views::style::CONTEXT_LABEL, views::style::STYLE_BODY_5_MEDIUM));
   mode_label_->SetAutoColorReadabilityEnabled(false);
 
-  trailing_accessory_ = search_row_->AddChildView(std::make_unique<views::View>());
-  trailing_accessory_->SetPreferredSize(
-      gfx::Size(kTrailingAccessorySizeDp, kTrailingAccessorySizeDp));
-  trailing_accessory_->SetCanProcessEventsWithinSubtree(false);
+  auto button = std::make_unique<views::MdTextButton>(
+      base::BindRepeating(&MahoCommandOverlayView::OnSearchEngineBadgePressed,
+                          base::Unretained(this)),
+      std::u16string());
+  button->SetStyle(ui::ButtonStyle::kText);
+  button->SetCornerRadius(kTrailingAccessoryCornerRadiusDp);
+  button->SetMinSize(gfx::Size(kTrailingAccessorySizeDp, kTrailingAccessorySizeDp));
+  button->SetMaxSize(gfx::Size(kTrailingAccessorySizeDp, kTrailingAccessorySizeDp));
+  button->SetTooltipText(u"Change search engine");
+  views::InkDrop::Get(button.get())->SetMode(views::InkDropHost::InkDropMode::OFF);
+  button->SetInstallFocusRingOnFocus(false);
+  button->SetRequestFocusOnPress(false);
+
+  trailing_accessory_ = search_row_->AddChildView(std::move(button));
   trailing_accessory_->SetBorder(views::CreateEmptyBorder(
       gfx::Insets::TLBR(0, 0, 0, kTrailingAccessoryTrailingInsetDp)));
   trailing_accessory_->SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -436,13 +452,6 @@ MahoCommandOverlayView::MahoCommandOverlayView(
   UpdateSearchRowChrome();
 
   UpdateModeChipVisibility();
-
-  if (!initial_text.empty()) {
-    textfield_->SetText(base::UTF8ToUTF16(initial_text));
-    if (select_initial_text_) {
-      textfield_->SelectAll(mode_ == CommandOverlayMode::kCurrentTab);
-    }
-  }
 
   divider_ = AddChildView(std::make_unique<views::Separator>());
   divider_->SetBorder(views::CreateEmptyBorder(
@@ -485,8 +494,22 @@ MahoCommandOverlayView::MahoCommandOverlayView(
 
   ApplyPlaceholderForMode();
 
+  if (!initial_text.empty() && mode_ != CommandOverlayMode::kCurrentTab) {
+    textfield_->SetText(base::UTF8ToUTF16(initial_text));
+    if (select_initial_text_) {
+      textfield_->SelectAll(false);
+    }
+  }
+
   InitializeCurrentTabSeedState(initial_text);
   UpdateSearchLeadingAccessory();
+
+  if (!initial_text.empty() && mode_ == CommandOverlayMode::kCurrentTab) {
+    textfield_->SetText(base::UTF8ToUTF16(initial_text));
+    if (select_initial_text_) {
+      textfield_->SelectAll(true);
+    }
+  }
 }
 
 MahoCommandOverlayView::MahoCommandOverlayView(
@@ -597,10 +620,20 @@ MahoCommandOverlayView::MahoCommandOverlayView(
       u"", views::style::CONTEXT_LABEL, views::style::STYLE_BODY_5_MEDIUM));
   mode_label_->SetAutoColorReadabilityEnabled(false);
 
-  trailing_accessory_ = search_row_->AddChildView(std::make_unique<views::View>());
-  trailing_accessory_->SetPreferredSize(
-      gfx::Size(kTrailingAccessorySizeDp, kTrailingAccessorySizeDp));
-  trailing_accessory_->SetCanProcessEventsWithinSubtree(false);
+  auto button = std::make_unique<views::MdTextButton>(
+      base::BindRepeating(&MahoCommandOverlayView::OnSearchEngineBadgePressed,
+                          base::Unretained(this)),
+      std::u16string());
+  button->SetStyle(ui::ButtonStyle::kText);
+  button->SetCornerRadius(kTrailingAccessoryCornerRadiusDp);
+  button->SetMinSize(gfx::Size(kTrailingAccessorySizeDp, kTrailingAccessorySizeDp));
+  button->SetMaxSize(gfx::Size(kTrailingAccessorySizeDp, kTrailingAccessorySizeDp));
+  button->SetTooltipText(u"Change search engine");
+  views::InkDrop::Get(button.get())->SetMode(views::InkDropHost::InkDropMode::OFF);
+  button->SetInstallFocusRingOnFocus(false);
+  button->SetRequestFocusOnPress(false);
+
+  trailing_accessory_ = search_row_->AddChildView(std::move(button));
   trailing_accessory_->SetBorder(views::CreateEmptyBorder(
       gfx::Insets::TLBR(0, 0, 0, kTrailingAccessoryTrailingInsetDp)));
   trailing_accessory_->SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -622,13 +655,6 @@ MahoCommandOverlayView::MahoCommandOverlayView(
   UpdateSearchRowChrome();
 
   UpdateModeChipVisibility();
-
-  if (!initial_text.empty()) {
-    textfield_->SetText(base::UTF8ToUTF16(initial_text));
-    if (select_initial_text_) {
-      textfield_->SelectAll(mode_ == CommandOverlayMode::kCurrentTab);
-    }
-  }
 
   divider_ = AddChildView(std::make_unique<views::Separator>());
   divider_->SetColorId(kMahoColorCommandBarDivider);
@@ -676,8 +702,22 @@ MahoCommandOverlayView::MahoCommandOverlayView(
 
   ApplyPlaceholderForMode();
 
+  if (!initial_text.empty() && mode_ != CommandOverlayMode::kCurrentTab) {
+    textfield_->SetText(base::UTF8ToUTF16(initial_text));
+    if (select_initial_text_) {
+      textfield_->SelectAll(false);
+    }
+  }
+
   InitializeCurrentTabSeedState(initial_text);
   UpdateSearchLeadingAccessory();
+
+  if (!initial_text.empty() && mode_ == CommandOverlayMode::kCurrentTab) {
+    textfield_->SetText(base::UTF8ToUTF16(initial_text));
+    if (select_initial_text_) {
+      textfield_->SelectAll(true);
+    }
+  }
 
   if (!initial_text.empty() && !is_seeded_state_) {
     ContentsChanged(textfield_, std::u16string(textfield_->GetText()));
@@ -935,6 +975,10 @@ std::vector<CommandSuggestion> MahoCommandOverlayView::BuildCurrentTabSeedResult
 
 void MahoCommandOverlayView::InitializeCurrentTabSeedState(
     const std::string& initial_text) {
+  if (!base::FeatureList::IsEnabled(features::kMahoCommandPaletteSeededHistory)) {
+    return;
+  }
+
   if (mode_ != CommandOverlayMode::kCurrentTab || initial_text.empty()) {
     return;
   }
@@ -1089,7 +1133,7 @@ void MahoCommandOverlayView::UpdateLayoutForMode() {
 
   if (trailing_accessory_) {
     trailing_accessory_->SetVisible(mode_ != CommandOverlayMode::kAI &&
-                                    mode_ != CommandOverlayMode::kCurrentTab);
+                                    mode_ != CommandOverlayMode::kCommandsOnly);
   }
 
   UpdateTrailingAccessoryPresentation();
@@ -1119,17 +1163,29 @@ void MahoCommandOverlayView::UpdateSearchLeadingAccessory() {
   }
 
   views::View* sparkle_view = search_icon_lane_->children().front();
-  const bool should_show_context_icon =
-      mode_ == CommandOverlayMode::kCurrentTab && !seeded_results_.empty() &&
-      seeded_results_.front().icon.has_value();
-  if (!should_show_context_icon) {
+  std::optional<ImageData> icon_to_decode;
+
+  if (model_) {
+    int selected_idx = model_->selected_index();
+    if (selected_idx >= 0 && selected_idx < static_cast<int>(model_->results().size())) {
+      icon_to_decode = model_->results()[selected_idx].icon;
+    }
+  }
+
+  if (!icon_to_decode.has_value()) {
+    if (mode_ == CommandOverlayMode::kCurrentTab && !seeded_results_.empty() &&
+        seeded_results_.front().icon.has_value()) {
+      icon_to_decode = seeded_results_.front().icon;
+    }
+  }
+
+  if (!icon_to_decode.has_value()) {
     sparkle_view->SetVisible(true);
     search_context_icon_->SetVisible(false);
     return;
   }
 
-  const gfx::Image context_icon =
-      DecodeAccessoryImage(*seeded_results_.front().icon);
+  const gfx::Image context_icon = DecodeAccessoryImage(*icon_to_decode);
   if (context_icon.IsEmpty()) {
     sparkle_view->SetVisible(true);
     search_context_icon_->SetVisible(false);
@@ -1216,6 +1272,15 @@ void MahoCommandOverlayView::ContentsChanged(
     is_seeded_state_ = false;
     UpdateSearchLeadingAccessory();
   }
+
+  if ((mode_ == CommandOverlayMode::kSearch ||
+       mode_ == CommandOverlayMode::kCurrentTab ||
+       mode_ == CommandOverlayMode::kNewTab) &&
+      new_contents == u">") {
+    EnterCommandsOnlyMode();
+    return;
+  }
+
   TriggerSearchForCurrentText();
 }
 
@@ -1269,6 +1334,10 @@ bool MahoCommandOverlayView::HandleKeyEvent(views::Textfield* sender,
       }
       if (mode_ == CommandOverlayMode::kSiteSearch) {
         ExitSiteSearchMode();
+        return true;
+      }
+      if (mode_ == CommandOverlayMode::kCommandsOnly) {
+        ExitCommandsOnlyMode();
         return true;
       }
       Dismiss();
@@ -1341,6 +1410,15 @@ bool MahoCommandOverlayView::HandleKeyEvent(views::Textfield* sender,
         }
       }
       return true;
+    }
+
+    case ui::VKEY_BACK: {
+      if (mode_ == CommandOverlayMode::kCommandsOnly &&
+          textfield_->GetText().empty()) {
+        ExitCommandsOnlyMode();
+        return true;
+      }
+      return false;
     }
 
     default:
@@ -1527,6 +1605,7 @@ void MahoCommandOverlayView::UpdateSelection(int new_index) {
     row->SetSelected(true);
     row->ScrollViewToVisible();
     textfield_->GetViewAccessibility().SetActiveDescendant(*row);
+    UpdateSearchLeadingAccessory();
   }
   results_container_->GetViewAccessibility().NotifyEvent(
       ax::mojom::Event::kSelectedChildrenChanged, true);
@@ -1657,13 +1736,14 @@ void MahoCommandOverlayView::NavigateTypedText() {
 }
 
 WindowOpenDisposition MahoCommandOverlayView::DispositionForMode() const {
-  // For transient sub-modes (kSiteSearch, kAI) the user is still operating in
+  // For transient sub-modes (kSiteSearch, kAI, kCommandsOnly) the user is still operating in
   // the context of the mode that was active before entering the sub-mode.
   // Use origin_mode_ so that a new-tab open which transitioned to site-search
   // still opens the result in a new foreground tab.
   const CommandOverlayMode effective_mode =
       (mode_ == CommandOverlayMode::kSiteSearch ||
-       mode_ == CommandOverlayMode::kAI)
+       mode_ == CommandOverlayMode::kAI ||
+       mode_ == CommandOverlayMode::kCommandsOnly)
           ? origin_mode_
           : mode_;
   switch (effective_mode) {
@@ -1754,6 +1834,33 @@ void MahoCommandOverlayView::ExitAIMode() {
   UpdateResultViews({});
 }
 
+void MahoCommandOverlayView::EnterCommandsOnlyMode() {
+  if (mode_ != CommandOverlayMode::kCommandsOnly) {
+    origin_mode_ = mode_;
+  }
+  mode_ = CommandOverlayMode::kCommandsOnly;
+  textfield_->SetText(std::u16string());
+  UpdateLayoutForMode();
+  UpdateModeChip();
+  UpdateSearchLeadingAccessory();
+
+  ApplyPlaceholderForMode();
+  if (model_) model_->Cancel();
+  UpdateResultViews({});
+}
+
+void MahoCommandOverlayView::ExitCommandsOnlyMode() {
+  mode_ = origin_mode_;
+  textfield_->SetText(std::u16string());
+  UpdateLayoutForMode();
+  UpdateModeChip();
+  UpdateSearchLeadingAccessory();
+
+  ApplyPlaceholderForMode();
+  if (model_) model_->Cancel();
+  UpdateResultViews({});
+}
+
 void MahoCommandOverlayView::ApplyPlaceholderForMode() {
   switch (mode_) {
     case CommandOverlayMode::kSearch:
@@ -1769,6 +1876,9 @@ void MahoCommandOverlayView::ApplyPlaceholderForMode() {
     case CommandOverlayMode::kAI:
       textfield_->SetPlaceholderText(u"Ask anything\u2026");
       break;
+    case CommandOverlayMode::kCommandsOnly:
+      textfield_->SetPlaceholderText(u"Search commands\u2026");
+      break;
   }
 }
 
@@ -1779,9 +1889,10 @@ void MahoCommandOverlayView::UpdateModeChipVisibility() {
 
   // The chip is an in-surface context indicator rendered inside the single
   // command overlay, not a separate surface. It appears only in sub-modes
-  // (kSiteSearch, kAI) where the input scope differs from the default.
+  // (kSiteSearch, kAI, kCommandsOnly) where the input scope differs from the default.
   const bool show_chip = mode_ == CommandOverlayMode::kSiteSearch ||
-                         mode_ == CommandOverlayMode::kAI;
+                         mode_ == CommandOverlayMode::kAI ||
+                         mode_ == CommandOverlayMode::kCommandsOnly;
   mode_chip_->SetVisible(show_chip);
 }
 
@@ -1798,18 +1909,24 @@ void MahoCommandOverlayView::UpdateModeChip() {
   }
 
   const bool show_chip = mode_ == CommandOverlayMode::kSiteSearch ||
-                         mode_ == CommandOverlayMode::kAI;
+                         mode_ == CommandOverlayMode::kAI ||
+                         mode_ == CommandOverlayMode::kCommandsOnly;
   if (!show_chip) {
     return;
   }
 
   const bool is_ai_mode = mode_ == CommandOverlayMode::kAI;
-  const std::u16string label_text =
-      is_ai_mode
-          ? std::u16string(u"AI Mode")
-          : base::UTF8ToUTF16(site_search_engine_name_.empty()
-                                  ? "Site Search"
-                                  : site_search_engine_name_);
+  const bool is_commands_mode = mode_ == CommandOverlayMode::kCommandsOnly;
+  std::u16string label_text;
+  if (is_ai_mode) {
+    label_text = std::u16string(u"AI Mode");
+  } else if (is_commands_mode) {
+    label_text = std::u16string(u"Commands");
+  } else {
+    label_text = base::UTF8ToUTF16(site_search_engine_name_.empty()
+                                      ? "Site Search"
+                                      : site_search_engine_name_);
+  }
   mode_label_->SetText(label_text);
 
   const SkColor accent_color = cp->GetColor(
@@ -1825,6 +1942,45 @@ void MahoCommandOverlayView::UpdateModeChip() {
   mode_chip_dot_->SetBackground(views::CreateRoundedRectBackground(
       chip_dot, kModeChipDotSizeDp / 2));
   mode_label_->SetEnabledColor(accent_color);
+}
+
+void MahoCommandOverlayView::OnSearchEngineBadgePressed() {
+  if (picker_widget_) {
+    picker_widget_->Close();
+    return;
+  }
+  picker_widget_ = MahoCommandSearchEnginePickerView::Show(
+      trailing_accessory_,
+      base::BindRepeating(&MahoCommandOverlayView::OnSearchEngineSelected,
+                          weak_factory_.GetWeakPtr()),
+      model_.get());
+  if (picker_widget_) {
+    picker_observation_.Observe(picker_widget_);
+  }
+}
+
+void MahoCommandOverlayView::OnSearchEngineSelected(const std::string& engine_id) {
+  base::DictValue event;
+  event.Set("type", "SetDefaultSearchEngine");
+  event.Set("id", engine_id);
+  std::string event_json;
+  base::JSONWriter::Write(event, &event_json);
+  char* result = maho_core_handle_event(maho::GetCore(), event_json.c_str());
+  if (result) {
+    maho_string_free(result);
+  }
+
+  // Refresh current results so the kSearch row reflects the new engine name.
+  if (model_) {
+    model_->RefetchCurrentQuery();
+  }
+}
+
+void MahoCommandOverlayView::OnWidgetDestroying(views::Widget* widget) {
+  if (widget == picker_widget_) {
+    picker_observation_.Reset();
+    picker_widget_ = nullptr;
+  }
 }
 
 }  // namespace maho

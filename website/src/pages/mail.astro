@@ -1,0 +1,14 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Nav from '../components/Nav.astro';
+import LandingPage from '../components/LandingPage';
+import Footer from '../components/Footer.astro';
+---
+
+<BaseLayout title="Maho Mail — One client. Three interfaces." description="Desktop app, CLI, and MCP server in one email client. Built for developers and AI agents.">
+  <main class="min-h-screen bg-background text-foreground">
+    <Nav activeProduct="mail" />
+    <LandingPage product="mail" />
+    <Footer />
+  </main>
+</BaseLayout>

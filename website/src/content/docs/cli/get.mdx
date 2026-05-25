@@ -1,0 +1,37 @@
+---
+title: maho get
+description: Get full email detail
+---
+
+Retrieve the full content of a specific email, including body, headers, and attachment metadata.
+
+## Usage
+
+```bash
+maho get <email_id> [flags]
+```
+
+## Arguments
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `email_id` | string | Email ID |
+
+## Flags
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Output as JSON |
+
+## Examples
+
+```bash
+# Display email content
+maho get em1
+
+# Get as JSON and pipe to an LLM
+maho get em1 --json | llm 'summarize this email'
+
+# Extract specific fields
+maho get em1 --json | jq '{subject: .subject, from: .from, date: .date}'
+```

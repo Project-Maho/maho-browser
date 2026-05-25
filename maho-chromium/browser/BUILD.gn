@@ -64,7 +64,7 @@ source_set("maho_ai_runtime_adapter") {
     ":maho_ai_runtime_adapter_interface",
     ":maho_browser_ai_tools",
     ":maho_opencode_acp_adapter",
-    "//chrome/browser/ui/tabs:tab_strip",
+    "//chrome/browser:browser_public_dependencies",
     "//content/public/browser",
     "//maho/browser/ui/webui/maho_ai:mojo_bindings",
     "//net",
@@ -383,6 +383,7 @@ source_set("maho_browser_main_extra_parts") {
   ]
   deps = [
     ":maho_core_holder",
+    ":maho_tab_registry",
     ":maho_theme_support",
     "//base",
     "//chrome/browser:main_extra_parts",
@@ -427,6 +428,28 @@ source_set("maho_tab_id_helper") {
   public_deps = [
     "//base",
     "//content/public/browser",
+  ]
+}
+
+source_set("maho_tab_registry") {
+  sources = [
+    "maho_tab_registry.cc",
+    "maho_tab_registry.h",
+  ]
+  deps = [
+    ":maho_core_holder",
+    ":maho_space_profile_bridge",
+    ":maho_tab_id_helper",
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/tab_list:tab_list",
+    "//chrome/browser/ui/browser_window:browser_window",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//chrome/browser/ui/tabs:tab_strip_model_observer",
+    "//content/public/browser",
+    "//maho/third_party/maho:maho_bridge",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//url",
   ]
 }
 

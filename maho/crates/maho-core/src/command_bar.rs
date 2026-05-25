@@ -379,8 +379,8 @@ impl CommandBarEngine {
                 suggestion: SuggestionViewModel {
                     kind: SuggestionType::Search,
                     key: format!("search:{}", query),
-                    title: format!("Search {} for \"{}\"", engine_name, query),
-                    subtitle: Some("Search".to_string()),
+                    title: format!("{} — Search with {}", query, engine_name),
+                    subtitle: None,
                     execution_payload: Some(search_url),
                     icon: None,
                     relevance_score: 1.5,

@@ -1,0 +1,28 @@
+---
+title: search_emails
+description: Full-text search across emails using FTS5 syntax
+---
+
+Full-text search across emails using SQLite FTS5 syntax.
+
+## Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `query` | string | Yes | — | Search query (FTS5 syntax) |
+| `account_id` | string | No | — | Filter by account ID |
+| `folder_id` | string | No | — | Filter by folder ID |
+| `limit` | integer | No | 20 | Maximum results |
+
+## Example
+
+```json
+{
+  "tool": "search_emails",
+  "arguments": {
+    "query": "project update",
+    "account_id": "acc1",
+    "limit": 10
+  }
+}
+```

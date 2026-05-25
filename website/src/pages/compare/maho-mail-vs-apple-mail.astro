@@ -1,0 +1,304 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Nav from '../../components/Nav.astro';
+import Footer from '../../components/Footer.astro';
+
+const title = "Maho Mail vs Apple Mail: Which Email Client Is Better in 2026?";
+const description = "Comparing Maho Mail to Apple Mail. The default macOS email client vs a programmable email client with CLI, MCP, and AI.";
+
+const faqs = [
+  {
+    q: "Why would I switch from Apple Mail?",
+    a: "Apple Mail works well for basic email on macOS and iOS. But it has no CLI, no API for automation, and no AI features. If you want to script your inbox, connect AI agents, or pipe email data to other tools, Apple Mail has no path for that. Maho Mail gives you programmatic access alongside a desktop GUI."
+  },
+  {
+    q: "Does Maho Mail sync with iCloud?",
+    a: "Maho Mail works with any IMAP account, including iCloud Mail. You can use your iCloud email address with Maho Mail. However, Maho does not integrate with iCloud-specific features like iCloud Drive, Contacts, or Calendar the way Apple Mail does."
+  },
+  {
+    q: "Is Maho Mail available on iPhone and iPad?",
+    a: "No. Maho Mail is currently a desktop application for macOS. Apple Mail's deep integration with iOS and iPadOS is a significant advantage if you need seamless mobile email. Maho focuses on the desktop and terminal experience."
+  },
+  {
+    q: "Is Maho Mail free like Apple Mail?",
+    a: "Yes. Both Maho Mail and Apple Mail are free to use. Apple Mail comes pre-installed on macOS, while Maho Mail needs to be downloaded separately. Maho Mail is also open source, which Apple Mail is not."
+  },
+  {
+    q: "Can Apple Mail work with AI tools?",
+    a: "Apple has added some AI features through Apple Intelligence (smart replies, summaries), but these are limited to Apple's own models and are not programmable. Maho Mail lets you choose your AI provider — OpenAI, Anthropic, or Ollama — and exposes email to AI agents through an MCP server."
+  },
+];
+
+const schema = {
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Article",
+      "headline": title,
+      "description": description,
+      "datePublished": "2026-04-12",
+      "dateModified": "2026-04-12",
+      "author": { "@type": "Organization", "name": "Maho", "url": "https://maho.app" },
+      "publisher": { "@type": "Organization", "name": "Maho", "url": "https://maho.app" },
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        { "@type": "ListItem", "position": 1, "name": "Home", "item": "https://maho.app" },
+        { "@type": "ListItem", "position": 2, "name": "Compare", "item": "https://maho.app/compare" },
+        { "@type": "ListItem", "position": 3, "name": "Maho Mail vs Apple Mail" },
+      ],
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": faqs.map(f => ({
+        "@type": "Question",
+        "name": f.q,
+        "acceptedAnswer": { "@type": "Answer", "text": f.a },
+      })),
+    },
+  ],
+};
+---
+
+<BaseLayout title={title} description={description}>
+  <script is:inline type="application/ld+json" set:html={JSON.stringify(schema)} />
+  <Nav />
+  <main class="min-h-screen bg-background text-foreground">
+
+    <section class="relative flex flex-col justify-center px-6 pt-32 pb-24">
+      <div class="max-w-6xl mx-auto">
+        <nav aria-label="Breadcrumb" class="text-sm text-muted-foreground mb-8">
+          <a href="/" class="hover:text-foreground transition-colors">Home</a>
+          <span class="mx-2">/</span>
+          <a href="/compare" class="hover:text-foreground transition-colors">Compare</a>
+          <span class="mx-2">/</span>
+          <span class="text-foreground">vs Apple Mail</span>
+        </nav>
+        <h1 class="heading-serif text-4xl sm:text-5xl lg:text-6xl leading-[1.1] mb-6">
+          Maho Mail vs Apple Mail
+        </h1>
+        <p class="text-lg text-muted-foreground max-w-2xl leading-relaxed">
+          The default vs the deliberate choice. What you gain when you move beyond the pre-installed option.
+        </p>
+      </div>
+    </section>
+
+    <section class="py-24 px-6 border-t border-border">
+      <div class="max-w-6xl mx-auto">
+        <div class="max-w-3xl">
+          <span class="inline-block border border-border text-muted-foreground text-xs px-3 py-1 rounded-full mb-6">Quick Verdict</span>
+          <p class="text-lg text-muted-foreground leading-relaxed">
+            <strong class="text-foreground">Choose Apple Mail</strong> if you want zero-setup email that syncs seamlessly across iPhone, iPad, and Mac with deep iCloud integration. <strong class="text-foreground">Choose Maho Mail</strong> if you want programmatic access to your inbox through a CLI and MCP server, with AI features and open-source transparency.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="py-24 px-6 border-t border-border">
+      <div class="max-w-6xl mx-auto">
+        <span class="inline-block border border-border text-muted-foreground text-xs px-3 py-1 rounded-full mb-6">At a Glance</span>
+        <h2 class="heading-serif text-3xl sm:text-4xl mb-10">Side-by-side comparison</h2>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-border">
+                <th class="text-left py-3 pr-6 text-muted-foreground font-medium">Feature</th>
+                <th class="text-left py-3 px-6 text-foreground font-medium">Maho Mail</th>
+                <th class="text-left py-3 pl-6 text-muted-foreground font-medium">Apple Mail</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-border">
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">Desktop GUI</td>
+                <td class="py-3 px-6 text-foreground">Yes — minimal, keyboard-driven</td>
+                <td class="py-3 pl-6 text-muted-foreground">Yes — native macOS app</td>
+              </tr>
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">CLI</td>
+                <td class="py-3 px-6 text-foreground">Yes — full email CLI with JSON output</td>
+                <td class="py-3 pl-6 text-muted-foreground">No</td>
+              </tr>
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">MCP Server</td>
+                <td class="py-3 px-6 text-foreground">Yes — AI agents connect via stdio</td>
+                <td class="py-3 pl-6 text-muted-foreground">No</td>
+              </tr>
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">AI Features</td>
+                <td class="py-3 px-6 text-foreground">Yes — bring your own provider</td>
+                <td class="py-3 pl-6 text-muted-foreground">Limited — Apple Intelligence only</td>
+              </tr>
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">Mobile App</td>
+                <td class="py-3 px-6 text-foreground">No — desktop only</td>
+                <td class="py-3 pl-6 text-muted-foreground">Yes — iPhone, iPad, Apple Watch</td>
+              </tr>
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">iCloud Integration</td>
+                <td class="py-3 px-6 text-foreground">IMAP only — no deep OS integration</td>
+                <td class="py-3 pl-6 text-muted-foreground">Full — Contacts, Calendar, iCloud Drive</td>
+              </tr>
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">Open Source</td>
+                <td class="py-3 px-6 text-foreground">Yes</td>
+                <td class="py-3 pl-6 text-muted-foreground">No — proprietary</td>
+              </tr>
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">Price</td>
+                <td class="py-3 px-6 text-foreground">Free</td>
+                <td class="py-3 pl-6 text-muted-foreground">Free (included with macOS)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="py-24 px-6 border-t border-border">
+      <div class="max-w-6xl mx-auto">
+        <span class="inline-block border border-border text-muted-foreground text-xs px-3 py-1 rounded-full mb-6">Deep Dive</span>
+        <h2 class="heading-serif text-3xl sm:text-4xl mb-10">Category comparison</h2>
+
+        <div class="space-y-16 max-w-3xl">
+          <div>
+            <h3 class="text-xl font-medium text-foreground mb-4">Setup & Ecosystem</h3>
+            <p class="text-muted-foreground leading-relaxed mb-4">
+              Apple Mail's biggest advantage is that it is already there. Open your Mac, sign into iCloud, and your email is ready. It syncs with your iPhone, iPad, and Apple Watch automatically. Contacts auto-complete from your address book. Calendar invitations are handled natively. For anyone in the Apple ecosystem, the integration is seamless.
+            </p>
+            <p class="text-muted-foreground leading-relaxed">
+              Maho Mail requires installation and IMAP account configuration. It does not integrate with iCloud Contacts, Calendar, or other Apple services beyond basic IMAP email. The tradeoff is intentional — Maho focuses on email as a programmable data source rather than an OS-level service.
+            </p>
+          </div>
+
+          <div>
+            <h3 class="text-xl font-medium text-foreground mb-4">Programmability</h3>
+            <p class="text-muted-foreground leading-relaxed mb-4">
+              Apple Mail is a closed system. You can set up mail rules within the app, and macOS offers some AppleScript/Shortcuts integration, but there is no CLI, no structured API, and no way for external tools to interact with your inbox programmatically.
+            </p>
+            <p class="text-muted-foreground leading-relaxed">
+              Maho Mail treats your inbox as a programmable resource. The CLI lets you search, read, and compose email from the terminal with JSON output. The MCP server exposes your inbox to AI agents. You can build automations like <code class="text-foreground text-sm bg-card px-1.5 py-0.5 rounded">maho search --unread --json | jq '.[] | .subject'</code> or let Claude handle your email triage. This is the fundamental difference between the two clients.
+            </p>
+          </div>
+
+          <div>
+            <h3 class="text-xl font-medium text-foreground mb-4">AI Capabilities</h3>
+            <p class="text-muted-foreground leading-relaxed mb-4">
+              Apple has introduced AI features through Apple Intelligence — smart reply suggestions, email summaries, and writing tools. These are tied to Apple's own models and run on-device or through Apple's Private Cloud Compute. You cannot choose a different provider or customize the behavior.
+            </p>
+            <p class="text-muted-foreground leading-relaxed">
+              Maho Mail lets you pick your AI provider — OpenAI, Anthropic, or Ollama for fully local inference. Beyond basic summarization, you can pipe email through any LLM, connect AI agents via MCP, and build custom classification pipelines. The AI is a tool you control, not a feature Apple decides to ship.
+            </p>
+          </div>
+
+          <div>
+            <h3 class="text-xl font-medium text-foreground mb-4">Privacy & Transparency</h3>
+            <p class="text-muted-foreground leading-relaxed mb-4">
+              Apple Mail benefits from Apple's privacy-focused branding, including Mail Privacy Protection that hides your IP from tracking pixels. However, the application itself is closed source, and iCloud email passes through Apple's servers.
+            </p>
+            <p class="text-muted-foreground leading-relaxed">
+              Maho Mail is open source. Every line of code is auditable. Everything stays on your machine — no cloud sync, no telemetry. If you use Ollama for AI, even your AI inference is local. For users who want verifiable privacy rather than promised privacy, open source is the difference.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="py-24 px-6 border-t border-border">
+      <div class="max-w-6xl mx-auto">
+        <div class="grid gap-12 md:grid-cols-2">
+          <div>
+            <h2 class="text-xl font-medium text-foreground mb-6">Choose Maho Mail if you...</h2>
+            <ul class="space-y-3">
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Want to script and automate your email from the terminal
+              </li>
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Need AI agents to interact with your inbox via MCP
+              </li>
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Want to choose your own AI provider
+              </li>
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Value open-source transparency
+              </li>
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Are a developer who treats email as data
+              </li>
+            </ul>
+          </div>
+          <div>
+            <h2 class="text-xl font-medium text-foreground mb-6">Choose Apple Mail if you...</h2>
+            <ul class="space-y-3">
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Want zero-setup email that works across all Apple devices
+              </li>
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Need deep iCloud, Contacts, and Calendar integration
+              </li>
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Rely on iPhone and iPad for email throughout the day
+              </li>
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Prefer a simple email experience with no configuration
+              </li>
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Do not need CLI, automation, or AI agent access
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="py-24 px-6 border-t border-border">
+      <div class="max-w-6xl mx-auto">
+        <span class="inline-block border border-border text-muted-foreground text-xs px-3 py-1 rounded-full mb-6">FAQ</span>
+        <h2 class="heading-serif text-3xl sm:text-4xl mb-10">Frequently asked questions</h2>
+        <div class="max-w-3xl space-y-4">
+          {faqs.map((faq) => (
+            <details class="group border border-border rounded-lg">
+              <summary class="flex items-center justify-between cursor-pointer px-6 py-4 text-foreground font-medium">
+                {faq.q}
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4 shrink-0 ml-4 transition-transform group-open:rotate-180"><path d="m6 9 6 6 6-6"/></svg>
+              </summary>
+              <div class="px-6 pb-4 text-muted-foreground leading-relaxed">{faq.a}</div>
+            </details>
+          ))}
+        </div>
+      </div>
+    </section>
+
+    <section class="py-24 px-6 border-t border-border">
+      <div class="max-w-6xl mx-auto text-center">
+        <h2 class="heading-serif text-4xl sm:text-5xl mb-6">
+          Ready to try Maho Mail?
+        </h2>
+        <p class="text-muted-foreground mb-8 max-w-xl mx-auto">
+          GUI for humans. CLI for developers. MCP for agents.
+        </p>
+        <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
+          <a href="/mail" class="inline-flex items-center gap-2 px-6 py-3 bg-foreground text-background rounded-md text-sm font-medium hover:opacity-90 transition-opacity">
+            Learn more about Maho Mail
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+          </a>
+          <a href="/compare" class="inline-flex items-center gap-2 px-6 py-3 border border-border rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:border-muted-foreground transition-colors">
+            See all comparisons
+          </a>
+        </div>
+      </div>
+    </section>
+
+  </main>
+  <Footer />
+</BaseLayout>

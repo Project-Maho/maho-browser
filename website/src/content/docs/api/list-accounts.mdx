@@ -1,0 +1,23 @@
+---
+title: list_accounts
+description: List all email accounts configured in Maho Mail
+---
+
+List all email accounts configured in Maho Mail.
+
+## Parameters
+
+None.
+
+## Example
+
+```json
+// Request
+{ "tool": "list_accounts" }
+
+// Response
+[
+  { "id": "acc1", "email": "alice@gmail.com", "provider": "Gmail" },
+  { "id": "acc2", "email": "bob@fastmail.com", "provider": "Fastmail" }
+]
+```

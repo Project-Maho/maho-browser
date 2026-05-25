@@ -1,0 +1,14 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Nav from '../components/Nav.astro';
+import LandingPage from '../components/LandingPage';
+import Footer from '../components/Footer.astro';
+---
+
+<BaseLayout title="Maho — Browser and Mail for modern work" description="Maho Browser and Maho Mail help you work with more focus, better tools, and private, open-source software.">
+  <main class="min-h-screen bg-background text-foreground">
+    <Nav activeProduct="browser" />
+    <LandingPage product="browser" />
+    <Footer />
+  </main>
+</BaseLayout>

@@ -1,0 +1,22 @@
+---
+title: list_folders
+description: List folders for an email account
+---
+
+List folders for an email account. If `account_id` is omitted, lists folders for all accounts.
+
+## Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `account_id` | string | No | Account ID. Use `list_accounts` to find IDs. |
+
+## Examples
+
+```json
+// List folders for a specific account
+{ "tool": "list_folders", "arguments": { "account_id": "acc1" } }
+
+// List folders for all accounts
+{ "tool": "list_folders", "arguments": {} }
+```

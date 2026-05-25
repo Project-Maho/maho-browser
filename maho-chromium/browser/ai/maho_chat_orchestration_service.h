@@ -26,6 +26,9 @@ namespace maho_ai::mojom {
 enum class ChatIntent;
 }  // namespace maho_ai::mojom
 
+struct ChatSession;
+struct MahoChatConfig;
+
 class MahoChatOrchestrationService {
  public:
   enum class RequestMode {
@@ -173,6 +176,32 @@ class MahoChatOrchestrationService {
   bool received_llm_content_ = false;
 
   base::WeakPtrFactory<MahoChatOrchestrationService> weak_factory_{this};
+
+#if defined(MAHO_RUST_AI)
+ public:
+  struct FfiUserData {
+    FfiUserData();
+    ~FfiUserData();
+    base::WeakPtr<MahoChatOrchestrationService> weak_service;
+    scoped_refptr<base::SequencedTaskRunner> task_runner;
+  };
+
+ private:
+  void OnRustToken(const std::string& token);
+  void OnRustComplete(const std::string& full_text,
+                      const std::string& tool_calls_json);
+  void OnRustError(const std::string& error);
+
+  static void OnRustTokenCallback(void* user_data, const char* token);
+  static void OnRustCompleteCallback(void* user_data,
+                                     const char* full_text,
+                                     const char* tool_calls_json);
+  static void OnRustErrorCallback(void* user_data, const char* error);
+
+  ChatSession* rust_session_ = nullptr;
+  std::unique_ptr<FfiUserData> ffi_user_data_;
+  std::shared_ptr<ConversationRoundState> active_round_state_;
+#endif
 };
 
 #endif  // MAHO_BROWSER_AI_MAHO_CHAT_ORCHESTRATION_SERVICE_H_

@@ -18,6 +18,8 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tab_ui_helper.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/favicon/favicon_service_factory.h"
+#include "components/favicon/core/favicon_service.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
@@ -548,6 +550,7 @@ void MahoSidebarFavoritesGridView::OnBoundsChanged(
 
 void MahoSidebarFavoritesGridView::Update(
     const MahoSidebarFavoritesModel& model) {
+  cancelable_task_tracker_.TryCancelAll();
   SnapshotCurrentBounds();
   const size_t old_count = favorite_count_;
 
@@ -622,6 +625,30 @@ void MahoSidebarFavoritesGridView::Update(
       if (it != live_tab_favicons.end()) {
         fav = it->second;
       }
+
+      if (fav.IsEmpty()) {
+        bool async_requested = false;
+        if (browser_) {
+          favicon::FaviconService* favicon_service =
+              FaviconServiceFactory::GetForProfile(
+                  browser_->profile(), ServiceAccessType::EXPLICIT_ACCESS);
+          if (favicon_service) {
+            favicon_service->GetFaviconImageForPageURL(
+                specs[index].url,
+                base::BindOnce(&MahoSidebarFavoritesGridView::OnFaviconLoaded,
+                               weak_factory_.GetWeakPtr(), index, specs[index].url),
+                &cancelable_task_tracker_);
+            async_requested = true;
+          }
+        }
+        if (!async_requested) {
+          fav = ui::ImageModel::FromVectorIcon(vector_icons::kGlobeIcon);
+        } else {
+          // Temporarily show globe icon while async load is in flight.
+          fav = ui::ImageModel::FromVectorIcon(vector_icons::kGlobeIcon);
+        }
+      }
+
       tile_icons_[index]->SetImage(std::move(fav));
       tile_icons_[index]->SetImageSize(
           gfx::Size(sidebar_layout::kFavoriteGlyphSizeDp,
@@ -664,6 +691,24 @@ void MahoSidebarFavoritesGridView::Update(
   if (has_reorder) {
     AnimateReorder();
   }
+}
+
+void MahoSidebarFavoritesGridView::OnFaviconLoaded(
+    size_t index,
+    const GURL& requested_url,
+    const favicon_base::FaviconImageResult& result) {
+  if (index >= tile_urls_.size() || tile_urls_[index] != requested_url) {
+    return;
+  }
+  if (!result.image.IsEmpty()) {
+    tile_icons_[index]->SetImage(ui::ImageModel::FromImage(result.image));
+  } else {
+    tile_icons_[index]->SetImage(ui::ImageModel::FromVectorIcon(
+        vector_icons::kGlobeIcon));
+  }
+  tile_icons_[index]->SetImageSize(
+      gfx::Size(sidebar_layout::kFavoriteGlyphSizeDp,
+                sidebar_layout::kFavoriteGlyphSizeDp));
 }
 
 MahoSidebarFavoritesGridView::LayoutSpec

@@ -528,3 +528,40 @@ fn closed_tab_limit_does_not_crowd_out_other_types() {
         "active tab must appear alongside closed tabs"
     );
 }
+
+#[test]
+fn search_suggestion_first_for_non_url_query() {
+    let engine = CommandBarEngine::new();
+    let ctx = empty_ctx();
+    for query in &["naver", "ㅇㅇ", "hello world"] {
+        let results = engine.search(query, None, &ctx);
+        assert!(!results.is_empty(), "results should not be empty for '{}'", query);
+        assert!(
+            matches!(results[0].kind, SuggestionType::Search),
+            "first result should be Search for '{}'; got {:?}",
+            query, results[0].kind
+        );
+    }
+}
+
+#[test]
+fn search_suggestion_title_uses_em_dash_format() {
+    let engine = CommandBarEngine::new();
+    let ctx = empty_ctx();
+    let query = "hello";
+    let results = engine.search(query, None, &ctx);
+    let search_res = results.iter().find(|r| matches!(r.kind, SuggestionType::Search)).expect("Search suggestion must exist");
+    assert_eq!(search_res.title, "hello — Search with Google");
+    assert!(search_res.subtitle.is_none());
+}
+
+#[test]
+fn search_suggestion_still_emitted_for_url_query() {
+    let engine = CommandBarEngine::new();
+    let ctx = empty_ctx();
+    let query = "naver.com";
+    let results = engine.search(query, None, &ctx);
+    let search_pos = pos_by_kind(&results, SuggestionType::Search);
+    assert!(search_pos.is_some(), "Search suggestion should be present for URL query");
+}
+

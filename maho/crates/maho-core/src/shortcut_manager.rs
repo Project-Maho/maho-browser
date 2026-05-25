@@ -215,13 +215,13 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
         "next_space",
         "Next Space",
         spaces.clone(),
-        KeyCombo::new("Right", vec![primary_modifier(), KeyModifier::Alt]),
+        KeyCombo::new("arrowright", vec![primary_modifier(), KeyModifier::Alt]),
     ));
     bindings.push(ShortcutBinding::new(
         "prev_space",
         "Previous Space",
         spaces.clone(),
-        KeyCombo::new("Left", vec![primary_modifier(), KeyModifier::Alt]),
+        KeyCombo::new("arrowleft", vec![primary_modifier(), KeyModifier::Alt]),
     ));
     bindings.push(ShortcutBinding::new(
         "new_space",

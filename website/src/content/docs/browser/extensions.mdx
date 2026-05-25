@@ -1,0 +1,279 @@
+---
+title: Extensions
+description: Manifest V3 Chrome extension support in Maho
+sidebar:
+  order: 4
+---
+
+Maho Browser supports Chrome-compatible extensions that use the Manifest V3 standard. In most cases, extensions built for Chrome can run in Maho with minimal or no modification, as long as they depend only on the APIs Maho exposes.
+
+## Overview
+
+Extensions are loaded from unpacked directories. Maho does not use Chrome Web Store integration. Instead, you point the browser at a local extension directory that contains a valid `manifest.json` file.
+
+When Maho loads an extension, it validates the manifest and reports errors if the manifest does not meet the supported schema.
+
+## Manifest V3 reference
+
+Maho supports the following Manifest V3 fields.
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `manifest_version` | Yes | Must be `3` |
+| `name` | Yes | String |
+| `version` | Yes | String in semver format |
+| `description` | No | String |
+| `icons` | No | Icon map, commonly `16`, `48`, and `128` |
+| `action` | No | Browser toolbar button configuration |
+| `background` | No | Service worker configuration |
+| `content_scripts` | No | Script and style injection rules |
+| `permissions` | No | Extension permissions |
+| `host_permissions` | No | URL pattern permissions |
+| `web_accessible_resources` | No | Resources exposed to pages |
+| `content_security_policy` | No | Extension page CSP |
+| `options_page` | No | Extension options page |
+| `options_ui` | No | Options UI configuration |
+| `devtools_page` | No | DevTools integration page |
+
+### Required fields
+
+#### `manifest_version`
+
+Must be set to `3`. Maho only supports Manifest V3 extensions.
+
+#### `name`
+
+The extension name. This field is required and must be a string.
+
+#### `version`
+
+The extension version in semver format. Maho expects a standard version string.
+
+### Optional fields
+
+#### `description`
+
+A short human-readable summary of the extension.
+
+#### `icons`
+
+Icon paths keyed by size. Common sizes include:
+
+- `16`
+- `48`
+- `128`
+
+#### `action`
+
+Defines the browser toolbar button. Supported properties include:
+
+- `default_popup`
+- `default_icon`
+- `default_title`
+
+#### `background`
+
+Declares the background service worker. Maho supports:
+
+- `service_worker`
+- `type: "module"`
+
+#### `content_scripts`
+
+Describes scripts and styles injected into matching pages.
+
+Each entry may include:
+
+- `matches`
+- `js`
+- `css`
+- `run_at`
+- `all_frames`
+
+#### `permissions`
+
+Declares extension permissions such as:
+
+- `storage`
+- `tabs`
+- `activeTab`
+- `scripting`
+
+#### `host_permissions`
+
+Declares URL patterns the extension can access, such as:
+
+- `*://*.example.com/*`
+
+#### `web_accessible_resources`
+
+Lists resources that extension pages or content scripts expose to matching web pages.
+
+#### `content_security_policy`
+
+Defines the extension page content security policy. Maho supports the `extension_pages` property.
+
+#### `options_page` and `options_ui`
+
+Use these fields to provide settings pages.
+
+- `options_page` points to a page path
+- `options_ui` supports `page` and `open_in_tab`
+
+#### `devtools_page`
+
+Registers a DevTools page for the extension.
+
+## Installation
+
+Extensions are installed from unpacked directories only.
+
+### Install process
+
+1. Locate the extension directory
+2. Ensure the directory contains `manifest.json`
+3. Load the directory in Maho
+4. Review validation results if Maho reports manifest errors
+
+### Important constraint
+
+Maho does not support installing extensions from the Chrome Web Store.
+
+## Lifecycle
+
+Maho follows the normal extension lifecycle for unpacked MV3 extensions.
+
+### Install
+
+During install, Maho:
+
+- Parses the manifest
+- Validates supported fields
+- Loads extension resources
+- Starts the background service worker
+
+### Enable
+
+When enabled, Maho:
+
+- Injects content scripts into matching pages
+- Shows the extension action button in the toolbar
+- Makes extension APIs available to the extent they are bridged by Maho
+
+### Disable
+
+When disabled, Maho:
+
+- Removes content scripts from active use
+- Hides the action button
+- Stops the service worker
+
+### Uninstall
+
+When uninstalled, Maho:
+
+- Clears extension data
+- Wipes extension storage
+- Removes all installed resources for that extension
+
+## Content script matching
+
+Content scripts use Chrome-style matching rules.
+
+### Match patterns
+
+The `matches` field supports standard Chrome match patterns, including:
+
+- `<all_urls>`
+- `*://*.example.com/*`
+
+### Glob patterns
+
+Maho also supports glob patterns for more fine-grained URL matching where applicable.
+
+### Run time
+
+The `run_at` field supports the standard MV3 injection times:
+
+- `document_start`
+- `document_end`
+- `document_idle`
+
+### Frame targeting
+
+Use `all_frames` to control whether scripts inject into subframes.
+
+- `true` injects into iframes as well as the top-level frame
+- `false` injects only into the top-level frame
+
+## Storage API
+
+Maho implements `chrome.storage.local` for extension storage.
+
+### Supported methods
+
+| Method | Behavior |
+| --- | --- |
+| `get(keys)` | Retrieve stored values |
+| `set(items)` | Store key-value pairs |
+| `remove(keys)` | Delete specific keys |
+| `clear()` | Wipe all storage for the extension |
+
+### Change events
+
+Storage change events fire when values change. Change records include `oldValue` and `newValue`.
+
+This lets extensions react to local state updates without polling.
+
+## Extension bridge
+
+Maho provides bridge APIs for communication between extension scripts and the browser.
+
+### Supported bridge behavior
+
+- `chrome.tabs.query()` for querying open tabs
+- `chrome.runtime.sendMessage()` and `onMessage` for extension messaging
+- Tab management APIs for creating, updating, and removing tabs
+
+### Scope limits
+
+Only APIs that Maho explicitly bridges are available. Not every Chrome API is exposed.
+
+If an extension depends on an unsupported API, it may install but fail when it tries to call that API.
+
+## Compatibility guidance
+
+For best results, keep extensions within the supported MV3 surface area:
+
+- Use `manifest_version: 3`
+- Prefer APIs Maho explicitly supports
+- Keep background logic in a service worker
+- Declare all required permissions and host permissions up front
+
+## Troubleshooting
+
+### Manifest validation errors
+
+If Maho rejects an extension at load time, check the manifest for:
+
+- Missing required fields
+- Invalid `manifest_version`
+- Version strings that do not follow semver format
+- Unsupported field shapes or values
+
+### Content scripts not running
+
+Verify:
+
+- The `matches` patterns are correct
+- The page URL is covered by `host_permissions` where needed
+- `run_at` is set appropriately
+- `all_frames` matches the intended injection target
+
+### Storage behavior
+
+If extension state does not persist as expected, confirm that the extension is using `chrome.storage.local` and not relying on an unavailable storage API.
+
+## Summary
+
+Maho's extension support is centered on unpacked Manifest V3 extensions, Chrome-style content script matching, local storage, and a limited bridge of browser APIs. Extensions that stay within that supported surface can run in Maho with little friction.

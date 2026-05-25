@@ -1,6 +1,8 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/ui/views/command/maho_command_overlay_view.h"
+#include "base/test/scoped_feature_list.h"
+#include "maho/browser/maho_features.h"
 
 #include <algorithm>
 #include <memory>
@@ -135,8 +137,8 @@ TEST_F(MahoCommandOverlayViewTest,
   auto* view = CreateView(CommandOverlayMode::kCurrentTab, url, true);
 
   const gfx::Range sel = view->textfield()->GetSelectedRange();
-  EXPECT_EQ(0u, sel.start());
-  EXPECT_EQ(static_cast<uint32_t>(url.size()), sel.end());
+  EXPECT_EQ(0u, sel.GetMin());
+  EXPECT_EQ(static_cast<uint32_t>(url.size()), sel.GetMax());
 }
 
 TEST_F(MahoCommandOverlayViewTest,
@@ -722,12 +724,10 @@ TEST_F(MahoCommandOverlayViewTest,
       MahoCommandOverlayView::BuildCurrentTabSeedResultsFromHistoryForTesting(
           "https://current.test/", "Current Page", history_entries);
 
-  ASSERT_EQ(5u, seeds.size());
+  ASSERT_EQ(3u, seeds.size());
   EXPECT_EQ("https://current.test/", seeds[0].execution_payload);
   EXPECT_EQ("https://prev1.test/", seeds[1].execution_payload);
   EXPECT_EQ("https://dup.test/", seeds[2].execution_payload);
-  EXPECT_EQ("https://prev2.test/", seeds[3].execution_payload);
-  EXPECT_EQ("https://prev3.test/", seeds[4].execution_payload);
 }
 
 TEST_F(MahoCommandOverlayViewTest,
@@ -1164,6 +1164,60 @@ TEST_F(MahoCommandOverlayViewTest,
   auto children = view->GetResultsContainerForTesting()->children();
   EXPECT_GE(children.size(), 1u)
       << "Hint label must be present after seeded clear";
+}
+
+TEST_F(MahoCommandOverlayViewTest,
+       SeededCurrentTabRows_DefaultCount) {
+  EXPECT_EQ(3u, SeededVisibleResultCap())
+      << "The default visible seeded cap must be reduced to 3";
+}
+
+TEST_F(MahoCommandOverlayViewTest,
+       SeededCurrentTabRows_FeatureFlagDisabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      features::kMahoCommandPaletteSeededHistory);
+
+  const std::string url = "https://example.com/page";
+  auto* view = CreateView(CommandOverlayMode::kCurrentTab, url, true);
+
+  EXPECT_FALSE(view->IsSeededStateForTesting())
+      << "Seeded state must be completely disabled when the feature flag is "
+         "turned off";
+  EXPECT_TRUE(view->GetSeededResultsForTesting().empty());
+}
+
+TEST_F(MahoCommandOverlayViewTest,
+       CommandsOnlyMode_EnterExitLifecycle) {
+  auto* view = CreateView(CommandOverlayMode::kSearch);
+
+  // Type '>' to enter commands-only mode.
+  view->textfield()->SetText(u">");
+  view->ContentsChanged(view->textfield(), u">");
+
+  EXPECT_EQ(CommandOverlayMode::kCommandsOnly, view->CurrentModeForTesting())
+      << "Typing '>' must transition the palette into commands-only mode";
+  EXPECT_TRUE(view->IsModeChipVisibleForTesting())
+      << "A mode chip must be visible in commands-only mode";
+
+  // Escape to exit commands-only mode.
+  SendKey(view, ui::VKEY_ESCAPE);
+  EXPECT_EQ(CommandOverlayMode::kSearch, view->CurrentModeForTesting())
+      << "Escape in commands-only mode must exit back to origin mode";
+  EXPECT_FALSE(view->IsModeChipVisibleForTesting());
+
+  // Enter again.
+  view->textfield()->SetText(u">");
+  view->ContentsChanged(view->textfield(), u">");
+  ASSERT_EQ(CommandOverlayMode::kCommandsOnly, view->CurrentModeForTesting());
+
+  // Backspace with empty text exits commands-only mode.
+  ASSERT_TRUE(view->textfield()->GetText().empty());
+  SendKey(view, ui::VKEY_BACK);
+  EXPECT_EQ(CommandOverlayMode::kSearch, view->CurrentModeForTesting())
+      << "Backspace with empty text in commands-only mode must exit back to "
+         "origin mode";
+}
 }
 
 }  // namespace

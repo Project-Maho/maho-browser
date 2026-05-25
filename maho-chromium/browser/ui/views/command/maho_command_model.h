@@ -16,6 +16,8 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
+#include "base/containers/flat_map.h"
+#include "ui/gfx/image/image.h"
 
 class Browser;
 
@@ -31,6 +33,7 @@ enum class CommandOverlayMode {
   kNewTab,       // Cmd+T: "Search in new tab..."
   kSiteSearch,   // @prefix + Tab: site-specific search.
   kAI,           // "ai" + Tab: AI chat mode.
+  kCommandsOnly, // ">" command mode.
 };
 
 enum class CommandSuggestionType {
@@ -124,9 +127,14 @@ class MahoCommandModel {
   void set_results(std::vector<CommandSuggestion> results) {
     results_ = std::move(results);
   }
+  Browser* browser() const { return browser_; }
+  void RefetchCurrentQuery();
 
   static CommandSuggestionType ParseType(const std::string& kind);
-  static void CapResults(std::vector<CommandSuggestion>& results);
+  static void CapResults(std::vector<CommandSuggestion>& results, CommandOverlayMode mode);
+  static void ApplyQuickActionGate(std::vector<CommandSuggestion>& results,
+                                   CommandOverlayMode mode,
+                                   const std::string& query);
   static base::Value BuildTabEntryDict(const std::string& stable_id,
                                        const std::string& browser_session_id,
                                        const std::string& tab_session_id,
@@ -154,6 +162,10 @@ class MahoCommandModel {
                                   const favicon_base::LargeIconResult& result);
   void RequestTabFavicons();
   void HydrateSiteSearchEngines();
+  void RequestSearchEngineFavicons();
+  void OnSearchEngineLargeIconLoaded(uint32_t search_generation,
+                                     std::string engine_id,
+                                     const favicon_base::LargeIconResult& result);
 
   raw_ptr<Browser> browser_;
   std::string query_;
@@ -167,6 +179,8 @@ class MahoCommandModel {
   base::CancelableTaskTracker favicon_task_tracker_;
   uint32_t search_generation_ = 0;
   base::TimeTicks search_start_ticks_;
+
+  base::flat_map<std::string, gfx::Image> engine_favicon_cache_;
 
   base::WeakPtrFactory<MahoCommandModel> weak_factory_{this};
 };

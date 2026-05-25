@@ -10,10 +10,11 @@ import {
   SessionStatus,
   ToolCallInfo,
   ToolResultInfo,
+  ViewMode,
 } from './maho_ai.mojom-webui.js';
 
 export type ConnectionState = RuntimeConnectionState;
-export {RuntimeEventKind};
+export {RuntimeEventKind, ViewMode};
 export type SessionRecord = SessionInfo;
 export type RuntimeEventRecord = RuntimeEvent;
 export type SessionStatusValue = SessionStatus;

@@ -36,7 +36,6 @@ await build({
   target: ['chrome120'],
   external: [
     './maho_ai.mojom-webui.js',
-    '../maho_ai.mojom-webui.js',
     'chrome://resources/js/*',
   ],
 });

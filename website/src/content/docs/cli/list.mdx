@@ -1,0 +1,40 @@
+---
+title: maho list
+description: List emails in a folder
+---
+
+List emails in a specific folder, sorted by date descending.
+
+## Usage
+
+```bash
+maho list <account_id> <folder_id> [flags]
+```
+
+## Arguments
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `account_id` | string | Account ID |
+| `folder_id` | string | Folder ID (use `maho folders` to find) |
+
+## Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--limit` | i64 | 20 | Maximum number of emails to return |
+| `--offset` | i64 | 0 | Offset for pagination |
+| `--json` | — | — | Output as JSON |
+
+## Examples
+
+```bash
+# List latest 20 emails in INBOX
+maho list acc1 fold1
+
+# List 50 emails with offset, as JSON
+maho list acc1 fold1 --limit 50 --offset 0 --json
+
+# Pipe to jq for processing
+maho list acc1 fold1 --json | jq '.[].subject'
+```

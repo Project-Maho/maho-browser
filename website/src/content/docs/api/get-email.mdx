@@ -1,0 +1,21 @@
+---
+title: get_email
+description: Get full email content including body, headers, and attachment metadata
+---
+
+Get full email content including body, headers, and attachment metadata.
+
+## Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `email_id` | string | Yes | Email ID to retrieve |
+
+## Example
+
+```json
+{
+  "tool": "get_email",
+  "arguments": { "email_id": "em1" }
+}
+```

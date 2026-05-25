@@ -14,10 +14,12 @@
 #include "base/functional/bind.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/i18n/case_conversion.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_downloads_data.h"
 #include "ui/accessibility/ax_enums.mojom.h"
+#include "ui/base/models/image_model.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/insets.h"
@@ -32,6 +34,10 @@
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/style/typography.h"
+#include "ui/views/controls/textfield/textfield.h"
+#include "components/vector_icons/vector_icons.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
+#include "maho/browser/ui/theme/maho_color_id.h"
 
 namespace maho {
 namespace {
@@ -42,12 +48,7 @@ constexpr int kRowSpacingDp = 8;
 constexpr int kRowPaddingDp = 10;
 constexpr int kSectionSpacingDp = 10;
 
-enum class MediaKind {
-  kAudio,
-  kVideo,
-  kImage,
-  kOther,
-};
+// MediaKind moved to header
 
 std::u16string MediaKindLabel(MediaKind kind) {
   switch (kind) {
@@ -389,6 +390,70 @@ void MahoSidebarMediaView::BuildUi() {
   header->SetAutoColorReadabilityEnabled(false);
   header->SetHorizontalAlignment(gfx::ALIGN_LEFT);
 
+  // 1. Search textfield shell
+  auto* search_shell = surface->AddChildView(std::make_unique<views::View>());
+  search_shell->SetPreferredSize(gfx::Size(0, 36));
+  search_shell->SetBackground(views::CreateRoundedRectBackground(
+      kMahoColorLibrarySearchPillBackground, 8));
+  search_shell->SetBorder(views::CreateRoundedRectBorder(
+      1, 8, kMahoColorLibraryGlyphBorder));
+  auto* search_layout = search_shell->SetLayoutManager(
+      std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kHorizontal,
+          gfx::Insets::VH(0, 12),
+          8));
+  search_layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kCenter);
+
+  auto* search_icon =
+      search_shell->AddChildView(std::make_unique<views::ImageView>());
+  search_icon->GetViewAccessibility().SetIsIgnored(true);
+  search_icon->SetPreferredSize(gfx::Size(14, 14));
+  search_icon->SetImage(ui::ImageModel::FromVectorIcon(
+      vector_icons::kSearchIcon, kMahoColorSecondaryText, 14));
+
+  auto search_field = std::make_unique<views::Textfield>();
+  search_field_ = search_shell->AddChildView(std::move(search_field));
+  search_field_->SetPlaceholderText(u"Search media...");
+  search_field_->set_controller(this);
+  search_field_->SetPreferredSize(gfx::Size(0, 36));
+  search_field_->SetBackgroundColor(SK_ColorTRANSPARENT);
+  search_field_->SetBorder(nullptr);
+  search_field_->SetTextColor(kMahoColorPrimaryText);
+  search_field_->SetAccessibleName(u"Search Media");
+  search_layout->SetFlexForView(search_field_, 1);
+  search_shell->GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
+  search_shell->GetViewAccessibility().SetName(u"Search media header");
+
+  // 2. Filter chips container
+  filters_container_ = surface->AddChildView(std::make_unique<views::View>());
+  auto* filters_layout = filters_container_->SetLayoutManager(
+      std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kHorizontal,
+          gfx::Insets::VH(0, 0),
+          6));
+  filters_layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kCenter);
+
+  auto make_filter_chip = [this](std::u16string label, std::optional<MediaKind> kind) {
+    auto* chip = filters_container_->AddChildView(
+        std::make_unique<views::MdTextButton>(
+            base::BindRepeating(&MahoSidebarMediaView::SetActiveFilter,
+                                weak_factory_.GetWeakPtr(), kind),
+            std::move(label)));
+    chip->SetStyle(ui::ButtonStyle::kText);
+    chip->SetCornerRadius(14);
+    return chip;
+  };
+
+  make_filter_chip(u"All", std::nullopt);
+  make_filter_chip(u"Audio", MediaKind::kAudio);
+  make_filter_chip(u"Video", MediaKind::kVideo);
+  make_filter_chip(u"Images", MediaKind::kImage);
+
+  // Initialize filter styles
+  SetActiveFilter(std::nullopt);
+
   scroll_view_ = surface->AddChildView(std::make_unique<views::ScrollView>());
   scroll_view_->SetBackgroundColor(std::nullopt);
   scroll_view_->SetHorizontalScrollBarMode(
@@ -453,11 +518,36 @@ views::Button* MahoSidebarMediaView::media_action_button_for_item_id_for_testing
 }
 
 void MahoSidebarMediaView::ReloadMedia() {
-  std::vector<DownloadItem> media_items;
+  cached_media_items_.clear();
   for (const auto& item : ParseDownloads()) {
     if (IsMediaLikeDownload(item)) {
-      media_items.push_back(item);
+      cached_media_items_.push_back(item);
     }
+  }
+
+  std::vector<DownloadItem> media_items;
+  std::u16string query;
+  if (search_field_) {
+    query = base::i18n::FoldCase(search_field_->GetText());
+  }
+
+  for (const auto& item : cached_media_items_) {
+    // 1. MediaKind filtering
+    if (active_filter_.has_value()) {
+      if (MediaKindForItem(item) != *active_filter_) {
+        continue;
+      }
+    }
+    // 2. Search query filtering
+    if (!query.empty()) {
+      std::u16string name = base::i18n::FoldCase(item.filename);
+      std::u16string url = base::i18n::FoldCase(base::UTF8ToUTF16(item.url));
+      if (name.find(query) == std::u16string::npos &&
+          url.find(query) == std::u16string::npos) {
+        continue;
+      }
+    }
+    media_items.push_back(item);
   }
 
   list_container_->RemoveAllChildViews();
@@ -504,12 +594,11 @@ void MahoSidebarMediaView::ReloadMedia() {
 
 void MahoSidebarMediaView::HandleMediaAction(const std::string& item_id,
                                              MediaActionKind action) {
-  const std::vector<DownloadItem> media_items = ParseDownloads();
-  const auto it = std::find_if(media_items.begin(), media_items.end(),
+  const auto it = std::find_if(cached_media_items_.begin(), cached_media_items_.end(),
                                [&](const DownloadItem& item) {
                                  return item.id == item_id;
                                });
-  if (it == media_items.end() || !HasRealFilePath(*it)) {
+  if (it == cached_media_items_.end() || !HasRealFilePath(*it)) {
     return;
   }
 
@@ -524,6 +613,41 @@ void MahoSidebarMediaView::HandleMediaAction(const std::string& item_id,
   } else if (action == MediaActionKind::kReveal) {
     platform_util::ShowItemInFolder(nullptr, path);
   }
+}
+
+void MahoSidebarMediaView::ContentsChanged(
+    views::Textfield* sender,
+    const std::u16string& new_contents) {
+  search_debounce_timer_.Start(
+      FROM_HERE, base::Milliseconds(200),
+      base::BindOnce(&MahoSidebarMediaView::ApplySearchFilter,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void MahoSidebarMediaView::ApplySearchFilter() {
+  ReloadMedia();
+}
+
+void MahoSidebarMediaView::SetActiveFilter(std::optional<MediaKind> filter) {
+  active_filter_ = filter;
+
+  if (filters_container_) {
+    size_t active_idx = 0;
+    if (filter == MediaKind::kAudio) active_idx = 1;
+    else if (filter == MediaKind::kVideo) active_idx = 2;
+    else if (filter == MediaKind::kImage) active_idx = 3;
+
+    for (size_t i = 0; i < filters_container_->children().size(); ++i) {
+      auto* button = static_cast<views::MdTextButton*>(filters_container_->children()[i]);
+      if (i == active_idx) {
+        button->SetStyle(ui::ButtonStyle::kProminent);
+      } else {
+        button->SetStyle(ui::ButtonStyle::kText);
+      }
+    }
+  }
+
+  ReloadMedia();
 }
 
 }  // namespace maho

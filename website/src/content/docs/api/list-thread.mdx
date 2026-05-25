@@ -1,0 +1,25 @@
+---
+title: list_thread
+description: List all emails in a thread by Message-ID
+---
+
+List all emails in a thread by Message-ID. Returns emails sorted by date ascending.
+
+## Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `account_id` | string | Yes | Account ID |
+| `message_id` | string | Yes | Message-ID header value of any email in the thread |
+
+## Example
+
+```json
+{
+  "tool": "list_thread",
+  "arguments": {
+    "account_id": "acc1",
+    "message_id": "<msg1@example.com>"
+  }
+}
+```

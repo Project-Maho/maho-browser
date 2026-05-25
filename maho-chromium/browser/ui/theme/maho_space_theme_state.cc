@@ -230,7 +230,9 @@ std::optional<MahoSpaceThemeState::ThemeData> ExtractThemeDataFromThemeDict(
             theme_dict->FindDouble("opacity").value_or(1.0), 0.0, 1.0)),
         .texture = static_cast<float>(std::clamp(
             theme_dict->FindDouble("texture").value_or(0.0), 0.0, 1.0)),
-        .grain = 0.0f,
+        .grain = static_cast<float>(std::clamp(
+            dominant ? dominant->FindDouble("grain").value_or(0.0) : 0.0,
+            0.0, 1.0)),
     };
   }
 

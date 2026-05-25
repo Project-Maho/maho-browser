@@ -32,9 +32,10 @@ class MahoSidebarSpaceDotDelegate {
                                    bool cancelled) = 0;
 };
 
-// Renders a single space as a compact footer dot with subtle inactive states
-// and a slightly more prominent active state. Hover still reveals the icon when
-// one exists so existing affordances remain intact.
+// Renders a single space. If the space has an icon, it renders the icon glyph
+// at rest in all states. If it doesn't have an icon, it falls back to drawing
+// a circle dot at a size tier depending on state (active, selected, hovered).
+// Active spaces also render a subtle outer halo ring.
 class MahoSidebarSpaceDotView : public views::View {
   METADATA_HEADER(MahoSidebarSpaceDotView, views::View)
 
@@ -74,10 +75,12 @@ class MahoSidebarSpaceDotView : public views::View {
  private:
   static constexpr int kViewSize = 15;
   static constexpr int kIndicatorSize = 11;
-  static constexpr float kDotSizeDefault = 2.0f;
-  static constexpr float kDotSizeSelected = 2.4f;
-  static constexpr float kDotSizeHoveredNoIcon = 2.9f;
-  static constexpr float kDotSizeActive = 3.8f;
+  // Size tier constants for icon-less fallback dots. Tuned to read as a
+  // footer navigation affordance.
+  static constexpr float kDotSizeDefault = 4.0f;
+  static constexpr float kDotSizeSelected = 4.8f;
+  static constexpr float kDotSizeHoveredNoIcon = 5.8f;
+  static constexpr float kDotSizeActive = 7.6f;
   static constexpr float kDragStartThreshold = 4.0f;
 
   float GetCurrentDotSize() const;
@@ -99,6 +102,8 @@ class MahoSidebarSpaceDotView : public views::View {
 
   gfx::Point drag_start_point_;
   bool did_start_drag_ = false;
+
+  friend class MahoSidebarSpaceDotViewTest;
 
   raw_ptr<MahoSidebarSpaceDotDelegate> delegate_ = nullptr;
 };

@@ -1,9 +1,8 @@
 import React, {useEffect, useMemo, useRef} from 'react';
 import {createRoot} from 'react-dom/client';
 
-import {RuntimeEventKind} from '../maho_ai.mojom-webui.js';
 import type {MahoAiStore} from '../store.js';
-import {isSessionReadOnly} from '../types.js';
+import {isSessionReadOnly, RuntimeEventKind, ViewMode} from '../types.js';
 import type {AppState, TimelineEntry} from '../types.js';
 import {getToolProgressLabel} from '../views/conversation_thread.js';
 import {bootstrapStore, createMahoAiStore} from './store.js';
@@ -54,6 +53,16 @@ function BootErrorCard({message}: {message: string}) {
   );
 }
 
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  const tagName = target.tagName.toLowerCase();
+  return target.isContentEditable || tagName === 'input' || tagName === 'textarea' ||
+      tagName === 'select';
+}
+
 function MahoAiApp({store}: {store: MahoAiStore}) {
   const state = useAppState(store);
   const bootstrappedRef = useRef(false);
@@ -67,6 +76,26 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
     void bootstrapStore(store).catch((error: unknown) => {
       console.error('[maho-ai] Bootstrap failed:', error);
     });
+  }, [store]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isEditableTarget(event.target)) {
+        return;
+      }
+
+      if (!event.shiftKey || !(event.metaKey || event.ctrlKey) ||
+          event.key.toLowerCase() !== 'd') {
+        return;
+      }
+
+      event.preventDefault();
+      const snapshot = store.getSnapshot();
+      store.setDeveloperMode(!snapshot.developerMode);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, [store]);
 
   const composerHandlers = useMemo<ComposerHandlers>(() => ({
@@ -92,6 +121,13 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
     onNewSession: () => {
       void store.startSession();
     },
+    onClosePanel: () => {
+      void store.closePanel();
+    },
+    onOpenSettings: () => {
+      void store.openSettings();
+    },
+    onGetViewMode: () => store.getViewMode(),
     onResumeSession: (sessionId: string) => {
       const snapshot = store.getSnapshot();
       const session = snapshot.sessionsById[sessionId];
@@ -104,6 +140,9 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
     onSelectInspector: (kind: AppState['selectedInspector']['kind'], id?: string) =>
       store.setSelectedInspector(kind, id),
     onSetDeveloperMode: (enabled: boolean) => store.setDeveloperMode(enabled),
+    onSetViewMode: (mode: ViewMode) => {
+      void store.setViewMode(mode);
+    },
   }), [store]);
 
   const sessionEvents = state.currentSessionId ?
@@ -135,8 +174,11 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
                 <CompactShell
                   entries={sessionEvents}
                   hasMessages={hasMessages}
+                  onClosePanel={modeHandlers.onClosePanel}
+                  onGetViewMode={modeHandlers.onGetViewMode}
+                  onOpenSettings={modeHandlers.onOpenSettings}
                   onRespondToApproval={modeHandlers.onRespondToApproval}
-                  onSetDeveloperMode={modeHandlers.onSetDeveloperMode}
+                  onSetViewMode={modeHandlers.onSetViewMode}
                   onStartSession={modeHandlers.onNewSession}
                   readOnly={readOnly}
                   state={state}

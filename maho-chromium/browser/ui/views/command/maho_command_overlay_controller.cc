@@ -29,6 +29,16 @@
 
 namespace maho {
 
+// Intentional product divergences from Zen Browser design (preserved by design):
+// 1. Standalone overlay architecture: Maho uses a views::Widget-based popup
+//    instead of being a urlbar provider / omnibox replacement.
+// 2. Explicit open modes and mode-based disposition: kCurrentTab, kNewTab,
+//    and kSearch stay distinct.
+// 3. AI mode (ai + Tab) and @prefix site-search.
+// 4. Typed-text URL/domain/search fallback.
+// 5. Calculator / unit-conversion clipboard copy behavior.
+// 6. Pre-show focus restore and 200ms deactivation hide.
+
 namespace {
 
 constexpr base::TimeDelta kFadeOutDuration = base::Milliseconds(180);
@@ -185,6 +195,10 @@ void MahoCommandOverlayController::OnWidgetDestroying(
     overlay_view_ = nullptr;
     anchor_ = nullptr;
     RestoreFocusToPreShowView();
+    if (parent_widget_) {
+      parent_widget_->RemoveObserver(this);
+      parent_widget_ = nullptr;
+    }
     // The widget is already in its destruction path, so the controller must
     // relinquish ownership without attempting to delete it again here.
     widget_.release();

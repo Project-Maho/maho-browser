@@ -1,0 +1,70 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --font-serif: "Instrument Serif", serif;
+}
+
+:root, .dark {
+  color-scheme: dark;
+  --background: #0a0a0a;
+  --foreground: #fafafa;
+  --card: #111111;
+  --card-foreground: #fafafa;
+  --muted: #262626;
+  --muted-foreground: #a1a1aa;
+  --border: rgba(255,255,255,0.08);
+  --primary: #fafafa;
+  --primary-foreground: #0a0a0a;
+}
+
+.light {
+  color-scheme: light;
+  --background: #ffffff;
+  --foreground: #18181b;
+  --card: #f4f4f5;
+  --card-foreground: #18181b;
+  --muted: #e4e4e7;
+  --muted-foreground: #71717a;
+  --border: #e4e4e7;
+  --primary: #18181b;
+  --primary-foreground: #ffffff;
+}
+
+@layer base {
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground antialiased; }
+}
+
+@layer utilities {
+  .heading-serif {
+    font-family: var(--font-serif);
+    font-style: italic;
+  }
+
+  :root:has(.blog-post--agentic-browser-comparison-2026) {
+    --sl-content-width: min(90rem, calc(100vw - 4rem));
+  }
+
+  :root:has(.blog-post--agentic-browser-comparison-2026) .sl-markdown-content {
+    inline-size: 100%;
+  }
+
+  :root:has(.blog-post--agentic-browser-comparison-2026) .sl-markdown-content table {
+    inline-size: max-content;
+    min-inline-size: 100%;
+    white-space: nowrap;
+  }
+
+}
+

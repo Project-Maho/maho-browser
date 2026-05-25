@@ -12,6 +12,8 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/task/cancelable_task_tracker.h"
+#include "components/favicon_base/favicon_types.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
@@ -126,6 +128,9 @@ class MahoSidebarFavoritesGridView : public views::View {
   void RebuildGridRows(size_t favorite_count);
   void UpdateContainerOwnedPreferredHeight(size_t favorite_count);
   void UpdateEmptyStateHighlight(bool highlighted);
+  void OnFaviconLoaded(size_t index,
+                       const GURL& requested_url,
+                       const favicon_base::FaviconImageResult& result);
 
   raw_ptr<Browser> browser_ = nullptr;
   raw_ptr<views::View> content_view_ = nullptr;
@@ -164,6 +169,7 @@ class MahoSidebarFavoritesGridView : public views::View {
   void CancelAnimations();
   int FindSnapshotIndexForTabId(const std::string& tab_id) const;
 
+  base::CancelableTaskTracker cancelable_task_tracker_;
   base::WeakPtrFactory<MahoSidebarFavoritesGridView> weak_factory_{this};
 };
 

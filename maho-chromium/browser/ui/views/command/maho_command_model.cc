@@ -309,6 +309,18 @@ const char* GetBackendSearchMode(CommandOverlayMode mode) {
       return "normal";
   }
 }
+
+bool IsProtocolLike(const std::string& query) {
+  if (query.find("://") != std::string::npos) {
+    return true;
+  }
+  for (const std::string& prefix : {"http://", "https://", "chrome://", "about:", "file:", "data:", "mailto:"}) {
+    if (base::StartsWith(query, prefix, base::CompareCase::INSENSITIVE_ASCII)) {
+      return true;
+    }
+  }
+  return false;
+}
 }  // namespace
 
 ImageData::ImageData() = default;
@@ -367,7 +379,8 @@ void MahoCommandModel::Search(const std::string& query,
   if (query.empty()) {
     debounce_timer_.Stop();
     results_.clear();
-    if (mode == CommandOverlayMode::kNewTab) {
+    if (mode == CommandOverlayMode::kNewTab ||
+        mode == CommandOverlayMode::kCommandsOnly) {
       debounce_timer_.Start(FROM_HERE, kDebounceDelay,
                             base::BindOnce(&MahoCommandModel::FireSearch,
                                            weak_factory_.GetWeakPtr()));
@@ -387,6 +400,12 @@ void MahoCommandModel::Cancel() {
   weak_factory_.InvalidateWeakPtrs();
 }
 
+void MahoCommandModel::RefetchCurrentQuery() {
+  if (pending_callback_) {
+    Search(query_, mode_, pending_callback_);
+  }
+}
+
 void MahoCommandModel::FireSearch() {
   ++search_generation_;
   search_start_ticks_ = base::TimeTicks::Now();
@@ -401,6 +420,10 @@ void MahoCommandModel::FireSearch() {
     search_query = search_query.substr(1);
     if (!search_query.empty() && search_query[0] == ' ')
       search_query = search_query.substr(1);
+    actions_only_ = true;
+  }
+
+  if (mode_ == CommandOverlayMode::kCommandsOnly) {
     actions_only_ = true;
   }
 
@@ -649,7 +672,10 @@ void MahoCommandModel::OnResults(ResultsCallback callback,
       return s.type != CommandSuggestionType::kAction;
     });
   }
-  CapResults(results);
+
+  ApplyQuickActionGate(results, mode_, query_);
+
+  CapResults(results, mode_);
 
   std::string prev_key;
   if (selected_index_ >= 0 &&
@@ -677,6 +703,7 @@ void MahoCommandModel::OnResults(ResultsCallback callback,
   callback.Run(results_);
   RequestBookmarkFavicons();
   RequestTabFavicons();
+  RequestSearchEngineFavicons();
 }
 
 void MahoCommandModel::RequestBookmarkFavicons() {
@@ -859,14 +886,31 @@ void MahoCommandModel::RequestTabFavicons() {
 }
 
 // static
-void MahoCommandModel::CapResults(std::vector<CommandSuggestion>& results) {
+void MahoCommandModel::ApplyQuickActionGate(std::vector<CommandSuggestion>& results,
+                                             CommandOverlayMode mode,
+                                             const std::string& query) {
+  if (mode == CommandOverlayMode::kCurrentTab || mode == CommandOverlayMode::kNewTab) {
+    if (query.length() <= 2 || IsProtocolLike(query)) {
+      std::erase_if(results, [](const CommandSuggestion& s) {
+        return s.type == CommandSuggestionType::kAction;
+      });
+    }
+  }
+}
+
+// static
+void MahoCommandModel::CapResults(std::vector<CommandSuggestion>& results, CommandOverlayMode mode) {
   // Phase 1: truncation-only — preserve Rust-ranked input order exactly.
   // The previous bucket-based logic re-sorted by type, overriding the Rust
   // ranker. Now we simply drop results beyond the display limit so that
   // whatever order Rust produced is surfaced unchanged.
-  constexpr size_t kMaxVisibleResults = 8;
-  if (results.size() > kMaxVisibleResults) {
-    results.resize(kMaxVisibleResults);
+  const size_t max_visible =
+      (mode == CommandOverlayMode::kCommandsOnly ||
+       mode == CommandOverlayMode::kSiteSearch)
+          ? 20
+          : 8;
+  if (results.size() > max_visible) {
+    results.resize(max_visible);
   }
 }
 
@@ -975,6 +1019,128 @@ std::vector<CommandSuggestion> MahoCommandModel::GetRecentSearches() {
     results.push_back(std::move(s));
   }
   return results;
+}
+
+void MahoCommandModel::RequestSearchEngineFavicons() {
+  MahoCore* core = maho::GetCore();
+  if (!core || !browser_ || !browser_->profile()) {
+    return;
+  }
+
+  std::string default_engine_id;
+  GURL homepage_url;
+
+  char* json = maho_core_get_search_engines(core);
+  if (json) {
+    std::string json_str(json);
+    maho_string_free(json);
+    std::optional<base::Value> parsed =
+        base::JSONReader::Read(json_str, base::JSON_PARSE_RFC);
+    if (parsed && parsed->is_list()) {
+      for (const auto& item : parsed->GetList()) {
+        const auto* dict = item.GetIfDict();
+        if (!dict)
+          continue;
+        const std::string* id = dict->FindString("id");
+        const std::optional<bool> is_default = dict->FindBool("isDefault");
+        if (id && is_default.value_or(false)) {
+          default_engine_id = *id;
+          if (default_engine_id == "google") {
+            homepage_url = GURL("https://www.google.com");
+          } else if (default_engine_id == "duckduckgo") {
+            homepage_url = GURL("https://duckduckgo.com");
+          } else if (default_engine_id == "bing") {
+            homepage_url = GURL("https://www.bing.com");
+          } else if (default_engine_id == "brave") {
+            homepage_url = GURL("https://search.brave.com");
+          } else if (default_engine_id == "ecosia") {
+            homepage_url = GURL("https://www.ecosia.org");
+          } else {
+            homepage_url = GURL("https://www.google.com");
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  if (default_engine_id.empty() || !homepage_url.is_valid()) {
+    return;
+  }
+
+  auto it = engine_favicon_cache_.find(default_engine_id);
+  if (it != engine_favicon_cache_.end()) {
+    std::optional<ImageData> icon = BuildImageDataFromImage(it->second);
+    if (icon.has_value()) {
+      bool updated = false;
+      for (auto& suggestion : results_) {
+        if (suggestion.type == CommandSuggestionType::kSearch && !suggestion.icon.has_value()) {
+          suggestion.icon = *icon;
+          updated = true;
+        }
+      }
+      if (updated && pending_callback_) {
+        pending_callback_.Run(results_);
+      }
+    }
+    return;
+  }
+
+  favicon::LargeIconService* large_icon_service =
+      LargeIconServiceFactory::GetForBrowserContext(browser_->profile());
+  if (!large_icon_service) {
+    return;
+  }
+
+  large_icon_service->GetLargeIconFromCacheFallbackToGoogleServer(
+      homepage_url,
+      favicon::LargeIconService::StandardIconSize::k16x16,
+      favicon::LargeIconService::StandardIconSize::k16x16,
+      favicon::LargeIconService::NoBigEnoughIconBehavior::kReturnEmpty,
+      /*should_trim_page_url_path=*/false,
+      kBookmarkFaviconTrafficAnnotation,
+      base::BindOnce(&MahoCommandModel::OnSearchEngineLargeIconLoaded,
+                     weak_factory_.GetWeakPtr(), search_generation_,
+                     default_engine_id),
+      &favicon_task_tracker_);
+}
+
+void MahoCommandModel::OnSearchEngineLargeIconLoaded(
+    uint32_t search_generation,
+    std::string engine_id,
+    const favicon_base::LargeIconResult& result) {
+  if (search_generation != search_generation_) {
+    return;
+  }
+
+  if (!result.bitmap.is_valid()) {
+    return;
+  }
+
+  gfx::Image favicon_image = gfx::Image::CreateFrom1xPNGBytes(
+      base::span(*result.bitmap.bitmap_data));
+  if (favicon_image.IsEmpty()) {
+    return;
+  }
+
+  engine_favicon_cache_[engine_id] = favicon_image;
+
+  std::optional<ImageData> icon = BuildImageDataFromImage(favicon_image);
+  if (!icon.has_value()) {
+    return;
+  }
+
+  bool updated = false;
+  for (auto& suggestion : results_) {
+    if (suggestion.type == CommandSuggestionType::kSearch && !suggestion.icon.has_value()) {
+      suggestion.icon = *icon;
+      updated = true;
+    }
+  }
+
+  if (updated && pending_callback_) {
+    pending_callback_.Run(results_);
+  }
 }
 
 }  // namespace maho

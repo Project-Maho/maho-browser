@@ -28,7 +28,7 @@ class CapResultsTest : public ::testing::Test {};
 
 TEST_F(CapResultsTest, EmptyInputProducesEmptyOutput) {
   std::vector<CommandSuggestion> results;
-  MahoCommandModel::CapResults(results);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch);
   EXPECT_TRUE(results.empty());
 }
 
@@ -38,7 +38,7 @@ TEST_F(CapResultsTest, InputBelowLimitIsUnchanged) {
   results.push_back(MakeSuggestion(CommandSuggestionType::kHistory, "hist:0"));
   results.push_back(MakeSuggestion(CommandSuggestionType::kBookmark, "bm:0"));
 
-  MahoCommandModel::CapResults(results);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch);
 
   ASSERT_EQ(3u, results.size());
   EXPECT_EQ("tab:0", results[0].key);
@@ -53,7 +53,7 @@ TEST_F(CapResultsTest, InputAtExactLimitIsUnchanged) {
                                      "hist:" + std::to_string(i)));
   }
 
-  MahoCommandModel::CapResults(results);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch);
 
   ASSERT_EQ(8u, results.size());
   for (int i = 0; i < 8; ++i) {
@@ -68,7 +68,7 @@ TEST_F(CapResultsTest, InputAboveLimitTruncatesAtEight) {
                                      "hist:" + std::to_string(i)));
   }
 
-  MahoCommandModel::CapResults(results);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch);
 
   EXPECT_EQ(8u, results.size());
 }
@@ -86,7 +86,7 @@ TEST_F(CapResultsTest, InputOrderIsPreservedAfterTruncation) {
   results.push_back(MakeSuggestion(CommandSuggestionType::kClosedTab, "closed:0"));
   results.push_back(MakeSuggestion(CommandSuggestionType::kRecentSearch, "recent:0"));
 
-  MahoCommandModel::CapResults(results);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch);
 
   ASSERT_EQ(8u, results.size());
   EXPECT_EQ("tab:0", results[0].key);
@@ -107,7 +107,7 @@ TEST_F(CapResultsTest, MixedTypesPreserveRustRankingOrder) {
   results.push_back(MakeSuggestion(CommandSuggestionType::kHistory, "hist:rank4"));
   results.push_back(MakeSuggestion(CommandSuggestionType::kTab, "tab:rank5"));
 
-  MahoCommandModel::CapResults(results);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch);
 
   ASSERT_EQ(5u, results.size());
   EXPECT_EQ("hist:rank1", results[0].key);
@@ -124,7 +124,7 @@ TEST_F(CapResultsTest, ActionOnlyInputAboveLimitTruncatesToEight) {
                                      "action:" + std::to_string(i)));
   }
 
-  MahoCommandModel::CapResults(results);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch);
 
   ASSERT_EQ(8u, results.size());
   for (int i = 0; i < 8; ++i) {
@@ -139,7 +139,7 @@ TEST_F(CapResultsTest, ActionOnlyInputAtExactLimitIsUnchanged) {
                                      "action:" + std::to_string(i)));
   }
 
-  MahoCommandModel::CapResults(results);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch);
 
   ASSERT_EQ(8u, results.size());
 }
@@ -150,12 +150,72 @@ TEST_F(CapResultsTest, ActionOnlyInputBelowLimitIsUnchanged) {
   results.push_back(MakeSuggestion(CommandSuggestionType::kAction, "action:1"));
   results.push_back(MakeSuggestion(CommandSuggestionType::kAction, "action:2"));
 
-  MahoCommandModel::CapResults(results);
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kSearch);
 
   ASSERT_EQ(3u, results.size());
   EXPECT_EQ("action:0", results[0].key);
   EXPECT_EQ("action:1", results[1].key);
   EXPECT_EQ("action:2", results[2].key);
+}
+
+TEST_F(CapResultsTest, CommandsOnlyModeCapsAtTwenty) {
+  std::vector<CommandSuggestion> results;
+  for (int i = 0; i < 30; ++i) {
+    results.push_back(MakeSuggestion(CommandSuggestionType::kAction,
+                                     "action:" + std::to_string(i)));
+  }
+
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kCommandsOnly);
+
+  EXPECT_EQ(20u, results.size());
+}
+
+TEST_F(CapResultsTest, SiteSearchModeCapsAtTwenty) {
+  std::vector<CommandSuggestion> results;
+  for (int i = 0; i < 30; ++i) {
+    results.push_back(MakeSuggestion(CommandSuggestionType::kHistory,
+                                     "hist:" + std::to_string(i)));
+  }
+
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kSiteSearch);
+
+  EXPECT_EQ(20u, results.size());
+}
+
+TEST_F(CapResultsTest, CurrentTabModeCapsAtEight) {
+  std::vector<CommandSuggestion> results;
+  for (int i = 0; i < 15; ++i) {
+    results.push_back(MakeSuggestion(CommandSuggestionType::kHistory,
+                                     "hist:" + std::to_string(i)));
+  }
+
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kCurrentTab);
+
+  EXPECT_EQ(8u, results.size());
+}
+
+TEST_F(CapResultsTest, NewTabModeCapsAtEight) {
+  std::vector<CommandSuggestion> results;
+  for (int i = 0; i < 15; ++i) {
+    results.push_back(MakeSuggestion(CommandSuggestionType::kHistory,
+                                     "hist:" + std::to_string(i)));
+  }
+
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kNewTab);
+
+  EXPECT_EQ(8u, results.size());
+}
+
+TEST_F(CapResultsTest, AIModeCapsAtEight) {
+  std::vector<CommandSuggestion> results;
+  for (int i = 0; i < 15; ++i) {
+    results.push_back(MakeSuggestion(CommandSuggestionType::kHistory,
+                                     "hist:" + std::to_string(i)));
+  }
+
+  MahoCommandModel::CapResults(results, CommandOverlayMode::kAI);
+
+  EXPECT_EQ(8u, results.size());
 }
 
 class ParseTypeTest : public ::testing::Test {};
@@ -447,6 +507,75 @@ TEST_F(SearchEmptyQueryTest,
          "not via the debounce timer";
   EXPECT_TRUE(received_results.empty())
       << "kCurrentTab empty-query callback must deliver an empty result vector";
+}
+
+class QuickActionGateTest : public ::testing::Test {};
+
+TEST_F(QuickActionGateTest, ShortQuerySuppressesActionInCurrentTabMode) {
+  std::vector<CommandSuggestion> results;
+  results.push_back(MakeSuggestion(CommandSuggestionType::kAction, "action:0"));
+  results.push_back(MakeSuggestion(CommandSuggestionType::kHistory, "hist:0"));
+
+  MahoCommandModel::ApplyQuickActionGate(
+      results, CommandOverlayMode::kCurrentTab, "ab");
+
+  ASSERT_EQ(1u, results.size());
+  EXPECT_EQ("hist:0", results[0].key);
+}
+
+TEST_F(QuickActionGateTest, ProtocolLikeInputSuppressesActionInNewTabMode) {
+  std::vector<CommandSuggestion> results;
+  results.push_back(MakeSuggestion(CommandSuggestionType::kAction, "action:0"));
+  results.push_back(MakeSuggestion(CommandSuggestionType::kNavigation, "nav:0"));
+
+  MahoCommandModel::ApplyQuickActionGate(
+      results, CommandOverlayMode::kNewTab, "https://example.com");
+
+  ASSERT_EQ(1u, results.size());
+  EXPECT_EQ("nav:0", results[0].key);
+}
+
+TEST_F(QuickActionGateTest, CommandsOnlyModeDoesNotSuppressActionForShortOrProtocolInput) {
+  std::vector<CommandSuggestion> results;
+  results.push_back(MakeSuggestion(CommandSuggestionType::kAction, "action:0"));
+  results.push_back(MakeSuggestion(CommandSuggestionType::kAction, "action:1"));
+
+  MahoCommandModel::ApplyQuickActionGate(
+      results, CommandOverlayMode::kCommandsOnly, "ab");
+  ASSERT_EQ(2u, results.size());
+
+  MahoCommandModel::ApplyQuickActionGate(
+      results, CommandOverlayMode::kCommandsOnly, "https://example.com");
+  ASSERT_EQ(2u, results.size());
+}
+
+TEST_F(QuickActionGateTest, TypedTextFallbackPreserved) {
+  std::vector<CommandSuggestion> results;
+  results.push_back(MakeSuggestion(CommandSuggestionType::kAction, "action:0"));
+  results.push_back(MakeSuggestion(CommandSuggestionType::kNavigation, "nav:0"));
+  results.push_back(MakeSuggestion(CommandSuggestionType::kSearch, "search:0"));
+
+  MahoCommandModel::ApplyQuickActionGate(
+      results, CommandOverlayMode::kCurrentTab, "ab");
+
+  ASSERT_EQ(2u, results.size());
+  EXPECT_EQ("nav:0", results[0].key);
+  EXPECT_EQ("search:0", results[1].key);
+}
+
+TEST_F(QuickActionGateTest, CalculatorAndUnitConversionPreserved) {
+  std::vector<CommandSuggestion> results;
+  results.push_back(MakeSuggestion(CommandSuggestionType::kAction, "action:0"));
+  results.push_back(MakeSuggestion(CommandSuggestionType::kCalculator, "calc:0"));
+  results.push_back(MakeSuggestion(CommandSuggestionType::kUnitConversion, "unit:0"));
+
+  MahoCommandModel::ApplyQuickActionGate(
+      results, CommandOverlayMode::kCurrentTab, "ab");
+
+  ASSERT_EQ(2u, results.size());
+  EXPECT_EQ("calc:0", results[0].key);
+  EXPECT_EQ("unit:0", results[1].key);
+}
 }
 
 }  // namespace

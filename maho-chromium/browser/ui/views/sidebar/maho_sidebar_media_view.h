@@ -8,23 +8,35 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/timer/timer.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_downloads_data.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/controls/label.h"
+#include "ui/views/controls/textfield/textfield_controller.h"
 #include "ui/views/view.h"
 
 namespace views {
 class Button;
 class ScrollView;
+class Textfield;
 }  // namespace views
 
 namespace maho {
+
+enum class MediaKind {
+  kAudio,
+  kVideo,
+  kImage,
+  kOther,
+};
 
 enum class MediaActionKind {
   kOpen,
   kReveal,
 };
 
-class MahoSidebarMediaView : public views::View {
+class MahoSidebarMediaView : public views::View,
+                             public views::TextfieldController {
   METADATA_HEADER(MahoSidebarMediaView, views::View)
 
  public:
@@ -45,13 +57,25 @@ class MahoSidebarMediaView : public views::View {
       const std::string& item_id,
       size_t action_index);
 
+  // views::TextfieldController:
+  void ContentsChanged(views::Textfield* sender,
+                       const std::u16string& new_contents) override;
+
  private:
   void BuildUi();
+  void ApplySearchFilter();
+  void SetActiveFilter(std::optional<MediaKind> filter);
   void HandleMediaAction(const std::string& item_id, MediaActionKind action);
 
   raw_ptr<views::ScrollView> scroll_view_ = nullptr;
   raw_ptr<views::View> list_container_ = nullptr;
   raw_ptr<views::Label> empty_state_view_ = nullptr;
+  raw_ptr<views::Textfield> search_field_ = nullptr;
+  raw_ptr<views::View> filters_container_ = nullptr;
+  base::OneShotTimer search_debounce_timer_;
+  std::optional<MediaKind> active_filter_;
+  std::vector<DownloadItem> cached_media_items_;
+
   base::WeakPtrFactory<MahoSidebarMediaView> weak_factory_{this};
 };
 

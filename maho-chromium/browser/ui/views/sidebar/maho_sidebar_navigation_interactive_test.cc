@@ -43,6 +43,7 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_spaces_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_library_action_pane_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_board_view.h"
 #include "maho/third_party/maho/maho_ffi.h"

@@ -13,6 +13,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/cancelable_task_tracker.h"
+#include "base/scoped_observation.h"
 #include "maho/browser/ui/views/command/maho_command_model.h"
 #include "url/gurl.h"
 #include "ui/base/metadata/metadata_header_macros.h"
@@ -22,6 +23,7 @@
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/controls/textfield/textfield_controller.h"
 #include "ui/views/view.h"
+#include "ui/views/widget/widget_observer.h"
 
 class Browser;
 
@@ -35,6 +37,8 @@ class Label;
 class ScrollView;
 class Separator;
 class View;
+class MdTextButton;
+class Widget;
 }  // namespace views
 
 namespace maho {
@@ -43,7 +47,8 @@ class MahoCommandModel;
 struct CommandSuggestion;
 
 class MahoCommandOverlayView : public views::View,
-                               public views::TextfieldController {
+                               public views::TextfieldController,
+                               public views::WidgetObserver {
   METADATA_HEADER(MahoCommandOverlayView, views::View)
 
  public:
@@ -87,7 +92,7 @@ class MahoCommandOverlayView : public views::View,
   bool TextfieldIsExpandedForTesting() const;
   views::ViewAccessibility* GetActiveDescendantForTesting() const;
   views::View* GetSearchRowForTesting() const { return search_row_; }
-  views::View* GetTrailingAccessoryForTesting() const {
+  views::MdTextButton* GetTrailingAccessoryForTesting() const {
     return trailing_accessory_;
   }
   void UpdateResultViewsForTesting(
@@ -178,7 +183,7 @@ class MahoCommandOverlayView : public views::View,
   raw_ptr<views::Textfield> textfield_ = nullptr;
   raw_ptr<views::View> search_row_ = nullptr;
   raw_ptr<views::View> input_background_ = nullptr;
-  raw_ptr<views::View> trailing_accessory_ = nullptr;
+  raw_ptr<views::MdTextButton> trailing_accessory_ = nullptr;
   raw_ptr<views::View> mode_chip_ = nullptr;
   raw_ptr<views::View> mode_chip_dot_ = nullptr;
   raw_ptr<views::Separator> divider_ = nullptr;
@@ -200,6 +205,8 @@ class MahoCommandOverlayView : public views::View,
   void ExitSiteSearchMode();
   void EnterAIMode();
   void ExitAIMode();
+  void EnterCommandsOnlyMode();
+  void ExitCommandsOnlyMode();
   void ApplyPlaceholderForMode();
   void UpdateModeChipVisibility();
   void UpdateModeChip();
@@ -217,11 +224,20 @@ class MahoCommandOverlayView : public views::View,
       Browser* browser,
       const std::string& url);
 
+  // views::WidgetObserver:
+  void OnWidgetDestroying(views::Widget* widget) override;
+
+  void OnSearchEngineBadgePressed();
+  void OnSearchEngineSelected(const std::string& engine_id);
+
   std::vector<CommandSuggestion> seeded_results_;
   bool is_seeded_state_ = false;
   std::string initial_url_;
   base::CancelableTaskTracker seeded_favicon_task_tracker_;
   uint32_t seeded_favicon_hydration_generation_ = 0;
+
+  raw_ptr<views::Widget> picker_widget_ = nullptr;
+  base::ScopedObservation<views::Widget, views::WidgetObserver> picker_observation_{this};
 
   base::WeakPtrFactory<MahoCommandOverlayView> weak_factory_{this};
 };

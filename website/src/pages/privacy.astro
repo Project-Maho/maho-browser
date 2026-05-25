@@ -1,0 +1,61 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+---
+
+<BaseLayout title="Privacy Policy — Maho" description="Privacy Policy for Maho applications and website.">
+  <div class="min-h-screen bg-background text-foreground">
+    <Nav />
+    <main class="max-w-3xl mx-auto px-6 pt-32 pb-24">
+      <h1 class="heading-serif text-4xl sm:text-5xl mb-4">Privacy Policy</h1>
+      <p class="text-muted-foreground text-sm mb-12">Effective: April 11, 2026</p>
+
+      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Overview</h2>
+      <p class="text-muted-foreground leading-relaxed mb-4">
+        Maho is built with privacy as a core principle. Our applications run locally on your device, keeping your data under your control. This policy covers both the maho.app website and Maho applications.
+      </p>
+
+      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Information We Don't Collect</h2>
+      <p class="text-muted-foreground leading-relaxed mb-4">
+        Maho Browser and Maho Mail do not collect browsing history, email content, contacts, search queries, or any personal data. Your data stays on your device and is never transmitted to our servers.
+      </p>
+
+      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Website Analytics</h2>
+      <p class="text-muted-foreground leading-relaxed mb-4">
+        The maho.app website may use privacy-respecting analytics to understand traffic patterns. No personal information is collected, and no data is shared with third parties for advertising or tracking purposes.
+      </p>
+
+      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Cookies</h2>
+      <p class="text-muted-foreground leading-relaxed mb-4">
+        The website uses only essential cookies necessary for functionality, such as theme preference storage. We do not use tracking cookies or third-party advertising cookies.
+      </p>
+
+      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Third-Party Services</h2>
+      <p class="text-muted-foreground leading-relaxed mb-4">
+        When you configure email accounts or AI providers in Maho Mail, your data flows directly between your device and those services. Maho does not intermediate, store, or have access to this data. Your use of third-party services is subject to their respective privacy policies.
+      </p>
+
+      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Open Source Transparency</h2>
+      <p class="text-muted-foreground leading-relaxed mb-4">
+        All Maho source code is publicly auditable at github.com/aspect-apps. You can verify our privacy claims by reviewing the code yourself.
+      </p>
+
+      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Data Storage</h2>
+      <p class="text-muted-foreground leading-relaxed mb-4">
+        All application data, including emails, settings, and browsing data, is stored locally on your device. Uninstalling the application removes this data from your device. We have no ability to access or delete your data remotely.
+      </p>
+
+      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Changes to This Policy</h2>
+      <p class="text-muted-foreground leading-relaxed mb-4">
+        We may update this privacy policy from time to time. Changes will be posted on this page with an updated effective date. We encourage you to review this policy periodically.
+      </p>
+
+      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Contact</h2>
+      <p class="text-muted-foreground leading-relaxed mb-4">
+        Privacy questions can be directed to hello@maho.app
+      </p>
+    </main>
+    <Footer />
+  </div>
+</BaseLayout>

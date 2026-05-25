@@ -1,0 +1,27 @@
+---
+interface Props {
+  headline: string;
+  subheadline: string;
+  cta: { label: string; href: string };
+}
+
+const { headline, subheadline, cta } = Astro.props;
+---
+
+<section class="py-24 px-6 border-t border-border">
+  <div class="max-w-6xl mx-auto text-center">
+    <h2 class="heading-serif text-4xl sm:text-5xl mb-6">
+      {headline}
+    </h2>
+    <p class="text-muted-foreground mb-8 max-w-xl mx-auto">
+      {subheadline}
+    </p>
+    <a
+      href={cta.href}
+      class="inline-flex items-center gap-2 px-6 py-3 bg-foreground text-background rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
+    >
+      {cta.label}
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+    </a>
+  </div>
+</section>

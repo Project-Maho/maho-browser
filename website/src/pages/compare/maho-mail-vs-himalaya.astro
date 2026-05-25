@@ -1,0 +1,293 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Nav from '../../components/Nav.astro';
+import Footer from '../../components/Footer.astro';
+
+const title = "Maho Mail vs himalaya: Which Email Client Is Better in 2026?";
+const description = "Comparing Maho Mail to himalaya. Both have a CLI, but only one has a desktop GUI, MCP server, and built-in AI.";
+
+const faqs = [
+  {
+    q: "Did Maho Mail take inspiration from himalaya?",
+    a: "Yes. himalaya pioneered the idea of a standalone CLI email client that works with structured output and multiple backends. Maho Mail builds on that philosophy by adding a desktop GUI, MCP server for AI agents, and built-in AI features alongside the CLI."
+  },
+  {
+    q: "Does himalaya have a GUI?",
+    a: "No. himalaya is a CLI-only tool. There have been community discussions about GUI frontends, but the project itself is terminal-only. Maho Mail includes a native desktop application alongside its CLI."
+  },
+  {
+    q: "Which has better IMAP support?",
+    a: "himalaya supports IMAP, Maildir, Notmuch, and SMTP/Sendmail backends, giving it broader protocol coverage. Maho Mail currently supports IMAP and SMTP. If you need Maildir or Notmuch integration, himalaya is the better choice today."
+  },
+  {
+    q: "Can I use himalaya with AI tools?",
+    a: "himalaya outputs structured data that could be piped to AI tools via shell commands, but it has no built-in AI features or MCP server. Maho Mail provides a native MCP server that AI agents can connect to directly, plus built-in AI for summarization, drafting, and classification."
+  },
+  {
+    q: "Are both projects open source?",
+    a: "Yes. Both Maho Mail and himalaya are open source projects. himalaya is more mature and has been available longer, with a larger contributor base."
+  },
+];
+
+const schema = {
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Article",
+      "headline": title,
+      "description": description,
+      "datePublished": "2026-04-12",
+      "dateModified": "2026-04-12",
+      "author": { "@type": "Organization", "name": "Maho", "url": "https://maho.app" },
+      "publisher": { "@type": "Organization", "name": "Maho", "url": "https://maho.app" },
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        { "@type": "ListItem", "position": 1, "name": "Home", "item": "https://maho.app" },
+        { "@type": "ListItem", "position": 2, "name": "Compare", "item": "https://maho.app/compare" },
+        { "@type": "ListItem", "position": 3, "name": "Maho Mail vs himalaya" },
+      ],
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": faqs.map(f => ({
+        "@type": "Question",
+        "name": f.q,
+        "acceptedAnswer": { "@type": "Answer", "text": f.a },
+      })),
+    },
+  ],
+};
+---
+
+<BaseLayout title={title} description={description}>
+  <script is:inline type="application/ld+json" set:html={JSON.stringify(schema)} />
+  <Nav />
+  <main class="min-h-screen bg-background text-foreground">
+
+    <section class="relative flex flex-col justify-center px-6 pt-32 pb-24">
+      <div class="max-w-6xl mx-auto">
+        <nav aria-label="Breadcrumb" class="text-sm text-muted-foreground mb-8">
+          <a href="/" class="hover:text-foreground transition-colors">Home</a>
+          <span class="mx-2">/</span>
+          <a href="/compare" class="hover:text-foreground transition-colors">Compare</a>
+          <span class="mx-2">/</span>
+          <span class="text-foreground">vs himalaya</span>
+        </nav>
+        <h1 class="heading-serif text-4xl sm:text-5xl lg:text-6xl leading-[1.1] mb-6">
+          Maho Mail vs himalaya
+        </h1>
+        <p class="text-lg text-muted-foreground max-w-2xl leading-relaxed">
+          Both have a CLI. Only one has everything else.
+        </p>
+      </div>
+    </section>
+
+    <section class="py-24 px-6 border-t border-border">
+      <div class="max-w-6xl mx-auto">
+        <div class="max-w-3xl">
+          <span class="inline-block border border-border text-muted-foreground text-xs px-3 py-1 rounded-full mb-6">Quick Verdict</span>
+          <p class="text-lg text-muted-foreground leading-relaxed">
+            <strong class="text-foreground">Choose himalaya</strong> if you want a mature, focused CLI email client with broad backend support including Maildir and Notmuch. <strong class="text-foreground">Choose Maho Mail</strong> if you want the CLI plus a desktop GUI, MCP server for AI agents, and built-in AI features in one package.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="py-24 px-6 border-t border-border">
+      <div class="max-w-6xl mx-auto">
+        <span class="inline-block border border-border text-muted-foreground text-xs px-3 py-1 rounded-full mb-6">At a Glance</span>
+        <h2 class="heading-serif text-3xl sm:text-4xl mb-10">Side-by-side comparison</h2>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-border">
+                <th class="text-left py-3 pr-6 text-muted-foreground font-medium">Feature</th>
+                <th class="text-left py-3 px-6 text-foreground font-medium">Maho Mail</th>
+                <th class="text-left py-3 pl-6 text-muted-foreground font-medium">himalaya</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-border">
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">Desktop GUI</td>
+                <td class="py-3 px-6 text-foreground">Yes — native desktop app</td>
+                <td class="py-3 pl-6 text-muted-foreground">No</td>
+              </tr>
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">CLI</td>
+                <td class="py-3 px-6 text-foreground">Yes — JSON output, Unix pipes</td>
+                <td class="py-3 pl-6 text-muted-foreground">Yes — mature, well-documented</td>
+              </tr>
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">MCP Server</td>
+                <td class="py-3 px-6 text-foreground">Yes — AI agents connect via stdio</td>
+                <td class="py-3 pl-6 text-muted-foreground">No</td>
+              </tr>
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">AI Built In</td>
+                <td class="py-3 px-6 text-foreground">Yes — summarize, draft, classify</td>
+                <td class="py-3 pl-6 text-muted-foreground">No</td>
+              </tr>
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">Backend Support</td>
+                <td class="py-3 px-6 text-foreground">IMAP, SMTP</td>
+                <td class="py-3 pl-6 text-muted-foreground">IMAP, Maildir, Notmuch, SMTP, Sendmail</td>
+              </tr>
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">Local & Private</td>
+                <td class="py-3 px-6 text-foreground">Yes</td>
+                <td class="py-3 pl-6 text-muted-foreground">Yes</td>
+              </tr>
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">Open Source</td>
+                <td class="py-3 px-6 text-foreground">Yes</td>
+                <td class="py-3 pl-6 text-muted-foreground">Yes</td>
+              </tr>
+              <tr>
+                <td class="py-3 pr-6 text-muted-foreground">Written In</td>
+                <td class="py-3 px-6 text-foreground">Rust + TypeScript</td>
+                <td class="py-3 pl-6 text-muted-foreground">Rust</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="py-24 px-6 border-t border-border">
+      <div class="max-w-6xl mx-auto">
+        <span class="inline-block border border-border text-muted-foreground text-xs px-3 py-1 rounded-full mb-6">Deep Dive</span>
+        <h2 class="heading-serif text-3xl sm:text-4xl mb-10">Category comparison</h2>
+
+        <div class="space-y-16 max-w-3xl">
+          <div>
+            <h3 class="text-xl font-medium text-foreground mb-4">CLI Experience</h3>
+            <p class="text-muted-foreground leading-relaxed mb-4">
+              himalaya has been refining its CLI for longer. It supports multiple backends — IMAP, Maildir, Notmuch for reading, SMTP and Sendmail for sending — which makes it more flexible if you work with local mail storage or complex mail server setups.
+            </p>
+            <p class="text-muted-foreground leading-relaxed">
+              Maho Mail's CLI is focused on IMAP/SMTP with JSON-first output designed for piping into modern tools. Commands like <code class="text-foreground text-sm bg-card px-1.5 py-0.5 rounded">maho search --from alice --json</code> return structured data that works cleanly with jq, scripting languages, and AI pipelines. If backend breadth matters most, himalaya wins. If structured output and AI integration matter more, Maho has the edge.
+            </p>
+          </div>
+
+          <div>
+            <h3 class="text-xl font-medium text-foreground mb-4">Beyond the CLI</h3>
+            <p class="text-muted-foreground leading-relaxed mb-4">
+              This is the fundamental difference. himalaya is a CLI tool. Maho Mail is a CLI tool, a desktop application, and an MCP server that share one local database.
+            </p>
+            <p class="text-muted-foreground leading-relaxed">
+              With Maho, you can triage email in the desktop app, automate workflows from the terminal, and let AI agents handle routine tasks through the MCP server — all working against the same data. himalaya does one thing well. Maho tries to do three things in one.
+            </p>
+          </div>
+
+          <div>
+            <h3 class="text-xl font-medium text-foreground mb-4">AI & Agent Support</h3>
+            <p class="text-muted-foreground leading-relaxed mb-4">
+              himalaya has no built-in AI features and no agent protocol. You could pipe its output to an LLM, but there is no structured integration point.
+            </p>
+            <p class="text-muted-foreground leading-relaxed">
+              Maho Mail includes an MCP server that lets AI tools like Claude, Cursor, or any MCP-compatible agent read, search, and draft email. It also has built-in AI features — summarization, drafting, classification, translation — using OpenAI, Anthropic, or Ollama.
+            </p>
+          </div>
+
+          <div>
+            <h3 class="text-xl font-medium text-foreground mb-4">Maturity & Reliability</h3>
+            <p class="text-muted-foreground leading-relaxed">
+              himalaya has been available longer, has more contributors, and has been tested by more users in production. Its Rust codebase is well-structured and actively maintained. Maho Mail is newer. Both projects are under active development, but himalaya has the track record advantage.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="py-24 px-6 border-t border-border">
+      <div class="max-w-6xl mx-auto">
+        <div class="grid gap-12 md:grid-cols-2">
+          <div>
+            <h2 class="text-xl font-medium text-foreground mb-6">Choose Maho Mail if you...</h2>
+            <ul class="space-y-3">
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Want a desktop GUI alongside your CLI
+              </li>
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Need AI agents to interact with your inbox via MCP
+              </li>
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Want built-in AI for summarization and drafting
+              </li>
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Prefer one tool for visual, terminal, and agent workflows
+              </li>
+            </ul>
+          </div>
+          <div>
+            <h2 class="text-xl font-medium text-foreground mb-6">Choose himalaya if you...</h2>
+            <ul class="space-y-3">
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Need Maildir, Notmuch, or Sendmail backend support
+              </li>
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Want a pure CLI tool with no GUI overhead
+              </li>
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Prefer a more mature, battle-tested project
+              </li>
+              <li class="flex items-start gap-3 text-muted-foreground">
+                <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
+                Value broader mail protocol coverage over additional interfaces
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="py-24 px-6 border-t border-border">
+      <div class="max-w-6xl mx-auto">
+        <span class="inline-block border border-border text-muted-foreground text-xs px-3 py-1 rounded-full mb-6">FAQ</span>
+        <h2 class="heading-serif text-3xl sm:text-4xl mb-10">Frequently asked questions</h2>
+        <div class="max-w-3xl space-y-4">
+          {faqs.map((faq) => (
+            <details class="group border border-border rounded-lg">
+              <summary class="flex items-center justify-between cursor-pointer px-6 py-4 text-foreground font-medium">
+                {faq.q}
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4 shrink-0 ml-4 transition-transform group-open:rotate-180"><path d="m6 9 6 6 6-6"/></svg>
+              </summary>
+              <div class="px-6 pb-4 text-muted-foreground leading-relaxed">{faq.a}</div>
+            </details>
+          ))}
+        </div>
+      </div>
+    </section>
+
+    <section class="py-24 px-6 border-t border-border">
+      <div class="max-w-6xl mx-auto text-center">
+        <h2 class="heading-serif text-4xl sm:text-5xl mb-6">
+          Ready to try Maho Mail?
+        </h2>
+        <p class="text-muted-foreground mb-8 max-w-xl mx-auto">
+          GUI for humans. CLI for developers. MCP for agents.
+        </p>
+        <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
+          <a href="/mail" class="inline-flex items-center gap-2 px-6 py-3 bg-foreground text-background rounded-md text-sm font-medium hover:opacity-90 transition-opacity">
+            Learn more about Maho Mail
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+          </a>
+          <a href="/compare" class="inline-flex items-center gap-2 px-6 py-3 border border-border rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:border-muted-foreground transition-colors">
+            See all comparisons
+          </a>
+        </div>
+      </div>
+    </section>
+
+  </main>
+  <Footer />
+</BaseLayout>

@@ -41,6 +41,8 @@
  */
 #define MAHO_ACP_ERR_INTERNAL 6
 
+typedef struct ChatSession ChatSession;
+
 /**
  * Opaque handle exposed to C. Created by [`maho_acp_create`], freed by
  * [`maho_acp_destroy`].
@@ -48,6 +50,13 @@
 typedef struct MahoAcpHandle MahoAcpHandle;
 
 typedef struct MahoCore MahoCore;
+
+typedef struct MahoChatConfig {
+  const char *api_key;
+  const char *endpoint;
+  const char *model;
+  const char *system_instruction;
+} MahoChatConfig;
 
 typedef void (*EventCallback)(void*, const uint8_t*, uintptr_t);
 
@@ -196,6 +205,31 @@ char *maho_core_get_combined_css(struct MahoCore *ptr);
  * Caller must free the returned string with `maho_string_free`.
  */
 char *maho_core_get_installed_extensions(struct MahoCore *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ */
+bool maho_core_is_native_password_provider_active(struct MahoCore *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ */
+bool maho_core_is_bitwarden_extension_available(struct MahoCore *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ */
+bool maho_core_is_onepassword_extension_available(struct MahoCore *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer to a MahoCore.
+ * `mode` must be a valid null-terminated C string.
+ */
+bool maho_core_is_password_provider_available(struct MahoCore *ptr, const char *mode);
 
 /**
  * # Safety
@@ -1302,6 +1336,131 @@ char *maho_core_get_shared_collections(struct MahoCore *ptr);
  * String parameters must be valid null-terminated UTF-8.
  */
 bool maho_core_join_shared_collection(struct MahoCore *ptr, const char *share_link);
+
+/**
+ * # Safety
+ * `path_utf8` must be a valid null-terminated C string.
+ * `out_key` must be a writable buffer of 16 bytes.
+ * `out_status` must be a writable pointer to a u32.
+ */
+bool maho_core_derive_oscrypt_key(const char *path_utf8, uint8_t *out_key, uint32_t *out_status);
+
+/**
+ * # Safety
+ * `path_utf8` must be a valid null-terminated C string.
+ * `out_status` must be a writable pointer to a u32.
+ */
+bool maho_core_oscrypt_key_path_is_secure(const char *path_utf8, uint32_t *out_status);
+
+/**
+ * # Safety
+ * `path_utf8` must be a valid null-terminated C string.
+ * `out_status` must be a writable pointer to a u32.
+ * The caller is responsible for freeing the returned string with `maho_string_free`.
+ */
+char *maho_core_read_validated_theme_json(const char *path_utf8, uint32_t *out_status);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer to a MahoCore.
+ * `space_id` must be a valid null-terminated C string.
+ * `theme_json` must be a valid null-terminated C string.
+ * `out_status` must be a writable pointer to a u32.
+ */
+bool maho_core_apply_space_theme_json(struct MahoCore *ptr,
+                                      const char *space_id,
+                                      const char *theme_json,
+                                      uint32_t *out_status);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer to a MahoCore.
+ * `space_id` must be a valid null-terminated C string.
+ * `path_utf8` must be a valid null-terminated C string.
+ * `out_status` must be a writable pointer to a u32.
+ */
+bool maho_core_export_space_theme(struct MahoCore *ptr,
+                                  const char *space_id,
+                                  const char *path_utf8,
+                                  uint32_t *out_status);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer to a MahoCore.
+ * `space_id` must be a valid null-terminated C string.
+ * `out_status` must be a writable pointer to a u32.
+ * The caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_serialize_space_theme(struct MahoCore *ptr,
+                                      const char *space_id,
+                                      uint32_t *out_status);
+
+/**
+ * # Safety
+ * All pointers in `config` must be null-terminated C strings.
+ */
+struct ChatSession *maho_core_chat_session_new(const struct MahoChatConfig *config);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_chat_session_new`, or null.
+ */
+void maho_core_chat_session_free(struct ChatSession *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer to a `ChatSession`.
+ * `name`, `description`, and `schema_json` must be null-terminated C strings.
+ */
+bool maho_core_chat_register_tool(struct ChatSession *ptr,
+                                  const char *name,
+                                  const char *description,
+                                  const char *schema_json);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer to a `ChatSession`.
+ */
+void maho_core_chat_set_event_sink(struct ChatSession *ptr,
+                                   void (*on_token)(void *user_data, const char *token),
+                                   void (*on_complete)(void *user_data,
+                                                       const char *full_text,
+                                                       const char *tool_calls_json),
+                                   void (*on_error)(void *user_data, const char *error),
+                                   void *user_data);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer to a `ChatSession`.
+ * `message` must be a valid null-terminated C string.
+ */
+bool maho_core_chat_send_user_turn(struct ChatSession *ptr, const char *message);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer to a `ChatSession`.
+ * `tool_call_id`, `tool_name`, and `result` must be null-terminated C strings.
+ */
+bool maho_core_chat_send_tool_result(struct ChatSession *ptr,
+                                     const char *tool_call_id,
+                                     const char *tool_name,
+                                     const char *result,
+                                     bool trigger);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer to a `ChatSession`.
+ */
+void maho_core_chat_cancel(struct ChatSession *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer to a `ChatSession`.
+ * `content` and `tool_calls_json` must be null-terminated C strings.
+ */
+void maho_core_chat_append_assistant_message(struct ChatSession *ptr,
+                                             const char *content,
+                                             const char *tool_calls_json);
 
 /**
  * Allocate a new ACP handle. Returns null on failure (should not happen).

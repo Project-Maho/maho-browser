@@ -139,14 +139,22 @@ source_set("maho_sidebar_core") {
 
 source_set("unit_tests") {
   testonly = true
-  sources = [ "maho_sidebar_dnd_dispatch_unittest.cc" ]
+  sources = [
+    "maho_sidebar_dnd_dispatch_unittest.cc",
+    "maho_sidebar_space_dot_view_unittest.cc",
+  ]
 
   deps = [
+    ":maho_sidebar_core",
     "//base",
     "//base/test:test_support",
+    "//cc/paint",
     "//chrome/browser/ui",
+    "//skia",
     "//testing/gtest",
     "//ui/base",
+    "//ui/compositor",
+    "//ui/gfx",
     "//ui/views:test_support",
   ]
 }

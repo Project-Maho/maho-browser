@@ -31,6 +31,7 @@ namespace maho::features {
 // mouse/keyboard focus path. The flag is retained as a kill-switch pending
 // end-to-end QA sign-off.
 BASE_DECLARE_FEATURE(kMahoUnifiedClickPath);
+BASE_DECLARE_FEATURE(kMahoCommandPaletteSeededHistory);
 
 }  // namespace maho::features
 

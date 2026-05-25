@@ -1,0 +1,261 @@
+---
+title: Sync
+description: Cross-device synchronization in Maho Browser
+sidebar: { order: 5 }
+---
+
+## Overview
+
+Maho Sync keeps browsing data consistent across your devices. When you change something on one device, the update is synchronized through a relay server and protected with end-to-end encryption.
+
+Sync is designed for continuity. A tab opened on Mac can appear on iPhone, bookmarks stay aligned across the fleet, and shared collections update in real time. The relay moves encrypted data between devices, but it cannot read the content it carries.
+
+## What sync covers
+
+Maho syncs eight kinds of data. Each entity has its own shape, version history, and propagation rules.
+
+| Entity | What syncs | Notes |
+|--------|------------|-------|
+| Spaces | Name, color, icon, tab order, folder structure, ATC rules | Full space configuration |
+| Tabs | URL, title, position within space, pinned state | Active tabs only |
+| Bookmarks | URL, title, folder hierarchy, tags | Full bookmark tree |
+| Notes | Content in Markdown, associated space, timestamps | Auto-merge on conflict |
+| Boosts | CSS and JS rules, URL patterns, preset configuration | Per-site customizations |
+| Reading List Items | URL, title, read or unread status, archive state | Reading progress |
+| Search Engines | Name, URL template, keyword shortcut | Custom search engines |
+| Shortcuts | Key binding, action, scope | Keyboard shortcut overrides |
+
+### Spaces
+
+Spaces carry the structure and configuration that define how you work in Maho.
+
+Synced space data includes:
+
+- Name
+- Color
+- Icon
+- Tab order
+- Folder structure
+- ATC rules
+
+Space sync preserves the full configuration, so a space looks and behaves the same on every device after synchronization completes.
+
+### Tabs
+
+Tabs are synced as active browsing state, not as a full historical archive.
+
+Synced tab fields include:
+
+- URL
+- Title
+- Position within the space
+- Pinned state
+
+Only active tabs are included. Tab state is kept aligned so that a device receiving the latest version sees the same working set and tab arrangement.
+
+### Bookmarks
+
+Bookmarks sync as a complete tree, including nested folders and tags.
+
+Synced bookmark data includes:
+
+- URL
+- Title
+- Folder hierarchy
+- Tags
+
+Because the entire bookmark tree is included, changes to folder structure propagate alongside item updates.
+
+### Notes
+
+Notes are synced as Markdown content with their owning space and timestamps.
+
+Synced note data includes:
+
+- Markdown content
+- Associated space
+- Timestamps
+
+Notes use auto-merge behavior when conflicts occur. This keeps collaborative or multi-device editing simple while still maintaining a stable final result.
+
+### Boosts
+
+Boosts are part of sync so site customizations follow you across devices.
+
+Synced boost data includes:
+
+- CSS rules
+- JavaScript rules
+- URL patterns
+- Preset configuration
+
+This covers both custom handcrafted boosts and one-click presets applied to a site.
+
+### Reading list items
+
+Reading list entries preserve reading progress and archive state.
+
+Synced reading list data includes:
+
+- URL
+- Title
+- Read or unread status
+- Archive state
+
+This keeps the list useful as a cross-device queue instead of a one-device scratchpad.
+
+### Search engines
+
+Custom search engines sync so your shortcuts remain available everywhere.
+
+Synced search engine data includes:
+
+- Name
+- URL template
+- Keyword shortcut
+
+This is useful when you maintain search engines for work, research, or domain-specific queries.
+
+### Shortcuts
+
+Keyboard shortcuts sync as overrides to the default binding set.
+
+Synced shortcut data includes:
+
+- Key binding
+- Action
+- Scope
+
+Shortcut sync ensures custom keymaps travel with your account and stay consistent on every device type.
+
+## Conflict resolution
+
+Maho uses last-write-wins, or LWW, for synced entities.
+
+### How LWW works
+
+- Each synced entity carries a version number
+- Version numbers increase monotonically for that entity
+- When conflicting edits arrive, the edit with the higher version wins
+- No manual conflict resolution is required
+- Deleted entities are tombstoned so the delete can propagate safely
+
+This model keeps synchronization deterministic. Every device can reach the same final state by applying the same version ordering.
+
+### Tombstones
+
+Deleted entities are not removed immediately from the sync graph. Instead, they are marked as deleted and kept as tombstones until the delete has had time to propagate.
+
+Tombstones matter because they prevent stale data from reappearing on another device that has not yet received the deletion event.
+
+## Send Tab
+
+Send Tab pushes a tab from one device to another instantly.
+
+### Behavior
+
+- Pick a tab on one device
+- Send it to a different signed in device
+- The recipient device receives a notification
+- The notification includes the tab URL and title
+
+### Platform support
+
+Send Tab works across all supported platforms.
+
+Examples include:
+
+- Mac to iPhone
+- iPhone to Mac
+- Android to iPad
+- Android to Mac
+
+The feature is device agnostic as long as both endpoints participate in the sync network.
+
+## Device types
+
+Maho recognizes four device types in the sync network.
+
+| Device type | Platform |
+|-------------|----------|
+| Mac | macOS desktop |
+| iPhone | iOS phone |
+| iPad | iOS tablet |
+| Android | Android phone or tablet |
+
+Device type awareness helps Maho present the correct sync targets and platform behavior without changing the underlying data model.
+
+## Relay server
+
+The default relay server is `wss://sync.maho.app`.
+
+### Transport
+
+- Sync uses WebSocket transport
+- Updates flow in real time when devices are online
+- The relay stores encrypted blobs only
+- The relay cannot read user data
+
+### Offline behavior
+
+When a device is offline, local changes queue on the device.
+Once the connection returns, queued changes sync automatically.
+
+This means the user can keep working without waiting for the network, and the sync layer catches up later.
+
+## Encryption
+
+All synced data uses end to end encryption.
+
+### Encryption properties
+
+- Data is encrypted before it reaches the relay
+- The relay never receives plaintext data
+- Encryption keys are derived from user account credentials
+- Devices perform key exchange during initial pairing
+
+### Pairing
+
+Initial pairing establishes trust between devices so they can exchange encrypted sync data securely. After pairing, devices can participate in the same encrypted sync set without exposing plaintext to the relay.
+
+## Shared collections
+
+Maho can share spaces and bookmark folders with other users.
+
+Shared collections support collaborative access with permission control.
+
+### Permission levels
+
+| Permission | Capabilities |
+|------------|--------------|
+| View | Read only access to shared content |
+| Edit | Add, remove, and modify items in the shared collection |
+| Admin | Manage permissions and delete the shared collection |
+
+### Shared collection behavior
+
+- Shared collections sync in real time
+- Changes made by one collaborator propagate to the others
+- Permissions define what each user can see and change
+- Spaces and bookmark folders both support sharing
+
+## Sync lifecycle
+
+A sync cycle follows the same basic flow across entity types.
+
+1. A local change is made on a device
+2. The entity version increases
+3. The change is encrypted locally
+4. The encrypted payload is sent to the relay
+5. Other devices receive and apply the newer version
+6. Conflicts are resolved by version order
+
+This workflow keeps synchronization predictable while avoiding user facing merge prompts.
+
+## Practical notes
+
+- Sync keeps active work aligned across devices
+- Shared collections support collaboration without exposing plaintext to the relay
+- Tombstones preserve delete history long enough for propagation
+- Offline changes are safe to make and will sync when the device reconnects
+- Send Tab is the fastest way to move a page from one device to another

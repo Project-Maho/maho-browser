@@ -96,6 +96,17 @@ button {
   cursor: pointer;
 }
 
+.tp-root::after {
+  content: '';
+  position: absolute;
+  inset: auto -80px -110px auto;
+  width: 260px;
+  height: 260px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(92, 131, 255, 0.18), transparent 70%);
+  pointer-events: none;
+}
+
 /* ── Mode chips — positioned absolutely inside canvas, top-left ───────────── */
 
 .tp-mode-chips {
@@ -219,6 +230,48 @@ button {
 }
 
 /* ── Prompt text ──────────────────────────────────────────────────────────── */
+
+.tp-canvas::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+      radial-gradient(circle, rgba(206, 225, 255, 0.18) 1px, transparent 1.6px) 0 0 / 18px 18px;
+  opacity: 0.38;
+  pointer-events: none;
+}
+
+.tp-canvas::after {
+  content: '';
+  position: absolute;
+  inset: auto 10% 0;
+  height: 120px;
+  background: linear-gradient(180deg, transparent, rgba(10, 14, 25, 0.56));
+  pointer-events: none;
+}
+
+.tp-glow {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(126, 184, 255, 0.34), rgba(126, 184, 255, 0));
+  filter: blur(8px);
+  pointer-events: none;
+}
+
+.tp-glow--top {
+  top: 30px;
+  right: 56px;
+  width: 116px;
+  height: 116px;
+}
+
+.tp-glow--bottom {
+  bottom: 80px;
+  left: 66px;
+  width: 138px;
+  height: 138px;
+  opacity: 0.74;
+}
 
 .tp-prompt {
   position: relative;
@@ -409,24 +462,24 @@ button {
   box-shadow: 0 0 0 1px rgba(10, 15, 28, 0.60);
 }
 
-/* Swatch colors — matches GT: white, pink, mauve, red, orange, yellow, green, blue, indigo */
-.tp-swatch--0 { background: #f2eeea; }
+/* Swatch colors */
+.tp-swatch--0 { background: #f4f0eb; }
 
-.tp-swatch--1 { background: #e8a9c0; }
+.tp-swatch--1 { background: #e7bfd0; }
 
-.tp-swatch--2 { background: #9e84b5; }
+.tp-swatch--2 { background: #9a81ad; }
 
-.tp-swatch--3 { background: #d4606e; }
+.tp-swatch--3 { background: #d3616f; }
 
-.tp-swatch--4 { background: #e8914e; }
+.tp-swatch--4 { background: #f0a35b; }
 
-.tp-swatch--5 { background: #e8c842; }
+.tp-swatch--5 { background: #efce4e; }
 
-.tp-swatch--6 { background: #3ec96d; }
+.tp-swatch--6 { background: #5cc56d; }
 
-.tp-swatch--7 { background: #6ab8f0; }
+.tp-swatch--7 { background: #74b9ff; }
 
-.tp-swatch--8 { background: #7080d4; }
+.tp-swatch--8 { background: #6478de; }
 
 /* ── Bottom row: wave + dial ──────────────────────────────────────────────── */
 
@@ -570,6 +623,24 @@ button {
 .tp-dial__indicator.is-hidden::before {
   opacity: 0;
 }
+
+.tp-dial__indicator.is-level-0 { transform: rotate(-138deg); }
+
+.tp-dial__indicator.is-level-1 { transform: rotate(-104deg); }
+
+.tp-dial__indicator.is-level-2 { transform: rotate(-72deg); }
+
+.tp-dial__indicator.is-level-3 { transform: rotate(-38deg); }
+
+.tp-dial__indicator.is-level-4 { transform: rotate(-6deg); }
+
+.tp-dial__indicator.is-level-5 { transform: rotate(28deg); }
+
+.tp-dial__indicator.is-level-6 { transform: rotate(60deg); }
+
+.tp-dial__indicator.is-level-7 { transform: rotate(94deg); }
+
+.tp-dial__indicator.is-level-8 { transform: rotate(128deg); }
 
 /* ── Footer ───────────────────────────────────────────────────────────────── */
 

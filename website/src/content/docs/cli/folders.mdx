@@ -1,0 +1,33 @@
+---
+title: maho folders
+description: List folders for an email account
+---
+
+List all folders (mailboxes) for a specific email account.
+
+## Usage
+
+```bash
+maho folders <account_id>
+```
+
+## Arguments
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `account_id` | string | Account ID (use `maho accounts` to find) |
+
+## Flags
+
+None.
+
+## Example
+
+```bash
+$ maho folders acc1
+ID       Name          Messages
+fold1    INBOX         142
+fold2    Sent          89
+fold3    Drafts        3
+fold4    Archive       1204
+```

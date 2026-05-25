@@ -1,0 +1,27 @@
+---
+title: API Reference
+description: MCP server tool reference for Maho Mail
+---
+
+Maho Mail includes an MCP (Model Context Protocol) server that exposes your email database to AI agents. Connect Claude, Cursor, or any MCP-compatible tool to your inbox.
+
+Examples use placeholder IDs. Use actual IDs from your Maho Mail database.
+
+## Connection
+
+The MCP server uses stdio transport. Configure your AI tool to launch:
+
+```bash
+maho-mcp
+```
+
+## Available Tools
+
+| Tool | Description |
+|------|-------------|
+| [`list_accounts`](/api/list-accounts/) | List all email accounts |
+| [`list_folders`](/api/list-folders/) | List folders for an account |
+| [`list_emails`](/api/list-emails/) | List emails in a folder |
+| [`get_email`](/api/get-email/) | Get full email content |
+| [`search_emails`](/api/search-emails/) | Full-text search across emails |
+| [`list_thread`](/api/list-thread/) | List all emails in a thread |

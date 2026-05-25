@@ -1,0 +1,40 @@
+---
+title: maho search
+description: Search emails via full-text search
+---
+
+Search emails using SQLite FTS5 full-text search across your local database.
+
+## Usage
+
+```bash
+maho search <query> [flags]
+```
+
+## Arguments
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `query` | string | Search query (FTS5 syntax) |
+
+## Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--account` | string | — | Filter by account ID |
+| `--folder` | string | — | Filter by folder ID |
+| `--limit` | i64 | 20 | Maximum number of results |
+| `--json` | — | — | Output as JSON |
+
+## Examples
+
+```bash
+# Search all emails
+maho search "project update"
+
+# Search within a specific account and folder
+maho search "invoice" --account acc1 --folder fold1
+
+# Search and pipe to AI
+maho search "meeting notes" --json | llm 'summarize these meetings'
+```

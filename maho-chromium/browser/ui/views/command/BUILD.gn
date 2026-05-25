@@ -13,6 +13,8 @@ source_set("maho_command_overlay") {
     "maho_command_overlay_view.h",
     "maho_command_result_row_view.cc",
     "maho_command_result_row_view.h",
+    "maho_command_search_engine_picker_view.cc",
+    "maho_command_search_engine_picker_view.h",
     "maho_shortcut_interceptor.cc",
     "maho_shortcut_interceptor.h",
   ]

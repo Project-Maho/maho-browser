@@ -4,6 +4,7 @@
 
 #include "base/logging.h"
 #include "base/no_destructor.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_window.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -21,14 +22,14 @@ MahoSpaceProfileBridge* MahoSpaceProfileBridge::GetInstance() {
 }
 
 MahoSpaceProfileBridge::MahoSpaceProfileBridge() {
-  browser_collection_observation_.Observe(GlobalBrowserCollection::GetInstance());
+  browser_collection_observation_.Observe(
+      GlobalBrowserCollection::GetInstance());
 }
 
 MahoSpaceProfileBridge::~MahoSpaceProfileBridge() = default;
 
-void MahoSpaceProfileBridge::RegisterSpace(
-    const std::string& space_id,
-    const base::FilePath& profile_path) {
+void MahoSpaceProfileBridge::RegisterSpace(const std::string& space_id,
+                                           const base::FilePath& profile_path) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   space_to_profile_[space_id] = profile_path;
   for (Observer& observer : observers_) {
@@ -87,8 +88,8 @@ bool MahoSpaceProfileBridge::SwitchToSpace(Browser* browser,
   const std::string& previous_space =
       browser ? GetActiveSpaceId(browser) : active_space_id_;
   auto old_it = space_to_profile_.find(previous_space);
-  bool profile_changed = (old_it != space_to_profile_.end() &&
-                          old_it->second != it->second);
+  bool profile_changed =
+      (old_it != space_to_profile_.end() && old_it->second != it->second);
 
   MahoCore* core = maho::GetCore();
   if (core) {
@@ -96,7 +97,8 @@ bool MahoSpaceProfileBridge::SwitchToSpace(Browser* browser,
   }
 
   // Always update both browser-scoped and the process-global fallback so
-  // surfaces that have no browser context see a consistent last-activated value.
+  // surfaces that have no browser context see a consistent last-activated
+  // value.
   if (browser) {
     browser_active_space_[browser] = space_id;
   }
@@ -121,7 +123,7 @@ void MahoSpaceProfileBridge::SetActiveSpaceId(const std::string& space_id) {
 }
 
 void MahoSpaceProfileBridge::SetActiveSpaceId(Browser* browser,
-                                               const std::string& space_id) {
+                                              const std::string& space_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (browser) {
     browser_active_space_[browser] = space_id;
@@ -138,7 +140,7 @@ void MahoSpaceProfileBridge::NotifyChanged() {
 }
 
 void MahoSpaceProfileBridge::SetLastActiveTab(const std::string& space_id,
-                                               const std::string& tab_id) {
+                                              const std::string& tab_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   last_active_tab_per_space_[space_id] = tab_id;
 }
@@ -175,6 +177,38 @@ const std::string& MahoSpaceProfileBridge::GetActiveSpaceId(
     auto it = browser_active_space_.find(browser);
     if (it != browser_active_space_.end()) {
       return it->second;
+    }
+  }
+  return active_space_id_;
+}
+
+const std::string& MahoSpaceProfileBridge::GetActiveSpaceId(
+    BrowserWindowInterface* browser) const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!browser) {
+    return active_space_id_;
+  }
+  Browser* browser_ptr = browser->GetBrowserForMigrationOnly();
+  if (browser_ptr) {
+    auto it = browser_active_space_.find(browser_ptr);
+    if (it != browser_active_space_.end()) {
+      // Browser-scoped entry exists — this is the canonical value.
+      return it->second;
+    }
+    // No browser-scoped entry. Fall back to the global active_space_id_ only
+    // when the browser's profile matches the profile registered for that space,
+    // or when there is no profile entry for the active space. Returning empty
+    // for a cross-profile browser prevents maho_tab_registry from dispatching
+    // tab events to the wrong space.
+    if (!active_space_id_.empty()) {
+      auto space_it = space_to_profile_.find(active_space_id_);
+      if (space_it != space_to_profile_.end()) {
+        const base::FilePath browser_profile_basename =
+            browser_ptr->profile()->GetPath().BaseName();
+        if (browser_profile_basename != space_it->second) {
+          return base::EmptyString();
+        }
+      }
     }
   }
   return active_space_id_;
@@ -234,9 +268,22 @@ void MahoSpaceProfileBridge::OnBrowserCreated(BrowserWindowInterface* browser) {
     return;
   }
   Browser* browser_ptr = browser->GetBrowserForMigrationOnly();
-  if (browser_ptr && !active_space_id_.empty()) {
-    browser_active_space_.emplace(browser_ptr, active_space_id_);
+  if (!browser_ptr || active_space_id_.empty()) {
+    return;
   }
+  // Only seed browser_active_space_ when the new browser's profile matches
+  // the profile registered for active_space_id_. Skipping cross-profile
+  // browsers prevents a browser opened for a different profile from
+  // inheriting a space that does not belong to it.
+  auto it = space_to_profile_.find(active_space_id_);
+  if (it != space_to_profile_.end()) {
+    const base::FilePath browser_profile_basename =
+        browser_ptr->profile()->GetPath().BaseName();
+    if (browser_profile_basename != it->second) {
+      return;
+    }
+  }
+  browser_active_space_.emplace(browser_ptr, active_space_id_);
 }
 
 void MahoSpaceProfileBridge::OnBrowserClosed(BrowserWindowInterface* browser) {
@@ -270,7 +317,8 @@ base::FilePath MahoSpaceProfileBridge::GetProfilePathForTesting(
 std::optional<base::FilePath> MahoSpaceProfileBridge::ProfileBasenameForId(
     std::string_view profile_id) {
   auto is_ascii_whitespace = [](char c) {
-    return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f';
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' ||
+           c == '\f';
   };
   std::string_view trimmed = profile_id;
   while (!trimmed.empty() && is_ascii_whitespace(trimmed.front())) {
@@ -287,8 +335,12 @@ std::optional<base::FilePath> MahoSpaceProfileBridge::ProfileBasenameForId(
     for (size_t i = 0; i < a.length(); ++i) {
       char ca = a[i];
       char cb = b[i];
-      if (ca >= 'A' && ca <= 'Z') ca += 32;
-      if (cb >= 'A' && cb <= 'Z') cb += 32;
+      if (ca >= 'A' && ca <= 'Z') {
+        ca += 32;
+      }
+      if (cb >= 'A' && cb <= 'Z') {
+        cb += 32;
+      }
       if (ca != cb) {
         return false;
       }
