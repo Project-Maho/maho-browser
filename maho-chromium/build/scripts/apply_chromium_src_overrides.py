@@ -8,6 +8,19 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+# ---------------------------------------------------------------------------
+# Platform detection
+# ---------------------------------------------------------------------------
+
+def host_platform() -> str:
+    """Return the canonical host platform string: 'mac', 'win', or 'linux'."""
+    if sys.platform == "darwin":
+        return "mac"
+    if sys.platform == "win32":
+        return "win"
+    return "linux"
+
+
 @dataclass(frozen=True)
 class Replacement:
     old: str
@@ -22,6 +35,18 @@ class Replacement:
     # content may already be present at a different location than the anchor
     # used in `old`, which would otherwise cause a duplicate insertion.
     guard: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Per-file platform filter
+# ---------------------------------------------------------------------------
+
+# Maps a relative path (matching a key in REPLACEMENTS) to the set of
+# platforms on which that file exists in the Chromium checkout.  A path
+# absent from this map is treated as enabled on all platforms.
+FILE_PLATFORMS: dict[str, frozenset[str]] = {
+    "chrome/app/app-Info.plist": frozenset({"mac"}),
+}
 
 
 REPLACEMENTS: dict[str, list[Replacement]] = {
@@ -1108,6 +1133,12 @@ def main() -> int:
         default=default_chromium_src(),
         help="Path to chromium/src checkout (default: workspace chromium/src)",
     )
+    parser.add_argument(
+        "--platform",
+        choices=("mac", "win", "linux"),
+        default=host_platform(),
+        help="Target platform for per-file filtering (default: auto-detected host)",
+    )
     args = parser.parse_args()
 
     chromium_src = args.chromium_src.resolve()
@@ -1117,11 +1148,16 @@ def main() -> int:
 
     any_changed = False
     for relative_path, replacements in REPLACEMENTS.items():
+        enabled_platforms = FILE_PLATFORMS.get(relative_path)
+        if enabled_platforms is not None and args.platform not in enabled_platforms:
+            print(
+                f"skip [{args.platform}]: {relative_path} "
+                f"(enabled on: {', '.join(sorted(enabled_platforms))})"
+            )
+            continue
+
         target_file = chromium_src / relative_path
         if not target_file.exists():
-            if relative_path == "chrome/app/app-Info.plist" and sys.platform != "darwin":
-                print(f"Skipping macOS-only override: {relative_path} (not on macOS)")
-                continue
             print(f"target file not found: {target_file}", file=sys.stderr)
             return 1
 
