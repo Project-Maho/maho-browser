@@ -7,12 +7,27 @@
 #include <utility>
 #include <vector>
 
+#include "base/auto_reset.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
+#include "ui/views/controls/button/md_text_button.h"
+#include "chrome/browser/extensions/extension_action_runner.h"
+#include "chrome/browser/extensions/extension_context_menu_model.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser.h"
+#include "components/sessions/content/session_tab_helper.h"
+#include "extensions/browser/extension_action.h"
+#include "extensions/browser/extension_action_icon_factory.h"
+#include "extensions/browser/extension_action_manager.h"
+#include "extensions/browser/extension_icon_image.h"
+#include "extensions/browser/extension_registry.h"
+#include "extensions/common/manifest_handlers/icons_handler.h"
 #include "maho/browser/ui/views/maho_mac_sf_symbol_helper.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/mojom/menu_source_type.mojom.h"
+#include "ui/base/ui_base_types.h"
 #include "ui/color/color_id.h"
 #include "ui/compositor/layer.h"
 #include "ui/events/event.h"
@@ -25,12 +40,14 @@
 #include "ui/views/border.h"
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
+#include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/button/toggle_button.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/layout/flex_layout.h"
+#include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
@@ -102,22 +119,28 @@ bool IsDisabledAction(const MahoLocationBarUtilityPanelAction& action) {
   return !action.enabled;
 }
 
-class MahoLocationBarUtilityPanelActionView : public views::View {
+class MahoLocationBarUtilityPanelActionView
+    : public views::View,
+      public extensions::ExtensionActionIconFactory::Observer,
+      public extensions::IconImage::Observer {
   METADATA_HEADER(MahoLocationBarUtilityPanelActionView, views::View)
 
  public:
   enum class DisplayMode {
     kToolbarButton,
     kExtensionChip,
+    kExtensionIconChip,
     kSettingsRow,
   };
 
   explicit MahoLocationBarUtilityPanelActionView(
+      Browser* browser,
       MahoLocationBarUtilityPanelAction action,
       DisplayMode display_mode)
-      : action_(std::move(action)), display_mode_(display_mode) {
+      : browser_(browser), action_(std::move(action)), display_mode_(display_mode) {
     const bool is_toolbar = display_mode_ == DisplayMode::kToolbarButton;
     const bool is_chip = display_mode_ == DisplayMode::kExtensionChip;
+    const bool is_icon_chip = display_mode_ == DisplayMode::kExtensionIconChip;
     const bool is_settings = display_mode_ == DisplayMode::kSettingsRow;
     const bool has_inline_toggle = HasInlineToggle();
     const bool show_settings_subtitle = is_settings && !action_.subtitle.empty();
@@ -128,14 +151,16 @@ class MahoLocationBarUtilityPanelActionView : public views::View {
       SetPreferredSize(gfx::Size(kToolbarRowHeight, kToolbarRowHeight));
     } else if (is_settings) {
       SetPreferredSize(gfx::Size(0, kSettingsRowHeight));
+    } else if (is_icon_chip) {
+      SetPreferredSize(gfx::Size(kChipHeight, kChipHeight));
     } else if (is_chip && action_.title == u"+") {
       SetPreferredSize(gfx::Size(kAddChipWidth, kChipHeight));
     }
 
     const int corner_radius = is_toolbar   ? kToolbarButtonCornerRadius
-                              : is_chip     ? kChipCornerRadius
+                              : (is_chip || is_icon_chip) ? kChipCornerRadius
                               : is_settings ? kSettingsRowCornerRadius
-                                            : 0;
+                              : 0;
     SetBackground(views::CreateRoundedRectBackground(
         is_settings ? ui::kColorSysSurface1 : ui::kColorSysSurface1,
         corner_radius));
@@ -159,14 +184,14 @@ class MahoLocationBarUtilityPanelActionView : public views::View {
     auto* layout = content->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kHorizontal,
         gfx::Insets::VH(0, is_toolbar   ? 0
-                           : is_chip     ? kChipHorizontalPadding
+                           : (is_chip || is_icon_chip) ? kChipHorizontalPadding
                            : is_settings ? kSettingsRowHorizontalPadding
-                                         : 0),
+                           : 0),
         is_toolbar   ? 0
-        : is_chip     ? kToolbarIconSpacing
+        : (is_chip || is_icon_chip) ? kToolbarIconSpacing
         : is_settings ? kToolbarIconSpacing
                       : 0));
-    if (is_toolbar) {
+    if (is_toolbar || is_icon_chip) {
       layout->set_main_axis_alignment(
           views::BoxLayout::MainAxisAlignment::kCenter);
     }
@@ -175,18 +200,45 @@ class MahoLocationBarUtilityPanelActionView : public views::View {
 
     views::View* icon_parent = content;
     const int icon_size = is_toolbar   ? kToolbarIconSize
+                         : is_icon_chip ? 16
                          : is_chip     ? kSettingsIconSize
                          : is_settings ? kSettingsIconSize
-                                       : 0;
+                         : 0;
 
     auto* icon_image = icon_parent->AddChildView(std::make_unique<views::ImageView>());
     icon_image->SetImageSize(gfx::Size(icon_size, icon_size));
     icon_image->SetCanProcessEventsWithinSubtree(false);
-    icon_image->SetImage(CreateMahoMacSFSymbol(
-        action_.sf_symbol_name, base::UTF16ToUTF8(BuildAccessibleName(action_)),
-        icon_size, ui::kColorSysOnSurfaceSubtle));
+    icon_image_view_ = icon_image;
 
-    if (!is_toolbar) {
+    if (is_icon_chip && browser_ && !action_.extension_id.empty()) {
+      Profile* profile = browser_->profile();
+      auto* registry = extensions::ExtensionRegistry::Get(profile);
+      const extensions::Extension* extension =
+          registry ? registry->GetInstalledExtension(action_.extension_id) : nullptr;
+      if (extension) {
+        auto* action_manager = extensions::ExtensionActionManager::Get(profile);
+        extensions::ExtensionAction* extension_action =
+            action_manager ? action_manager->GetExtensionAction(*extension) : nullptr;
+        if (extension_action) {
+          icon_factory_ = std::make_unique<extensions::ExtensionActionIconFactory>(
+              extension, extension_action, this);
+        } else {
+          icon_image_ = std::make_unique<extensions::IconImage>(
+              profile, extension, extensions::IconsInfo::GetIcons(extension),
+              icon_size, gfx::ImageSkia(), this);
+        }
+      }
+    }
+
+    if (is_icon_chip && (icon_factory_ || icon_image_)) {
+      UpdateIconImage();
+    } else {
+      icon_image->SetImage(CreateMahoMacSFSymbol(
+          action_.sf_symbol_name, base::UTF16ToUTF8(BuildAccessibleName(action_)),
+          icon_size, ui::kColorSysOnSurfaceSubtle));
+    }
+
+    if (!is_toolbar && !is_icon_chip) {
       auto* text_column = content->AddChildView(std::make_unique<views::View>());
       auto* text_layout = text_column->SetLayoutManager(
           std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical,
@@ -234,7 +286,14 @@ class MahoLocationBarUtilityPanelActionView : public views::View {
                                                      : ax::mojom::Role::kButton);
     GetViewAccessibility().SetName(BuildAccessibleName(action_));
     SetTooltipText(ActionTooltip(action_));
-    SetEnabled(action_.enabled);
+    CHECK(!icon_factory_ || !icon_image_);
+    if (!action_.extension_id.empty()) {
+      // Keep enabled in Views framework to receive right-clicks for the context menu,
+      // but interactions are blocked via action_.enabled checks in event handlers.
+      SetEnabled(true);
+    } else {
+      SetEnabled(action_.enabled);
+    }
   }
 
   gfx::Size CalculatePreferredSize(
@@ -356,11 +415,60 @@ class MahoLocationBarUtilityPanelActionView : public views::View {
     }
   }
 
+  void UpdateIconImage() {
+    if (!icon_image_view_) {
+      return;
+    }
+    gfx::Image image;
+    if (icon_factory_) {
+      int tab_id = -1;
+      if (browser_) {
+        if (auto* web_contents = browser_->tab_strip_model()->GetActiveWebContents()) {
+          SessionID session_id = sessions::SessionTabHelper::IdForTab(web_contents);
+          if (session_id.is_valid()) {
+            tab_id = session_id.id();
+          }
+        }
+      }
+      image = icon_factory_->GetIcon(tab_id);
+    } else if (icon_image_) {
+      image = icon_image_->image();
+    }
+
+    if (!image.IsEmpty()) {
+      icon_image_view_->SetImage(ui::ImageModel::FromImageSkia(image.AsImageSkia()));
+    } else {
+      icon_image_view_->SetImage(ui::ImageModel());
+    }
+  }
+
+
+  // extensions::ExtensionActionIconFactory::Observer:
+  void OnIconUpdated() override {
+    UpdateIconImage();
+  }
+
+  // extensions::IconImage::Observer:
+  void OnExtensionIconImageChanged(extensions::IconImage* image) override {
+    UpdateIconImage();
+  }
+
+  void ShowContextMenu(const gfx::Point& p,
+                       ui::mojom::MenuSourceType source_type) override {
+    if (action_.context_menu_callback) {
+      action_.context_menu_callback.Run(this);
+    }
+  }
+
+  raw_ptr<Browser> browser_ = nullptr;
   MahoLocationBarUtilityPanelAction action_;
   DisplayMode display_mode_;
   raw_ptr<views::View> selection_background_ = nullptr;
   raw_ptr<views::Label> subtitle_label_ = nullptr;
   raw_ptr<views::ToggleButton> toggle_button_ = nullptr;
+  raw_ptr<views::ImageView> icon_image_view_ = nullptr;
+  std::unique_ptr<extensions::ExtensionActionIconFactory> icon_factory_;
+  std::unique_ptr<extensions::IconImage> icon_image_;
 };
 
 BEGIN_METADATA(MahoLocationBarUtilityPanelActionView)
@@ -438,6 +546,13 @@ MahoLocationBarUtilityPanelView::MahoLocationBarUtilityPanelView(
       1, kPanelCornerRadius, ui::kColorSysSurfaceVariant));
 
   BuildContents();
+
+  if (model_.owning_browser) {
+    if (auto* bridge = MahoExtensionStateBridge::FromProfile(
+            model_.owning_browser->profile())) {
+      bridge_observation_.Observe(bridge);
+    }
+  }
 }
 
 MahoLocationBarUtilityPanelView::~MahoLocationBarUtilityPanelView() = default;
@@ -477,43 +592,87 @@ void MahoLocationBarUtilityPanelView::BuildContents() {
 }
 
 void MahoLocationBarUtilityPanelView::AddZone(const MahoUtilityPanelZone& zone) {
-  AddZoneHeader(zone.header_label);
+  if (zone.id == MahoUtilityPanelZoneId::kExtensions) {
+    extensions_container_ = contents_view_->AddChildView(std::make_unique<views::View>());
+    extensions_container_->SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kVertical, gfx::Insets(), 0));
+    BuildExtensionsZoneContents(zone);
+    return;
+  }
+
+  AddZoneHeader(zone.header_label, zone.header_trailing_action, contents_view_);
   switch (zone.style) {
     case MahoUtilityPanelZoneStyle::kToolbarRow:
-      AddToolbarRowZone(zone);
+      AddToolbarRowZone(zone, contents_view_);
       return;
     case MahoUtilityPanelZoneStyle::kChipRow:
-      AddChipRowZone(zone);
+      AddChipRowZone(zone, contents_view_);
       return;
     case MahoUtilityPanelZoneStyle::kSettingsList:
-      AddSettingsListZone(zone);
+      AddSettingsListZone(zone, contents_view_);
       return;
   }
 }
 
+void MahoLocationBarUtilityPanelView::BuildExtensionsZoneContents(
+    const MahoUtilityPanelZone& zone) {
+  DCHECK(extensions_container_);
+  for (const auto& item : zone.items) {
+    action_views_for_testing_.erase(item.title);
+  }
+  AddZoneHeader(zone.header_label, zone.header_trailing_action, extensions_container_);
+  AddChipRowZone(zone, extensions_container_);
+}
+
 void MahoLocationBarUtilityPanelView::AddZoneHeader(
-    const std::u16string& header_label) {
+    const std::u16string& header_label,
+    const std::optional<MahoLocationBarUtilityPanelAction>& trailing_action,
+    views::View* parent_view) {
   if (header_label.empty()) {
     return;
   }
 
-  auto* header = contents_view_->AddChildView(std::make_unique<views::Label>(
-      header_label, views::style::CONTEXT_LABEL,
-      views::style::STYLE_BODY_4_MEDIUM));
-  header->SetBorder(views::CreateEmptyBorder(
-      gfx::Insets::TLBR(kZoneHeaderTopPadding, 2, kZoneHeaderBottomPadding, 2)));
-  header->SetAutoColorReadabilityEnabled(false);
-  header->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
-  header->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+  if (trailing_action.has_value()) {
+    auto* container = parent_view->AddChildView(std::make_unique<views::View>());
+    auto* layout = container->SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kHorizontal,
+        gfx::Insets::TLBR(kZoneHeaderTopPadding, 2, kZoneHeaderBottomPadding, 2),
+        0));
+    layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
+
+    auto* header = container->AddChildView(std::make_unique<views::Label>(
+        header_label, views::style::CONTEXT_LABEL,
+        views::style::STYLE_BODY_4_MEDIUM));
+    header->SetAutoColorReadabilityEnabled(false);
+    header->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
+    header->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+    layout->SetFlexForView(header, 1);
+    auto* trailing_button = container->AddChildView(std::make_unique<views::MdTextButton>(
+        base::BindRepeating(&MahoLocationBarUtilityPanelView::OnManageButtonClicked,
+                            base::Unretained(this), *trailing_action),
+        trailing_action->title));
+    trailing_button->SetStyle(ui::ButtonStyle::kText);
+    RegisterActionViewForTesting(*trailing_action, trailing_button);
+  } else {
+    auto* header = parent_view->AddChildView(std::make_unique<views::Label>(
+        header_label, views::style::CONTEXT_LABEL,
+        views::style::STYLE_BODY_4_MEDIUM));
+    header->SetBorder(views::CreateEmptyBorder(
+        gfx::Insets::TLBR(kZoneHeaderTopPadding, 2, kZoneHeaderBottomPadding, 2)));
+    header->SetAutoColorReadabilityEnabled(false);
+    header->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
+    header->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+  }
 }
 
 void MahoLocationBarUtilityPanelView::AddToolbarRowZone(
-    const MahoUtilityPanelZone& zone) {
+    const MahoUtilityPanelZone& zone,
+    views::View* parent_view) {
   if (zone.items.empty()) {
     return;
   }
 
-  auto* section = contents_view_->AddChildView(std::make_unique<views::View>());
+  auto* section = parent_view->AddChildView(std::make_unique<views::View>());
   auto* layout = section->SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kHorizontal, gfx::Insets(),
       kToolbarIconSpacing));
@@ -523,19 +682,21 @@ void MahoLocationBarUtilityPanelView::AddToolbarRowZone(
   for (const auto& action : zone.items) {
     auto* action_view = section->AddChildView(
         std::make_unique<MahoLocationBarUtilityPanelActionView>(
-            action, MahoLocationBarUtilityPanelActionView::DisplayMode::kToolbarButton));
+            model_.owning_browser, action,
+            MahoLocationBarUtilityPanelActionView::DisplayMode::kToolbarButton));
     RegisterActionViewForTesting(action, action_view);
     layout->SetFlexForView(action_view, 1);
   }
 }
 
 void MahoLocationBarUtilityPanelView::AddChipRowZone(
-    const MahoUtilityPanelZone& zone) {
+    const MahoUtilityPanelZone& zone,
+    views::View* parent_view) {
   if (zone.items.empty()) {
     return;
   }
 
-  auto* section = contents_view_->AddChildView(std::make_unique<views::View>());
+  auto* section = parent_view->AddChildView(std::make_unique<views::View>());
   auto* layout = section->SetLayoutManager(std::make_unique<views::FlexLayout>());
   layout->SetOrientation(views::LayoutOrientation::kHorizontal);
   layout->SetCrossAxisAlignment(views::LayoutAlignment::kStart);
@@ -545,20 +706,25 @@ void MahoLocationBarUtilityPanelView::AddChipRowZone(
                      gfx::Insets::VH(0, kChipRowSpacing / 2));
 
   for (const auto& action : zone.items) {
+    const bool is_real_ext = !action.extension_id.empty();
     auto* action_view = section->AddChildView(
         std::make_unique<MahoLocationBarUtilityPanelActionView>(
-            action, MahoLocationBarUtilityPanelActionView::DisplayMode::kExtensionChip));
+            model_.owning_browser, action,
+            is_real_ext
+                ? MahoLocationBarUtilityPanelActionView::DisplayMode::kExtensionIconChip
+                : MahoLocationBarUtilityPanelActionView::DisplayMode::kExtensionChip));
     RegisterActionViewForTesting(action, action_view);
   }
 }
 
 void MahoLocationBarUtilityPanelView::AddSettingsListZone(
-    const MahoUtilityPanelZone& zone) {
+    const MahoUtilityPanelZone& zone,
+    views::View* parent_view) {
   if (zone.items.empty()) {
     return;
   }
 
-  auto* section = contents_view_->AddChildView(std::make_unique<views::View>());
+  auto* section = parent_view->AddChildView(std::make_unique<views::View>());
   auto* layout = section->SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical, gfx::Insets(),
       0));
@@ -568,9 +734,57 @@ void MahoLocationBarUtilityPanelView::AddSettingsListZone(
   for (const auto& action : zone.items) {
     auto* action_view = section->AddChildView(
         std::make_unique<MahoLocationBarUtilityPanelActionView>(
-            action, MahoLocationBarUtilityPanelActionView::DisplayMode::kSettingsRow));
+            model_.owning_browser, action,
+            MahoLocationBarUtilityPanelActionView::DisplayMode::kSettingsRow));
     RegisterActionViewForTesting(action, action_view);
   }
+}
+
+void MahoLocationBarUtilityPanelView::OnInstalledExtensionsChanged() {
+  if (rebuilding_extensions_) {
+    return;
+  }
+  if (!model_.owning_browser) {
+    return;
+  }
+
+  base::AutoReset<bool> auto_reset(&rebuilding_extensions_, true);
+
+  if (extensions_container_) {
+    for (auto it = action_views_for_testing_.begin(); it != action_views_for_testing_.end(); ) {
+      if (it->second && extensions_container_->Contains(it->second)) {
+        it = action_views_for_testing_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    extensions_container_->RemoveAllChildViews();
+    MahoUtilityPanelZone zone = internal::BuildExtensionsZone(model_.owning_browser);
+    BuildExtensionsZoneContents(zone);
+    contents_view_->InvalidateLayout();
+    SizeToContents();
+  }
+}
+
+void MahoLocationBarUtilityPanelView::RunExtensionContextMenu(
+    std::unique_ptr<extensions::ExtensionContextMenuModel> menu_model,
+    views::View* anchor) {
+  if (!anchor || !anchor->GetWidget()) {
+    return;
+  }
+
+  const int generation = ++menu_generation_;
+  context_menu_runner_.reset();
+  current_menu_model_ = std::move(menu_model);
+  context_menu_runner_ = std::make_unique<views::MenuRunner>(
+      current_menu_model_.get(),
+      views::MenuRunner::HAS_MNEMONICS | views::MenuRunner::CONTEXT_MENU,
+      base::BindRepeating(&MahoLocationBarUtilityPanelView::OnMenuClosed,
+                          base::Unretained(this), generation));
+
+  context_menu_runner_->RunMenuAt(
+      anchor->GetWidget(), nullptr, anchor->GetBoundsInScreen(),
+      views::MenuAnchorPosition::kTopLeft, ui::mojom::MenuSourceType::kMouse);
 }
 
 void MahoLocationBarUtilityPanelView::AddFooterSummary() {
@@ -602,6 +816,27 @@ void MahoLocationBarUtilityPanelView::RegisterActionViewForTesting(
     views::View* view) {
   if (!action.title.empty() && view) {
     action_views_for_testing_[action.title] = view;
+  }
+}
+
+void MahoLocationBarUtilityPanelView::OnMenuClosed(int generation) {
+  if (generation != menu_generation_) {
+    return;
+  }
+  context_menu_runner_.reset();
+  current_menu_model_.reset();
+}
+
+void MahoLocationBarUtilityPanelView::OnManageButtonClicked(
+    MahoLocationBarUtilityPanelAction action) {
+  if (!action.callback.is_null()) {
+    action.callback.Run();
+  }
+  if (action.close_after_activate) {
+    if (views::Widget* widget = GetWidget(); widget && !widget->IsClosed()) {
+      widget->CloseWithReason(
+          views::Widget::ClosedReason::kAcceptButtonClicked);
+    }
   }
 }
 
