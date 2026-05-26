@@ -157,6 +157,7 @@ source_set("maho_context_menus") {
     "//maho/third_party/maho:maho_ffi_headers",
     "//maho/browser:maho_theme_support",
     "//maho/browser/ui/views/sidebar:maho_sidebar_library",
+    "//maho/browser/ui/views/space_config:maho_space_config_dialog",
     "//net",
     "//ui/base",
     "//ui/compositor",
@@ -198,13 +199,17 @@ source_set("maho_location_bar_views") {
   ]
   deps = [
     ":maho_core_holder",
+    ":maho_extension_state_bridge",
     "//base",
     "//chrome/browser/content_settings:content_settings_factory",
+    "//chrome/browser/extensions",
     "//chrome/browser/image_editor",
     "//chrome/browser/page_info",
     "//chrome/browser/permissions",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/ui/tabs:tab_strip",
+    "//extensions/browser",
+    "//extensions/common",
     "//chrome/browser/ui/location_bar",
     "//chrome/browser/ui/sharing_hub:sharing_hub",
     "//chrome/browser/ui/sharing_hub:impl",
@@ -237,15 +242,18 @@ source_set("maho_location_bar_views_unittests") {
   ]
   deps = [
     ":maho_location_bar_views",
+    ":maho_extension_state_bridge",
     "//base",
     "//chrome/browser/content_settings:content_settings_factory",
     "//chrome/browser/permissions",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/ui/location_bar",
+    "//chrome/test:test_support",
     "//components/content_settings/core/common",
     "//components/permissions",
     "//components/security_state/core",
     "//content/public/browser",
+    "//extensions/browser:test_support",
     "//testing/gtest",
     "//ui/views:test_support",
     "//url",
@@ -376,6 +384,24 @@ source_set("maho_space_profile_bridge") {
   ]
 }
 
+source_set("maho_extension_state_bridge") {
+  sources = [
+    "extensions/maho_extension_state_bridge.cc",
+    "extensions/maho_extension_state_bridge.h",
+  ]
+  public_deps = [
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//extensions/browser",
+    "//extensions/common",
+  ]
+  deps = [
+    ":maho_core_holder",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//maho/third_party/maho:maho_core_prebuilt",
+  ]
+}
+
 source_set("maho_browser_main_extra_parts") {
   sources = [
     "maho_browser_main_extra_parts.cc",
@@ -383,6 +409,7 @@ source_set("maho_browser_main_extra_parts") {
   ]
   deps = [
     ":maho_core_holder",
+    ":maho_extension_state_bridge",
     ":maho_tab_registry",
     ":maho_theme_support",
     "//base",

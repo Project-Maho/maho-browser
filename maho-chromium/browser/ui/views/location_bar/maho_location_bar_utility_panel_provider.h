@@ -8,12 +8,17 @@
 #include <vector>
 
 #include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/values.h"
 
 class Browser;
 class LocationBar;
 class LocationBarModel;
 class Profile;
+
+namespace views {
+class View;
+}  // namespace views
 
 namespace content {
 class WebContents;
@@ -52,6 +57,11 @@ struct MahoLocationBarUtilityPanelAction {
   std::u16string toggle_off_subtitle;
   base::RepeatingCallback<void(bool)> toggle_callback;
   bool close_after_activate = false;
+
+  // Extension Icon Grid Phase 3 updates
+  std::string extension_id;
+  base::RepeatingCallback<void(views::View* anchor)> context_menu_callback;
+  bool context_menu_enabled = true;
 };
 
 struct MahoLocationBarUtilityPanelFooter {
@@ -95,6 +105,7 @@ struct MahoUtilityPanelZone {
   MahoUtilityPanelZoneStyle style = MahoUtilityPanelZoneStyle::kToolbarRow;
   std::u16string header_label;
   std::vector<MahoLocationBarUtilityPanelAction> items;
+  std::optional<MahoLocationBarUtilityPanelAction> header_trailing_action;
 };
 
 struct MahoLocationBarUtilityPanelModel {
@@ -106,6 +117,7 @@ struct MahoLocationBarUtilityPanelModel {
 
   std::vector<MahoUtilityPanelZone> zones;
   MahoLocationBarUtilityPanelFooter footer;
+  raw_ptr<Browser> owning_browser = nullptr;
 };
 
 namespace internal {
@@ -134,18 +146,16 @@ MahoLocationBarUtilityPanelAction BuildBlockAdsAndTrackersRowForState(
 void SetBlockAdsAndTrackersEnabledForOrigin(const std::string& origin,
                                             bool blocking_enabled);
 
-std::vector<MahoLocationBarUtilityPanelAction> BuildInstalledExtensions(
-    const std::string& json);
+std::vector<MahoLocationBarUtilityPanelAction> BuildExtensionIconActions(
+    Browser* browser);
+
+MahoLocationBarUtilityPanelAction BuildExtensionsManageAction(Browser* browser);
 
 MahoUtilityPanelZone BuildToolbarZone(Browser* browser);
 
-MahoUtilityPanelZone BuildExtensionsZone(const std::string& json,
-                                         Browser* browser);
+MahoUtilityPanelZone BuildExtensionsZone(Browser* browser);
 
 MahoUtilityPanelZone BuildSettingsZone(Browser* browser);
-
-MahoLocationBarUtilityPanelAction BuildExtensionsSummaryAction(
-    const std::vector<MahoLocationBarUtilityPanelAction>& extensions);
 
 MahoLocationBarUtilityPanelAction BuildAutoPipSettingsRow(
     content::WebContents* web_contents,

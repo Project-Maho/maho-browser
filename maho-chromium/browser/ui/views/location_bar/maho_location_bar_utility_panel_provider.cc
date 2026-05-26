@@ -43,6 +43,24 @@
 #include "url/gurl.h"
 #include "url/origin.h"
 
+#include "chrome/browser/extensions/extension_context_menu_model.h"
+#include "chrome/browser/extensions/extension_action_runner.h"
+#include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
+#include "extensions/browser/extension_action_manager.h"
+#include "extensions/browser/extension_registry.h"
+#include "extensions/common/extension.h"
+#include "extensions/common/manifest_handlers/icons_handler.h"
+#include "components/sessions/content/session_tab_helper.h"
+#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
+#include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_view.h"
+#include "ui/views/bubble/bubble_dialog_delegate_view.h"
+#include "ui/views/view.h"
+#include "ui/views/view_utils.h"
+#include "ui/views/widget/widget.h"
+#include "ui/views/widget/widget_delegate.h"
+#include "extensions/browser/ui_util.h"
+
 namespace maho {
 
 namespace internal {
@@ -63,10 +81,12 @@ constexpr char kBlockAdsAndTrackersSymbolName[] = "shield.lefthalf.filled";
 
 content::WebContents* GetActiveWebContents(Browser* browser);
 const GURL& GetVisibleOrCommittedUrl(content::WebContents* contents);
-std::vector<MahoLocationBarUtilityPanelAction> BuildInstalledExtensions(
-    const std::string& json,
-    Browser* browser);
 void OpenExtensionsSettingsPaneForBrowser(Browser* browser);
+void InvokeExtensionActionForBrowser(Browser* browser,
+                                     const std::string& extension_id);
+void ShowExtensionContextMenuForBrowser(Browser* browser,
+                                        const std::string& extension_id,
+                                        views::View* anchor);
 
 std::u16string ToUtf16(const std::string& text) {
   return base::UTF8ToUTF16(text);
@@ -166,28 +186,6 @@ std::optional<base::Value> ReadCoreSettings(MahoCore* core) {
   std::string json(json_str);
   maho_string_free(json_str);
   return base::JSONReader::Read(json, base::JSON_PARSE_RFC);
-}
-
-std::string ReadInstalledExtensionsJsonOrFallback() {
-  MahoCore* core = maho::GetCore();
-  if (!core) {
-    return std::string();
-  }
-
-  char* json_str = maho_core_get_installed_extensions(core);
-  if (!json_str) {
-    return std::string();
-  }
-
-  std::string json(json_str);
-  maho_string_free(json_str);
-  return json;
-}
-
-bool IsExtensionsFallbackAction(
-    const MahoLocationBarUtilityPanelAction& action) {
-  return action.title == u"Extensions" &&
-         action.subtitle == u"No installed extensions";
 }
 
 bool HasActivePageForSiteControls(Browser* browser) {
@@ -595,19 +593,6 @@ void OpenExtensionsSettingsPaneForBrowser(Browser* browser) {
   maho::OpenMahoSettingsPane(browser, "extensions");
 }
 
-MahoLocationBarUtilityPanelAction BuildExtensionsSummaryAction(
-    const std::vector<MahoLocationBarUtilityPanelAction>& extensions) {
-  if (extensions.size() == 1 && extensions[0].title == u"Extensions") {
-    return MakeAction(extensions[0].title, extensions[0].subtitle,
-                      extensions[0].sf_symbol_name,
-                      extensions[0].data_state, false);
-  }
-  return MakeAction(u"Extensions",
-                    base::NumberToString16(extensions.size()) + u" installed",
-                    kExtensionsSymbolName,
-                    MahoLocationBarUtilityPanelDataState::kLive, false);
-}
-
 void TriggerCameraScreenshot(Browser* browser) {
   if (!browser) {
     return;
@@ -675,20 +660,174 @@ MahoUtilityPanelZone BuildToolbarZone(Browser* browser) {
   return zone;
 }
 
-MahoUtilityPanelZone BuildExtensionsZone(const std::string& json,
-                                         Browser* browser) {
+void InvokeExtensionActionForBrowser(Browser* browser,
+                                     const std::string& extension_id) {
+  if (!browser) {
+    return;
+  }
+  content::WebContents* web_contents = GetActiveWebContents(browser);
+  if (!web_contents) {
+    return;
+  }
+  Profile* profile = browser->profile();
+  if (!profile) {
+    return;
+  }
+  auto* registry = extensions::ExtensionRegistry::Get(profile);
+  if (!registry) {
+    return;
+  }
+  const extensions::Extension* extension =
+      registry->GetInstalledExtension(extension_id);
+  if (!extension) {
+    return;
+  }
+  if (!registry->enabled_extensions().Contains(extension_id)) {
+    return;
+  }
+  content::GetUIThreadTaskRunner({})->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](base::WeakPtr<content::WebContents> wc,
+             scoped_refptr<const extensions::Extension> ext) {
+            if (!wc) return;
+            auto* runner =
+                extensions::ExtensionActionRunner::GetForWebContents(
+                    wc.get());
+            if (!runner) return;
+            runner->RunAction(ext.get(), /*grant_tab_permissions=*/true);
+          },
+          web_contents->GetWeakPtr(),
+          scoped_refptr<const extensions::Extension>(extension)));
+}
+
+void ShowExtensionContextMenuForBrowser(Browser* browser,
+                                        const std::string& extension_id,
+                                        views::View* anchor) {
+  if (!browser || !anchor) {
+    return;
+  }
+  Profile* profile = browser->profile();
+  if (!profile) {
+    return;
+  }
+  auto* registry = extensions::ExtensionRegistry::Get(profile);
+  const extensions::Extension* extension =
+      registry ? registry->GetInstalledExtension(extension_id) : nullptr;
+  if (!extension) {
+    return;
+  }
+
+  bool is_pinned = false;
+  if (auto* model = ToolbarActionsModel::Get(profile)) {
+    is_pinned = model->IsActionPinned(extension_id);
+  }
+
+  auto menu_model = std::make_unique<extensions::ExtensionContextMenuModel>(
+      extension, browser, is_pinned, nullptr, true,
+      extensions::ExtensionContextMenuModel::ContextMenuSource::kToolbarAction);
+
+  views::Widget* widget = anchor->GetWidget();
+  if (!widget) {
+    return;
+  }
+  views::WidgetDelegate* delegate = widget->widget_delegate();
+  if (!delegate) {
+    return;
+  }
+  views::BubbleDialogDelegate* bubble_delegate = delegate->AsBubbleDialogDelegate();
+  if (!bubble_delegate) {
+    return;
+  }
+  auto* panel_view = static_cast<MahoLocationBarUtilityPanelView*>(bubble_delegate);
+  CHECK(panel_view);
+  panel_view->RunExtensionContextMenu(std::move(menu_model), anchor);
+}
+
+std::vector<MahoLocationBarUtilityPanelAction> BuildExtensionIconActions(
+    Browser* browser) {
+  std::vector<MahoLocationBarUtilityPanelAction> actions;
+  if (!browser) {
+    return actions;
+  }
+
+  Profile* profile = browser->profile();
+  if (!profile) {
+    return actions;
+  }
+
+  auto* registry = extensions::ExtensionRegistry::Get(profile);
+  if (!registry) {
+    return actions;
+  }
+
+  auto append_set =
+      [&](const extensions::ExtensionSet& set, bool enabled) {
+        for (const auto& ext : set) {
+          if (!extensions::ui_util::ShouldDisplayInExtensionSettings(*ext)) {
+            continue;
+          }
+          MahoLocationBarUtilityPanelAction action;
+          action.title = base::UTF8ToUTF16(ext->name());
+          action.accessible_name = enabled
+              ? action.title
+              : action.title + u" (Disabled)";
+          action.enabled = enabled;
+          action.data_state = MahoLocationBarUtilityPanelDataState::kLive;
+          action.extension_id = ext->id();
+          action.close_after_activate = enabled;
+
+          if (enabled) {
+            action.callback = base::BindRepeating(
+                &InvokeExtensionActionForBrowser, base::Unretained(browser),
+                ext->id());
+          }
+
+          action.context_menu_callback = base::BindRepeating(
+              &ShowExtensionContextMenuForBrowser,
+              base::Unretained(browser), ext->id());
+          action.context_menu_enabled = true;
+
+          actions.push_back(std::move(action));
+        }
+      };
+
+  append_set(registry->enabled_extensions(), /*enabled=*/true);
+  append_set(registry->disabled_extensions(), /*enabled=*/false);
+  return actions;
+}
+
+MahoLocationBarUtilityPanelAction BuildExtensionsManageAction(Browser* browser) {
+  MahoLocationBarUtilityPanelAction action;
+  action.title = u"Manage";
+  action.accessible_name = u"Manage extensions";
+  action.enabled = browser != nullptr;
+  action.data_state = MahoLocationBarUtilityPanelDataState::kLive;
+  action.close_after_activate = true;
+  if (browser) {
+    action.callback = base::BindRepeating(
+        &OpenExtensionsSettingsPaneForBrowser, base::Unretained(browser));
+  }
+  return action;
+}
+
+MahoUtilityPanelZone BuildExtensionsZone(Browser* browser) {
   MahoUtilityPanelZone zone;
   zone.id = MahoUtilityPanelZoneId::kExtensions;
   zone.style = MahoUtilityPanelZoneStyle::kChipRow;
   zone.header_label = u"Extensions";
+  zone.header_trailing_action = BuildExtensionsManageAction(browser);
 
   std::vector<MahoLocationBarUtilityPanelAction> items =
-      BuildInstalledExtensions(json, browser);
+      BuildExtensionIconActions(browser);
 
-  if (items.size() == 1 && IsExtensionsFallbackAction(items.front())) {
-    zone.items.push_back(MakeAction(u"No extensions", u"",
-                                    kExtensionsSymbolName,
-                                    items.front().data_state, false));
+  if (items.empty()) {
+    MahoLocationBarUtilityPanelAction empty_chip;
+    empty_chip.title = u"No extensions";
+    empty_chip.enabled = false;
+    empty_chip.data_state = MahoLocationBarUtilityPanelDataState::kLive;
+    empty_chip.sf_symbol_name = kExtensionsSymbolName;
+    zone.items.push_back(std::move(empty_chip));
   } else {
     for (auto& item : items) {
       zone.items.push_back(std::move(item));
@@ -789,80 +928,9 @@ MahoLocationBarUtilityPanelFooter BuildFooter(Browser* browser) {
 
 void PopulateArcShapeModelData(MahoLocationBarUtilityPanelModel& model,
                                Browser* browser) {
-  const std::string extensions_json = ReadInstalledExtensionsJsonOrFallback();
   model.zones.push_back(BuildToolbarZone(browser));
-  model.zones.push_back(BuildExtensionsZone(extensions_json, browser));
+  model.zones.push_back(BuildExtensionsZone(browser));
   model.zones.push_back(BuildSettingsZone(browser));
-}
-
-std::vector<MahoLocationBarUtilityPanelAction> BuildInstalledExtensions(
-    const std::string& json) {
-  return BuildInstalledExtensions(json, nullptr);
-}
-
-std::vector<MahoLocationBarUtilityPanelAction> BuildInstalledExtensions(
-    const std::string& json,
-    Browser* browser) {
-  std::vector<MahoLocationBarUtilityPanelAction> items;
-  std::optional<base::Value> parsed =
-      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_list()) {
-    items.push_back(MakeAction(u"Extensions", u"Extension list unavailable",
-                               kExtensionsSymbolName,
-                               MahoLocationBarUtilityPanelDataState::kUnavailable,
-                               false));
-    return items;
-  }
-
-  for (const auto& item : parsed->GetList()) {
-    const auto* dict = item.GetIfDict();
-    if (!dict) {
-      continue;
-    }
-
-    const std::string* name = dict->FindString("name");
-    const std::string* version = dict->FindString("version");
-    const std::string* id = dict->FindString("id");
-    const bool ext_enabled = dict->FindBool("enabled").value_or(true);
-
-    std::u16string title = ToUtf16(name ? *name : (id ? *id : std::string()));
-    if (title.empty()) {
-      title = u"Unnamed extension";
-    }
-
-    std::u16string subtitle = ext_enabled ? u"Enabled" : u"Disabled";
-    if (version && !version->empty()) {
-      subtitle = u"v" + ToUtf16(*version) + u" · " + subtitle;
-    }
-
-    MahoLocationBarUtilityPanelAction action =
-        MakeAction(std::move(title), std::move(subtitle),
-                   kExtensionsSymbolName,
-                   MahoLocationBarUtilityPanelDataState::kLive,
-                   browser != nullptr);
-    action.close_after_activate = true;
-    if (browser) {
-      action.callback = base::BindRepeating(
-          &OpenExtensionsSettingsPaneForBrowser, base::Unretained(browser));
-    }
-    items.push_back(std::move(action));
-  }
-
-  if (items.empty()) {
-    MahoLocationBarUtilityPanelAction action =
-        MakeAction(u"Extensions", u"No installed extensions",
-                   kExtensionsSymbolName,
-                   MahoLocationBarUtilityPanelDataState::kLive,
-                   browser != nullptr);
-    action.close_after_activate = true;
-    if (browser) {
-      action.callback = base::BindRepeating(
-          &OpenExtensionsSettingsPaneForBrowser, base::Unretained(browser));
-    }
-    items.push_back(std::move(action));
-  }
-
-  return items;
 }
 
 }  // namespace internal
@@ -899,6 +967,7 @@ MahoLocationBarUtilityPanelModel BuildMahoLocationBarUtilityPanelModel(
     LocationBar* location_bar) {
   MahoLocationBarUtilityPanelModel model;
   Browser* browser = location_bar ? location_bar->GetBrowser() : nullptr;
+  model.owning_browser = browser;
   internal::PopulateArcShapeModelData(model, browser);
   model.footer = internal::BuildFooter(location_bar);
   return model;
@@ -907,6 +976,7 @@ MahoLocationBarUtilityPanelModel BuildMahoLocationBarUtilityPanelModel(
 MahoLocationBarUtilityPanelModel BuildMahoLocationBarUtilityPanelModelForBrowser(
     Browser* browser) {
   MahoLocationBarUtilityPanelModel model;
+  model.owning_browser = browser;
   internal::PopulateArcShapeModelData(model, browser);
   model.footer = internal::BuildFooter(browser);
   return model;

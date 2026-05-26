@@ -11,8 +11,18 @@
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/test/base/testing_profile.h"
+#include "chrome/test/base/test_browser_window.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
 #include "components/omnibox/browser/location_bar_model.h"
 #include "components/security_state/core/security_state.h"
+#include "content/public/test/browser_task_environment.h"
+#include "content/public/test/test_renderer_host.h"
+#include "extensions/browser/extension_registry.h"
+#include "extensions/common/extension_builder.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
@@ -206,62 +216,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
   EXPECT_FALSE(row.callback);
 }
 
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     InstalledExtensionsBuildsFallbackAndConcreteItems) {
-  std::vector<MahoLocationBarUtilityPanelAction> invalid =
-      internal::BuildInstalledExtensions("{}");
-  ASSERT_EQ(invalid.size(), 1u);
-  EXPECT_EQ(invalid[0].title, u"Extensions");
-  EXPECT_EQ(invalid[0].subtitle, u"Extension list unavailable");
-  EXPECT_EQ(invalid[0].sf_symbol_name, "puzzlepiece.extension");
-  EXPECT_EQ(invalid[0].data_state,
-            MahoLocationBarUtilityPanelDataState::kUnavailable);
-  EXPECT_FALSE(invalid[0].enabled);
-  EXPECT_FALSE(invalid[0].callback);
 
-  std::vector<MahoLocationBarUtilityPanelAction> extensions =
-      internal::BuildInstalledExtensions(R"([
-        {"id":"alpha","name":"Alpha","version":"1.2.3","enabled":true},
-        {"id":"beta","enabled":false}
-      ])");
-  ASSERT_EQ(extensions.size(), 2u);
-  EXPECT_EQ(extensions[0].title, u"Alpha");
-  EXPECT_EQ(extensions[0].subtitle, u"v1.2.3 · Enabled");
-  EXPECT_EQ(extensions[0].sf_symbol_name, "puzzlepiece.extension");
-  EXPECT_FALSE(extensions[0].enabled);
-  EXPECT_FALSE(extensions[0].callback);
-  EXPECT_EQ(extensions[1].title, u"beta");
-  EXPECT_EQ(extensions[1].subtitle, u"Disabled");
-  EXPECT_EQ(extensions[1].sf_symbol_name, "puzzlepiece.extension");
-  EXPECT_FALSE(extensions[1].enabled);
-  EXPECT_FALSE(extensions[1].callback);
-}
-
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     ExtensionsSummaryPreservesSingleFallbackAndCountsMultipleItems) {
-  std::vector<MahoLocationBarUtilityPanelAction> fallback =
-      internal::BuildInstalledExtensions("{}");
-  MahoLocationBarUtilityPanelAction summary =
-      internal::BuildExtensionsSummaryAction(fallback);
-  EXPECT_EQ(summary.title, u"Extensions");
-  EXPECT_EQ(summary.subtitle, u"Extension list unavailable");
-  EXPECT_EQ(summary.sf_symbol_name, "puzzlepiece.extension");
-  EXPECT_EQ(summary.data_state,
-            MahoLocationBarUtilityPanelDataState::kUnavailable);
-  EXPECT_FALSE(summary.enabled);
-  EXPECT_FALSE(summary.callback);
-
-  std::vector<MahoLocationBarUtilityPanelAction> multiple(2);
-  multiple[0].title = u"One";
-  multiple[1].title = u"Two";
-  summary = internal::BuildExtensionsSummaryAction(multiple);
-  EXPECT_EQ(summary.title, u"Extensions");
-  EXPECT_EQ(summary.subtitle, u"2 installed");
-  EXPECT_EQ(summary.sf_symbol_name, "puzzlepiece.extension");
-  EXPECT_EQ(summary.data_state, MahoLocationBarUtilityPanelDataState::kLive);
-  EXPECT_FALSE(summary.enabled);
-  EXPECT_FALSE(summary.callback);
-}
 
 TEST(MahoLocationBarUtilityPanelProviderInternalTest,
      SecuritySymbolNameReflectsSecurityLevel) {
@@ -379,15 +334,15 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
 
 TEST(MahoLocationBarUtilityPanelProviderInternalTest,
      ExtensionsZoneHeaderLabelIsExtensions) {
-  MahoUtilityPanelZone zone = internal::BuildExtensionsZone("[]", nullptr);
+  MahoUtilityPanelZone zone = internal::BuildExtensionsZone(nullptr);
   EXPECT_EQ(zone.id, MahoUtilityPanelZoneId::kExtensions);
   EXPECT_EQ(zone.style, MahoUtilityPanelZoneStyle::kChipRow);
   EXPECT_EQ(zone.header_label, u"Extensions");
 }
 
 TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     ExtensionsZoneEmptyJsonProducesFallbackPlusAddChip) {
-  MahoUtilityPanelZone zone = internal::BuildExtensionsZone("[]", nullptr);
+     ExtensionsZoneEmptyRegistryProducesNoExtensionsChipPlusAddChip) {
+  MahoUtilityPanelZone zone = internal::BuildExtensionsZone(nullptr);
   ASSERT_EQ(zone.items.size(), 2u);
   EXPECT_EQ(zone.items.front().title, u"No extensions");
   EXPECT_TRUE(zone.items.front().subtitle.empty());
@@ -399,25 +354,9 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
 }
 
 TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     ExtensionsZoneInvalidJsonProducesUnavailableFallbackPlusAddChip) {
-  MahoUtilityPanelZone zone = internal::BuildExtensionsZone("", nullptr);
-  ASSERT_EQ(zone.items.size(), 2u);
-  EXPECT_EQ(zone.items.front().title, u"Extensions");
-  EXPECT_EQ(zone.items.front().subtitle, u"Extension list unavailable");
-  EXPECT_FALSE(zone.items.front().enabled);
-  EXPECT_FALSE(zone.items.front().callback);
-  EXPECT_EQ(zone.items.back().title, u"+");
-  EXPECT_FALSE(zone.items.back().enabled);
-  EXPECT_FALSE(zone.items.back().callback);
-}
-
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     ExtensionsZoneNonEmptyJsonAppendsOnlyAddChip) {
-  MahoUtilityPanelZone zone = internal::BuildExtensionsZone(
-      R"([{"id":"alpha","name":"Alpha","version":"1.2.3","enabled":true}])",
-      nullptr);
-  ASSERT_EQ(zone.items.size(), 2u);
-  EXPECT_EQ(zone.items.front().title, u"Alpha");
+     ExtensionsZoneAlwaysAppendsAddChipLast) {
+  MahoUtilityPanelZone zone = internal::BuildExtensionsZone(nullptr);
+  ASSERT_GE(zone.items.size(), 1u);
   EXPECT_EQ(zone.items.back().title, u"+");
 }
 
@@ -575,8 +514,8 @@ TEST(MahoLocationBarUtilityPanelProviderTest,
   EXPECT_EQ(settings_zone->header_label, u"Settings");
 
   ASSERT_EQ(extensions_zone->items.size(), 2u);
-  EXPECT_EQ(extensions_zone->items[0].title, u"Extensions");
-  EXPECT_EQ(extensions_zone->items[0].subtitle, u"Extension list unavailable");
+  EXPECT_EQ(extensions_zone->items[0].title, u"No extensions");
+  EXPECT_TRUE(extensions_zone->items[0].subtitle.empty());
   EXPECT_FALSE(extensions_zone->items[0].enabled);
   EXPECT_EQ(extensions_zone->items[1].title, u"+");
   EXPECT_FALSE(extensions_zone->items[1].enabled);
@@ -785,6 +724,110 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
   EXPECT_EQ(footer.data_state, MahoLocationBarUtilityPanelDataState::kLive);
   EXPECT_EQ(footer.security_level,
             static_cast<int>(security_state::DANGEROUS));
+}
+
+class MahoLocationBarUtilityPanelProviderRegistryTest : public testing::Test {
+ protected:
+  MahoLocationBarUtilityPanelProviderRegistryTest() = default;
+  ~MahoLocationBarUtilityPanelProviderRegistryTest() override = default;
+
+  content::BrowserTaskEnvironment task_environment_;
+  content::RenderViewHostTestEnabler rvh_test_enabler_;
+};
+
+TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
+       ExtensionsZoneReadsFromExtensionRegistryNotCoreCache) {
+  TestingProfile profile;
+  auto window = std::make_unique<TestBrowserWindow>();
+  Browser::CreateParams params(&profile, true);
+  params.window = window.release();
+  Browser* browser = Browser::Create(params);
+
+  auto* registry = extensions::ExtensionRegistry::Get(&profile);
+  ASSERT_TRUE(registry);
+
+  // Add dummy extensions
+  auto ext1 = extensions::ExtensionBuilder("Alpha").SetID("alpha_id").Build();
+  auto ext2 = extensions::ExtensionBuilder("Beta").SetID("beta_id").Build();
+  
+  registry->AddEnabled(ext1);
+  registry->AddDisabled(ext2);
+
+  MahoUtilityPanelZone zone = internal::BuildExtensionsZone(browser);
+  
+  ASSERT_EQ(zone.items.size(), 3u);
+  EXPECT_EQ(zone.items[0].title, u"Alpha");
+  EXPECT_EQ(zone.items[0].accessible_name, u"Alpha");
+  EXPECT_EQ(zone.items[0].extension_id, "alpha_id");
+  EXPECT_TRUE(zone.items[0].enabled);
+  EXPECT_TRUE(zone.items[0].callback);
+  EXPECT_TRUE(zone.items[0].context_menu_callback);
+  EXPECT_TRUE(zone.items[0].context_menu_enabled);
+
+  EXPECT_EQ(zone.items[1].title, u"Beta");
+  EXPECT_EQ(zone.items[1].accessible_name, u"Beta (Disabled)");
+  EXPECT_EQ(zone.items[1].extension_id, "beta_id");
+  EXPECT_FALSE(zone.items[1].enabled);
+  EXPECT_FALSE(zone.items[1].callback);
+  EXPECT_TRUE(zone.items[1].context_menu_callback);
+  EXPECT_TRUE(zone.items[1].context_menu_enabled);
+
+  EXPECT_EQ(zone.items[2].title, u"+");
+
+  // Verify context menu callbacks can be executed without crash (null/dummy anchor checks)
+  zone.items[0].context_menu_callback.Run(nullptr);
+  zone.items[1].context_menu_callback.Run(nullptr);
+}
+
+TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
+       ExtensionsZoneFiltersByShouldDisplayInExtensionSettings) {
+  TestingProfile profile;
+  auto window = std::make_unique<TestBrowserWindow>();
+  Browser::CreateParams params(&profile, true);
+  params.window = window.release();
+  Browser* browser = Browser::Create(params);
+
+  auto* registry = extensions::ExtensionRegistry::Get(&profile);
+  
+  auto ext = extensions::ExtensionBuilder("Internal Component")
+                 .SetLocation(extensions::mojom::ManifestLocation::kComponent)
+                 .SetID("internal_id")
+                 .Build();
+                 
+  registry->AddEnabled(ext);
+
+  MahoUtilityPanelZone zone = internal::BuildExtensionsZone(browser);
+  ASSERT_EQ(zone.items.size(), 2u);
+  EXPECT_EQ(zone.items[0].title, u"No extensions");
+  EXPECT_EQ(zone.items[1].title, u"+");
+}
+
+TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
+       ExtensionsZoneHeaderTrailingActionIsManage) {
+  TestingProfile profile;
+  auto window = std::make_unique<TestBrowserWindow>();
+  Browser::CreateParams params(&profile, true);
+  params.window = window.release();
+  Browser* browser = Browser::Create(params);
+
+  MahoUtilityPanelZone zone = internal::BuildExtensionsZone(browser);
+  ASSERT_TRUE(zone.header_trailing_action.has_value());
+  EXPECT_EQ(zone.header_trailing_action->title, u"Manage");
+  EXPECT_TRUE(zone.header_trailing_action->enabled);
+  EXPECT_TRUE(zone.header_trailing_action->callback);
+  
+  // Add a dummy tab first
+  chrome::AddTabAt(browser, GURL("about:blank"), -1, true);
+  
+  // Verify it navigates to the extensions settings URL
+  zone.header_trailing_action->callback.Run();
+
+  EXPECT_EQ(browser->tab_strip_model()->count(), 2);
+  EXPECT_EQ(browser->tab_strip_model()->GetActiveWebContents()->GetVisibleURL().spec(),
+            "chrome://maho-settings/?pane=extensions");
+
+  // Close all tabs before browser destruction to avoid crash
+  browser->tab_strip_model()->CloseAllTabs();
 }
 
 }  // namespace
