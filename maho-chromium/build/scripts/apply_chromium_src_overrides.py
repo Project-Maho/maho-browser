@@ -1078,6 +1078,43 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             description="Include Maho sidebar interactive tests in Chromium interactive_ui_tests deps",
         ),
     ],
+    "chrome/browser/ui/views/page_action/page_action_properties_provider.cc": [
+        Replacement(
+            old=(
+                "    {\n"
+                "        kActionShowTranslate,\n"
+                "        {\n"
+                "            .histogram_name = \"Translate\",\n"
+                "            .type = PageActionIconType::kTranslate,\n"
+                "            .element_identifier = kTranslatePageActionElementId,\n"
+                "        },\n"
+                "    },\n"
+            ),
+            new=(
+                "    {\n"
+                "        kActionShowTranslate,\n"
+                "        {\n"
+                "            .histogram_name = \"Translate\",\n"
+                "            .type = PageActionIconType::kTranslate,\n"
+                "            // Maho: kTranslatePageActionElementId is owned by the Maho\n"
+                "            // sidebar's secondary_label_ in Arc layout. Suppressing\n"
+                "            // identifier assignment here keeps ElementTracker lookups\n"
+                "            // (BrowserView::ShowTranslateBubble's highlight_element)\n"
+                "            // unambiguous and prevents the DCHECK_EQ(1U, ...) crash in\n"
+                "            // GetUniqueElement when both views are visible.\n"
+                "        },\n"
+                "    },\n"
+            ),
+            description=(
+                "Drop kTranslatePageActionElementId from the upstream translate "
+                "PageActionView's properties so Maho's sidebar secondary_label_ "
+                "becomes the sole holder; required for §2J of the toolbar provider plan."
+            ),
+            guard=(
+                "// Maho: kTranslatePageActionElementId is owned by the Maho\n"
+            ),
+        ),
+    ],
 }
 
 

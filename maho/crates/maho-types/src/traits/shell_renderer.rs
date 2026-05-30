@@ -62,6 +62,32 @@ pub struct FolderViewModel {
     pub is_pinned: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_folder_id: Option<FolderId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_json: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum SidebarNode {
+    Tab {
+        #[serde(flatten)]
+        tab: TabViewModel,
+    },
+    Folder {
+        id: FolderId,
+        name: String,
+        is_expanded: bool,
+        is_pinned: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        parent_folder_id: Option<FolderId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provider_type: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        config_json: Option<String>,
+        children: Vec<SidebarNode>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -239,9 +265,9 @@ pub struct FindBarState {
 #[serde(rename_all = "camelCase")]
 pub struct BoostViewModel {
     pub id: BoostId,
-    pub url_pattern: String,
+    pub domain: String,
+    pub name: String,
     pub custom_css: Option<String>,
-    pub custom_js: Option<String>,
     pub enabled: bool,
 }
 

@@ -19,13 +19,11 @@ MahoFolderContextMenu::MahoFolderContextMenu(
     Browser* browser,
     const std::string& space_id,
     const std::string& folder_id,
-    bool folder_is_pinned,
     const std::string& parent_folder_id,
     BeginRenameCallback begin_rename_callback)
     : browser_(browser),
       space_id_(space_id),
       folder_id_(folder_id),
-      folder_is_pinned_(folder_is_pinned),
       parent_folder_id_(parent_folder_id),
       begin_rename_callback_(std::move(begin_rename_callback)) {}
 
@@ -38,18 +36,13 @@ std::unique_ptr<ui::SimpleMenuModel> MahoFolderContextMenu::BuildMenuModel() {
 
   model->AddSeparator(ui::NORMAL_SEPARATOR);
 
-  if (folder_is_pinned_) {
-    model->AddItem(IDC_MAHO_FOLDER_UNPIN, u"Unpin Folder");
-  } else {
-    model->AddItem(IDC_MAHO_FOLDER_PIN, u"Pin Folder");
-  }
-
-  model->AddSeparator(ui::NORMAL_SEPARATOR);
-
   if (!parent_folder_id_.empty()) {
     model->AddItem(IDC_MAHO_FOLDER_MOVE_TO_ROOT, u"Move Folder to Root");
     model->AddSeparator(ui::NORMAL_SEPARATOR);
   }
+
+  model->AddItem(IDC_MAHO_FOLDER_CONVERT_TO_SPACE, u"Convert Folder to Space");
+  model->AddSeparator(ui::NORMAL_SEPARATOR);
 
   model->AddItem(IDC_MAHO_FOLDER_DELETE, u"Delete Folder");
 
@@ -64,25 +57,19 @@ void MahoFolderContextMenu::ExecuteCommand(int command_id, int event_flags) {
       }
       break;
 
-    case IDC_MAHO_FOLDER_PIN:
-      if (!space_id_.empty() && !folder_id_.empty()) {
-        maho::DispatchShellEvent("pin_folder",
-                                 {{"space_id", space_id_},
-                                  {"folder_id", folder_id_}});
-      }
-      break;
 
-    case IDC_MAHO_FOLDER_UNPIN:
-      if (!space_id_.empty() && !folder_id_.empty()) {
-        maho::DispatchShellEvent("unpin_folder",
-                                 {{"space_id", space_id_},
-                                  {"folder_id", folder_id_}});
-      }
-      break;
 
     case IDC_MAHO_FOLDER_DELETE:
       if (!space_id_.empty() && !folder_id_.empty()) {
         maho::DispatchShellEvent("delete_folder",
+                                 {{"space_id", space_id_},
+                                  {"folder_id", folder_id_}});
+      }
+      break;
+
+    case IDC_MAHO_FOLDER_CONVERT_TO_SPACE:
+      if (!space_id_.empty() && !folder_id_.empty()) {
+        maho::DispatchShellEvent("convert_folder_to_space",
                                  {{"space_id", space_id_},
                                   {"folder_id", folder_id_}});
       }

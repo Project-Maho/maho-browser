@@ -13,10 +13,6 @@ class MahoPageInfoUITest : public testing::Test {
   content::BrowserTaskEnvironment task_environment_;
 };
 
-TEST_F(MahoPageInfoUITest, ShowBoostBubbleNullBrowserIsNoOp) {
-  MahoPageInfoUI::ShowBoostBubble(nullptr);
-}
-
 TEST_F(MahoPageInfoUITest, ShowShieldBubbleNullBrowserIsNoOp) {
   MahoPageInfoUI::ShowShieldBubble(nullptr);
 }
@@ -43,6 +39,10 @@ TEST_F(MahoPageInfoUITest, ShowSiteSettingsInvalidUrlIsNoOp) {
 
 TEST_F(MahoPageInfoUITest, ShowCookiesSettingsNullBrowserIsNoOp) {
   MahoPageInfoUI::ShowCookiesSettings(nullptr);
+}
+
+TEST_F(MahoPageInfoUITest, ShowBoostEditorNullBrowserIsNoOp) {
+  MahoPageInfoUI::ShowBoostEditor(nullptr);
 }
 
 }  // namespace

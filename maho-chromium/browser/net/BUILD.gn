@@ -1,5 +1,14 @@
 # Copyright 2026 Maho Browser. All rights reserved.
 
+import("//mojo/public/tools/bindings/mojom.gni")
+
+# Future Mojo contract for boost content script ↔ browser IPC.
+# v1 transport uses JS injection + polling; this mojom defines the
+# type-safe interface for a future renderer-side Mojo migration.
+mojom("maho_boost_content_script_mojom") {
+  sources = [ "maho_boost_content_script.mojom" ]
+}
+
 source_set("net") {
   sources = [
     "maho_ad_block_tab_helper.cc",
@@ -14,14 +23,20 @@ source_set("net") {
     "maho_webstore_ua_throttle.h",
   ]
   deps = [
+    ":maho_boost_content_script_mojom",
     "//maho/browser:maho_core_holder",
+    "//maho/browser/resources/maho_boost_content_script:resources",
     "//maho/third_party/maho:maho_bridge",
+    "//maho/third_party/maho:maho_ffi_headers",
     "//base",
+    "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/tabs:tab_strip",
     "//content/public/browser",
     "//net",
     "//services/network/public/cpp",
     "//services/network/public/mojom",
     "//third_party/blink/public/common",
+    "//ui/base",
     "//url",
   ]
 }

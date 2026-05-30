@@ -2,7 +2,75 @@
 
 module maho_ai.mojom;
 
+// ==========================================================================
+// Context attachment types — Phase B: context picker backend.
+// These are intentionally minimal and additive; future sources (history,
+// bookmarks, files) will extend ContextSourceKind without touching callers
+// that already handle the existing variants.
+// ==========================================================================
 
+// Identifies the source category of a context attachment.
+enum ContextSourceKind {
+  // The currently-active tab (legacy path — maps 1:1 to attach_browser_context).
+  kCurrentPage,
+  // A specific open tab selected from the tab picker.
+  kOpenTab,
+  // Reserved for future sources — never sent by the backend today.
+  kHistory,
+  kBookmark,
+  kFile,
+};
+
+// A single browser history item returned by SearchHistory.
+// Carries the URL, page title, and the visit timestamp (seconds since Unix
+// epoch, fractional) so the picker can show recency information.
+struct HistoryItem {
+  // Page URL. Never empty (items with no URL are filtered by the backend).
+  string url;
+  // Page title at visit time. May be empty for untitled pages.
+  string title;
+  // Timestamp of the most-recent visit (seconds since Unix epoch).
+  double visited_at;
+};
+
+// A single bookmark item returned by SearchBookmarks.
+struct BookmarkItem {
+  // Unique bookmark identifier.
+  string id;
+  // Page URL.
+  string url;
+  // Bookmark title.
+  string title;
+};
+
+// A single open browser tab visible to the context picker.
+// Returned by GetOpenTabs; the frontend uses this to populate the picker.
+struct TabItem {
+  // Opaque browser-assigned tab ID (matches TabStripModel index-stable ID).
+  int32 tab_id;
+  // Page URL. May be empty for tabs that have not yet committed a navigation.
+  string url;
+  // Page title. Empty until the document has a title.
+  string title;
+  // Whether this is the currently-active tab in the browser window.
+  bool is_active;
+  // 0-based index in the tab strip (for display ordering only).
+  int32 index;
+};
+
+// A structured context attachment chosen by the user in the picker.
+// Sent with SubmitPrompt in the optional |attachments| array.  When the
+// array is null (absent), the legacy bool-based current-page path applies.
+struct ContextAttachment {
+  ContextSourceKind kind;
+  // For kCurrentPage / kOpenTab: the tab_id returned by GetOpenTabs.
+  // -1 means "active tab at submit time" (used by the legacy path).
+  int32 tab_id;
+  // Human-readable label shown in the composer chip (e.g. page title).
+  string label;
+  // URL associated with this attachment. May be empty for non-tab sources.
+  string url;
+};
 
 enum ChatIntent {
   kFreeform,
@@ -68,6 +136,10 @@ struct BrowserContextPayload {
   // Human-readable warnings (e.g. "content was truncated", "partial
   // extraction").
   array<string> warnings;
+  // Human-readable label identifying this attachment in the inspector
+  // (e.g. "Current page", "Tab: My Page Title"). Set by the page handler
+  // at injection time so multi-attachment sessions are distinguishable.
+  string label;
 };
 
 // ==========================================================================
@@ -276,12 +348,42 @@ interface PageHandler {
   GetSessionHistory(string session_id, uint32 offset, uint32 limit)
       => (array<RuntimeEvent> events, uint32 total_count);
 
+  // Return the list of open tabs in the browser window associated with this
+  // panel.  Used by the context picker to populate the tab source list.
+  // Tabs are returned in tab-strip order; the active tab has is_active=true.
+  // Returns an empty array if no browser or tab strip is available (e.g. the
+  // panel is running in a popup window without a tab strip).
+  GetOpenTabs() => (array<TabItem> tabs);
+
+  // Search browser history for pages matching |query|.
+  // Returns up to |max_results| items ordered by relevance/recency.
+  // |query| may be empty, in which case the most recently visited pages are
+  // returned.  Returns an empty array if the core is not available or the
+  // search produces no results.
+  SearchHistory(string query, uint32 max_results) => (array<HistoryItem> items);
+
+  // Search bookmarks for pages matching |query|.
+  // Returns up to |max_results| items.
+  // Returns an empty array if the core is not available or the search produces no results.
+  SearchBookmarks(string query, uint32 max_results) => (array<BookmarkItem> items);
+
+
   // Submit a user prompt into the active session.
-  // When |attach_browser_context| is true, the runtime adapter injects
-  // current page context (URL, title, content) into the prompt at submit
-  // time. The page handler does NOT assemble context — the adapter owns it.
+  // Legacy path (Phase A and earlier): pass |attach_browser_context|=true and
+  // leave |attachments| null — the adapter injects the active tab's page
+  // context at submit time as before.
+  //
+  // Phase B picker path: pass |attachments| as a non-null array of
+  // ContextAttachment items chosen by the user.  The handler resolves each
+  // attachment at submit time (fetching content for kOpenTab entries) and
+  // builds the augmented prompt.  |attach_browser_context| is ignored when
+  // |attachments| is non-null so callers need not clear it.
+  //
+  // Invariant: exactly one of the two mechanisms should be active per call —
+  // either |attach_browser_context|=true + null |attachments|, or non-null
+  // |attachments| (possibly empty, meaning no context attached).
   SubmitPrompt(string session_id, string prompt, bool attach_browser_context,
-               InteractionMode mode);
+               InteractionMode mode, array<ContextAttachment>? attachments);
 
   // Cancel the current turn in a session.
   CancelTurn(string session_id);

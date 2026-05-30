@@ -26,10 +26,7 @@ enum MahoTabContextMenuCommand {
   IDC_MAHO_TAB_FREEZE = 57014,
   IDC_MAHO_TAB_UNFREEZE = 57015,
   IDC_MAHO_TAB_OPEN_SPLIT = 57016,
-  // Customize Page submenu: 57017-57019
-  IDC_MAHO_TAB_CUSTOMIZE_PAGE = 57017,
-  IDC_MAHO_TAB_BOOST_MY_BOOST = 57018,
-  IDC_MAHO_TAB_BOOST_EDIT = 57019,
+  IDC_MAHO_TAB_BOOST = 57017,
   // Extended tab actions: 57020-57024
   IDC_MAHO_TAB_SHARE = 57020,
   IDC_MAHO_TAB_CHANGE_ICON = 57021,
@@ -38,11 +35,11 @@ enum MahoTabContextMenuCommand {
   IDC_MAHO_TAB_ARCHIVE_BELOW = 57024,
 };
 
-// Address bar context menu: 57020-57029
+// Address bar context menu: 57025-57029
 enum MahoAddressBarContextMenuCommand {
-  IDC_MAHO_ADDR_EDIT = 57020,
-  IDC_MAHO_ADDR_COPY_URL = 57021,
-  IDC_MAHO_ADDR_COPY_MARKDOWN = 57022,
+  IDC_MAHO_ADDR_EDIT = 57025,
+  IDC_MAHO_ADDR_COPY_URL = 57026,
+  IDC_MAHO_ADDR_COPY_MARKDOWN = 57027,
 };
 
 // Space context menu: 57030-57129
@@ -88,11 +85,9 @@ enum MahoFavoritesContextMenuCommand {
 // Folder context menu: 57070-57079
 enum MahoFolderContextMenuCommand {
   IDC_MAHO_FOLDER_RENAME = 57070,
-  IDC_MAHO_FOLDER_PIN = 57071,
-  IDC_MAHO_FOLDER_UNPIN = 57072,
-  IDC_MAHO_FOLDER_NEW_TAB = 57073,
   IDC_MAHO_FOLDER_DELETE = 57074,
   IDC_MAHO_FOLDER_MOVE_TO_ROOT = 57075,
+  IDC_MAHO_FOLDER_CONVERT_TO_SPACE = 57076,
 };
 
 // Dynamic "Move Tab to Space" submenu: 57200-57299

@@ -25,6 +25,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
 #include "components/vector_icons/vector_icons.h"
+#include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/ui/context_menu/maho_favorites_context_menu.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
@@ -990,6 +991,30 @@ void MahoSidebarFavoritesGridView::CollapseFromDrag() {
   UpdateContainerOwnedPreferredHeight(0);
 }
 
+void MahoSidebarFavoritesGridView::OnDragStarted(const std::string& tab_id) {
+  active_drag_tab_id_ = tab_id;
+  for (size_t i = 0; i < kTileCount; ++i) {
+    if (tile_tab_ids_[i] != tab_id) {
+      continue;
+    }
+    if (tile_views_[i] && tile_views_[i]->layer()) {
+      tile_views_[i]->layer()->SetOpacity(0.f);
+    }
+  }
+}
+
+void MahoSidebarFavoritesGridView::OnDragEnded() {
+  active_drag_tab_id_.clear();
+  current_drag_preview_index_ = -1;
+  for (size_t i = 0; i < kTileCount; ++i) {
+    if (tile_views_[i] && tile_views_[i]->layer()) {
+      tile_views_[i]->layer()->GetAnimator()->StopAnimating();
+      tile_views_[i]->layer()->SetOpacity(1.f);
+      tile_views_[i]->layer()->SetTransform(gfx::Transform());
+    }
+  }
+}
+
 void MahoSidebarFavoritesGridView::OnDragExited() {
   current_drag_preview_index_ = -1;
   drag_over_drop_target_ = false;
@@ -1155,13 +1180,42 @@ void MahoSidebarFavoritesGridView::OnTileDragDone(const std::string& tab_id) {
 }
 
 void MahoSidebarFavoritesGridView::OnTilePressed(size_t index) {
-  if (!browser_ || index >= tile_urls_.size() || !tile_urls_[index].is_valid()) {
+  if (!browser_ || index >= tile_urls_.size()) {
     return;
   }
 
+  // 1. Prefer activating an existing live tab when the favorite has a tab id
+  //    that matches a live WebContents. Single authoritative path:
+  //    MahoTabIdHelper::stable_tab_id(). Mirrors
+  //    MahoSidebarTabListView::ResolveTabStripIndexForTabId().
+  const std::string& tab_id = tile_tab_ids_[index];
+  if (!tab_id.empty()) {
+    TabStripModel* strip = browser_->tab_strip_model();
+    if (strip) {
+      for (int i = 0; i < strip->count(); ++i) {
+        content::WebContents* contents = strip->GetWebContentsAt(i);
+        if (!contents) {
+          continue;
+        }
+        auto* helper = MahoTabIdHelper::FromWebContents(contents);
+        if (helper && helper->stable_tab_id() == tab_id) {
+          strip->ActivateTabAt(
+              i, TabStripUserGestureDetails(
+                     TabStripUserGestureDetails::GestureType::kOther));
+          return;
+        }
+      }
+    }
+  }
+
+  // 2. Fallback: no live tab matches. Open the favorite URL in a NEW
+  //    foreground tab so the user's current tab is preserved.
+  if (!tile_urls_[index].is_valid()) {
+    return;
+  }
   browser_->OpenURL(content::OpenURLParams(
                         tile_urls_[index], content::Referrer(),
-                        WindowOpenDisposition::CURRENT_TAB,
+                        WindowOpenDisposition::NEW_FOREGROUND_TAB,
                         ui::PAGE_TRANSITION_AUTO_BOOKMARK, false),
                     base::NullCallback());
 }

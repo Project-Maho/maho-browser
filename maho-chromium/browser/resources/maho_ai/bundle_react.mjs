@@ -31,11 +31,21 @@ await build({
   nodePaths: [websiteNodeModules],
   outfile: outputFile,
   platform: 'browser',
-  plugins: [nodeModulesGuardPlugin(websiteNodeModules)],
+  plugins: [
+    nodeModulesGuardPlugin(websiteNodeModules),
+    {
+      name: 'mojom-webui-external',
+      setup(build) {
+        build.onResolve({filter: /maho_ai\.mojom-webui\.js$/}, () => ({
+          path: './maho_ai.mojom-webui.js',
+          external: true,
+        }));
+      },
+    },
+  ],
   sourcemap: false,
   target: ['chrome120'],
   external: [
-    './maho_ai.mojom-webui.js',
     'chrome://resources/js/*',
   ],
 });

@@ -21,7 +21,6 @@ class MahoFolderContextMenu : public ui::SimpleMenuModel::Delegate {
   MahoFolderContextMenu(Browser* browser,
                         const std::string& space_id,
                         const std::string& folder_id,
-                        bool folder_is_pinned,
                         const std::string& parent_folder_id,
                         BeginRenameCallback begin_rename_callback);
 
@@ -40,7 +39,6 @@ class MahoFolderContextMenu : public ui::SimpleMenuModel::Delegate {
   raw_ptr<Browser> browser_;
   std::string space_id_;
   std::string folder_id_;
-  bool folder_is_pinned_ = false;
   std::string parent_folder_id_;
   BeginRenameCallback begin_rename_callback_;
 };

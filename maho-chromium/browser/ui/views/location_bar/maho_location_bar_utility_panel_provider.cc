@@ -1,6 +1,7 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/ui/maho_settings_navigation.h"
+#include "maho/browser/ui/views/boost/maho_boost_window_controller.h"
 #include "maho/browser/ui/views/location_bar/maho_dom_screenshot_handler.h"
 #include "maho/browser/ui/views/location_bar/maho_full_page_capture_client.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_provider.h"
@@ -70,7 +71,6 @@ constexpr char kDeveloperModeSymbolName[] = "hammer";
 constexpr char kAutoPipSymbolName[] = "pip.enter";
 constexpr char kShieldsSymbolName[] = "shield.lefthalf.filled";
 constexpr char kShareSymbolName[] = "square.and.arrow.up";
-constexpr char kMagicWandSymbolName[] = "wand.and.stars";
 constexpr char kCameraSymbolName[] = "camera";
 constexpr char kViewfinderSymbolName[] = "viewfinder";
 constexpr char kZoomInSymbolName[] = "plus.magnifyingglass";
@@ -204,14 +204,6 @@ void ShowShieldBubbleForBrowser(Browser* browser) {
   }
 
   MahoPageInfoUI::ShowShieldBubble(browser);
-}
-
-void ShowBoostBubbleForBrowser(Browser* browser) {
-  if (!browser) {
-    return;
-  }
-
-  MahoPageInfoUI::ShowBoostBubble(browser);
 }
 
 std::string GetSecuritySFSymbolNameForLevel(int security_level) {
@@ -383,23 +375,6 @@ MahoLocationBarUtilityPanelAction BuildShareAction(Browser* browser) {
   action.close_after_activate = true;
   if (has_active_page && browser) {
     action.callback = base::BindRepeating(&ShowSharingHubForBrowser,
-                                          base::Unretained(browser));
-  }
-  return action;
-}
-
-MahoLocationBarUtilityPanelAction BuildBoostAction(Browser* browser) {
-  const bool has_active_page = HasActivePageForSiteControls(browser);
-  MahoLocationBarUtilityPanelAction action = MakeAction(
-      u"Boost",
-      has_active_page ? u"Customize this site" : u"Current page unavailable",
-      kMagicWandSymbolName,
-      has_active_page ? MahoLocationBarUtilityPanelDataState::kLive
-                      : MahoLocationBarUtilityPanelDataState::kUnavailable,
-      has_active_page);
-  action.close_after_activate = true;
-  if (has_active_page && browser) {
-    action.callback = base::BindRepeating(&ShowBoostBubbleForBrowser,
                                           base::Unretained(browser));
   }
   return action;
@@ -654,7 +629,6 @@ MahoUtilityPanelZone BuildToolbarZone(Browser* browser) {
   zone.id = MahoUtilityPanelZoneId::kToolbar;
   zone.style = MahoUtilityPanelZoneStyle::kToolbarRow;
   zone.items.push_back(BuildShareAction(browser));
-  zone.items.push_back(BuildBoostAction(browser));
   zone.items.push_back(BuildCameraAction(browser));
   zone.items.push_back(BuildViewfinderAction(browser));
   return zone;

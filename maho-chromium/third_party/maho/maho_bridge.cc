@@ -12,6 +12,7 @@
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "maho_ffi.h"
+#include "url/gurl.h"
 
 namespace maho::core {
 
@@ -133,69 +134,187 @@ std::string GetCosmeticResources(MahoCore* core, const char* url) {
 }
 
 std::string GetBoostInjectionCss(MahoCore* core, const char* url) {
-  char* raw = maho_core_get_boosts_for_url(core, url);
-  if (!raw) {
+  if (!core || !url) {
     return std::string();
   }
-  auto parsed = base::JSONReader::Read(raw, base::JSON_PARSE_RFC);
-  maho_string_free(raw);
-  if (!parsed || !parsed->is_list()) {
+
+  GURL gurl(url);
+  if (!gurl.is_valid() || !gurl.has_host()) {
     return std::string();
   }
-  std::string combined;
-  for (const auto& item : parsed->GetList()) {
-    if (!item.is_dict()) {
-      continue;
-    }
-    const auto& dict = item.GetDict();
-    if (!dict.FindBool("enabled").value_or(false)) {
-      continue;
-    }
-    const std::string* css = dict.FindString("customCss");
-    if (css && !css->empty()) {
-      if (!combined.empty()) {
-        combined += "\n";
-      }
-      combined += *css;
-    }
+  const std::string domain(gurl.host());
+  if (domain.empty()) {
+    return std::string();
   }
-  return combined;
+
+  char* active_json = maho_core_boost_get_active(core, domain.c_str());
+  if (!active_json) {
+    VLOG(1) << "[MahoBoost] GetBoostInjectionCss: no active boost for domain="
+            << domain;
+    return std::string();
+  }
+
+  auto parsed = base::JSONReader::Read(active_json, base::JSON_PARSE_RFC);
+  maho_string_free(active_json);
+  if (!parsed || !parsed->is_dict()) {
+    return std::string();
+  }
+  const std::string* boost_id = parsed->GetDict().FindString("id");
+  if (!boost_id || boost_id->empty()) {
+    return std::string();
+  }
+
+  char* css = maho_core_boost_compose_css(core, boost_id->c_str());
+  if (!css) {
+    VLOG(1) << "[MahoBoost] GetBoostInjectionCss: compose_css returned null "
+            << "for boost_id=" << *boost_id << " domain=" << domain;
+    return std::string();
+  }
+  std::string result(css);
+  maho_string_free(css);
+  VLOG(1) << "[MahoBoost] GetBoostInjectionCss: domain=" << domain
+          << " css_length=" << result.size();
+  return result;
 }
 
-std::string GetBoostInjectionJs(MahoCore* core, const char* url) {
-  char* raw = maho_core_get_boosts_for_url(core, url);
-  if (!raw) {
+std::string CreateTempBoost(MahoCore* core, const char* domain) {
+  if (!core || !domain) {
     return std::string();
   }
-  auto parsed = base::JSONReader::Read(raw, base::JSON_PARSE_RFC);
-  maho_string_free(raw);
-  if (!parsed || !parsed->is_list()) {
+  char* json = maho_core_boost_create_temp(core, domain);
+  if (!json) {
     return std::string();
   }
-  std::string combined;
-  for (const auto& item : parsed->GetList()) {
-    if (!item.is_dict()) {
-      continue;
-    }
-    const auto& dict = item.GetDict();
-    if (!dict.FindBool("enabled").value_or(false)) {
-      continue;
-    }
-    const std::string* js = dict.FindString("customJs");
-    if (js && !js->empty()) {
-      if (!combined.empty()) {
-        combined += "\n";
-      }
-      combined += *js;
-    }
+  std::string result(json);
+  maho_string_free(json);
+  return result;
+}
+
+std::string CommitBoost(MahoCore* core, const char* boost_id) {
+  if (!core || !boost_id) {
+    return std::string();
   }
-  return combined;
+  char* json = maho_core_boost_commit(core, boost_id);
+  if (!json) {
+    return std::string();
+  }
+  std::string result(json);
+  maho_string_free(json);
+  return result;
+}
+
+std::string DiscardBoost(MahoCore* core, const char* boost_id) {
+  if (!core || !boost_id) {
+    return std::string();
+  }
+  char* prev_id = maho_core_boost_discard(core, boost_id);
+  if (!prev_id) {
+    return std::string();
+  }
+  std::string result(prev_id);
+  maho_string_free(prev_id);
+  return result;
+}
+
+std::string ShuffleBoost(MahoCore* core, const char* boost_id) {
+  if (!core || !boost_id) {
+    return std::string();
+  }
+  char* json = maho_core_boost_shuffle(core, boost_id);
+  if (!json) {
+    return std::string();
+  }
+  std::string result(json);
+  maho_string_free(json);
+  return result;
+}
+
+std::string ResetBoost(MahoCore* core, const char* boost_id) {
+  if (!core || !boost_id) {
+    return std::string();
+  }
+  char* json = maho_core_boost_reset(core, boost_id);
+  if (!json) {
+    return std::string();
+  }
+  std::string result(json);
+  maho_string_free(json);
+  return result;
+}
+
+std::string ExportBoost(MahoCore* core, const char* boost_id) {
+  if (!core || !boost_id) {
+    return std::string();
+  }
+  char* json = maho_core_boost_export(core, boost_id);
+  if (!json) {
+    return std::string();
+  }
+  std::string result(json);
+  maho_string_free(json);
+  return result;
+}
+
+std::string ImportBoost(MahoCore* core,
+                        const char* domain,
+                        const char* json) {
+  if (!core || !domain || !json) {
+    return std::string();
+  }
+  char* result_json = maho_core_boost_import(core, domain, json);
+  if (!result_json) {
+    return std::string();
+  }
+  std::string result(result_json);
+  maho_string_free(result_json);
+  return result;
+}
+
+std::string AppendZapSelector(MahoCore* core,
+                              const char* boost_id,
+                              const char* selector) {
+  if (!core || !boost_id || !selector) {
+    return std::string();
+  }
+  char* json = maho_core_boost_append_zap(core, boost_id, selector);
+  if (!json) {
+    return std::string();
+  }
+  std::string result(json);
+  maho_string_free(json);
+  return result;
+}
+
+std::string RemoveZapSelector(MahoCore* core,
+                              const char* boost_id,
+                              const char* selector) {
+  if (!core || !boost_id || !selector) {
+    return std::string();
+  }
+  char* json = maho_core_boost_remove_zap(core, boost_id, selector);
+  if (!json) {
+    return std::string();
+  }
+  std::string result(json);
+  maho_string_free(json);
+  return result;
 }
 
 std::string SearchHistory(MahoCore* core,
                           const char* query,
                           size_t limit) {
   char* result = maho_core_search_history(core, query, limit);
+  if (!result) {
+    return "[]";
+  }
+  std::string ret(result);
+  maho_string_free(result);
+  return ret;
+}
+
+std::string SearchBookmarks(MahoCore* core,
+                            const char* query) {
+  char* result = maho_core_search_bookmarks(core, query);
   if (!result) {
     return "[]";
   }

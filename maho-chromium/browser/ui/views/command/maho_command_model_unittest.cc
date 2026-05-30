@@ -576,7 +576,6 @@ TEST_F(QuickActionGateTest, CalculatorAndUnitConversionPreserved) {
   EXPECT_EQ("calc:0", results[0].key);
   EXPECT_EQ("unit:0", results[1].key);
 }
-}
 
 }  // namespace
 }  // namespace maho

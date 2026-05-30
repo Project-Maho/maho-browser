@@ -12,8 +12,8 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 #include "maho/browser/maho_core_holder.h"
-#include "maho/browser/ui/views/boost/maho_boost_bubble_coordinator.h"
 #include "maho/browser/net/maho_ad_block_tab_helper.h"
+#include "maho/browser/ui/views/boost/maho_boost_window_controller.h"
 #include "maho/browser/ui/views/shields/maho_shield_bubble_coordinator.h"
 #include "maho/third_party/maho/maho_bridge.h"
 #include "ui/base/interaction/element_tracker.h"
@@ -52,29 +52,6 @@ views::View* GetLocationBarAnchorView(Browser* browser) {
 }
 
 }  // namespace
-
-// static
-void MahoPageInfoUI::ShowBoostBubble(Browser* browser) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-
-  if (!browser) {
-    return;
-  }
-
-  views::View* anchor_view = GetLocationBarAnchorView(browser);
-  content::WebContents* web_contents =
-      browser->tab_strip_model()->GetActiveWebContents();
-  if (!anchor_view || !web_contents) {
-    return;
-  }
-
-  if (BrowserWindow* window = browser->window()) {
-    window->Activate();
-  }
-
-  maho::MahoBoostBubbleCoordinator::GetForBrowser(browser).Show(
-      anchor_view, browser, web_contents);
-}
 
 // static
 void MahoPageInfoUI::ShowShieldBubble(views::View* anchor_view,
@@ -129,6 +106,33 @@ void MahoPageInfoUI::ShowCookiesSettings(Browser* browser) {
     return;
   }
   chrome::ShowContentSettings(browser, ContentSettingsType::COOKIES);
+}
+
+// static
+void MahoPageInfoUI::ShowBoostEditor(Browser* browser) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  if (!browser) {
+    return;
+  }
+
+  TabStripModel* tab_strip = browser->tab_strip_model();
+  if (!tab_strip) {
+    return;
+  }
+
+  content::WebContents* active_tab = tab_strip->GetActiveWebContents();
+  if (!active_tab) {
+    return;
+  }
+
+  const GURL& url = active_tab->GetLastCommittedURL();
+  if (!url.is_valid() || url.is_empty()) {
+    return;
+  }
+
+  maho::MahoBoostWindowController::GetForBrowser(browser, browser->profile())
+      .ShowForActiveDomain(active_tab);
 }
 
 // static

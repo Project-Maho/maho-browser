@@ -170,64 +170,85 @@ struct Folder: Codable, Identifiable {
     var parentFolderId: FolderId? = nil
 }
 
+enum TextCase: String, Codable {
+    case none
+    case upper
+    case lower
+    case capitalize
+}
+
+struct ColorBoost: Codable {
+    let enableColorBoost: Bool
+    let dotAngleDeg: Double
+    let secondaryDotAngleDegDelta: Double
+    let brightness: Double
+    let saturation: Double
+    let contrast: Double
+    let autoTheme: Bool
+    let smartInvert: Bool
+}
+
+struct TypographyBoost: Codable {
+    let fontFamily: String?
+    let textCaseOverride: TextCase
+    let sizeOverride: Float?
+}
+
 struct Boost: Codable {
     let id: BoostId
-    let urlPattern: UrlPattern
-    let customCss: String?
-    let customJs: String?
-    let colorTheme: ColorOverride?
-    let fontOverride: FontOverride?
-    let enabled: Bool
-    let spaceScope: SpaceId?
-}
-
-struct ColorOverride: Codable, Equatable {
-    let background: MahoColor?
-    let text: MahoColor?
-    let links: MahoColor?
-}
-
-struct FontOverride: Codable, Equatable {
-    let fontFamily: String?
-    let fontSize: Double?
-    let lineHeight: Double?
-}
-
-struct BoostUpdate: Codable {
-    var urlPattern: UrlPattern? = nil
-    var customCss: Patchable<String> = .absent
-    var customJs: Patchable<String> = .absent
-    var colorTheme: Patchable<ColorOverride> = .absent
-    var fontOverride: Patchable<FontOverride> = .absent
-    var enabled: Bool? = nil
-    var spaceScope: Patchable<SpaceId> = .absent
+    let domain: String
+    let name: String
+    let color: ColorBoost
+    let typography: TypographyBoost
+    let zapSelectors: [String]
+    let customCss: String
 
     private enum CodingKeys: String, CodingKey {
-        case urlPattern, customCss, customJs, colorTheme
-        case fontOverride, enabled, spaceScope
+        case id, domain, name, color, typography, zapSelectors, customCss
+    }
+}
+
+struct ColorBoostUpdate: Codable {
+    var enableColorBoost: Bool? = nil
+    var dotAngleDeg: Double? = nil
+    var secondaryDotAngleDegDelta: Double? = nil
+    var brightness: Double? = nil
+    var saturation: Double? = nil
+    var contrast: Double? = nil
+    var autoTheme: Bool? = nil
+    var smartInvert: Bool? = nil
+}
+
+struct TypographyBoostUpdate: Codable {
+    var fontFamily: Patchable<String> = .absent
+    var textCaseOverride: TextCase? = nil
+    var sizeOverride: Patchable<Float> = .absent
+
+    private enum CodingKeys: String, CodingKey {
+        case fontFamily, textCaseOverride, sizeOverride
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        urlPattern = try container.decodeIfPresent(UrlPattern.self, forKey: .urlPattern)
-        customCss = try container.decodePatchable(Patchable<String>.self, forKey: .customCss)
-        customJs = try container.decodePatchable(Patchable<String>.self, forKey: .customJs)
-        colorTheme = try container.decodePatchable(Patchable<ColorOverride>.self, forKey: .colorTheme)
-        fontOverride = try container.decodePatchable(Patchable<FontOverride>.self, forKey: .fontOverride)
-        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled)
-        spaceScope = try container.decodePatchable(Patchable<SpaceId>.self, forKey: .spaceScope)
+        fontFamily = try container.decodePatchable(Patchable<String>.self, forKey: .fontFamily)
+        textCaseOverride = try container.decodeIfPresent(TextCase.self, forKey: .textCaseOverride)
+        sizeOverride = try container.decodePatchable(Patchable<Float>.self, forKey: .sizeOverride)
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encodeIfPresent(urlPattern, forKey: .urlPattern)
-        try container.encodePatchable(customCss, forKey: .customCss)
-        try container.encodePatchable(customJs, forKey: .customJs)
-        try container.encodePatchable(colorTheme, forKey: .colorTheme)
-        try container.encodePatchable(fontOverride, forKey: .fontOverride)
-        try container.encodeIfPresent(enabled, forKey: .enabled)
-        try container.encodePatchable(spaceScope, forKey: .spaceScope)
+        try container.encodePatchable(fontFamily, forKey: .fontFamily)
+        try container.encodeIfPresent(textCaseOverride, forKey: .textCaseOverride)
+        try container.encodePatchable(sizeOverride, forKey: .sizeOverride)
     }
+}
+
+struct BoostUpdate: Codable {
+    var name: String? = nil
+    var color: ColorBoostUpdate? = nil
+    var typography: TypographyBoostUpdate? = nil
+    var zapSelectors: [String]? = nil
+    var customCss: String? = nil
 }
 
 struct Note: Codable, Identifiable {

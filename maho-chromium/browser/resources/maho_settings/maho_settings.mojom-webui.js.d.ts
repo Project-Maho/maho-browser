@@ -161,6 +161,10 @@ export class PageCallbackRouter {
   settingsChanged: {
     addListener(listener: (settings: SettingValue[]) => void): void;
   };
+  installedExtensionsChanged: {
+    addListener(listener: (extensions: InstalledExtension[]) => void): void;
+    removeListener(listener: (extensions: InstalledExtension[]) => void): void;
+  };
 }
 
 export class PageHandlerRemote {

@@ -7,9 +7,50 @@ export enum ChatIntent {
   kSummarizeCurrentPage,
 }
 
+export enum ContextSourceKind {
+  kCurrentPage,
+  kOpenTab,
+  kHistory,
+  kBookmark,
+  kFile,
+}
+
+export interface HistoryItem {
+  url: string;
+  title: string;
+  visitedAt: number;
+}
+
+export interface BookmarkItem {
+  id: string;
+  url: string;
+  title: string;
+}
+
+
+export interface TabItem {
+  tabId: number;
+  url: string;
+  title: string;
+  isActive: boolean;
+  index: number;
+}
+
+export interface ContextAttachment {
+  kind: ContextSourceKind;
+  tabId: number;
+  label: string;
+  url: string;
+}
+
 export enum InteractionMode {
   kAssistant,
   kDeveloper,
+}
+
+export enum ViewMode {
+  kSidebar,
+  kFloating,
 }
 
 export enum BrowserContextStatus {
@@ -28,6 +69,7 @@ export interface BrowserContextPayload {
   contentSnippet: string;
   contentLength: number;
   warnings: string[];
+  label: string;
 }
 
 export enum RuntimeConnectionState {
@@ -162,17 +204,24 @@ export class PageHandlerRemote {
     events: RuntimeEvent[];
     totalCount: number;
   }>;
+  getOpenTabs(): Promise<{tabs: TabItem[]}>;
+  searchHistory(query: string, maxResults: number): Promise<{items: HistoryItem[]}>;
+  searchBookmarks(query: string, maxResults: number): Promise<{items: BookmarkItem[]}>;
   submitPrompt(
       sessionId: string,
       prompt: string,
       attachBrowserContext: boolean,
-      mode: InteractionMode): Promise<void>;
+      mode: InteractionMode,
+      attachments: ContextAttachment[] | null): Promise<void>;
   cancelTurn(sessionId: string): Promise<void>;
   respondToApproval(
       sessionId: string,
       approvalId: string,
       approved: boolean): Promise<void>;
   closePanel(): Promise<void>;
+  openSettings(): Promise<void>;
+  getViewMode(): Promise<{mode: ViewMode}>;
+  setViewMode(mode: ViewMode): Promise<void>;
 }
 
 export class PageHandlerFactory {

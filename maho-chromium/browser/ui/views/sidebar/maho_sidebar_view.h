@@ -10,9 +10,11 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/values.h"
 #include "base/functional/callback_forward.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#include "components/translate/content/browser/content_translate_driver.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_library_rail_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
@@ -39,6 +41,12 @@ class ViewTracker;
 
 namespace maho {
 
+// Body-mode switch for the sidebar (tabs vs library).
+enum class MahoSidebarBodyMode {
+  kTabs,
+  kLibrary,
+};
+
 class MahoSidebarArchiveView;
 class MahoSidebarCreateSpaceView;
 class MahoSidebarDownloadsView;
@@ -51,17 +59,13 @@ class MahoSidebarTabListView;
 class MahoSidebarTopBarView;
 class MahoSidebarNotesView;
 class MahoSidebarEaselsView;
-class MahoSidebarBoostsView;
 class MahoSidebarSpacesView;
 
-enum class MahoSidebarBodyMode {
-  kTabs,
-  kLibrary,
-};
-
-class MahoSidebarView : public views::View,
-                        public TabStripModelObserver,
-                        public MahoSpaceProfileBridge::Observer {
+class MahoSidebarView
+    : public views::View,
+      public TabStripModelObserver,
+      public MahoSpaceProfileBridge::Observer,
+      public translate::ContentTranslateDriver::TranslationObserver {
   METADATA_HEADER(MahoSidebarView, views::View)
 
  public:
@@ -78,6 +82,7 @@ class MahoSidebarView : public views::View,
   int OnDragUpdated(const ui::DropTargetEvent& event) override;
   DropCallback GetDropCallback(const ui::DropTargetEvent& event) override;
   void OnDragExited() override;
+  void OnDragEnded();
 
   void OpenLibrary();
   void OpenLibrary(MahoSidebarLibraryRailView::Category category);
@@ -130,9 +135,6 @@ class MahoSidebarView : public views::View,
   MahoSidebarEaselsView* easel_view_for_testing() {
     return easel_view_;
   }
-  MahoSidebarBoostsView* boost_view_for_testing() {
-    return boost_view_;
-  }
   MahoSidebarNotesView* notes_view_for_testing() {
     return notes_view_;
   }
@@ -184,6 +186,11 @@ class MahoSidebarView : public views::View,
   void OnTabPinnedStateChanged(tabs::TabInterface* tab, int index) override;
   void OnTabGroupChanged(const TabGroupChange& change) override;
 
+  void OnTranslateEnabledChanged(content::WebContents* source) override;
+  void OnIsPageTranslatedChanged(content::WebContents* source) override;
+
+  void RefreshTranslateObservation();
+
   raw_ptr<Browser> browser_;
   raw_ptr<views::View> body_host_ = nullptr;
   raw_ptr<views::View> content_host_ = nullptr;
@@ -197,7 +204,6 @@ class MahoSidebarView : public views::View,
   raw_ptr<MahoSidebarMediaView> media_view_ = nullptr;
   raw_ptr<MahoSidebarSpacesView> spaces_view_ = nullptr;
   raw_ptr<MahoSidebarEaselsView> easel_view_ = nullptr;
-  raw_ptr<MahoSidebarBoostsView> boost_view_ = nullptr;
   raw_ptr<MahoSidebarNotesView> notes_view_ = nullptr;
   raw_ptr<MahoSidebarLibraryRailView> library_rail_view_ = nullptr;
   raw_ptr<MahoSidebarTopBarView> top_bar_view_ = nullptr;
@@ -217,6 +223,9 @@ class MahoSidebarView : public views::View,
   bool refresh_scheduled_ = false;
   bool needs_re_refresh_ = false;
   std::set<content::WebContents*> recently_registered_contents_;
+  base::ScopedObservation<translate::ContentTranslateDriver,
+                         translate::ContentTranslateDriver::TranslationObserver>
+      translate_observation_{this};
   base::WeakPtrFactory<MahoSidebarView> weak_factory_{this};
 };
 

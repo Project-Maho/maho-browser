@@ -181,9 +181,8 @@ data class NoteViewModel(
 @Serializable
 data class BoostViewModel(
     val id: BoostId,
-    @SerialName("urlPattern") val urlPattern: String,
+    val domain: String,
     @SerialName("customCss") val customCss: String? = null,
-    @SerialName("customJs") val customJs: String? = null,
     val enabled: Boolean,
 )
 

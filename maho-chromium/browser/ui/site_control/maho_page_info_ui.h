@@ -17,11 +17,11 @@ class MahoPageInfoUI {
  public:
   MahoPageInfoUI() = delete;
 
-  static void ShowBoostBubble(Browser* browser);
   static void ShowShieldBubble(Browser* browser);
   static void ShowShieldBubble(views::View* anchor_view,
                                Browser* browser,
                                const std::string& origin);
+  static void ShowBoostEditor(Browser* browser);
   static void ShowSiteSettings(Browser* browser, const GURL& url);
   static void ShowCookiesSettings(Browser* browser);
 };

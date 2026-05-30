@@ -9,9 +9,12 @@
 #include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "chrome/browser/extensions/extension_uninstall_dialog.h"
 #include "components/prefs/pref_change_registrar.h"
+#include "maho/browser/extensions/maho_extension_state_bridge.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/ui/webui/maho_settings/maho_settings.mojom.h"
 #include "maho/third_party/maho/maho_ffi.h"
@@ -22,7 +25,10 @@
 class PrefService;
 class Profile;
 
-class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler {
+class MahoSettingsPageHandler
+    : public maho_settings::mojom::PageHandler,
+      public maho::MahoExtensionStateBridge::Observer,
+      public extensions::ExtensionUninstallDialog::Delegate {
  public:
   MahoSettingsPageHandler(
       mojo::PendingReceiver<maho_settings::mojom::PageHandler> receiver,
@@ -135,7 +141,15 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler {
   void ToggleExtension(const std::string& id,
                        ToggleExtensionCallback callback) override;
   void RemoveExtension(const std::string& id,
-                      RemoveExtensionCallback callback) override;
+                       RemoveExtensionCallback callback) override;
+
+  // maho::MahoExtensionStateBridge::Observer:
+  void OnInstalledExtensionsChanged() override;
+
+  // extensions::ExtensionUninstallDialog::Delegate:
+  void OnExtensionUninstallDialogClosed(
+      bool did_start_uninstall,
+      const std::u16string& error) override;
 
  private:
   static const char* GetPrefPath(const std::string& maho_key);
@@ -158,6 +172,9 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler {
   void AppendFfiSettings(
       std::vector<maho_settings::mojom::SettingValuePtr>& settings);
 
+  void ScheduleExtensionNotify();
+  void FlushExtensionNotify();
+
   void OnThemeStoreFetched(FetchThemeStoreCallback callback,
                            std::optional<std::string> body);
   void LoadCachedThemeStoreFromDisk();
@@ -174,6 +191,15 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler {
 
   base::OneShotTimer notify_timer_;
   std::string last_emitted_snapshot_;
+
+  base::OneShotTimer ext_notify_timer_;
+
+  base::ScopedObservation<maho::MahoExtensionStateBridge,
+                          maho::MahoExtensionStateBridge::Observer>
+      ext_bridge_observation_{this};
+
+  std::unique_ptr<extensions::ExtensionUninstallDialog> uninstall_dialog_;
+  RemoveExtensionCallback pending_remove_callback_;
 
   std::unique_ptr<network::SimpleURLLoader> theme_store_loader_;
   std::string cached_theme_store_json_;

@@ -136,6 +136,7 @@ struct MahoSidebarSearchModel {
   std::string current_url;
   bool has_active_tab = false;
   bool force_placeholder_for_empty_favorites = false;
+  bool translation_available = false;
   MahoSidebarAddressDisplayMode display_mode =
       MahoSidebarAddressDisplayMode::kSearchPlaceholder;
 };
@@ -222,6 +223,8 @@ struct SidebarTreeNode {
   bool is_expanded = true;
   bool folder_is_pinned = false;
   std::string parent_of_folder_id;
+  bool is_live = false;
+  std::string provider_type;
 
   // --- Children (folders and split groups) ---
   std::vector<SidebarTreeNode> children;

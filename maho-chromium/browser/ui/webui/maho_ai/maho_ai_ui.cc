@@ -4,6 +4,7 @@
 
 #include <memory>
 
+#include "base/logging.h"
 #include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/profiles/profile.h"
@@ -153,6 +154,7 @@ void MahoAIUI::CreatePageHandler(
     }
   }
   if (!browser) {
+    LOG(WARNING) << "MahoAIUI::CreatePageHandler: no browser found, dropping handler creation";
     return;
   }
 

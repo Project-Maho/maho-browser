@@ -19,6 +19,7 @@
 #include "base/task/thread_pool.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/extensions/extension_uninstall_dialog.h"
 #include "chrome/browser/preloading/preloading_prefs.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
@@ -28,6 +29,9 @@
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/storage_partition.h"
+#include "extensions/browser/extension_registrar.h"
+#include "extensions/browser/extension_registry.h"
+#include "maho/browser/extensions/maho_extension_state_bridge.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/passwords/maho_password_provider_utils.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
@@ -36,6 +40,7 @@
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "ui/color/color_provider_manager.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace {
 
@@ -1035,18 +1040,6 @@ bool DeleteAutofillPaymentOnPool(const std::string& id) {
   return maho_core_delete_autofill_payment_persisted(core, id.c_str());
 }
 
-bool ToggleExtensionOnPool(const std::string& id) {
-  MahoCore* core = maho::GetCore();
-  if (!core) return false;
-  return maho_core_toggle_extension(core, id.c_str());
-}
-
-bool RemoveExtensionOnPool(const std::string& id) {
-  MahoCore* core = maho::GetCore();
-  if (!core) return false;
-  return maho_core_remove_extension(core, id.c_str());
-}
-
 }  // namespace
 
 // ── Constructor / Destructor ──
@@ -1077,6 +1070,10 @@ MahoSettingsPageHandler::MahoSettingsPageHandler(
   }
 
   LoadCachedThemeStoreFromDisk();
+
+  if (auto* bridge = maho::MahoExtensionStateBridge::FromProfile(profile_)) {
+    ext_bridge_observation_.Observe(bridge);
+  }
 }
 
 MahoSettingsPageHandler::~MahoSettingsPageHandler() = default;
@@ -1302,6 +1299,32 @@ void MahoSettingsPageHandler::FlushNotify() {
   page_->SettingsChanged(std::move(settings));
 }
 
+void MahoSettingsPageHandler::OnInstalledExtensionsChanged() {
+  ScheduleExtensionNotify();
+}
+
+void MahoSettingsPageHandler::ScheduleExtensionNotify() {
+  ext_notify_timer_.Start(
+      FROM_HERE, base::Milliseconds(50),
+      base::BindOnce(&MahoSettingsPageHandler::FlushExtensionNotify,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void MahoSettingsPageHandler::FlushExtensionNotify() {
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
+      base::BindOnce(&BuildInstalledExtensionsOnPool),
+      base::BindOnce(
+          [](base::WeakPtr<MahoSettingsPageHandler> self,
+             std::vector<maho_settings::mojom::InstalledExtensionPtr> exts) {
+            if (!self) {
+              return;
+            }
+            self->page_->InstalledExtensionsChanged(std::move(exts));
+          },
+          weak_factory_.GetWeakPtr()));
+}
+
 bool MahoSettingsPageHandler::HandleFfiSetting(const std::string& key,
                                                 const std::string& value) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -1350,6 +1373,15 @@ bool MahoSettingsPageHandler::HandleFfiSetting(const std::string& key,
     base::DictValue settings;
     base::DictValue general;
     general.Set("todayTabTimeoutHours", static_cast<double>(hours));
+    settings.Set("general", std::move(general));
+    std::string json;
+    base::JSONWriter::Write(base::Value(std::move(settings)), &json);
+    maho_core_update_settings(core, json.c_str());
+    handled = true;
+  } else if (key == "tabs.pinned_close_behavior") {
+    base::DictValue settings;
+    base::DictValue general;
+    general.Set("pinnedCloseBehavior", value);
     settings.Set("general", std::move(general));
     std::string json;
     base::JSONWriter::Write(base::Value(std::move(settings)), &json);
@@ -1416,6 +1448,10 @@ void MahoSettingsPageHandler::AppendFfiSettings(
     if (auto today_timeout = general->FindDouble("todayTabTimeoutHours")) {
       add("tabs.today_tab_timeout",
           base::NumberToString(static_cast<int>(*today_timeout)));
+    }
+    if (const std::string* pinned_close =
+            general->FindString("pinnedCloseBehavior")) {
+      add("tabs.pinned_close_behavior", *pinned_close);
     }
   }
 
@@ -2083,6 +2119,11 @@ void MahoSettingsPageHandler::GetContentBlockerStats(
 
 void MahoSettingsPageHandler::GetInstalledExtensions(
     GetInstalledExtensionsCallback callback) {
+  if (!ext_bridge_observation_.IsObserving()) {
+    if (auto* bridge = maho::MahoExtensionStateBridge::FromProfile(profile_)) {
+      ext_bridge_observation_.Observe(bridge);
+    }
+  }
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
       base::BindOnce(&BuildInstalledExtensionsOnPool),
@@ -2096,24 +2137,88 @@ void MahoSettingsPageHandler::GetInstalledExtensions(
 
 void MahoSettingsPageHandler::ToggleExtension(const std::string& id,
                                               ToggleExtensionCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&ToggleExtensionOnPool, id),
-      base::BindOnce(
-          [](ToggleExtensionCallback cb, bool enabled) {
-            std::move(cb).Run(enabled);
-          },
-          std::move(callback)));
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  auto* registry = extensions::ExtensionRegistry::Get(profile_);
+  auto* bridge = maho::MahoExtensionStateBridge::FromProfile(profile_);
+  if (!bridge) {
+    std::move(callback).Run(
+        registry && registry->enabled_extensions().Contains(id));
+    return;
+  }
+  const bool currently_enabled =
+      registry && registry->enabled_extensions().Contains(id);
+  if (currently_enabled) {
+    bridge->RequestDisable(id);
+  } else {
+    bridge->RequestEnable(id);
+  }
+  std::move(callback).Run(
+      registry && registry->enabled_extensions().Contains(id));
 }
 
 void MahoSettingsPageHandler::RemoveExtension(const std::string& id,
                                               RemoveExtensionCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&RemoveExtensionOnPool, id),
-      base::BindOnce(
-          [](RemoveExtensionCallback cb, bool success) {
-            std::move(cb).Run(success);
-          },
-          std::move(callback)));
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  if (uninstall_dialog_ || pending_remove_callback_) {
+    std::move(callback).Run(
+        maho_settings::mojom::RemoveExtensionResult::kBusy);
+    return;
+  }
+
+  auto* bridge = maho::MahoExtensionStateBridge::FromProfile(profile_);
+  if (!bridge) {
+    std::move(callback).Run(
+        maho_settings::mojom::RemoveExtensionResult::kNotFound);
+    return;
+  }
+
+  if (!bridge->RequestUninstall(id)) {
+    auto* registry = extensions::ExtensionRegistry::Get(profile_);
+    const bool exists =
+        registry &&
+        registry->GetExtensionById(id,
+                                   extensions::ExtensionRegistry::EVERYTHING);
+    std::move(callback).Run(
+        exists ? maho_settings::mojom::RemoveExtensionResult::kBlockedByPolicy
+               : maho_settings::mojom::RemoveExtensionResult::kNotFound);
+    return;
+  }
+
+  auto* registry = extensions::ExtensionRegistry::Get(profile_);
+  scoped_refptr<const extensions::Extension> ext =
+      registry
+          ? registry->GetExtensionById(
+                id, extensions::ExtensionRegistry::EVERYTHING)
+          : nullptr;
+  if (!ext) {
+    std::move(callback).Run(
+        maho_settings::mojom::RemoveExtensionResult::kNotFound);
+    return;
+  }
+
+  pending_remove_callback_ = std::move(callback);
+  uninstall_dialog_ = extensions::ExtensionUninstallDialog::Create(
+      profile_, /*parent=*/gfx::NativeWindow(), this);
+  uninstall_dialog_->ConfirmUninstall(
+      ext, extensions::UNINSTALL_REASON_USER_INITIATED,
+      extensions::UNINSTALL_SOURCE_CHROME_EXTENSIONS_PAGE);
+}
+
+void MahoSettingsPageHandler::OnExtensionUninstallDialogClosed(
+    bool did_start_uninstall,
+    const std::u16string& error) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  uninstall_dialog_.reset();
+  if (pending_remove_callback_) {
+    maho_settings::mojom::RemoveExtensionResult result;
+    if (!did_start_uninstall) {
+      result = maho_settings::mojom::RemoveExtensionResult::kCancelled;
+    } else if (!error.empty()) {
+      result = maho_settings::mojom::RemoveExtensionResult::kUninstallFailed;
+    } else {
+      result = maho_settings::mojom::RemoveExtensionResult::kSuccess;
+    }
+    std::move(pending_remove_callback_).Run(result);
+  }
 }

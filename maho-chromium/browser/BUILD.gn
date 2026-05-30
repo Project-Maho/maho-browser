@@ -349,27 +349,8 @@ source_set("maho_ui_stubs") {
   ]
 }
 
-source_set("maho_link_preview") {
-  sources = [
-    "ui/link_preview/link_hover_script_string.h",
-    "ui/link_preview/maho_link_preview_manager.cc",
-    "ui/link_preview/maho_link_preview_manager.h",
-  ]
-  deps = [
-    ":maho_core_holder",
-    ":maho_prompt_utils",
-    "//base",
-    "//chrome/browser/profiles:profile",
-    "//components/prefs",
-    "//content/public/browser",
-    "//maho/third_party/maho:maho_bridge",
-    "//net",
-    "//services/network/public/cpp",
-    "//third_party/blink/public/mojom:mojom_platform",
-    "//ui/gfx/geometry",
-    "//ui/views",
-    "//url",
-  ]
+group("maho_link_preview") {
+  public_deps = [ "//maho/browser/ui/link_preview:maho_link_preview" ]
 }
 
 source_set("maho_space_profile_bridge") {
@@ -399,6 +380,29 @@ source_set("maho_extension_state_bridge") {
     ":maho_core_holder",
     "//maho/third_party/maho:maho_ffi_headers",
     "//maho/third_party/maho:maho_core_prebuilt",
+  ]
+}
+
+source_set("maho_extension_state_bridge_unittests") {
+  testonly = true
+  sources = [
+    "extensions/maho_extension_state_bridge_unittest.cc",
+  ]
+  deps = [
+    ":maho_extension_state_bridge",
+    ":maho_core_holder",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser/profiles:profile",
+    "//chrome/test:test_support",
+    "//content/test:test_support",
+    "//extensions/browser",
+    "//extensions/browser:test_support",
+    "//extensions/common",
+    "//maho/third_party/maho:maho_bridge",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//testing/gtest",
   ]
 }
 
@@ -444,6 +448,18 @@ source_set("maho_settings_navigation") {
     "//net",
     "//ui/base",
     "//url",
+  ]
+}
+
+source_set("maho_ai_popup_lifetime_tracker") {
+  sources = [
+    "maho_ai_popup_lifetime_tracker.cc",
+    "maho_ai_popup_lifetime_tracker.h",
+  ]
+  deps = [
+    "//base",
+    "//chrome/browser/ui/browser_window:browser_window",
+    "//ui/base",
   ]
 }
 

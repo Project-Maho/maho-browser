@@ -1,0 +1,7 @@
+[      85ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:4072/standalone/app_bundle.js:21359
+[      87ms] [INFO] [standalone stub] createPageHandler @ http://127.0.0.1:4072/standalone/app_bundle.js:21801
+[     148ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:4072/favicon.ico:0
+[   21097ms] [INFO] [standalone stub] previewTheme {theme_json: {"type":"gradient","gradientColors":[{"hue":0.3792…ating","opacity":0.5,"texture":0,"scheme":"auto"}} @ http://127.0.0.1:4072/standalone/app_bundle.js:21782
+[   21200ms] [INFO] [standalone stub] previewTheme {theme_json: {"type":"gradient","gradientColors":[{"hue":0.3792…ogous","opacity":0.5,"texture":0,"scheme":"auto"}} @ http://127.0.0.1:4072/standalone/app_bundle.js:21782
+[   21283ms] [INFO] [standalone stub] previewTheme {theme_json: {"type":"gradient","gradientColors":[{"hue":0.8792…ogous","opacity":0.5,"texture":0,"scheme":"auto"}} @ http://127.0.0.1:4072/standalone/app_bundle.js:21782
+[   39399ms] [INFO] [standalone stub] previewTheme {theme_json: {"type":"gradient","gradientColors":[{"hue":0.5806…ogous","opacity":0.5,"texture":0,"scheme":"auto"}} @ http://127.0.0.1:4072/standalone/app_bundle.js:21782

@@ -107,6 +107,15 @@ char *maho_core_get_sidebar_root_order(struct MahoCore *ptr,
 /**
  * # Safety
  * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `space_id_json` must be a valid null-terminated C string containing a SpaceId JSON.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_get_sidebar_tree(struct MahoCore *ptr,
+                                 const char *space_id_json);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
  * Caller must free the returned string with `maho_string_free`.
  */
 char *maho_core_get_active_space_id(struct MahoCore *ptr);
@@ -210,6 +219,20 @@ char *maho_core_get_installed_extensions(struct MahoCore *ptr);
  * # Safety
  * `ptr` must be a valid pointer returned by `maho_core_new`.
  */
+void maho_core_clear_installed_extensions(struct MahoCore *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `extensions_json` must be a valid null-terminated C string.
+ */
+void maho_core_set_installed_extensions(struct MahoCore *ptr,
+                                        const char *extensions_json);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ */
 bool maho_core_is_native_password_provider_active(struct MahoCore *ptr);
 
 /**
@@ -273,6 +296,50 @@ bool maho_core_update_password_username(struct MahoCore *ptr,
  * Caller must free the returned string with `maho_string_free`.
  */
 char *maho_core_get_boosts_for_url(struct MahoCore *ptr, const char *url);
+
+char *maho_core_boost_list_for_domain(struct MahoCore *ptr, const char *domain);
+
+char *maho_core_boost_get(struct MahoCore *ptr, const char *boost_id);
+
+char *maho_core_boost_create(struct MahoCore *ptr, const char *domain, const char *name);
+
+char *maho_core_boost_update(struct MahoCore *ptr,
+                             const char *boost_id,
+                             const char *changes_json);
+
+bool maho_core_boost_delete(struct MahoCore *ptr, const char *boost_id);
+
+void maho_core_boost_set_active(struct MahoCore *ptr,
+                                const char *domain,
+                                const char *boost_id);
+
+char *maho_core_boost_get_active(struct MahoCore *ptr, const char *domain);
+
+char *maho_core_boost_compose_css(struct MahoCore *ptr, const char *boost_id);
+
+char *maho_core_boost_create_temp(struct MahoCore *ptr, const char *domain);
+
+char *maho_core_boost_commit(struct MahoCore *ptr, const char *boost_id);
+
+char *maho_core_boost_discard(struct MahoCore *ptr, const char *boost_id);
+
+char *maho_core_boost_shuffle(struct MahoCore *ptr, const char *boost_id);
+
+char *maho_core_boost_reset(struct MahoCore *ptr, const char *boost_id);
+
+char *maho_core_boost_export(struct MahoCore *ptr, const char *boost_id);
+
+char *maho_core_boost_import(struct MahoCore *ptr,
+                             const char *domain,
+                             const char *json);
+
+char *maho_core_boost_append_zap(struct MahoCore *ptr,
+                                 const char *boost_id,
+                                 const char *selector);
+
+char *maho_core_boost_remove_zap(struct MahoCore *ptr,
+                                 const char *boost_id,
+                                 const char *selector);
 
 /**
  * # Safety
@@ -820,31 +887,6 @@ char *maho_core_export_single_note(struct MahoCore *ptr, const char *note_id, co
  * Returns JSON array of [note_id, rank] pairs. Caller must free with `maho_string_free`.
  */
 char *maho_core_search_notes_fts(struct MahoCore *ptr, const char *query);
-
-/**
- * # Safety
- * `ptr` must be valid.
- * Returns JSON array of boost templates. Caller must free with `maho_string_free`.
- */
-char *maho_core_get_boost_templates(struct MahoCore *ptr);
-
-/**
- * # Safety
- * `ptr` must be valid. `template_id` and `url_pattern` must be valid null-terminated C strings.
- * Returns JSON boost view model or null. Caller must free with `maho_string_free`.
- */
-char *maho_core_create_boost_from_template(struct MahoCore *ptr,
-                                           const char *template_id,
-                                           const char *url_pattern);
-
-/**
- * # Safety
- * `ptr` must be valid. `url` and `space_id` must be valid null-terminated C strings.
- * Returns JSON array of boost view models. Caller must free with `maho_string_free`.
- */
-char *maho_core_get_boosts_for_url_in_space(struct MahoCore *ptr,
-                                            const char *url,
-                                            const char *space_id);
 
 /**
  * # Safety

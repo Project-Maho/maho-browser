@@ -13,6 +13,7 @@
 #include "chrome/common/chrome_paths.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "maho/browser/extensions/maho_extension_state_bridge.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_registry.h"
@@ -139,6 +140,10 @@ void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
                                                  bool is_initial_profile) {
   if (!is_initial_profile) {
     return;
+  }
+  if (profile && !profile->IsOffTheRecord()) {
+    extension_state_bridge_ =
+        std::make_unique<maho::MahoExtensionStateBridge>(profile);
   }
 }
 

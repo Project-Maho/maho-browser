@@ -11,8 +11,14 @@ import {
 } from './maho_ai.mojom-webui.js';
 import {
   AppState,
+  ComposerAttachment,
+  CURRENT_PAGE_ATTACHMENT,
+  DEFAULT_HISTORY_SEARCH_STATE,
+  DEFAULT_BOOKMARKS_SEARCH_STATE,
+  DEFAULT_OPEN_TABS_STATE,
   createInitialState,
-  getLastBrowserContext,
+  getSubmitContextAttachments,
+  hasCurrentPageAttachment,
   isRenderableTimelineEvent,
   TimelineEntry,
 } from './types.js';
@@ -33,9 +39,13 @@ function cloneState(state: AppState): AppState {
     approvalsById: {...state.approvalsById},
     approvalResultsById: {...state.approvalResultsById},
     selectedInspector: {...state.selectedInspector},
-    composer: {...state.composer},
+    composer: {...state.composer, attachments: [...state.composer.attachments]},
+    openTabs: {...state.openTabs, items: [...state.openTabs.items]},
+    historySearch: {...state.historySearch, items: [...state.historySearch.items]},
+    bookmarksSearch: {...state.bookmarksSearch, items: [...state.bookmarksSearch.items]},
     turnPendingBySessionId: {...state.turnPendingBySessionId},
-    lastContextBySessionId: {...state.lastContextBySessionId},
+    contextsBySessionId: Object.fromEntries(
+        Object.entries(state.contextsBySessionId).map(([key, value]) => [key, [...value]])),
   };
 }
 
@@ -99,9 +109,7 @@ export class MahoAiStore {
       });
 
       if (this.state.currentSessionId) {
-        const currentSession = this.state.sessionsById[this.state.currentSessionId];
-        await this.resumeSession(
-            this.state.currentSessionId, currentSession?.isReadOnly ?? false);
+        await this.resumeSession(this.state.currentSessionId);
       }
     } catch (error) {
       this.patch(state => {
@@ -156,6 +164,33 @@ export class MahoAiStore {
     await this.resumeSession(session.sessionId, false);
   }
 
+  /**
+   * Creates a new session without forwarding the prompt through
+   * StartSession(initial_prompt), then submits the pending composer state
+   * (prompt + attachments) via the normal submitPrompt path.  Use this for
+   * first-send when there is no current session so that attachment state is
+   * preserved correctly.
+   */
+  async startSessionThenSubmit(): Promise<void> {
+    const mode = this.state.developerMode ?
+        InteractionMode.kDeveloper :
+        InteractionMode.kAssistant;
+    // Pass null prompt so the backend does not auto-submit anything.
+    const {session} = await this.pageHandler.startSession(null, mode);
+
+    this.patch(state => {
+      state.sessionsById[session.sessionId] = session;
+      state.sessionOrder = sortSessionIds(state.sessionsById);
+      state.currentSessionId = session.sessionId;
+      state.selectedInspector = {kind: 'session', id: session.sessionId};
+      // Do NOT clear the prompt or mark turnPending here; submitPrompt will.
+      state.eventsBySessionId[session.sessionId] = [];
+    });
+
+    await this.resumeSession(session.sessionId, false);
+    await this.submitPrompt();
+  }
+
   async resumeSession(sessionId: string, fetchHistory = true): Promise<void> {
     const {session, replayEvents} = await this.pageHandler.resumeSession(sessionId);
 
@@ -166,7 +201,7 @@ export class MahoAiStore {
         state.sessionOrder = sortSessionIds(state.sessionsById);
       }
       state.selectedInspector = {kind: 'session', id: sessionId};
-      this.updateLastContextSnapshot(state, sessionId, replayEvents);
+      this.updateContextSnapshot(state, sessionId, replayEvents);
       if (replayEvents.length) {
         state.eventsBySessionId[sessionId] = replayEvents.filter(isRenderableTimelineEvent)
                                           .map(event => ({sessionId, event}));
@@ -181,16 +216,154 @@ export class MahoAiStore {
   async loadHistory(sessionId: string): Promise<void> {
     const {events, totalCount} = await this.pageHandler.getSessionHistory(sessionId, 0, 200);
     this.patch(state => {
-      this.updateLastContextSnapshot(state, sessionId, events);
+      this.updateContextSnapshot(state, sessionId, events);
       state.eventsBySessionId[sessionId] = events.filter(isRenderableTimelineEvent)
                                         .map(event => ({sessionId, event}));
       state.historiesBySessionId[sessionId] = {loaded: true, totalCount};
     });
   }
 
-  toggleBrowserContext() {
+  toggleAttachment(attachment: ComposerAttachment) {
     this.patch(state => {
-      state.composer.attachBrowserContext = !state.composer.attachBrowserContext;
+      const idx = state.composer.attachments.findIndex(a => a.id === attachment.id);
+      if (idx >= 0) {
+        state.composer.attachments.splice(idx, 1);
+      } else {
+        state.composer.attachments.push(attachment);
+      }
+    });
+  }
+
+  addAttachment(attachment: ComposerAttachment) {
+    this.patch(state => {
+      if (!state.composer.attachments.some(a => a.id === attachment.id)) {
+        state.composer.attachments.push(attachment);
+      }
+    });
+  }
+
+  removeAttachment(attachmentId: string) {
+    this.patch(state => {
+      state.composer.attachments = state.composer.attachments.filter(a => a.id !== attachmentId);
+    });
+  }
+
+  toggleBrowserContext() {
+    this.toggleAttachment(CURRENT_PAGE_ATTACHMENT);
+  }
+
+  async loadOpenTabs(force = false): Promise<void> {
+    if (this.state.openTabs.loading || (this.state.openTabs.loaded && !force)) {
+      return;
+    }
+
+    this.patch(state => {
+      state.openTabs = {
+        ...state.openTabs,
+        loading: true,
+        error: null,
+      };
+    });
+
+    try {
+      const {tabs} = await this.pageHandler.getOpenTabs();
+      this.patch(state => {
+        state.openTabs = {
+          items: tabs,
+          loading: false,
+          loaded: true,
+          error: null,
+        };
+      });
+    } catch (error) {
+      this.patch(state => {
+        state.openTabs = {
+          ...state.openTabs,
+          loading: false,
+          loaded: true,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      });
+    }
+  }
+
+  resetOpenTabs() {
+    this.patch(state => {
+      state.openTabs = {...DEFAULT_OPEN_TABS_STATE, items: []};
+    });
+  }
+
+  async searchHistory(query: string, maxResults = 20): Promise<void> {
+    this.patch(state => {
+      state.historySearch = {
+        query,
+        items: state.historySearch.items,
+        loading: true,
+        error: null,
+      };
+    });
+
+    try {
+      const {items} = await this.pageHandler.searchHistory(query, maxResults);
+      this.patch(state => {
+        state.historySearch = {
+          query,
+          items,
+          loading: false,
+          error: null,
+        };
+      });
+    } catch (error) {
+      this.patch(state => {
+        state.historySearch = {
+          ...state.historySearch,
+          loading: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      });
+    }
+  }
+
+  resetHistorySearch() {
+    this.patch(state => {
+      state.historySearch = {...DEFAULT_HISTORY_SEARCH_STATE};
+    });
+  }
+
+  async searchBookmarks(query: string, maxResults = 20): Promise<void> {
+    this.patch(state => {
+      state.bookmarksSearch = {
+        query,
+        items: state.bookmarksSearch.items,
+        loading: true,
+        error: null,
+      };
+    });
+
+    try {
+      const {items} = await this.pageHandler.searchBookmarks(query, maxResults);
+      this.patch(state => {
+        state.bookmarksSearch = {
+          query,
+          items,
+          loading: false,
+          error: null,
+        };
+      });
+    } catch (error) {
+      this.patch(state => {
+        state.bookmarksSearch = {
+          ...state.bookmarksSearch,
+          loading: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      });
+    }
+  }
+
+  resetBookmarksSearch() {
+    this.patch(state => {
+      state.bookmarksSearch = {...DEFAULT_BOOKMARKS_SEARCH_STATE};
     });
   }
 
@@ -202,7 +375,9 @@ export class MahoAiStore {
       return;
     }
 
-    const attachBrowserContext = this.state.composer.attachBrowserContext;
+    const attachments = getSubmitContextAttachments(this.state.composer.attachments);
+    const attachBrowserContext = attachments === null &&
+        hasCurrentPageAttachment(this.state.composer.attachments);
     const mode = this.state.developerMode ?
         InteractionMode.kDeveloper :
         InteractionMode.kAssistant;
@@ -211,7 +386,8 @@ export class MahoAiStore {
       state.composer.prompt = '';
     });
 
-    await this.pageHandler.submitPrompt(sessionId, prompt, attachBrowserContext, mode);
+    await this.pageHandler.submitPrompt(
+        sessionId, prompt, attachBrowserContext, mode, attachments);
   }
 
   async cancelTurn(): Promise<void> {
@@ -283,7 +459,8 @@ export class MahoAiStore {
           state.turnPendingBySessionId[sessionId] = false;
         }
         if (event.kind === RuntimeEventKind.kBrowserContextInjected && event.browserContext) {
-          state.lastContextBySessionId[sessionId] = event.browserContext;
+          const existing = state.contextsBySessionId[sessionId] || [];
+          state.contextsBySessionId[sessionId] = [...existing, event.browserContext];
         }
       });
     });
@@ -338,14 +515,16 @@ export class MahoAiStore {
     state.eventsBySessionId[sessionId] = [...existing, nextEntry];
   }
 
-  private updateLastContextSnapshot(state: AppState, sessionId: string, events: RuntimeEvent[]) {
-    const browserContext = getLastBrowserContext(events);
-    if (browserContext) {
-      state.lastContextBySessionId[sessionId] = browserContext;
+  private updateContextSnapshot(state: AppState, sessionId: string, events: RuntimeEvent[]) {
+    const payloads = events
+        .filter(e => e.kind === RuntimeEventKind.kBrowserContextInjected && e.browserContext)
+        .map(e => e.browserContext!);
+    if (payloads.length) {
+      state.contextsBySessionId[sessionId] = payloads;
       return;
     }
 
-    delete state.lastContextBySessionId[sessionId];
+    delete state.contextsBySessionId[sessionId];
   }
 
   private patch(mutator: (state: AppState) => void) {

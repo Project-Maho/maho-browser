@@ -24,6 +24,7 @@
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/controls/button/md_text_button.h"
 
 namespace maho {
 namespace {
@@ -1217,7 +1218,6 @@ TEST_F(MahoCommandOverlayViewTest,
   EXPECT_EQ(CommandOverlayMode::kSearch, view->CurrentModeForTesting())
       << "Backspace with empty text in commands-only mode must exit back to "
          "origin mode";
-}
 }
 
 }  // namespace

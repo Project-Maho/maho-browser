@@ -67,10 +67,10 @@ pub struct NoteExport {
 }
 
 pub struct BoostExport {
-    pub url_pattern: String,
+    pub domain: String,
     pub custom_css: Option<String>,
-    pub custom_js: Option<String>,
 }
+
 
 #[derive(Clone, Debug, Serialize)]
 pub struct BrowserProfile {
@@ -208,9 +208,8 @@ impl ImportExportManager {
             .iter()
             .map(|boost| {
                 serde_json::json!({
-                    "url_pattern": boost.url_pattern,
+                    "domain": boost.domain,
                     "custom_css": boost.custom_css,
-                    "custom_js": boost.custom_js,
                 })
             })
             .collect();

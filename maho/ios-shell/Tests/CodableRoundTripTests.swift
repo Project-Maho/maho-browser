@@ -167,6 +167,101 @@ final class CodableRoundTripTests: XCTestCase {
         }
     }
 
+    // MARK: - PinnedCloseBehavior round-trip
+
+    func testPinnedCloseBehaviorRoundTripSwitch() throws {
+        let encoded = try JSONEncoder().encode(PinnedCloseBehavior.switch)
+        let decoded = try JSONDecoder().decode(PinnedCloseBehavior.self, from: encoded)
+        XCTAssertEqual(decoded, .switch)
+        let wire = try XCTUnwrap(String(data: encoded, encoding: .utf8))
+        XCTAssertEqual(wire, "\"switch\"")
+    }
+
+    func testPinnedCloseBehaviorRoundTripReset() throws {
+        let encoded = try JSONEncoder().encode(PinnedCloseBehavior.reset)
+        let decoded = try JSONDecoder().decode(PinnedCloseBehavior.self, from: encoded)
+        XCTAssertEqual(decoded, .reset)
+        let wire = try XCTUnwrap(String(data: encoded, encoding: .utf8))
+        XCTAssertEqual(wire, "\"reset\"")
+    }
+
+    func testPinnedCloseBehaviorRoundTripResetSwitch() throws {
+        let encoded = try JSONEncoder().encode(PinnedCloseBehavior.resetSwitch)
+        let decoded = try JSONDecoder().decode(PinnedCloseBehavior.self, from: encoded)
+        XCTAssertEqual(decoded, .resetSwitch)
+        let wire = try XCTUnwrap(String(data: encoded, encoding: .utf8))
+        XCTAssertEqual(wire, "\"reset-switch\"")
+    }
+
+    func testPinnedCloseBehaviorRoundTripUnloadSwitch() throws {
+        let encoded = try JSONEncoder().encode(PinnedCloseBehavior.unloadSwitch)
+        let decoded = try JSONDecoder().decode(PinnedCloseBehavior.self, from: encoded)
+        XCTAssertEqual(decoded, .unloadSwitch)
+        let wire = try XCTUnwrap(String(data: encoded, encoding: .utf8))
+        XCTAssertEqual(wire, "\"unload-switch\"")
+    }
+
+    func testPinnedCloseBehaviorRoundTripResetUnloadSwitch() throws {
+        let encoded = try JSONEncoder().encode(PinnedCloseBehavior.resetUnloadSwitch)
+        let decoded = try JSONDecoder().decode(PinnedCloseBehavior.self, from: encoded)
+        XCTAssertEqual(decoded, .resetUnloadSwitch)
+        let wire = try XCTUnwrap(String(data: encoded, encoding: .utf8))
+        XCTAssertEqual(wire, "\"reset-unload-switch\"")
+    }
+
+    func testPinnedCloseBehaviorRoundTripClose() throws {
+        let encoded = try JSONEncoder().encode(PinnedCloseBehavior.close)
+        let decoded = try JSONDecoder().decode(PinnedCloseBehavior.self, from: encoded)
+        XCTAssertEqual(decoded, .close)
+        let wire = try XCTUnwrap(String(data: encoded, encoding: .utf8))
+        XCTAssertEqual(wire, "\"close\"")
+    }
+
+    func testGeneralSettingsPinnedCloseBehaviorDefaultsToSwitch() throws {
+        let json = """
+        {
+            "defaultSearchEngine": {"name": "Google", "urlTemplate": "https://google.com?q={query}", "isDefault": true},
+            "todayTabTimeoutHours": 24.0,
+            "restoreOnLaunch": "restore_all",
+            "downloadPath": "/Downloads",
+            "autoplayPolicy": "allow"
+        }
+        """.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(GeneralSettings.self, from: json)
+        XCTAssertEqual(decoded.archiveTimeoutHours, 24.0)
+        XCTAssertTrue(decoded.siteSearchEntries.isEmpty)
+        XCTAssertEqual(decoded.pinnedCloseBehavior, .switch)
+    }
+
+    func testGeneralSettingsPinnedCloseBehaviorDecodesExplicitValue() throws {
+        let json = """
+        {
+            "defaultSearchEngine": {"name": "Google", "urlTemplate": "https://google.com?q={query}", "isDefault": true},
+            "todayTabTimeoutHours": 24.0,
+            "restoreOnLaunch": "restore_all",
+            "downloadPath": "/Downloads",
+            "autoplayPolicy": "allow",
+            "pinnedCloseBehavior": "reset-unload-switch"
+        }
+        """.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(GeneralSettings.self, from: json)
+        XCTAssertEqual(decoded.pinnedCloseBehavior, .resetUnloadSwitch)
+    }
+
+    func testGeneralSettingsUpdatePinnedCloseBehaviorOptional() throws {
+        let json = "{}".data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(GeneralSettingsUpdate.self, from: json)
+        XCTAssertNil(decoded.pinnedCloseBehavior)
+    }
+
+    func testGeneralSettingsUpdatePinnedCloseBehaviorRoundTrip() throws {
+        var update = GeneralSettingsUpdate()
+        update.pinnedCloseBehavior = .close
+        let encoded = try JSONEncoder().encode(update)
+        let decoded = try JSONDecoder().decode(GeneralSettingsUpdate.self, from: encoded)
+        XCTAssertEqual(decoded.pinnedCloseBehavior, .close)
+    }
+
     // MARK: - Helpers
 
     private func jsonDict(from value: some Encodable) throws -> [String: Any] {

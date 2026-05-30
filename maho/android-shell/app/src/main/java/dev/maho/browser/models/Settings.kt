@@ -72,6 +72,16 @@ enum class ToolbarItemKind {
 }
 
 @Serializable
+enum class PinnedCloseBehavior {
+    @SerialName("switch") Switch,
+    @SerialName("reset") Reset,
+    @SerialName("reset-switch") ResetSwitch,
+    @SerialName("unload-switch") UnloadSwitch,
+    @SerialName("reset-unload-switch") ResetUnloadSwitch,
+    @SerialName("close") Close,
+}
+
+@Serializable
 data class ReaderSettings(
     @SerialName("fontFamily") val fontFamily: String,
     @SerialName("fontSize") val fontSize: Double,
@@ -115,6 +125,7 @@ data class GeneralSettings(
     @SerialName("autoplayPolicy") val autoplayPolicy: AutoplayPolicy,
     @SerialName("archiveTimeoutHours") val archiveTimeoutHours: Double = 24.0,
     @SerialName("siteSearchEntries") val siteSearchEntries: List<SiteSearchEntry> = emptyList(),
+    @SerialName("pinnedCloseBehavior") val pinnedCloseBehavior: PinnedCloseBehavior = PinnedCloseBehavior.Switch,
 )
 
 @Serializable
@@ -225,6 +236,7 @@ data class GeneralSettingsUpdate(
     @SerialName("autoplayPolicy") val autoplayPolicy: AutoplayPolicy? = null,
     @SerialName("archiveTimeoutHours") val archiveTimeoutHours: Double? = null,
     @SerialName("siteSearchEntries") val siteSearchEntries: List<SiteSearchEntry>? = null,
+    @SerialName("pinnedCloseBehavior") val pinnedCloseBehavior: PinnedCloseBehavior? = null,
 )
 
 @Serializable

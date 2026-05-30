@@ -298,11 +298,7 @@ sealed class CoreUpdate {
         val changes: SpaceConfigUpdate,
     ) : CoreUpdate()
 
-    @Serializable @SerialName("global_boosts_toggled")
-    data class GlobalBoostsToggled(val enabled: Boolean) : CoreUpdate()
 
-    @Serializable @SerialName("js_boosts_toggled")
-    data class JsBoostsToggled(val enabled: Boolean) : CoreUpdate()
 
     @Serializable @SerialName("extension_toggled")
     data class ExtensionToggled(

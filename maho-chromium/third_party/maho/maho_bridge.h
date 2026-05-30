@@ -50,15 +50,32 @@ bool LoadContentEngineCache(MahoCore* core, const char* path);
 
 std::string GetCosmeticResources(MahoCore* core, const char* url);
 
-// Boost injection — returns the concatenated CSS/JS from all enabled boosts
-// matching |url|. Returns an empty string if none apply.
 std::string GetBoostInjectionCss(MahoCore* core, const char* url);
-std::string GetBoostInjectionJs(MahoCore* core, const char* url);
+
+std::string CreateTempBoost(MahoCore* core, const char* domain);
+std::string CommitBoost(MahoCore* core, const char* boost_id);
+std::string DiscardBoost(MahoCore* core, const char* boost_id);
+std::string ShuffleBoost(MahoCore* core, const char* boost_id);
+std::string ResetBoost(MahoCore* core, const char* boost_id);
+std::string ExportBoost(MahoCore* core, const char* boost_id);
+std::string ImportBoost(MahoCore* core,
+                        const char* domain,
+                        const char* json);
+std::string AppendZapSelector(MahoCore* core,
+                              const char* boost_id,
+                              const char* selector);
+std::string RemoveZapSelector(MahoCore* core,
+                              const char* boost_id,
+                              const char* selector);
 
 // History search (returns JSON)
 std::string SearchHistory(MahoCore* core,
                           const char* query,
                           size_t limit);
+
+// Bookmarks search (returns JSON)
+std::string SearchBookmarks(MahoCore* core,
+                            const char* query);
 
 // Generic event handler (returns JSON)
 std::string HandleEvent(MahoCore* core, const char* event_json);

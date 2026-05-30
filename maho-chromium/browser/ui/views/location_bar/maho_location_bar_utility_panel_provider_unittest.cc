@@ -235,42 +235,25 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
 }
 
 TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     ToolbarZoneHasFourActionsInExactOrder) {
+     ToolbarZoneHasThreeActionsInExactOrder) {
   MahoUtilityPanelZone zone = internal::BuildToolbarZone(nullptr);
   EXPECT_EQ(zone.id, MahoUtilityPanelZoneId::kToolbar);
   EXPECT_EQ(zone.style, MahoUtilityPanelZoneStyle::kToolbarRow);
-  ASSERT_EQ(zone.items.size(), 4u);
+  ASSERT_EQ(zone.items.size(), 3u);
 
   EXPECT_EQ(zone.items[0].title, u"Share");
   EXPECT_EQ(zone.items[0].sf_symbol_name, "square.and.arrow.up");
   EXPECT_FALSE(zone.items[0].callback);
   EXPECT_FALSE(zone.items[0].enabled);
 
-  EXPECT_EQ(zone.items[1].title, u"Boost");
-  EXPECT_EQ(zone.items[1].sf_symbol_name, "wand.and.stars");
+  EXPECT_EQ(zone.items[1].title, u"Screenshot");
+  EXPECT_EQ(zone.items[1].sf_symbol_name, "camera");
   EXPECT_FALSE(zone.items[1].enabled);
   EXPECT_FALSE(zone.items[1].callback);
-  EXPECT_EQ(zone.items[2].title, u"Screenshot");
-  EXPECT_EQ(zone.items[2].sf_symbol_name, "camera");
+  EXPECT_EQ(zone.items[2].title, u"Full-Page Screenshot");
+  EXPECT_EQ(zone.items[2].sf_symbol_name, "viewfinder");
   EXPECT_FALSE(zone.items[2].enabled);
   EXPECT_FALSE(zone.items[2].callback);
-  EXPECT_EQ(zone.items[3].title, u"Full-Page Screenshot");
-  EXPECT_EQ(zone.items[3].sf_symbol_name, "viewfinder");
-  EXPECT_FALSE(zone.items[3].enabled);
-  EXPECT_FALSE(zone.items[3].callback);
-}
-
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     BoostActionIsUnavailableWithNullBrowser) {
-  MahoLocationBarUtilityPanelAction boost = internal::BuildBoostAction(nullptr);
-  EXPECT_EQ(boost.title, u"Boost");
-  EXPECT_EQ(boost.subtitle, u"Current page unavailable");
-  EXPECT_EQ(boost.sf_symbol_name, "wand.and.stars");
-  EXPECT_EQ(boost.data_state,
-            MahoLocationBarUtilityPanelDataState::kUnavailable);
-  EXPECT_FALSE(boost.enabled);
-  EXPECT_FALSE(boost.callback);
-  EXPECT_TRUE(boost.close_after_activate);
 }
 
 TEST(MahoLocationBarUtilityPanelProviderInternalTest,

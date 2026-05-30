@@ -105,8 +105,6 @@ constexpr RailCategorySpec kRailCategories[] = {
      "archivebox", "Archived Tabs", true},
     {MahoSidebarLibraryRailView::Category::kSpaces, u"Spaces", u"Spaces",
      &vector_icons::kHomeIcon, "square.on.square", "Spaces", true},
-    {MahoSidebarLibraryRailView::Category::kBoosts, u"Boosts", u"Boosts",
-     &vector_icons::kScienceIcon, "bolt", "Boosts", true},
     {MahoSidebarLibraryRailView::Category::kMedia, u"Media", u"Media",
      &vector_icons::kVideoLibraryIcon, "photo.on.rectangle.angled", "Media",
      false},

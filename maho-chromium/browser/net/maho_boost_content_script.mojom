@@ -1,0 +1,27 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+//
+// API contract for the boost content script ↔ browser channel.
+// v1 transport: JS injection + polling via ExecuteJavaScriptInIsolatedWorld.
+// Future: migrate to renderer-side Mojo bindings for type-safe IPC.
+
+module maho_boost_content_script.mojom;
+
+// Implemented by the renderer-side content script (future Mojo migration).
+// v1: called via ExecuteJavaScriptInIsolatedWorld("window.__mahoBoost.X()").
+interface BoostContentScript {
+  EnterZapMode(array<string> zap_selectors);
+  ExitZapMode();
+  EnterPickerMode();
+  ExitPickerMode();
+  SetZapSelectors(array<string> selectors);
+};
+
+// Implemented by the browser-side injection handler.
+// v1: polled via ExecuteJavaScriptInIsolatedWorld("window.__mahoBoost.drain()").
+interface BoostContentScriptHost {
+  OnZapElementClicked(string selector);
+  OnUnzapElementClicked(string selector);
+  OnPickerSelectorSelected(string selector);
+  OnModeExited(string mode);
+  OnNotify(string topic, string? msg);
+};

@@ -49,6 +49,26 @@ pub enum AutoplayPolicy {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum PinnedCloseBehavior {
+    #[serde(rename = "switch")]
+    Switch,
+    #[serde(rename = "reset")]
+    Reset,
+    #[serde(rename = "reset-switch")]
+    ResetSwitch,
+    #[serde(rename = "unload-switch")]
+    UnloadSwitch,
+    #[serde(rename = "reset-unload-switch")]
+    ResetUnloadSwitch,
+    #[serde(rename = "close")]
+    Close,
+}
+
+fn default_pinned_close_behavior() -> PinnedCloseBehavior {
+    PinnedCloseBehavior::Switch
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReaderSettings {
     pub font_family: String,
@@ -91,6 +111,8 @@ pub struct GeneralSettings {
     pub archive_timeout_hours: f64,
     #[serde(default = "default_site_search_entries")]
     pub site_search_entries: Vec<SiteSearchEntry>,
+    #[serde(default = "default_pinned_close_behavior")]
+    pub pinned_close_behavior: PinnedCloseBehavior,
 }
 
 fn default_archive_timeout() -> f64 {
@@ -279,6 +301,8 @@ pub struct GeneralSettingsUpdate {
     pub archive_timeout_hours: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub site_search_entries: Option<Vec<SiteSearchEntry>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pinned_close_behavior: Option<PinnedCloseBehavior>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]

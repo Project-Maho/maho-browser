@@ -1,0 +1,21 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+source_set("maho_space_config_dialog") {
+  sources = [
+    "maho_space_config_dialog.cc",
+    "maho_space_config_dialog.h",
+  ]
+  deps = [
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//maho/browser/ui/webui/maho_space_config:mojo_bindings",
+    "//maho/browser:maho_theme_support",
+    "//maho/components/constants",
+    "//net",
+    "//ui/base",
+    "//ui/gfx",
+    "//ui/views",
+    "//ui/views/controls/webview",
+    "//url",
+  ]
+}

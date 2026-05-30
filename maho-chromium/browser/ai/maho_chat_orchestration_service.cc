@@ -20,6 +20,7 @@
 #endif
 #include "components/prefs/pref_service.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "maho/browser/ai/maho_ai_security_utils.h"
 #include "maho/browser/ai/maho_browser_tool_executor.h"
 #include "maho/browser/ai/maho_browser_tool_registry.h"
 #include "maho/browser/ai/maho_extract_prompt_messages.h"
@@ -324,10 +325,15 @@ void MahoChatOrchestrationService::OnPageContextReady(
   bool include_context = classification.requires_page_context &&
                          active_round_state_->page_context.HasUsableContent();
   if (include_context) {
-    final_message = std::string("Title: ") + active_round_state_->page_context.title +
-                    "\nURL: " + active_round_state_->page_context.url +
-                    "\nContent:\n" + active_round_state_->page_context.GetLegacyText() +
-                    "\n\nUser Question:\n" + message;
+    std::string redacted_url =
+        maho::ai_security::RedactUrlForAi(active_round_state_->page_context.url);
+    final_message =
+        std::string("Title: ") + active_round_state_->page_context.title +
+        "\nURL: " + redacted_url +
+        "\nContent:\n" +
+        maho::ai_security::WrapUntrusted(
+            active_round_state_->page_context.GetLegacyText()) +
+        "\n\nUser Question:\n" + message;
   }
 
   if (!maho_core_chat_send_user_turn(rust_session_, final_message.c_str())) {

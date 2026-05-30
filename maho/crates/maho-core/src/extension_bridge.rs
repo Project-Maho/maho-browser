@@ -95,6 +95,8 @@ pub struct InstalledExtension {
     pub id: String,
     pub name: String,
     pub version: String,
+    #[serde(default)]
+    pub description: String,
     pub enabled: bool,
 }
 
@@ -300,6 +302,17 @@ impl ExtensionBridge {
 
     pub fn register_extension(&mut self, ext: InstalledExtension) {
         self.extensions.insert(ext.id.clone(), ext);
+    }
+
+    pub fn set_installed_extensions(&mut self, exts: Vec<InstalledExtension>) {
+        self.extensions.clear();
+        for ext in exts {
+            self.extensions.insert(ext.id.clone(), ext);
+        }
+    }
+
+    pub fn clear_installed_extensions(&mut self) {
+        self.extensions.clear();
     }
 
     pub fn toggle_extension(&mut self, extension_id: &str) -> Option<bool> {

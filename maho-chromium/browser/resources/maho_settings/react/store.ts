@@ -105,6 +105,10 @@ export class MahoSettingsStore {
     return this.state;
   }
 
+  getCallbackRouter(): PageCallbackRouter {
+    return this.callbackRouter;
+  }
+
   getHandler(): PageHandlerRemote {
     return this.pageHandler;
   }

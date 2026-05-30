@@ -21,9 +21,14 @@ source_set("maho_boost") {
 
   deps = [
     "//chrome/browser/profiles:profile",
+    "//maho/browser:maho_core_holder",
     "//maho/browser/resources/maho_boost:resources",
+    "//maho/browser/ui/views/boost:maho_boost_window",
     "//maho/components/constants",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
     "//mojo/public/cpp/bindings",
+    "//net",
     "//ui/webui",
     "//url",
   ]

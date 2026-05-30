@@ -1,4 +1,5 @@
-import React, {useEffect, useMemo, useRef} from 'react';
+import React, {Component, useEffect, useMemo, useRef} from 'react';
+import type {ErrorInfo, ReactNode} from 'react';
 import {createRoot} from 'react-dom/client';
 
 import type {MahoAiStore} from '../store.js';
@@ -6,6 +7,7 @@ import {isSessionReadOnly, RuntimeEventKind, ViewMode} from '../types.js';
 import type {AppState, TimelineEntry} from '../types.js';
 import {getToolProgressLabel} from '../views/conversation_thread.js';
 import {bootstrapStore, createMahoAiStore} from './store.js';
+import {runWithBootGuard} from './boot-guard.js';
 import {CompactShell} from './features/compact/compact-shell.js';
 import {
   Composer,
@@ -14,6 +16,8 @@ import {
 import {DeveloperWorkspace} from './features/developer/developer-workspace.js';
 import {useAppState} from './hooks/use-app-state.js';
 import {cn} from './lib/cn.js';
+
+const PAGE_HANDLER_TIMEOUT_MS = 3000;
 
 function getPendingThreadLabel(entries: TimelineEntry[], pending: boolean): string | null {
   if (!pending) {
@@ -44,6 +48,7 @@ function getPendingThreadLabel(entries: TimelineEntry[], pending: boolean): stri
 
   return getToolProgressLabel(latestToolName);
 }
+
 function BootErrorCard({message}: {message: string}) {
   return (
     <section className="boot-error">
@@ -51,6 +56,43 @@ function BootErrorCard({message}: {message: string}) {
       <pre>{message}</pre>
     </section>
   );
+}
+
+function PageHandlerTimeoutCard() {
+  return (
+    <section className="boot-error">
+      <h1>Maho AI failed to start</h1>
+      <pre>{'Page handler did not respond within ' +
+        String(PAGE_HANDLER_TIMEOUT_MS / 1000) +
+        's. Reload the panel or restart the browser.'}</pre>
+    </section>
+  );
+}
+
+interface ErrorBoundaryState {
+  caughtError: Error | null;
+}
+
+class ErrorBoundary extends Component<{children: ReactNode}, ErrorBoundaryState> {
+  constructor(props: {children: ReactNode}) {
+    super(props);
+    this.state = {caughtError: null};
+  }
+
+  static getDerivedStateFromError(error: unknown): ErrorBoundaryState {
+    return {caughtError: error instanceof Error ? error : new Error(String(error))};
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    console.error('[maho-ai] Uncaught render error:', error, info.componentStack);
+  }
+
+  render(): ReactNode {
+    if (this.state.caughtError) {
+      return <BootErrorCard message={this.state.caughtError.message} />;
+    }
+    return this.props.children;
+  }
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -66,16 +108,34 @@ function isEditableTarget(target: EventTarget | null): boolean {
 function MahoAiApp({store}: {store: MahoAiStore}) {
   const state = useAppState(store);
   const bootstrappedRef = useRef(false);
+  const [handlerTimedOut, setHandlerTimedOut] = React.useState(false);
 
   useEffect(() => {
+    (window as unknown as Record<string, unknown>)['__mahoAiMounted'] = true;
+  }, []);
+
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      setHandlerTimedOut(true);
+    }, PAGE_HANDLER_TIMEOUT_MS);
+
     if (bootstrappedRef.current) {
+      clearTimeout(timeoutId);
       return;
     }
 
     bootstrappedRef.current = true;
-    void bootstrapStore(store).catch((error: unknown) => {
-      console.error('[maho-ai] Bootstrap failed:', error);
-    });
+    void bootstrapStore(store)
+      .then(() => {
+        clearTimeout(timeoutId);
+        setHandlerTimedOut(false);
+      })
+      .catch((error: unknown) => {
+        clearTimeout(timeoutId);
+        console.error('[maho-ai] Bootstrap failed:', error);
+      });
+
+    return () => clearTimeout(timeoutId);
   }, [store]);
 
   useEffect(() => {
@@ -106,10 +166,37 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
     onStartSession: () => {
       void store.startSession();
     },
+    onLoadOpenTabs: () => {
+      void store.loadOpenTabs();
+    },
+    onRefreshOpenTabs: () => {
+      void store.loadOpenTabs(true);
+    },
+    onResetHistorySearch: () => {
+      store.resetHistorySearch();
+    },
+    onSearchHistory: (query: string) => {
+      void store.searchHistory(query);
+    },
+    onResetBookmarksSearch: () => {
+      store.resetBookmarksSearch();
+    },
+    onSearchBookmarks: (query: string) => {
+      void store.searchBookmarks(query);
+    },
     onToggleBrowserContext: () => store.toggleBrowserContext(),
+    onToggleHistoryAttachment: attachment => {
+      store.toggleAttachment(attachment);
+    },
+    onToggleTabAttachment: attachment => {
+      store.toggleAttachment(attachment);
+    },
+    onToggleBookmarkAttachment: attachment => {
+      store.toggleAttachment(attachment);
+    },
     onSubmit: () => {
       if (!store.getSnapshot().currentSessionId) {
-        void store.startSession();
+        void store.startSessionThenSubmit();
         return;
       }
 
@@ -129,9 +216,7 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
     },
     onGetViewMode: () => store.getViewMode(),
     onResumeSession: (sessionId: string) => {
-      const snapshot = store.getSnapshot();
-      const session = snapshot.sessionsById[sessionId];
-      void store.resumeSession(sessionId, session?.isReadOnly ?? false);
+      void store.resumeSession(sessionId);
     },
     onRespondToApproval: (approvalId: string, approved: boolean) => {
       void store.respondToApproval(approvalId, approved);
@@ -153,6 +238,10 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
   const readOnly = isSessionReadOnly(currentSession);
   const pendingTurn = !!(state.currentSessionId && state.turnPendingBySessionId[state.currentSessionId]);
   const thinkingLabel = getPendingThreadLabel(sessionEvents, pendingTurn);
+
+  if (handlerTimedOut && !state.bootError) {
+    return <PageHandlerTimeoutCard />;
+  }
 
   return (
     <div className={cn('console-shell', state.developerMode && 'console-shell--developer')}>
@@ -205,7 +294,11 @@ if (!rootElement) {
 }
 
 const store = createMahoAiStore();
-createRoot(rootElement).render(
-    <React.StrictMode>
-      <MahoAiApp store={store} />
-    </React.StrictMode>);
+runWithBootGuard(rootElement, () => {
+  createRoot(rootElement).render(
+      <React.StrictMode>
+        <ErrorBoundary>
+          <MahoAiApp store={store} />
+        </ErrorBoundary>
+      </React.StrictMode>);
+});

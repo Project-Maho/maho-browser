@@ -1,0 +1,787 @@
+# Authoritative cross-platform icon registry for Maho non-WebUI shells.
+# Format:
+# [[icon]]
+# name = "semantic_name"
+# description = "Brief description of usage"
+# sizes = ["size1", "size2"]
+#   [icon.platforms]
+#   views = "C++ vector_icons symbol or local symbol"
+#   apple = "SF Symbols name (shared or base name)"
+#   android = "Compose Material Icon reference"
+
+[[icon]]
+name = "nav_back"
+description = "Navigate back in history"
+sizes = ["16", "20", "24"]
+[icon.platforms]
+views = "vector_icons::kBackArrowIcon"
+apple = "chevron.backward"
+android = "Icons.AutoMirrored.Filled.ArrowBack"
+
+[[icon]]
+name = "nav_forward"
+description = "Navigate forward in history"
+sizes = ["16", "20", "24"]
+[icon.platforms]
+views = "vector_icons::kSubmenuArrowChromeRefreshIcon"
+apple = "chevron.forward"
+android = "Icons.AutoMirrored.Filled.ArrowForward"
+
+[[icon]]
+name = "close"
+description = "Close tab, dialog, sheet, or overlay"
+sizes = ["14", "16", "20"]
+[icon.platforms]
+views = "vector_icons::kCloseChromeRefreshIcon"
+apple = "xmark"
+android = "Icons.Default.Close"
+
+[[icon]]
+name = "reload_sync"
+description = "Reload page or trigger data sync"
+sizes = ["16", "20"]
+[icon.platforms]
+views = "vector_icons::kSyncChromeRefreshIcon"
+apple = "arrow.clockwise"
+android = "Icons.Default.Refresh"
+
+[[icon]]
+name = "search"
+description = "Search bar, search input, query triggers"
+sizes = ["14", "16", "20"]
+[icon.platforms]
+views = "vector_icons::kSearchIcon"
+apple = "magnifyingglass"
+android = "Icons.Default.Search"
+
+[[icon]]
+name = "globe"
+description = "Default site favicon, Web indicator"
+sizes = ["16", "20"]
+[icon.platforms]
+views = "vector_icons::kGlobeIcon"
+apple = "globe"
+android = "Icons.Default.Language"
+
+[[icon]]
+name = "downloads"
+description = "Download manager access and status"
+sizes = ["16", "20"]
+[icon.platforms]
+views = "vector_icons::kFileDownloadOffChromeRefreshIcon"
+apple = "arrow.down.to.line"
+android = "Icons.Filled.Download"
+
+[[icon]]
+name = "archive"
+description = "Archived tabs library / history section"
+sizes = ["16", "20"]
+[icon.platforms]
+views = "kArchiveboxIcon"
+apple = "archivebox"
+android = "Icons.Filled.Schedule"
+
+[[icon]]
+name = "spaces"
+description = "Space Switcher / spaces organization"
+sizes = ["16", "20"]
+[icon.platforms]
+views = "vector_icons::kHomeIcon"
+apple = "square.on.square"
+android = "Icons.Default.Tab"
+
+[[icon]]
+name = "boosts"
+description = "Boosts and custom AI actions"
+sizes = ["16", "20"]
+[icon.platforms]
+views = "vector_icons::kScienceIcon"
+apple = "bolt"
+android = "Icons.Default.AutoAwesome"
+
+[[icon]]
+name = "media"
+description = "Media library and player UI"
+sizes = ["16", "20"]
+[icon.platforms]
+views = "vector_icons::kVideoLibraryIcon"
+apple = "photo.on.rectangle.angled"
+android = ""
+
+[[icon]]
+name = "easels"
+description = "Easels drawing and canvas tool"
+sizes = ["16", "20"]
+[icon.platforms]
+views = "vector_icons::kStickyNote2Icon"
+apple = "pencil.and.scribble"
+android = ""
+
+[[icon]]
+name = "notes"
+description = "Notes section"
+sizes = ["16", "20"]
+[icon.platforms]
+views = "vector_icons::kStickyNote2Icon"
+apple = "note.text"
+android = "Icons.Filled.NoteAlt"
+
+[[icon]]
+name = "bookmarks"
+description = "Bookmarks library and item favorites"
+sizes = ["16", "20"]
+[icon.platforms]
+views = "vector_icons::kStarIcon"
+apple = "bookmark"
+android = "Icons.Filled.Bookmark"
+
+[[icon]]
+name = "history"
+description = "Browser history access"
+sizes = ["16", "20"]
+[icon.platforms]
+views = ""
+apple = "clock"
+android = "Icons.Filled.History"
+
+[[icon]]
+name = "reading_list"
+description = "Reading list section"
+sizes = ["16", "20"]
+[icon.platforms]
+views = ""
+apple = "eyeglasses"
+android = "Icons.Filled.Visibility"
+
+[[icon]]
+name = "settings"
+description = "App settings and advanced settings"
+sizes = ["16", "20"]
+[icon.platforms]
+views = ""
+apple = "gearshape"
+android = "Icons.Filled.Settings"
+
+[[icon]]
+name = "profiles"
+description = "Profiles selector and manager"
+sizes = ["16", "20"]
+[icon.platforms]
+views = ""
+apple = "person.crop.circle"
+android = "Icons.Filled.Person"
+
+[[icon]]
+name = "notifications"
+description = "Push notifications configuration"
+sizes = ["16", "20"]
+[icon.platforms]
+views = ""
+apple = "bell"
+android = "Icons.Filled.Notifications"
+
+[[icon]]
+name = "autofill_key"
+description = "Autofill passwords and forms settings"
+sizes = ["16", "20"]
+[icon.platforms]
+views = ""
+apple = "key"
+android = "Icons.Filled.Key"
+
+[[icon]]
+name = "privacy"
+description = "Privacy, security, content blocker"
+sizes = ["16", "20"]
+[icon.platforms]
+views = ""
+apple = "shield"
+android = "Icons.Filled.Security"
+
+[[icon]]
+name = "help_feedback"
+description = "Feedback screen, user support"
+sizes = ["16", "20"]
+[icon.platforms]
+views = ""
+apple = "envelope"
+android = "Icons.Filled.Feedback"
+
+[[icon]]
+name = "clear_sweep"
+description = "Clear history, reset settings, sweep tabs"
+sizes = ["16", "20"]
+[icon.platforms]
+views = ""
+apple = "arrow.counterclockwise"
+android = "Icons.Filled.ClearAll"
+
+[[icon]]
+name = "delete"
+description = "Trash / delete action"
+sizes = ["16", "20"]
+[icon.platforms]
+views = ""
+apple = "trash"
+android = "Icons.Filled.Delete"
+
+[[icon]]
+name = "share"
+description = "System share sheet trigger"
+sizes = ["16", "20"]
+[icon.platforms]
+views = ""
+apple = "square.and.arrow.up"
+android = "Icons.Filled.Share"
+
+[[icon]]
+name = "more_actions"
+description = "More menu / overflow actions"
+sizes = ["16", "20"]
+[icon.platforms]
+views = ""
+apple = "ellipsis.circle"
+android = "Icons.Filled.MoreVert"
+
+[[icon]]
+name = "info_lock"
+description = "Address bar security status indicator"
+sizes = ["16", "20"]
+[icon.platforms]
+views = ""
+apple = "lock.fill"
+android = "Icons.Default.Lock"
+
+[[icon]]
+name = "audio_indicator"
+description = "Tab audio indicator"
+sizes = ["14", "16"]
+[icon.platforms]
+views = "vector_icons::kVolumeUpChromeRefreshIcon"
+apple = "speaker.wave.2"
+android = ""
+
+[[icon]]
+name = "sparkles_ai"
+description = "AI Panel trigger and onboarding"
+sizes = ["16", "20"]
+[icon.platforms]
+views = ""
+apple = "sparkles"
+android = "Icons.Default.AutoAwesome"
+
+[[icon]]
+name = "add"
+description = "Add action, new tab, new space, new folder"
+sizes = ["16", "20"]
+[icon.platforms]
+views = "vector_icons::kAddIcon"
+apple = "plus"
+android = "Icons.Filled.Add"
+
+[[icon]]
+name = "check_circle"
+description = "Checkmark circle selection state"
+sizes = ["16", "20"]
+[icon.platforms]
+views = "vector_icons::kCheckCircleIcon"
+apple = "checkmark.circle.fill"
+android = "Icons.Filled.CheckCircle"
+
+[[icon]]
+name = "expand_more"
+description = "Disclosure triangle chevron down"
+sizes = ["14", "16"]
+[icon.platforms]
+views = "vector_icons::kExpandMoreIcon"
+apple = "chevron.down"
+android = "Icons.Filled.KeyboardArrowDown"
+
+[[icon]]
+name = "filter"
+description = "Filter list or items"
+sizes = ["16"]
+[icon.platforms]
+views = "vector_icons::kFilterIcon"
+apple = "line.3.horizontal.decrease"
+android = "Icons.Filled.FilterList"
+
+[[icon]]
+name = "folder"
+description = "Folder icon"
+sizes = ["16", "20"]
+[icon.platforms]
+views = "vector_icons::kFolderChromeRefreshIcon"
+apple = "folder"
+android = "Icons.Filled.Folder"
+
+[[icon]]
+name = "launch"
+description = "Open link in external app/tab"
+sizes = ["14", "16"]
+[icon.platforms]
+views = "vector_icons::kLaunchIcon"
+apple = "arrow.up.forward"
+android = "Icons.AutoMirrored.Filled.OpenInNew"
+
+[[icon]]
+name = "search_alt"
+description = "Alternate search icon"
+sizes = ["16"]
+[icon.platforms]
+views = "vector_icons::kSearchChromeRefreshIcon"
+apple = "magnifyingglass"
+android = "Icons.Default.Search"
+
+[[icon]]
+name = "sidebar_left"
+description = "Sidebar left toggle layout"
+sizes = ["16"]
+[icon.platforms]
+views = "vector_icons::kSelectWindowChromeRefreshIcon"
+apple = "sidebar.left"
+android = ""
+
+[[icon]]
+name = "audio_muted"
+description = "Audio muted tab indicator"
+sizes = ["14", "16"]
+[icon.platforms]
+views = "vector_icons::kVolumeOffChromeRefreshIcon"
+apple = "speaker.slash.fill"
+android = ""
+
+[[icon]]
+name = "stop_loading"
+description = "Stop in-progress page load (toolbar stop button)"
+sizes = ["16", "20"]
+[icon.platforms]
+views = ""
+apple = "xmark"
+android = ""
+
+[[icon]]
+name = "not_secure"
+description = "Address bar not-secure / mixed-content warning"
+sizes = ["12", "16"]
+[icon.platforms]
+views = ""
+apple = "exclamationmark.triangle.fill"
+android = ""
+
+[[icon]]
+name = "ai_onboarding"
+description = "AI onboarding section icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "sparkles.rectangle.stack"
+android = ""
+
+[[icon]]
+name = "ai_settings"
+description = "AI settings button icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "slider.horizontal.3"
+android = ""
+
+[[icon]]
+name = "document_text"
+description = "Text document / page context icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "doc.text"
+android = ""
+
+[[icon]]
+name = "compare_tabs"
+description = "Compare tabs action icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "rectangle.on.rectangle"
+android = ""
+
+[[icon]]
+name = "upload_file"
+description = "Upload file action icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "doc.badge.plus"
+android = ""
+
+[[icon]]
+name = "tools"
+description = "Browse tools action icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "wrench"
+android = ""
+
+[[icon]]
+name = "connect_app"
+description = "Connect app action icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "app.connected.to.app.below.fill"
+android = ""
+
+[[icon]]
+name = "response_format"
+description = "Response format selection icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "text.alignleft"
+android = ""
+
+[[icon]]
+name = "stop_generation"
+description = "Stop generation button icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "stop.fill"
+android = ""
+
+[[icon]]
+name = "send"
+description = "Send query button icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "arrow.right"
+android = ""
+
+[[icon]]
+name = "remove_context"
+description = "Remove context button icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "xmark"
+android = ""
+
+[[icon]]
+name = "restore"
+description = "Restore archived tab icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "arrow.up.left"
+android = ""
+
+[[icon]]
+name = "gradient_toggle"
+description = "Gradient toggle button icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "circle.lefthalf.filled"
+android = ""
+
+[[icon]]
+name = "theme_light"
+description = "Light theme mode icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "sun.max.fill"
+android = ""
+
+[[icon]]
+name = "theme_dark"
+description = "Dark theme mode icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "moon.fill"
+android = ""
+
+[[icon]]
+name = "brightness_down"
+description = "Decrease brightness button icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "minus"
+android = ""
+
+[[icon]]
+name = "split_view"
+description = "Toggle split view button icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "rectangle.split.2x1"
+android = ""
+
+[[icon]]
+name = "extensions"
+description = "Extensions button icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "puzzlepiece.extension"
+android = ""
+
+[[icon]]
+name = "autofill_location"
+description = "Saved locations autofill empty state icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "mappin.and.ellipse"
+android = ""
+
+[[icon]]
+name = "autofill_card"
+description = "Saved payment cards autofill empty state icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "creditcard"
+android = ""
+
+[[icon]]
+name = "nav_back_forward"
+description = "Back and forward navigation layout preview icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "chevron.left.chevron.right"
+android = ""
+
+[[icon]]
+name = "flexible_spacer"
+description = "Flexible spacer layout preview icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "arrow.left.and.right"
+android = ""
+
+[[icon]]
+name = "custom_toolbar_item"
+description = "Custom toolbar item placeholder icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "star"
+android = ""
+
+[[icon]]
+name = "navigation"
+description = "Navigation suggestion placeholder icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "safari"
+android = ""
+
+[[icon]]
+name = "calculator"
+description = "Calculator suggestion placeholder icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "function"
+android = ""
+
+[[icon]]
+name = "unit_conversion"
+description = "Unit conversion suggestion placeholder icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "arrow.left.arrow.right"
+android = ""
+
+[[icon]]
+name = "closed_tab"
+description = "Closed tab suggestion placeholder icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "xmark.square"
+android = ""
+
+[[icon]]
+name = "history_sync"
+description = "History sync suggestion placeholder icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "clock.arrow.circlepath"
+android = ""
+
+[[icon]]
+name = "chevron_left"
+description = "Left chevron icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "chevron.left"
+android = ""
+
+[[icon]]
+name = "chevron_right"
+description = "Right chevron icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "chevron.right"
+android = ""
+
+[[icon]]
+name = "more_options"
+description = "More options icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "ellipsis"
+android = ""
+
+[[icon]]
+name = "favorite_filled"
+description = "Filled favorite star icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "star.fill"
+android = ""
+
+[[icon]]
+name = "site_figma"
+description = "Figma site fallback icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "square.grid.2x2"
+android = ""
+
+[[icon]]
+name = "site_slack"
+description = "Slack site fallback icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "bubble.left.and.bubble.right"
+android = ""
+
+[[icon]]
+name = "site_vercel"
+description = "Vercel site fallback icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "triangle"
+android = ""
+
+[[icon]]
+name = "new_space"
+description = "New space icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "square.grid.2x2"
+android = ""
+
+[[icon]]
+name = "new_tab"
+description = "New tab icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "plus.square.on.square"
+android = ""
+
+[[icon]]
+name = "archive_filled"
+description = "Filled archive box icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "archivebox.fill"
+android = ""
+
+[[icon]]
+name = "audio_playing"
+description = "Audio playing indicator icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "speaker.wave.2.fill"
+android = ""
+
+[[icon]]
+name = "folder_filled"
+description = "Filled folder icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "folder.fill"
+android = ""
+
+[[icon]]
+name = "edit_context"
+description = "Edit context icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "square.and.pencil"
+android = ""
+
+[[icon]]
+name = "assistant_style"
+description = "Assistant style adjustment icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "lines.measurement.horizontal"
+android = ""
+
+[[icon]]
+name = "spacer"
+description = "Fixed width layout spacer icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "minus"
+android = ""
+
+[[icon]]
+name = "camera"
+description = "Camera input trigger icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "video"
+android = ""
+
+[[icon]]
+name = "microphone"
+description = "Microphone voice input trigger icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "mic"
+android = ""
+
+[[icon]]
+name = "site_github"
+description = "GitHub site fallback icon"
+sizes = ["16"]
+[icon.platforms]
+views = ""
+apple = "chevron.left.forwardslash.chevron.right"
+android = ""
+
+
+

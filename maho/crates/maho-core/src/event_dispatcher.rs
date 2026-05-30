@@ -1,15 +1,16 @@
-use maho_types::boost::BoostUpdate;
-use maho_types::common::{MemoryPressureLevel, Url, UrlPattern};
+use maho_types::common::{MemoryPressureLevel, Url};
 use maho_types::chat::ChatRequestContext;
 use maho_types::events::core_update::{CoreUpdate, FolderUpdate, MemoryAction};
 use maho_types::events::shell_event::{QuickAction, ShellEvent};
-use maho_types::identifiers::{BoostId, FolderId, NoteId, ProfileId, SpaceId, TabId};
+use maho_types::identifiers::{FolderId, NoteId, ProfileId, SpaceId, TabId};
 use maho_types::settings::{Settings, SettingsUpdate};
 use maho_types::space::{Space, SpaceColor};
 use maho_types::tab::Tab;
 use maho_types::traits::shell_renderer::{
     SearchContext, SpaceViewModel, SuggestionViewModel, TabStateUpdate, TabViewModel,
 };
+
+use crate::space_manager::FolderError;
 
 pub trait TabManagerInterface {
     fn create_tab(&mut self, space_id: SpaceId, url: Option<Url>, parent_id: Option<TabId>, window_id: Option<i64>) -> Tab;
@@ -78,7 +79,7 @@ pub trait SpaceManagerInterface {
         tab_id: &TabId,
         before_tab_id: Option<&TabId>,
     );
-    fn reorder_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId, parent_folder_id: Option<&FolderId>, before_folder_id: Option<&FolderId>);
+    fn reorder_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId, parent_folder_id: Option<&FolderId>, before_folder_id: Option<&FolderId>) -> Result<(), FolderError>;
     fn move_folder_to_root(&mut self, space_id: &SpaceId, folder_id: &FolderId, before_folder_id: Option<&FolderId>);
     fn get_active_space_id(&self) -> &SpaceId;
     fn get_space_order(&self) -> &[SpaceId];
@@ -89,6 +90,7 @@ pub trait SpaceManagerInterface {
         space_id: &SpaceId,
         name: &str,
         is_pinned: bool,
+        parent_folder_id: Option<FolderId>,
     ) -> Option<maho_types::traits::shell_renderer::FolderViewModel>;
     fn rename_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId, name: &str);
     fn delete_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId);
@@ -102,14 +104,18 @@ pub trait SpaceManagerInterface {
     );
     fn remove_tab_from_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId, tab_id: &TabId);
     fn toggle_folder_expanded(&mut self, space_id: &SpaceId, folder_id: &FolderId);
-    fn pin_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId);
-    fn unpin_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId);
-    fn move_folder(&mut self, folder_id: &FolderId, new_parent: Option<FolderId>);
+    fn move_folder(&mut self, folder_id: &FolderId, new_parent: Option<FolderId>) -> Result<(), FolderError>;
     fn move_folder_in_space(
         &mut self,
         space_id: &SpaceId,
         folder_id: &FolderId,
         new_parent: Option<FolderId>,
+    ) -> Result<(), FolderError>;
+    fn move_folder_to_space(
+        &mut self,
+        folder_id: &FolderId,
+        source_space_id: &SpaceId,
+        target_space_id: &SpaceId,
     );
     fn get_folder_view_models(
         &self,
@@ -141,13 +147,6 @@ pub trait CommandBarInterface {
         mode: Option<&str>,
         ctx: &SearchContext,
     ) -> Vec<SuggestionViewModel>;
-}
-
-pub trait BoostManagerInterface {
-    fn create_boost(&mut self, url_pattern: UrlPattern) -> maho_types::boost::Boost;
-    fn update_boost(&mut self, boost_id: &BoostId, changes: BoostUpdate);
-    fn toggle_boost(&mut self, boost_id: &BoostId, enabled: bool);
-    fn delete_boost(&mut self, boost_id: &BoostId) -> Option<maho_types::boost::Boost>;
 }
 
 pub trait NoteManagerInterface {
@@ -232,7 +231,6 @@ impl EventDispatcher {
         tab_mgr: &mut dyn TabManagerInterface,
         space_mgr: &mut dyn SpaceManagerInterface,
         cmd_bar: &dyn CommandBarInterface,
-        _boost_mgr: &mut dyn BoostManagerInterface,
         _note_mgr: &mut dyn NoteManagerInterface,
         _settings_mgr: &mut dyn SettingsInterface,
         content_blocker: &mut dyn ContentBlockerInterface,
@@ -623,8 +621,9 @@ impl EventDispatcher {
                 space_id,
                 name,
                 is_pinned,
+                parent_folder_id,
             } => {
-                if let Some(folder) = space_mgr.create_folder(&space_id, &name, is_pinned) {
+                if let Some(folder) = space_mgr.create_folder(&space_id, &name, is_pinned, parent_folder_id) {
                     vec![CoreUpdate::FolderCreated { folder }]
                 } else {
                     vec![]
@@ -715,48 +714,113 @@ impl EventDispatcher {
                     },
                 }]
             }
-            ShellEvent::PinFolder {
+            ShellEvent::ConvertFolderToSpace {
                 space_id,
                 folder_id,
             } => {
-                space_mgr.pin_folder(&space_id, &folder_id);
-                vec![CoreUpdate::FolderUpdated {
-                    folder_id,
-                    changes: FolderUpdate {
-                        name: None,
-                        is_expanded: None,
-                        is_pinned: Some(true),
-                    },
-                }]
-            }
-            ShellEvent::UnpinFolder {
-                space_id,
-                folder_id,
-            } => {
-                space_mgr.unpin_folder(&space_id, &folder_id);
-                vec![CoreUpdate::FolderUpdated {
-                    folder_id,
-                    changes: FolderUpdate {
-                        name: None,
-                        is_expanded: None,
-                        is_pinned: Some(false),
-                    },
-                }]
+                let folder_info = space_mgr.get_space(&space_id)
+                    .and_then(|sp| sp.folders.iter().find(|f| f.id == folder_id).map(|f| (f.name.clone(), f.tab_ids.clone(), sp.color.clone(), sp.profile_id.clone())));
+                
+                if let Some((folder_name, folder_tab_ids, color, profile_id)) = folder_info {
+                    let mut descendants_with_tabs = Vec::new();
+                    let mut to_visit = vec![folder_id.clone()];
+                    while let Some(parent) = to_visit.pop() {
+                        if let Some(sp) = space_mgr.get_space(&space_id) {
+                            for f in &sp.folders {
+                                if f.parent_folder_id == Some(parent.clone()) {
+                                    descendants_with_tabs.push((f.id.clone(), f.tab_ids.clone()));
+                                    to_visit.push(f.id.clone());
+                                }
+                            }
+                        }
+                    }
+                    let descendant_ids: Vec<FolderId> = descendants_with_tabs.iter().map(|(id, _)| id.clone()).collect();
+
+                    let new_space = space_mgr.create_space(&folder_name, color, profile_id);
+                    let new_space_id = new_space.id.clone();
+
+                    let mut updates = Vec::new();
+                    let space_vm = space_mgr.get_space_view_model(&new_space_id).unwrap();
+                    updates.push(CoreUpdate::SpaceCreated { space: space_vm });
+
+                    for desc_id in &descendant_ids {
+                        let mut parent_in_descendants = false;
+                        if let Some(sp) = space_mgr.get_space(&space_id) {
+                            if let Some(f) = sp.folders.iter().find(|f| f.id == *desc_id) {
+                                if let Some(ref p_id) = f.parent_folder_id {
+                                    if descendant_ids.contains(p_id) {
+                                        parent_in_descendants = true;
+                                    }
+                                }
+                            }
+                        }
+
+                        if !parent_in_descendants {
+                            let _ = space_mgr.move_folder_in_space(&space_id, desc_id, None);
+                        }
+
+                        space_mgr.move_folder_to_space(desc_id, &space_id, &new_space_id);
+                        updates.push(CoreUpdate::FolderUpdated {
+                            folder_id: desc_id.clone(),
+                            changes: FolderUpdate {
+                                name: None,
+                                is_expanded: None,
+                                is_pinned: None,
+                            },
+                        });
+                    }
+
+                    for tab_id in &folder_tab_ids {
+                        let is_favorite = tab_mgr.get_tab(tab_id).map(|t| t.is_favorite).unwrap_or(false);
+                        tab_mgr.move_tab(tab_id, new_space_id.clone(), 0);
+                        space_mgr.remove_tab_from_space(&space_id, tab_id);
+                        space_mgr.add_tab_to_space(&new_space_id, tab_id.clone(), None);
+                        space_mgr.apply_tab_residency(&new_space_id, tab_id, is_favorite, false);
+                    }
+
+                    for (_desc_id, desc_tab_ids) in &descendants_with_tabs {
+                        for tab_id in desc_tab_ids {
+                            let is_favorite = tab_mgr.get_tab(tab_id).map(|t| t.is_favorite).unwrap_or(false);
+                            tab_mgr.move_tab(tab_id, new_space_id.clone(), 0);
+                            space_mgr.remove_tab_from_space(&space_id, tab_id);
+                            space_mgr.add_tab_to_space(&new_space_id, tab_id.clone(), None);
+                            space_mgr.apply_tab_residency(&new_space_id, tab_id, is_favorite, true);
+                        }
+                    }
+
+                    space_mgr.delete_folder(&space_id, &folder_id);
+                    updates.push(CoreUpdate::FolderDeleted { folder_id: folder_id.clone() });
+                    updates.push(CoreUpdate::TabOrderChanged {
+                        space_id: space_id.clone(),
+                        order: vec![],
+                    });
+                    updates.push(CoreUpdate::TabOrderChanged {
+                        space_id: new_space_id,
+                        order: vec![],
+                    });
+
+                    updates
+                } else {
+                    vec![]
+                }
             }
             ShellEvent::MoveFolderIntoFolder {
                 space_id,
                 folder_id,
                 target_folder_id,
             } => {
-                space_mgr.move_folder_in_space(&space_id, &folder_id, Some(target_folder_id));
-                vec![CoreUpdate::FolderUpdated {
-                    folder_id,
-                    changes: FolderUpdate {
-                        name: None,
-                        is_expanded: None,
-                        is_pinned: None,
-                    },
-                }]
+                if space_mgr.move_folder_in_space(&space_id, &folder_id, Some(target_folder_id)).is_ok() {
+                    vec![CoreUpdate::FolderUpdated {
+                        folder_id,
+                        changes: FolderUpdate {
+                            name: None,
+                            is_expanded: None,
+                            is_pinned: None,
+                        },
+                    }]
+                } else {
+                    vec![]
+                }
             }
             ShellEvent::MoveFolderToRoot {
                 space_id,
@@ -772,8 +836,11 @@ impl EventDispatcher {
                 parent_folder_id,
                 before_folder_id,
             } => {
-                space_mgr.reorder_folder(&space_id, &folder_id, parent_folder_id.as_ref(), before_folder_id.as_ref());
-                vec![CoreUpdate::FolderOrderChanged { space_id }]
+                if space_mgr.reorder_folder(&space_id, &folder_id, parent_folder_id.as_ref(), before_folder_id.as_ref()).is_ok() {
+                    vec![CoreUpdate::FolderOrderChanged { space_id }]
+                } else {
+                    vec![]
+                }
             }
             ShellEvent::ReorderRootItem {
                 space_id,
@@ -887,10 +954,10 @@ impl EventDispatcher {
             ShellEvent::RemoveSearchEngine { .. } => vec![],
             ShellEvent::SetDefaultSearchEngine { .. } => vec![],
 
-            // Boosts
+            // Boosts — handled in MahoCore::handle_event before dispatch
             ShellEvent::CreateBoost { .. }
             | ShellEvent::UpdateBoost { .. }
-            | ShellEvent::ToggleBoost { .. }
+            | ShellEvent::SetActiveBoost { .. }
             | ShellEvent::DeleteBoost { .. }
             // CSS Mods
             | ShellEvent::InstallCssMod { .. }
@@ -1065,8 +1132,7 @@ impl EventDispatcher {
             ShellEvent::ViewSource { .. } => vec![],
 
             // Boosts settings (handled in MahoCore::handle_event before dispatch)
-            ShellEvent::ToggleGlobalBoosts => vec![],
-            ShellEvent::ToggleJsBoosts => vec![],
+
 
             // Extensions management (handled in MahoCore::handle_event before dispatch)
             ShellEvent::ToggleExtension { .. } => vec![],
@@ -1153,24 +1219,8 @@ impl EventDispatcher {
     }
 }
 
-use crate::boost_manager::BoostManager;
 use crate::note_manager::NoteManager;
 use crate::settings_manager::SettingsManager;
-
-impl BoostManagerInterface for BoostManager {
-    fn create_boost(&mut self, url_pattern: UrlPattern) -> maho_types::boost::Boost {
-        self.create_boost(url_pattern)
-    }
-    fn update_boost(&mut self, boost_id: &BoostId, changes: BoostUpdate) {
-        self.update_boost(boost_id, changes);
-    }
-    fn toggle_boost(&mut self, boost_id: &BoostId, enabled: bool) {
-        self.toggle_boost(boost_id, enabled);
-    }
-    fn delete_boost(&mut self, boost_id: &BoostId) -> Option<maho_types::boost::Boost> {
-        self.delete_boost(boost_id)
-    }
-}
 
 impl NoteManagerInterface for NoteManager {
     fn create_note(

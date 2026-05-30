@@ -146,6 +146,7 @@ class CodableRoundTripTest {
                 restoreOnLaunch = RestorePolicy.RestoreAll,
                 downloadPath = "/downloads",
                 autoplayPolicy = AutoplayPolicy.BlockAudio,
+                pinnedCloseBehavior = PinnedCloseBehavior.ResetSwitch,
             ),
             appearance = AppearanceSettings(
                 theme = Theme.Dark,
@@ -171,5 +172,56 @@ class CodableRoundTripTest {
         val encoded = json.encodeToString(Settings.serializer(), settings)
         val decoded = json.decodeFromString(Settings.serializer(), encoded)
         assertEquals(settings, decoded)
+    }
+
+    @Test
+    fun `PinnedCloseBehavior all wire values round trip`() {
+        val cases = mapOf(
+            PinnedCloseBehavior.Switch to "\"switch\"",
+            PinnedCloseBehavior.Reset to "\"reset\"",
+            PinnedCloseBehavior.ResetSwitch to "\"reset-switch\"",
+            PinnedCloseBehavior.UnloadSwitch to "\"unload-switch\"",
+            PinnedCloseBehavior.ResetUnloadSwitch to "\"reset-unload-switch\"",
+            PinnedCloseBehavior.Close to "\"close\"",
+        )
+        for ((behavior, expectedWire) in cases) {
+            val encoded = Json.encodeToString(PinnedCloseBehavior.serializer(), behavior)
+            assertEquals("wire value for $behavior", expectedWire, encoded)
+            val decoded = Json.decodeFromString(PinnedCloseBehavior.serializer(), encoded)
+            assertEquals("round-trip for $behavior", behavior, decoded)
+        }
+    }
+
+    @Test
+    fun `GeneralSettings missing pinnedCloseBehavior defaults to Switch`() {
+        val jsonWithoutField = """
+            {
+                "defaultSearchEngine": {"name": "DDG", "urlTemplate": "https://ddg.gg/?q={query}", "isDefault": true},
+                "todayTabTimeoutHours": 8.0,
+                "restoreOnLaunch": "restore_all",
+                "downloadPath": "/tmp",
+                "autoplayPolicy": "allow"
+            }
+        """.trimIndent()
+        val decoded = json.decodeFromString(GeneralSettings.serializer(), jsonWithoutField)
+        assertEquals(PinnedCloseBehavior.Switch, decoded.pinnedCloseBehavior)
+    }
+
+    @Test
+    fun `GeneralSettingsUpdate pinnedCloseBehavior null when absent`() {
+        val emptyUpdate = GeneralSettingsUpdate()
+        assertEquals(null, emptyUpdate.pinnedCloseBehavior)
+        val encoded = json.encodeToString(GeneralSettingsUpdate.serializer(), emptyUpdate)
+        val decoded = json.decodeFromString(GeneralSettingsUpdate.serializer(), encoded)
+        assertEquals(null, decoded.pinnedCloseBehavior)
+    }
+
+    @Test
+    fun `GeneralSettingsUpdate pinnedCloseBehavior round trip`() {
+        val update = GeneralSettingsUpdate(pinnedCloseBehavior = PinnedCloseBehavior.Close)
+        val encoded = json.encodeToString(GeneralSettingsUpdate.serializer(), update)
+        assertTrue(encoded.contains("\"close\""))
+        val decoded = json.decodeFromString(GeneralSettingsUpdate.serializer(), encoded)
+        assertEquals(PinnedCloseBehavior.Close, decoded.pinnedCloseBehavior)
     }
 }

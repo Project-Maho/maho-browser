@@ -223,7 +223,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarSpacesInteractiveTest, ProfileBasenameForIdVal
             MahoSpaceProfileBridge::ProfileBasenameForId("Default-Like-But-Not"));
 
   // Rejections (std::nullopt)
-  // contains / or \\ 
+  // contains / or backslash
   EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId("alpha/beta"));
   EXPECT_EQ(std::nullopt, MahoSpaceProfileBridge::ProfileBasenameForId("alpha\\beta"));
   // equals "." or ".."

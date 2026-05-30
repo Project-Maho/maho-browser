@@ -191,8 +191,8 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, TabReorderContract) {
 
   DragViewToPoint(first, GetViewPoint(second, 0.5, 0.15));
 
-  EXPECT_TRUE(observer_.HasEvent("reorder_tab"))
-      << "Expected reorder_tab event after drag";
+  EXPECT_TRUE(observer_.HasEvent("reorder_root_item"))
+      << "Expected reorder_root_item event after drag";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest, SidebarTreeJsonContract) {
@@ -458,11 +458,11 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
-                        SidebarRowOrderNoTabsRendersOnlyNewTabCta) {
+                        SidebarRowOrderNoTabsWithBrowserContextKeepsFullScaffold) {
   MahoSidebarTabListModel empty_model;
   tab_list_->Update(empty_model, browser());
 
-  ExpectNoTabsRows(tab_list_->tab_rows_for_testing());
+  ExpectEmptyPinnedSectionLayout(tab_list_->tab_rows_for_testing());
 }
 
 // --- Wave 0 baseline: refresh contract and BuildViewStateModel shape --------
@@ -1280,6 +1280,78 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
 
   chrome::CloseWindow(second_browser);
   base::RunLoop().RunUntilIdle();
+}
+
+// Regression: closing the last pinned tab produces a model with an empty
+// pinned_tree but the tab strip still has tabs.  RebuildRows must use the full
+// scaffold (pinned-section placeholder + separator + + New Tab + normal section)
+// so the separator is never lost.  This was the root cause of the
+// pinned-separator disappearance bug.
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                        LastPinnedTabCloseKeepsFullScaffold) {
+  SeedProfile(2);
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+
+  auto state = GetViewState();
+  ASSERT_FALSE(state.tab_list.normal_tree.empty())
+      << "Seed 2 must have at least one normal tab";
+
+  MahoSidebarTabListModel pinned_cleared = state.tab_list;
+  pinned_cleared.pinned_tree.clear();
+
+  tab_list_->Update(pinned_cleared, browser());
+
+  ExpectEmptyPinnedSectionLayout(tab_list_->tab_rows_for_testing());
+}
+
+// Regression: an empty display tree when the tab strip also has tabs (the
+// transient gap between closing the last pinned tab and the model rebuild)
+// must still produce the full scaffold, not the bare + New Tab layout.
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                        EmptyDisplayTreeWithLiveTabsKeepsFullScaffold) {
+  SeedProfile(2);
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+
+  TabStripModel* strip = browser()->tab_strip_model();
+  ASSERT_TRUE(strip);
+  ASSERT_GT(strip->count(), 0) << "Seed 2 must have at least one live tab";
+
+  MahoSidebarTabListModel empty_trees;
+  empty_trees.active_space_id = GetActiveSpaceId();
+
+  tab_list_->Update(empty_trees, browser());
+
+  views::View* rows = tab_list_->tab_rows_for_testing();
+  ASSERT_TRUE(rows);
+  ASSERT_EQ(4u, rows->children().size())
+      << "Full scaffold must keep hidden pinned + separator + + New Tab + "
+         "normal section when live tabs exist, even with an empty display tree";
+
+  EXPECT_TRUE(tab_list_->pinned_separator_for_testing() != nullptr)
+      << "pinned_separator_ must be allocated in the full scaffold path";
+  EXPECT_TRUE(tab_list_->pinned_separator_for_testing()->GetVisible())
+      << "Separator must be visible when live tabs exist";
+  EXPECT_TRUE(tab_list_->new_tab_button_for_testing() != nullptr)
+      << "+ New Tab button must exist in the full scaffold path";
+  EXPECT_FALSE(rows->children()[0]->GetVisible())
+      << "Pinned section placeholder must stay hidden for an empty tree";
+  EXPECT_TRUE(IsInlineRowButton(rows->children()[2], u"+ New Tab"))
+      << "+ New Tab should remain in the scaffold position";
+  EXPECT_TRUE(rows->children()[3]->GetVisible())
+      << "Normal section container must still exist in the full scaffold path";
+}
+
+// True zero-tab state: both the model and the tab strip are empty.
+// RebuildRows must produce only the bare + New Tab CTA (1 child).
+// This verifies that the zero-tab path is still reachable and correct.
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                        TrueZeroTabStateRendersBareNewTabOnly) {
+  MahoSidebarTabListModel empty_model;
+  tab_list_->Update(empty_model, /*browser=*/nullptr);
+
+  ExpectNoTabsRows(tab_list_->tab_rows_for_testing());
 }
 
 }  // namespace

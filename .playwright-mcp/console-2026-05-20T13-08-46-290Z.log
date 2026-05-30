@@ -1,0 +1,2 @@
+[      38ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:4071/standalone/app_bundle.js:0
+[      45ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:4071/favicon.ico:0

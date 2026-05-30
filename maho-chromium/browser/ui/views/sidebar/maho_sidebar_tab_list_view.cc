@@ -2,6 +2,8 @@
 
 #include "maho_sidebar_tab_list_view.h"
 
+#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
+
 #include <functional>
 #include <memory>
 #include <set>
@@ -34,7 +36,6 @@
 #include "maho/browser/ui/context_menu/maho_folder_context_menu.h"
 #include "maho/browser/ui/context_menu/maho_space_context_menu.h"
 #include "maho/browser/ui/context_menu/maho_tab_context_menu.h"
-#include "maho/browser/ui/views/boost/maho_boost_bubble_coordinator.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_id_helper.h"
@@ -57,8 +58,6 @@
 #include "ui/events/event.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
-#include "ui/gfx/canvas.h"
-#include "cc/paint/paint_flags.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/button.h"
@@ -82,7 +81,9 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_drag_util.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_drop_planner.h"
 
-namespace maho {
+namespace {
+
+using namespace maho;  // NOLINT(build/namespaces)
 
 constexpr int kRowSpacingDp = 0;
 constexpr int kRowHeightDp = 32;
@@ -95,6 +96,7 @@ constexpr int kSectionSpacingDp = 4;
 constexpr int kFolderIndentDp = 13;
 constexpr int kFolderRowHeightDp = 33;
 constexpr int kSectionSeparatorHeightDp = 8;
+constexpr int kSectionSeparatorLineHeightDp = 2;
 constexpr int kFolderGlyphSizeDp = 13;
 constexpr int kFolderGlyphContainerSizeDp = 16;
 constexpr int kChevronSizeDp = 12;
@@ -107,6 +109,7 @@ const gfx::Insets kInlineRowInsets = gfx::Insets::TLBR(0, 10, 0, 8);
 const gfx::Insets kPlaceholderInsets = gfx::Insets::TLBR(1, 12, 0, 9);
 const gfx::Insets kNewTabRowMargins = gfx::Insets::TLBR(1, 0, 0, 0);
 const gfx::Insets kSectionInsets = gfx::Insets::TLBR(0, 0, 0, 0);
+const gfx::Insets kSectionSeparatorInsets = gfx::Insets::TLBR(3, 8, 3, 8);
 
 ui::DropTargetEvent ForwardDropTargetEventToView(const ui::DropTargetEvent& event,
                                                  views::View* source,
@@ -116,6 +119,18 @@ ui::DropTargetEvent ForwardDropTargetEventToView(const ui::DropTargetEvent& even
   return ui::DropTargetEvent(event.data(), gfx::PointF(target_location),
                              event.root_location_f(),
                              event.source_operations());
+}
+
+void NotifySidebarDragEnded(views::View* start_view) {
+  views::View* v = start_view;
+  while (v) {
+    if (v->GetClassName() == std::string("MahoSidebarView")) {
+      MahoSidebarView* sidebar_view = static_cast<MahoSidebarView*>(v);
+      sidebar_view->OnDragEnded();
+      break;
+    }
+    v = v->parent();
+  }
 }
 
 class SidebarDropForwardingLabelButton : public views::LabelButton {
@@ -161,6 +176,11 @@ class SidebarDropForwardingLabelButton : public views::LabelButton {
     if (drop_target_) {
       drop_target_->OnDragExited();
     }
+  }
+
+  void OnDragDone() override {
+    views::LabelButton::OnDragDone();
+    NotifySidebarDragEnded(this);
   }
 
  private:
@@ -218,33 +238,27 @@ class SidebarSeparatorRow : public views::View {
  public:
   SidebarSeparatorRow() {
     SetPreferredSize(gfx::Size(1, kSectionSeparatorHeightDp));
+    auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kVertical, kSectionSeparatorInsets,
+        0));
+    layout->set_cross_axis_alignment(
+        views::BoxLayout::CrossAxisAlignment::kStretch);
+
+    auto divider = std::make_unique<views::View>();
+    divider->SetPreferredSize(gfx::Size(0, kSectionSeparatorLineHeightDp));
+    divider->SetBackground(
+        views::CreateSolidBackground(ui::kColorSysNeutralOutline));
+    AddChildView(std::move(divider));
   }
 
   SidebarSeparatorRow(const SidebarSeparatorRow&) = delete;
   SidebarSeparatorRow& operator=(const SidebarSeparatorRow&) = delete;
   ~SidebarSeparatorRow() override = default;
-
-  void OnPaint(gfx::Canvas* canvas) override {
-    views::View::OnPaint(canvas);
-    if (!GetColorProvider()) {
-      return;
-    }
-    const SkColor color = GetColorProvider()->GetColor(ui::kColorSysNeutralOutline);
-    cc::PaintFlags flags;
-    flags.setColor(color);
-    flags.setAntiAlias(false);
-
-    // Center the 2px divider line vertically within the 8px height.
-    // 3px top margin + 2px line + 3px bottom margin = 8px.
-    const int line_height = 2;
-    const int y = (height() - line_height) / 2;
-    canvas->DrawRect(gfx::Rect(8, y, width() - 16, line_height), flags);
-  }
 };
 
 class SidebarSectionDropTarget : public views::View {
  public:
-  SidebarSectionDropTarget(bool emphasized, MahoSidebarTabSection section)
+  explicit SidebarSectionDropTarget(MahoSidebarTabSection section)
       : section_(section) {
     auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical, kSectionInsets,
@@ -260,24 +274,43 @@ class SidebarSectionDropTarget : public views::View {
     on_favorites_drop_accepted_ = std::move(cb);
   }
 
+  void SetPopulated(bool populated) {
+    populated_ = populated;
+  }
+
   bool GetDropFormats(int* formats,
                       std::set<ui::ClipboardFormatType>* format_types) override {
     format_types->insert(GetMahoDragFormatType());
     return true;
   }
 
+  // CanDrop() stays permissive even when the section is populated so that drag
+  // events keep propagating through SidebarDropForwardingView to row and
+  // insertion-lane descendants. The populated-section rejection is applied
+  // later in OnDragUpdated() / GetDropCallback() once the final target is known.
   bool CanDrop(const ui::OSExchangeData& data) override {
     SidebarDragPayload payload;
     return ReadMahoDragData(data, payload);
   }
 
   int OnDragUpdated(const ui::DropTargetEvent& event) override {
+    if (populated_) {
+      return static_cast<int>(ui::mojom::DragOperation::kNone);
+    }
     drag_over_drop_target_ = true;
     UpdateAppearance();
     return static_cast<int>(ui::mojom::DragOperation::kMove);
   }
 
   DropCallback GetDropCallback(const ui::DropTargetEvent& event) override {
+    if (populated_) {
+      return base::BindOnce(
+          [](const ui::DropTargetEvent&,
+             ui::mojom::DragOperation& output_drag_op,
+             std::unique_ptr<ui::LayerTreeOwner>) {
+            output_drag_op = ui::mojom::DragOperation::kNone;
+          });
+    }
     return base::BindOnce(
         [](MahoSidebarTabSection section,
            base::RepeatingCallback<void(const std::string&)>
@@ -334,6 +367,7 @@ class SidebarSectionDropTarget : public views::View {
 
   const MahoSidebarTabSection section_;
   bool drag_over_drop_target_ = false;
+  bool populated_ = false;
   base::RepeatingCallback<void(const std::string&)> on_favorites_drop_accepted_;
 };
 
@@ -384,6 +418,9 @@ MahoSidebarTabListModel BuildLiveStripFallbackTabListModel(
     }
   }
 
+  // This fallback model intentionally flattens live eligible tabs into pinned
+  // and normal root rows. It is only used to preserve the scaffold during the
+  // brief window where the core-driven sidebar tree is transiently empty.
   for (int i = 0; i < strip->count(); ++i) {
     content::WebContents* contents = strip->GetWebContentsAt(i);
     if (!contents) {
@@ -422,16 +459,25 @@ MahoSidebarTabListModel BuildLiveStripFallbackTabListModel(
   return fallback_model;
 }
 
-views::View* AddSectionContainer(views::View* parent, bool emphasized,
+views::View* AddSectionContainer(views::View* parent,
                                  MahoSidebarTabSection section) {
-  auto container = std::make_unique<SidebarSectionDropTarget>(emphasized, section);
+  auto container = std::make_unique<SidebarSectionDropTarget>(section);
   auto* raw = container.get();
   parent->AddChildView(
       std::unique_ptr<views::View>(container.release()));
   return raw;
 }
 
-namespace {
+bool HasTabStripContext(Browser* browser) {
+  return browser && browser->tab_strip_model();
+}
+
+BEGIN_METADATA(SidebarSeparatorRow)
+END_METADATA
+
+}  // namespace
+
+namespace maho {
 
 base::DictValue MakeRootItem(SidebarNodeKind kind, const std::string& id);
 base::DictValue MakeInsertionPointBefore(SidebarNodeKind target_kind,
@@ -441,8 +487,6 @@ void DispatchReorderRootItem(const std::string& space_id,
                              SidebarNodeKind item_kind,
                              const std::string& item_id,
                              base::DictValue insertion_point);
-
-}  // namespace
 
 class SidebarInsertionLaneView : public views::View {
    METADATA_HEADER(SidebarInsertionLaneView, views::View)
@@ -769,32 +813,8 @@ SidebarInlineRow* AddInlineRow(views::View* parent,
   return button_ptr;
 }
 
-}  // namespace
-
-namespace maho {
-
-views::View::DropCallback GetSectionDropCallbackForTesting(
-    MahoSidebarTabSection section,
-    const ui::DropTargetEvent& event) {
-  SidebarSectionDropTarget target(/*emphasized=*/section ==
-                                      MahoSidebarTabSection::kPinned,
-                                  section);
-  return target.GetDropCallback(event);
-}
-
-SidebarSectionDropIndicatorStateForTesting
-GetSectionDropIndicatorStateForTesting(MahoSidebarTabSection section,
-                                             const ui::DropTargetEvent& event) {
-  SidebarSectionDropTarget target(/*emphasized=*/section ==
-                                      MahoSidebarTabSection::kPinned,
-                                  section);
-  SidebarSectionDropIndicatorStateForTesting state;
-  target.OnDragUpdated(event);
-  state.visible_after_update = target.is_drop_indicator_visible_for_testing();
-  target.OnDragExited();
-  state.visible_after_exit = target.is_drop_indicator_visible_for_testing();
-  return state;
-}
+BEGIN_METADATA(SidebarInsertionLaneView)
+END_METADATA
 
 BEGIN_METADATA(MahoSidebarTabListView)
 END_METADATA
@@ -802,10 +822,29 @@ BEGIN_METADATA(SidebarTabRowView)
 END_METADATA
 BEGIN_METADATA(SidebarFolderRowView)
 END_METADATA
-BEGIN_METADATA(SidebarSeparatorRow)
-END_METADATA
-BEGIN_METADATA(SidebarInsertionLaneView)
-END_METADATA
+
+views::View::DropCallback GetSectionDropCallbackForTesting(
+    MahoSidebarTabSection section,
+    const ui::DropTargetEvent& event,
+    bool populated) {
+  SidebarSectionDropTarget target(section);
+  target.SetPopulated(populated);
+  return target.GetDropCallback(event);
+}
+
+SidebarSectionDropIndicatorStateForTesting
+GetSectionDropIndicatorStateForTesting(MahoSidebarTabSection section,
+                                             const ui::DropTargetEvent& event,
+                                             bool populated) {
+  SidebarSectionDropTarget target(section);
+  target.SetPopulated(populated);
+  SidebarSectionDropIndicatorStateForTesting state;
+  target.OnDragUpdated(event);
+  state.visible_after_update = target.is_drop_indicator_visible_for_testing();
+  target.OnDragExited();
+  state.visible_after_exit = target.is_drop_indicator_visible_for_testing();
+  return state;
+}
 
 namespace {
 
@@ -1018,8 +1057,6 @@ bool ReadMahoDragData(const ui::OSExchangeData& data,
   return DeserializeDragPayload(serialized, out);
 }
 
-namespace {
-
 base::DictValue MakeRootItem(SidebarNodeKind kind, const std::string& id) {
   base::DictValue item;
   item.Set("kind", kind == SidebarNodeKind::kTab ? "tab" : "folder");
@@ -1051,8 +1088,6 @@ void DispatchReorderRootItem(const std::string& space_id,
   dict.Set("insertion_point", std::move(insertion_point));
   DispatchShellEventDict("reorder_root_item", std::move(dict));
 }
-
-}  // namespace
 
 // --- SidebarTabRowView ---
 
@@ -1197,28 +1232,6 @@ int SidebarTabRowView::live_tab_index_for_testing() const {
     }
   }
   return tab_index_;
-}
-
-void SidebarTabRowView::ActivateTabAndOpenBoostBubble(int tab_index) {
-  if (!browser_) {
-    return;
-  }
-  TabStripModel* model = browser_->tab_strip_model();
-  if (!model || !model->ContainsIndex(tab_index)) {
-    return;
-  }
-  model->ActivateTabAt(tab_index);
-  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser_);
-  if (!browser_view) {
-    return;
-  }
-  views::View* anchor_view = browser_view->GetLocationBarView();
-  if (!anchor_view) {
-    return;
-  }
-  content::WebContents* active_contents = model->GetActiveWebContents();
-  maho::MahoBoostBubbleCoordinator::GetForBrowser(browser_).Show(
-      anchor_view, browser_, active_contents);
 }
 
 void SidebarTabRowView::RenameTab(int /*tab_index*/) {
@@ -1483,6 +1496,11 @@ void SidebarTabRowView::OnDragExited() {
   active_drop_zone_ = SidebarTabDropZone::kNone;
   drag_over_drop_target_ = false;
   UpdateAppearance();
+}
+
+void SidebarTabRowView::OnDragDone() {
+  views::View::OnDragDone();
+  NotifySidebarDragEnded(this);
 }
 
 void SidebarTabRowView::BeginTitleEditing() {
@@ -1778,7 +1796,7 @@ void SidebarFolderRowView::ShowContextMenuForViewImpl(
     EndFolderEditing(false);
   }
   active_folder_context_menu_ = std::make_unique<MahoFolderContextMenu>(
-      browser_, space_id_, folder_id_, folder_is_pinned_, parent_folder_id_,
+      browser_, space_id_, folder_id_, parent_folder_id_,
       base::BindOnce(&SidebarFolderRowView::BeginFolderEditing,
                      weak_factory_.GetWeakPtr()));
   active_folder_menu_model_ = active_folder_context_menu_->BuildMenuModel();
@@ -2030,6 +2048,11 @@ void SidebarFolderRowView::OnDragExited() {
   active_drop_zone_ = SidebarFolderDropZone::kNone;
   drag_over_drop_target_ = false;
   UpdateAppearance();
+}
+
+void SidebarFolderRowView::OnDragDone() {
+  views::View::OnDragDone();
+  NotifySidebarDragEnded(this);
 }
 
 void SidebarFolderRowView::WriteDragDataForView(views::View* sender,
@@ -2356,13 +2379,11 @@ void MahoSidebarTabListView::UpdatePinnedDropLaneVisibility(bool visible) {
 }
 
 void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
-                                           Browser* browser) {
+                                            Browser* browser) {
   HandleTabRowHoverEnd();
-  // Tear down any active tab context-menu state before destroying the row
-  // views.  The menu runner holds a raw pointer to active_menu_model_, and
-  // active_context_menu_ holds a raw pointer to the SidebarTabRowView delegate.
-  // Resetting in this order (runner → model → context menu) ensures none of
-  // those raw pointers can dangle once RemoveAllChildViews() runs below.
+  // Tear down active context-menu state before destroying row views.
+  // The menu runner, menu model, and delegate chain may still reference row
+  // views, so preserve this order before RemoveAllChildViews() clears them.
   active_menu_runner_.reset();
   active_menu_model_.reset();
   active_context_menu_.reset();
@@ -2373,60 +2394,8 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
 
   const bool has_tree = !model.pinned_tree.empty() ||
                         !model.normal_tree.empty();
-
-  if (!has_tree) {
-    const TabStripModel* strip =
-        browser ? browser->tab_strip_model() : nullptr;
-    const bool live_tabs_exist = strip && !strip->empty();
-    if (live_tabs_exist) {
-      MahoSidebarTabListModel fallback_model =
-          BuildLiveStripFallbackTabListModel(browser, active_space_id_);
-      const bool fallback_has_tree = !fallback_model.pinned_tree.empty() ||
-                                     !fallback_model.normal_tree.empty();
-      if (fallback_has_tree) {
-        RebuildTreeSection(tab_rows_, fallback_model.pinned_tree,
-                           MahoSidebarTabSection::kPinned, browser);
-        auto separator = std::make_unique<SidebarSeparatorRow>();
-        pinned_separator_ = tab_rows_->AddChildView(std::move(separator));
-        const bool pinned_visible = !fallback_model.pinned_tree.empty() ||
-                                    pinned_drop_lane_revealed_;
-        auto* pinned_drop_target = static_cast<SidebarSectionDropTarget*>(
-            pinned_section_target_);
-        if (fallback_model.pinned_tree.empty()) {
-          pinned_drop_target->SetMinDropTargetHeight(kRowHeightDp);
-        }
-        pinned_section_target_->SetVisible(pinned_visible);
-        pinned_separator_->SetVisible(true);
-        new_tab_button_ = AddInlineRow(
-            tab_rows_, u"+ New Tab",
-            base::BindRepeating(&MahoSidebarTabListView::OpenNewTab,
-                                weak_factory_.GetWeakPtr()),
-            false, true);
-        RebuildTreeSection(tab_rows_, fallback_model.normal_tree,
-                           MahoSidebarTabSection::kNormal, browser);
-
-        if (GetWidget() && GetWidget()->IsVisible()) {
-          for (views::View* current = this; current; current = current->parent()) {
-            current->DeprecatedLayoutImmediately();
-          }
-          GetWidget()->SynthesizeMouseMoveEvent();
-          base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-              FROM_HERE,
-              base::BindOnce(
-                  [](base::WeakPtr<MahoSidebarTabListView> weak_self) {
-                    if (!weak_self) {
-                      return;
-                    }
-                    views::Widget* widget = weak_self->GetWidget();
-                    if (widget) {
-                      widget->SynthesizeMouseMoveEvent();
-                    }
-                  },
-                  weak_factory_.GetWeakPtr()));
-        }
-        return;
-      }
-    }
+  // True zero-context: no browser/tab-strip AND no model content.
+  if (!HasTabStripContext(browser) && !has_tree) {
     new_tab_button_ = AddInlineRow(
         tab_rows_, u"+ New Tab",
         base::BindRepeating(&MahoSidebarTabListView::OpenNewTab,
@@ -2435,15 +2404,23 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
     return;
   }
 
-  RebuildTreeSection(tab_rows_, model.pinned_tree,
+  const MahoSidebarTabListModel* effective_model = &model;
+  MahoSidebarTabListModel fallback_model;
+  if (!has_tree) {
+    fallback_model =
+        BuildLiveStripFallbackTabListModel(browser, active_space_id_);
+    effective_model = &fallback_model;
+  }
+
+  RebuildTreeSection(tab_rows_, effective_model->pinned_tree,
                      MahoSidebarTabSection::kPinned, browser);
   auto separator = std::make_unique<SidebarSeparatorRow>();
   pinned_separator_ = tab_rows_->AddChildView(std::move(separator));
-  const bool pinned_visible = !model.pinned_tree.empty() ||
+  const bool pinned_visible = !effective_model->pinned_tree.empty() ||
                               pinned_drop_lane_revealed_;
   auto* pinned_drop_target =
       static_cast<SidebarSectionDropTarget*>(pinned_section_target_);
-  if (model.pinned_tree.empty()) {
+  if (effective_model->pinned_tree.empty()) {
     pinned_drop_target->SetMinDropTargetHeight(kRowHeightDp);
   }
   pinned_section_target_->SetVisible(pinned_visible);
@@ -2453,7 +2430,7 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
       base::BindRepeating(&MahoSidebarTabListView::OpenNewTab,
                           weak_factory_.GetWeakPtr()),
       false, true);
-  RebuildTreeSection(tab_rows_, model.normal_tree,
+  RebuildTreeSection(tab_rows_, effective_model->normal_tree,
                      MahoSidebarTabSection::kNormal, browser);
 
   // After rebuilding, propagate layout through the full ancestor chain so the
@@ -2487,8 +2464,7 @@ void MahoSidebarTabListView::RebuildTreeSection(
     const std::vector<SidebarTreeNode>& nodes,
     MahoSidebarTabSection section,
     Browser* browser) {
-  const bool emphasized = (section == MahoSidebarTabSection::kPinned);
-  auto* section_container = AddSectionContainer(parent, emphasized, section);
+  auto* section_container = AddSectionContainer(parent, section);
 
   if (section == MahoSidebarTabSection::kPinned) {
     pinned_section_target_ = section_container;
@@ -2496,9 +2472,13 @@ void MahoSidebarTabListView::RebuildTreeSection(
     normal_section_target_ = section_container;
   }
 
+  auto* section_drop_target =
+      static_cast<SidebarSectionDropTarget*>(section_container);
+  section_drop_target->SetPopulated(!nodes.empty());
+
   if (favorites_drop_accepted_callback_) {
-    static_cast<SidebarSectionDropTarget*>(section_container)
-        ->SetFavoritesDropAcceptedCallback(favorites_drop_accepted_callback_);
+    section_drop_target->SetFavoritesDropAcceptedCallback(
+        favorites_drop_accepted_callback_);
   }
 
   auto* rows_container = section_container->AddChildView(

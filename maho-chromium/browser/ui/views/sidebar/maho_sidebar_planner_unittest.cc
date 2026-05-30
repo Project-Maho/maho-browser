@@ -165,24 +165,19 @@ TEST_F(SidebarPlannerTest, NormalToFavoritesEmitsFavoriteOnly) {
             SidebarDropPlan::PinTransition::Kind::kNone);
 }
 
-TEST_F(SidebarPlannerTest, FolderNormalToPinnedEmitsPinFolder) {
-  SidebarDragPayload payload =
-      MakeFolder("folder-1", SidebarDragOrigin::kNormalSection);
-  SidebarDropPlan plan = ResolveDropPlan(SectionKind::kPinned, payload);
-  EXPECT_TRUE(plan.is_valid);
-  ASSERT_EQ(plan.steps.size(), 1u);
-  EXPECT_EQ(plan.steps[0].kind, "pin_folder");
-  EXPECT_EQ(plan.steps[0].node_id, "folder-1");
-}
-
-TEST_F(SidebarPlannerTest, FolderPinnedToNormalEmitsUnpinFolder) {
+TEST_F(SidebarPlannerTest, FolderDropToNormalIsInvalid) {
   SidebarDragPayload payload =
       MakeFolder("folder-1", SidebarDragOrigin::kPinnedSection);
   SidebarDropPlan plan = ResolveDropPlan(SectionKind::kNormal, payload);
+  EXPECT_FALSE(plan.is_valid);
+}
+
+TEST_F(SidebarPlannerTest, FolderDropToPinnedHasNoSteps) {
+  SidebarDragPayload payload =
+      MakeFolder("folder-1", SidebarDragOrigin::kPinnedSection);
+  SidebarDropPlan plan = ResolveDropPlan(SectionKind::kPinned, payload);
   EXPECT_TRUE(plan.is_valid);
-  ASSERT_EQ(plan.steps.size(), 1u);
-  EXPECT_EQ(plan.steps[0].kind, "unpin_folder");
-  EXPECT_EQ(plan.steps[0].node_id, "folder-1");
+  EXPECT_TRUE(plan.steps.empty());
 }
 
 TEST_F(SidebarPlannerTest, PlanSectionDropDelegatesToResolveDropPlan) {
@@ -316,36 +311,10 @@ TEST_F(SidebarPlannerTest,
   }
 }
 
-// Contract: pin-state parity for folders.
-// folder from kNormalSection(source_is_pinned=false) → kPinned must produce
-// pin_folder; folder from kPinnedSection(source_is_pinned=true) → kNormal
-// must produce unpin_folder. This is the mirror symmetry the plan requires.
-TEST_F(SidebarPlannerTest,
-       FolderPinTransitionIsSymmetricAcrossSections) {
-  // Normal folder → Pinned section.
-  {
-    SidebarDragPayload payload =
-        MakeFolder("folder-a", SidebarDragOrigin::kNormalSection);
-    SidebarDropPlan plan = ResolveDropPlan(SectionKind::kPinned, payload);
-    EXPECT_TRUE(plan.is_valid);
-    ASSERT_EQ(plan.steps.size(), 1u)
-        << "normal folder -> pinned must produce exactly [pin_folder]";
-    EXPECT_EQ(plan.steps[0].kind, "pin_folder");
-    EXPECT_EQ(plan.steps[0].node_id, "folder-a");
-  }
+// Contract: pin-state parity for folders (Zen Model alignment).
+// Folders are type-pinned in the Zen model. Dropping a folder to normal/favorites is invalid.
+// Dropping a folder to the pinned section is valid but yields no transitions/steps.
 
-  // Pinned folder → Normal section.
-  {
-    SidebarDragPayload payload =
-        MakeFolder("folder-b", SidebarDragOrigin::kPinnedSection);
-    SidebarDropPlan plan = ResolveDropPlan(SectionKind::kNormal, payload);
-    EXPECT_TRUE(plan.is_valid);
-    ASSERT_EQ(plan.steps.size(), 1u)
-        << "pinned folder -> normal must produce exactly [unpin_folder]";
-    EXPECT_EQ(plan.steps[0].kind, "unpin_folder");
-    EXPECT_EQ(plan.steps[0].node_id, "folder-b");
-  }
-}
 
 // Contract: same-section same-section root drop is a no-op for BOTH sections.
 // This is symmetric by construction: neither section is special-cased.

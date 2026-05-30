@@ -84,7 +84,6 @@
 		5F8BE8E0C212889826111122 /* ThemeSystemTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08BE473707CB824E883DB6CF /* ThemeSystemTests.swift */; };
 		62141A8FA685097B70F2B515 /* ConversationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2B44D59C321851E7136673 /* ConversationStore.swift */; };
 		63FAC9AA564B23A327CC84F0 /* SharingPermissionsController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0111AA49791E88579B1DA5 /* SharingPermissionsController.swift */; };
-		65B46B7022A6BA3EA0EE5599 /* BoostMarketplaceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3984BE488D834E6891B3FF72 /* BoostMarketplaceController.swift */; };
 		6B2E1D538D31764D0A9AF58F /* MahoBridge+Extensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 635B16C9E6208E0BEE9BF562 /* MahoBridge+Extensions.swift */; };
 		6C78211E42B19466052058FB /* MiniPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7387B1B664D35E7871FEDF5D /* MiniPlayerView.swift */; };
 		6CDDFD96955BE5F765274E35 /* InlineEditHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3580DEA53123651869793EBC /* InlineEditHandler.swift */; };
@@ -149,7 +148,6 @@
 		D3943BFB41942DD8BE1F49DD /* IncognitoWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A567913758FBEE3214241F2 /* IncognitoWindowController.swift */; };
 		D3F02335CAD37812E91C4E3A /* SuggestionChipView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7C6536626F68FBC3DD9DD66 /* SuggestionChipView.swift */; };
 		D41890E2465FEB83FD629288 /* SidebarDnDTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11FBCB5CDDDFB651E097EE00 /* SidebarDnDTests.swift */; };
-		D4FE8EE0F1E18C81868B329A /* BoostEditorController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9AC54C8C0E5B653F10CAFD4 /* BoostEditorController.swift */; };
 		D7DFECFAC7A52DDAF67DC7C4 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 929FC7CA57BD0903261D5D3E /* main.swift */; };
 		D814ABA24234D8F12DBA4211 /* MahoBridge+Spaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40E5D3E437DA8DACEDFD9BD8 /* MahoBridge+Spaces.swift */; };
 		DC3B631F7BC10DBA0B76EA62 /* SecureLocalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67738312A843B5F62F3C7B20 /* SecureLocalStore.swift */; };
@@ -229,7 +227,6 @@
 		370A09B9E7B1BB8C148031DD /* ProfilesSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfilesSettingsView.swift; sourceTree = "<group>"; };
 		37F188B0FF95A8EF2B035539 /* SuggestionDestinationResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuggestionDestinationResolver.swift; sourceTree = "<group>"; };
 		38F42560A3797D7204FE7776 /* PeekWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeekWindowController.swift; sourceTree = "<group>"; };
-		3984BE488D834E6891B3FF72 /* BoostMarketplaceController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoostMarketplaceController.swift; sourceTree = "<group>"; };
 		3A567913758FBEE3214241F2 /* IncognitoWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncognitoWindowController.swift; sourceTree = "<group>"; };
 		3B99558C551F52CDB82C4B0B /* MahoUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MahoUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3D3026AD7A79CBD6DD3B2918 /* PageContextExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PageContextExtractor.swift; sourceTree = "<group>"; };
@@ -349,7 +346,6 @@
 		F6E550B61E726E314B358AEF /* SidebarOutlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarOutlineView.swift; sourceTree = "<group>"; };
 		F88ABBA496441896C350228B /* Settings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Settings.swift; sourceTree = "<group>"; };
 		F899B71FA5B79FF64A87576A /* ExtensionToolbarManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionToolbarManager.swift; sourceTree = "<group>"; };
-		F9AC54C8C0E5B653F10CAFD4 /* BoostEditorController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoostEditorController.swift; sourceTree = "<group>"; };
 		FDAC0F8BA7D47556CA8CA088 /* ATCRuleEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ATCRuleEngine.swift; sourceTree = "<group>"; };
 		FF1AFF85313E8530CEF4B167 /* SyncTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncTransport.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -568,8 +564,6 @@
 		80FD63CD6F00867E37848804 /* Boost */ = {
 			isa = PBXGroup;
 			children = (
-				F9AC54C8C0E5B653F10CAFD4 /* BoostEditorController.swift */,
-				3984BE488D834E6891B3FF72 /* BoostMarketplaceController.swift */,
 			);
 			path = Boost;
 			sourceTree = "<group>";
@@ -912,8 +906,6 @@
 				9C34D63BBE0E37FD8BA1095F /* AutofillHandler.swift in Sources */,
 				EC601F07B85EF76C20698999 /* AutofillPopoverController.swift in Sources */,
 				0C869D336DD6B64BE5611896 /* AutofillSettingsView.swift in Sources */,
-				D4FE8EE0F1E18C81868B329A /* BoostEditorController.swift in Sources */,
-				65B46B7022A6BA3EA0EE5599 /* BoostMarketplaceController.swift in Sources */,
 				DDDCCD91D17F85C6DE8D2ACF /* BrowserImportController.swift in Sources */,
 				58F0E5EEC4046651F0C67CC0 /* BrowserWindowController.swift in Sources */,
 				4A54C585740178DDAF4B0A9B /* ChromeGeometry.swift in Sources */,

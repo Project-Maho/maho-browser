@@ -4,25 +4,36 @@
 
 #include <memory>
 
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "components/vector_icons/vector_icons.h"
+#include "chrome/browser/ui/views/translate/translate_bubble_controller.h"
+#include "components/language_detection/core/constants.h"
+#include "components/prefs/pref_service.h"
+#include "components/translate/core/browser/language_state.h"
+#include "components/translate/core/browser/translate_manager.h"
+#include "components/translate/core/common/translate_errors.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
+#include "maho/browser/maho_features.h"
 #include "maho/browser/ui/context_menu/maho_address_bar_context_menu.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_provider.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/base/models/image_model.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/color/color_id.h"
@@ -32,7 +43,6 @@
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/button.h"
-#include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/controls/textfield/textfield.h"
@@ -68,9 +78,6 @@ constexpr int kSearchPillTrailingInsetDp = 15;
 
 // Leading inset for the compact (placeholder) pill variant.
 constexpr int kSearchPillLeadingInsetDp = 13;
-
-// Horizontal gap between the leading icon and the start of the text stack.
-constexpr int kSearchPillIconLabelSpacingDp = 8;
 
 // Textfield horizontal padding (used in editing mode).
 constexpr int kSearchTextfieldHorizontalInsetDp = 13;
@@ -165,8 +172,7 @@ MahoSidebarSearchView::MahoSidebarSearchView(Browser* browser)
   idle_button_raw->SetPreferredSize(
       gfx::Size(1, sidebar_layout::kSearchPillHeightDp));
   auto* idle_layout = idle_button_raw->SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::Orientation::kHorizontal, gfx::Insets(),
-      kSearchPillIconLabelSpacingDp));
+      views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 0));
   idle_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
   idle_layout->set_main_axis_alignment(
@@ -174,18 +180,6 @@ MahoSidebarSearchView::MahoSidebarSearchView(Browser* browser)
   idle_button_ = static_cast<views::LabelButton*>(
       search_shell_->AddChildView(std::move(idle_button)));
   idle_button_->set_context_menu_controller(this);
-
-  auto icon_shell = std::make_unique<views::View>();
-  icon_shell->SetPreferredSize(gfx::Size(14, 14));
-  auto* icon_layout = icon_shell->SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 0));
-  icon_layout->set_main_axis_alignment(
-      views::BoxLayout::MainAxisAlignment::kCenter);
-  icon_layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kCenter);
-  leading_icon_shell_ = idle_button_raw->AddChildView(std::move(icon_shell));
-  leading_icon_ =
-      leading_icon_shell_->AddChildView(std::make_unique<views::ImageView>());
 
   auto text_stack = std::make_unique<views::View>();
   auto* text_layout = text_stack->SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -213,7 +207,19 @@ MahoSidebarSearchView::MahoSidebarSearchView(Browser* browser)
   secondary_label_->SetElideBehavior(gfx::ELIDE_TAIL);
   secondary_label_->SetBorder(views::CreateEmptyBorder(
       gfx::Insets::TLBR(kSearchPillSecondaryBaselineOffsetDp, 0, 0, 0)));
-
+  // Direct pref + flag check (no BrowserView lookup): MahoSidebarSearchView is
+  // constructed inside the upstream BrowserView ctor before Browser::window_
+  // is assigned, so BrowserView::GetBrowserViewForBrowser(browser_) returns
+  // nullptr here. Mirror the predicate that BrowserView::IsMahoArcLayoutActive
+  // computes — both inputs (Profile + is_type_normal) are available now.
+  const bool arc_active =
+      browser_ && browser_->is_type_normal() && browser_->profile() &&
+      sidebar_prefs::IsSidebarLayoutEnabled(browser_->profile()->GetPrefs());
+  if (arc_active && base::FeatureList::IsEnabled(
+                        features::kMahoArcToolbarButtonProvider)) {
+    secondary_label_->SetProperty(views::kElementIdentifierKey,
+                                   kTranslatePageActionElementId);
+  }
   auto utility_icon_slot = std::make_unique<views::View>();
   auto* utility_slot_layout = utility_icon_slot->SetLayoutManager(
       std::make_unique<views::BoxLayout>(
@@ -478,7 +484,69 @@ void MahoSidebarSearchView::OnIdleButtonPressed(const ui::Event& event) {
     return;
   }
 
+  if (ShouldRouteEventToTranslate(event)) {
+    OnTranslateLabelClicked();
+    return;
+  }
+
   OnSearchPressed(event);
+}
+
+void MahoSidebarSearchView::OnTranslateLabelClicked() {
+  // Direct-anchor path (avoids ToolbarButtonProvider::From routing entirely).
+  // The systemic provider replacement plan (§2C) is not viable on macOS Arc
+  // because BrowserView::AddedToWidget() requires a valid provider in its body
+  // before any child view's AddedToWidget can run, and ToolbarView ctor cannot
+  // know the Maho-side anchor target. Anchor the translate bubble at the Maho
+  // sidebar label here. Other bubbles (zoom/memory-saver/etc.) continue to
+  // anchor through the upstream ToolbarView, which is unchanged.
+  if (!browser_ || !secondary_label_) {
+    return;
+  }
+  content::WebContents* contents =
+      browser_->tab_strip_model()->GetActiveWebContents();
+  if (!contents) {
+    return;
+  }
+  auto* translate_client = ChromeTranslateClient::FromWebContents(contents);
+  if (!translate_client) {
+    return;
+  }
+  auto* translate_manager = translate_client->GetTranslateManager();
+  if (!translate_manager) {
+    return;
+  }
+  auto* controller = TranslateBubbleController::From(browser_);
+  if (!controller) {
+    return;
+  }
+
+  std::string source_language;
+  std::string target_language;
+  translate_client->GetTranslateLanguages(contents, &source_language,
+                                           &target_language);
+  if (source_language == target_language) {
+    source_language = language_detection::kUnknownLanguageCode;
+  }
+
+  const auto* language_state = translate_manager->GetLanguageState();
+  translate::TranslateStep step = translate::TRANSLATE_STEP_BEFORE_TRANSLATE;
+  if (language_state) {
+    if (language_state->translation_pending()) {
+      step = translate::TRANSLATE_STEP_TRANSLATING;
+    } else if (language_state->translation_error()) {
+      step = translate::TRANSLATE_STEP_TRANSLATE_ERROR;
+    } else if (language_state->IsPageTranslated()) {
+      step = translate::TRANSLATE_STEP_AFTER_TRANSLATE;
+    }
+  }
+
+  contents->ClearFocusedElement();
+  controller->ShowTranslateBubble(
+      contents, views::BubbleAnchor(secondary_label_),
+      /*highlighted_element=*/std::nullopt, step, source_language,
+      target_language, translate::TranslateErrors::NONE,
+      LocationBarBubbleDelegateView::USER_GESTURE);
 }
 
 void MahoSidebarSearchView::OnIdleButtonHoverChanged(bool hover_visible) {
@@ -559,15 +627,11 @@ void MahoSidebarSearchView::UpdateUtilityAffordanceVisibility() {
 void MahoSidebarSearchView::UpdateIdleSurface() {
   const std::u16string primary_text = BuildPrimaryText();
   const std::u16string secondary_text = BuildSecondaryText();
-  const bool show_placeholder =
-      model_.display_mode == MahoSidebarAddressDisplayMode::kSearchPlaceholder;
-  const bool has_active_tab = model_.has_active_tab;
   idle_button_->SetAccessibleName(primary_text);
   idle_button_->SetTooltipText(primary_text);
   primary_label_->SetText(primary_text);
   secondary_label_->SetText(secondary_text);
   secondary_label_->SetVisible(!secondary_text.empty());
-  leading_icon_shell_->SetVisible(true);
   if (utility_icon_) {
     const bool utility_available = CanShowUtilityAffordance();
     if (!utility_available) {
@@ -577,14 +641,6 @@ void MahoSidebarSearchView::UpdateIdleSurface() {
     utility_icon_->SetEnabled(utility_available);
     UpdateUtilityAffordanceVisibility();
   }
-  leading_icon_->SetImage(ui::ImageModel::FromVectorIcon(
-      show_placeholder ? vector_icons::kSearchIcon
-                       : (has_active_tab ? vector_icons::kGlobeIcon
-                                         : vector_icons::kSearchChromeRefreshIcon),
-      show_placeholder ? ui::kColorSysOnSurfaceSubtle
-                       : (has_active_tab ? ui::kColorSysOnSurface
-                                          : ui::kColorSysOnSurfaceSubtle),
-      show_placeholder ? 11 : 10));
 }
 
 void MahoSidebarSearchView::UpdateSearchChrome() {
@@ -615,9 +671,6 @@ void MahoSidebarSearchView::UpdateSearchChrome() {
   idle_button_->SetPreferredSize(
       gfx::Size(1, show_placeholder ? sidebar_layout::kSearchPillCompactHeightDp
                                     : sidebar_layout::kSearchPillHeightDp));
-  leading_icon_shell_->SetPreferredSize(show_placeholder ? gfx::Size(11, 11)
-                                                         : gfx::Size(14, 14));
-  leading_icon_shell_->SetBackground(nullptr);
   if (utility_icon_slot_) {
     utility_icon_slot_->SetBackground(nullptr);
     utility_icon_slot_->SetBorder(nullptr);
@@ -659,7 +712,7 @@ std::u16string MahoSidebarSearchView::BuildPrimaryText() const {
 
 std::u16string MahoSidebarSearchView::BuildSecondaryText() const {
   if (model_.display_mode != MahoSidebarAddressDisplayMode::kAddressCard ||
-      !model_.has_active_tab) {
+      !model_.has_active_tab || !model_.translation_available) {
     return std::u16string();
   }
   return u"Translation Available";
@@ -711,6 +764,28 @@ bool MahoSidebarSearchView::ShouldToggleUtilityPanelForEvent(
       idle_local_bounds.right() - slot_bounds_in_idle.right(),
       idle_local_bounds.height());
   return trailing_inset_rect.Contains(point_in_idle);
+}
+
+bool MahoSidebarSearchView::ShouldRouteEventToTranslate(
+    const ui::Event& event) const {
+  if (!idle_button_ || !secondary_label_ || !secondary_label_->GetVisible() ||
+      !model_.translation_available) {
+    return false;
+  }
+
+  if (!event.IsLocatedEvent()) {
+    return false;
+  }
+
+  const auto* located_event = event.AsLocatedEvent();
+  if (!located_event) {
+    return false;
+  }
+
+  gfx::Point point_in_label = located_event->location();
+  views::View::ConvertPointToTarget(idle_button_, secondary_label_,
+                                     &point_in_label);
+  return secondary_label_->HitTestPoint(point_in_label);
 }
 
 }  // namespace maho

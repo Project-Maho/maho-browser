@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::autofill::{AutofillAddress, AutofillPayment};
 use crate::boost::BoostUpdate;
 use crate::chat::{ChatRequestContext, ChatRequestMode, PageContext};
-use crate::common::{ImageData, MemoryPressureLevel, Size, Url, UrlPattern};
+use crate::common::{ImageData, MemoryPressureLevel, Size, Url};
 use crate::identifiers::{BoostId, FolderId, NoteId, ProfileId, SpaceId, TabId};
 use crate::settings::SettingsUpdate;
 use crate::space::{SpaceColor, SpaceConfigUpdate};
@@ -217,6 +217,8 @@ pub enum ShellEvent {
         name: String,
         #[serde(default)]
         is_pinned: bool,
+        #[serde(default)]
+        parent_folder_id: Option<FolderId>,
     },
     RenameFolder {
         space_id: SpaceId,
@@ -224,6 +226,10 @@ pub enum ShellEvent {
         name: String,
     },
     DeleteFolder {
+        space_id: SpaceId,
+        folder_id: FolderId,
+    },
+    ConvertFolderToSpace {
         space_id: SpaceId,
         folder_id: FolderId,
     },
@@ -273,14 +279,7 @@ pub enum ShellEvent {
         space_id: SpaceId,
         folder_id: FolderId,
     },
-    PinFolder {
-        space_id: SpaceId,
-        folder_id: FolderId,
-    },
-    UnpinFolder {
-        space_id: SpaceId,
-        folder_id: FolderId,
-    },
+
 
     // Root ordering (unified mixed-item contract)
     ReorderRootItem {
@@ -333,15 +332,15 @@ pub enum ShellEvent {
 
     // Boosts (4)
     CreateBoost {
-        url_pattern: UrlPattern,
+        domain: String,
     },
     UpdateBoost {
         boost_id: BoostId,
         changes: BoostUpdate,
     },
-    ToggleBoost {
-        boost_id: BoostId,
-        enabled: bool,
+    SetActiveBoost {
+        domain: String,
+        boost_id: Option<BoostId>,
     },
     DeleteBoost {
         boost_id: BoostId,
@@ -520,8 +519,6 @@ pub enum ShellEvent {
     MemoryWarning {
         level: MemoryPressureLevel,
     },
-    ToggleGlobalBoosts,
-    ToggleJsBoosts,
     ToggleExtension {
         extension_id: String,
     },
@@ -731,6 +728,7 @@ impl ShellEvent {
             Self::CreateFolder { .. }
                 | Self::RenameFolder { .. }
                 | Self::DeleteFolder { .. }
+                | Self::ConvertFolderToSpace { .. }
                 | Self::MoveFolderIntoFolder { .. }
                 | Self::MoveFolderToRoot { .. }
                 | Self::ReorderFolder { .. }
@@ -739,8 +737,6 @@ impl ShellEvent {
                 | Self::MoveTabToFolder { .. }
                 | Self::RemoveTabFromFolder { .. }
                 | Self::ToggleFolderExpanded { .. }
-                | Self::PinFolder { .. }
-                | Self::UnpinFolder { .. }
                 | Self::ReorderRootItem { .. }
         )
     }

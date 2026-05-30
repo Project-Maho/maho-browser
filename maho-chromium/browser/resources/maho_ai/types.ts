@@ -1,13 +1,18 @@
 import {
   ApprovalRequestInfo,
   ApprovalResultInfo,
+  BookmarkItem,
   BrowserContextPayload as BrowserContextPayloadRecord,
   BrowserContextStatus,
+  ContextAttachment as ContextAttachmentRecord,
+  ContextSourceKind,
+  HistoryItem,
   RuntimeConnectionState,
   RuntimeEvent,
   RuntimeEventKind,
   SessionInfo,
   SessionStatus,
+  TabItem,
   ToolCallInfo,
   ToolResultInfo,
   ViewMode,
@@ -25,6 +30,10 @@ export type ApprovalResultRecord = ApprovalResultInfo;
 export type EventKind = RuntimeEventKind;
 export type BrowserContextPayload = BrowserContextPayloadRecord;
 export type BrowserContextStatusValue = BrowserContextStatus;
+export type OpenTabRecord = TabItem;
+export type HistoryItemRecord = HistoryItem;
+export type BookmarkItemRecord = BookmarkItem;
+export type SubmitContextAttachmentRecord = ContextAttachmentRecord;
 
 export interface TimelineEntry {
   sessionId: string;
@@ -36,10 +45,266 @@ export interface InspectorSelection {
   id?: string;
 }
 
+// currentPage uses the legacy attach_browser_context path when selected alone.
+// tab is backed by GetOpenTabs + SubmitPrompt attachments. The remaining kinds
+// stay as honest frontend placeholders for now.
+export type ComposerAttachmentKind =
+    'currentPage'|'tab'|'history'|'bookmark'|'file';
+
+export interface ComposerAttachment {
+  id: string;
+  kind: ComposerAttachmentKind;
+  label: string;
+  detail?: string;
+  tabId?: number;
+  url?: string;
+}
+
+export interface OpenTabsState {
+  items: OpenTabRecord[];
+  loading: boolean;
+  loaded: boolean;
+  error: string|null;
+}
+
+export interface HistorySearchState {
+  query: string;
+  items: HistoryItemRecord[];
+  loading: boolean;
+  error: string|null;
+}
+
+export interface BookmarksSearchState {
+  query: string;
+  items: BookmarkItemRecord[];
+  loading: boolean;
+  error: string|null;
+}
+
+export const DEFAULT_BOOKMARKS_SEARCH_STATE: BookmarksSearchState = {
+  query: '',
+  items: [],
+  loading: false,
+  error: null,
+};
+
 export interface ComposerState {
   prompt: string;
-  attachBrowserContext: boolean;
+  // Replaces the old `attachBrowserContext: boolean`.
+  // `currentPage` (id='currentPage') maps to the backend bool; others are
+  // frontend-only until the Mojo contract is extended.
+  attachments: ComposerAttachment[];
   modeLabel: string;
+}
+
+export const CURRENT_PAGE_ATTACHMENT: ComposerAttachment = {
+  id: 'currentPage',
+  kind: 'currentPage',
+  label: 'Current page',
+};
+
+export const DEFAULT_OPEN_TABS_STATE: OpenTabsState = {
+  items: [],
+  loading: false,
+  loaded: false,
+  error: null,
+};
+
+export const DEFAULT_HISTORY_SEARCH_STATE: HistorySearchState = {
+  query: '',
+  items: [],
+  loading: false,
+  error: null,
+};
+
+export function hasCurrentPageAttachment(attachments: ComposerAttachment[]): boolean {
+  return attachments.some(a => a.id === 'currentPage');
+}
+
+export function isTabAttachment(attachment: ComposerAttachment): boolean {
+  return attachment.kind === 'tab';
+}
+
+export function isHistoryAttachment(attachment: ComposerAttachment): boolean {
+  return attachment.kind === 'history';
+}
+
+export function getTabAttachmentId(tabId: number): string {
+  return `tab:${tabId}`;
+}
+
+export function redactUrlForDisplay(url?: string|null): string {
+  const trimmed = url?.trim() || '';
+  if (!trimmed) {
+    return '';
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    const queryIndex = trimmed.indexOf('?');
+    const hashIndex = trimmed.indexOf('#');
+    const cutoff = [queryIndex, hashIndex]
+        .filter(index => index >= 0)
+        .reduce((smallest, index) => Math.min(smallest, index), trimmed.length);
+    return trimmed.slice(0, cutoff);
+  }
+}
+
+export function getOpenTabTitle(tab: OpenTabRecord): string {
+  return tab.title.trim() || redactUrlForDisplay(tab.url) || `Tab ${tab.index + 1}`;
+}
+
+export function getOpenTabDetail(tab: OpenTabRecord): string {
+  return redactUrlForDisplay(tab.url) || (tab.isActive ? 'Active tab' : `Tab ${tab.index + 1}`);
+}
+
+export function createTabAttachment(tab: OpenTabRecord): ComposerAttachment {
+  return {
+    id: getTabAttachmentId(tab.tabId),
+    kind: 'tab',
+    label: getOpenTabTitle(tab),
+    detail: getOpenTabDetail(tab),
+    tabId: tab.tabId,
+    url: tab.url,
+  };
+}
+
+export function getHistoryAttachmentId(url: string): string {
+  return `history:${url}`;
+}
+
+function normalizeHistoryTimestamp(value?: number|string|null): Date|null {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : new Date(parsed);
+  }
+
+  const absolute = Math.abs(value);
+  if (absolute >= 1e14) {
+    return new Date(value / 1000);
+  }
+
+  if (absolute >= 1e12) {
+    return new Date(value);
+  }
+
+  return new Date(value * 1000);
+}
+
+function formatHistoryVisitedAt(value?: number|string|null): string|null {
+  const date = normalizeHistoryTimestamp(value);
+  if (!date) {
+    return null;
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    month: 'short',
+  }).format(date);
+}
+
+export function getHistoryItemTitle(item: HistoryItemRecord): string {
+  return item.title.trim() || redactUrlForDisplay(item.url) || 'Visited page';
+}
+
+export function getHistoryVisitedLabel(item: HistoryItemRecord): string|null {
+  return formatHistoryVisitedAt(item.visitedAt);
+}
+
+export function getHistoryItemDetail(item: HistoryItemRecord): string {
+  const visitedLabel = getHistoryVisitedLabel(item);
+  const url = redactUrlForDisplay(item.url);
+  if (!visitedLabel) {
+    return url || 'Visited page';
+  }
+
+  return url ? `${url} · ${visitedLabel}` : visitedLabel;
+}
+
+export function getBookmarkAttachmentId(id: string): string {
+  return `bookmark:${id}`;
+}
+
+export function getBookmarkItemTitle(item: BookmarkItemRecord): string {
+  return item.title.trim() || redactUrlForDisplay(item.url) || 'Bookmarked page';
+}
+
+export function getBookmarkItemDetail(item: BookmarkItemRecord): string {
+  return redactUrlForDisplay(item.url) || 'Bookmarked page';
+}
+
+export function createBookmarkAttachment(item: BookmarkItemRecord): ComposerAttachment {
+  return {
+    id: getBookmarkAttachmentId(item.id),
+    kind: 'bookmark',
+    label: getBookmarkItemTitle(item),
+    detail: getBookmarkItemDetail(item),
+    url: item.url,
+  };
+}
+
+export function createHistoryAttachment(item: HistoryItemRecord): ComposerAttachment {
+  return {
+    id: getHistoryAttachmentId(item.url),
+    kind: 'history',
+    label: getHistoryItemTitle(item),
+    detail: getHistoryItemDetail(item),
+    url: item.url,
+  };
+}
+
+export function getSubmitContextAttachments(
+    attachments: ComposerAttachment[]): SubmitContextAttachmentRecord[]|null {
+  const hasCurrentPage = hasCurrentPageAttachment(attachments);
+  const tabAttachments = attachments.filter(isTabAttachment);
+  const historyAttachments = attachments.filter(a => a.kind === 'history');
+  const bookmarkAttachments = attachments.filter(a => a.kind === 'bookmark');
+  if (!tabAttachments.length && !historyAttachments.length && !bookmarkAttachments.length) {
+    return null;
+  }
+
+  const submitAttachments: SubmitContextAttachmentRecord[] = [];
+  if (hasCurrentPage) {
+    submitAttachments.push({
+      kind: ContextSourceKind.kCurrentPage,
+      tabId: -1,
+      label: CURRENT_PAGE_ATTACHMENT.label,
+      url: '',
+    });
+  }
+
+  submitAttachments.push(...tabAttachments.map(attachment => ({
+    kind: ContextSourceKind.kOpenTab,
+    tabId: attachment.tabId ?? -1,
+    label: attachment.label,
+    url: attachment.url || '',
+  })));
+
+  submitAttachments.push(...historyAttachments.map(attachment => ({
+    kind: ContextSourceKind.kHistory,
+    tabId: -1,
+    label: attachment.label,
+    url: attachment.url || '',
+  })));
+
+  submitAttachments.push(...bookmarkAttachments.map(attachment => ({
+    kind: ContextSourceKind.kBookmark,
+    tabId: -1,
+    label: attachment.label,
+    url: attachment.url || '',
+  })));
+
+  return submitAttachments;
 }
 
 export interface SessionHistoryState {
@@ -66,13 +331,16 @@ export interface AppState {
   approvalResultsById: Record<string, ApprovalResultRecord>;
   selectedInspector: InspectorSelection;
   composer: ComposerState;
+  openTabs: OpenTabsState;
+  historySearch: HistorySearchState;
+  bookmarksSearch: BookmarksSearchState;
   turnPendingBySessionId: Record<string, boolean>;
-  lastContextBySessionId: Record<string, BrowserContextPayload>;
+  contextsBySessionId: Record<string, BrowserContextPayload[]>;
 }
 
 export const DEFAULT_COMPOSER_STATE: ComposerState = {
   prompt: '',
-  attachBrowserContext: true,
+  attachments: [],
   modeLabel: 'Task',
 };
 
@@ -96,8 +364,11 @@ export function createInitialState(): AppState {
     approvalResultsById: {},
     selectedInspector: {kind: 'session'},
     composer: {...DEFAULT_COMPOSER_STATE},
+    openTabs: {...DEFAULT_OPEN_TABS_STATE, items: []},
+    historySearch: {...DEFAULT_HISTORY_SEARCH_STATE},
+    bookmarksSearch: {...DEFAULT_BOOKMARKS_SEARCH_STATE},
     turnPendingBySessionId: {},
-    lastContextBySessionId: {},
+    contextsBySessionId: {},
   };
 }
 

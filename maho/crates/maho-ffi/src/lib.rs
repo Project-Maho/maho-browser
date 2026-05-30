@@ -31,6 +31,8 @@ struct SidebarRootItemView {
     id: String,
 }
 
+
+
 fn to_json_cstring<T: serde::Serialize + ?Sized>(value: &T) -> *mut c_char {
     match serde_json::to_string(value) {
         Ok(json) => CString::new(json)
@@ -161,6 +163,32 @@ pub unsafe extern "C" fn maho_core_get_sidebar_root_order(
         })
         .collect::<Vec<_>>();
     to_json_cstring(&root_items)
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `space_id_json` must be a valid null-terminated C string containing a SpaceId JSON.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_sidebar_tree(
+    ptr: *mut MahoCore,
+    space_id_json: *const c_char,
+) -> *mut c_char {
+    if ptr.is_null() || space_id_json.is_null() {
+        return ptr::null_mut();
+    }
+    let core = &*ptr;
+    let json_str = match CStr::from_ptr(space_id_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let space_id = match serde_json::from_str(json_str) {
+        Ok(id) => id,
+        Err(_) => return ptr::null_mut(),
+    };
+
+    let tree = core.get_sidebar_tree(&space_id);
+    to_json_cstring(&tree)
 }
 
 /// # Safety
@@ -411,6 +439,41 @@ pub unsafe extern "C" fn maho_core_get_installed_extensions(ptr: *mut MahoCore) 
 /// # Safety
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
 #[no_mangle]
+pub unsafe extern "C" fn maho_core_clear_installed_extensions(ptr: *mut MahoCore) {
+    if ptr.is_null() {
+        return;
+    }
+    let core = &mut *ptr;
+    core.clear_installed_extensions();
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `extensions_json` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_set_installed_extensions(
+    ptr: *mut MahoCore,
+    extensions_json: *const c_char,
+) {
+    if ptr.is_null() || extensions_json.is_null() {
+        return;
+    }
+    let core = &mut *ptr;
+    let json_str = match CStr::from_ptr(extensions_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let extensions: Vec<maho_core::extension_bridge::InstalledExtension> =
+        match serde_json::from_str(json_str) {
+            Ok(exts) => exts,
+            Err(_) => return,
+        };
+    core.set_installed_extensions(extensions);
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+#[no_mangle]
 pub unsafe extern "C" fn maho_core_is_native_password_provider_active(ptr: *mut MahoCore) -> bool {
     if ptr.is_null() {
         return true;
@@ -599,6 +662,471 @@ pub unsafe extern "C" fn maho_core_get_boosts_for_url(
         Err(_) => return ptr::null_mut(),
     };
     to_json_cstring(&core.get_boosts_for_url(url_str))
+}
+
+/// Returns JSON array of Boost objects for the given domain (Phase 1 API).
+/// Caller must free with `maho_string_free`.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`. `domain` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_boost_list_for_domain(
+    ptr: *mut MahoCore,
+    domain: *const c_char,
+) -> *mut c_char {
+    if ptr.is_null() || domain.is_null() {
+        return ptr::null_mut();
+    }
+    let core = &*ptr;
+    let domain_str = match CStr::from_ptr(domain).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    to_json_cstring(&core.list_boosts_for_domain(domain_str))
+}
+
+/// Returns JSON Boost object for the given boost ID, or null if not found.
+/// Caller must free with `maho_string_free`.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`. `boost_id` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_boost_get(
+    ptr: *mut MahoCore,
+    boost_id: *const c_char,
+) -> *mut c_char {
+    if ptr.is_null() || boost_id.is_null() {
+        return ptr::null_mut();
+    }
+    let core = &*ptr;
+    let id_str = match CStr::from_ptr(boost_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let bid = maho_types::identifiers::BoostId::new(id_str.to_string());
+    match core.get_boost_by_id(&bid) {
+        Some(boost) => to_json_cstring(&boost),
+        None => ptr::null_mut(),
+    }
+}
+
+/// Creates a new Boost for the given domain and name. Returns the created Boost as JSON.
+/// Caller must free with `maho_string_free`.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`. `domain` and `name` must be valid null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_boost_create(
+    ptr: *mut MahoCore,
+    domain: *const c_char,
+    name: *const c_char,
+) -> *mut c_char {
+    if ptr.is_null() || domain.is_null() || name.is_null() {
+        return ptr::null_mut();
+    }
+    let core = &mut *ptr;
+    let domain_str = match CStr::from_ptr(domain).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let name_str = match CStr::from_ptr(name).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let boost = core.create_boost_persisted(domain_str.to_string(), name_str.to_string());
+    to_json_cstring(&boost)
+}
+
+/// Updates a Boost by ID with partial changes (JSON BoostUpdate patch).
+/// Returns the updated Boost as JSON, or null if not found.
+/// Caller must free with `maho_string_free`.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`. `boost_id` and `changes_json` must be valid null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_boost_update(
+    ptr: *mut MahoCore,
+    boost_id: *const c_char,
+    changes_json: *const c_char,
+) -> *mut c_char {
+    if ptr.is_null() || boost_id.is_null() || changes_json.is_null() {
+        return ptr::null_mut();
+    }
+    let core = &mut *ptr;
+    let id_str = match CStr::from_ptr(boost_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let changes_str = match CStr::from_ptr(changes_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let changes: maho_types::boost::BoostUpdate = match serde_json::from_str(changes_str) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[MahoBoost] maho_core_boost_update: serde failed: {e} json={changes_str}");
+            return ptr::null_mut();
+        }
+    };
+    let bid = maho_types::identifiers::BoostId::new(id_str.to_string());
+    core.update_boost_persisted(&bid, changes);
+    core.get_boost_by_id(&bid)
+        .map(|b| to_json_cstring(&b))
+        .unwrap_or(ptr::null_mut())
+}
+
+/// Deletes a Boost by ID. Returns true if deleted, false if not found.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`. `boost_id` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_boost_delete(
+    ptr: *mut MahoCore,
+    boost_id: *const c_char,
+) -> bool {
+    if ptr.is_null() || boost_id.is_null() {
+        return false;
+    }
+    let core = &mut *ptr;
+    let id_str = match CStr::from_ptr(boost_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let bid = maho_types::identifiers::BoostId::new(id_str.to_string());
+    core.delete_boost_persisted(&bid).is_some()
+}
+
+/// Sets the active Boost for a domain. Pass null `boost_id` to clear the active boost.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`. `domain` must be a valid null-terminated C string.
+/// `boost_id` may be null to clear.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_boost_set_active(
+    ptr: *mut MahoCore,
+    domain: *const c_char,
+    boost_id: *const c_char,
+) {
+    if ptr.is_null() || domain.is_null() {
+        return;
+    }
+    let core = &mut *ptr;
+    let domain_str = match CStr::from_ptr(domain).to_str() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let active_boost_id = if boost_id.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(boost_id).to_str() {
+            Ok(s) => Some(maho_types::identifiers::BoostId::new(s.to_string())),
+            Err(_) => return,
+        }
+    };
+    core.set_active_boost_persisted(domain_str, active_boost_id);
+}
+
+/// Returns the active Boost for a domain as JSON, or null if none is set.
+/// Caller must free with `maho_string_free`.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`. `domain` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_boost_get_active(
+    ptr: *mut MahoCore,
+    domain: *const c_char,
+) -> *mut c_char {
+    if ptr.is_null() || domain.is_null() {
+        return ptr::null_mut();
+    }
+    let core = &*ptr;
+    let domain_str = match CStr::from_ptr(domain).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    match core.get_active_boost_for_domain(domain_str) {
+        Some(boost) => to_json_cstring(&boost),
+        None => ptr::null_mut(),
+    }
+}
+
+/// Returns the composed CSS string for the given Boost ID, or null if not found.
+/// Caller must free with `maho_string_free`.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`. `boost_id` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_boost_compose_css(
+    ptr: *mut MahoCore,
+    boost_id: *const c_char,
+) -> *mut c_char {
+    if ptr.is_null() || boost_id.is_null() {
+        return ptr::null_mut();
+    }
+    let core = &*ptr;
+    let id_str = match CStr::from_ptr(boost_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let bid = maho_types::identifiers::BoostId::new(id_str.to_string());
+    match core.compose_css_for_boost(&bid) {
+        Some(css) if !css.is_empty() => {
+            match CString::new(css) {
+                Ok(s) => s.into_raw(),
+                Err(_) => ptr::null_mut(),
+            }
+        }
+        _ => ptr::null_mut(),
+    }
+}
+
+/// Creates a temporary boost for the given domain, sets it active, and persists.
+/// Returns the created Boost as JSON. Caller must free with `maho_string_free`.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`. `domain` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_boost_create_temp(
+    ptr: *mut MahoCore,
+    domain: *const c_char,
+) -> *mut c_char {
+    if ptr.is_null() || domain.is_null() {
+        return ptr::null_mut();
+    }
+    let core = &mut *ptr;
+    let domain_str = match CStr::from_ptr(domain).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let boost = core.create_temp_boost_persisted(domain_str.to_string());
+    to_json_cstring(&boost)
+}
+
+/// Commits a temporary boost (marks it permanent). Returns the committed Boost as JSON.
+/// Caller must free with `maho_string_free`.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`. `boost_id` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_boost_commit(
+    ptr: *mut MahoCore,
+    boost_id: *const c_char,
+) -> *mut c_char {
+    if ptr.is_null() || boost_id.is_null() {
+        return ptr::null_mut();
+    }
+    let core = &mut *ptr;
+    let id_str = match CStr::from_ptr(boost_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let bid = maho_types::identifiers::BoostId::new(id_str.to_string());
+    match core.commit_boost_persisted(&bid) {
+        Some(boost) => to_json_cstring(&boost),
+        None => ptr::null_mut(),
+    }
+}
+
+/// Discards a temporary boost. Returns the previously-active boost ID as a JSON string,
+/// or null if none. Caller must free with `maho_string_free`.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`. `boost_id` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_boost_discard(
+    ptr: *mut MahoCore,
+    boost_id: *const c_char,
+) -> *mut c_char {
+    if ptr.is_null() || boost_id.is_null() {
+        return ptr::null_mut();
+    }
+    let core = &mut *ptr;
+    let id_str = match CStr::from_ptr(boost_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let bid = maho_types::identifiers::BoostId::new(id_str.to_string());
+    match core.discard_boost_persisted(&bid) {
+        Some(prev_id) => {
+            let id_string = prev_id.as_ref().to_string();
+            match CString::new(id_string) {
+                Ok(s) => s.into_raw(),
+                Err(_) => ptr::null_mut(),
+            }
+        }
+        None => ptr::null_mut(),
+    }
+}
+
+/// Shuffles boost colors randomly. Returns the updated Boost as JSON.
+/// Caller must free with `maho_string_free`.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`. `boost_id` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_boost_shuffle(
+    ptr: *mut MahoCore,
+    boost_id: *const c_char,
+) -> *mut c_char {
+    if ptr.is_null() || boost_id.is_null() {
+        return ptr::null_mut();
+    }
+    let core = &mut *ptr;
+    let id_str = match CStr::from_ptr(boost_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let bid = maho_types::identifiers::BoostId::new(id_str.to_string());
+    match core.shuffle_boost_persisted(&bid) {
+        Some(boost) => to_json_cstring(&boost),
+        None => ptr::null_mut(),
+    }
+}
+
+/// Resets a boost to defaults. Returns the updated Boost as JSON.
+/// Caller must free with `maho_string_free`.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`. `boost_id` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_boost_reset(
+    ptr: *mut MahoCore,
+    boost_id: *const c_char,
+) -> *mut c_char {
+    if ptr.is_null() || boost_id.is_null() {
+        return ptr::null_mut();
+    }
+    let core = &mut *ptr;
+    let id_str = match CStr::from_ptr(boost_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let bid = maho_types::identifiers::BoostId::new(id_str.to_string());
+    match core.reset_boost_persisted(&bid) {
+        Some(boost) => to_json_cstring(&boost),
+        None => ptr::null_mut(),
+    }
+}
+
+/// Exports a boost as a JSON string for sharing/backup.
+/// Returns the export JSON string, or null if not found.
+/// Caller must free with `maho_string_free`.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`. `boost_id` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_boost_export(
+    ptr: *mut MahoCore,
+    boost_id: *const c_char,
+) -> *mut c_char {
+    if ptr.is_null() || boost_id.is_null() {
+        return ptr::null_mut();
+    }
+    let core = &*ptr;
+    let id_str = match CStr::from_ptr(boost_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let bid = maho_types::identifiers::BoostId::new(id_str.to_string());
+    match core.export_boost(&bid) {
+        Some(json) => {
+            match CString::new(json) {
+                Ok(s) => s.into_raw(),
+                Err(_) => ptr::null_mut(),
+            }
+        }
+        None => ptr::null_mut(),
+    }
+}
+
+/// Imports a boost from a JSON string into the given domain.
+/// Returns the newly-created Boost as JSON, or null on failure.
+/// Caller must free with `maho_string_free`.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`. `domain` and `json` must be valid null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_boost_import(
+    ptr: *mut MahoCore,
+    domain: *const c_char,
+    json: *const c_char,
+) -> *mut c_char {
+    if ptr.is_null() || domain.is_null() || json.is_null() {
+        return ptr::null_mut();
+    }
+    let core = &mut *ptr;
+    let domain_str = match CStr::from_ptr(domain).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let json_str = match CStr::from_ptr(json).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    match core.import_boost_persisted(domain_str.to_string(), json_str) {
+        Some(boost) => to_json_cstring(&boost),
+        None => ptr::null_mut(),
+    }
+}
+
+/// Appends a zap selector to a boost. Returns the updated Boost as JSON.
+/// Caller must free with `maho_string_free`.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`. `boost_id` and `selector` must be valid null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_boost_append_zap(
+    ptr: *mut MahoCore,
+    boost_id: *const c_char,
+    selector: *const c_char,
+) -> *mut c_char {
+    if ptr.is_null() || boost_id.is_null() || selector.is_null() {
+        return ptr::null_mut();
+    }
+    let core = &mut *ptr;
+    let id_str = match CStr::from_ptr(boost_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let sel_str = match CStr::from_ptr(selector).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let bid = maho_types::identifiers::BoostId::new(id_str.to_string());
+    match core.append_zap_selector_persisted(&bid, sel_str.to_string()) {
+        Some(boost) => to_json_cstring(&boost),
+        None => ptr::null_mut(),
+    }
+}
+
+/// Removes a zap selector from a boost. Returns the updated Boost as JSON.
+/// Caller must free with `maho_string_free`.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`. `boost_id` and `selector` must be valid null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_boost_remove_zap(
+    ptr: *mut MahoCore,
+    boost_id: *const c_char,
+    selector: *const c_char,
+) -> *mut c_char {
+    if ptr.is_null() || boost_id.is_null() || selector.is_null() {
+        return ptr::null_mut();
+    }
+    let core = &mut *ptr;
+    let id_str = match CStr::from_ptr(boost_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let sel_str = match CStr::from_ptr(selector).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let bid = maho_types::identifiers::BoostId::new(id_str.to_string());
+    match core.remove_zap_selector_persisted(&bid, sel_str) {
+        Some(boost) => to_json_cstring(&boost),
+        None => ptr::null_mut(),
+    }
 }
 
 /// # Safety
@@ -2297,74 +2825,8 @@ pub unsafe extern "C" fn maho_core_search_notes_fts(
     to_json_cstring(&results)
 }
 
-/// # Safety
-/// `ptr` must be valid.
-/// Returns JSON array of boost templates. Caller must free with `maho_string_free`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_core_get_boost_templates(ptr: *mut MahoCore) -> *mut c_char {
-    if ptr.is_null() {
-        return ptr::null_mut();
-    }
-    let core = &*ptr;
-    let json = core.get_boost_templates_json();
-    CString::new(json)
-        .map(CString::into_raw)
-        .unwrap_or(ptr::null_mut())
-}
 
-/// # Safety
-/// `ptr` must be valid. `template_id` and `url_pattern` must be valid null-terminated C strings.
-/// Returns JSON boost view model or null. Caller must free with `maho_string_free`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_core_create_boost_from_template(
-    ptr: *mut MahoCore,
-    template_id: *const c_char,
-    url_pattern: *const c_char,
-) -> *mut c_char {
-    if ptr.is_null() || template_id.is_null() || url_pattern.is_null() {
-        return ptr::null_mut();
-    }
-    let core = &mut *ptr;
-    let tid = match CStr::from_ptr(template_id).to_str() {
-        Ok(s) => s,
-        Err(_) => return ptr::null_mut(),
-    };
-    let pat = match CStr::from_ptr(url_pattern).to_str() {
-        Ok(s) => s,
-        Err(_) => return ptr::null_mut(),
-    };
-    match core.create_boost_from_template(tid, pat) {
-        Some(json) => CString::new(json)
-            .map(CString::into_raw)
-            .unwrap_or(ptr::null_mut()),
-        None => ptr::null_mut(),
-    }
-}
 
-/// # Safety
-/// `ptr` must be valid. `url` and `space_id` must be valid null-terminated C strings.
-/// Returns JSON array of boost view models. Caller must free with `maho_string_free`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_core_get_boosts_for_url_in_space(
-    ptr: *mut MahoCore,
-    url: *const c_char,
-    space_id: *const c_char,
-) -> *mut c_char {
-    if ptr.is_null() || url.is_null() || space_id.is_null() {
-        return ptr::null_mut();
-    }
-    let core = &*ptr;
-    let u = match CStr::from_ptr(url).to_str() {
-        Ok(s) => s,
-        Err(_) => return ptr::null_mut(),
-    };
-    let sid = match CStr::from_ptr(space_id).to_str() {
-        Ok(s) => s,
-        Err(_) => return ptr::null_mut(),
-    };
-    let results = core.get_boosts_for_url_in_space(u, sid);
-    to_json_cstring(&results)
-}
 
 /// # Safety
 /// `ptr` must be valid.

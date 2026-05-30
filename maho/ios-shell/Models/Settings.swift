@@ -29,6 +29,15 @@ enum AutoplayPolicy: String, Codable {
     case blockAudio = "block_audio"
 }
 
+enum PinnedCloseBehavior: String, Codable {
+    case `switch` = "switch"
+    case reset = "reset"
+    case resetSwitch = "reset-switch"
+    case unloadSwitch = "unload-switch"
+    case resetUnloadSwitch = "reset-unload-switch"
+    case close = "close"
+}
+
 struct ReaderSettings: Codable {
     let fontFamily: String
     let fontSize: Double
@@ -61,6 +70,45 @@ struct GeneralSettings: Codable {
     let autoplayPolicy: AutoplayPolicy
     var archiveTimeoutHours: Double = 24.0
     var siteSearchEntries: [SiteSearchEntry] = []
+    var pinnedCloseBehavior: PinnedCloseBehavior = .switch
+
+    private enum CodingKeys: String, CodingKey {
+        case defaultSearchEngine, todayTabTimeoutHours, restoreOnLaunch
+        case downloadPath, autoplayPolicy
+        case archiveTimeoutHours, siteSearchEntries, pinnedCloseBehavior
+    }
+
+    init(
+        defaultSearchEngine: SettingsSearchEngine,
+        todayTabTimeoutHours: Double,
+        restoreOnLaunch: RestorePolicy,
+        downloadPath: String,
+        autoplayPolicy: AutoplayPolicy,
+        archiveTimeoutHours: Double = 24.0,
+        siteSearchEntries: [SiteSearchEntry] = [],
+        pinnedCloseBehavior: PinnedCloseBehavior = .switch
+    ) {
+        self.defaultSearchEngine = defaultSearchEngine
+        self.todayTabTimeoutHours = todayTabTimeoutHours
+        self.restoreOnLaunch = restoreOnLaunch
+        self.downloadPath = downloadPath
+        self.autoplayPolicy = autoplayPolicy
+        self.archiveTimeoutHours = archiveTimeoutHours
+        self.siteSearchEntries = siteSearchEntries
+        self.pinnedCloseBehavior = pinnedCloseBehavior
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        defaultSearchEngine = try container.decode(SettingsSearchEngine.self, forKey: .defaultSearchEngine)
+        todayTabTimeoutHours = try container.decode(Double.self, forKey: .todayTabTimeoutHours)
+        restoreOnLaunch = try container.decode(RestorePolicy.self, forKey: .restoreOnLaunch)
+        downloadPath = try container.decode(String.self, forKey: .downloadPath)
+        autoplayPolicy = try container.decode(AutoplayPolicy.self, forKey: .autoplayPolicy)
+        archiveTimeoutHours = try container.decodeIfPresent(Double.self, forKey: .archiveTimeoutHours) ?? 24.0
+        siteSearchEntries = try container.decodeIfPresent([SiteSearchEntry].self, forKey: .siteSearchEntries) ?? []
+        pinnedCloseBehavior = try container.decodeIfPresent(PinnedCloseBehavior.self, forKey: .pinnedCloseBehavior) ?? .switch
+    }
 }
 
 struct SiteSearchEntry: Codable {
@@ -200,6 +248,7 @@ struct GeneralSettingsUpdate: Codable {
     var autoplayPolicy: AutoplayPolicy? = nil
     var archiveTimeoutHours: Double? = nil
     var siteSearchEntries: [SiteSearchEntry]? = nil
+    var pinnedCloseBehavior: PinnedCloseBehavior? = nil
 }
 
 struct AppearanceSettingsUpdate: Codable {

@@ -41,6 +41,7 @@
 #include "maho/browser/ui/views/little_arc/maho_little_arc_window.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
+#include "maho/browser/ui/views/boost/maho_boost_window_controller.h"
 #include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "maho/third_party/maho/maho_ffi.h"
@@ -459,10 +460,9 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
     params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
     Navigate(&params);
   } else if (action_id == "open_boost_editor") {
-    GURL boost_url(maho::kMahoBoostURL);
-    NavigateParams params(browser, boost_url, ui::PAGE_TRANSITION_GENERATED);
-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
-    Navigate(&params);
+    MahoBoostWindowController::GetForBrowser(browser, browser->profile())
+        .ShowForActiveDomain(
+            browser->tab_strip_model()->GetActiveWebContents());
   } else if (action_id == "open_atc_rules") {
     GURL settings_url(maho::kMahoSettingsURL);
     NavigateParams params(browser, settings_url,

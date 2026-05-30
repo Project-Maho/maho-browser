@@ -11,6 +11,7 @@ action("bundle_react") {
     "../maho_common/react/use_mojo.ts",
     "maho_ai.mojom-webui.js.d.ts",
     "react/app.tsx",
+    "react/boot-guard.ts",
     "react/features/compact/compact-shell.tsx",
     "react/features/compact/compact-stage.tsx",
     "react/features/compact/compact-topbar.tsx",

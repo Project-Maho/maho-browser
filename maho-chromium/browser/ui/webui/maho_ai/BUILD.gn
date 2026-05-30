@@ -50,6 +50,7 @@ source_set("maho_ai") {
     "//chrome/browser/profiles:profile",
     "//chrome/browser/ui/browser_window",
     "//chrome/browser/ui/tabs:tab_strip",
+    "//maho/browser:maho_ai_popup_lifetime_tracker",
     "//maho/browser:maho_ai_runtime_adapter",
     "//maho/browser:maho_chat_orchestration",
     "//maho/browser:maho_browser_ai_tools",

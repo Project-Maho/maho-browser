@@ -3,19 +3,11 @@ import AppKit
 final class ExtensionsSettingsViewController: NSViewController, CoreUpdateObserver {
     private let tableView = NSTableView()
     private let emptyLabel = NSTextField(labelWithString: "No extensions installed")
-    private let globalBoostsToggle = NSButton(checkboxWithTitle: "Enable Global Boosts", target: nil, action: nil)
-    private let jsBoostsToggle = NSButton(checkboxWithTitle: "Enable JS Boosts", target: nil, action: nil)
     private var extensions: [ExtensionViewModel] = []
     private var extensionsSectionView: SettingsManagedTableSectionView?
 
     override func loadView() {
-        globalBoostsToggle.target = self
-        globalBoostsToggle.action = #selector(globalBoostsToggled(_:))
-        globalBoostsToggle.state = .on
 
-        jsBoostsToggle.target = self
-        jsBoostsToggle.action = #selector(jsBoostsToggled(_:))
-        jsBoostsToggle.state = .on
 
         let nameCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("Name"))
         nameCol.title = "Name"
@@ -66,7 +58,6 @@ final class ExtensionsSettingsViewController: NSViewController, CoreUpdateObserv
         self.extensionsSectionView = extensionsSectionView
 
         view = SettingsPaneHostView(sections: [
-            .card([globalBoostsToggle, jsBoostsToggle]),
             .managedTable(extensionsSectionView)
         ])
 
@@ -93,13 +84,7 @@ final class ExtensionsSettingsViewController: NSViewController, CoreUpdateObserv
         updateTableHeight()
     }
 
-    @objc private func globalBoostsToggled(_ sender: NSButton) {
-        CoreUpdateDispatcher.shared.sendAndDispatch(.toggleGlobalBoosts)
-    }
 
-    @objc private func jsBoostsToggled(_ sender: NSButton) {
-        CoreUpdateDispatcher.shared.sendAndDispatch(.toggleJsBoosts)
-    }
 
     @objc private func toggleExtensionClicked(_ sender: NSButton) {
         let row = sender.tag

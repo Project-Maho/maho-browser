@@ -10,6 +10,7 @@
 #include "ui/views/view.h"
 #include "ui/views/view_tracker.h"
 #include "ui/views/widget/widget.h"
+#include "ui/compositor/layer.h"
 
 namespace maho {
 

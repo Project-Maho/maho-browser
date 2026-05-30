@@ -148,47 +148,88 @@ fn sqlite_update_note_content() {
 #[test]
 fn sqlite_save_and_load_boosts() {
     let db = SqliteStorage::open_in_memory().unwrap();
-    db.save_boost(
-        "b1",
-        "*.example.com/*",
-        "glob",
-        Some("body { color: red; }"),
-        None,
-        Some("dark"),
-        None,
-        true,
-        Some("work"),
-    )
-    .unwrap();
-    db.save_boost(
-        "b2",
-        "^https://news\\..*",
-        "regex",
-        None,
-        Some("alert(1)"),
-        None,
-        Some("monospace"),
-        false,
-        None,
-    )
-    .unwrap();
+    let boost1 = maho_types::boost::Boost {
+        id: maho_types::identifiers::BoostId::new("b1"),
+        domain: "example.com".to_string(),
+        name: "My Boost".to_string(),
+        color: maho_types::boost::ColorBoost {
+            dot_pos: maho_types::boost::Point { x: 0.76, y: 0.66 },
+            dot_distance: 0.0,
+            dot_angle_deg: 45.0,
+            secondary_dot_pos: maho_types::boost::Point { x: 0.5, y: 0.81 },
+            secondary_dot_angle_deg_delta: 10.0,
+            magic_theme: true,
+            color_boost_enabled: true,
+            smart_invert: false,
+            contrast: 0.9,
+            brightness: 1.1,
+            saturation: 1.2,
+        },
+        typography: maho_types::boost::TypographyBoost {
+            font_family: "Helvetica".to_string(),
+            case_mode: maho_types::boost::CaseMode::Capitalize,
+            size_mode: maho_types::boost::SizeMode::K125,
+        },
+        zap_selectors: vec![".ad-banner".to_string()],
+        custom_css: "body { background: blue; }".to_string(),
+        change_was_made: false,
+        created_at: maho_types::common::DateTime::now(),
+        updated_at: maho_types::common::DateTime::now(),
+    };
+    db.save_boost(&boost1).unwrap();
+
     let boosts = db.load_boosts().unwrap();
-    assert_eq!(boosts.len(), 2);
-    let b1 = boosts.iter().find(|b| b.0 == "b1").unwrap();
-    assert_eq!(b1.1, "*.example.com/*");
-    assert_eq!(b1.2, "glob");
-    assert_eq!(b1.3, Some("body { color: red; }".to_string()));
-    assert!(b1.7);
-    assert_eq!(b1.8, Some("work".to_string()));
-    let b2 = boosts.iter().find(|b| b.0 == "b2").unwrap();
-    assert!(!b2.7);
+    assert_eq!(boosts.len(), 1);
+    let loaded = &boosts[0];
+    assert_eq!(loaded.id.as_ref(), "b1");
+    assert_eq!(loaded.domain, "example.com");
+    assert_eq!(loaded.name, "My Boost");
+    assert!(loaded.color.color_boost_enabled);
+    assert_eq!(loaded.color.dot_angle_deg, 45.0);
+    assert_eq!(loaded.typography.font_family, "Helvetica");
+    assert_eq!(loaded.typography.case_mode, maho_types::boost::CaseMode::Capitalize);
+    assert_eq!(loaded.typography.size_mode, maho_types::boost::SizeMode::K125);
+    assert_eq!(loaded.zap_selectors, vec![".ad-banner".to_string()]);
+    assert_eq!(loaded.custom_css, "body { background: blue; }");
+    
+    // Test active boost state
+    assert_eq!(db.get_active_boost("example.com").unwrap(), None);
+    db.set_active_boost("example.com", Some("b1")).unwrap();
+    assert_eq!(db.get_active_boost("example.com").unwrap().as_deref(), Some("b1"));
 }
 
 #[test]
 fn sqlite_delete_boost() {
     let db = SqliteStorage::open_in_memory().unwrap();
-    db.save_boost("b1", "*.com/*", "glob", None, None, None, None, true, None)
-        .unwrap();
+    let boost1 = maho_types::boost::Boost {
+        id: maho_types::identifiers::BoostId::new("b1"),
+        domain: "example.com".to_string(),
+        name: "My Boost".to_string(),
+        color: maho_types::boost::ColorBoost {
+            dot_pos: maho_types::boost::Point { x: 0.76, y: 0.66 },
+            dot_distance: 0.0,
+            dot_angle_deg: 45.0,
+            secondary_dot_pos: maho_types::boost::Point { x: 0.5, y: 0.81 },
+            secondary_dot_angle_deg_delta: 10.0,
+            magic_theme: true,
+            color_boost_enabled: true,
+            smart_invert: false,
+            contrast: 0.9,
+            brightness: 1.1,
+            saturation: 1.2,
+        },
+        typography: maho_types::boost::TypographyBoost {
+            font_family: "Helvetica".to_string(),
+            case_mode: maho_types::boost::CaseMode::Capitalize,
+            size_mode: maho_types::boost::SizeMode::K125,
+        },
+        zap_selectors: vec![],
+        custom_css: "".to_string(),
+        change_was_made: false,
+        created_at: maho_types::common::DateTime::now(),
+        updated_at: maho_types::common::DateTime::now(),
+    };
+    db.save_boost(&boost1).unwrap();
     assert!(db.delete_boost("b1").unwrap());
     assert!(!db.delete_boost("b1").unwrap());
     assert!(db.load_boosts().unwrap().is_empty());
@@ -473,4 +514,65 @@ fn lmdb_multiple_keys() {
     assert_eq!(db.get("a").unwrap().unwrap(), b"1");
     assert_eq!(db.get("b").unwrap().unwrap(), b"2");
     assert_eq!(db.get("c").unwrap().unwrap(), b"3");
+}
+
+#[test]
+fn sqlite_boosts_migration_self_healing() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+    let db_path_str = db_path.to_str().unwrap();
+
+    {
+        let conn = rusqlite::Connection::open(db_path_str).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE boosts (
+                id TEXT PRIMARY KEY,
+                url_pattern TEXT NOT NULL,
+                custom_css TEXT,
+                custom_js TEXT,
+                enabled INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX idx_boosts_url_pattern ON boosts(url_pattern);
+            INSERT INTO boosts (id, url_pattern, custom_css, custom_js, enabled)
+            VALUES ('old_id', '*://example.com/*', 'body { color: red; }', 'console.log()', 1);"
+        ).unwrap();
+    }
+
+    let storage = SqliteStorage::open(db_path_str).unwrap();
+
+    let boosts = storage.load_boosts().unwrap();
+    assert!(boosts.is_empty());
+
+    let boost1 = maho_types::boost::Boost {
+        id: maho_types::identifiers::BoostId::new("b1"),
+        domain: "example.com".to_string(),
+        name: "My Boost".to_string(),
+        color: maho_types::boost::ColorBoost {
+            dot_pos: maho_types::boost::Point { x: 0.76, y: 0.66 },
+            dot_distance: 0.0,
+            dot_angle_deg: 45.0,
+            secondary_dot_pos: maho_types::boost::Point { x: 0.5, y: 0.81 },
+            secondary_dot_angle_deg_delta: 10.0,
+            magic_theme: true,
+            color_boost_enabled: true,
+            smart_invert: false,
+            contrast: 0.9,
+            brightness: 1.1,
+            saturation: 1.2,
+        },
+        typography: maho_types::boost::TypographyBoost {
+            font_family: "Helvetica".to_string(),
+            case_mode: maho_types::boost::CaseMode::Capitalize,
+            size_mode: maho_types::boost::SizeMode::K125,
+        },
+        zap_selectors: vec![".ad-banner".to_string()],
+        custom_css: "body { background: blue; }".to_string(),
+        change_was_made: false,
+        created_at: maho_types::common::DateTime::now(),
+        updated_at: maho_types::common::DateTime::now(),
+    };
+    storage.save_boost(&boost1).unwrap();
+    let loaded = storage.load_boosts().unwrap();
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].domain, "example.com");
 }

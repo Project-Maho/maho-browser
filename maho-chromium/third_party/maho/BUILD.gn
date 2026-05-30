@@ -24,6 +24,7 @@ source_set("maho_bridge") {
   ]
   deps = [
     "//base",
+    "//url",
   ]
 }
 

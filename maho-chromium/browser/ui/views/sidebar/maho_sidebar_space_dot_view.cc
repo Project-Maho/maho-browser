@@ -114,10 +114,15 @@ void MahoSidebarSpaceDotView::OnPaint(gfx::Canvas* canvas) {
     const float radius = dot_size / 2.0f;
 
     const auto* cp = GetColorProvider();
+    const bool is_hovered_no_icon = is_hovered_ && !has_icon_ && !is_active_;
     const SkColor fill = is_active_
                              ? SkColorSetRGB(0xE8, 0xEF, 0xFB)
-                             : (cp ? cp->GetColor(ui::kColorSysOnSurfaceSubtle)
-                                   : SkColorSetRGB(0xA2, 0xA8, 0xB6));
+                             : (cp ? cp->GetColor(is_hovered_no_icon
+                                                      ? ui::kColorSysOnSurface
+                                                      : ui::kColorSysOnSurfaceSubtle)
+                                   : (is_hovered_no_icon
+                                          ? SkColorSetRGB(0xE8, 0xEF, 0xFB)
+                                          : SkColorSetRGB(0xA2, 0xA8, 0xB6)));
     const int alpha = is_active_ ? static_cast<int>(dot_opacity_ * 212)
                                  : static_cast<int>(dot_opacity_ * 72);
 

@@ -50,8 +50,6 @@ enum CoreUpdate: Codable {
     case syncStateChanged(status: SyncStatus)
     case settingsChanged(settings: Settings)
     case spaceConfigUpdated(spaceId: SpaceId, changes: SpaceConfigUpdate)
-    case globalBoostsToggled(enabled: Bool)
-    case jsBoostsToggled(enabled: Bool)
     case extensionToggled(extensionId: String, enabled: Bool)
     case extensionRemoved(extensionId: String)
     case accountChanged(account: AccountInfo?)
@@ -222,10 +220,7 @@ enum CoreUpdate: Codable {
             self = .spaceConfigUpdated(
                 spaceId: try container.decode(SpaceId.self, forKey: DynamicCodingKey(stringValue: "space_id")!),
                 changes: try container.decode(SpaceConfigUpdate.self, forKey: DynamicCodingKey(stringValue: "changes")!))
-        case "global_boosts_toggled":
-            self = .globalBoostsToggled(enabled: try container.decode(Bool.self, forKey: DynamicCodingKey(stringValue: "enabled")!))
-        case "js_boosts_toggled":
-            self = .jsBoostsToggled(enabled: try container.decode(Bool.self, forKey: DynamicCodingKey(stringValue: "enabled")!))
+
         case "extension_toggled":
             self = .extensionToggled(
                 extensionId: try container.decode(String.self, forKey: DynamicCodingKey(stringValue: "extension_id")!),

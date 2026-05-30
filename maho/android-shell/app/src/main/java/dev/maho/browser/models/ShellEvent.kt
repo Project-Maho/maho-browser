@@ -325,7 +325,7 @@ sealed class ShellEvent {
 
     // Boosts
     @Serializable @SerialName("create_boost")
-    data class CreateBoost(@SerialName("url_pattern") val urlPattern: UrlPattern) : ShellEvent()
+    data class CreateBoost(val domain: String) : ShellEvent()
 
     @Serializable @SerialName("update_boost")
     data class UpdateBoostEvent(
@@ -522,12 +522,7 @@ sealed class ShellEvent {
     @Serializable @SerialName("memory_warning")
     data class MemoryWarning(val level: MemoryPressureLevel) : ShellEvent()
 
-    // Boosts settings
-    @Serializable @SerialName("toggle_global_boosts")
-    data object ToggleGlobalBoosts : ShellEvent()
 
-    @Serializable @SerialName("toggle_js_boosts")
-    data object ToggleJsBoosts : ShellEvent()
 
     // Extensions management
     @Serializable @SerialName("toggle_extension")

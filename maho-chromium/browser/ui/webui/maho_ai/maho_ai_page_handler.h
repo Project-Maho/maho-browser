@@ -2,6 +2,8 @@
 #define MAHO_BROWSER_UI_WEBUI_MAHO_AI_MAHO_AI_PAGE_HANDLER_H_
 
 #include <cstdint>
+#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -56,10 +58,20 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
                          uint32_t offset,
                          uint32_t limit,
                          GetSessionHistoryCallback callback) override;
+  void GetOpenTabs(GetOpenTabsCallback callback) override;
+  void SearchHistory(const std::string& query,
+                     uint32_t max_results,
+                     SearchHistoryCallback callback) override;
+  void SearchBookmarks(const std::string& query,
+                       uint32_t max_results,
+                       SearchBookmarksCallback callback) override;
+
   void SubmitPrompt(const std::string& session_id,
                     const std::string& prompt,
                     bool attach_browser_context,
-                    maho_ai::mojom::InteractionMode mode) override;
+                    maho_ai::mojom::InteractionMode mode,
+                    std::optional<std::vector<maho_ai::mojom::ContextAttachmentPtr>>
+                        attachments) override;
   void CancelTurn(const std::string& session_id) override;
   void RespondToApproval(const std::string& session_id,
                          const std::string& approval_id,
@@ -74,12 +86,49 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   // remote. Also maintains chat history for the simple chat UI.
   void OnRuntimeEvent(MahoAiRuntimeEvent event);
 
-  // Async continuation: called once page-context extraction completes. Builds
-  // the augmented prompt (or falls back to the original) and forwards to the
-  // active adapter.
+  // Async continuation: called once page-context extraction completes for the
+  // legacy |attach_browser_context| path. Builds the augmented prompt (or
+  // falls back to the original) and forwards to the active adapter.
   void OnContextExtractedThenSubmit(
       std::string user_prompt,
       maho_ai::mojom::InteractionMode mode,
+      MahoAiPageContextExtractor::PageContextResult ctx);
+
+  // Phase B picker path: called once context extraction completes for a
+  // specific open tab chosen via |GetOpenTabs|. |tab_label| is the human-
+  // readable label for the injected context event.
+  void OnTabContextExtractedThenSubmit(
+      std::string user_prompt,
+      maho_ai::mojom::InteractionMode mode,
+      std::string tab_label,
+      MahoAiPageContextExtractor::PageContextResult ctx);
+
+  // Phase B multi-attachment aggregation: collects extraction results from
+  // multiple attachments in submission order and emits a single
+  // SubmitMessage once every slot has been filled.
+  struct AttachmentSlot {
+    AttachmentSlot();
+    AttachmentSlot(AttachmentSlot&&) noexcept;
+    AttachmentSlot& operator=(AttachmentSlot&&) noexcept;
+    ~AttachmentSlot();
+    std::string label;
+    std::string header_tag;
+    MahoAiPageContextExtractor::PageContextResult result;
+    bool completed = false;
+  };
+
+  struct PendingAttachmentBatch {
+    PendingAttachmentBatch();
+    ~PendingAttachmentBatch();
+    std::string user_prompt;
+    maho_ai::mojom::InteractionMode mode;
+    std::vector<AttachmentSlot> slots;
+    size_t completed_count = 0;
+  };
+
+  void OnAttachmentSlotCompleted(
+      std::shared_ptr<PendingAttachmentBatch> batch,
+      size_t slot_index,
       MahoAiPageContextExtractor::PageContextResult ctx);
 
   // Builds a Mojo RuntimeEvent from an internal event struct.

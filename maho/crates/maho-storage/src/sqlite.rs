@@ -58,10 +58,60 @@ impl SqliteStorage {
             "ALTER TABLE shortcuts ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1",
             [],
         );
+
+        let has_dot_pos_x: bool = self.conn.query_row(
+            "SELECT 1 FROM pragma_table_info('boosts') WHERE name='dot_pos_x'",
+            [],
+            |_| Ok(true),
+        ).unwrap_or(false);
+
+        if !has_dot_pos_x {
+            let _ = self.conn.execute(
+                "ALTER TABLE boosts ADD COLUMN dot_pos_x REAL NOT NULL DEFAULT 0.76", []);
+            let _ = self.conn.execute(
+                "ALTER TABLE boosts ADD COLUMN dot_pos_y REAL NOT NULL DEFAULT 0.66", []);
+            let _ = self.conn.execute(
+                "ALTER TABLE boosts ADD COLUMN dot_distance REAL NOT NULL DEFAULT 0", []);
+            let _ = self.conn.execute(
+                "ALTER TABLE boosts ADD COLUMN secondary_dot_pos_x REAL NOT NULL DEFAULT 0.5", []);
+            let _ = self.conn.execute(
+                "ALTER TABLE boosts ADD COLUMN secondary_dot_pos_y REAL NOT NULL DEFAULT 0.81", []);
+            let _ = self.conn.execute(
+                "ALTER TABLE boosts ADD COLUMN change_was_made INTEGER NOT NULL DEFAULT 0", []);
+            let _ = self.conn.execute(
+                "ALTER TABLE boosts ADD COLUMN size_mode TEXT NOT NULL DEFAULT 'k100'", []);
+
+            self.conn.execute_batch(
+                "UPDATE boosts SET size_mode = CASE
+                    WHEN size_override IS NULL OR abs(size_override - 1.0) < 0.01 THEN 'k100'
+                    WHEN abs(size_override - 0.9) < 0.06 THEN 'k90'
+                    WHEN abs(size_override - 1.1) < 0.06 THEN 'k110'
+                    WHEN abs(size_override - 1.25) < 0.08 THEN 'k125'
+                    WHEN abs(size_override - 1.5) < 0.13 THEN 'k150'
+                    WHEN size_override < 0.95 THEN 'k90'
+                    WHEN size_override < 1.05 THEN 'k100'
+                    WHEN size_override < 1.175 THEN 'k110'
+                    WHEN size_override < 1.375 THEN 'k125'
+                    ELSE 'k150'
+                END;"
+            )?;
+        }
+
         Ok(())
     }
 
     fn initialize_schema(&self) -> Result<(), StorageError> {
+        let has_old_schema: bool = self.conn.query_row(
+            "SELECT 1 FROM pragma_table_info('boosts') WHERE name='url_pattern'",
+            [],
+            |_| Ok(true)
+        ).unwrap_or(false);
+        if has_old_schema {
+            let _ = self.conn.execute("DROP TABLE IF EXISTS domain_boost_state", []);
+            let _ = self.conn.execute("DROP TABLE IF EXISTS boosts", []);
+            let _ = self.conn.execute("DROP INDEX IF EXISTS idx_boosts_url_pattern", []);
+        }
+
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,14 +140,28 @@ impl SqliteStorage {
             );
             CREATE TABLE IF NOT EXISTS boosts (
                 id TEXT PRIMARY KEY,
-                url_pattern TEXT NOT NULL,
-                pattern_type TEXT NOT NULL DEFAULT 'glob',
-                custom_css TEXT,
-                custom_js TEXT,
-                color_theme TEXT,
-                font_override TEXT,
-                enabled INTEGER NOT NULL DEFAULT 1,
-                space_scope TEXT
+                domain TEXT NOT NULL,
+                name TEXT NOT NULL,
+                enable_color_boost INTEGER NOT NULL DEFAULT 0,
+                dot_angle_deg REAL NOT NULL DEFAULT 0.0,
+                secondary_dot_angle_deg_delta REAL NOT NULL DEFAULT 0.0,
+                brightness REAL NOT NULL DEFAULT 1.0,
+                saturation REAL NOT NULL DEFAULT 1.0,
+                contrast REAL NOT NULL DEFAULT 1.0,
+                auto_theme INTEGER NOT NULL DEFAULT 0,
+                smart_invert INTEGER NOT NULL DEFAULT 0,
+                font_family TEXT,
+                text_case_override TEXT NOT NULL DEFAULT 'none',
+                size_override REAL,
+                zap_selectors TEXT NOT NULL DEFAULT '[]',
+                custom_css TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS domain_boost_state (
+                domain TEXT PRIMARY KEY,
+                active_boost_id TEXT,
+                FOREIGN KEY(active_boost_id) REFERENCES boosts(id) ON DELETE SET NULL
             );
             CREATE TABLE IF NOT EXISTS css_mods (
                 id TEXT PRIMARY KEY,
@@ -156,7 +220,7 @@ impl SqliteStorage {
             CREATE INDEX IF NOT EXISTS idx_history_visited ON history(visited_at);
             CREATE INDEX IF NOT EXISTS idx_notes_linked_tab ON notes(linked_tab_id);
             CREATE INDEX IF NOT EXISTS idx_notes_linked_url ON notes(linked_url);
-            CREATE INDEX IF NOT EXISTS idx_boosts_url_pattern ON boosts(url_pattern);
+            CREATE INDEX IF NOT EXISTS idx_boosts_domain ON boosts(domain);
             CREATE INDEX IF NOT EXISTS idx_search_history_searched ON search_history(searched_at);
             CREATE INDEX IF NOT EXISTS idx_downloads_state ON downloads(state);
             CREATE TABLE IF NOT EXISTS usage_stats (
@@ -623,58 +687,134 @@ impl SqliteStorage {
 
     // === Boosts ===
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn save_boost(
-        &self,
-        id: &str,
-        url_pattern: &str,
-        pattern_type: &str,
-        custom_css: Option<&str>,
-        custom_js: Option<&str>,
-        color_theme: Option<&str>,
-        font_override: Option<&str>,
-        enabled: bool,
-        space_scope: Option<&str>,
-    ) -> Result<(), StorageError> {
+    pub fn save_boost(&self, boost: &maho_types::boost::Boost) -> Result<(), StorageError> {
+        let case_mode_str = match &boost.typography.case_mode {
+            maho_types::boost::CaseMode::None => "none",
+            maho_types::boost::CaseMode::Upper => "upper",
+            maho_types::boost::CaseMode::Lower => "lower",
+            maho_types::boost::CaseMode::Capitalize => "capitalize",
+        };
+        let zap_selectors_json = serde_json::to_string(&boost.zap_selectors).unwrap_or_else(|_| "[]".to_string());
+        let font_family_val: Option<&str> = if boost.typography.font_family.is_empty() {
+            None
+        } else {
+            Some(&boost.typography.font_family)
+        };
+        
         self.conn.execute(
-            "INSERT OR REPLACE INTO boosts (id, url_pattern, pattern_type, custom_css, custom_js, color_theme, font_override, enabled, space_scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            rusqlite::params![id, url_pattern, pattern_type, custom_css, custom_js, color_theme, font_override, enabled, space_scope],
+            "INSERT OR REPLACE INTO boosts (
+                id, domain, name, enable_color_boost, dot_angle_deg, secondary_dot_angle_deg_delta,
+                brightness, saturation, contrast, auto_theme, smart_invert,
+                font_family, text_case_override, zap_selectors, custom_css,
+                created_at, updated_at,
+                dot_pos_x, dot_pos_y, dot_distance, secondary_dot_pos_x, secondary_dot_pos_y,
+                change_was_made, size_mode
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+            rusqlite::params![
+                boost.id.as_ref(),
+                &boost.domain,
+                &boost.name,
+                boost.color.color_boost_enabled as i32,
+                boost.color.dot_angle_deg,
+                boost.color.secondary_dot_angle_deg_delta,
+                boost.color.brightness,
+                boost.color.saturation,
+                boost.color.contrast,
+                boost.color.magic_theme as i32,
+                boost.color.smart_invert as i32,
+                font_family_val,
+                case_mode_str,
+                zap_selectors_json,
+                &boost.custom_css,
+                boost.created_at.as_ref(),
+                boost.updated_at.as_ref(),
+                boost.color.dot_pos.x as f64,
+                boost.color.dot_pos.y as f64,
+                boost.color.dot_distance as f64,
+                boost.color.secondary_dot_pos.x as f64,
+                boost.color.secondary_dot_pos.y as f64,
+                boost.change_was_made as i32,
+                boost.typography.size_mode.as_db_string(),
+            ],
         )?;
         Ok(())
     }
 
-    #[allow(clippy::type_complexity)]
-    pub fn load_boosts(
-        &self,
-    ) -> Result<
-        Vec<(
-            String,
-            String,
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            bool,
-            Option<String>,
-        )>,
-        StorageError,
-    > {
+    pub fn load_boosts(&self) -> Result<Vec<maho_types::boost::Boost>, StorageError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, url_pattern, pattern_type, custom_css, custom_js, color_theme, font_override, enabled, space_scope FROM boosts",
+            "SELECT id, domain, name, enable_color_boost, dot_angle_deg, secondary_dot_angle_deg_delta,
+                    brightness, saturation, contrast, auto_theme, smart_invert,
+                    font_family, text_case_override, zap_selectors, custom_css,
+                    created_at, updated_at,
+                    dot_pos_x, dot_pos_y, dot_distance, secondary_dot_pos_x, secondary_dot_pos_y,
+                    change_was_made, size_mode FROM boosts",
         )?;
         let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, Option<String>>(6)?,
-                row.get::<_, bool>(7)?,
-                row.get::<_, Option<String>>(8)?,
-            ))
+            let id = row.get::<_, String>(0)?;
+            let domain = row.get::<_, String>(1)?;
+            let name = row.get::<_, String>(2)?;
+            let color_boost_enabled = row.get::<_, i32>(3)? != 0;
+            let dot_angle_deg = row.get::<_, f64>(4)?;
+            let secondary_dot_angle_deg_delta = row.get::<_, f64>(5)?;
+            let brightness = row.get::<_, f64>(6)?;
+            let saturation = row.get::<_, f64>(7)?;
+            let contrast = row.get::<_, f64>(8)?;
+            let magic_theme = row.get::<_, i32>(9)? != 0;
+            let smart_invert = row.get::<_, i32>(10)? != 0;
+            let font_family_opt = row.get::<_, Option<String>>(11)?;
+            let text_case_str = row.get::<_, String>(12)?;
+            let zap_selectors_json = row.get::<_, String>(13)?;
+            let custom_css = row.get::<_, String>(14)?;
+            let created_at_str = row.get::<_, String>(15)?;
+            let updated_at_str = row.get::<_, String>(16)?;
+            let dot_pos_x = row.get::<_, f64>(17).unwrap_or(0.76) as f32;
+            let dot_pos_y = row.get::<_, f64>(18).unwrap_or(0.66) as f32;
+            let dot_distance = row.get::<_, f64>(19).unwrap_or(0.0) as f32;
+            let secondary_dot_pos_x = row.get::<_, f64>(20).unwrap_or(0.5) as f32;
+            let secondary_dot_pos_y = row.get::<_, f64>(21).unwrap_or(0.81) as f32;
+            let change_was_made = row.get::<_, i32>(22).unwrap_or(0) != 0;
+            let size_mode_str = row.get::<_, String>(23).unwrap_or_else(|_| "k100".to_string());
+
+            let case_mode = match text_case_str.as_str() {
+                "upper" => maho_types::boost::CaseMode::Upper,
+                "lower" => maho_types::boost::CaseMode::Lower,
+                "capitalize" => maho_types::boost::CaseMode::Capitalize,
+                _ => maho_types::boost::CaseMode::None,
+            };
+
+            let size_mode = maho_types::boost::SizeMode::from_db_string(&size_mode_str)
+                .unwrap_or(maho_types::boost::SizeMode::K100);
+
+            let zap_selectors: Vec<String> = serde_json::from_str(&zap_selectors_json).unwrap_or_default();
+
+            Ok(maho_types::boost::Boost {
+                id: maho_types::identifiers::BoostId::new(id),
+                domain,
+                name,
+                color: maho_types::boost::ColorBoost {
+                    dot_pos: maho_types::boost::Point { x: dot_pos_x, y: dot_pos_y },
+                    dot_distance,
+                    dot_angle_deg,
+                    secondary_dot_pos: maho_types::boost::Point { x: secondary_dot_pos_x, y: secondary_dot_pos_y },
+                    secondary_dot_angle_deg_delta,
+                    magic_theme,
+                    color_boost_enabled,
+                    smart_invert,
+                    contrast,
+                    brightness,
+                    saturation,
+                },
+                typography: maho_types::boost::TypographyBoost {
+                    font_family: font_family_opt.unwrap_or_default(),
+                    case_mode,
+                    size_mode,
+                },
+                zap_selectors,
+                custom_css,
+                change_was_made,
+                created_at: maho_types::common::DateTime::from_iso(created_at_str),
+                updated_at: maho_types::common::DateTime::from_iso(updated_at_str),
+            })
         })?;
         let mut results = Vec::new();
         for row in rows {
@@ -688,6 +828,24 @@ impl SqliteStorage {
             .conn
             .execute("DELETE FROM boosts WHERE id = ?1", rusqlite::params![id])?;
         Ok(affected > 0)
+    }
+
+    pub fn set_active_boost(&self, domain: &str, active_boost_id: Option<&str>) -> Result<(), StorageError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO domain_boost_state (domain, active_boost_id) VALUES (?1, ?2)",
+            rusqlite::params![domain, active_boost_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_active_boost(&self, domain: &str) -> Result<Option<String>, StorageError> {
+        let mut stmt = self.conn.prepare("SELECT active_boost_id FROM domain_boost_state WHERE domain = ?1")?;
+        let mut rows = stmt.query(rusqlite::params![domain])?;
+        if let Some(row) = rows.next()? {
+            Ok(row.get::<_, Option<String>>(0)?)
+        } else {
+            Ok(None)
+        }
     }
 
     // === CSS Mods ===
@@ -1741,5 +1899,73 @@ mod tests {
 
         assert_eq!(db.get_sync_last_pulled_version("bookmarks").unwrap(), 10);
         assert_eq!(db.get_sync_last_pulled_version("notes").unwrap(), 20);
+    }
+
+    #[test]
+    fn test_boost_migration_adds_new_columns_and_migrates_size() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS boosts (
+                id TEXT PRIMARY KEY,
+                domain TEXT NOT NULL,
+                name TEXT NOT NULL,
+                enable_color_boost INTEGER NOT NULL DEFAULT 0,
+                dot_angle_deg REAL NOT NULL DEFAULT 0.0,
+                secondary_dot_angle_deg_delta REAL NOT NULL DEFAULT 0.0,
+                brightness REAL NOT NULL DEFAULT 1.0,
+                saturation REAL NOT NULL DEFAULT 1.0,
+                contrast REAL NOT NULL DEFAULT 1.0,
+                auto_theme INTEGER NOT NULL DEFAULT 0,
+                smart_invert INTEGER NOT NULL DEFAULT 0,
+                font_family TEXT,
+                text_case_override TEXT NOT NULL DEFAULT 'none',
+                size_override REAL,
+                zap_selectors TEXT NOT NULL DEFAULT '[]',
+                custom_css TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS passwords (id TEXT PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS shortcuts (id TEXT PRIMARY KEY);"
+        ).unwrap();
+
+        conn.execute(
+            "INSERT INTO boosts (id, domain, name, brightness, saturation, contrast,
+                size_override, text_case_override, created_at, updated_at)
+             VALUES ('b1', 'example.com', 'Test', 1.0, 1.0, 1.0,
+                1.25, 'capitalize', '2025-01-01T00:00:00', '2025-01-01T00:00:00')",
+            [],
+        ).unwrap();
+
+        let db = SqliteStorage { conn };
+        db.run_migrations().unwrap();
+
+        let dot_pos_x: f64 = db.conn.query_row(
+            "SELECT dot_pos_x FROM boosts WHERE id = 'b1'", [], |r| r.get(0)
+        ).unwrap();
+        assert!((dot_pos_x - 0.76).abs() < 0.01);
+
+        let dot_pos_y: f64 = db.conn.query_row(
+            "SELECT dot_pos_y FROM boosts WHERE id = 'b1'", [], |r| r.get(0)
+        ).unwrap();
+        assert!((dot_pos_y - 0.66).abs() < 0.01);
+
+        let size_mode: String = db.conn.query_row(
+            "SELECT size_mode FROM boosts WHERE id = 'b1'", [], |r| r.get(0)
+        ).unwrap();
+        assert_eq!(size_mode, "k125");
+
+        let brightness: f64 = db.conn.query_row(
+            "SELECT brightness FROM boosts WHERE id = 'b1'", [], |r| r.get(0)
+        ).unwrap();
+        assert!((brightness - 1.0).abs() < f64::EPSILON);
+
+        let change_was_made: i32 = db.conn.query_row(
+            "SELECT change_was_made FROM boosts WHERE id = 'b1'", [], |r| r.get(0)
+        ).unwrap();
+        assert_eq!(change_was_made, 0);
+
+        db.run_migrations().unwrap();
     }
 }

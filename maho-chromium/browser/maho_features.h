@@ -33,6 +33,20 @@ namespace maho::features {
 BASE_DECLARE_FEATURE(kMahoUnifiedClickPath);
 BASE_DECLARE_FEATURE(kMahoCommandPaletteSeededHistory);
 
+// When enabled, Maho replaces the upstream `ToolbarButtonProvider`
+// (registered by `ToolbarView` on `BrowserWindowInterface`) with a
+// Maho-owned `MahoToolbarButtonProvider` whenever
+// `BrowserView::IsMahoArcLayoutActive()` is true.  The Maho provider routes
+// bubble anchors (translate, zoom, memory saver, etc.) to the sidebar pill
+// instead of the zero-bounded upstream toolbar, and forwards every
+// non-anchor virtual to the still-constructed upstream `ToolbarView`.
+//
+// Disabling this flag restores the upstream registration: bubbles anchor to
+// the invisible toolbar (broken-but-unchanged Arc behaviour) and the
+// sidebar's "Translation Available" label loses its click handler.  Used
+// as a kill-switch pending end-to-end QA sign-off.
+BASE_DECLARE_FEATURE(kMahoArcToolbarButtonProvider);
+
 }  // namespace maho::features
 
 #endif  // MAHO_BROWSER_MAHO_FEATURES_H_

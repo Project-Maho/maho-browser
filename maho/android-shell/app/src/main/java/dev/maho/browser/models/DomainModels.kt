@@ -184,40 +184,71 @@ data class Note(
 )
 
 @Serializable
+enum class TextCase {
+    @SerialName("none") NONE,
+    @SerialName("upper") UPPER,
+    @SerialName("lower") LOWER,
+    @SerialName("capitalize") CAPITALIZE
+}
+
+@Serializable
+data class ColorBoost(
+    @SerialName("enableColorBoost") val enableColorBoost: Boolean,
+    @SerialName("dotAngleDeg") val dotAngleDeg: Double,
+    @SerialName("secondaryDotAngleDegDelta") val secondaryDotAngleDegDelta: Double,
+    val brightness: Double,
+    val saturation: Double,
+    val contrast: Double,
+    @SerialName("autoTheme") val autoTheme: Boolean,
+    @SerialName("smartInvert") val smartInvert: Boolean,
+)
+
+@Serializable
+data class TypographyBoost(
+    @SerialName("fontFamily") val fontFamily: String? = null,
+    @SerialName("textCaseOverride") val textCaseOverride: TextCase,
+    @SerialName("sizeOverride") val sizeOverride: Float? = null,
+)
+
+@Serializable
 data class Boost(
     val id: BoostId,
-    @SerialName("urlPattern") val urlPattern: UrlPattern,
-    @SerialName("customCss") val customCss: String? = null,
-    @SerialName("customJs") val customJs: String? = null,
-    @SerialName("colorTheme") val colorTheme: ColorOverride? = null,
-    @SerialName("fontOverride") val fontOverride: FontOverride? = null,
-    val enabled: Boolean,
-    @SerialName("spaceScope") val spaceScope: SpaceId? = null,
+    val domain: String,
+    val name: String,
+    val color: ColorBoost,
+    val typography: TypographyBoost,
+    @SerialName("zapSelectors") val zapSelectors: List<String>,
+    @SerialName("customCss") val customCss: String,
+    @SerialName("createdAt") val createdAt: String,
+    @SerialName("updatedAt") val updatedAt: String,
 )
 
 @Serializable
-data class ColorOverride(
-    val background: Color? = null,
-    val text: Color? = null,
-    val links: Color? = null,
+data class ColorBoostUpdate(
+    @EncodeDefault(EncodeDefault.Mode.NEVER) @SerialName("enableColorBoost") val enableColorBoost: Boolean? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) @SerialName("dotAngleDeg") val dotAngleDeg: Double? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) @SerialName("secondaryDotAngleDegDelta") val secondaryDotAngleDegDelta: Double? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val brightness: Double? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val saturation: Double? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val contrast: Double? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) @SerialName("autoTheme") val autoTheme: Boolean? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) @SerialName("smartInvert") val smartInvert: Boolean? = null,
 )
 
 @Serializable
-data class FontOverride(
-    @SerialName("fontFamily") val fontFamily: String? = null,
-    @SerialName("fontSize") val fontSize: Double? = null,
-    @SerialName("lineHeight") val lineHeight: Double? = null,
+data class TypographyBoostUpdate(
+    @EncodeDefault(EncodeDefault.Mode.NEVER) @SerialName("fontFamily") val fontFamily: Patchable<String?> = Patchable.Absent,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) @SerialName("textCaseOverride") val textCaseOverride: TextCase? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) @SerialName("sizeOverride") val sizeOverride: Patchable<Float?> = Patchable.Absent,
 )
 
 @Serializable
 data class BoostUpdate(
-    @SerialName("urlPattern") val urlPattern: UrlPattern? = null,
-    @EncodeDefault(EncodeDefault.Mode.NEVER) @SerialName("customCss") val customCss: Patchable<String> = Patchable.Absent,
-    @EncodeDefault(EncodeDefault.Mode.NEVER) @SerialName("customJs") val customJs: Patchable<String> = Patchable.Absent,
-    @EncodeDefault(EncodeDefault.Mode.NEVER) @SerialName("colorTheme") val colorTheme: Patchable<ColorOverride> = Patchable.Absent,
-    @EncodeDefault(EncodeDefault.Mode.NEVER) @SerialName("fontOverride") val fontOverride: Patchable<FontOverride> = Patchable.Absent,
-    val enabled: Boolean? = null,
-    @EncodeDefault(EncodeDefault.Mode.NEVER) @SerialName("spaceScope") val spaceScope: Patchable<SpaceId> = Patchable.Absent,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val name: String? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val color: ColorBoostUpdate? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val typography: TypographyBoostUpdate? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) @SerialName("zapSelectors") val zapSelectors: List<String>? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) @SerialName("customCss") val customCss: String? = null,
 )
 
 @Serializable

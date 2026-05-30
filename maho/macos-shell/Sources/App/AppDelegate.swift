@@ -34,8 +34,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var mainWindowControllerRef: BrowserWindowController? { WindowManager.shared.focusedWindow ?? mainWindowController }
     private var commandBarController: CommandBarWindowController?
     private var settingsWindowController: SettingsWindowController?
-    private var boostEditorController: BoostEditorController?
-    private var boostMarketplaceController: BoostMarketplaceController?
+
     #if canImport(Sparkle)
     private let updaterController = SPUStandardUpdaterController(
         startingUpdater: false,
@@ -652,12 +651,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
         organizeTabsItem.keyEquivalentModifierMask = [.command, .shift]
         viewMenuItem.submenu?.addItem(organizeTabsItem)
-        let boostMarketplaceItem = NSMenuItem(
-            title: "Boost Marketplace...",
-            action: #selector(openBoostMarketplace),
-            keyEquivalent: ""
-        )
-        viewMenuItem.submenu?.addItem(boostMarketplaceItem)
+
         mainMenu.addItem(viewMenuItem)
 
         // MARK: - Window Menu
@@ -863,17 +857,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func openBoostEditor() {
-        boostEditorController = boostEditorController ?? BoostEditorController()
-        boostEditorController?.showWindow(nil)
-        boostEditorController?.window?.makeKeyAndOrderFront(nil)
+        // Deactivated: legacy window
     }
 
     @objc func openBoostMarketplace() {
-        if boostMarketplaceController == nil {
-            boostMarketplaceController = BoostMarketplaceController()
-        }
-        boostMarketplaceController?.showWindow(nil)
-        boostMarketplaceController?.window?.makeKeyAndOrderFront(nil)
+        // Deactivated: legacy window
     }
 
     @objc func findInPage() {

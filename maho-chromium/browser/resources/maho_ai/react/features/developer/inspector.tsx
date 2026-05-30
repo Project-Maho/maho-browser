@@ -2,10 +2,12 @@ import type {AppState, SessionRecord} from '../../../types.js';
 import {
   getBrowserContextStatusLabel,
   getBrowserContextStatusTone,
+  redactUrlForDisplay,
   getRuntimeStateLabel,
   getSessionAccessLabel,
   getSessionTitle,
   getStatusLabel,
+  hasCurrentPageAttachment,
   isSessionReadOnly,
 } from '../../../types.js';
 import {cn} from '../../lib/cn.js';
@@ -98,40 +100,50 @@ export function Inspector(
           </>
         ) : state.selectedInspector.kind === 'context' ? (
           (() => {
-            const lastContext = state.lastContextBySessionId[currentSessionId];
+            const payloads = state.contextsBySessionId[currentSessionId] || [];
             return (
               <section className="inspector-card">
-                {lastContext ? (
+                {payloads.length > 0 ? (
                   <>
-                    <SectionLabel text="Injected context" />
-                    <Pill
-                      text={getBrowserContextStatusLabel(lastContext.status)}
-                      tone={getBrowserContextStatusTone(lastContext.status) as PillTone}
-                    />
-                    <KeyValueRow label="URL" value={lastContext.url} />
-                    <KeyValueRow label="Title" value={lastContext.title} />
-                    <KeyValueRow
-                      label="Content size"
-                      value={`${lastContext.contentLength.toLocaleString()} chars`}
-                    />
-                    {lastContext.contentSnippet ? (
-                      <pre className="inspector-pre">{lastContext.contentSnippet}</pre>
-                    ) : null}
-                    {lastContext.warnings.length ? (
-                      <KeyValueRow label="Warnings" value={lastContext.warnings.join('\n')} />
-                    ) : null}
+                    <SectionLabel text={`Injected context (${payloads.length})`} />
+                    {payloads.map((ctx, idx) => (
+                      <div key={idx} className="inspector-context-entry">
+                        <KeyValueRow
+                          label={`#${idx + 1}`}
+                          value={ctx.label || `Attachment ${idx + 1}`}
+                        />
+                        <Pill
+                          text={getBrowserContextStatusLabel(ctx.status)}
+                          tone={getBrowserContextStatusTone(ctx.status) as PillTone}
+                        />
+                        {ctx.url ? <KeyValueRow label="URL" value={redactUrlForDisplay(ctx.url)} /> : null}
+                        {ctx.title ? <KeyValueRow label="Title" value={ctx.title} /> : null}
+                        {ctx.contentLength > 0 ? (
+                          <KeyValueRow
+                            label="Content size"
+                            value={`${ctx.contentLength.toLocaleString()} chars`}
+                          />
+                        ) : null}
+                        {ctx.contentSnippet ? (
+                          <pre className="inspector-pre">{ctx.contentSnippet}</pre>
+                        ) : null}
+                        {ctx.warnings.length ? (
+                          <KeyValueRow label="Warnings" value={ctx.warnings.join('\n')} />
+                        ) : null}
+                      </div>
+                    ))}
                   </>
                 ) : (
                   <>
                     <SectionLabel text="Attached context" />
-                    <KeyValueRow
-                      label="Page context"
-                      value={readOnly ?
-                        'Historical snapshot only' :
-                        (state.composer.attachBrowserContext ?
-                          'On — injected at send time' :
-                          'Off')}
-                    />
+                     <KeyValueRow
+                       label="Page context"
+                       value={readOnly ?
+                         'Historical snapshot only' :
+                         (hasCurrentPageAttachment(state.composer.attachments) ?
+                           'On — injected at send time' :
+                           'Off')}
+                     />
                     <KeyValueRow label="Composer mode" value={state.composer.modeLabel} />
                     <KeyValueRow
                       label="Pending turn"

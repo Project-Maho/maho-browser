@@ -75,35 +75,6 @@ TEST(MahoTabContextMenuTest, BuildMenuModelContainsMute) {
   EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_TAB_MUTE));
 }
 
-TEST(MahoTabContextMenuTest, BuildMenuModelContainsCustomizePageCommand) {
-  MahoTabContextMenu menu(nullptr, 0);
-  std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
-  ASSERT_NE(model, nullptr);
-  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_TAB_CUSTOMIZE_PAGE));
-}
-
-TEST(MahoTabContextMenuTest, CustomizePageSubmenuContainsMyBoostAndEdit) {
-  MahoTabContextMenu menu(nullptr, 0);
-  std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
-  ASSERT_NE(model, nullptr);
-  const ui::MenuModel* submenu =
-      FindSubMenuForCommand(*model, IDC_MAHO_TAB_CUSTOMIZE_PAGE);
-  ASSERT_NE(submenu, nullptr);
-  bool has_my_boost = false;
-  bool has_edit = false;
-  for (size_t i = 0; i < submenu->GetItemCount(); ++i) {
-    int cmd = submenu->GetCommandIdAt(i);
-    if (cmd == IDC_MAHO_TAB_BOOST_MY_BOOST) {
-      has_my_boost = true;
-    }
-    if (cmd == IDC_MAHO_TAB_BOOST_EDIT) {
-      has_edit = true;
-    }
-  }
-  EXPECT_TRUE(has_my_boost);
-  EXPECT_TRUE(has_edit);
-}
-
 TEST(MahoTabContextMenuTest, BuildMenuModelContainsOpenInSplitView) {
   MahoTabContextMenu menu(nullptr, 0);
   std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
@@ -116,6 +87,13 @@ TEST(MahoTabContextMenuTest, BuildMenuModelContainsDuplicate) {
   std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
   ASSERT_NE(model, nullptr);
   EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_TAB_DUPLICATE));
+}
+
+TEST(MahoTabContextMenuTest, BuildMenuModelContainsBoost) {
+  MahoTabContextMenu menu(nullptr, 0);
+  std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
+  ASSERT_NE(model, nullptr);
+  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_TAB_BOOST));
 }
 
 TEST(MahoTabContextMenuTest, BuildMenuModelContainsMoveToSubmenu) {
@@ -146,40 +124,11 @@ TEST(MahoTabContextMenuTest, AllCommandsDisabledWhenBrowserIsNull) {
   EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_CHANGE_ICON));
   EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_RENAME));
   EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_MUTE));
-  EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_CUSTOMIZE_PAGE));
-  EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_BOOST_MY_BOOST));
-  EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_BOOST_EDIT));
   EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_OPEN_SPLIT));
   EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_DUPLICATE));
+  EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_BOOST));
   EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_ARCHIVE));
   EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_ARCHIVE_BELOW));
-}
-
-TEST(MahoTabContextMenuTest, BoostCommandsDisabledWhenTabIndexOutOfRange) {
-  MahoTabContextMenu menu(nullptr, -1);
-  EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_BOOST_MY_BOOST));
-  EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_BOOST_EDIT));
-  EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_TAB_CUSTOMIZE_PAGE));
-}
-
-TEST(MahoTabContextMenuTest, DelegateCalledForBoostCommands) {
-  class TestDelegate : public MahoTabContextMenu::Delegate {
-   public:
-    void ActivateTabAndOpenBoostBubble(int tab_index) override {
-      called = true;
-      last_tab_index = tab_index;
-    }
-    bool called = false;
-    int last_tab_index = -1;
-  };
-
-  TestDelegate delegate;
-  MahoTabContextMenu menu(nullptr, 0, &delegate);
-  menu.ExecuteCommand(IDC_MAHO_TAB_BOOST_MY_BOOST, 0);
-  EXPECT_FALSE(delegate.called);
-
-  menu.ExecuteCommand(IDC_MAHO_TAB_BOOST_EDIT, 0);
-  EXPECT_FALSE(delegate.called);
 }
 
 TEST(MahoTabContextMenuTest, RenameTabSilentWithNullDelegate) {
@@ -193,7 +142,6 @@ TEST(MahoTabContextMenuTest, RenameTabSilentWithNullDelegate) {
 TEST(MahoTabContextMenuTest, RenameTabDelegateCalledWhenEnabled) {
   class TestDelegate : public MahoTabContextMenu::Delegate {
    public:
-    void ActivateTabAndOpenBoostBubble(int /*tab_index*/) override {}
     void RenameTab(int tab_index) override {
       rename_called = true;
       last_tab_index = tab_index;
@@ -212,9 +160,7 @@ TEST(MahoTabContextMenuTest, RenameTabDelegateCalledWhenEnabled) {
 }
 
 TEST(MahoTabContextMenuTest, CommandIdValues) {
-  EXPECT_EQ(IDC_MAHO_TAB_CUSTOMIZE_PAGE, 57017);
-  EXPECT_EQ(IDC_MAHO_TAB_BOOST_MY_BOOST, 57018);
-  EXPECT_EQ(IDC_MAHO_TAB_BOOST_EDIT, 57019);
+  EXPECT_EQ(IDC_MAHO_TAB_BOOST, 57017);
   EXPECT_EQ(IDC_MAHO_TAB_SHARE, 57020);
   EXPECT_EQ(IDC_MAHO_TAB_CHANGE_ICON, 57021);
   EXPECT_EQ(IDC_MAHO_TAB_RENAME, 57022);
@@ -256,10 +202,10 @@ TEST(MahoTabContextMenuTest, TopLevelOrderMatchesProduction) {
   //  3  Change Icon…
   //  4  Rename…
   //  5  Mute
-  //  6  Customize Page… (submenu)
-  //  7  [separator]
-  //  8  Open in Split View
-  //  9  Duplicate
+  //  6  [separator]
+  //  7  Open in Split View
+  //  8  Duplicate
+  //  9  Boost
   // 10  Move to (submenu)
   // 11  [separator]
   // 12  Archive Tab
@@ -283,16 +229,16 @@ TEST(MahoTabContextMenuTest, TopLevelOrderMatchesProduction) {
   EXPECT_EQ(items[5].type, ui::MenuModel::TYPE_COMMAND);
   EXPECT_EQ(items[5].command_id, IDC_MAHO_TAB_MUTE);
 
-  EXPECT_EQ(items[6].type, ui::MenuModel::TYPE_SUBMENU);
-  EXPECT_EQ(items[6].command_id, IDC_MAHO_TAB_CUSTOMIZE_PAGE);
+  EXPECT_EQ(items[6].type, ui::MenuModel::TYPE_SEPARATOR);
 
-  EXPECT_EQ(items[7].type, ui::MenuModel::TYPE_SEPARATOR);
+  EXPECT_EQ(items[7].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[7].command_id, IDC_MAHO_TAB_OPEN_SPLIT);
 
   EXPECT_EQ(items[8].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[8].command_id, IDC_MAHO_TAB_OPEN_SPLIT);
+  EXPECT_EQ(items[8].command_id, IDC_MAHO_TAB_DUPLICATE);
 
   EXPECT_EQ(items[9].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[9].command_id, IDC_MAHO_TAB_DUPLICATE);
+  EXPECT_EQ(items[9].command_id, IDC_MAHO_TAB_BOOST);
 
   EXPECT_EQ(items[10].type, ui::MenuModel::TYPE_SUBMENU);
   EXPECT_EQ(items[10].command_id, IDC_MAHO_TAB_MOVE_TO_SPACE);
@@ -318,39 +264,6 @@ TEST(MahoTabContextMenuTest, TopLevelHasExactlyThreeSeparators) {
     }
   }
   EXPECT_EQ(sep_count, 3);
-}
-
-// ---------------------------------------------------------------------------
-// Customize Page submenu — exact item count, order, and labels
-// ---------------------------------------------------------------------------
-
-TEST(MahoTabContextMenuTest, CustomizePageSubmenuExactlyTwoItems) {
-  MahoTabContextMenu menu(nullptr, 0);
-  std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
-  ASSERT_NE(model, nullptr);
-
-  const ui::MenuModel* sub =
-      FindSubMenuForCommand(*model, IDC_MAHO_TAB_CUSTOMIZE_PAGE);
-  ASSERT_NE(sub, nullptr);
-  EXPECT_EQ(sub->GetItemCount(), 2u);
-}
-
-TEST(MahoTabContextMenuTest, CustomizePageSubmenuOrderMyBoostThenEdit) {
-  MahoTabContextMenu menu(nullptr, 0);
-  std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
-  ASSERT_NE(model, nullptr);
-
-  const ui::MenuModel* sub =
-      FindSubMenuForCommand(*model, IDC_MAHO_TAB_CUSTOMIZE_PAGE);
-  ASSERT_NE(sub, nullptr);
-  ASSERT_EQ(sub->GetItemCount(), 2u);
-
-  EXPECT_EQ(sub->GetCommandIdAt(0), IDC_MAHO_TAB_BOOST_MY_BOOST);
-  EXPECT_EQ(sub->GetLabelAt(0), u"My Boost");
-
-  EXPECT_EQ(sub->GetCommandIdAt(1), IDC_MAHO_TAB_BOOST_EDIT);
-  // The label uses the ellipsis character U+2026.
-  EXPECT_EQ(sub->GetLabelAt(1), u"Edit\u2026");
 }
 
 // ---------------------------------------------------------------------------
@@ -509,6 +422,11 @@ TEST(MahoTabContextMenuTest, EmptyCoreTabIdDoesNotBreakEnabledState) {
 TEST(MahoTabContextMenuTest, ShareSilentWithNullBrowser) {
   MahoTabContextMenu menu(nullptr, 0);
   menu.ExecuteCommand(IDC_MAHO_TAB_SHARE, 0);
+}
+
+TEST(MahoTabContextMenuTest, BoostSilentWithNullBrowser) {
+  MahoTabContextMenu menu(nullptr, 0);
+  menu.ExecuteCommand(IDC_MAHO_TAB_BOOST, 0);
 }
 
 // Archive Tab activates the tab then posts to the thread pool. With a null

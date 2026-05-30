@@ -1662,6 +1662,7 @@ function ContentBlockerPane({pane, store}: {pane: PaneDefinition; store: MahoSet
 
 function ExtensionsPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}) {
   const handler = store.getHandler();
+  const callbackRouter = store.getCallbackRouter();
   const [state, setState] = useState<LoadState<InstalledExtension[]>>(createLoadingState());
 
   const loadExtensions = useCallback(async () => {
@@ -1677,6 +1678,16 @@ function ExtensionsPane({pane, store}: {pane: PaneDefinition; store: MahoSetting
   useEffect(() => {
     void loadExtensions();
   }, [loadExtensions]);
+
+  useEffect(() => {
+    const onExtensionsChanged = (extensions: InstalledExtension[]) => {
+      setState(createLoadedState(extensions));
+    };
+    callbackRouter.installedExtensionsChanged.addListener(onExtensionsChanged);
+    return () => {
+      callbackRouter.installedExtensionsChanged.removeListener(onExtensionsChanged);
+    };
+  }, [callbackRouter]);
 
   return (
     <DomainPaneSection pane={pane}>

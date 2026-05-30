@@ -1,6 +1,7 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/ui/maho_settings_navigation.h"
+#include "maho/browser/ui/site_control/maho_page_info_ui.h"
 #include "maho/browser/ui/views/shields/maho_shield_bubble_view.h"
 
 #include <memory>
@@ -97,6 +98,7 @@ MahoShieldBubbleView::MahoShieldBubbleView(Browser* browser,
   settings_button->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   settings_button->SetLabelStyle(views::style::STYLE_BODY_4);
   settings_button->SetEnabledTextColors(ui::kColorSysOnSurfaceVariant);
+
 }
 
 // static

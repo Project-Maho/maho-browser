@@ -233,13 +233,12 @@ struct FindBarState: Codable, Equatable {
 
 struct BoostViewModel: Codable, Equatable {
     let id: BoostId
-    let urlPattern: String
+    let domain: String
     let customCss: String?
-    let customJs: String?
     let enabled: Bool
 
     private enum CodingKeys: String, CodingKey {
-        case id, urlPattern, customCss, customJs, enabled
+        case id, domain, customCss, enabled
     }
 }
 

@@ -300,6 +300,77 @@ func testSpaceSwitcherDisplayItemAccessibilityLabel() {
     assertEqual(activeSpace.accessibilityLabel, "Space: Work, Active, Profile Default, 3 tabs")
 }
 
+// MARK: - PinnedCloseBehavior Tests
+
+func testPinnedCloseBehaviorRoundTrip() {
+    let cases: [PinnedCloseBehavior] = [
+        .switch, .reset, .resetSwitch, .unloadSwitch, .resetUnloadSwitch, .close
+    ]
+    for behavior in cases {
+        let decoded = try! roundTrip(behavior)
+        assertEqual(decoded, behavior)
+    }
+}
+
+func testPinnedCloseBehaviorWireValues() throws {
+    let expected: [(PinnedCloseBehavior, String)] = [
+        (.switch, "switch"),
+        (.reset, "reset"),
+        (.resetSwitch, "reset-switch"),
+        (.unloadSwitch, "unload-switch"),
+        (.resetUnloadSwitch, "reset-unload-switch"),
+        (.close, "close"),
+    ]
+    for (behavior, wireValue) in expected {
+        let json = try jsonString(behavior)
+        assertEqual(json, "\"\(wireValue)\"")
+    }
+}
+
+func testGeneralSettingsPinnedCloseBehaviorRoundTrip() {
+    let withExplicit = GeneralSettings(
+        defaultSearchEngine: SettingsSearchEngine(name: "DuckDuckGo", urlTemplate: "https://duckduckgo.com/?q={query}", isDefault: true),
+        todayTabTimeoutHours: 24,
+        restoreOnLaunch: .restoreAll,
+        downloadPath: "/tmp",
+        autoplayPolicy: .blockAudio,
+        pinnedCloseBehavior: .resetSwitch
+    )
+    let decoded = try! roundTrip(withExplicit)
+    assertEqual(decoded.pinnedCloseBehavior, .resetSwitch)
+}
+
+func testGeneralSettingsPinnedCloseBehaviorDefault() throws {
+    // JSON omitting archiveTimeoutHours, siteSearchEntries, and pinnedCloseBehavior —
+    // all three must decode successfully with their defaults (backward-compat / Rust parity).
+    let json = """
+    {
+        "defaultSearchEngine": {"name": "DDG", "urlTemplate": "https://ddg.gg/?q={query}", "isDefault": true},
+        "todayTabTimeoutHours": 24,
+        "restoreOnLaunch": "restore_all",
+        "downloadPath": "/tmp",
+        "autoplayPolicy": "block_audio"
+    }
+    """
+    let data = json.data(using: .utf8)!
+    let decoded = try JSONDecoder().decode(GeneralSettings.self, from: data)
+    assertEqual(decoded.archiveTimeoutHours, 24.0)
+    assertTrue(decoded.siteSearchEntries.isEmpty, "siteSearchEntries should default to empty array")
+    assertEqual(decoded.pinnedCloseBehavior, .switch)
+}
+
+func testGeneralSettingsUpdatePinnedCloseBehaviorRoundTrip() {
+    let update = GeneralSettingsUpdate(pinnedCloseBehavior: .close)
+    let decoded = try! roundTrip(update)
+    assertEqual(decoded.pinnedCloseBehavior, .close)
+}
+
+func testGeneralSettingsUpdatePinnedCloseBehaviorNilDefault() {
+    let update = GeneralSettingsUpdate()
+    let decoded = try! roundTrip(update)
+    assertTrue(decoded.pinnedCloseBehavior == nil, "pinnedCloseBehavior should be nil when not set in GeneralSettingsUpdate")
+}
+
 // MARK: - Main
 
 @main
@@ -313,6 +384,12 @@ struct TestRunner {
         testSpaceConfigUpdateRoundTrip()
         try! testSpaceConfigUpdateSerializationShape()
         testSpaceSwitcherDisplayItemAccessibilityLabel()
+        testPinnedCloseBehaviorRoundTrip()
+        try! testPinnedCloseBehaviorWireValues()
+        testGeneralSettingsPinnedCloseBehaviorRoundTrip()
+        try! testGeneralSettingsPinnedCloseBehaviorDefault()
+        testGeneralSettingsUpdatePinnedCloseBehaviorRoundTrip()
+        testGeneralSettingsUpdatePinnedCloseBehaviorNilDefault()
         print("ALL TESTS PASSED")
     }
 }

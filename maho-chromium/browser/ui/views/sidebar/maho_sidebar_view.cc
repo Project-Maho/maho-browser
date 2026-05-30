@@ -11,13 +11,18 @@
 #include "base/logging.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
+#include "components/prefs/pref_service.h"
 #include "maho/browser/ui/theme/maho_color_id.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_change_type.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "components/translate/content/browser/content_translate_driver.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
 #include "url/gurl.h"
@@ -46,7 +51,6 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_notes_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_easels_view.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_boosts_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_spaces_view.h"
 #include "net/base/url_util.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
@@ -90,6 +94,7 @@ MahoSidebarView::MahoSidebarView(Browser* browser)
   if (tab_strip_model()) {
     tab_strip_model()->AddObserver(this);
   }
+  RefreshTranslateObservation();
   ScheduleRefreshAll();
 }
 
@@ -100,6 +105,7 @@ MahoSidebarView::~MahoSidebarView() {
   if (tab_strip_model()) {
     tab_strip_model()->RemoveObserver(this);
   }
+  translate_observation_.Reset();
 }
 
 void MahoSidebarView::OnThemeChanged() {
@@ -477,15 +483,6 @@ views::View* MahoSidebarView::GetOrCreateLibraryPane(
       pane = easel_view_;
       break;
     }
-    case MahoSidebarLibraryRailView::Category::kBoosts: {
-      if (!boost_view_) {
-        boost_view_ = library_content_host_->AddChildView(
-            std::make_unique<MahoSidebarBoostsView>());
-        boost_view_->SetVisible(false);
-      }
-      pane = boost_view_;
-      break;
-    }
   }
 
   if (pane) {
@@ -533,9 +530,6 @@ void MahoSidebarView::ShowLibraryPane(
   } else if (category == MahoSidebarLibraryRailView::Category::kEasels &&
              easel_view_) {
     easel_view_->EnsureWebUILoaded();
-  } else if (category == MahoSidebarLibraryRailView::Category::kBoosts &&
-             boost_view_) {
-    boost_view_->ReloadBoosts();
   }
 }
 
@@ -695,6 +689,10 @@ void MahoSidebarView::OnTabStripModelChanged(
     TabStripModel* tab_strip_model,
     const TabStripModelChange& change,
     const TabStripSelectionChange& selection) {
+  if (selection.active_tab_changed() ||
+      change.type() == TabStripModelChange::kReplaced) {
+    RefreshTranslateObservation();
+  }
   ScheduleRefreshAll();
 }
 
@@ -810,5 +808,44 @@ void MahoSidebarView::OnDragExited() {
   }
 }
 
+void MahoSidebarView::OnDragEnded() {
+  if (favorites_view_) {
+    favorites_view_->OnDragEnded();
+  }
+}
+
+void MahoSidebarView::OnTranslateEnabledChanged(content::WebContents* source) {
+  ScheduleRefreshAll();
+}
+
+void MahoSidebarView::OnIsPageTranslatedChanged(content::WebContents* source) {
+  ScheduleRefreshAll();
+}
+
+void MahoSidebarView::RefreshTranslateObservation() {
+  translate_observation_.Reset();
+  TabStripModel* tsm = tab_strip_model();
+  if (!tsm) {
+    return;
+  }
+  const int active_index = tsm->active_index();
+  if (active_index == TabStripModel::kNoTab ||
+      !tsm->ContainsIndex(active_index)) {
+    return;
+  }
+  content::WebContents* contents = tsm->GetWebContentsAt(active_index);
+  if (!contents) {
+    return;
+  }
+  auto* translate_client = ChromeTranslateClient::FromWebContents(contents);
+  if (!translate_client) {
+    return;
+  }
+  translate::ContentTranslateDriver* driver =
+      translate_client->translate_driver();
+  if (driver) {
+    translate_observation_.Observe(driver);
+  }
+}
 
 }  // namespace maho

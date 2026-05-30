@@ -1,0 +1,4 @@
+[      78ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:4072/standalone/app_bundle.js:21359
+[      79ms] [INFO] [standalone stub] createPageHandler @ http://127.0.0.1:4072/standalone/app_bundle.js:21801
+[   27680ms] [INFO] [standalone stub] previewTheme {theme_json: {"type":"gradient","gradientColors":[{"hue":0.5806…gous","opacity":0.25,"texture":0,"scheme":"auto"}} @ http://127.0.0.1:4072/standalone/app_bundle.js:21782
+[   27782ms] [INFO] [standalone stub] previewTheme {theme_json: {"type":"gradient","gradientColors":[{"hue":0.5806…ogous","opacity":0.9,"texture":0,"scheme":"auto"}} @ http://127.0.0.1:4072/standalone/app_bundle.js:21782

@@ -1,9 +1,12 @@
+use maho_core::boost_manager::BoostManager;
 use maho_core::command_bar::CommandBarEngine;
 use maho_core::maho_core::MahoCore;
-use maho_types::common::{Orientation, Url, UrlPattern, UrlPatternType};
+use maho_types::boost::{BoostUpdate, CaseMode, ColorBoostUpdate, SizeMode, TypographyBoostUpdate};
+use maho_types::common::{Orientation, Url};
 use maho_types::events::core_update::CoreUpdate;
 use maho_types::events::shell_event::ShellEvent;
 use maho_types::identifiers::{FolderId, SpaceId, TabId};
+use maho_types::settings::{GeneralSettingsUpdate, PinnedCloseBehavior, SettingsUpdate};
 use maho_types::space::{SpaceColor, SpaceConfigUpdate};
 use maho_types::traits::shell_renderer::{SearchContext, SuggestionType, TabViewModel};
 
@@ -868,6 +871,7 @@ fn space_create_folder_no_panic() {
         space_id,
         name: "Research".to_string(),
         is_pinned: false,
+        parent_folder_id: None,
     });
 }
 
@@ -880,6 +884,7 @@ fn create_folder_emits_folder_created_update() {
         space_id,
         name: "Emit Folder".to_string(),
         is_pinned: false,
+        parent_folder_id: None,
     });
 
     assert!(matches!(
@@ -896,6 +901,7 @@ fn space_folder_view_models() {
         space_id: space_id.clone(),
         name: "Folder1".to_string(),
         is_pinned: false,
+        parent_folder_id: None,
     });
     assert!(!core.get_folder_view_models(&space_id).is_empty());
 }
@@ -909,6 +915,7 @@ fn create_folder_can_start_pinned() {
         space_id: space_id.clone(),
         name: "Pinned Folder".to_string(),
         is_pinned: true,
+        parent_folder_id: None,
     });
 
     assert!(matches!(
@@ -1499,30 +1506,166 @@ fn reader_settings_json_not_empty() {
 fn boost_create_via_event() {
     let mut core = MahoCore::new();
     core.handle_event(ShellEvent::CreateBoost {
-        url_pattern: UrlPattern {
-            pattern: "example.com".to_string(),
-            pattern_type: UrlPatternType::Glob,
-        },
+        domain: "example.com".to_string(),
     });
     assert!(!core.get_boost_view_models().is_empty());
+    let vms = core.get_boost_view_models();
+    assert_eq!(vms[0].name, "example.com Boost");
 }
 
 #[test]
-fn boost_for_url_no_panic() {
+fn boost_for_url_subdomain_matching() {
     let mut core = MahoCore::new();
     core.handle_event(ShellEvent::CreateBoost {
-        url_pattern: UrlPattern {
-            pattern: "*.example.com".to_string(),
-            pattern_type: UrlPatternType::Glob,
-        },
+        domain: "example.com".to_string(),
     });
-    let _ = core.get_boosts_for_url("https://www.example.com/page");
+    let vms = core.get_boost_view_models();
+    assert_eq!(vms.len(), 1);
+    let boost_id = vms[0].id.clone();
+    
+    core.handle_event(ShellEvent::SetActiveBoost {
+        domain: "example.com".to_string(),
+        boost_id: Some(boost_id.clone()),
+    });
+    
+    let matched = core.get_boosts_for_url("https://www.example.com/page");
+    assert_eq!(matched.len(), 1);
+    assert_eq!(matched[0].id, boost_id);
+    
+    let matched_sub = core.get_boosts_for_url("http://sub.example.com:8080/foo");
+    assert_eq!(matched_sub.len(), 1);
+    assert_eq!(matched_sub[0].id, boost_id);
+    
+    let matched_other = core.get_boosts_for_url("https://example.org/");
+    assert!(matched_other.is_empty());
 }
 
 #[test]
-fn boost_templates_json_not_empty() {
-    let core = MahoCore::new();
-    assert!(!core.get_boost_templates_json().is_empty());
+fn boost_create_emits_boost_created() {
+    let mut core = MahoCore::new();
+
+    let updates = core.handle_event(ShellEvent::CreateBoost {
+        domain: "example.com".to_string(),
+    });
+
+    assert!(
+        matches!(updates.as_slice(), [CoreUpdate::BoostCreated { .. }]),
+        "CreateBoost must emit exactly one BoostCreated; got {:?}",
+        updates
+    );
+    if let [CoreUpdate::BoostCreated { boost }] = updates.as_slice() {
+        assert_eq!(boost.domain, "example.com");
+    }
+}
+
+#[test]
+fn boost_update_emits_boost_updated() {
+    let mut core = MahoCore::new();
+
+    let create_updates = core.handle_event(ShellEvent::CreateBoost {
+        domain: "update.example.com".to_string(),
+    });
+    let boost_id = match create_updates.as_slice() {
+        [CoreUpdate::BoostCreated { boost }] => boost.id.clone(),
+        _ => panic!("expected BoostCreated"),
+    };
+
+    let updates = core.handle_event(ShellEvent::UpdateBoost {
+        boost_id: boost_id.clone(),
+        changes: BoostUpdate {
+            name: Some("Renamed Boost".to_string()),
+            color: None,
+            typography: None,
+            zap_selectors: None,
+            custom_css: None,
+        },
+    });
+
+    assert!(
+        matches!(updates.as_slice(), [CoreUpdate::BoostUpdated { .. }]),
+        "UpdateBoost must emit exactly one BoostUpdated; got {:?}",
+        updates
+    );
+    if let [CoreUpdate::BoostUpdated { boost_id: returned_id, .. }] = updates.as_slice() {
+        assert_eq!(*returned_id, boost_id);
+    }
+}
+
+#[test]
+fn boost_set_active_emits_boost_active_changed() {
+    let mut core = MahoCore::new();
+
+    let create_updates = core.handle_event(ShellEvent::CreateBoost {
+        domain: "toggle.example.com".to_string(),
+    });
+    let boost_id = match create_updates.as_slice() {
+        [CoreUpdate::BoostCreated { boost }] => boost.id.clone(),
+        _ => panic!("expected BoostCreated"),
+    };
+
+    let activate_updates = core.handle_event(ShellEvent::SetActiveBoost {
+        domain: "toggle.example.com".to_string(),
+        boost_id: Some(boost_id.clone()),
+    });
+    assert!(
+        matches!(
+            activate_updates.as_slice(),
+            [CoreUpdate::BoostActiveChanged { domain, active_boost_id: Some(id) }]
+                if domain == "toggle.example.com" && *id == boost_id
+        ),
+        "SetActiveBoost(Some) must emit BoostActiveChanged with the id; got {:?}",
+        activate_updates
+    );
+
+    let deactivate_updates = core.handle_event(ShellEvent::SetActiveBoost {
+        domain: "toggle.example.com".to_string(),
+        boost_id: None,
+    });
+    assert!(
+        matches!(
+            deactivate_updates.as_slice(),
+            [CoreUpdate::BoostActiveChanged { domain, active_boost_id: None }]
+                if domain == "toggle.example.com"
+        ),
+        "SetActiveBoost(None) must emit BoostActiveChanged with None; got {:?}",
+        deactivate_updates
+    );
+}
+
+#[test]
+fn boost_delete_emits_boost_deleted() {
+    let mut core = MahoCore::new();
+
+    let create_updates = core.handle_event(ShellEvent::CreateBoost {
+        domain: "delete.example.com".to_string(),
+    });
+    let boost_id = match create_updates.as_slice() {
+        [CoreUpdate::BoostCreated { boost }] => boost.id.clone(),
+        _ => panic!("expected BoostCreated"),
+    };
+
+    let delete_updates = core.handle_event(ShellEvent::DeleteBoost {
+        boost_id: boost_id.clone(),
+    });
+
+    assert!(
+        matches!(
+            delete_updates.as_slice(),
+            [CoreUpdate::BoostDeleted { boost_id: deleted_id, domain }]
+                if *deleted_id == boost_id && domain == "delete.example.com"
+        ),
+        "DeleteBoost must emit BoostDeleted; got {:?}",
+        delete_updates
+    );
+
+    let empty_updates = core.handle_event(ShellEvent::DeleteBoost {
+        boost_id: boost_id.clone(),
+    });
+    assert!(
+        empty_updates.is_empty(),
+        "DeleteBoost on non-existent id must emit no updates; got {:?}",
+        empty_updates
+    );
 }
 
 // ===== NOTES (via events) =====
@@ -2131,6 +2274,7 @@ fn create_folder(core: &mut MahoCore, space_id: SpaceId, name: &str) -> FolderId
         space_id: space_id.clone(),
         name: name.to_string(),
         is_pinned: false,
+        parent_folder_id: None,
     });
     let after = core.get_folder_view_models(&space_id);
     after
@@ -2141,80 +2285,7 @@ fn create_folder(core: &mut MahoCore, space_id: SpaceId, name: &str) -> FolderId
         .clone()
 }
 
-#[test]
-fn folder_pin_sets_pinned() {
-    // Create core, create a folder in default space
-    let mut core = MahoCore::new();
-    let space_id = core.get_active_space_id();
-    let folder_id = create_folder(&mut core, space_id.clone(), "TestFolder");
 
-    // Verify folder is not pinned initially
-    let folders_before = core.get_folder_view_models(&space_id);
-    let folder_before = folders_before
-        .iter()
-        .find(|f| f.id == folder_id)
-        .expect("folder should exist");
-    assert!(
-        !folder_before.is_pinned,
-        "folder should not be pinned initially"
-    );
-
-    // Pin the folder via ShellEvent::PinFolder
-    core.handle_event(ShellEvent::PinFolder {
-        space_id: space_id.clone(),
-        folder_id: folder_id.clone(),
-    });
-
-    // Get folder view models, verify isPinned == true
-    let folders_after = core.get_folder_view_models(&space_id);
-    let folder_after = folders_after
-        .iter()
-        .find(|f| f.id == folder_id)
-        .expect("folder should exist");
-    assert!(
-        folder_after.is_pinned,
-        "folder should be pinned after PinFolder event"
-    );
-}
-
-#[test]
-fn folder_unpin_clears_pinned() {
-    // Create core with a folder
-    let mut core = MahoCore::new();
-    let space_id = core.get_active_space_id();
-    let folder_id = create_folder(&mut core, space_id.clone(), "TestFolder");
-
-    // Pin a folder first
-    core.handle_event(ShellEvent::PinFolder {
-        space_id: space_id.clone(),
-        folder_id: folder_id.clone(),
-    });
-
-    // Verify it's pinned
-    let folders_pinned = core.get_folder_view_models(&space_id);
-    let folder_pinned = folders_pinned
-        .iter()
-        .find(|f| f.id == folder_id)
-        .expect("folder should exist");
-    assert!(folder_pinned.is_pinned, "folder should be pinned");
-
-    // Then unpin
-    core.handle_event(ShellEvent::UnpinFolder {
-        space_id: space_id.clone(),
-        folder_id: folder_id.clone(),
-    });
-
-    // Verify isPinned == false
-    let folders_unpinned = core.get_folder_view_models(&space_id);
-    let folder_unpinned = folders_unpinned
-        .iter()
-        .find(|f| f.id == folder_id)
-        .expect("folder should exist");
-    assert!(
-        !folder_unpinned.is_pinned,
-        "folder should not be pinned after UnpinFolder event"
-    );
-}
 
 #[test]
 fn folder_move_into_folder_sets_parent() {
@@ -2341,6 +2412,7 @@ fn create_folder_helper(core: &mut MahoCore, name: &str) -> FolderId {
         space_id,
         name: name.to_string(),
         is_pinned: false,
+        parent_folder_id: None,
     });
     match updates.as_slice() {
         [CoreUpdate::FolderCreated { folder }] => folder.id.clone(),
@@ -2500,11 +2572,16 @@ fn reorder_pinned_folder_does_not_cross_into_regular() {
     let mut core = MahoCore::new();
     let space_id = core.get_active_space_id();
 
-    let pinned = create_folder_helper(&mut core, "Pinned");
-    core.handle_event(ShellEvent::PinFolder {
+    let updates = core.handle_event(ShellEvent::CreateFolder {
         space_id: space_id.clone(),
-        folder_id: pinned.clone(),
+        name: "Pinned".to_string(),
+        is_pinned: true,
+        parent_folder_id: None,
     });
+    let pinned = match updates.as_slice() {
+        [CoreUpdate::FolderCreated { folder }] => folder.id.clone(),
+        _ => panic!("expected FolderCreated"),
+    };
 
     let _regular_a = create_folder_helper(&mut core, "RegA");
     let regular_b = create_folder_helper(&mut core, "RegB");
@@ -2531,11 +2608,16 @@ fn move_nested_folder_to_root_among_regular_folders() {
     let mut core = MahoCore::new();
     let space_id = core.get_active_space_id();
 
-    let pinned = create_folder_helper(&mut core, "Pinned");
-    core.handle_event(ShellEvent::PinFolder {
+    let updates = core.handle_event(ShellEvent::CreateFolder {
         space_id: space_id.clone(),
-        folder_id: pinned.clone(),
+        name: "Pinned".to_string(),
+        is_pinned: true,
+        parent_folder_id: None,
     });
+    let _pinned = match updates.as_slice() {
+        [CoreUpdate::FolderCreated { folder }] => folder.id.clone(),
+        _ => panic!("expected FolderCreated"),
+    };
 
     let parent = create_folder_helper(&mut core, "Parent");
     let child = create_folder_helper(&mut core, "Child");
@@ -2810,4 +2892,224 @@ fn url_dedup_normalises_trailing_slash() {
         1,
         "trailing slash variant and non-slash variant of same URL should collapse to one result"
     );
+}
+
+fn set_pinned_close_behavior(core: &mut MahoCore, behavior: PinnedCloseBehavior) {
+    core.update_settings(SettingsUpdate {
+        general: Some(GeneralSettingsUpdate {
+            pinned_close_behavior: Some(behavior),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+}
+
+fn pin_tab_with_url(core: &mut MahoCore, url: &str) -> TabId {
+    let tab_id = create_tab_with_url(core, url);
+    core.handle_event(ShellEvent::PinTab { tab_id: tab_id.clone() });
+    tab_id
+}
+
+#[test]
+fn pinned_close_switch_mode_keeps_tab_in_pinned_list() {
+    let mut core = MahoCore::new();
+    let tab_id = pin_tab_with_url(&mut core, "https://example.com");
+    let space_id = core.get_active_space_id();
+
+    core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone() });
+
+    let pinned = core.get_pinned_tabs(&space_id);
+    assert!(
+        pinned.iter().any(|t| t.id == tab_id),
+        "pinned tab must remain in pinned list under switch mode"
+    );
+}
+
+#[test]
+fn pinned_close_close_mode_removes_tab() {
+    let mut core = MahoCore::new();
+    set_pinned_close_behavior(&mut core, PinnedCloseBehavior::Close);
+    let tab_id = pin_tab_with_url(&mut core, "https://example.com");
+    let space_id = core.get_active_space_id();
+
+    core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone() });
+
+    let pinned = core.get_pinned_tabs(&space_id);
+    assert!(
+        !pinned.iter().any(|t| t.id == tab_id),
+        "pinned tab must be removed from pinned list under close mode"
+    );
+}
+
+#[test]
+fn pinned_close_reset_mode_keeps_tab_and_resets_url() {
+    let mut core = MahoCore::new();
+    set_pinned_close_behavior(&mut core, PinnedCloseBehavior::Reset);
+    let tab_id = pin_tab_with_url(&mut core, "https://example.com");
+    let space_id = core.get_active_space_id();
+
+    core.handle_event(ShellEvent::NavigateTo {
+        tab_id: tab_id.clone(),
+        url: Url::new("https://other.com"),
+    });
+
+    core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone() });
+
+    let pinned = core.get_pinned_tabs(&space_id);
+    let tab_vm = pinned.iter().find(|t| t.id == tab_id).expect("tab must remain pinned");
+    assert_eq!(
+        tab_vm.url, "https://example.com",
+        "URL must be reset to pinned_url under reset mode"
+    );
+}
+
+#[test]
+fn pinned_close_switch_mode_moves_last_active_to_another_tab() {
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+    let pinned_id = pin_tab_with_url(&mut core, "https://pinned.com");
+    let other_id = create_tab_in_space(&mut core, &space_id);
+
+    core.handle_event(ShellEvent::ActivateTab { tab_id: pinned_id.clone() });
+
+    assert_eq!(
+        core.get_last_active_tab_for_space(&space_id),
+        Some(pinned_id.clone()),
+        "pinned tab must be last-active before CloseTab"
+    );
+
+    core.handle_event(ShellEvent::CloseTab { tab_id: pinned_id.clone() });
+
+    let last_active = core.get_last_active_tab_for_space(&space_id);
+    assert_ne!(
+        last_active,
+        Some(pinned_id.clone()),
+        "last-active must not remain on the closed pinned tab after switch"
+    );
+    assert_eq!(
+        last_active,
+        Some(other_id),
+        "last-active must move to the other available tab"
+    );
+}
+
+#[test]
+fn pinned_close_unload_switch_mode_suspends_tab_and_keeps_it_pinned() {
+    let mut core = MahoCore::new();
+    set_pinned_close_behavior(&mut core, PinnedCloseBehavior::UnloadSwitch);
+    let tab_id = pin_tab_with_url(&mut core, "https://example.com");
+    let space_id = core.get_active_space_id();
+
+    core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone() });
+
+    let pinned = core.get_pinned_tabs(&space_id);
+    let tab_vm = pinned.iter().find(|t| t.id == tab_id).expect("tab must remain pinned");
+    assert_eq!(
+        tab_vm.lifecycle_state, "suspended",
+        "tab must be suspended (unloaded) under unload-switch mode"
+    );
+}
+
+// ===== BOOST LIFECYCLE (WU-7) =====
+
+#[test]
+fn test_boost_create_temp_produces_valid_boost() {
+    let mut mgr = BoostManager::new();
+    let boost = mgr.create_temp("example.com".to_string());
+
+    assert_eq!(boost.domain, "example.com");
+    assert!(!boost.id.0.as_str().is_empty());
+    assert!(!boost.color.color_boost_enabled);
+    assert!(!boost.color.magic_theme);
+    assert_eq!(boost.typography.case_mode, CaseMode::None);
+    assert_eq!(boost.typography.size_mode, SizeMode::K100);
+    assert!(boost.zap_selectors.is_empty());
+    assert!(boost.custom_css.is_empty());
+    assert!(!boost.change_was_made);
+}
+
+#[test]
+fn test_boost_commit_persists_state() {
+    let mut mgr = BoostManager::new();
+    let boost = mgr.create_temp("example.com".to_string());
+    let id = boost.id.clone();
+
+    let update = BoostUpdate {
+        color: Some(ColorBoostUpdate {
+            magic_theme: Some(true),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    mgr.update(&id, update);
+
+    let committed = mgr.commit_boost(&id).expect("commit_boost must return Some for a known id");
+    assert!(committed.change_was_made);
+
+    let retrieved = mgr.get_boost(&id).expect("boost must exist after commit");
+    assert!(retrieved.color.magic_theme);
+    assert!(retrieved.change_was_made);
+}
+
+#[test]
+fn test_boost_discard_removes_temp() {
+    let mut mgr = BoostManager::new();
+    let boost = mgr.create_temp("example.com".to_string());
+    let id = boost.id.clone();
+
+    let prev = mgr.discard_boost(&id);
+    assert!(prev.is_none());
+    assert!(mgr.get_boost(&id).is_none());
+    assert!(mgr.list_for_domain("example.com").is_empty());
+}
+
+#[test]
+fn test_boost_lifecycle_full_roundtrip() {
+    let mut mgr = BoostManager::new();
+    let boost = mgr.create_temp("test.org".to_string());
+    let id = boost.id.clone();
+
+    let update = BoostUpdate {
+        typography: Some(TypographyBoostUpdate {
+            case_mode: Some(CaseMode::Upper),
+            size_mode: Some(SizeMode::K125),
+            ..Default::default()
+        }),
+        custom_css: Some("body { color: red; }".to_string()),
+        ..Default::default()
+    };
+    mgr.update(&id, update);
+    mgr.commit_boost(&id).expect("commit must succeed");
+
+    let boosts = mgr.list_for_domain("test.org");
+    assert_eq!(boosts.len(), 1);
+    assert_eq!(boosts[0].typography.case_mode, CaseMode::Upper);
+    assert_eq!(boosts[0].typography.size_mode, SizeMode::K125);
+    assert_eq!(boosts[0].custom_css, "body { color: red; }");
+    assert!(boosts[0].change_was_made);
+}
+
+#[test]
+fn test_boost_discard_after_update_blocked_by_change_flag() {
+    let mut mgr = BoostManager::new();
+    let boost = mgr.create_temp("discard.com".to_string());
+    let id = boost.id.clone();
+
+    let update = BoostUpdate {
+        color: Some(ColorBoostUpdate {
+            magic_theme: Some(true),
+            ..Default::default()
+        }),
+        custom_css: Some("h1 { display: none; }".to_string()),
+        ..Default::default()
+    };
+    mgr.update(&id, update);
+
+    let discard_result = mgr.discard_boost(&id);
+    assert!(discard_result.is_none(), "discard must be blocked when change_was_made is true");
+
+    let still_there = mgr.get_boost(&id).expect("boost must still exist after blocked discard");
+    assert!(still_there.color.magic_theme, "update must still be present");
+    assert_eq!(still_there.custom_css, "h1 { display: none; }");
+    assert_eq!(mgr.list_for_domain("discard.com").len(), 1);
 }

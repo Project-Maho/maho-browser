@@ -220,8 +220,6 @@ enum CoreUpdate: Codable, Equatable {
     case syncStateChanged(status: SyncStatus)
     case settingsChanged(settings: Settings)
     case spaceConfigUpdated(spaceId: SpaceId, changes: SpaceConfigUpdate)
-    case globalBoostsToggled(enabled: Bool)
-    case jsBoostsToggled(enabled: Bool)
     case extensionToggled(extensionId: String, enabled: Bool)
     case extensionRemoved(extensionId: String)
     case accountChanged(account: AccountInfo?)
@@ -439,10 +437,7 @@ enum CoreUpdate: Codable, Equatable {
             self = .spaceConfigUpdated(
                 spaceId: try container.decode(SpaceId.self, forKey: .spaceId),
                 changes: try container.decode(SpaceConfigUpdate.self, forKey: .changes))
-        case "global_boosts_toggled":
-            self = .globalBoostsToggled(enabled: try container.decode(Bool.self, forKey: .enabled))
-        case "js_boosts_toggled":
-            self = .jsBoostsToggled(enabled: try container.decode(Bool.self, forKey: .enabled))
+
         case "extension_toggled":
             self = .extensionToggled(
                 extensionId: try container.decode(String.self, forKey: .extensionId),
@@ -695,12 +690,7 @@ enum CoreUpdate: Codable, Equatable {
             try container.encode("space_config_updated", forKey: .kind)
             try container.encode(spaceId, forKey: .spaceId)
             try container.encode(changes, forKey: .changes)
-        case .globalBoostsToggled(let enabled):
-            try container.encode("global_boosts_toggled", forKey: .kind)
-            try container.encode(enabled, forKey: .enabled)
-        case .jsBoostsToggled(let enabled):
-            try container.encode("js_boosts_toggled", forKey: .kind)
-            try container.encode(enabled, forKey: .enabled)
+
         case .extensionToggled(let extensionId, let enabled):
             try container.encode("extension_toggled", forKey: .kind)
             try container.encode(extensionId, forKey: .extensionId)

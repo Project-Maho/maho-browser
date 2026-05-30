@@ -19,6 +19,7 @@
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
+#include "maho/browser/ui/views/boost/maho_boost_window_controller.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
 #include "maho/third_party/maho/maho_ffi.h"
@@ -79,13 +80,6 @@ std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
     model->AddItem(IDC_MAHO_TAB_MUTE, u"Mute Tab");
   }
 
-  //  6  Customize Page… (submenu)
-  boost_submenu_ = std::make_unique<ui::SimpleMenuModel>(this);
-  boost_submenu_->AddItem(IDC_MAHO_TAB_BOOST_MY_BOOST, u"My Boost");
-  boost_submenu_->AddItem(IDC_MAHO_TAB_BOOST_EDIT, u"Edit\u2026");
-  model->AddSubMenu(IDC_MAHO_TAB_CUSTOMIZE_PAGE, u"Customize Page\u2026",
-                    boost_submenu_.get());
-
   //  7  [separator]
   model->AddSeparator(ui::NORMAL_SEPARATOR);
 
@@ -95,7 +89,10 @@ std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
   //  9  Duplicate
   model->AddItem(IDC_MAHO_TAB_DUPLICATE, u"Duplicate Tab");
 
-  // 10  Move to (submenu)
+  // 10  Boost
+  model->AddItem(IDC_MAHO_TAB_BOOST, u"Boost");
+
+  // 11  Move to (submenu)
   move_to_space_submenu_ = std::make_unique<ui::SimpleMenuModel>(this);
   space_entries_.clear();
 
@@ -159,13 +156,13 @@ std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
   model->AddSubMenu(IDC_MAHO_TAB_MOVE_TO_SPACE, u"Move to Space",
                     move_to_space_submenu_.get());
 
-  // 11  [separator]
+  // 12  [separator]
   model->AddSeparator(ui::NORMAL_SEPARATOR);
 
-  // 12  Archive Tab
+  // 13  Archive Tab
   model->AddItem(IDC_MAHO_TAB_ARCHIVE, u"Archive Tab");
 
-  // 13  Archive Tabs Below
+  // 14  Archive Tabs Below
   model->AddItem(IDC_MAHO_TAB_ARCHIVE_BELOW, u"Archive Tabs Below");
 
   return model;
@@ -243,6 +240,17 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
       tab_strip_model->ActivateTabAt(tab_index_);
       chrome::DuplicateTab(browser_);
       break;
+    case IDC_MAHO_TAB_BOOST: {
+      content::WebContents* contents =
+          has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_)
+                              : nullptr;
+      if (contents) {
+        maho::MahoBoostWindowController::GetForBrowser(browser_,
+                                                       browser_->profile())
+            .ShowForActiveDomain(contents);
+      }
+      break;
+    }
     case IDC_MAHO_TAB_PIN:
       if (!has_valid_tab_index) {
         break;
@@ -340,12 +348,6 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
         break;
       }
       break;
-    case IDC_MAHO_TAB_BOOST_MY_BOOST:
-    case IDC_MAHO_TAB_BOOST_EDIT:
-      if (delegate_ && has_valid_tab_index) {
-        delegate_->ActivateTabAndOpenBoostBubble(tab_index_);
-      }
-      break;
     default:
       if (IsMoveToSpaceCommand(command_id)) {
         int index = MoveToSpaceIndex(command_id);
@@ -411,6 +413,7 @@ bool MahoTabContextMenu::IsCommandIdEnabled(int command_id) const {
     case IDC_MAHO_TAB_COPY_URL:
     case IDC_MAHO_TAB_RELOAD:
     case IDC_MAHO_TAB_OPEN_SPLIT:
+    case IDC_MAHO_TAB_BOOST:
     case IDC_MAHO_TAB_SHARE:
     case IDC_MAHO_TAB_CHANGE_ICON:
     case IDC_MAHO_TAB_ARCHIVE:
@@ -432,10 +435,6 @@ bool MahoTabContextMenu::IsCommandIdEnabled(int command_id) const {
       return false;
     case IDC_MAHO_TAB_MOVE_TO_SPACE:
       return has_valid_tab_index;
-    case IDC_MAHO_TAB_CUSTOMIZE_PAGE:
-    case IDC_MAHO_TAB_BOOST_MY_BOOST:
-    case IDC_MAHO_TAB_BOOST_EDIT:
-      return delegate_ != nullptr && has_valid_tab_index;
     default:
       if (IsMoveToSpaceCommand(command_id)) {
         return true;

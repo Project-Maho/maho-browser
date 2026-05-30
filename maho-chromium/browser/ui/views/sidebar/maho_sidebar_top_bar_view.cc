@@ -230,6 +230,7 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
   StyleClusterView(nav_cluster_);
 
   ApplyChromeSpacing();
+  UpdateButtonImages();
 }
 
 MahoSidebarTopBarView::~MahoSidebarTopBarView() = default;
@@ -262,33 +263,32 @@ bool MahoSidebarTopBarView::IsPositionInWindowCaption(
   return true;
 }
 
-// Adjusts spacing and visibility based on whether in-sidebar navigation is
-// active.  When navigation is disabled (default), leading/nav clusters and the
-// flex spacer are hidden, leaving only the traffic-light spacer visible so the
-// row still provides window-drag area.  When navigation is enabled, the leading
-// cluster gets wider inter-button spacing and a trailing margin to visually
-// separate it from the nav cluster.
+// Adjusts spacing based on whether in-sidebar navigation is active. The chrome
+// stays visible even before the first navigable tab exists so startup/no-tab
+// states preserve the same top-row scaffold and caption behavior; button
+// enabled state is handled separately in UpdateButtonImages().
 void MahoSidebarTopBarView::ApplyChromeSpacing() {
   auto* leading_layout =
       static_cast<views::BoxLayout*>(leading_cluster_->GetLayoutManager());
   auto* nav_layout =
       static_cast<views::BoxLayout*>(nav_cluster_->GetLayoutManager());
 
-  const bool show_nav = model_.navigation_enabled;
+  const bool navigation_active = model_.navigation_enabled;
 
   leading_layout->set_between_child_spacing(
-      show_nav ? sidebar_layout::kTopBarCompactLeadingGapDp
-               : sidebar_layout::kTopBarButtonSpacingDp);
+      navigation_active ? sidebar_layout::kTopBarCompactLeadingGapDp
+                        : sidebar_layout::kTopBarButtonSpacingDp);
   nav_layout->set_between_child_spacing(sidebar_layout::kTopBarButtonSpacingDp);
 
-  leading_cluster_->SetVisible(show_nav);
+  leading_cluster_->SetVisible(true);
   leading_cluster_->SetProperty(
       views::kMarginsKey,
       gfx::Insets::TLBR(0, 0, 0,
-                        show_nav ? sidebar_layout::kTopBarCompactLeadingGapDp
-                                 : 0));
-  flex_spacer_->SetVisible(show_nav);
-  nav_cluster_->SetVisible(show_nav);
+                        navigation_active
+                            ? sidebar_layout::kTopBarCompactLeadingGapDp
+                            : 0));
+  flex_spacer_->SetVisible(true);
+  nav_cluster_->SetVisible(true);
 
   StyleClusterView(leading_cluster_);
   StyleClusterView(nav_cluster_);

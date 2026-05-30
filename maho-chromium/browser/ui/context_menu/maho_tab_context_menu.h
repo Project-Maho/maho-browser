@@ -17,7 +17,6 @@ class MahoTabContextMenu : public ui::SimpleMenuModel::Delegate {
   class Delegate {
    public:
     virtual ~Delegate() = default;
-    virtual void ActivateTabAndOpenBoostBubble(int tab_index) = 0;
     virtual void RenameTab(int tab_index) {}
   };
 
@@ -51,7 +50,6 @@ class MahoTabContextMenu : public ui::SimpleMenuModel::Delegate {
   std::string core_tab_id_;
   std::vector<SpaceEntry> space_entries_;
   std::unique_ptr<ui::SimpleMenuModel> move_to_space_submenu_;
-  std::unique_ptr<ui::SimpleMenuModel> boost_submenu_;
 };
 
 #endif  // MAHO_CHROMIUM_BROWSER_UI_CONTEXT_MENU_MAHO_TAB_CONTEXT_MENU_H_

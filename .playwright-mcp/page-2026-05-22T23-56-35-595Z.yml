@@ -1,0 +1,36 @@
+- main [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - button "Auto — gradient theme that adapts to system" [pressed] [ref=e6] [cursor=pointer]:
+        - generic [ref=e7]: ✦
+        - generic [ref=e8]: Auto
+      - button "Light — bright solid theme" [ref=e9] [cursor=pointer]:
+        - generic [ref=e10]: ☀
+        - generic [ref=e11]: Light
+      - button "Dark — dark solid theme" [ref=e12] [cursor=pointer]:
+        - generic [ref=e13]: 🌙
+        - generic [ref=e14]: Dark
+    - generic [ref=e15]:
+      - button "analogous" [ref=e16] [cursor=pointer]
+      - button "Add color stop" [disabled] [ref=e17]: +
+      - button "Remove color stop" [ref=e18] [cursor=pointer]: −
+    - paragraph: Drag the colored dots to choose your theme
+  - generic [ref=e20]:
+    - list "Theme swatches" [ref=e21]:
+      - listitem "Theme preset 1" [ref=e22] [cursor=pointer]
+      - listitem "Theme preset 2" [ref=e23] [cursor=pointer]
+      - listitem "Theme preset 3" [ref=e24] [cursor=pointer]
+      - listitem "Theme preset 4" [ref=e25] [cursor=pointer]
+      - listitem "Theme preset 5" [ref=e26] [cursor=pointer]
+      - listitem "Theme preset 6" [ref=e27] [cursor=pointer]
+      - listitem "Theme preset 7" [ref=e28] [cursor=pointer]
+      - listitem "Theme preset 8" [ref=e29] [cursor=pointer]
+      - listitem "Theme preset 9" [ref=e30] [cursor=pointer]
+    - button "Next swatch" [ref=e31] [cursor=pointer]:
+      - generic [ref=e32]: ›
+  - generic [ref=e33]:
+    - img [ref=e35] [cursor=pointer]
+    - button "Adjust grain" [ref=e38] [cursor=pointer]
+  - generic [ref=e40]:
+    - button "Cancel" [ref=e41] [cursor=pointer]
+    - button "Done" [ref=e42] [cursor=pointer]

@@ -38,7 +38,6 @@ class MahoSidebarLibraryRailView : public views::View {
     kMedia,
     kSpaces,
     kEasels,
-    kBoosts,
     kNotes,
   };
 

@@ -144,6 +144,15 @@ struct ContentBlockerStats {
   uint32 filter_list_count;
 };
 
+enum RemoveExtensionResult {
+  kSuccess,
+  kCancelled,
+  kBlockedByPolicy,
+  kNotFound,
+  kBusy,
+  kUninstallFailed,
+};
+
 struct InstalledExtension {
   string id;
   string name;
@@ -232,9 +241,10 @@ interface PageHandler {
 
   GetInstalledExtensions() => (array<InstalledExtension> extensions);
   ToggleExtension(string id) => (bool enabled);
-  RemoveExtension(string id) => (bool success);
+  RemoveExtension(string id) => (RemoveExtensionResult result);
 };
 
 interface Page {
   SettingsChanged(array<SettingValue> settings);
+  InstalledExtensionsChanged(array<InstalledExtension> extensions);
 };

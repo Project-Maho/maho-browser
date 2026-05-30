@@ -38,7 +38,8 @@ std::unique_ptr<views::View> CreateMahoAiWebView(BrowserWindowInterface* browser
   auto view = std::make_unique<SidePanelWebUIViewT_MahoAIUI>(
       scope, base::RepeatingClosure(), base::RepeatingClosure(),
       std::move(contents_wrapper));
-  view->ShowUI();
+  // Let MahoAIUI signal readiness through embedder()->ShowUI() once its
+  // page handler is actually bound.
   return view;
 }
 
@@ -48,11 +49,14 @@ namespace maho {
 
 void RegisterMahoAiSidePanel(BrowserWindowInterface* browser,
                               SidePanelRegistry* global_registry) {
-  global_registry->Register(std::make_unique<SidePanelEntry>(
+  auto entry = std::make_unique<SidePanelEntry>(
       SidePanelEntry::Key(SidePanelEntry::Id::kMahoAiPanel),
       base::BindRepeating(&CreateMahoAiWebView, browser,
                           browser->GetProfile()),
-      base::NullCallback()));
+      base::NullCallback());
+  entry->set_should_show_header(false);
+  entry->set_should_show_outline(false);
+  global_registry->Register(std::move(entry));
 }
 
 }  // namespace maho

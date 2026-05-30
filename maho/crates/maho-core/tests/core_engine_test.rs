@@ -243,7 +243,6 @@ mod persistence_tests {
     use super::*;
     use maho_types::air_traffic::{MatchType, TrafficRule};
     use maho_types::autofill::{AutofillAddress, AutofillPayment};
-    use maho_types::common::{UrlPattern, UrlPatternType};
     use maho_types::keyboard::{KeyCombo, KeyModifier};
     use maho_types::search_engine::SearchEngine;
     use tempfile::TempDir;
@@ -286,11 +285,12 @@ mod persistence_tests {
     fn boost_persistence_round_trip() {
         let temp_dir = temp_dir();
         let mut core = create_persisted_core(&temp_dir);
-        let boost = core.create_boost_persisted(UrlPattern {
-            pattern: "example.com/*".to_string(),
-            pattern_type: UrlPatternType::Glob,
-        });
+        let boost = core.create_boost_persisted(
+            "example.com".to_string(),
+            "My Test Boost".to_string(),
+        );
         let boost_id = boost.id.clone();
+        core.set_active_boost_persisted("example.com", Some(boost_id.clone()));
 
         drop(core);
 
@@ -301,9 +301,10 @@ mod persistence_tests {
         let restored_boost = boosts.iter().find(|boost| boost.id == boost_id);
         assert!(restored_boost.is_some());
         assert_eq!(
-            restored_boost.map(|boost| boost.url_pattern.as_str()),
-            Some("example.com/*")
+            restored_boost.map(|boost| boost.domain.as_str()),
+            Some("example.com")
         );
+        assert!(restored_boost.map(|boost| boost.enabled).unwrap_or(false));
     }
 
     #[test]

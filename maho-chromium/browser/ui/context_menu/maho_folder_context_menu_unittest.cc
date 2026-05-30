@@ -36,8 +36,6 @@ std::vector<ItemDesc> FlattenTopLevel(const ui::SimpleMenuModel& model) {
 
 TEST(MahoFolderContextMenuTest, CommandIdValues) {
   EXPECT_EQ(IDC_MAHO_FOLDER_RENAME,   57070);
-  EXPECT_EQ(IDC_MAHO_FOLDER_PIN,      57071);
-  EXPECT_EQ(IDC_MAHO_FOLDER_UNPIN,    57072);
   EXPECT_EQ(IDC_MAHO_FOLDER_DELETE,   57074);
 }
 
@@ -54,47 +52,11 @@ TEST(MahoFolderContextMenuTest, BuildMenuModelContainsRename) {
   EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_FOLDER_RENAME));
 }
 
-TEST(MahoFolderContextMenuTest, BuildMenuModelContainsPin) {
-  MahoFolderContextMenu menu(nullptr, "folder-abc");
-  std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
-  ASSERT_NE(model, nullptr);
-  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_FOLDER_PIN));
-}
-
 TEST(MahoFolderContextMenuTest, BuildMenuModelContainsDelete) {
   MahoFolderContextMenu menu(nullptr, "folder-abc");
   std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
   ASSERT_NE(model, nullptr);
   EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_FOLDER_DELETE));
-}
-
-TEST(MahoFolderContextMenuTest, BuildMenuModelDoesNotContainUnpin) {
-  MahoFolderContextMenu menu(nullptr, "folder-abc");
-  std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
-  ASSERT_NE(model, nullptr);
-  EXPECT_FALSE(ModelContainsCommand(*model, IDC_MAHO_FOLDER_UNPIN));
-}
-
-TEST(MahoFolderContextMenuTest, PinnedFolderShowsUnpinInsteadOfPin) {
-  MahoFolderContextMenu menu(nullptr, "space-1", "folder-abc",
-                              /*folder_is_pinned=*/true,
-                              /*parent_folder_id=*/"",
-                              MahoFolderContextMenu::BeginRenameCallback());
-  std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
-  ASSERT_NE(model, nullptr);
-  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_FOLDER_UNPIN));
-  EXPECT_FALSE(ModelContainsCommand(*model, IDC_MAHO_FOLDER_PIN));
-}
-
-TEST(MahoFolderContextMenuTest, UnpinnedFolderShowsPinNotUnpin) {
-  MahoFolderContextMenu menu(nullptr, "space-1", "folder-abc",
-                              /*folder_is_pinned=*/false,
-                              /*parent_folder_id=*/"",
-                              MahoFolderContextMenu::BeginRenameCallback());
-  std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
-  ASSERT_NE(model, nullptr);
-  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_FOLDER_PIN));
-  EXPECT_FALSE(ModelContainsCommand(*model, IDC_MAHO_FOLDER_UNPIN));
 }
 
 TEST(MahoFolderContextMenuTest, TopLevelOrderMatchesProduction) {
@@ -111,29 +73,11 @@ TEST(MahoFolderContextMenuTest, TopLevelOrderMatchesProduction) {
   EXPECT_EQ(items[1].type, ui::MenuModel::TYPE_SEPARATOR);
 
   EXPECT_EQ(items[2].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[2].command_id, IDC_MAHO_FOLDER_PIN);
+  EXPECT_EQ(items[2].command_id, IDC_MAHO_FOLDER_CONVERT_TO_SPACE);
 
   EXPECT_EQ(items[3].type, ui::MenuModel::TYPE_SEPARATOR);
 
   EXPECT_EQ(items[4].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[4].command_id, IDC_MAHO_FOLDER_DELETE);
-}
-
-TEST(MahoFolderContextMenuTest, PinnedFolderTopLevelOrderHasUnpin) {
-  MahoFolderContextMenu menu(nullptr, "space-1", "folder-abc",
-                              /*folder_is_pinned=*/true,
-                              /*parent_folder_id=*/"",
-                              MahoFolderContextMenu::BeginRenameCallback());
-  std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
-  ASSERT_NE(model, nullptr);
-
-  auto items = FlattenTopLevel(*model);
-  ASSERT_EQ(items.size(), 5u);
-
-  EXPECT_EQ(items[0].command_id, IDC_MAHO_FOLDER_RENAME);
-  EXPECT_EQ(items[1].type, ui::MenuModel::TYPE_SEPARATOR);
-  EXPECT_EQ(items[2].command_id, IDC_MAHO_FOLDER_UNPIN);
-  EXPECT_EQ(items[3].type, ui::MenuModel::TYPE_SEPARATOR);
   EXPECT_EQ(items[4].command_id, IDC_MAHO_FOLDER_DELETE);
 }
 
@@ -170,14 +114,14 @@ TEST(MahoFolderContextMenuTest, BuildMenuModelWithEmptyFolderIdReturnsModel) {
   std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
   ASSERT_NE(model, nullptr);
   EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_FOLDER_RENAME));
+  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_FOLDER_CONVERT_TO_SPACE));
   EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_FOLDER_DELETE));
 }
 
 TEST(MahoFolderContextMenuTest, AllCommandsEnabledWithNullBrowser) {
   MahoFolderContextMenu menu(nullptr, "folder-abc");
   EXPECT_TRUE(menu.IsCommandIdEnabled(IDC_MAHO_FOLDER_RENAME));
-  EXPECT_TRUE(menu.IsCommandIdEnabled(IDC_MAHO_FOLDER_PIN));
-  EXPECT_TRUE(menu.IsCommandIdEnabled(IDC_MAHO_FOLDER_UNPIN));
+  EXPECT_TRUE(menu.IsCommandIdEnabled(IDC_MAHO_FOLDER_CONVERT_TO_SPACE));
   EXPECT_TRUE(menu.IsCommandIdEnabled(IDC_MAHO_FOLDER_DELETE));
 }
 
@@ -190,8 +134,7 @@ TEST(MahoFolderContextMenuTest, UnknownCommandIdIsEnabled) {
 TEST(MahoFolderContextMenuTest, NothingIsChecked) {
   MahoFolderContextMenu menu(nullptr, "folder-abc");
   EXPECT_FALSE(menu.IsCommandIdChecked(IDC_MAHO_FOLDER_RENAME));
-  EXPECT_FALSE(menu.IsCommandIdChecked(IDC_MAHO_FOLDER_PIN));
-  EXPECT_FALSE(menu.IsCommandIdChecked(IDC_MAHO_FOLDER_UNPIN));
+  EXPECT_FALSE(menu.IsCommandIdChecked(IDC_MAHO_FOLDER_CONVERT_TO_SPACE));
   EXPECT_FALSE(menu.IsCommandIdChecked(IDC_MAHO_FOLDER_DELETE));
 }
 
@@ -200,14 +143,9 @@ TEST(MahoFolderContextMenuTest, ExecuteRenameWithNullBrowserDoesNotCrash) {
   menu.ExecuteCommand(IDC_MAHO_FOLDER_RENAME, 0);
 }
 
-TEST(MahoFolderContextMenuTest, ExecutePinWithNullBrowserDoesNotCrash) {
+TEST(MahoFolderContextMenuTest, ExecuteConvertToSpaceWithNullBrowserDoesNotCrash) {
   MahoFolderContextMenu menu(nullptr, "folder-abc");
-  menu.ExecuteCommand(IDC_MAHO_FOLDER_PIN, 0);
-}
-
-TEST(MahoFolderContextMenuTest, ExecuteUnpinWithNullBrowserDoesNotCrash) {
-  MahoFolderContextMenu menu(nullptr, "folder-abc");
-  menu.ExecuteCommand(IDC_MAHO_FOLDER_UNPIN, 0);
+  menu.ExecuteCommand(IDC_MAHO_FOLDER_CONVERT_TO_SPACE, 0);
 }
 
 TEST(MahoFolderContextMenuTest, ExecuteDeleteWithNullBrowserDoesNotCrash) {
@@ -224,12 +162,12 @@ TEST(MahoFolderContextMenuTest, ExecuteUnknownCommandDoesNotCrash) {
 TEST(MahoFolderContextMenuTest, ExecuteCommandWithNonZeroEventFlagsDoesNotCrash) {
   MahoFolderContextMenu menu(nullptr, "folder-abc");
   menu.ExecuteCommand(IDC_MAHO_FOLDER_RENAME, /*event_flags=*/1);
+  menu.ExecuteCommand(IDC_MAHO_FOLDER_CONVERT_TO_SPACE, /*event_flags=*/2);
   menu.ExecuteCommand(IDC_MAHO_FOLDER_DELETE, /*event_flags=*/0xFF);
 }
 
 TEST(MahoFolderContextMenuTest, MoveToRootHiddenForRootFolder) {
   MahoFolderContextMenu menu(nullptr, "space-1", "folder-root",
-                              /*folder_is_pinned=*/false,
                               /*parent_folder_id=*/"",
                               MahoFolderContextMenu::BeginRenameCallback());
   std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
@@ -239,7 +177,6 @@ TEST(MahoFolderContextMenuTest, MoveToRootHiddenForRootFolder) {
 
 TEST(MahoFolderContextMenuTest, MoveToRootPresentForNestedFolder) {
   MahoFolderContextMenu menu(nullptr, "space-1", "folder-child",
-                              /*folder_is_pinned=*/false,
                               /*parent_folder_id=*/"folder-parent",
                               MahoFolderContextMenu::BeginRenameCallback());
   std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
@@ -249,7 +186,6 @@ TEST(MahoFolderContextMenuTest, MoveToRootPresentForNestedFolder) {
 
 TEST(MahoFolderContextMenuTest, ExecuteMoveToRootDoesNotCrashWithNullBrowser) {
   MahoFolderContextMenu menu(nullptr, "space-1", "folder-child",
-                              /*folder_is_pinned=*/false,
                               /*parent_folder_id=*/"folder-parent",
                               MahoFolderContextMenu::BeginRenameCallback());
   menu.ExecuteCommand(IDC_MAHO_FOLDER_MOVE_TO_ROOT, 0);
@@ -258,7 +194,7 @@ TEST(MahoFolderContextMenuTest, ExecuteMoveToRootDoesNotCrashWithNullBrowser) {
 TEST(MahoFolderContextMenuTest, ExecuteRenameFiresCallback) {
   bool callback_fired = false;
   MahoFolderContextMenu menu(
-      nullptr, "space-1", "folder-abc", /*folder_is_pinned=*/false,
+      nullptr, "space-1", "folder-abc",
       /*parent_folder_id=*/"",
       base::BindOnce([](bool* flag) { *flag = true; }, &callback_fired));
   menu.ExecuteCommand(IDC_MAHO_FOLDER_RENAME, 0);
@@ -269,7 +205,7 @@ TEST(MahoFolderContextMenuTest, ExecuteRenameFiresCallback) {
 TEST(MahoFolderContextMenuTest, ExecuteRenameCallbackOnlyFiresOnce) {
   int fire_count = 0;
   MahoFolderContextMenu menu(
-      nullptr, "space-1", "folder-abc", /*folder_is_pinned=*/false,
+      nullptr, "space-1", "folder-abc",
       /*parent_folder_id=*/"",
       base::BindOnce([](int* count) { ++(*count); }, &fire_count));
   menu.ExecuteCommand(IDC_MAHO_FOLDER_RENAME, 0);

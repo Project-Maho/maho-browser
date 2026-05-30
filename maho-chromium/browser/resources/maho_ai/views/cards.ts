@@ -178,8 +178,26 @@ function renderBlocks(raw: string): string {
   return blocks.join('');
 }
 
+const kMarkdownAttrs = ['rel', 'href', 'target'];
+
 export function renderTrustedMarkdown(raw: string): TrustedHTML {
-  return sanitizeInnerHtml(renderBlocks(raw), {tags: kMarkdownTags});
+  try {
+    return sanitizeInnerHtml(renderBlocks(raw), {
+      tags: kMarkdownTags,
+      attrs: kMarkdownAttrs,
+    });
+  } catch (_primaryError) {
+    const fallback = `<p>⚠️ 렌더 실패: 안전하지 않은 마크업이 포함되었습니다.</p>` +
+        `<pre>${escapeHtml(raw)}</pre>`;
+    try {
+      return sanitizeInnerHtml(fallback, {
+        tags: ['p', 'pre'],
+        attrs: [],
+      });
+    } catch (_secondaryError) {
+      return '[Maho AI] 렌더링 오류가 발생했습니다.' as unknown as TrustedHTML;
+    }
+  }
 }
 
 export function renderMarkdownInto(container: HTMLElement, raw: string): void {

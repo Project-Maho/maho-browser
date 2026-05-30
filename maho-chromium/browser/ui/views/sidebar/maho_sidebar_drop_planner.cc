@@ -55,24 +55,9 @@ SidebarDropPlan ResolveDropPlan(SectionKind target,
       (payload.origin == SidebarDragOrigin::kPinnedSection);
 
   if (!is_tab) {
-    if (target == SectionKind::kFavorites) {
+    if (target == SectionKind::kFavorites || target == SectionKind::kNormal) {
       plan.is_valid = false;
       return plan;
-    }
-    const bool to_pinned = (target == SectionKind::kPinned);
-    const bool already_pinned = source_is_pinned;
-    if (to_pinned && !already_pinned) {
-      plan.pin_transition.kind = SidebarDropPlan::PinTransition::Kind::kPin;
-      plan.pin_transition.node_id = payload.node_id;
-      plan.pin_transition.space_id = payload.space_id;
-      plan.pin_transition.is_folder = true;
-      plan.steps.push_back({"pin_folder", payload.node_id, payload.space_id, {}});
-    } else if (!to_pinned && already_pinned) {
-      plan.pin_transition.kind = SidebarDropPlan::PinTransition::Kind::kUnpin;
-      plan.pin_transition.node_id = payload.node_id;
-      plan.pin_transition.space_id = payload.space_id;
-      plan.pin_transition.is_folder = true;
-      plan.steps.push_back({"unpin_folder", payload.node_id, payload.space_id, {}});
     }
     return plan;
   }
@@ -176,10 +161,6 @@ bool ExecuteDropPlan(const SidebarDropPlan& plan) {
           {"space_id", step.space_id},
           {"folder_id", step.folder_id},
           {"tab_id", step.node_id}});
-    } else if (step.kind == "pin_folder" || step.kind == "unpin_folder") {
-      DispatchShellEvent(step.kind, {
-          {"space_id", step.space_id},
-          {"folder_id", step.node_id}});
     } else {
       DispatchShellEvent(step.kind, {{"tab_id", step.node_id}});
     }
@@ -196,15 +177,8 @@ bool ExecuteDropPlanTransitionsOnly(const SidebarDropPlan& plan) {
     if (step.kind == maho::sidebar::kMoveTabToRoot) {
       continue;
     }
-    if (step.kind == "pin_folder" || step.kind == "unpin_folder") {
-      DispatchShellEvent(step.kind, {
-          {"space_id", step.space_id},
-          {"folder_id", step.node_id}});
-      executed = true;
-    } else {
-      DispatchShellEvent(step.kind, {{"tab_id", step.node_id}});
-      executed = true;
-    }
+    DispatchShellEvent(step.kind, {{"tab_id", step.node_id}});
+    executed = true;
   }
   return executed;
 }

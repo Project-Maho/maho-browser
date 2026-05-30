@@ -106,6 +106,7 @@ class MahoSidebarTabListView : public views::View,
       const std::string& folder_id);
   views::LabelButton* new_tab_button_for_testing() { return new_tab_button_; }
   views::View* tab_rows_for_testing() { return tab_rows_; }
+  views::View* pinned_separator_for_testing() { return pinned_separator_; }
   bool IsTabPreviewShowingForTesting() const;
   views::Widget* tab_preview_widget_for_testing() const;
   const std::u16string& tab_preview_title_for_testing() const;
@@ -219,7 +220,6 @@ class SidebarTabRowView : public views::View,
                                   ui::mojom::MenuSourceType source_type) override;
 
   // MahoTabContextMenu::Delegate:
-  void ActivateTabAndOpenBoostBubble(int tab_index) override;
   void RenameTab(int tab_index) override;
 
   bool GetDropFormats(int* formats,
@@ -228,6 +228,7 @@ class SidebarTabRowView : public views::View,
   int OnDragUpdated(const ui::DropTargetEvent& event) override;
   DropCallback GetDropCallback(const ui::DropTargetEvent& event) override;
   void OnDragExited() override;
+  void OnDragDone() override;
 
   void WriteDragDataForView(views::View* sender,
                             const gfx::Point& press_pt,
@@ -358,6 +359,7 @@ class SidebarFolderRowView : public views::View,
   int OnDragUpdated(const ui::DropTargetEvent& event) override;
   DropCallback GetDropCallback(const ui::DropTargetEvent& event) override;
   void OnDragExited() override;
+  void OnDragDone() override;
 
   void WriteDragDataForView(views::View* sender,
                             const gfx::Point& press_pt,
@@ -439,10 +441,12 @@ struct SidebarSectionDropIndicatorStateForTesting {
 
 views::View::DropCallback GetSectionDropCallbackForTesting(
     MahoSidebarTabSection section,
-    const ui::DropTargetEvent& event);
+    const ui::DropTargetEvent& event,
+    bool populated = false);
 SidebarSectionDropIndicatorStateForTesting
 GetSectionDropIndicatorStateForTesting(MahoSidebarTabSection section,
-                                       const ui::DropTargetEvent& event);
+                                       const ui::DropTargetEvent& event,
+                                       bool populated = false);
 
 }  // namespace maho
 

@@ -25,27 +25,8 @@ extension MahoBridge {
         }
     }
 
-    func getBoostsForUrlInSpace(url: String, spaceId: String) -> [BoostViewModel] {
-        return withFFIString(url) { urlCStr -> [BoostViewModel] in
-            return withFFIString(spaceId) { spaceCStr -> [BoostViewModel] in
-                guard let ptr = callCore({ maho_core_get_boosts_for_url_in_space($0, urlCStr, spaceCStr) }) else { return [] }
-                defer { maho_string_free(ptr) }
-                return decode(String(cString: ptr)) ?? []
-            }
-        }
-    }
 
-    func getBoostTemplates() -> String? {
-        return callCoreString { maho_core_get_boost_templates($0) }
-    }
 
-    func createBoostFromTemplate(templateId: String, urlPattern: String) -> String? {
-        return withFFIString(templateId) { templateCStr -> String? in
-            return withFFIString(urlPattern) { patternCStr -> String? in
-                return callCoreString { maho_core_create_boost_from_template($0, templateCStr, patternCStr) }
-            }
-        }
-    }
 
     // MARK: - Notes
 

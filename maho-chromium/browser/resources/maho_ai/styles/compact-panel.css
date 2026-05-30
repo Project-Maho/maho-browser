@@ -80,17 +80,15 @@
 }
 
 
-.compact-composer__page-row,
-.compact-composer__footer,
-.compact-composer__footer-actions,
 .compact-panel__status-meta {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: var(--maho-ai-space-3);
 }
 
 .compact-icon-button,
 .compact-composer__icon-button,
-.compact-composer__page-chip-icon,
 .compact-panel__center-mark {
   display: inline-flex;
   align-items: center;
@@ -111,7 +109,6 @@
   height: var(--maho-ai-space-4);
 }
 
-.compact-composer__page-chip-label,
 .compact-panel__status-label {
   color: var(--maho-ai-text-faint);
   font-size: var(--maho-ai-text-xs);
@@ -119,8 +116,7 @@
   text-transform: uppercase;
 }
 
-.compact-panel__status-title,
-.compact-composer__page-chip-title {
+.compact-panel__status-title {
   color: var(--maho-ai-text-primary);
   font-size: var(--maho-ai-text-sm);
   font-weight: 600;
@@ -148,8 +144,6 @@
 .compact-icon-button,
 .compact-composer__icon-button,
 .compact-quick-action,
-.compact-composer__page-chip,
-.compact-composer__context-chip,
 .compact-panel__status-card,
 .compact-composer {
   border: var(--maho-ai-border-width) solid var(--maho-ai-border-soft);
@@ -280,13 +274,7 @@
   border-color: var(--maho-ai-border);
 }
 
-.compact-panel__status-meta {
-  justify-content: space-between;
-  gap: var(--maho-ai-space-3);
-}
-
 .compact-panel__status-badge,
-.compact-composer__context-chip,
 .compact-quick-action {
   min-height: 30px;
   padding: 0 12px;
@@ -295,8 +283,7 @@
   font-weight: 600;
 }
 
-.compact-panel__status-badge,
-.compact-composer__context-chip {
+.compact-panel__status-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -383,7 +370,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .compact-panel__halo {
-    animation: none !important;
+    animation: none;
   }
 }
 

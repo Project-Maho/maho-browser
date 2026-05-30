@@ -1,0 +1,106 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
+#zen-boost-advanced-color-options-panel {
+  color-scheme: light;
+  --panel-padding: 18px;
+  --panel-radius: 13px;
+  --advanced-color-panel-background: #fff;
+  --advanced-color-panel-border: rgba(33, 39, 48, 0.09);
+  --advanced-color-panel-shadow:
+    0 18px 40px rgba(19, 23, 28, 0.18),
+    0 6px 16px rgba(19, 23, 28, 0.08);
+  --advanced-color-text: #3a3a3b;
+  --advanced-color-muted-track: #b5b5b9;
+  --advanced-color-thumb: #e6e5ea;
+  --advanced-color-thumb-border: #d1d0d5;
+  --advanced-color-thumb-active: #cbcad0;
+
+  position: fixed;
+  z-index: 1001;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: calc(185px + var(--panel-padding) * 2);
+  width: max-content;
+  max-width: min(260px, calc(100vw - 32px));
+  padding: var(--panel-padding);
+  box-sizing: border-box;
+  border: 1px solid var(--advanced-color-panel-border);
+  border-radius: var(--panel-radius);
+  background: var(--advanced-color-panel-background);
+  box-shadow: var(--advanced-color-panel-shadow);
+  overflow: visible;
+  isolation: isolate;
+  transform-origin: top center;
+
+  &::before {
+    content: '';
+    position: absolute;
+    top: -8px;
+    left: var(--arrow-x, 50%);
+    width: 16px;
+    height: 16px;
+    background: var(--advanced-color-panel-background);
+    border-top: 1px solid var(--advanced-color-panel-border);
+    border-left: 1px solid var(--advanced-color-panel-border);
+    box-shadow: -4px -4px 12px rgba(19, 23, 28, 0.06);
+    transform: translateX(-50%) rotate(45deg);
+  }
+
+  & > div {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  & p {
+    margin: 0;
+    color: var(--advanced-color-text);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.35;
+  }
+
+  & input {
+    width: 185px;
+    appearance: none !important;
+    height: 4px;
+    margin: 0;
+    background-color: var(--advanced-color-muted-track);
+    border-radius: 999px;
+  }
+}
+
+#zen-boost-advanced-color-options-panel input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  background-color: var(--advanced-color-thumb);
+  border: solid 1px var(--advanced-color-thumb-border);
+  border-radius: 100%;
+  box-shadow: 0 2px 6px rgba(19, 23, 28, 0.12);
+}
+
+#zen-boost-advanced-color-options-panel input::-webkit-slider-thumb:active {
+  background-color: var(--advanced-color-thumb-active);
+}
+
+@media (prefers-color-scheme: dark) {
+  #zen-boost-advanced-color-options-panel {
+    color-scheme: dark;
+    --advanced-color-panel-background: #24262c;
+    --advanced-color-panel-border: rgba(255, 255, 255, 0.08);
+    --advanced-color-panel-shadow:
+      0 20px 42px rgba(0, 0, 0, 0.42),
+      0 8px 20px rgba(0, 0, 0, 0.24);
+    --advanced-color-text: #f2f2f5;
+    --advanced-color-muted-track: #5b5e68;
+    --advanced-color-thumb: #d8d8de;
+    --advanced-color-thumb-border: #8b8e98;
+    --advanced-color-thumb-active: #fff;
+  }
+}

@@ -8,9 +8,11 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/browser.h"  // nogncheck
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "components/sessions/content/session_tab_helper.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/isolated_world_ids.h"
+#include "maho/browser/ai/maho_ai_security_utils.h"
 
 namespace {
 
@@ -24,6 +26,60 @@ const char kCannotAccessPageMessage[] =
     "Maho AI couldn't access the current page content. Try again once the page finishes loading.";
 const char kExtractionFailedMessage[] =
     "Maho AI couldn't extract readable content from the current page.";
+
+constexpr char kPageContextScript[] = R"JS(
+(() => {
+  const warnings = [];
+  const title = document.title || '';
+  const raw_href = location.href || '';
+  const url = raw_href ? raw_href.split('#')[0] : '';
+  const selected_text = window.getSelection ? String(window.getSelection() || '') : '';
+  const meta = document.querySelector('meta[name="description"]');
+  const meta_description = meta ? (meta.getAttribute('content') || '') : '';
+  const headings = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6'))
+      .map((heading) => (heading.textContent || '').trim())
+      .filter((heading) => heading.length > 0)
+      .slice(0, 50);
+  const links = Array.from(document.querySelectorAll('a[href]'))
+      .map((link) => (link.href || '').trim())
+      .filter((link) => link.length > 0)
+      .slice(0, 20);
+  const body_text = document.body ? (document.body.innerText || '') : '';
+  const main_text = body_text.length > 50000 ? body_text.slice(0, 50000) : body_text;
+
+  if (!document.body) {
+    warnings.push('document.body is missing.');
+  }
+  if (!main_text.trim()) {
+    warnings.push('No readable body text was found.');
+  }
+  if (body_text.length > 50000) {
+    warnings.push('Body text was truncated to the extractor limit.');
+  }
+  if (!headings.length) {
+    warnings.push('No headings were found.');
+  }
+
+  const has_content = main_text.trim().length > 0 || selected_text.trim().length > 0 ||
+                      headings.length > 0 || meta_description.trim().length > 0 ||
+                      links.length > 0;
+  const extraction_status = has_content
+      ? (warnings.length > 0 ? 'partial' : 'success')
+      : 'extraction_failed';
+
+  return {
+    title,
+    url,
+    selected_text,
+    main_text,
+    headings,
+    meta_description,
+    links,
+    extraction_warnings: warnings,
+    extraction_status,
+  };
+})()
+)JS";
 
 std::string NormalizeText(const std::string& text) {
   std::string trimmed;
@@ -159,7 +215,7 @@ MahoAiPageContextExtractor::BuildResultFromJsValue(const std::string& title,
     page_context.title = NormalizeText(*extracted_title);
   }
   if (const std::string* extracted_url = dict->FindString("url")) {
-    page_context.url = NormalizeText(*extracted_url);
+    page_context.url = maho::ai_security::RedactUrlForAi(NormalizeText(*extracted_url));
   }
   if (const std::string* selected_text = dict->FindString("selected_text")) {
     page_context.selected_text = NormalizeText(*selected_text);
@@ -245,6 +301,33 @@ content::WebContents* MahoAiPageContextExtractor::GetActiveWebContents() const {
   return browser_->tab_strip_model()->GetActiveWebContents();
 }
 
+content::WebContents* MahoAiPageContextExtractor::GetWebContentsForTabId(
+    int tab_id) const {
+  if (!browser_) {
+    return nullptr;
+  }
+  TabStripModel* tab_strip = browser_->tab_strip_model();
+  if (!tab_strip) {
+    return nullptr;
+  }
+  const int count = tab_strip->count();
+  for (int i = 0; i < count; ++i) {
+    content::WebContents* wc = tab_strip->GetWebContentsAt(i);
+    if (!wc) {
+      continue;
+    }
+    sessions::SessionTabHelper* helper =
+        sessions::SessionTabHelper::FromWebContents(wc);
+    if (!helper) {
+      continue;
+    }
+    if (helper->session_id().id() == tab_id) {
+      return wc;
+    }
+  }
+  return nullptr;
+}
+
 void MahoAiPageContextExtractor::GetPageContext(PageContextCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
@@ -258,14 +341,11 @@ void MahoAiPageContextExtractor::GetPageContext(PageContextCallback callback) {
   }
 
   const GURL& visible_url = active_wc->GetVisibleURL();
-  if (visible_url.SchemeIs("chrome") ||
-      visible_url.SchemeIs("chrome-untrusted") ||
-      visible_url.SchemeIs("devtools") ||
-      visible_url.SchemeIs("about")) {
+  if (maho::ai_security::IsUrlBlocked(visible_url)) {
     PageContextResult result;
     result.extraction_status = PageContextResult::Status::kCannotAccess;
     result.title = base::UTF16ToUTF8(active_wc->GetTitle());
-    result.url = visible_url.spec();
+    result.url = maho::ai_security::RedactUrlForAi(visible_url);
     result.extraction_warnings.push_back(
         "Maho AI cannot analyze internal browser pages.");
     std::move(callback).Run(std::move(result));
@@ -273,7 +353,7 @@ void MahoAiPageContextExtractor::GetPageContext(PageContextCallback callback) {
   }
 
   const std::string title = base::UTF16ToUTF8(active_wc->GetTitle());
-  const std::string url = active_wc->GetVisibleURL().spec();
+  const std::string url = maho::ai_security::RedactUrlForAi(active_wc->GetVisibleURL());
 
   content::RenderFrameHost* rfh = active_wc->GetPrimaryMainFrame();
   if (!rfh || !rfh->IsRenderFrameLive()) {
@@ -285,59 +365,6 @@ void MahoAiPageContextExtractor::GetPageContext(PageContextCallback callback) {
     std::move(callback).Run(std::move(result));
     return;
   }
-
-  constexpr char kPageContextScript[] = R"JS(
-(() => {
-  const warnings = [];
-  const title = document.title || '';
-  const url = location.href || '';
-  const selected_text = window.getSelection ? String(window.getSelection() || '') : '';
-  const meta = document.querySelector('meta[name="description"]');
-  const meta_description = meta ? (meta.getAttribute('content') || '') : '';
-  const headings = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6'))
-      .map((heading) => (heading.textContent || '').trim())
-      .filter((heading) => heading.length > 0)
-      .slice(0, 50);
-  const links = Array.from(document.querySelectorAll('a[href]'))
-      .map((link) => (link.href || '').trim())
-      .filter((link) => link.length > 0)
-      .slice(0, 20);
-  const body_text = document.body ? (document.body.innerText || '') : '';
-  const main_text = body_text.length > 50000 ? body_text.slice(0, 50000) : body_text;
-
-  if (!document.body) {
-    warnings.push('document.body is missing.');
-  }
-  if (!main_text.trim()) {
-    warnings.push('No readable body text was found.');
-  }
-  if (body_text.length > 50000) {
-    warnings.push('Body text was truncated to the extractor limit.');
-  }
-  if (!headings.length) {
-    warnings.push('No headings were found.');
-  }
-
-  const has_content = main_text.trim().length > 0 || selected_text.trim().length > 0 ||
-                      headings.length > 0 || meta_description.trim().length > 0 ||
-                      links.length > 0;
-  const extraction_status = has_content
-      ? (warnings.length > 0 ? 'partial' : 'success')
-      : 'extraction_failed';
-
-  return {
-    title,
-    url,
-    selected_text,
-    main_text,
-    headings,
-    meta_description,
-    links,
-    extraction_warnings: warnings,
-    extraction_status,
-  };
-})()
-)JS";
 
   rfh->ExecuteJavaScriptInIsolatedWorld(
       base::UTF8ToUTF16(std::string_view(kPageContextScript)),
@@ -355,4 +382,52 @@ void MahoAiPageContextExtractor::OnPageContextExtracted(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   std::move(callback).Run(
       BuildResultFromJsValue(title, url, std::move(result)));
+}
+
+void MahoAiPageContextExtractor::GetPageContextForTabId(
+    int tab_id,
+    PageContextCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  content::WebContents* wc = GetWebContentsForTabId(tab_id);
+  if (!wc) {
+    PageContextResult result;
+    result.extraction_status = PageContextResult::Status::kNoActiveTab;
+    result.extraction_warnings.push_back(kNoActiveTabMessage);
+    std::move(callback).Run(std::move(result));
+    return;
+  }
+
+  const GURL& visible_url = wc->GetVisibleURL();
+  if (maho::ai_security::IsUrlBlocked(visible_url)) {
+    PageContextResult result;
+    result.extraction_status = PageContextResult::Status::kCannotAccess;
+    result.title = base::UTF16ToUTF8(wc->GetTitle());
+    result.url = maho::ai_security::RedactUrlForAi(visible_url);
+    result.extraction_warnings.push_back(
+        "Maho AI cannot analyze internal browser pages.");
+    std::move(callback).Run(std::move(result));
+    return;
+  }
+
+  const std::string title = base::UTF16ToUTF8(wc->GetTitle());
+  const std::string url = maho::ai_security::RedactUrlForAi(wc->GetVisibleURL());
+
+  content::RenderFrameHost* rfh = wc->GetPrimaryMainFrame();
+  if (!rfh || !rfh->IsRenderFrameLive()) {
+    PageContextResult result;
+    result.extraction_status = PageContextResult::Status::kCannotAccess;
+    result.title = title;
+    result.url = url;
+    result.extraction_warnings.push_back(kCannotAccessPageMessage);
+    std::move(callback).Run(std::move(result));
+    return;
+  }
+
+  rfh->ExecuteJavaScriptInIsolatedWorld(
+      base::UTF8ToUTF16(std::string_view(kPageContextScript)),
+      base::BindOnce(&MahoAiPageContextExtractor::OnPageContextExtracted,
+                     weak_factory_.GetWeakPtr(), title, url,
+                     std::move(callback)),
+      content::ISOLATED_WORLD_ID_CONTENT_END + 1);
 }

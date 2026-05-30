@@ -72,6 +72,7 @@ impl SettingsManager {
                         color_name: None,
                     },
                 ],
+                pinned_close_behavior: PinnedCloseBehavior::Switch,
             },
             appearance: AppearanceSettings {
                 theme: Theme::System,
@@ -144,6 +145,9 @@ impl SettingsManager {
             }
             if let Some(entries) = general.site_search_entries {
                 self.settings.general.site_search_entries = entries;
+            }
+            if let Some(behavior) = general.pinned_close_behavior {
+                self.settings.general.pinned_close_behavior = behavior;
             }
         }
         if let Some(appearance) = changes.appearance {
@@ -370,6 +374,22 @@ impl SettingsManager {
                             _ => "24 hours",
                         },
                         "options": ["Off", "12 hours", "24 hours", "7 days", "30 days", "60 days", "90 days"]
+                    }),
+                },
+                SettingsItem {
+                    key: "general.pinned_close_behavior".to_string(),
+                    label: "Pinned Tab Close Behavior".to_string(),
+                    item_type: SettingsItemType::Select,
+                    value: serde_json::json!({
+                        "current": match self.settings.general.pinned_close_behavior {
+                            PinnedCloseBehavior::Switch => "switch",
+                            PinnedCloseBehavior::Reset => "reset",
+                            PinnedCloseBehavior::ResetSwitch => "reset-switch",
+                            PinnedCloseBehavior::UnloadSwitch => "unload-switch",
+                            PinnedCloseBehavior::ResetUnloadSwitch => "reset-unload-switch",
+                            PinnedCloseBehavior::Close => "close",
+                        },
+                        "options": ["switch", "reset", "reset-switch", "unload-switch", "reset-unload-switch", "close"]
                     }),
                 },
             ],

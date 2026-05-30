@@ -4,16 +4,17 @@ use std::collections::HashMap;
 use crate::autofill::{AutofillAddress, AutofillPayment};
 use crate::chat::ChatRequestContext;
 use crate::common::{ImageData, Url};
-use crate::identifiers::{DownloadId, FolderId, ProfileId, SpaceId, TabId};
+use crate::identifiers::{BoostId, DownloadId, FolderId, ProfileId, SpaceId, TabId};
 use crate::passwords::SavedPassword;
 use crate::profile::ProfileConfig;
 use crate::search_engine::SearchEngineViewModel;
 use crate::settings::Settings;
 use crate::space::{ActiveSpaceModel, SpaceColor, SpaceConfigUpdate};
 use crate::tab::TabLifecycleState;
+use crate::boost::Boost;
 use crate::traits::shell_renderer::{
-    DownloadViewModel, FolderViewModel, NotificationViewModel, PermissionRequest, SpaceViewModel,
-    SuggestionViewModel, TabStateUpdate, TabViewModel,
+    DownloadViewModel, FolderViewModel, NotificationViewModel, PermissionRequest,
+    SpaceViewModel, SuggestionViewModel, TabStateUpdate, TabViewModel,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -301,12 +302,6 @@ pub enum CoreUpdate {
         space_id: SpaceId,
         changes: SpaceConfigUpdate,
     },
-    GlobalBoostsToggled {
-        enabled: bool,
-    },
-    JsBoostsToggled {
-        enabled: bool,
-    },
     ExtensionToggled {
         extension_id: String,
         enabled: bool,
@@ -314,6 +309,7 @@ pub enum CoreUpdate {
     ExtensionRemoved {
         extension_id: String,
     },
+    InstalledExtensionsUpdated,
     AccountChanged {
         account: Option<crate::account::AccountInfo>,
     },
@@ -427,6 +423,21 @@ pub enum CoreUpdate {
         tool_name: String,
         args: String,
     },
+    BoostCreated {
+        boost: Boost,
+    },
+    BoostUpdated {
+        boost_id: BoostId,
+        boost: Boost,
+    },
+    BoostActiveChanged {
+        domain: String,
+        active_boost_id: Option<BoostId>,
+    },
+    BoostDeleted {
+        boost_id: BoostId,
+        domain: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -492,10 +503,9 @@ impl CoreUpdate {
             Self::SettingsChanged { .. }
                 | Self::ContentBlockerStateChanged { .. }
                 | Self::FilterListUpdated { .. }
-                | Self::GlobalBoostsToggled { .. }
-                | Self::JsBoostsToggled { .. }
                 | Self::ExtensionToggled { .. }
                 | Self::ExtensionRemoved { .. }
+                | Self::InstalledExtensionsUpdated
                 | Self::AccountChanged { .. }
                 | Self::AccountAuthStateChanged { .. }
                 | Self::AccountTokenRefreshed { .. }

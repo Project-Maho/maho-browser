@@ -1,0 +1,13 @@
+[     105ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:4072/standalone/app_bundle.js:21359
+[     107ms] [INFO] [standalone stub] createPageHandler @ http://127.0.0.1:4072/standalone/app_bundle.js:21801
+[   35410ms] [INFO] [standalone stub] previewTheme {theme_json: {"type":"gradient","gradientColors":[{"hue":0.5806…ntary","opacity":0.5,"texture":0,"scheme":"auto"}} @ http://127.0.0.1:4072/standalone/app_bundle.js:21782
+[   35461ms] [INFO] [standalone stub] previewTheme {theme_json: {"type":"gradient","gradientColors":[{"hue":0.5806…iadic","opacity":0.5,"texture":0,"scheme":"auto"}} @ http://127.0.0.1:4072/standalone/app_bundle.js:21782
+[   35513ms] [INFO] [standalone stub] previewTheme {theme_json: {"type":"gradient","gradientColors":[{"hue":0.5806…ogous","opacity":0.5,"texture":0,"scheme":"auto"}} @ http://127.0.0.1:4072/standalone/app_bundle.js:21782
+[   35564ms] [INFO] [standalone stub] previewTheme {theme_json: {"type":"gradient","gradientColors":[{"hue":0.5806…ntary","opacity":0.5,"texture":0,"scheme":"auto"}} @ http://127.0.0.1:4072/standalone/app_bundle.js:21782
+[   35616ms] [INFO] [standalone stub] previewTheme {theme_json: {"type":"gradient","gradientColors":[{"hue":0.5806…iadic","opacity":0.5,"texture":0,"scheme":"auto"}} @ http://127.0.0.1:4072/standalone/app_bundle.js:21782
+[   35668ms] [INFO] [standalone stub] previewTheme {theme_json: {"type":"gradient","gradientColors":[{"hue":0.5806…iadic","opacity":0.5,"texture":0,"scheme":"auto"}} @ http://127.0.0.1:4072/standalone/app_bundle.js:21782
+[   35769ms] [INFO] [standalone stub] previewTheme {theme_json: {"type":"gradient","gradientColors":[{"hue":0.5806…ntary","opacity":0.5,"texture":0,"scheme":"auto"}} @ http://127.0.0.1:4072/standalone/app_bundle.js:21782
+[   35821ms] [INFO] [standalone stub] previewTheme {theme_json: {"type":"gradient","gradientColors":[{"hue":0.5806…ogous","opacity":0.5,"texture":0,"scheme":"auto"}} @ http://127.0.0.1:4072/standalone/app_bundle.js:21782
+[   35873ms] [INFO] [standalone stub] previewTheme {theme_json: {"type":"gradient","gradientColors":[{"hue":0.5806…ntary","opacity":0.5,"texture":0,"scheme":"auto"}} @ http://127.0.0.1:4072/standalone/app_bundle.js:21782
+[   35924ms] [INFO] [standalone stub] previewTheme {theme_json: {"type":"gradient","gradientColors":[{"hue":0.5806…ogous","opacity":0.5,"texture":0,"scheme":"auto"}} @ http://127.0.0.1:4072/standalone/app_bundle.js:21782
+[   35976ms] [INFO] [standalone stub] previewTheme {theme_json: {"type":"gradient","gradientColors":[{"hue":0.5806…ogous","opacity":0.5,"texture":0,"scheme":"auto"}} @ http://127.0.0.1:4072/standalone/app_bundle.js:21782

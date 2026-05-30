@@ -67,6 +67,8 @@ fn folder_struct_is_valid() {
         is_expanded: true,
         is_pinned: false,
         parent_folder_id: None,
+        provider_type: None,
+        config_json: None,
     };
     assert_eq!(folder.name, "Work Tabs");
     assert_eq!(folder.tab_ids.len(), 2);
@@ -107,6 +109,7 @@ fn profile_contains_all_entity_arrays() {
                 autoplay_policy: AutoplayPolicy::BlockAudio,
                 archive_timeout_hours: 24.0,
                 site_search_entries: vec![],
+                pinned_close_behavior: PinnedCloseBehavior::Switch,
             },
             privacy: PrivacySettings {
                 do_not_track: true,
@@ -495,4 +498,43 @@ fn memory_action_covers_all_4() {
         MemoryAction::ReleasedWebviews { count: 10 },
     ];
     assert_eq!(actions.len(), 4);
+}
+
+// === PinnedCloseBehavior serde tests ===
+
+#[test]
+fn pinned_close_behavior_defaults_to_switch_when_missing() {
+    let json = r#"{
+        "defaultSearchEngine": {"name":"G","urlTemplate":"https://g.com/search?q=%s","isDefault":true},
+        "todayTabTimeoutHours": 12.0,
+        "restoreOnLaunch": "restore_all",
+        "downloadPath": "/tmp",
+        "autoplayPolicy": "block_audio",
+        "archiveTimeoutHours": 24.0,
+        "siteSearchEntries": []
+    }"#;
+    let settings: GeneralSettings = serde_json::from_str(json).unwrap();
+    assert!(matches!(settings.pinned_close_behavior, PinnedCloseBehavior::Switch));
+}
+
+#[test]
+fn pinned_close_behavior_round_trips_reset_unload_switch() {
+    let original = GeneralSettings {
+        default_search_engine: SearchEngine {
+            name: "G".to_string(),
+            url_template: "https://g.com/search?q=%s".to_string(),
+            is_default: true,
+        },
+        today_tab_timeout_hours: 12.0,
+        restore_on_launch: RestorePolicy::RestoreAll,
+        download_path: "/tmp".to_string(),
+        autoplay_policy: AutoplayPolicy::BlockAudio,
+        archive_timeout_hours: 24.0,
+        site_search_entries: vec![],
+        pinned_close_behavior: PinnedCloseBehavior::ResetUnloadSwitch,
+    };
+    let serialized = serde_json::to_string(&original).unwrap();
+    assert!(serialized.contains("reset-unload-switch"));
+    let deserialized: GeneralSettings = serde_json::from_str(&serialized).unwrap();
+    assert!(matches!(deserialized.pinned_close_behavior, PinnedCloseBehavior::ResetUnloadSwitch));
 }

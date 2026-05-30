@@ -5,13 +5,23 @@ use maho_types::folder::Folder;
 use maho_types::identifiers::{FolderId, ProfileId, SpaceId, TabId};
 use maho_types::space::{Space, SpaceColor, SpaceConfigUpdate};
 use maho_types::space::{RootInsertionPoint, RootItem};
-use maho_types::traits::shell_renderer::{FolderViewModel, SpaceViewModel};
+use maho_types::traits::shell_renderer::{FolderViewModel, SpaceViewModel, SidebarNode, TabViewModel};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SpaceUpdateError {
     EmptyName,
     DuplicateName,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FolderError {
+    CycleDetected,
+    DepthLimitExceeded,
+    FolderNotFound,
+    SpaceNotFound,
+}
+
+pub const MAX_FOLDER_DEPTH: usize = 5;
 
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
@@ -59,6 +69,8 @@ mod tests {
                     is_expanded: true,
                     is_pinned: false,
                     parent_folder_id: None,
+                    provider_type: None,
+                    config_json: None,
                 },
                 Folder {
                     id: child_folder_id,
@@ -67,6 +79,8 @@ mod tests {
                     is_expanded: true,
                     is_pinned: false,
                     parent_folder_id: Some(folder_id.clone()),
+                    provider_type: None,
+                    config_json: None,
                 },
             ],
             root_order: vec![],
@@ -80,7 +94,7 @@ mod tests {
 
         assert_eq!(
             manager.get_root_order(&space_id),
-            vec![RootItem::Tab(tab_id), RootItem::Folder(folder_id)]
+            vec![RootItem::Folder(folder_id), RootItem::Tab(tab_id)]
         );
     }
 
@@ -107,6 +121,8 @@ mod tests {
                 is_expanded: true,
                 is_pinned: false,
                 parent_folder_id: None,
+                provider_type: None,
+                config_json: None,
             }],
             root_order: explicit_order.clone(),
             atc_rules: vec![],
@@ -151,7 +167,7 @@ mod tests {
         let space_id = manager.get_active_space_id().clone();
         let tab_id = TabId::generate();
 
-        let folder = manager.create_folder(&space_id, "F", false).unwrap();
+        let folder = manager.create_folder(&space_id, "F", false, None).unwrap();
         manager.add_tab_to_space(&space_id, tab_id.clone(), None);
         manager.add_tab_to_folder(&space_id, &folder.id, tab_id.clone());
 
@@ -169,7 +185,7 @@ mod tests {
         let space_id = manager.get_active_space_id().clone();
         let tab_id = TabId::generate();
 
-        let folder = manager.create_folder(&space_id, "F", false).unwrap();
+        let folder = manager.create_folder(&space_id, "F", false, None).unwrap();
         manager.add_tab_to_space(&space_id, tab_id.clone(), None);
         manager.add_tab_to_folder(&space_id, &folder.id, tab_id.clone());
 
@@ -197,6 +213,8 @@ mod tests {
                 is_expanded: true,
                 is_pinned: false,
                 parent_folder_id: None,
+                provider_type: None,
+                config_json: None,
             });
             space.tab_order = vec![before_tab.clone(), moved_tab.clone()];
         }
@@ -204,7 +222,7 @@ mod tests {
         manager.move_tab_to_root(&space_id, &folder_id, &moved_tab, Some(&before_tab));
 
         let space = manager.spaces.get(&space_id).unwrap();
-        assert!(space.folders.iter().all(|folder| folder.id != folder_id));
+        assert!(space.folders.iter().any(|folder| folder.id == folder_id));
         assert_eq!(space.tab_order, vec![moved_tab, before_tab]);
     }
 
@@ -213,7 +231,7 @@ mod tests {
         let mut manager = SpaceManager::new();
         let space_id = manager.get_active_space_id().clone();
 
-        let vm = manager.create_folder(&space_id, "Work", false).unwrap();
+        let vm = manager.create_folder(&space_id, "Work", false, None).unwrap();
 
         assert_eq!(vm.name, "Work");
         assert!(!vm.is_pinned);
@@ -231,7 +249,7 @@ mod tests {
         let mut manager = SpaceManager::new();
         let space_id = manager.get_active_space_id().clone();
 
-        let vm = manager.create_folder(&space_id, "Work", false).unwrap();
+        let vm = manager.create_folder(&space_id, "Work", false, None).unwrap();
 
         assert_eq!(manager.get_root_order(&space_id), vec![RootItem::Folder(vm.id)]);
     }
@@ -241,7 +259,7 @@ mod tests {
         let mut manager = SpaceManager::new();
         let space_id = manager.get_active_space_id().clone();
 
-        let vm = manager.create_folder(&space_id, "Work", false).unwrap();
+        let vm = manager.create_folder(&space_id, "Work", false, None).unwrap();
         manager.delete_folder(&space_id, &vm.id);
 
         assert!(manager.get_root_order(&space_id).is_empty());
@@ -252,7 +270,7 @@ mod tests {
         let mut manager = SpaceManager::new();
         let space_id = manager.get_active_space_id().clone();
 
-        let vm = manager.create_folder(&space_id, "Pinned Folder", true).unwrap();
+        let vm = manager.create_folder(&space_id, "Pinned Folder", true, None).unwrap();
 
         assert!(vm.is_pinned);
         let space = manager.spaces.get(&space_id).unwrap();
@@ -266,7 +284,7 @@ mod tests {
         let space_id = manager.get_active_space_id().clone();
         let tab_id = TabId::generate();
 
-        let vm = manager.create_folder(&space_id, "F", false).unwrap();
+        let vm = manager.create_folder(&space_id, "F", false, None).unwrap();
         manager.add_tab_to_folder(&space_id, &vm.id, tab_id.clone());
 
         let space = manager.spaces.get(&space_id).unwrap();
@@ -280,8 +298,8 @@ mod tests {
         let space_id = manager.get_active_space_id().clone();
         let tab_id = TabId::generate();
 
-        let folder_a = manager.create_folder(&space_id, "A", false).unwrap();
-        let folder_b = manager.create_folder(&space_id, "B", false).unwrap();
+        let folder_a = manager.create_folder(&space_id, "A", false, None).unwrap();
+        let folder_b = manager.create_folder(&space_id, "B", false, None).unwrap();
 
         manager.add_tab_to_folder(&space_id, &folder_a.id, tab_id.clone());
         manager.add_tab_to_folder(&space_id, &folder_b.id, tab_id.clone());
@@ -299,7 +317,7 @@ mod tests {
         let space_id = manager.get_active_space_id().clone();
         let tab_id = TabId::generate();
 
-        let vm = manager.create_folder(&space_id, "F", false).unwrap();
+        let vm = manager.create_folder(&space_id, "F", false, None).unwrap();
         manager.add_tab_to_folder(&space_id, &vm.id, tab_id.clone());
         manager.remove_tab_from_folder(&space_id, &vm.id, &tab_id);
 
@@ -316,7 +334,7 @@ mod tests {
         let t2 = TabId::generate();
         let t3 = TabId::generate();
 
-        let vm = manager.create_folder(&space_id, "F", false).unwrap();
+        let vm = manager.create_folder(&space_id, "F", false, None).unwrap();
         manager.add_tab_to_folder(&space_id, &vm.id, t1.clone());
         manager.add_tab_to_folder(&space_id, &vm.id, t2.clone());
         manager.add_tab_to_folder(&space_id, &vm.id, t3.clone());
@@ -328,44 +346,18 @@ mod tests {
         assert_eq!(folder.tab_ids, vec![t2, t3, t1]);
     }
 
-    #[test]
-    fn pin_folder_sets_pinned_flag() {
-        let mut manager = SpaceManager::new();
-        let space_id = manager.get_active_space_id().clone();
 
-        let vm = manager.create_folder(&space_id, "F", false).unwrap();
-        assert!(!vm.is_pinned);
-
-        manager.pin_folder(&space_id, &vm.id);
-
-        let space = manager.spaces.get(&space_id).unwrap();
-        let folder = space.folders.iter().find(|f| f.id == vm.id).unwrap();
-        assert!(folder.is_pinned);
-    }
-
-    #[test]
-    fn unpin_folder_clears_pinned_flag() {
-        let mut manager = SpaceManager::new();
-        let space_id = manager.get_active_space_id().clone();
-
-        let vm = manager.create_folder(&space_id, "F", true).unwrap();
-        manager.unpin_folder(&space_id, &vm.id);
-
-        let space = manager.spaces.get(&space_id).unwrap();
-        let folder = space.folders.iter().find(|f| f.id == vm.id).unwrap();
-        assert!(!folder.is_pinned);
-    }
 
     #[test]
     fn reorder_folder_root_before_sibling() {
         let mut manager = SpaceManager::new();
         let space_id = manager.get_active_space_id().clone();
 
-        let f1 = manager.create_folder(&space_id, "F1", false).unwrap();
-        let f2 = manager.create_folder(&space_id, "F2", false).unwrap();
-        let f3 = manager.create_folder(&space_id, "F3", false).unwrap();
+        let f1 = manager.create_folder(&space_id, "F1", false, None).unwrap();
+        let f2 = manager.create_folder(&space_id, "F2", false, None).unwrap();
+        let f3 = manager.create_folder(&space_id, "F3", false, None).unwrap();
 
-        manager.reorder_folder(&space_id, &f3.id, None, Some(&f1.id));
+        let _ = manager.reorder_folder(&space_id, &f3.id, None, Some(&f1.id));
 
         let space = manager.spaces.get(&space_id).unwrap();
         let ids: Vec<_> = space.folders.iter().map(|f| f.id.clone()).collect();
@@ -377,9 +369,9 @@ mod tests {
         let mut manager = SpaceManager::new();
         let space_id = manager.get_active_space_id().clone();
 
-        let parent = manager.create_folder(&space_id, "Parent", false).unwrap();
-        let child1 = manager.create_folder(&space_id, "C1", false).unwrap();
-        let child2 = manager.create_folder(&space_id, "C2", false).unwrap();
+        let parent = manager.create_folder(&space_id, "Parent", false, None).unwrap();
+        let child1 = manager.create_folder(&space_id, "C1", false, None).unwrap();
+        let child2 = manager.create_folder(&space_id, "C2", false, None).unwrap();
 
         if let Some(space) = manager.spaces.get_mut(&space_id) {
             for f in space.folders.iter_mut() {
@@ -389,7 +381,7 @@ mod tests {
             }
         }
 
-        manager.reorder_folder(&space_id, &child2.id, Some(&parent.id), Some(&child1.id));
+        let _ = manager.reorder_folder(&space_id, &child2.id, Some(&parent.id), Some(&child1.id));
 
         let space = manager.spaces.get(&space_id).unwrap();
         let children: Vec<_> = space
@@ -406,10 +398,10 @@ mod tests {
         let mut manager = SpaceManager::new();
         let space_id = manager.get_active_space_id().clone();
 
-        let parent = manager.create_folder(&space_id, "Parent", false).unwrap();
-        let child = manager.create_folder(&space_id, "Child", false).unwrap();
+        let parent = manager.create_folder(&space_id, "Parent", false, None).unwrap();
+        let child = manager.create_folder(&space_id, "Child", false, None).unwrap();
 
-        manager.reorder_folder(&space_id, &child.id, Some(&parent.id), None);
+        let _ = manager.reorder_folder(&space_id, &child.id, Some(&parent.id), None);
 
         let root_order = manager.get_root_order(&space_id);
         assert!(root_order.contains(&RootItem::Folder(parent.id)));
@@ -691,7 +683,7 @@ mod tests {
         let mut manager = SpaceManager::new();
         let space_id = manager.get_active_space_id().clone();
         let tab_id = TabId::generate();
-        let folder_vm = manager.create_folder(&space_id, "F", false).unwrap();
+        let folder_vm = manager.create_folder(&space_id, "F", false, None).unwrap();
 
         manager.add_tab_to_space(&space_id, tab_id.clone(), None);
 
@@ -747,7 +739,7 @@ mod tests {
         let tab_id = TabId::generate();
 
         manager.add_tab_to_space(&space_id, tab_id.clone(), None);
-        let folder = manager.create_folder(&space_id, "F", false).unwrap();
+        let folder = manager.create_folder(&space_id, "F", false, None).unwrap();
         manager.add_tab_to_folder(&space_id, &folder.id, tab_id.clone());
 
         assert!(manager.is_tab_in_folder(&space_id, &tab_id));
@@ -834,9 +826,9 @@ mod tests {
         let mut manager = SpaceManager::new();
         let space_id = manager.get_active_space_id().clone();
 
-        let anchor = manager.create_folder(&space_id, "Anchor", false).unwrap();
-        let parent = manager.create_folder(&space_id, "Parent", false).unwrap();
-        let nested = manager.create_folder(&space_id, "Nested", false).unwrap();
+        let anchor = manager.create_folder(&space_id, "Anchor", false, None).unwrap();
+        let parent = manager.create_folder(&space_id, "Parent", false, None).unwrap();
+        let nested = manager.create_folder(&space_id, "Nested", false, None).unwrap();
 
         if let Some(space) = manager.spaces.get_mut(&space_id) {
             if let Some(f) = space.folders.iter_mut().find(|f| f.id == nested.id) {
@@ -850,7 +842,7 @@ mod tests {
             "precondition: nested must not be in root_order before promotion"
         );
 
-        manager.reorder_folder(&space_id, &nested.id, None, Some(&anchor.id));
+        let _ = manager.reorder_folder(&space_id, &nested.id, None, Some(&anchor.id));
 
         let space = manager.spaces.get(&space_id).unwrap();
         let promoted = space.folders.iter().find(|f| f.id == nested.id).unwrap();
@@ -871,33 +863,27 @@ mod tests {
     }
 
     #[test]
-    fn move_folder_in_space_does_not_affect_same_folder_id_in_other_space() {
+    fn move_folder_in_space_rejects_cross_space_parent() {
         let mut manager = SpaceManager::new();
         let space_a = manager.get_active_space_id().clone();
 
-        let folder_a = manager.create_folder(&space_a, "FA", false).unwrap();
+        let folder_a = manager.create_folder(&space_a, "FA", false, None).unwrap();
 
         let space_b = manager
             .create_space("SpaceB", maho_types::space::SpaceColor { hue: 1.0, saturation: 0.5, brightness: 0.5, grain: 0.0 }, maho_types::identifiers::ProfileId::new(""))
             .id;
 
-        let parent_b = manager.create_folder(&space_b, "Parent", false).unwrap();
+        let parent_b = manager.create_folder(&space_b, "Parent", false, None).unwrap();
 
-        manager.move_folder_in_space(&space_a, &folder_a.id, Some(parent_b.id.clone()));
+        let res = manager.move_folder_in_space(&space_a, &folder_a.id, Some(parent_b.id.clone()));
+        assert!(matches!(res, Err(FolderError::FolderNotFound)));
 
         let space_a_data = manager.spaces.get(&space_a).unwrap();
         let folder_in_a = space_a_data.folders.iter().find(|f| f.id == folder_a.id).unwrap();
         assert_eq!(
             folder_in_a.parent_folder_id,
-            Some(parent_b.id.clone()),
-            "folder in space_a should have new parent"
-        );
-
-        let space_b_data = manager.spaces.get(&space_b).unwrap();
-        let parent_in_b = space_b_data.folders.iter().find(|f| f.id == parent_b.id).unwrap();
-        assert!(
-            parent_in_b.parent_folder_id.is_none(),
-            "parent folder in space_b must be unaffected"
+            None,
+            "folder in space_a should NOT have parent from space_b"
         );
     }
 }
@@ -924,6 +910,7 @@ pub struct SpaceManager {
     spaces: HashMap<SpaceId, Space>,
     space_order: Vec<SpaceId>,
     active_space_id: SpaceId,
+    pub is_restoring: bool,
 }
 
 impl Default for SpaceManager {
@@ -938,6 +925,7 @@ impl SpaceManager {
             spaces: HashMap::new(),
             space_order: vec![],
             active_space_id: SpaceId::new(""),
+            is_restoring: false,
         };
         let default_space = mgr.create_space_internal(
             "Personal",
@@ -1058,6 +1046,7 @@ impl SpaceManager {
     }
 
     pub fn restore_spaces(&mut self, spaces: Vec<Space>, active_space_id: SpaceId) {
+        self.is_restoring = true;
         self.spaces.clear();
         self.space_order.clear();
         for space in &spaces {
@@ -1080,6 +1069,7 @@ impl SpaceManager {
                 active_space.is_active = true;
             }
         }
+        self.is_restoring = false;
     }
 
     fn synthesize_root_order(space: &Space) -> Vec<RootItem> {
@@ -1089,14 +1079,14 @@ impl SpaceManager {
             tab_ids_in_folders.extend(folder.tab_ids.iter().cloned());
         }
 
-        for tab_id in &space.tab_order {
-            if !tab_ids_in_folders.contains(tab_id) {
-                root_order.push(RootItem::Tab(tab_id.clone()));
-            }
-        }
         for folder in &space.folders {
             if folder.parent_folder_id.is_none() {
                 root_order.push(RootItem::Folder(folder.id.clone()));
+            }
+        }
+        for tab_id in &space.tab_order {
+            if !tab_ids_in_folders.contains(tab_id) {
+                root_order.push(RootItem::Tab(tab_id.clone()));
             }
         }
         root_order
@@ -1200,16 +1190,6 @@ impl SpaceManager {
             })
             .unwrap_or(RootInsertionPoint::Append);
         self.reorder_root_item(space_id, &RootItem::Tab(tab_id.clone()), &insertion_point);
-
-        let should_delete_folder = self
-            .spaces
-            .get(space_id)
-            .and_then(|space| space.folders.iter().find(|folder| folder.id == *folder_id))
-            .is_some_and(|folder| folder.tab_ids.is_empty());
-
-        if should_delete_folder {
-            self.delete_folder(space_id, folder_id);
-        }
     }
 
     pub fn reorder_folder(
@@ -1218,15 +1198,30 @@ impl SpaceManager {
         folder_id: &FolderId,
         parent_folder_id: Option<&FolderId>,
         before_folder_id: Option<&FolderId>,
-    ) {
+    ) -> Result<(), FolderError> {
+        if let Some(pid) = parent_folder_id {
+            if !self.spaces.get(space_id).map(|s| s.folders.iter().any(|f| f.id == *pid)).unwrap_or(false) {
+                return Err(FolderError::FolderNotFound);
+            }
+            if pid == folder_id || self.is_descendant_of(space_id, pid, folder_id) {
+                return Err(FolderError::CycleDetected);
+            }
+        }
+        let subtree_height = self.get_subtree_height(space_id, folder_id);
+        let parent_depth = self.get_max_depth_under_parent(space_id, parent_folder_id);
+        if parent_depth + subtree_height > MAX_FOLDER_DEPTH {
+            return Err(FolderError::DepthLimitExceeded);
+        }
         {
             let space = match self.spaces.get_mut(space_id) {
                 Some(s) => s,
-                None => return,
+                None => return Err(FolderError::SpaceNotFound),
             };
 
             if let Some(folder) = space.folders.iter_mut().find(|f| f.id == *folder_id) {
                 folder.parent_folder_id = parent_folder_id.cloned();
+            } else {
+                return Err(FolderError::FolderNotFound);
             }
             if parent_folder_id.is_some() {
                 space
@@ -1236,7 +1231,7 @@ impl SpaceManager {
 
             let folder_pos = match space.folders.iter().position(|f| f.id == *folder_id) {
                 Some(p) => p,
-                None => return,
+                None => return Err(FolderError::FolderNotFound),
             };
             let folder = space.folders.remove(folder_pos);
 
@@ -1269,6 +1264,7 @@ impl SpaceManager {
                 .unwrap_or(RootInsertionPoint::Append);
             self.reorder_root_item(space_id, &RootItem::Folder(folder_id.clone()), &insertion_point);
         }
+        Ok(())
     }
 
     pub fn move_folder_to_root(
@@ -1428,15 +1424,29 @@ impl SpaceManager {
         space_id: &SpaceId,
         name: &str,
         is_pinned: bool,
+        parent_folder_id: Option<FolderId>,
     ) -> Option<FolderViewModel> {
+        if let Some(ref parent_id) = parent_folder_id {
+            let parent_depth = self.get_max_depth_under_parent(space_id, Some(parent_id));
+            if parent_depth + 1 > MAX_FOLDER_DEPTH {
+                return None;
+            }
+        }
         let space = self.spaces.get_mut(space_id)?;
+        if let Some(ref parent_id) = parent_folder_id {
+            if !space.folders.iter().any(|f| f.id == *parent_id) {
+                return None;
+            }
+        }
         let folder = Folder {
             id: FolderId::generate(),
             name: name.to_string(),
             tab_ids: vec![],
             is_expanded: true,
             is_pinned,
-            parent_folder_id: None,
+            parent_folder_id: parent_folder_id.clone(),
+            provider_type: None,
+            config_json: None,
         };
         let vm = FolderViewModel {
             id: folder.id.clone(),
@@ -1446,9 +1456,13 @@ impl SpaceManager {
             is_pinned: folder.is_pinned,
             tab_ids: folder.tab_ids.clone(),
             parent_folder_id: folder.parent_folder_id.clone(),
+            provider_type: None,
+            config_json: None,
         };
-        if !space.root_order.iter().any(|item| item == &RootItem::Folder(folder.id.clone())) {
-            space.root_order.push(RootItem::Folder(folder.id.clone()));
+        if parent_folder_id.is_none() {
+            if !space.root_order.iter().any(|item| item == &RootItem::Folder(folder.id.clone())) {
+                space.root_order.push(RootItem::Folder(folder.id.clone()));
+            }
         }
         space.folders.push(folder);
         Some(vm)
@@ -1525,21 +1539,7 @@ impl SpaceManager {
         }
     }
 
-    pub fn pin_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId) {
-        if let Some(space) = self.spaces.get_mut(space_id) {
-            if let Some(folder) = space.folders.iter_mut().find(|f| f.id == *folder_id) {
-                folder.is_pinned = true;
-            }
-        }
-    }
 
-    pub fn unpin_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId) {
-        if let Some(space) = self.spaces.get_mut(space_id) {
-            if let Some(folder) = space.folders.iter_mut().find(|f| f.id == *folder_id) {
-                folder.is_pinned = false;
-            }
-        }
-    }
 
     pub fn get_folder_view_models(&self, space_id: &SpaceId) -> Vec<FolderViewModel> {
         self.spaces
@@ -1554,17 +1554,45 @@ impl SpaceManager {
             .unwrap_or_default()
     }
 
-    pub fn move_folder(&mut self, folder_id: &FolderId, new_parent: Option<FolderId>) {
-        for space in self.spaces.values_mut() {
-            if let Some(folder) = space.folders.iter_mut().find(|f| f.id == *folder_id) {
-                folder.parent_folder_id = new_parent.clone();
-                if new_parent.is_some() {
-                    space
-                        .root_order
-                        .retain(|item| item != &RootItem::Folder(folder_id.clone()));
-                }
-                return;
+    pub fn move_folder(&mut self, folder_id: &FolderId, new_parent: Option<FolderId>) -> Result<(), FolderError> {
+        let target_space_id = self.spaces.iter().find_map(|(space_id, space)| {
+            if space.folders.iter().any(|f| f.id == *folder_id) {
+                Some(space_id.clone())
+            } else {
+                None
             }
+        });
+        if let Some(space_id) = target_space_id {
+            if let Some(ref pid) = new_parent {
+                if !self.spaces.get(&space_id).map(|s| s.folders.iter().any(|f| f.id == *pid)).unwrap_or(false) {
+                    return Err(FolderError::FolderNotFound);
+                }
+                if pid == folder_id || self.is_descendant_of(&space_id, pid, folder_id) {
+                    return Err(FolderError::CycleDetected);
+                }
+            }
+            let subtree_height = self.get_subtree_height(&space_id, folder_id);
+            let parent_depth = self.get_max_depth_under_parent(&space_id, new_parent.as_ref());
+            if parent_depth + subtree_height > MAX_FOLDER_DEPTH {
+                return Err(FolderError::DepthLimitExceeded);
+            }
+            if let Some(space) = self.spaces.get_mut(&space_id) {
+                if let Some(folder) = space.folders.iter_mut().find(|f| f.id == *folder_id) {
+                    folder.parent_folder_id = new_parent.clone();
+                    if new_parent.is_some() {
+                        space
+                            .root_order
+                            .retain(|item| item != &RootItem::Folder(folder_id.clone()));
+                    }
+                    Ok(())
+                } else {
+                    Err(FolderError::FolderNotFound)
+                }
+            } else {
+                Err(FolderError::SpaceNotFound)
+            }
+        } else {
+            Err(FolderError::FolderNotFound)
         }
     }
 
@@ -1573,7 +1601,20 @@ impl SpaceManager {
         space_id: &SpaceId,
         folder_id: &FolderId,
         new_parent: Option<FolderId>,
-    ) {
+    ) -> Result<(), FolderError> {
+        if let Some(ref pid) = new_parent {
+            if !self.spaces.get(space_id).map(|s| s.folders.iter().any(|f| f.id == *pid)).unwrap_or(false) {
+                return Err(FolderError::FolderNotFound);
+            }
+            if pid == folder_id || self.is_descendant_of(space_id, pid, folder_id) {
+                return Err(FolderError::CycleDetected);
+            }
+        }
+        let subtree_height = self.get_subtree_height(space_id, folder_id);
+        let parent_depth = self.get_max_depth_under_parent(space_id, new_parent.as_ref());
+        if parent_depth + subtree_height > MAX_FOLDER_DEPTH {
+            return Err(FolderError::DepthLimitExceeded);
+        }
         if let Some(space) = self.spaces.get_mut(space_id) {
             if let Some(folder) = space.folders.iter_mut().find(|f| f.id == *folder_id) {
                 folder.parent_folder_id = new_parent.clone();
@@ -1582,6 +1623,41 @@ impl SpaceManager {
                         .root_order
                         .retain(|item| item != &RootItem::Folder(folder_id.clone()));
                 }
+                Ok(())
+            } else {
+                Err(FolderError::FolderNotFound)
+            }
+        } else {
+            Err(FolderError::SpaceNotFound)
+        }
+    }
+
+    pub fn move_folder_to_space(
+        &mut self,
+        folder_id: &FolderId,
+        source_space_id: &SpaceId,
+        target_space_id: &SpaceId,
+    ) {
+        let folder_opt = if let Some(source_space) = self.spaces.get_mut(source_space_id) {
+            if let Some(pos) = source_space.folders.iter().position(|f| f.id == *folder_id) {
+                let folder = source_space.folders.remove(pos);
+                source_space.root_order.retain(|item| item != &RootItem::Folder(folder_id.clone()));
+                Some(folder)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some(folder) = folder_opt {
+            if let Some(target_space) = self.spaces.get_mut(target_space_id) {
+                if folder.parent_folder_id.is_none() {
+                    if !target_space.root_order.contains(&RootItem::Folder(folder.id.clone())) {
+                        target_space.root_order.push(RootItem::Folder(folder.id.clone()));
+                    }
+                }
+                target_space.folders.push(folder);
             }
         }
     }
@@ -1599,6 +1675,90 @@ impl SpaceManager {
             .unwrap_or_default()
     }
 
+    pub fn is_descendant_of(
+        &self,
+        space_id: &SpaceId,
+        descendant: &FolderId,
+        ancestor: &FolderId,
+    ) -> bool {
+        if descendant == ancestor {
+            return true;
+        }
+        let space = match self.spaces.get(space_id) {
+            Some(s) => s,
+            None => return false,
+        };
+        let mut visited = HashSet::new();
+        let mut current = descendant.clone();
+        visited.insert(current.clone());
+        while let Some(folder) = space.folders.iter().find(|f| f.id == current) {
+            if let Some(ref parent_id) = folder.parent_folder_id {
+                if parent_id == ancestor {
+                    return true;
+                }
+                if visited.contains(parent_id) {
+                    break;
+                }
+                visited.insert(parent_id.clone());
+                current = parent_id.clone();
+            } else {
+                break;
+            }
+        }
+        false
+    }
+
+    pub fn get_max_depth_under_parent(&self, space_id: &SpaceId, parent_id: Option<&FolderId>) -> usize {
+        match parent_id {
+            None => 0,
+            Some(pid) => {
+                let mut depth = 0;
+                let mut current = Some(pid.clone());
+                let mut visited = HashSet::new();
+                if let Some(space) = self.spaces.get(space_id) {
+                    while let Some(id) = current {
+                        if visited.contains(&id) {
+                            break; // Cycle guard
+                        }
+                        visited.insert(id.clone());
+                        if let Some(folder) = space.folders.iter().find(|f| f.id == id) {
+                            depth += 1;
+                            current = folder.parent_folder_id.clone();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                depth
+            }
+        }
+    }
+
+    pub fn get_subtree_height(&self, space_id: &SpaceId, folder_id: &FolderId) -> usize {
+        let mut visited = HashSet::new();
+        self.get_subtree_height_recursive(space_id, folder_id, &mut visited)
+    }
+
+    fn get_subtree_height_recursive(&self, space_id: &SpaceId, folder_id: &FolderId, visited: &mut HashSet<FolderId>) -> usize {
+        if visited.contains(folder_id) {
+            return 0; // Cycle guard
+        }
+        visited.insert(folder_id.clone());
+        let mut max_child_height = 0;
+        if let Some(space) = self.spaces.get(space_id) {
+            for folder in &space.folders {
+                if folder.parent_folder_id.as_ref() == Some(folder_id) {
+                    let height = self.get_subtree_height_recursive(space_id, &folder.id, visited);
+                    if height > max_child_height {
+                        max_child_height = height;
+                    }
+                }
+            }
+        }
+        visited.remove(folder_id);
+        max_child_height + 1
+    }
+
     fn folder_to_view_model(&self, folder: &Folder) -> FolderViewModel {
         FolderViewModel {
             id: folder.id.clone(),
@@ -1608,6 +1768,73 @@ impl SpaceManager {
             is_pinned: folder.is_pinned,
             tab_ids: folder.tab_ids.clone(),
             parent_folder_id: folder.parent_folder_id.clone(),
+            provider_type: folder.provider_type.clone(),
+            config_json: folder.config_json.clone(),
+        }
+    }
+
+    pub fn get_sidebar_tree<F>(&self, space_id: &SpaceId, get_tab_vm: F) -> Vec<SidebarNode>
+    where
+        F: Fn(&TabId) -> Option<TabViewModel> + Copy,
+    {
+        let root_order = self.get_root_order(space_id);
+        let mut tree = Vec::new();
+        for item in root_order {
+            if let Some(node) = self.build_sidebar_node_recursive(space_id, &item, get_tab_vm) {
+                tree.push(node);
+            }
+        }
+        tree
+    }
+
+    fn build_sidebar_node_recursive<F>(
+        &self,
+        space_id: &SpaceId,
+        item: &RootItem,
+        get_tab_vm: F,
+    ) -> Option<SidebarNode>
+    where
+        F: Fn(&TabId) -> Option<TabViewModel> + Copy,
+    {
+        match item {
+            RootItem::Tab(tab_id) => {
+                let tab_vm = get_tab_vm(tab_id)?;
+                Some(SidebarNode::Tab { tab: tab_vm })
+            }
+            RootItem::Folder(folder_id) => {
+                let space = self.get_space(space_id)?;
+                let folder = space.folders.iter().find(|f| f.id == *folder_id)?;
+
+                let mut children = Vec::new();
+                for child_tab_id in &folder.tab_ids {
+                    if let Some(tab_vm) = get_tab_vm(child_tab_id) {
+                        children.push(SidebarNode::Tab { tab: tab_vm });
+                    }
+                }
+
+                for child_folder in &space.folders {
+                    if child_folder.parent_folder_id.as_ref() == Some(folder_id) {
+                        if let Some(child_node) = self.build_sidebar_node_recursive(
+                            space_id,
+                            &RootItem::Folder(child_folder.id.clone()),
+                            get_tab_vm,
+                        ) {
+                            children.push(child_node);
+                        }
+                    }
+                }
+
+                Some(SidebarNode::Folder {
+                    id: folder.id.clone(),
+                    name: folder.name.clone(),
+                    is_expanded: folder.is_expanded,
+                    is_pinned: folder.is_pinned,
+                    parent_folder_id: folder.parent_folder_id.clone(),
+                    provider_type: folder.provider_type.clone(),
+                    config_json: folder.config_json.clone(),
+                    children,
+                })
+            }
         }
     }
 

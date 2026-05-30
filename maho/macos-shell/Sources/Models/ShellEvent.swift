@@ -245,7 +245,7 @@ enum ShellEvent: Codable, Equatable {
     case resizeSplit(paneId: PaneId, ratio: Double)
 
     // Boosts
-    case createBoost(urlPattern: UrlPattern)
+    case createBoost(domain: String)
     case updateBoost(boostId: BoostId, changes: BoostUpdate)
     case toggleBoost(boostId: BoostId, enabled: Bool)
     case deleteBoost(boostId: BoostId)
@@ -322,9 +322,7 @@ enum ShellEvent: Codable, Equatable {
     case appWillTerminate
     case memoryWarning(level: MemoryPressureLevel)
 
-    // Boosts settings
-    case toggleGlobalBoosts
-    case toggleJsBoosts
+
 
     // Extensions management
     case toggleExtension(extensionId: String)
@@ -409,7 +407,7 @@ enum ShellEvent: Codable, Equatable {
         case orientation
         case paneId = "pane_id"
         case ratio
-        case urlPattern = "url_pattern"
+        case domain
         case boostId = "boost_id"
         case changes
         case enabled
@@ -691,7 +689,7 @@ enum ShellEvent: Codable, Equatable {
 
         // Boosts
         case "create_boost":
-            self = .createBoost(urlPattern: try container.decode(UrlPattern.self, forKey: .urlPattern))
+            self = .createBoost(domain: try container.decode(String.self, forKey: .domain))
         case "update_boost":
             self = .updateBoost(
                 boostId: try container.decode(BoostId.self, forKey: .boostId),
@@ -865,11 +863,7 @@ enum ShellEvent: Codable, Equatable {
         case "memory_warning":
             self = .memoryWarning(level: try container.decode(MemoryPressureLevel.self, forKey: .level))
 
-        // Boosts settings
-        case "toggle_global_boosts":
-            self = .toggleGlobalBoosts
-        case "toggle_js_boosts":
-            self = .toggleJsBoosts
+
 
         // Extensions management
         case "toggle_extension":
@@ -1233,9 +1227,9 @@ enum ShellEvent: Codable, Equatable {
             try container.encode(paneId, forKey: .paneId)
             try container.encode(ratio, forKey: .ratio)
 
-        case .createBoost(let urlPattern):
+        case .createBoost(let domain):
             try container.encode("create_boost", forKey: .kind)
-            try container.encode(urlPattern, forKey: .urlPattern)
+            try container.encode(domain, forKey: .domain)
         case .updateBoost(let boostId, let changes):
             try container.encode("update_boost", forKey: .kind)
             try container.encode(boostId, forKey: .boostId)
@@ -1422,10 +1416,7 @@ enum ShellEvent: Codable, Equatable {
             try container.encode("memory_warning", forKey: .kind)
             try container.encode(level, forKey: .level)
 
-        case .toggleGlobalBoosts:
-            try container.encode("toggle_global_boosts", forKey: .kind)
-        case .toggleJsBoosts:
-            try container.encode("toggle_js_boosts", forKey: .kind)
+
 
         case .toggleExtension(let extensionId):
             try container.encode("toggle_extension", forKey: .kind)

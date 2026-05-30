@@ -9,6 +9,7 @@
 #include "cc/paint/paint_recorder.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkCanvas.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkPaint.h"
 #include "third_party/skia/include/core/SkRect.h"
 #include "ui/gfx/canvas.h"
@@ -35,6 +36,10 @@ class MahoSidebarSpaceDotViewTest : public views::ViewsTestBase {
 
   views::Label* GetIconLabel(MahoSidebarSpaceDotView* view) {
     return view->icon_label_;
+  }
+
+  void SetHovered(MahoSidebarSpaceDotView* view, bool hovered) {
+    view->is_hovered_ = hovered;
   }
 };
 
@@ -165,6 +170,40 @@ TEST_F(MahoSidebarSpaceDotViewTest, ConfigureNoIconActive) {
   SkRect expected_halo_rect = SkRect::MakeLTRB(2.9f, 2.9f, 12.1f, 12.1f);
   EXPECT_NEAR(mock_canvas.draw_oval_calls()[1].oval.fLeft, expected_halo_rect.fLeft, 0.01f);
   EXPECT_EQ(mock_canvas.draw_oval_calls()[1].paint.getStyle(), SkPaint::kStroke_Style);
+}
+
+TEST_F(MahoSidebarSpaceDotViewTest,
+       HoveredNoIconInactiveUsesBrighterPaintThanIdle) {
+  auto view = CreateDotView();
+  view->Configure("space-2", "Space 2", "", SK_ColorRED, /*is_active=*/false);
+
+  cc::PaintRecorder idle_recorder;
+  gfx::Canvas idle_canvas(idle_recorder.beginRecording(), 1.0f);
+  view->OnPaint(&idle_canvas);
+
+  cc::PaintRecord idle_record = idle_recorder.finishRecordingAsPicture();
+  MockCanvas idle_mock_canvas(15, 15);
+  idle_record.Playback(&idle_mock_canvas);
+  ASSERT_EQ(idle_mock_canvas.draw_oval_calls().size(), 1u);
+  const SkColor idle_color = idle_mock_canvas.draw_oval_calls()[0].paint.getColor();
+
+  SetHovered(view.get(), true);
+
+  cc::PaintRecorder hovered_recorder;
+  gfx::Canvas hovered_canvas(hovered_recorder.beginRecording(), 1.0f);
+  view->OnPaint(&hovered_canvas);
+
+  cc::PaintRecord hovered_record = hovered_recorder.finishRecordingAsPicture();
+  MockCanvas hovered_mock_canvas(15, 15);
+  hovered_record.Playback(&hovered_mock_canvas);
+  ASSERT_EQ(hovered_mock_canvas.draw_oval_calls().size(), 1u);
+  const SkColor hovered_color =
+      hovered_mock_canvas.draw_oval_calls()[0].paint.getColor();
+
+  EXPECT_EQ(SkColorGetA(hovered_color), SkColorGetA(idle_color));
+  EXPECT_GT(SkColorGetR(hovered_color), SkColorGetR(idle_color));
+  EXPECT_GT(SkColorGetG(hovered_color), SkColorGetG(idle_color));
+  EXPECT_GT(SkColorGetB(hovered_color), SkColorGetB(idle_color));
 }
 
 TEST_F(MahoSidebarSpaceDotViewTest, SetActiveToggle) {

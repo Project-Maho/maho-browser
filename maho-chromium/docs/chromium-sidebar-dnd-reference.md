@@ -180,21 +180,13 @@ Product wired.
 
 ### Folder pinned ↔ normal
 
-#### Chromium evidence
+In the Zen-aligned model, folders are structurally (type-)pinned. There is no user-facing toggle that flips a folder between pinned and normal, and no shell event dispatch path exists for that transition.
 
-`SidebarSectionDropTarget::GetDropCallback()` dispatches:
+Folder drop behavior at section boundaries:
 
-- `pin_folder`
-- `unpin_folder`
-
-#### Core evidence
-
-- `ShellEvent::PinFolder`
-- `ShellEvent::UnpinFolder`
-
-#### Status
-
-Product wired.
+- folder dropped on the normal section: invalid, no-op;
+- folder dropped on the favorites grid: invalid, no-op (favorites accept tab payloads only);
+- folder dropped on the pinned section: valid, handled as a regular folder drop with no extra pin/unpin transition or step.
 
 ### Tab ↔ favorites
 

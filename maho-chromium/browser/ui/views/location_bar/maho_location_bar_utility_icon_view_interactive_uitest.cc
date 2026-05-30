@@ -19,7 +19,6 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
-#include "maho/browser/ui/views/boost/maho_boost_bubble_coordinator.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_provider.h"
@@ -472,46 +471,6 @@ IN_PROC_BROWSER_TEST_F(LocationBarUtilityPanelInteractiveUiTest,
     return !utility_icon->IsPanelOpenForTesting();
   }));
   EXPECT_FALSE(utility_icon->IsPanelOpenForTesting());
-}
-
-IN_PROC_BROWSER_TEST_F(LocationBarUtilityPanelInteractiveUiTest,
-                       UtilityPanelBoostQuickActionShowsBoostBubbleAndClosesPanel) {
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), embedded_test_server()->GetURL("/title1.html")));
-  base::RunLoop().RunUntilIdle();
-  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
-
-  LocationBarView* location_bar_view = GetLocationBarView();
-  ASSERT_TRUE(location_bar_view);
-  auto* utility_icon = location_bar_view->GetUtilityIconViewForTesting();
-  ASSERT_TRUE(utility_icon);
-
-  maho::MahoBoostBubbleCoordinator& boost_coordinator =
-      maho::MahoBoostBubbleCoordinator::GetForBrowser(browser());
-  EXPECT_FALSE(boost_coordinator.IsShowing());
-
-  maho::MahoLocationBarUtilityPanelView* panel_view =
-      OpenUtilityPanelFromRealLocationBar(location_bar_view);
-  ASSERT_TRUE(panel_view);
-
-  views::View* boost_action = panel_view->GetActionViewForTesting(u"Boost");
-  ASSERT_TRUE(boost_action);
-
-  ClickViewCenter(boost_action);
-
-  ASSERT_TRUE(base::test::RunUntil([&]() {
-    return boost_coordinator.IsShowing();
-  }));
-  EXPECT_TRUE(boost_coordinator.IsShowing());
-  ASSERT_TRUE(base::test::RunUntil([&]() {
-    return !utility_icon->IsPanelOpenForTesting();
-  }));
-  EXPECT_FALSE(utility_icon->IsPanelOpenForTesting());
-
-  boost_coordinator.Hide();
-  ASSERT_TRUE(base::test::RunUntil([&]() {
-    return !boost_coordinator.IsShowing();
-  }));
 }
 
 IN_PROC_BROWSER_TEST_F(LocationBarUtilityPanelInteractiveUiTest,

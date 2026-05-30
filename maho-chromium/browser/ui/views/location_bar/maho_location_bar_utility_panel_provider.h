@@ -130,8 +130,6 @@ MahoLocationBarUtilityPanelAction BuildDeveloperModeAction(
 
 MahoLocationBarUtilityPanelAction BuildShareAction(Browser* browser);
 
-MahoLocationBarUtilityPanelAction BuildBoostAction(Browser* browser);
-
 MahoLocationBarUtilityPanelAction BuildCameraAction(Browser* browser);
 
 MahoLocationBarUtilityPanelAction BuildViewfinderAction(Browser* browser);

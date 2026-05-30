@@ -28,12 +28,12 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_archive_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_downloads_view.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_boosts_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_easels_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_notes_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_library_rail_view.h"
@@ -337,9 +337,104 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
 
   content::WebContents* active =
       browser()->tab_strip_model()->GetActiveWebContents();
-  EXPECT_TRUE(active->GetVisibleURL().spec().find(first_fav.url.host()) !=
-              std::string::npos)
-      << "Active tab should match clicked favorite URL";
+  ASSERT_TRUE(active);
+  auto* helper = MahoTabIdHelper::FromWebContents(active);
+  ASSERT_TRUE(helper);
+  EXPECT_EQ(helper->stable_tab_id(), first_fav.tab_id)
+      << "Click on a live-mapped favorite must activate that tab, "
+         "not navigate the current tab";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
+                       FavoriteClickWithNoLiveTabOpensNewForegroundTab) {
+  SeedProfile(2);
+
+  auto state = GetViewState();
+  ASSERT_FALSE(state.favorites.items.empty());
+  const auto& first_fav = state.favorites.items[0];
+  ASSERT_FALSE(first_fav.tab_id.empty());
+
+  // Close every live tab whose stable_tab_id matches the favorite.
+  // After this, OnTilePressed must NOT find a live mapping and must
+  // fall back to NEW_FOREGROUND_TAB.
+  TabStripModel* strip = browser()->tab_strip_model();
+  for (int i = strip->count() - 1; i >= 0; --i) {
+    content::WebContents* wc = strip->GetWebContentsAt(i);
+    auto* helper = wc ? MahoTabIdHelper::FromWebContents(wc) : nullptr;
+    if (helper && helper->stable_tab_id() == first_fav.tab_id) {
+      strip->CloseWebContentsAt(i, TabCloseTypes::CLOSE_USER_GESTURE);
+    }
+  }
+  // Ensure at least one unrelated tab remains so we can detect "new tab".
+  ASSERT_GT(strip->count(), 0);
+  const int tab_count_before = strip->count();
+  content::WebContents* active_before = strip->GetActiveWebContents();
+  ASSERT_TRUE(active_before);
+
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+
+  views::View* tile = favorites_->GetTileForTesting(0);
+  ASSERT_TRUE(tile);
+  const gfx::Point center = tile->GetBoundsInScreen().CenterPoint();
+  ASSERT_TRUE(ui_controls::SendMouseMove(center.x(), center.y()));
+  base::RunLoop click_loop;
+  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
+      ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
+      click_loop.QuitClosure()));
+  click_loop.Run();
+  base::RunLoop().RunUntilIdle();
+
+  EXPECT_EQ(strip->count(), tab_count_before + 1)
+      << "Fallback path must open a new tab, not reuse current";
+  EXPECT_NE(strip->GetActiveWebContents(), active_before)
+      << "New tab must be foreground (active)";
+  EXPECT_TRUE(strip->GetActiveWebContents()
+                  ->GetVisibleURL()
+                  .spec()
+                  .find(first_fav.url.host()) != std::string::npos);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
+                       FavoriteClickAfterDragCancel) {
+  SeedProfile(2);
+
+  auto state = GetViewState();
+  ASSERT_FALSE(state.favorites.items.empty());
+
+  const auto& first_fav = state.favorites.items[0];
+  ASSERT_FALSE(first_fav.tab_id.empty())
+      << "First favorite must have a matching tab";
+
+  views::View* tile = favorites_->GetTileForTesting(0);
+  ASSERT_TRUE(tile);
+
+  // Simulate starting drag and canceling it using standard views API.
+  views::DragController* controller = tile->drag_controller();
+  ASSERT_TRUE(controller);
+
+  ui::OSExchangeData data;
+  controller->WriteDragDataForView(tile, gfx::Point(), &data);
+  tile->OnDragDone();
+
+  // Click on the tile and verify it still activates the correct tab.
+  const gfx::Point center = tile->GetBoundsInScreen().CenterPoint();
+  ASSERT_TRUE(ui_controls::SendMouseMove(center.x(), center.y()));
+  base::RunLoop click_loop;
+  ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
+      ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
+      click_loop.QuitClosure()));
+  click_loop.Run();
+  base::RunLoop().RunUntilIdle();
+
+  content::WebContents* active =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  ASSERT_TRUE(active);
+  auto* helper = MahoTabIdHelper::FromWebContents(active);
+  ASSERT_TRUE(helper);
+  EXPECT_EQ(helper->stable_tab_id(), first_fav.tab_id)
+      << "Click on a live-mapped favorite must activate that tab, "
+         "not navigate the current tab";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
@@ -450,7 +545,6 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
           MahoSidebarLibraryRailView::Category::kDownloads,
           MahoSidebarLibraryRailView::Category::kArchivedTabs,
           MahoSidebarLibraryRailView::Category::kSpaces,
-          MahoSidebarLibraryRailView::Category::kBoosts,
       };
   EXPECT_EQ(kVisibleFirstEntryCategories, rail->visible_categories_for_testing());
   // PB1-B: Rail selection exclusivity — only kArchivedTabs must carry the
@@ -464,7 +558,6 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
       MahoSidebarLibraryRailView::Category::kMedia,
       MahoSidebarLibraryRailView::Category::kSpaces,
       MahoSidebarLibraryRailView::Category::kEasels,
-      MahoSidebarLibraryRailView::Category::kBoosts,
       MahoSidebarLibraryRailView::Category::kNotes,
   };
   for (const auto category : kAllCategories) {
@@ -814,7 +907,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   EXPECT_EQ(MahoSidebarLibraryRailView::Category::kSpaces,
             rail->selected_category());
   EXPECT_GT(sidebar->spaces_view_for_testing()->GetBoundsInScreen().height(), 0);
-  EXPECT_TRUE(sidebar->spaces_view_for_testing()->title_label_for_testing());
+  EXPECT_TRUE(sidebar->spaces_view_for_testing()->scroll_view_for_testing());
   ASSERT_TRUE(sidebar->archive_view_for_testing());
   EXPECT_FALSE(sidebar->archive_view_for_testing()->GetVisible());
 }
@@ -843,37 +936,10 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   EXPECT_EQ(MahoSidebarLibraryRailView::Category::kEasels,
             rail->selected_category());
 
-  EXPECT_TRUE(sidebar->easel_view_for_testing()->title_label_for_testing());
+  EXPECT_TRUE(sidebar->easel_view_for_testing()->web_view_for_testing());
 }
 
 
-
-IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
-                         LibraryOpensBoostsPaneInline) {
-  ResolveViews();
-
-  auto* sidebar = GetSidebarView();
-  ASSERT_TRUE(sidebar);
-  auto* rail = sidebar->library_rail_view_for_testing();
-  ASSERT_TRUE(rail);
-  auto* boosts_button = rail->button_for_category_for_testing(
-      MahoSidebarLibraryRailView::Category::kBoosts);
-  ASSERT_TRUE(boosts_button);
-  EXPECT_TRUE(boosts_button->GetEnabled());
-
-  sidebar->OpenLibrary(MahoSidebarLibraryRailView::Category::kBoosts);
-  base::RunLoop().RunUntilIdle();
-
-  EXPECT_TRUE(sidebar->is_library_mode_for_testing());
-  EXPECT_EQ(MahoSidebarLibraryRailView::Category::kBoosts,
-            sidebar->active_library_category_for_testing());
-  ASSERT_TRUE(sidebar->boost_view_for_testing());
-  EXPECT_TRUE(sidebar->boost_view_for_testing()->GetVisible());
-  EXPECT_EQ(MahoSidebarLibraryRailView::Category::kBoosts,
-            rail->selected_category());
-
-  EXPECT_TRUE(sidebar->boost_view_for_testing()->title_label_for_testing());
-}
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
                        ToggleArchiveModeAliasOpensAndClosesLibrary) {

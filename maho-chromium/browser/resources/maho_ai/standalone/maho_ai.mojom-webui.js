@@ -77,6 +77,11 @@ export const InteractionMode = {
   kDeveloper: 1,
 };
 
+export const ViewMode = {
+  kSidebar: 0,
+  kFloating: 1,
+};
+
 export const BrowserContextStatus = {
   kInjected: 0,
   kDeniedInternalPage: 1,
@@ -289,6 +294,19 @@ export class PageHandlerRemote {
     };
   }
 
+  async getOpenTabs() {
+    return {tabs: []};
+  }
+
+  async searchHistory(query, maxResults) {
+    return {items: []};
+  }
+
+  async searchBookmarks(query, maxResults) {
+    return {items: []};
+  }
+
+
   async submitPrompt(sessionId, prompt, attachBrowserContext, mode) {
     const trimmedPrompt = prompt.trim();
     if (!trimmedPrompt) {
@@ -376,6 +394,16 @@ export class PageHandlerRemote {
   }
 
   async closePanel() {}
+
+  async openSettings() {
+    window.open('chrome://maho-settings/', '_blank');
+  }
+
+  async getViewMode() {
+    return {mode: ViewMode.kSidebar};
+  }
+
+  async setViewMode(_mode) {}
 
   async probeConnection() {
     try {

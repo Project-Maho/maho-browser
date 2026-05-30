@@ -8,7 +8,7 @@ use maho_types::events::core_update::{CoreUpdate, MemoryAction};
 use maho_types::events::shell_event::ShellEvent;
 use maho_types::identifiers::{BoostId, FolderId, NoteId, ProfileId, SpaceId, TabId};
 use maho_types::note::Note;
-use maho_types::settings::{AppearanceSettingsUpdate, Settings, SettingsUpdate};
+use maho_types::settings::{AppearanceSettingsUpdate, PinnedCloseBehavior, Settings, SettingsUpdate};
 use maho_types::keyboard::{KeyCombo, KeyModifier};
 use maho_types::space::{RootItem, Space, SpaceColor};
 use maho_types::split_view::{SplitConfig, SplitViewConfig};
@@ -358,7 +358,7 @@ mod tests {
         let space_id = core.get_active_space_id().clone();
         let tab_id = create_tab(&mut core);
 
-        let folder_vm = core.space_manager.create_folder(&space_id, "F", false).unwrap();
+        let folder_vm = core.space_manager.create_folder(&space_id, "F", false, None).unwrap();
         core.space_manager.add_tab_to_folder(&space_id, &folder_vm.id, tab_id.clone());
 
         core.favorite_tab(&tab_id);
@@ -514,7 +514,7 @@ mod tests {
         let space_id = core.get_active_space_id().clone();
         let tab_id = create_tab(&mut core);
 
-        let folder_vm = core.space_manager.create_folder(&space_id, "F", false).unwrap();
+        let folder_vm = core.space_manager.create_folder(&space_id, "F", false, None).unwrap();
         core.space_manager.add_tab_to_folder(&space_id, &folder_vm.id, tab_id.clone());
         core.favorite_tab(&tab_id);
 
@@ -536,7 +536,7 @@ mod tests {
         let space_id = core.get_active_space_id().clone();
         let tab_id = create_tab(&mut core);
 
-        let folder_vm = core.space_manager.create_folder(&space_id, "F", false).unwrap();
+        let folder_vm = core.space_manager.create_folder(&space_id, "F", false, None).unwrap();
         core.space_manager.add_tab_to_folder(&space_id, &folder_vm.id, tab_id.clone());
         assert!(
             !core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id.clone())),
@@ -556,11 +556,11 @@ mod tests {
     }
 
     #[test]
-    fn move_folder_into_folder_scoped_to_space_does_not_affect_same_folder_in_other_space() {
+    fn move_folder_into_folder_scoped_to_space_rejects_cross_space_parent() {
         let mut core = MahoCore::new();
         let space_a = core.get_active_space_id().clone();
 
-        let folder_a = core.space_manager.create_folder(&space_a, "FA", false).unwrap();
+        let folder_a = core.space_manager.create_folder(&space_a, "FA", false, None).unwrap();
 
         let profile_id = core.get_space_view_models()
             .into_iter()
@@ -570,27 +570,22 @@ mod tests {
         let space_b_space = core.create_space("B", SpaceColor { hue: 0.5, saturation: 0.5, brightness: 0.5, grain: 0.0 }, profile_id);
         let space_b = space_b_space.id.clone();
 
-        let parent_b = core.space_manager.create_folder(&space_b, "Parent", false).unwrap();
+        let parent_b = core.space_manager.create_folder(&space_b, "Parent", false, None).unwrap();
 
-        core.handle_event(ShellEvent::MoveFolderIntoFolder {
+        let updates = core.handle_event(ShellEvent::MoveFolderIntoFolder {
             space_id: space_a.clone(),
             folder_id: folder_a.id.clone(),
             target_folder_id: parent_b.id.clone(),
         });
 
+        assert!(updates.is_empty(), "cross-space parent move should emit no updates");
+
         let space_a_data = core.space_manager.get_space(&space_a).unwrap();
         let folder_in_a = space_a_data.folders.iter().find(|f| f.id == folder_a.id).unwrap();
         assert_eq!(
             folder_in_a.parent_folder_id,
-            Some(parent_b.id.clone()),
-            "folder in space_a should have new parent"
-        );
-
-        let space_b_data = core.space_manager.get_space(&space_b).unwrap();
-        let parent_in_b = space_b_data.folders.iter().find(|f| f.id == parent_b.id).unwrap();
-        assert!(
-            parent_in_b.parent_folder_id.is_none(),
-            "parent folder in space_b must be unmodified"
+            None,
+            "folder in space_a should NOT have parent from space_b"
         );
     }
 }
@@ -858,6 +853,11 @@ impl MahoCore {
             "Extensions".into(),
         );
         command_bar.add_action(
+            "open_boost_editor".into(),
+            "Boost Editor".into(),
+            "Extensions".into(),
+        );
+        command_bar.add_action(
             "toggle_content_blocker".into(),
             "Toggle Content Blocker".into(),
             "Extensions".into(),
@@ -905,7 +905,7 @@ impl MahoCore {
 
         let dispatcher = EventDispatcher::new();
 
-        let mut core = Self {
+        let core = Self {
             tab_manager,
             space_manager,
             command_bar,
@@ -1174,36 +1174,15 @@ impl MahoCore {
 
         // Load boosts
         if let Ok(boosts_data) = storage.load_boosts() {
-            for (
-                id,
-                url_pattern,
-                pattern_type,
-                custom_css,
-                custom_js,
-                color_theme,
-                font_override,
-                enabled,
-                space_scope,
-            ) in boosts_data
-            {
-                let pattern_type_enum = match pattern_type.as_str() {
-                    "regex" => maho_types::common::UrlPatternType::Regex,
-                    _ => maho_types::common::UrlPatternType::Glob,
-                };
-                let boost = maho_types::boost::Boost {
-                    id: maho_types::identifiers::BoostId::new(&id),
-                    url_pattern: maho_types::common::UrlPattern {
-                        pattern: url_pattern,
-                        pattern_type: pattern_type_enum,
-                    },
-                    custom_css,
-                    custom_js,
-                    color_theme: color_theme.and_then(|s| serde_json::from_str(&s).ok()),
-                    font_override: font_override.and_then(|s| serde_json::from_str(&s).ok()),
-                    enabled,
-                    space_scope: space_scope.map(maho_types::identifiers::SpaceId::new),
-                };
+            for boost in boosts_data {
+                let domain = boost.domain.clone();
+                let id = boost.id.clone();
                 self.boost_manager.restore_boost(boost);
+                if let Ok(Some(active_id_str)) = storage.get_active_boost(&domain) {
+                    if active_id_str == id.as_ref() {
+                        self.boost_manager.restore_active_boost(domain, id);
+                    }
+                }
             }
         }
 
@@ -1671,30 +1650,7 @@ impl MahoCore {
 
     fn persist_boost(&self, boost: &Boost) {
         if let Some(ref storage) = self.storage {
-            let color_theme = boost
-                .color_theme
-                .as_ref()
-                .and_then(|color| serde_json::to_string(color).ok());
-            let font_override = boost
-                .font_override
-                .as_ref()
-                .and_then(|font| serde_json::to_string(font).ok());
-            let pattern_type = match boost.url_pattern.pattern_type {
-                maho_types::common::UrlPatternType::Regex => "regex",
-                maho_types::common::UrlPatternType::Glob => "glob",
-            };
-
-            let _ = storage.save_boost(
-                boost.id.as_ref(),
-                &boost.url_pattern.pattern,
-                pattern_type,
-                boost.custom_css.as_deref(),
-                boost.custom_js.as_deref(),
-                color_theme.as_deref(),
-                font_override.as_deref(),
-                boost.enabled,
-                boost.space_scope.as_ref().map(|space_id| space_id.as_ref()),
-            );
+            let _ = storage.save_boost(boost);
         }
     }
 
@@ -1733,32 +1689,107 @@ impl MahoCore {
         note
     }
 
-    pub fn create_boost_persisted(&mut self, url_pattern: maho_types::common::UrlPattern) -> Boost {
-        let boost = self.boost_manager.create_boost(url_pattern);
+    pub fn create_boost_persisted(&mut self, domain: String, name: String) -> Boost {
+        let boost = self.boost_manager.create(domain, name);
         self.persist_boost(&boost);
         boost
     }
 
     pub fn update_boost_persisted(&mut self, boost_id: &BoostId, changes: BoostUpdate) {
-        self.boost_manager.update_boost(boost_id, changes);
-        if let Some(boost) = self.boost_manager.get_boost(boost_id) {
-            self.persist_boost(boost);
-        }
-    }
-
-    pub fn toggle_boost_persisted(&mut self, boost_id: &BoostId, enabled: bool) {
-        self.boost_manager.toggle_boost(boost_id, enabled);
+        self.boost_manager.update(boost_id, changes);
         if let Some(boost) = self.boost_manager.get_boost(boost_id) {
             self.persist_boost(boost);
         }
     }
 
     pub fn delete_boost_persisted(&mut self, boost_id: &BoostId) -> Option<Boost> {
-        let boost = self.boost_manager.delete_boost(boost_id);
+        let boost = self.boost_manager.delete(boost_id);
         if let Some(ref storage) = self.storage {
             let _ = storage.delete_boost(boost_id.as_ref());
         }
         boost
+    }
+
+    pub fn set_active_boost_persisted(&mut self, domain: &str, boost_id: Option<BoostId>) {
+        self.boost_manager.set_active(domain, boost_id.clone());
+        if let Some(ref storage) = self.storage {
+            let _ = storage.set_active_boost(domain, boost_id.as_ref().map(|id| id.as_ref()));
+        }
+    }
+
+    pub fn get_active_boost_for_domain(&self, domain: &str) -> Option<Boost> {
+        self.boost_manager.get_active(domain)
+    }
+
+    pub fn list_boosts_for_domain(&self, domain: &str) -> Vec<Boost> {
+        self.boost_manager.list_for_domain(domain)
+    }
+
+    pub fn get_boost_by_id(&self, boost_id: &BoostId) -> Option<Boost> {
+        self.boost_manager.get_boost(boost_id).cloned()
+    }
+
+    pub fn compose_css_for_boost(&self, boost_id: &BoostId) -> Option<String> {
+        self.boost_manager.get_boost(boost_id).map(|b| self.boost_manager.compose_css(b))
+    }
+
+    pub fn create_temp_boost_persisted(&mut self, domain: String) -> Boost {
+        let boost = self.boost_manager.create_temp(domain.clone());
+        self.persist_boost(&boost);
+        if let Some(ref storage) = self.storage {
+            let _ = storage.set_active_boost(&domain, Some(boost.id.as_ref()));
+        }
+        boost
+    }
+
+    pub fn commit_boost_persisted(&mut self, boost_id: &BoostId) -> Option<Boost> {
+        let boost = self.boost_manager.commit_boost(boost_id)?;
+        self.persist_boost(&boost);
+        Some(boost)
+    }
+
+    pub fn discard_boost_persisted(&mut self, boost_id: &BoostId) -> Option<BoostId> {
+        let domain = self.boost_manager.get_boost(boost_id)?.domain.clone();
+        let prev = self.boost_manager.discard_boost(boost_id)?;
+        if let Some(ref storage) = self.storage {
+            let _ = storage.delete_boost(boost_id.as_ref());
+            let _ = storage.set_active_boost(&domain, Some(prev.as_ref()));
+        }
+        Some(prev)
+    }
+
+    pub fn shuffle_boost_persisted(&mut self, boost_id: &BoostId) -> Option<Boost> {
+        let boost = self.boost_manager.shuffle_boost(boost_id)?;
+        self.persist_boost(&boost);
+        Some(boost)
+    }
+
+    pub fn reset_boost_persisted(&mut self, boost_id: &BoostId) -> Option<Boost> {
+        let boost = self.boost_manager.reset_boost(boost_id)?;
+        self.persist_boost(&boost);
+        Some(boost)
+    }
+
+    pub fn export_boost(&self, boost_id: &BoostId) -> Option<String> {
+        self.boost_manager.export_boost(boost_id)
+    }
+
+    pub fn import_boost_persisted(&mut self, domain: String, json: &str) -> Option<Boost> {
+        let boost = self.boost_manager.import_boost(domain, json)?;
+        self.persist_boost(&boost);
+        Some(boost)
+    }
+
+    pub fn append_zap_selector_persisted(&mut self, boost_id: &BoostId, selector: String) -> Option<Boost> {
+        let boost = self.boost_manager.append_zap_selector(boost_id, selector)?;
+        self.persist_boost(&boost);
+        Some(boost)
+    }
+
+    pub fn remove_zap_selector_persisted(&mut self, boost_id: &BoostId, selector: &str) -> Option<Boost> {
+        let boost = self.boost_manager.remove_zap_selector(boost_id, selector)?;
+        self.persist_boost(&boost);
+        Some(boost)
     }
 
     pub fn grant_permission_persisted(&mut self, origin: &str, permission: &str) {
@@ -2243,14 +2274,7 @@ impl MahoCore {
                     "Profile not found",
                 )];
             }
-            ShellEvent::ToggleGlobalBoosts => {
-                let enabled = self.boost_manager.toggle_global();
-                return vec![CoreUpdate::GlobalBoostsToggled { enabled }];
-            }
-            ShellEvent::ToggleJsBoosts => {
-                let enabled = self.boost_manager.toggle_js();
-                return vec![CoreUpdate::JsBoostsToggled { enabled }];
-            }
+
             ShellEvent::ToggleExtension { extension_id } => {
                 if let Some(enabled) = self.extension_bridge.toggle_extension(extension_id) {
                     return vec![CoreUpdate::ExtensionToggled {
@@ -2321,21 +2345,33 @@ impl MahoCore {
                 let account = self.account_manager.toggle_sync();
                 return vec![CoreUpdate::AccountChanged { account }];
             }
-            ShellEvent::CreateBoost { url_pattern } => {
-                let boost = self.create_boost_persisted(url_pattern.clone());
-                let _ = boost;
-                return vec![];
+            ShellEvent::CreateBoost { domain } => {
+                let name = format!("{} Boost", domain);
+                let boost = self.create_boost_persisted(domain.clone(), name);
+                return vec![CoreUpdate::BoostCreated { boost }];
             }
             ShellEvent::UpdateBoost { boost_id, changes } => {
                 self.update_boost_persisted(boost_id, changes.clone());
+                if let Some(boost) = self.boost_manager.get_boost(boost_id).cloned() {
+                    let boost_id = boost_id.clone();
+                    return vec![CoreUpdate::BoostUpdated { boost_id, boost }];
+                }
                 return vec![];
             }
-            ShellEvent::ToggleBoost { boost_id, enabled } => {
-                self.toggle_boost_persisted(boost_id, *enabled);
-                return vec![];
+            ShellEvent::SetActiveBoost { domain, boost_id } => {
+                self.set_active_boost_persisted(domain, boost_id.clone());
+                return vec![CoreUpdate::BoostActiveChanged {
+                    domain: domain.clone(),
+                    active_boost_id: boost_id.clone(),
+                }];
             }
             ShellEvent::DeleteBoost { boost_id } => {
-                self.delete_boost_persisted(boost_id);
+                if let Some(deleted) = self.delete_boost_persisted(boost_id) {
+                    return vec![CoreUpdate::BoostDeleted {
+                        boost_id: boost_id.clone(),
+                        domain: deleted.domain,
+                    }];
+                }
                 return vec![];
             }
             ShellEvent::InstallCssMod { name, css, description, author, version, homepage, source_url } => {
@@ -2569,7 +2605,7 @@ impl MahoCore {
                     for tidy_folder in &folders {
                         if let Some(folder_vm) =
                             self.space_manager
-                                .create_folder(space_id, &tidy_folder.name, false)
+                                .create_folder(space_id, &tidy_folder.name, false, None)
                         {
                             for tab_id in &tidy_folder.tab_ids {
                                 self.space_manager.add_tab_to_folder(
@@ -2621,6 +2657,78 @@ impl MahoCore {
                         ..Default::default()
                     },
                 }];
+            }
+            ShellEvent::CloseTab { ref tab_id } => {
+                let behavior = self
+                    .settings_manager
+                    .get_settings()
+                    .general
+                    .pinned_close_behavior
+                    .clone();
+                let is_pinned = self
+                    .tab_manager
+                    .get_tab(tab_id)
+                    .map(|t| t.is_pinned)
+                    .unwrap_or(false);
+
+                if is_pinned && !matches!(behavior, PinnedCloseBehavior::Close) {
+                    let space_id =
+                        match self.tab_manager.get_tab(tab_id).map(|t| t.space_id.clone()) {
+                            Some(sid) => sid,
+                            None => return vec![],
+                        };
+
+                    let needs_reset = matches!(
+                        behavior,
+                        PinnedCloseBehavior::Reset
+                            | PinnedCloseBehavior::ResetSwitch
+                            | PinnedCloseBehavior::ResetUnloadSwitch
+                    );
+                    if needs_reset {
+                        self.tab_manager.reset_pinned_tab(tab_id);
+                    }
+
+                    let needs_unload = matches!(
+                        behavior,
+                        PinnedCloseBehavior::UnloadSwitch | PinnedCloseBehavior::ResetUnloadSwitch
+                    );
+                    if needs_unload {
+                        self.tab_manager.suspend_tab(tab_id);
+                    }
+
+                    let needs_focus_switch = matches!(
+                        behavior,
+                        PinnedCloseBehavior::Switch
+                            | PinnedCloseBehavior::ResetSwitch
+                            | PinnedCloseBehavior::UnloadSwitch
+                            | PinnedCloseBehavior::ResetUnloadSwitch
+                    );
+                    if needs_focus_switch {
+                        let currently_active =
+                            self.space_manager.get_last_active_tab(&space_id).cloned();
+                        if currently_active.as_ref() == Some(tab_id) {
+                            let next_active = self
+                                .space_manager
+                                .get_tab_order(&space_id)
+                                .into_iter()
+                                .filter(|id| id != tab_id)
+                                .find(|id| {
+                                    self.tab_manager
+                                        .get_tab(id)
+                                        .map(|t| {
+                                            !matches!(
+                                                t.state,
+                                                TabLifecycleState::Archived { .. }
+                                            )
+                                        })
+                                        .unwrap_or(false)
+                                });
+                            self.space_manager.set_last_active_tab(&space_id, next_active);
+                        }
+                    }
+
+                    return vec![];
+                }
             }
             ShellEvent::ResetPinnedTab { ref tab_id } => {
                 self.reset_pinned_tab(tab_id);
@@ -2725,7 +2833,7 @@ impl MahoCore {
 
                 let folder_vm = match self
                     .space_manager
-                    .create_folder(target_space_id, &source_space.name, false)
+                    .create_folder(target_space_id, &source_space.name, false, None)
                 {
                     Some(folder) => folder,
                     None => {
@@ -2952,7 +3060,6 @@ impl MahoCore {
             &mut self.tab_manager,
             &mut self.space_manager,
             &self.command_bar,
-            &mut self.boost_manager,
             &mut self.note_manager,
             &mut self.settings_manager,
             &mut self.content_blocker,
@@ -3078,6 +3185,10 @@ impl MahoCore {
 
     pub fn get_active_space_id(&self) -> SpaceId {
         self.space_manager.get_active_space_id().clone()
+    }
+
+    pub fn get_last_active_tab_for_space(&self, space_id: &SpaceId) -> Option<TabId> {
+        self.space_manager.get_last_active_tab(space_id).cloned()
     }
 
     pub fn create_space(&mut self, name: &str, color: SpaceColor, profile_id: ProfileId) -> Space {
@@ -3616,6 +3727,16 @@ impl MahoCore {
             .collect()
     }
 
+    pub fn get_sidebar_tree(&self, space_id: &SpaceId) -> Vec<maho_types::traits::shell_renderer::SidebarNode> {
+        self.space_manager.get_sidebar_tree(space_id, |tab_id| {
+            let tab = self.tab_manager.get_tab(tab_id)?;
+            if matches!(tab.state, TabLifecycleState::Archived { .. }) {
+                return None;
+            }
+            Some(self.tab_manager.to_tab_view_model(tab))
+        })
+    }
+
     pub fn favorite_tab(&mut self, tab_id: &TabId) -> bool {
         let profile_space_ids = self
             .tab_manager
@@ -3675,7 +3796,22 @@ impl MahoCore {
     }
 
     pub fn get_boost_view_models(&self) -> Vec<maho_types::traits::shell_renderer::BoostViewModel> {
-        self.boost_manager.get_all_view_models()
+        self.boost_manager
+            .get_all_boosts()
+            .into_iter()
+            .map(|b| {
+                let enabled = self.boost_manager.get_active(&b.domain)
+                    .map(|a| a.id == b.id)
+                    .unwrap_or(false);
+                maho_types::traits::shell_renderer::BoostViewModel {
+                    id: b.id.clone(),
+                    domain: b.domain.clone(),
+                    name: b.name.clone(),
+                    custom_css: Some(self.boost_manager.compose_css(b)),
+                    enabled,
+                }
+            })
+            .collect()
     }
 
     pub fn get_installed_extensions(&self) -> Vec<crate::extension_bridge::InstalledExtension> {
@@ -3695,31 +3831,74 @@ impl MahoCore {
     }
 
     pub fn toggle_extension(&mut self, extension_id: &str) -> Option<bool> {
-        self.extension_bridge.toggle_extension(extension_id)
+        let res = self.extension_bridge.toggle_extension(extension_id);
+        if res.is_some() {
+            let update = CoreUpdate::InstalledExtensionsUpdated;
+            for listener in self.update_listeners.borrow().iter() {
+                listener(update.clone());
+            }
+        }
+        res
     }
 
     pub fn remove_extension(
         &mut self,
         extension_id: &str,
     ) -> Option<crate::extension_bridge::InstalledExtension> {
-        self.extension_bridge.remove_extension(extension_id)
+        let res = self.extension_bridge.remove_extension(extension_id);
+        if res.is_some() {
+            let update = CoreUpdate::InstalledExtensionsUpdated;
+            for listener in self.update_listeners.borrow().iter() {
+                listener(update.clone());
+            }
+        }
+        res
+    }
+
+    pub fn register_extension(&mut self, ext: crate::extension_bridge::InstalledExtension) {
+        self.extension_bridge.register_extension(ext);
+        let update = CoreUpdate::InstalledExtensionsUpdated;
+        for listener in self.update_listeners.borrow().iter() {
+            listener(update.clone());
+        }
+    }
+
+    pub fn set_installed_extensions(&mut self, exts: Vec<crate::extension_bridge::InstalledExtension>) {
+        self.extension_bridge.set_installed_extensions(exts);
+        let update = CoreUpdate::InstalledExtensionsUpdated;
+        for listener in self.update_listeners.borrow().iter() {
+            listener(update.clone());
+        }
+    }
+
+    pub fn clear_installed_extensions(&mut self) {
+        self.extension_bridge.clear_installed_extensions();
+        let update = CoreUpdate::InstalledExtensionsUpdated;
+        for listener in self.update_listeners.borrow().iter() {
+            listener(update.clone());
+        }
     }
 
     pub fn get_boosts_for_url(
         &self,
         url: &str,
     ) -> Vec<maho_types::traits::shell_renderer::BoostViewModel> {
-        self.boost_manager
-            .get_boosts_for_url(url)
-            .into_iter()
-            .map(|boost| maho_types::traits::shell_renderer::BoostViewModel {
-                id: boost.id.clone(),
-                url_pattern: boost.url_pattern.pattern.clone(),
-                custom_css: boost.custom_css.clone(),
-                custom_js: boost.custom_js.clone(),
-                enabled: boost.enabled,
-            })
-            .collect()
+        let host = extract_domain_from_url(url);
+        let parts: Vec<&str> = host.as_deref().unwrap_or("").split('.').collect();
+        for i in 0..parts.len() {
+            let domain = parts[i..].join(".");
+            if let Some(active) = self.boost_manager.get_active(&domain) {
+                let enabled = true;
+                return vec![maho_types::traits::shell_renderer::BoostViewModel {
+                    id: active.id.clone(),
+                    domain: active.domain.clone(),
+                    name: active.name.clone(),
+                    custom_css: Some(self.boost_manager.compose_css(&active)),
+                    enabled,
+                }];
+            }
+        }
+        vec![]
     }
 
     pub fn get_note_view_models(&self) -> Vec<maho_types::traits::shell_renderer::NoteViewModel> {
@@ -3859,35 +4038,26 @@ impl MahoCore {
         };
         vm.sections.push(extensions_section);
 
-        // Add Boosts section
-        let mut boost_items: Vec<SettingsItem> = vec![
-            SettingsItem {
-                key: "boosts_global".to_string(),
-                label: "Enable Boosts".to_string(),
-                item_type: SettingsItemType::Toggle,
-                value: serde_json::json!(self.boost_manager.is_globally_enabled()),
-            },
-            SettingsItem {
-                key: "boosts_js".to_string(),
-                label: "Allow JavaScript Boosts".to_string(),
-                item_type: SettingsItemType::Toggle,
-                value: serde_json::json!(self.boost_manager.is_js_enabled()),
-            },
-        ];
-        for boost_vm in self.boost_manager.list_boosts() {
-            boost_items.push(SettingsItem {
-                key: format!("boost_{}", boost_vm.id),
-                label: boost_vm.url_pattern.clone(),
-                item_type: SettingsItemType::Toggle,
-                value: serde_json::json!({
-                    "id": boost_vm.id.to_string(),
-                    "urlPattern": boost_vm.url_pattern,
-                    "enabled": boost_vm.enabled,
-                    "hasCss": boost_vm.custom_css.is_some(),
-                    "hasJs": boost_vm.custom_js.is_some(),
-                }),
-            });
-        }
+        let boost_items: Vec<SettingsItem> = self.boost_manager
+            .get_all_boosts()
+            .into_iter()
+            .map(|b| {
+                let is_active = self.boost_manager.get_active(&b.domain)
+                    .map(|a| a.id == b.id)
+                    .unwrap_or(false);
+                SettingsItem {
+                    key: format!("boost_{}", b.id),
+                    label: b.domain.clone(),
+                    item_type: SettingsItemType::Toggle,
+                    value: serde_json::json!({
+                        "id": b.id.to_string(),
+                        "domain": b.domain,
+                        "enabled": is_active,
+                        "hasCss": !b.custom_css.is_empty(),
+                    }),
+                }
+            })
+            .collect();
         let boosts_section = SettingsSection {
             title: "Boosts".to_string(),
             items: boost_items,
@@ -4450,59 +4620,9 @@ impl MahoCore {
         }
     }
 
-    pub fn get_boost_templates_json(&self) -> String {
-        let templates: Vec<serde_json::Value> = self
-            .boost_manager
-            .get_templates()
-            .into_iter()
-            .map(|t| {
-                serde_json::json!({
-                    "id": t.id,
-                    "name": t.name,
-                    "description": t.description,
-                    "css": t.css,
-                })
-            })
-            .collect();
-        serde_json::to_string(&templates).unwrap_or_else(|_| "[]".to_string())
-    }
 
-    pub fn create_boost_from_template(
-        &mut self,
-        template_id: &str,
-        pattern: &str,
-    ) -> Option<String> {
-        let url_pattern = maho_types::common::UrlPattern {
-            pattern: pattern.to_string(),
-            pattern_type: maho_types::common::UrlPatternType::Glob,
-        };
-        let boost = self
-            .boost_manager
-            .create_boost_from_template(template_id, url_pattern)?;
-        Some(
-            serde_json::to_string(&crate::boost_manager::BoostManager::to_view_model(&boost))
-                .unwrap_or_default(),
-        )
-    }
 
-    pub fn get_boosts_for_url_in_space(
-        &self,
-        url: &str,
-        space_id_str: &str,
-    ) -> Vec<maho_types::traits::shell_renderer::BoostViewModel> {
-        let space_id = maho_types::identifiers::SpaceId::new(space_id_str);
-        self.boost_manager
-            .get_boosts_for_url_in_space(url, &space_id)
-            .into_iter()
-            .map(|boost| maho_types::traits::shell_renderer::BoostViewModel {
-                id: boost.id.clone(),
-                url_pattern: boost.url_pattern.pattern.clone(),
-                custom_css: boost.custom_css.clone(),
-                custom_js: boost.custom_js.clone(),
-                enabled: boost.enabled,
-            })
-            .collect()
-    }
+
 
     pub fn get_reader_settings_json(&self) -> String {
         serde_json::to_string(self.settings_manager.get_reader_settings())
@@ -4574,10 +4694,10 @@ impl MahoCore {
                         .iter()
                         .map(|b| {
                             serde_json::json!({
-                                "url_pattern": b.url_pattern.pattern,
+                                "domain": b.domain,
+                                "name": b.name,
                                 "custom_css": b.custom_css,
-                                "custom_js": b.custom_js,
-                                "enabled": b.enabled,
+                                "enabled": self.boost_manager.get_active(&b.domain).map(|active| active.id == b.id).unwrap_or(false),
                             })
                         })
                         .collect(),
@@ -5628,7 +5748,7 @@ impl SpaceManagerInterface for SpaceManager {
         self.move_tab_to_root(space_id, folder_id, tab_id, before_tab_id)
     }
 
-    fn reorder_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId, parent_folder_id: Option<&FolderId>, before_folder_id: Option<&FolderId>) {
+    fn reorder_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId, parent_folder_id: Option<&FolderId>, before_folder_id: Option<&FolderId>) -> Result<(), crate::space_manager::FolderError> {
         self.reorder_folder(space_id, folder_id, parent_folder_id, before_folder_id)
     }
 
@@ -5657,8 +5777,9 @@ impl SpaceManagerInterface for SpaceManager {
         space_id: &SpaceId,
         name: &str,
         is_pinned: bool,
+        parent_folder_id: Option<FolderId>,
     ) -> Option<maho_types::traits::shell_renderer::FolderViewModel> {
-        self.create_folder(space_id, name, is_pinned)
+        self.create_folder(space_id, name, is_pinned, parent_folder_id)
     }
 
     fn rename_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId, name: &str) {
@@ -5691,15 +5812,7 @@ impl SpaceManagerInterface for SpaceManager {
         self.toggle_folder_expanded(space_id, folder_id)
     }
 
-    fn pin_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId) {
-        self.pin_folder(space_id, folder_id)
-    }
-
-    fn unpin_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId) {
-        self.unpin_folder(space_id, folder_id)
-    }
-
-    fn move_folder(&mut self, folder_id: &FolderId, new_parent: Option<FolderId>) {
+    fn move_folder(&mut self, folder_id: &FolderId, new_parent: Option<FolderId>) -> Result<(), crate::space_manager::FolderError> {
         self.move_folder(folder_id, new_parent)
     }
 
@@ -5708,8 +5821,17 @@ impl SpaceManagerInterface for SpaceManager {
         space_id: &SpaceId,
         folder_id: &FolderId,
         new_parent: Option<FolderId>,
-    ) {
+    ) -> Result<(), crate::space_manager::FolderError> {
         self.move_folder_in_space(space_id, folder_id, new_parent)
+    }
+
+    fn move_folder_to_space(
+        &mut self,
+        folder_id: &FolderId,
+        source_space_id: &SpaceId,
+        target_space_id: &SpaceId,
+    ) {
+        self.move_folder_to_space(folder_id, source_space_id, target_space_id)
     }
 
     fn move_folder_to_root(&mut self, space_id: &SpaceId, folder_id: &FolderId, before_folder_id: Option<&FolderId>) {
@@ -5768,4 +5890,12 @@ impl CommandBarInterface for CommandBarEngine {
     ) -> Vec<SuggestionViewModel> {
         self.search(query, mode, ctx)
     }
+}
+
+fn extract_domain_from_url(url: &str) -> Option<String> {
+    let host = url.strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    let host = host.split('/').next()?.split(':').next()?;
+    Some(host.to_string())
 }

@@ -121,10 +121,14 @@ source_set("maho_sidebar_core") {
     "//chrome/browser/ui/tabs:tab_strip",
     "//chrome/browser/ui/views/frame",
     "//components/prefs",
+    "//components/translate/content/browser",
+    "//components/translate/core/browser",
     "//content/public/browser",
     "//maho/browser:maho_core_holder",
+    "//maho/browser:maho_features",
     "//maho/browser:maho_space_profile_bridge",
     "//maho/browser:maho_tab_id_helper",
+    "//maho/browser/net",
     "//maho/components/constants",
     "//maho/third_party/maho:maho_bridge",
     "//maho/third_party/maho:maho_ffi_headers",
@@ -180,32 +184,6 @@ source_set("browser_tests") {
     "//ui/compositor",
     "//ui/views",
     "//ui/views:test_support",
-  ]
-}
-
-source_set("maho_sidebar_boosts") {
-  sources = [
-    "maho_sidebar_boosts_data.cc",
-    "maho_sidebar_boosts_data.h",
-    "maho_sidebar_boosts_view.cc",
-    "maho_sidebar_boosts_view.h",
-  ]
-
-  deps = [
-    ":maho_sidebar_core",
-    "//base",
-    "//components/vector_icons",
-    "//maho/browser:maho_core_holder",
-    "//maho/third_party/maho:maho_bridge",
-    "//maho/third_party/maho:maho_core_prebuilt",
-    "//maho/third_party/maho:maho_ffi_headers",
-    "//ui/accessibility",
-    "//ui/base",
-    "//ui/color",
-    "//ui/compositor",
-    "//ui/gfx",
-    "//ui/views",
-    "//url",
   ]
 }
 

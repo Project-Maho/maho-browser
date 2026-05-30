@@ -4,6 +4,8 @@
 // Documents the upstream patches applied to browser_view.cc:
 //
 // 1. #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+//    #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
+//    #include "maho/browser/ui/views/sidebar/maho_toolbar_button_provider.h"
 //    #include "maho/browser/ui/views/command/maho_command_overlay_controller.h"
 //
 // 2. In BrowserView::BrowserView(), after contents_height_side_panel_:
@@ -33,6 +35,8 @@
 // 5. Member fields in BrowserView class (public, in member section):
 //      raw_ptr<views::View> maho_sidebar_container_ = nullptr;
 //      raw_ptr<views::View> maho_create_space_blank_view_ = nullptr;
+//      std::unique_ptr<maho::MahoToolbarButtonProvider>
+//          maho_toolbar_button_provider_;
 //      std::unique_ptr<maho::MahoCommandOverlayController>
 //          maho_command_overlay_controller_;
 //
@@ -97,6 +101,28 @@
 //            std::make_unique<maho::MahoCommandOverlayController>(browser_.get());
 //      }
 //
+// 5b. In BrowserView::AddedToWidget(), BEFORE the ToolbarButtonProvider CHECK:
+//      if (IsMahoArcLayoutActive() &&
+//          base::FeatureList::IsEnabled(
+//              maho::features::kMahoArcToolbarButtonProvider)) {
+//        maho::MahoSidebarSearchView* search_view = nullptr;
+//        if (auto* container = static_cast<maho::MahoSidebarContainerView*>(
+//                maho_sidebar_container_)) {
+//          if (auto* sidebar =
+//                  static_cast<maho::MahoSidebarView*>(
+//                      container->sidebar_view())) {
+//            search_view = sidebar->search_view_for_testing();
+//          }
+//        }
+//        maho_toolbar_button_provider_ =
+//            std::make_unique<maho::MahoToolbarButtonProvider>(
+//                browser_.get(), this, search_view);
+//      }
+//    Instantiates and retains MahoToolbarButtonProvider so that
+//    ToolbarButtonProvider::From(browser_) resolves correctly before the
+//    CHECK fires.  search_view is resolved opportunistically; if null,
+//    MahoToolbarButtonProvider falls back to LastResortAnchor() internally.
+//
 // 6. In BrowserView::NonClientHitTest(), BEFORE the vertical_tab_strip and
 //    projects_panel checks (around line 4763 upstream), insert:
 //      if (maho_sidebar_container_ && maho_sidebar_container_->GetVisible()) {
@@ -120,14 +146,19 @@
 //      "//maho/browser/ui/views/sidebar/maho_sidebar_easels_view.h",
 //      "//maho/browser/ui/views/sidebar/maho_sidebar_notes_view.cc",
 //      "//maho/browser/ui/views/sidebar/maho_sidebar_notes_view.h",
+//      "//maho/browser/ui/views/sidebar/maho_toolbar_button_provider.cc",
+//      "//maho/browser/ui/views/sidebar/maho_toolbar_button_provider.h",
 //
 // 7. #include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
 //
 // 8. Forward declaration in browser_view.h:
 //      class MahoSplitViewController;
+//      namespace maho { class MahoToolbarButtonProvider; }
 //
-//    Member field in BrowserView class:
+//    Member fields in BrowserView class:
 //      std::unique_ptr<MahoSplitViewController> split_view_controller_;
+//      std::unique_ptr<maho::MahoToolbarButtonProvider>
+//          maho_toolbar_button_provider_;
 //
 // 9. Lazy-init accessor (creates controller on first use):
 //

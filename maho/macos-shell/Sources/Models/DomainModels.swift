@@ -415,51 +415,67 @@ struct ProfileConfig: Codable, Equatable {
     }
 }
 
+enum TextCase: String, Codable, Equatable {
+    case none
+    case upper
+    case lower
+    case capitalize
+}
+
+struct ColorBoost: Codable, Equatable {
+    let enableColorBoost: Bool
+    let dotAngleDeg: Double
+    let secondaryDotAngleDegDelta: Double
+    let brightness: Double
+    let saturation: Double
+    let contrast: Double
+    let autoTheme: Bool
+    let smartInvert: Bool
+}
+
+struct TypographyBoost: Codable, Equatable {
+    let fontFamily: String?
+    let textCaseOverride: TextCase
+    let sizeOverride: Float?
+}
+
 struct Boost: Codable, Equatable {
     let id: BoostId
-    let urlPattern: UrlPattern
-    let customCss: String?
-    let customJs: String?
-    let colorTheme: ColorOverride?
-    let fontOverride: FontOverride?
-    let enabled: Bool
-    let spaceScope: SpaceId?
+    let domain: String
+    let name: String
+    let color: ColorBoost
+    let typography: TypographyBoost
+    let zapSelectors: [String]
+    let customCss: String
 
     private enum CodingKeys: String, CodingKey {
-        case id, urlPattern, customCss, customJs
-        case colorTheme, fontOverride, enabled, spaceScope
+        case id, domain, name, color, typography, zapSelectors, customCss
     }
+}
+
+struct ColorBoostUpdate: Codable, Equatable {
+    let enableColorBoost: Bool?
+    let dotAngleDeg: Double?
+    let secondaryDotAngleDegDelta: Double?
+    let brightness: Double?
+    let saturation: Double?
+    let contrast: Double?
+    let autoTheme: Bool?
+    let smartInvert: Bool?
+}
+
+struct TypographyBoostUpdate: Codable, Equatable {
+    let fontFamily: String??
+    let textCaseOverride: TextCase?
+    let sizeOverride: Float??
 }
 
 struct BoostUpdate: Codable, Equatable {
-    let urlPattern: UrlPattern?
-    let customCss: String??
-    let customJs: String??
-    let colorTheme: ColorOverride??
-    let fontOverride: FontOverride??
-    let enabled: Bool?
-    let spaceScope: SpaceId??
-
-    private enum CodingKeys: String, CodingKey {
-        case urlPattern, customCss, customJs
-        case colorTheme, fontOverride, enabled, spaceScope
-    }
-}
-
-struct ColorOverride: Codable, Equatable {
-    let background: Color?
-    let text: Color?
-    let links: Color?
-}
-
-struct FontOverride: Codable, Equatable {
-    let fontFamily: String?
-    let fontSize: Double?
-    let lineHeight: Double?
-
-    private enum CodingKeys: String, CodingKey {
-        case fontFamily, fontSize, lineHeight
-    }
+    let name: String?
+    let color: ColorBoostUpdate?
+    let typography: TypographyBoostUpdate?
+    let zapSelectors: [String]?
+    let customCss: String?
 }
 
 struct TrafficRule: Codable, Equatable {

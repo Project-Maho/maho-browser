@@ -42,6 +42,15 @@ export const TODAY_TAB_TIMEOUT_OPTIONS = [
   {value: '48', label: '48 hours'},
 ];
 
+export const PINNED_CLOSE_BEHAVIOR_OPTIONS = [
+  {value: 'switch', label: 'Switch to the next tab'},
+  {value: 'reset', label: 'Reset the pinned tab'},
+  {value: 'reset-switch', label: 'Reset, then switch to the next tab'},
+  {value: 'unload-switch', label: 'Unload, then switch to the next tab'},
+  {value: 'reset-unload-switch', label: 'Reset, unload, then switch to the next tab'},
+  {value: 'close', label: 'Close the pinned tab'},
+];
+
 export const SETTING_DEFINITIONS: SettingDefinition[] = [
   {
     key: 'general.homepage',
@@ -223,6 +232,15 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
       description: 'How long recently active tabs stay in the Today section before ageing out.',
       control: 'select',
       options: TODAY_TAB_TIMEOUT_OPTIONS,
+    },
+  },
+  {
+    key: 'tabs.pinned_close_behavior',
+    metadata: {
+      label: 'When closing a pinned tab',
+      description: 'Choose whether closing a pinned tab should switch away, reset its state, unload it, or fully close it.',
+      control: 'select',
+      options: PINNED_CLOSE_BEHAVIOR_OPTIONS,
     },
   },
 ];

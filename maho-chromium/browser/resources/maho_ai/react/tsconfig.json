@@ -62,6 +62,7 @@
   "include": [
     "./**/*.ts",
     "./**/*.tsx",
+    "../app.ts",
     "../store.ts",
     "../types.ts",
     "../views/cards.ts",

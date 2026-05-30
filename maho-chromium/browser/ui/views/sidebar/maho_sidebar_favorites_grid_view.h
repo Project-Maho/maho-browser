@@ -74,6 +74,12 @@ class MahoSidebarFavoritesGridView : public views::View {
   // Called by the parent when the drag leaves the sidebar region, clearing any
   // temporary drag-highlight state.
   void CollapseFromDrag();
+  // Called by the parent when a drag session originating from this grid starts
+  // so the source tile can be visually hidden while the preview animates.
+  void OnDragStarted(const std::string& tab_id);
+  // Called by the parent when the drag session ends (drop or cancel) so the
+  // grid can restore its tile layer state.
+  void OnDragEnded();
 
   ui::DropTargetEvent ForwardDropEventToGrid(
       const ui::DropTargetEvent& event,
@@ -149,6 +155,7 @@ class MahoSidebarFavoritesGridView : public views::View {
   LayoutSpec current_layout_spec_;
   bool drag_over_drop_target_ = false;
   bool drag_reveal_active_ = false;
+  std::string active_drag_tab_id_;
   std::string drag_accepted_tab_id_;
 
   std::unique_ptr<MahoFavoritesContextMenu> active_context_menu_;

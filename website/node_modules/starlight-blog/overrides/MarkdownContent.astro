@@ -1,0 +1,20 @@
+---
+import Default from '@astrojs/starlight/components/MarkdownContent.astro'
+
+import StarlightBlogMarkdownContent from '../components/starlight/MarkdownContent.astro'
+import { isAnyBlogPostPage } from '../libs/page'
+
+const { id } = Astro.locals.starlightRoute
+---
+
+{
+  isAnyBlogPostPage(id) ? (
+    <StarlightBlogMarkdownContent>
+      <slot />
+    </StarlightBlogMarkdownContent>
+  ) : (
+    <Default>
+      <slot />
+    </Default>
+  )
+}

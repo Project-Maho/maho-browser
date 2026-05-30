@@ -25,7 +25,6 @@ class MenuRunner;
 class Label;
 class Textfield;
 class View;
-class ImageView;
 class LabelButton;
 class Widget;
 }  // namespace views
@@ -62,6 +61,9 @@ class MahoSidebarSearchView : public views::View,
     return utility_icon_;
   }
 
+  views::Label* translate_label_view() { return secondary_label_; }
+  views::View* idle_button_view() { return idle_button_; }
+
   // views::ContextMenuController:
   void ShowContextMenuForViewImpl(views::View* source,
                                   const gfx::Point& point,
@@ -90,7 +92,9 @@ class MahoSidebarSearchView : public views::View,
   void UpdateSearchChrome();
   bool LooksLikeUrl(const std::string& input) const;
   bool ShouldToggleUtilityPanelForEvent(const ui::Event& event) const;
+  bool ShouldRouteEventToTranslate(const ui::Event& event) const;
   void OnIdleButtonPressed(const ui::Event& event);
+  void OnTranslateLabelClicked();
   void OnIdleButtonHoverChanged(bool hover_visible);
   void ToggleUtilityPanel();
   views::Widget* ShowUtilityPanel();
@@ -104,8 +108,6 @@ class MahoSidebarSearchView : public views::View,
   raw_ptr<Browser> browser_;
   raw_ptr<views::View> search_shell_ = nullptr;
   raw_ptr<views::LabelButton> idle_button_ = nullptr;
-  raw_ptr<views::View> leading_icon_shell_ = nullptr;
-  raw_ptr<views::ImageView> leading_icon_ = nullptr;
   raw_ptr<views::Label> primary_label_ = nullptr;
   raw_ptr<views::Label> secondary_label_ = nullptr;
   raw_ptr<views::View> utility_icon_slot_ = nullptr;

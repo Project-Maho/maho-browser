@@ -59,6 +59,8 @@ class MahoAiPageContextExtractor {
 
   void GetPageContext(PageContextCallback callback);
 
+  void GetPageContextForTabId(int tab_id, PageContextCallback callback);
+
  private:
   static std::string StatusToString(PageContextResult::Status status);
   static std::vector<std::string> ExtractStringList(const base::Value* value);
@@ -72,6 +74,7 @@ class MahoAiPageContextExtractor {
                               base::Value result);
 
   content::WebContents* GetActiveWebContents() const;
+  content::WebContents* GetWebContentsForTabId(int tab_id) const;
 
   raw_ptr<Browser> browser_;
   SEQUENCE_CHECKER(sequence_checker_);

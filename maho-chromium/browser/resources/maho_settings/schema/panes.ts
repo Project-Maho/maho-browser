@@ -56,7 +56,7 @@ export const LIVE_PANE_SECTION_MANIFEST: Record<string, LivePaneSectionDefinitio
     {kind: 'live-card', card: {
       title: 'Tab lifecycle',
       description: '',
-      settingKeys: ['tabs.archive_timeout', 'tabs.today_tab_timeout'],
+      settingKeys: ['tabs.archive_timeout', 'tabs.today_tab_timeout', 'tabs.pinned_close_behavior'],
       wide: true,
     }},
   ],

@@ -115,7 +115,6 @@ class KindDiscriminatorTest {
             CoreUpdate.SpaceRecolored("s", SpaceColor(0.0, 0.0, 0.0)) to "space_recolored",
             CoreUpdate.ActiveSpaceChanged("s") to "active_space_changed",
             CoreUpdate.AllNotificationsDismissed to "all_notifications_dismissed",
-            CoreUpdate.GlobalBoostsToggled(true) to "global_boosts_toggled",
             CoreUpdate.NavigateTab("t", "u") to "navigate_tab",
             CoreUpdate.TabLifecycleChanged("t", TabLifecycleState.Active) to "tab_lifecycle_changed",
         )

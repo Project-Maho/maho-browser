@@ -37,6 +37,17 @@ class MahoSidebarTopBarView : public views::View {
   void Update(const MahoSidebarTopBarModel& model);
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
 
+  views::View* leading_cluster_for_testing() { return leading_cluster_; }
+  views::View* nav_cluster_for_testing() { return nav_cluster_; }
+  views::View* flex_spacer_for_testing() { return flex_spacer_; }
+  views::ImageButton* sidebar_toggle_button_for_testing() {
+    return sidebar_toggle_button_;
+  }
+  views::ImageButton* back_button_for_testing() { return back_button_; }
+  views::ImageButton* forward_button_for_testing() { return forward_button_; }
+  views::ImageButton* reload_button_for_testing() { return reload_button_; }
+  views::ImageButton* ai_button_for_testing() { return ai_button_; }
+
   // Returns true if `point` (in this view's coordinates) is not over any
   // interactive control and should be treated as window-draggable caption area.
   bool IsPositionInWindowCaption(const gfx::Point& point) const;

@@ -173,9 +173,8 @@ enum SettingsItemType: String, Codable {
 
 struct BoostViewModel: Codable {
     let id: BoostId
-    let urlPattern: String
+    let domain: String
     let customCss: String?
-    let customJs: String?
     let enabled: Bool
 }
 

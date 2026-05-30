@@ -2,6 +2,7 @@
 
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
+#include "chrome/browser/profiles/profile.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "net/base/url_util.h"

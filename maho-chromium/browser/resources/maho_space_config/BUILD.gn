@@ -1,0 +1,30 @@
+import("//ui/webui/resources/tools/build_webui.gni")
+
+assert(!is_android)
+
+build_webui("build") {
+  grd_prefix = "maho_space_config"
+
+  static_files = [
+    "space_config.html",
+    "space_config.css",
+  ]
+
+  ts_files = [ "app.ts" ]
+
+  ts_deps = [
+    "//maho/browser/resources/maho_common:build_ts",
+    "//ui/webui/resources/mojo:build_ts",
+  ]
+  ts_path_mappings = [
+    "//resources/maho_common/*|" +
+        rebase_path("$root_gen_dir/maho/browser/resources/maho_common/tsc/*",
+                    target_gen_dir),
+  ]
+
+  webui_context_type = "trusted"
+
+  mojo_files_deps =
+      [ "//maho/browser/ui/webui/maho_space_config:mojo_bindings_ts__generator" ]
+  mojo_files = [ "$root_gen_dir/maho/browser/ui/webui/maho_space_config/maho_space_config.mojom-webui.ts" ]
+}
