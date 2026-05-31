@@ -18,6 +18,7 @@
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
 #include "components/omnibox/browser/location_bar_model.h"
+#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "components/security_state/core/security_state.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_renderer_host.h"
@@ -130,7 +131,7 @@ void ExpectActionsEquivalent(const MahoLocationBarUtilityPanelAction& actual,
   EXPECT_EQ(actual.title, expected.title);
   EXPECT_EQ(actual.subtitle, expected.subtitle);
   EXPECT_EQ(actual.accessible_name, expected.accessible_name);
-  EXPECT_EQ(actual.sf_symbol_name, expected.sf_symbol_name);
+  EXPECT_EQ(actual.icon, expected.icon);
   EXPECT_EQ(actual.enabled, expected.enabled);
   EXPECT_EQ(actual.data_state, expected.data_state);
   EXPECT_EQ(actual.has_toggle, expected.has_toggle);
@@ -151,7 +152,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
       internal::BuildDeveloperModeAction(&*disabled_settings);
   EXPECT_EQ(disabled.title, u"Developer mode");
   EXPECT_EQ(disabled.subtitle, u"Disabled");
-  EXPECT_EQ(disabled.sf_symbol_name, "hammer");
+  EXPECT_EQ(disabled.icon, &maho_lucide_icons::kHammerIcon);
   EXPECT_EQ(disabled.data_state,
             MahoLocationBarUtilityPanelDataState::kLive);
   EXPECT_FALSE(disabled.enabled);
@@ -161,7 +162,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
   MahoLocationBarUtilityPanelAction unavailable =
       internal::BuildDeveloperModeAction(&*missing_advanced);
   EXPECT_EQ(unavailable.subtitle, u"Developer mode unavailable");
-  EXPECT_EQ(unavailable.sf_symbol_name, "hammer");
+  EXPECT_EQ(unavailable.icon, &maho_lucide_icons::kHammerIcon);
   EXPECT_EQ(unavailable.data_state,
             MahoLocationBarUtilityPanelDataState::kUnavailable);
   EXPECT_FALSE(unavailable.enabled);
@@ -169,7 +170,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
   MahoLocationBarUtilityPanelAction null_action =
       internal::BuildDeveloperModeAction(nullptr);
   EXPECT_EQ(null_action.subtitle, u"Developer mode unavailable");
-  EXPECT_EQ(null_action.sf_symbol_name, "hammer");
+  EXPECT_EQ(null_action.icon, &maho_lucide_icons::kHammerIcon);
   EXPECT_EQ(null_action.data_state,
             MahoLocationBarUtilityPanelDataState::kUnavailable);
   EXPECT_FALSE(null_action.enabled);
@@ -181,7 +182,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
   EXPECT_EQ(share.title, u"Share");
   EXPECT_EQ(share.subtitle, u"Current page unavailable");
   EXPECT_NE(share.subtitle, u"Copy page URL");
-  EXPECT_EQ(share.sf_symbol_name, "square.and.arrow.up");
+  EXPECT_EQ(share.icon, &maho_lucide_icons::kShareIcon);
   EXPECT_EQ(share.data_state,
             MahoLocationBarUtilityPanelDataState::kUnavailable);
   EXPECT_FALSE(share.enabled);
@@ -195,7 +196,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
       internal::BuildShieldsAction(nullptr);
   EXPECT_EQ(shields.title, u"Shields");
   EXPECT_EQ(shields.subtitle, u"Current page unavailable");
-  EXPECT_EQ(shields.sf_symbol_name, "shield.lefthalf.filled");
+  EXPECT_EQ(shields.icon, &maho_lucide_icons::kShieldHalfIcon);
   EXPECT_EQ(shields.data_state,
             MahoLocationBarUtilityPanelDataState::kUnavailable);
   EXPECT_FALSE(shields.enabled);
@@ -209,7 +210,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
       internal::BuildAutoPipSettingsRow(nullptr, nullptr);
   EXPECT_EQ(row.title, u"Automatic Picture-In-Picture");
   EXPECT_EQ(row.subtitle, u"No active page available");
-  EXPECT_EQ(row.sf_symbol_name, "pip.enter");
+  EXPECT_EQ(row.icon, &maho_lucide_icons::kPictureInPicture2Icon);
   EXPECT_EQ(row.data_state,
             MahoLocationBarUtilityPanelDataState::kUnavailable);
   EXPECT_FALSE(row.enabled);
@@ -242,16 +243,16 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
   ASSERT_EQ(zone.items.size(), 3u);
 
   EXPECT_EQ(zone.items[0].title, u"Share");
-  EXPECT_EQ(zone.items[0].sf_symbol_name, "square.and.arrow.up");
+  EXPECT_EQ(zone.items[0].icon, &maho_lucide_icons::kShareIcon);
   EXPECT_FALSE(zone.items[0].callback);
   EXPECT_FALSE(zone.items[0].enabled);
 
   EXPECT_EQ(zone.items[1].title, u"Screenshot");
-  EXPECT_EQ(zone.items[1].sf_symbol_name, "camera");
+  EXPECT_EQ(zone.items[1].icon, &maho_lucide_icons::kCameraIcon);
   EXPECT_FALSE(zone.items[1].enabled);
   EXPECT_FALSE(zone.items[1].callback);
   EXPECT_EQ(zone.items[2].title, u"Full-Page Screenshot");
-  EXPECT_EQ(zone.items[2].sf_symbol_name, "viewfinder");
+  EXPECT_EQ(zone.items[2].icon, &maho_lucide_icons::kScanIcon);
   EXPECT_FALSE(zone.items[2].enabled);
   EXPECT_FALSE(zone.items[2].callback);
 }
@@ -262,7 +263,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
       internal::BuildCameraAction(nullptr);
   EXPECT_EQ(action.title, u"Screenshot");
   EXPECT_EQ(action.subtitle, u"Current page unavailable");
-  EXPECT_EQ(action.sf_symbol_name, "camera");
+  EXPECT_EQ(action.icon, &maho_lucide_icons::kCameraIcon);
   EXPECT_EQ(action.data_state,
             MahoLocationBarUtilityPanelDataState::kUnavailable);
   EXPECT_FALSE(action.enabled);
@@ -289,9 +290,9 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
 
   EXPECT_EQ(camera.title, u"Screenshot");
   EXPECT_EQ(viewfinder.title, u"Full-Page Screenshot");
-  EXPECT_EQ(camera.sf_symbol_name, "camera");
-  EXPECT_EQ(viewfinder.sf_symbol_name, "viewfinder");
-  EXPECT_NE(camera.sf_symbol_name, viewfinder.sf_symbol_name);
+  EXPECT_EQ(camera.icon, &maho_lucide_icons::kCameraIcon);
+  EXPECT_EQ(viewfinder.icon, &maho_lucide_icons::kScanIcon);
+  EXPECT_NE(camera.icon, viewfinder.icon);
   EXPECT_NE(camera.title, viewfinder.title);
 }
 
@@ -301,7 +302,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
       internal::BuildViewfinderAction(nullptr);
   EXPECT_EQ(action.title, u"Full-Page Screenshot");
   EXPECT_EQ(action.subtitle, u"Current page unavailable");
-  EXPECT_EQ(action.sf_symbol_name, "viewfinder");
+  EXPECT_EQ(action.icon, &maho_lucide_icons::kScanIcon);
   EXPECT_EQ(action.data_state,
             MahoLocationBarUtilityPanelDataState::kUnavailable);
   EXPECT_FALSE(action.enabled);
@@ -377,7 +378,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
       internal::BuildBlockAdsAndTrackersRow(nullptr);
   EXPECT_EQ(row.title, u"Block Ads & Trackers");
   EXPECT_EQ(row.subtitle, u"Current page unavailable");
-  EXPECT_EQ(row.sf_symbol_name, "shield.lefthalf.filled");
+  EXPECT_EQ(row.icon, &maho_lucide_icons::kShieldHalfIcon);
   EXPECT_EQ(row.data_state,
             MahoLocationBarUtilityPanelDataState::kUnavailable);
   EXPECT_FALSE(row.enabled);
@@ -448,7 +449,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
         internal::BuildDeveloperModeAction(&*parsed_settings);
     EXPECT_EQ(zone.items[0].title, expected.title);
     EXPECT_EQ(zone.items[0].subtitle, expected.subtitle);
-    EXPECT_EQ(zone.items[0].sf_symbol_name, expected.sf_symbol_name);
+    EXPECT_EQ(zone.items[0].icon, expected.icon);
     EXPECT_EQ(zone.items[0].enabled, expected.enabled);
     EXPECT_EQ(zone.items[0].data_state, expected.data_state);
   }
@@ -517,7 +518,7 @@ TEST(MahoLocationBarUtilityPanelProviderTest,
       BuildMahoLocationBarUtilityPanelModel(nullptr);
 
   EXPECT_EQ(model.footer.title, u"Security state unavailable");
-  EXPECT_EQ(model.footer.sf_symbol_name, "questionmark.shield");
+  EXPECT_EQ(model.footer.icon, &maho_lucide_icons::kShieldQuestionIcon);
   EXPECT_EQ(model.footer.data_state,
             MahoLocationBarUtilityPanelDataState::kUnavailable);
 }
@@ -528,7 +529,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
       internal::BuildZoomInActionForState(/*has_active_page=*/true,
                                           /*at_max_zoom=*/false);
   EXPECT_EQ(mid.title, u"Zoom In");
-  EXPECT_EQ(mid.sf_symbol_name, "plus.magnifyingglass");
+  EXPECT_EQ(mid.icon, &maho_lucide_icons::kZoomInIcon);
   EXPECT_EQ(mid.data_state, MahoLocationBarUtilityPanelDataState::kLive);
   EXPECT_TRUE(mid.enabled);
   EXPECT_FALSE(mid.close_after_activate);
@@ -552,7 +553,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
       internal::BuildZoomOutActionForState(/*has_active_page=*/true,
                                            /*at_min_zoom=*/false);
   EXPECT_EQ(mid.title, u"Zoom Out");
-  EXPECT_EQ(mid.sf_symbol_name, "minus.magnifyingglass");
+  EXPECT_EQ(mid.icon, &maho_lucide_icons::kZoomOutIcon);
   EXPECT_EQ(mid.data_state, MahoLocationBarUtilityPanelDataState::kLive);
   EXPECT_TRUE(mid.enabled);
   EXPECT_FALSE(mid.close_after_activate);
@@ -580,7 +581,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
   EXPECT_TRUE(no_controller.subtitle.empty());
   EXPECT_EQ(no_controller.accessible_name, u"Reset Zoom");
   EXPECT_FALSE(no_controller.enabled);
-  EXPECT_EQ(no_controller.sf_symbol_name, "1.magnifyingglass");
+  EXPECT_EQ(no_controller.icon, &maho_lucide_icons::kSearchIcon);
   EXPECT_FALSE(no_controller.close_after_activate);
 
   MahoLocationBarUtilityPanelAction at_default =
@@ -640,7 +641,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
       internal::BuildFooterFromWebContents(nullptr);
   EXPECT_EQ(footer.title, u"Security state unavailable");
   EXPECT_EQ(footer.subtitle, u"Page security");
-  EXPECT_EQ(footer.sf_symbol_name, "questionmark.shield");
+  EXPECT_EQ(footer.icon, &maho_lucide_icons::kShieldQuestionIcon);
   EXPECT_EQ(footer.data_state,
             MahoLocationBarUtilityPanelDataState::kUnavailable);
   EXPECT_EQ(footer.security_level, static_cast<int>(security_state::NONE));
@@ -664,7 +665,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
       internal::BuildFooterFromModel(nullptr);
   EXPECT_EQ(footer.title, u"Security state unavailable");
   EXPECT_EQ(footer.subtitle, u"Page security");
-  EXPECT_EQ(footer.sf_symbol_name, "questionmark.shield");
+  EXPECT_EQ(footer.icon, &maho_lucide_icons::kShieldQuestionIcon);
   EXPECT_EQ(footer.data_state,
             MahoLocationBarUtilityPanelDataState::kUnavailable);
   EXPECT_EQ(footer.security_level, static_cast<int>(security_state::NONE));
@@ -680,7 +681,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
       internal::BuildFooterFromModel(&model);
   EXPECT_EQ(footer.subtitle, u"example.com");
   EXPECT_EQ(footer.title, u"Secure");
-  EXPECT_EQ(footer.sf_symbol_name, "checkmark.shield");
+  EXPECT_EQ(footer.icon, &maho_lucide_icons::kShieldCheckIcon);
   EXPECT_EQ(footer.data_state, MahoLocationBarUtilityPanelDataState::kLive);
   EXPECT_EQ(footer.security_level,
             static_cast<int>(security_state::SECURE));
@@ -703,7 +704,7 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
       internal::BuildFooterFromModel(&model);
   EXPECT_EQ(footer.subtitle, u"evil.example.org");
   EXPECT_EQ(footer.title, u"Dangerous");
-  EXPECT_EQ(footer.sf_symbol_name, "xmark.shield");
+  EXPECT_EQ(footer.icon, &maho_lucide_icons::kShieldXIcon);
   EXPECT_EQ(footer.data_state, MahoLocationBarUtilityPanelDataState::kLive);
   EXPECT_EQ(footer.security_level,
             static_cast<int>(security_state::DANGEROUS));

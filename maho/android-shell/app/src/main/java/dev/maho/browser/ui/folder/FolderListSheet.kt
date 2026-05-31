@@ -10,9 +10,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
@@ -42,6 +39,8 @@ import dev.maho.browser.bridge.BridgeFolders
 import dev.maho.browser.models.FolderId
 import dev.maho.browser.models.FolderViewModel
 import dev.maho.browser.models.SpaceId
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 private data class FolderItemBounds(
     val top: Float,
@@ -148,7 +147,7 @@ fun FolderListSheet(
                     BridgeFolders.createFolder(name = "New Folder", spaceId = spaceId)
                     reloadFolders()
                 }) {
-                    Icon(Icons.Filled.Add, contentDescription = "New Folder")
+                    Icon(painter = painterResource(id = MahoIcon.Add.drawableRes), contentDescription = "New Folder")
                 }
             },
         ) { padding ->
@@ -163,8 +162,7 @@ fun FolderListSheet(
                     Column(
                         horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
                     ) {
-                        Icon(
-                            Icons.Filled.Folder,
+                        Icon(painter = painterResource(id = MahoIcon.Folder.drawableRes),
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

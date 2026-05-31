@@ -3,9 +3,27 @@ export type IconSymbol =
     'panelSpark'|'plus'|'retry'|'settingsGear'|'stop'|'thumbDown'|
     'thumbUp'|'trash'|'viewModeToggle'|'xmark';
 
+const ICON_MAP: Record<IconSymbol, string> = {
+  arrowUpRight: 'arrow-up-right',
+  composerSpark: 'sparkles',
+  copy: 'copy',
+  edit: 'pencil',
+  ellipsis: 'ellipsis',
+  globe: 'globe',
+  panelSpark: 'sparkles',
+  plus: 'plus',
+  retry: 'rotate-cw',
+  settingsGear: 'settings',
+  stop: 'circle-stop',
+  thumbDown: 'thumbs-down',
+  thumbUp: 'thumbs-up',
+  trash: 'trash-2',
+  viewModeToggle: 'panel-right',
+  xmark: 'x',
+};
 
-export function getSFSymbolUrl(symbol: IconSymbol): string {
-  return `chrome://maho-ai/sf-symbol/${encodeURIComponent(symbol)}`;
+export function getIconUrl(symbol: IconSymbol): string {
+  return `chrome://maho-ai/icons/${ICON_MAP[symbol]}.svg`;
 }
 
 export function createIcon(symbol: IconSymbol): HTMLSpanElement {
@@ -13,6 +31,6 @@ export function createIcon(symbol: IconSymbol): HTMLSpanElement {
   icon.className = 'maho-ai-icon';
   icon.setAttribute('aria-hidden', 'true');
   icon.dataset['symbol'] = symbol;
-  icon.style.setProperty('--maho-ai-icon-url', `url("${getSFSymbolUrl(symbol)}")`);
+  icon.style.setProperty('--maho-ai-icon-url', `url("${getIconUrl(symbol)}")`);
   return icon;
 }

@@ -10,6 +10,7 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/values.h"
+#include "ui/gfx/vector_icon_types.h"
 
 class Browser;
 class LocationBar;
@@ -46,7 +47,7 @@ struct MahoLocationBarUtilityPanelAction {
   std::u16string title;
   std::u16string subtitle;
   std::u16string accessible_name;
-  std::string sf_symbol_name;
+  raw_ptr<const gfx::VectorIcon> icon = nullptr;
   bool enabled = true;
   MahoLocationBarUtilityPanelDataState data_state =
       MahoLocationBarUtilityPanelDataState::kLive;
@@ -74,7 +75,7 @@ struct MahoLocationBarUtilityPanelFooter {
   std::u16string title;
   std::u16string subtitle;
   std::u16string primary_action_label;
-  std::string sf_symbol_name;
+  raw_ptr<const gfx::VectorIcon> icon = nullptr;
   bool primary_action_enabled = true;
   bool close_after_primary_action = false;
   MahoLocationBarUtilityPanelDataState data_state =
@@ -160,6 +161,7 @@ MahoLocationBarUtilityPanelAction BuildAutoPipSettingsRow(
     Profile* profile);
 
 std::string GetSecuritySFSymbolNameForLevel(int security_level);
+const gfx::VectorIcon& GetSecurityIconForLevel(int security_level);
 
 MahoLocationBarUtilityPanelFooter BuildFooterFromWebContents(
     content::WebContents* web_contents);

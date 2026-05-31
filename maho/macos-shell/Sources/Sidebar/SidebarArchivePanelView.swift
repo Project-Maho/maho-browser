@@ -364,9 +364,7 @@ final class SidebarArchivePanelView: NSView, NSSearchFieldDelegate {
         filterButton.layer?.borderWidth = 1
         filterButton.target = self
         filterButton.action = #selector(showFilterMenu(_:))
-        filterButton.image = NSImage(systemSymbolName: "line.3.horizontal.decrease", accessibilityDescription: "Filter")?.withSymbolConfiguration(
-            NSImage.SymbolConfiguration(pointSize: 9, weight: .semibold)
-        )
+        filterButton.image = MahoIcon.imageForSFSymbol("line.3.horizontal.decrease", pointSize: 9, accessibilityDescription: "Filter")
         filterButton.imagePosition = .imageLeading
         filterButton.imageHugsTitle = true
         filterButton.imageScaling = .scaleProportionallyDown
@@ -791,9 +789,7 @@ private final class SidebarArchiveRowView: NSView {
             faviconView.contentTintColor = nil
         } else {
             usesFallbackFavicon = true
-            faviconView.image = NSImage(systemSymbolName: "globe", accessibilityDescription: "Archived tab")?.withSymbolConfiguration(
-                NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
-            )
+            faviconView.image = MahoIcon.imageForSFSymbol("globe", pointSize: 13, accessibilityDescription: "Archived tab")
             faviconView.contentTintColor = MahoAppColors.secondaryText.withAlphaComponent(0.72)
         }
 
@@ -859,9 +855,7 @@ private final class SidebarArchiveRowView: NSView {
         addSubview(textStackView)
 
         restoreGlyphView.translatesAutoresizingMaskIntoConstraints = false
-        restoreGlyphView.image = NSImage(systemSymbolName: "arrow.up.left", accessibilityDescription: "Restore")?.withSymbolConfiguration(
-            NSImage.SymbolConfiguration(pointSize: SidebarArchivePanelView.Metrics.rowGlyphSize, weight: .semibold)
-        )
+        restoreGlyphView.image = MahoIcon.imageForSFSymbol("arrow.up.left", pointSize: SidebarArchivePanelView.Metrics.rowGlyphSize, accessibilityDescription: "Restore")
         restoreGlyphView.setAccessibilityElement(false)
         addSubview(restoreGlyphView)
 
@@ -1131,9 +1125,7 @@ private final class SidebarArchiveEmptyStateView: NSView {
         addSubview(silhouetteView)
 
         iconView.translatesAutoresizingMaskIntoConstraints = false
-        iconView.image = NSImage(systemSymbolName: "archivebox", accessibilityDescription: "Archive")?.withSymbolConfiguration(
-            NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
-        )
+        iconView.image = MahoIcon.imageForSFSymbol("archivebox", pointSize: 13, accessibilityDescription: "Archive")
         iconView.setAccessibilityElement(false)
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false

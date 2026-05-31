@@ -82,11 +82,11 @@ final class ToolbarController: NSObject, NSToolbarDelegate {
         forwardButton?.isEnabled = canGoForward
 
         if isLoading {
-            reloadStopButton?.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Stop")
+            reloadStopButton?.image = MahoIcon.imageForSFSymbol("xmark", accessibilityDescription: "Stop")
             reloadStopButton?.toolTip = "Stop"
             reloadStopButton?.setAccessibilityLabel("Stop Loading")
         } else {
-            reloadStopButton?.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Reload")
+            reloadStopButton?.image = MahoIcon.imageForSFSymbol("arrow.clockwise", accessibilityDescription: "Reload")
             reloadStopButton?.toolTip = "Reload"
             reloadStopButton?.setAccessibilityLabel("Reload Page")
         }
@@ -189,8 +189,7 @@ final class ToolbarController: NSObject, NSToolbarDelegate {
         let button = NSButton(frame: NSRect(x: 0, y: 0, width: 28, height: 28))
         button.bezelStyle = .texturedRounded
         button.isBordered = false
-        let configuration = NSImage.SymbolConfiguration(pointSize: 10.5, weight: .medium)
-        button.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: tooltip)?.withSymbolConfiguration(configuration)
+        button.image = MahoIcon.imageForSFSymbol(symbolName, pointSize: 10.5, accessibilityDescription: tooltip)
         button.contentTintColor = MahoAppColors.titlebarControlTint.withAlphaComponent(0.80)
         button.target = self
         button.action = action

@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 
 struct TabGridToolbar: View {
     let tabCount: Int
@@ -31,7 +32,7 @@ struct TabGridToolbar: View {
             Spacer(minLength: 0)
 
             actionButton(
-                icon: "plus",
+                icon: Lucide.plus,
                 title: nil,
                 identifier: "tabGridNewTabButton",
                 label: "New tab",
@@ -41,7 +42,7 @@ struct TabGridToolbar: View {
             }
 
             actionButton(
-                icon: "xmark",
+                icon: Lucide.x,
                 title: nil,
                 identifier: "tabGridDismissButton",
                 label: "Done",
@@ -67,7 +68,7 @@ struct TabGridToolbar: View {
     }
 
     private func actionButton(
-        icon: String,
+        icon: UIImage,
         title: String?,
         identifier: String,
         label: String,
@@ -86,9 +87,9 @@ struct TabGridToolbar: View {
         .accessibilityHint(hint)
     }
 
-    private func actionLabel(icon: String, title: String?) -> some View {
+    private func actionLabel(icon: UIImage, title: String?) -> some View {
         VStack(spacing: 0) {
-            Image(systemName: icon)
+            Image(lucide: icon)
                 .font(.body.weight(.semibold))
                 .frame(width: ShellTheme.Size.touchTarget, height: ShellTheme.Size.touchTarget)
                 .foregroundStyle(.primary)

@@ -457,8 +457,7 @@ final class SpaceSwitcherView: NSView, CoreUpdateObserver {
     }
 
     private func configuredSymbol(named symbolName: String, pointSize: CGFloat, accessibilityDescription: String?) -> NSImage? {
-        let configuration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .medium)
-        return NSImage(systemSymbolName: symbolName, accessibilityDescription: accessibilityDescription)?.withSymbolConfiguration(configuration)
+        return MahoIcon.imageForSFSymbol(symbolName, pointSize: pointSize, accessibilityDescription: accessibilityDescription)
     }
 
     override func keyDown(with event: NSEvent) {
@@ -985,8 +984,7 @@ private final class SpaceSwitcherActionRowView: NSView {
 
         iconImageView.translatesAutoresizingMaskIntoConstraints = false
         iconImageView.imageScaling = .scaleProportionallyDown
-        let configuration = NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
-        iconImageView.image = NSImage(systemSymbolName: item.symbolName, accessibilityDescription: item.title)?.withSymbolConfiguration(configuration)
+        iconImageView.image = MahoIcon.imageForSFSymbol(item.symbolName, pointSize: 13, accessibilityDescription: item.title)
         addSubview(iconImageView)
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false

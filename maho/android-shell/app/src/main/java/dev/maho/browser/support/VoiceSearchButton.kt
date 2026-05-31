@@ -13,9 +13,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -29,6 +26,8 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 @Composable
 fun VoiceSearchButton(
@@ -101,7 +100,7 @@ fun VoiceSearchButton(
             },
         ) {
             Icon(
-                imageVector = if (isError) Icons.Default.MicOff else Icons.Default.Mic,
+                painter = painterResource(id = if (isError) MahoIcon.MicOff.drawableRes else MahoIcon.Mic.drawableRes),
                 contentDescription = if (isListening) "Stop voice search" else "Voice search",
                 tint = when {
                     isListening -> MaterialTheme.colorScheme.primary

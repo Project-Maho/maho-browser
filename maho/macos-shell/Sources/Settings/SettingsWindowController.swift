@@ -565,11 +565,7 @@ private final class SettingsSidebarCellView: NSTableCellView {
         titleLabel.textColor = selected ? MahoAppColors.primaryText : MahoAppColors.secondaryText
         titleLabel.font = .systemFont(ofSize: 12.5, weight: selected ? .semibold : .medium)
 
-        let baseImage = NSImage(
-            systemSymbolName: pane.imageName,
-            accessibilityDescription: pane.title
-        )
-        iconView.image = baseImage?.withSymbolConfiguration(.init(pointSize: 14, weight: selected ? .semibold : .medium))
+        iconView.image = MahoIcon.imageForSFSymbol(pane.imageName, pointSize: 14, accessibilityDescription: pane.title)
         iconView.contentTintColor = selected
             ? MahoAppColors.accentBlueBright.withAlphaComponent(0.96)
             : MahoAppColors.secondaryText.withAlphaComponent(0.9)

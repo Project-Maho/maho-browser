@@ -641,7 +641,7 @@ final class SpaceColorPreviewView: NSView, NSTextFieldDelegate {
             button.layer?.cornerRadius = displayStyle == .createSheetZen ? 12 : 8
             button.layer?.borderWidth = 1
             button.bezelStyle = .inline
-            button.image = NSImage(systemSymbolName: mode.0, accessibilityDescription: mode.1)
+            button.image = MahoIcon.imageForSFSymbol(mode.0, accessibilityDescription: mode.1)
             button.imagePosition = .imageLeading
             button.imageScaling = .scaleProportionallyDown
             button.title = displayStyle == .createSheetZen ? mode.1 : " \(mode.1)"
@@ -923,7 +923,7 @@ final class SpaceColorPreviewView: NSView, NSTextFieldDelegate {
         button.translatesAutoresizingMaskIntoConstraints = false
         button.isBordered = false
         button.bezelStyle = .inline
-        button.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
+        button.image = MahoIcon.imageForSFSymbol(symbolName)
         button.imageScaling = .scaleProportionallyDown
         button.contentTintColor = MahoAppColors.secondaryText
         button.tag = tag
@@ -939,17 +939,13 @@ final class SpaceColorPreviewView: NSView, NSTextFieldDelegate {
         button.translatesAutoresizingMaskIntoConstraints = false
         button.isBordered = false
         button.bezelStyle = .inline
-        button.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
+        let pointSize: CGFloat = displayStyle == .createSheetZen ? 15 : 14
+        button.image = MahoIcon.imageForSFSymbol(symbolName, pointSize: pointSize)
         button.imageScaling = .scaleProportionallyDown
         button.contentTintColor = NSColor.white.withAlphaComponent(displayStyle == .createSheetZen ? 0.62 : 0.5)
         button.target = self
         button.action = #selector(brightnessButtonTapped(_:))
         button.setAccessibilityIdentifier(accessibilityIdentifier)
-
-        if let image = button.image {
-            let configuration = NSImage.SymbolConfiguration(pointSize: displayStyle == .createSheetZen ? 15 : 14, weight: .medium)
-            button.image = image.withSymbolConfiguration(configuration)
-        }
 
         NSLayoutConstraint.activate([
             button.widthAnchor.constraint(equalToConstant: displayStyle == .createSheetZen ? 24 : 20),
@@ -968,7 +964,7 @@ final class SpaceColorPreviewView: NSView, NSTextFieldDelegate {
         gradientToggleButton.title = "Gradient"
         gradientToggleButton.font = .systemFont(ofSize: displayStyle == .createSheetZen ? 11 : 10.5, weight: .medium)
         gradientToggleButton.contentTintColor = MahoAppColors.primaryText
-        gradientToggleButton.image = NSImage(systemSymbolName: "circle.lefthalf.filled", accessibilityDescription: "Gradient")
+        gradientToggleButton.image = MahoIcon.imageForSFSymbol("circle.lefthalf.filled", accessibilityDescription: "Gradient")
         gradientToggleButton.imagePosition = .imageLeading
         gradientToggleButton.imageScaling = .scaleProportionallyDown
         gradientToggleButton.target = self

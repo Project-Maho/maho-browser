@@ -1,5 +1,6 @@
 import WidgetKit
 import SwiftUI
+import LucideIcons
 
 struct MahoWidgetEntry: TimelineEntry {
     let date: Date
@@ -28,7 +29,7 @@ struct MahoWidgetEntryView: View {
         Link(destination: URL(string: "maho://search?q=")!) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Image(systemName: "magnifyingglass")
+                    Image(lucide: Lucide.search)
                         .foregroundStyle(.secondary)
                     Text("Search in Maho")
                         .font(.subheadline)

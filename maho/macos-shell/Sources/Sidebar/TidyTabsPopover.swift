@@ -122,7 +122,7 @@ final class TidyTabsConfirmViewController: NSViewController {
 
             let folderIcon = NSImageView()
             folderIcon.translatesAutoresizingMaskIntoConstraints = false
-            folderIcon.image = NSImage(systemSymbolName: "folder.fill", accessibilityDescription: nil)
+            folderIcon.image = MahoIcon.imageForSFSymbol("folder.fill")
             folderIcon.contentTintColor = folderIconColor
             NSLayoutConstraint.activate([
                 folderIcon.widthAnchor.constraint(equalToConstant: 14),

@@ -10,10 +10,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Bookmark
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -40,6 +36,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.maho.browser.bridge.BridgeBookmarks
 import dev.maho.browser.models.BookmarkEntry
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -81,7 +79,7 @@ fun BookmarksScreen(
                             onBack()
                         }
                     }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(painter = painterResource(id = MahoIcon.NavBack.drawableRes), contentDescription = "Back")
                     }
                 },
             )
@@ -117,8 +115,7 @@ fun BookmarksScreen(
                         contentAlignment = Alignment.Center,
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                Icons.Filled.Bookmark,
+                            Icon(painter = painterResource(id = MahoIcon.Bookmarks.drawableRes),
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -179,8 +176,7 @@ private fun BookmarkItem(
                     .padding(horizontal = 16.dp),
                 contentAlignment = Alignment.CenterEnd,
             ) {
-                Icon(
-                    Icons.Filled.Delete,
+                Icon(painter = painterResource(id = MahoIcon.Delete.drawableRes),
                     contentDescription = "Delete",
                     tint = Color.White,
                 )

@@ -272,7 +272,7 @@ final class FavoritesContextMenu {
     }
 
     private static func mutedIndicatorImage() -> NSImage? {
-        NSImage(systemSymbolName: "speaker.slash.fill", accessibilityDescription: "Muted")
+        MahoIcon.imageForSFSymbol("speaker.slash.fill", accessibilityDescription: "Muted")
     }
 
     private static func canReplacePinnedURL(for tab: TabViewModel, currentActiveTab: TabViewModel?) -> Bool {

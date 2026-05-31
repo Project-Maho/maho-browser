@@ -9,9 +9,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -25,6 +22,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import dev.maho.browser.ui.theme.BrowserShellTheme
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 @Composable
 fun TabGridToolbar(
@@ -60,8 +59,7 @@ fun TabGridToolbar(
                 onClick = onNewTab,
                 modifier = Modifier.testTag("tabGridNewTabButton"),
             ) {
-                Icon(
-                    Icons.Filled.Add,
+                Icon(painter = painterResource(id = MahoIcon.Add.drawableRes),
                     contentDescription = "New tab in $activeSpaceName",
                     modifier = Modifier,
                 )
@@ -94,8 +92,7 @@ fun TabGridToolbar(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (tabCount > 1) {
                     TextButton(onClick = onCloseAll) {
-                        Icon(
-                            Icons.Filled.CleaningServices,
+                        Icon(painter = painterResource(id = MahoIcon.Eraser.drawableRes),
                             contentDescription = "Close All",
                             modifier = Modifier,
                         )

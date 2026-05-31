@@ -9,9 +9,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -29,6 +26,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import java.util.Locale
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 @Composable
 fun LanguageSettingsScreen(
@@ -70,7 +69,7 @@ fun LanguageSettingsScreen(
                 title = { Text("Language") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(painter = painterResource(id = MahoIcon.NavBack.drawableRes), contentDescription = "Back")
                     }
                 },
             )
@@ -88,7 +87,7 @@ fun LanguageSettingsScreen(
                     headlineContent = { Text(locale.getDisplayName(locale).replaceFirstChar { it.uppercase(locale) }) },
                     trailingContent = {
                         if (isSelected) {
-                            Icon(Icons.Default.Check, contentDescription = "Selected")
+                            Icon(painter = painterResource(id = MahoIcon.Check.drawableRes), contentDescription = "Selected")
                         }
                     },
                     modifier = Modifier.clickable { selectLocale(locale) },

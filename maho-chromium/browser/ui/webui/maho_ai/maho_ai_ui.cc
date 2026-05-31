@@ -28,7 +28,6 @@
 #include "content/public/common/url_constants.h"
 #include "components/prefs/pref_service.h"
 #include "maho/browser/ui/webui/maho_ai/maho_ai_page_handler.h"
-#include "maho/browser/ui/webui/maho_ai/maho_ai_sf_symbol_source.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "ui/webui/webui_util.h"
@@ -58,14 +57,6 @@ MahoAIUI::MahoAIUI(content::WebUI* web_ui)
   }
   webui::SetupWebUIDataSource(source, kMahoAiResources,
                               IDR_MAHO_AI_MAHO_AI_HTML);
-
-  source->SetRequestFilter(
-      base::BindRepeating(&maho_ai::ShouldHandleSFSymbolRequest),
-      base::BindRepeating(
-          [](const std::string& path,
-             content::WebUIDataSource::GotDataCallback callback) {
-            maho_ai::HandleSFSymbolRequest(path, std::move(callback));
-          }));
 }
 
 MahoAIUI::~MahoAIUI() = default;

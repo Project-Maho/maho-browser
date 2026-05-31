@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import LucideIcons
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -476,7 +477,7 @@ struct MainBrowserView: View {
                     .fill(ShellTheme.Palette.incognitoSurfaceStrong)
                     .frame(width: ShellTheme.Size.summaryStateIcon, height: ShellTheme.Size.summaryStateIcon)
 
-                Image(systemName: "eye.slash.fill")
+                Image(lucide: Lucide.eyeOff)
                     .font(.headline.weight(.semibold))
                     .foregroundStyle(ShellTheme.Palette.incognitoForeground)
             }

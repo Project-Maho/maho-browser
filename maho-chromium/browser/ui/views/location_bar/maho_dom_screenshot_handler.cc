@@ -11,6 +11,7 @@
 #include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/strings/strcat.h"
@@ -350,29 +351,29 @@ void MahoDomScreenshotHandler::ShowResultBubble(
 
   MahoDomScreenshotActionMenu menu;
   menu.header_label = u"Send To...";
-  menu.header_sf_symbol_name = "square.and.arrow.up";
+  menu.header_icon = &maho_lucide_icons::kShareIcon;
   menu.header_activate = base::BindOnce(
       &MahoDomScreenshotHandler::OnSendToClicked, weak_factory_.GetWeakPtr());
 
   menu.rows.push_back({
-      u"Copy", "doc.on.doc", true, false,
+      u"Copy", &maho_lucide_icons::kCopyIcon, true, false,
       base::BindOnce(&MahoDomScreenshotHandler::OnCopyClicked,
                      weak_factory_.GetWeakPtr()),
   });
   menu.rows.push_back({
-      u"Save...", "arrow.down.to.line", true, false,
+      u"Save...", &maho_lucide_icons::kArrowDownToLineIcon, true, false,
       base::BindOnce(&MahoDomScreenshotHandler::OnSaveClicked,
                      weak_factory_.GetWeakPtr()),
   });
   menu.rows.push_back({
-      u"Retake", "arrow.clockwise", true, false,
+      u"Retake", &maho_lucide_icons::kRotateCwIcon, true, false,
       base::BindOnce(&MahoDomScreenshotHandler::OnRetakeClicked,
                      weak_factory_.GetWeakPtr()),
   });
 
   const bool edit_enabled = IsScreenshotEditFlagOn();
   menu.rows.push_back({
-      u"Edit", "pencil.tip.crop.circle", edit_enabled, false,
+      u"Edit", &maho_lucide_icons::kPencilLineIcon, edit_enabled, false,
       edit_enabled
           ? base::BindOnce(&MahoDomScreenshotHandler::OnEditClicked,
                            weak_factory_.GetWeakPtr())
@@ -385,7 +386,7 @@ void MahoDomScreenshotHandler::ShowResultBubble(
   const bool imessage_enabled = false;
 #endif
   menu.rows.push_back({
-      u"Send via iMessage...", "message", imessage_enabled, false,
+      u"Send via iMessage...", &maho_lucide_icons::kMessageSquareIcon, imessage_enabled, false,
       imessage_enabled
           ? base::BindOnce(
                 &MahoDomScreenshotHandler::OnSendViaIMessageClicked,
@@ -395,7 +396,7 @@ void MahoDomScreenshotHandler::ShowResultBubble(
 
   const bool save_to_library_enabled = IsSaveToLibraryFlagOn();
   menu.rows.push_back({
-      u"Save to Library", "tray.and.arrow.down", save_to_library_enabled,
+      u"Save to Library", &maho_lucide_icons::kArrowDownToLineIcon, save_to_library_enabled,
       false,
       save_to_library_enabled
           ? base::BindOnce(&MahoDomScreenshotHandler::OnSaveToLibraryClicked,

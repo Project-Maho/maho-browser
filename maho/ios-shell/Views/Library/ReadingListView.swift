@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 
 struct ReadingListView: View {
     let onOpenURL: (String) -> Void
@@ -82,17 +83,14 @@ struct ReadingListView: View {
                         Button(role: .destructive) {
                             removeItem(item)
                         } label: {
-                            Label("Remove", systemImage: "trash")
+                            Label { Text("Remove") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("trash")) }
                         }
                     }
                     .swipeActions(edge: .leading, allowsFullSwipe: true) {
                         Button {
                             toggleRead(item)
                         } label: {
-                            Label(
-                                item.isRead ? "Mark Unread" : "Mark Read",
-                                systemImage: item.isRead ? "circle" : "checkmark.circle"
-                            )
+                            Label { Text(item.isRead ? "Mark Unread" : "Mark Read") } icon: { Image(lucide: MahoIcon.imageForSFSymbol(item.isRead ? "circle" : "checkmark.circle")) }
                         }
                         .tint(item.isRead ? .orange : .green)
                     }
@@ -103,7 +101,7 @@ struct ReadingListView: View {
 
     private var emptyState: some View {
         VStack(spacing: 12) {
-            Image(systemName: "eyeglasses")
+            Image(lucide: Lucide.glasses)
                 .font(.system(size: 48))
                 .foregroundStyle(.secondary)
             Text(filterMode == .all ? "Reading List Empty" : "No \(filterMode.rawValue) Items")

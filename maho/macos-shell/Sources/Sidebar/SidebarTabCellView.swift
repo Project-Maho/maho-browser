@@ -308,7 +308,6 @@ class SidebarTabCellView: NSTableCellView, NSTextFieldDelegate {
     }
 
     private func configuredSymbol(named symbolName: String, pointSize: CGFloat, accessibilityDescription: String?) -> NSImage? {
-        let configuration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .medium)
-        return NSImage(systemSymbolName: symbolName, accessibilityDescription: accessibilityDescription)?.withSymbolConfiguration(configuration)
+        return MahoIcon.imageForSFSymbol(symbolName, pointSize: pointSize, accessibilityDescription: accessibilityDescription)
     }
 }

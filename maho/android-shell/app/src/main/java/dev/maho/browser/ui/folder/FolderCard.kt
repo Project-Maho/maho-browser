@@ -3,9 +3,6 @@ package dev.maho.browser.ui.folder
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.DragHandle
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -28,6 +25,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import dev.maho.browser.models.FolderViewModel
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -59,8 +58,7 @@ fun FolderCard(
             )
         },
         leadingContent = {
-            Icon(
-                Icons.Filled.Folder,
+            Icon(painter = painterResource(id = MahoIcon.Folder.drawableRes),
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
             )
@@ -80,8 +78,7 @@ fun FolderCard(
                     },
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(
-                    Icons.Filled.DragHandle,
+                Icon(painter = painterResource(id = MahoIcon.DragHandle.drawableRes),
                     contentDescription = "Drag folder to reorder",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

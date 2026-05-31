@@ -12,7 +12,7 @@ struct DownloadsView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if downloads.isEmpty {
                     ContentUnavailableView {
-                        Label("No Downloads", systemImage: "arrow.down.circle")
+                        Label { Text("No Downloads") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("arrow.down.circle")) }
                     } description: {
                         Text("Files you download will appear here.")
                     }
@@ -35,13 +35,13 @@ struct DownloadsView: View {
                         Button(role: .destructive) {
                             removeDownload(download)
                         } label: {
-                            Label("Delete", systemImage: "trash")
+                            Label { Text("Delete") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("trash")) }
                         }
                         if download.state == .downloading {
                             Button {
                                 cancelDownload(download)
                             } label: {
-                                Label("Cancel", systemImage: "xmark.circle")
+                                Label { Text("Cancel") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("xmark.circle")) }
                             }
                             .tint(.orange)
                         }
@@ -51,14 +51,14 @@ struct DownloadsView: View {
                             Button {
                                 pauseDownload(download)
                             } label: {
-                                Label("Pause", systemImage: "pause")
+                                Label { Text("Pause") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("pause")) }
                             }
                             .tint(.yellow)
                         } else if download.state == .paused {
                             Button {
                                 resumeDownload(download)
                             } label: {
-                                Label("Resume", systemImage: "play")
+                                Label { Text("Resume") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("play")) }
                             }
                             .tint(.green)
                         }

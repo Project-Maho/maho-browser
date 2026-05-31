@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 
 struct LanguageSettingsView: View {
     @AppStorage("settings.preferredLanguage") private var preferredLanguage: String = ""
@@ -24,7 +25,7 @@ struct LanguageSettingsView: View {
                         Text("System Default")
                         Spacer()
                         if preferredLanguage.isEmpty {
-                            Image(systemName: "checkmark")
+                            Image(lucide: Lucide.check)
                                 .foregroundStyle(Color.accentColor)
                         }
                     }
@@ -40,7 +41,7 @@ struct LanguageSettingsView: View {
                             Text(locale.localizedString(forIdentifier: locale.identifier) ?? locale.identifier)
                             Spacer()
                             if preferredLanguage == locale.identifier {
-                                Image(systemName: "checkmark")
+                                Image(lucide: Lucide.check)
                                     .foregroundStyle(Color.accentColor)
                             }
                         }

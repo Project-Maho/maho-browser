@@ -62,7 +62,7 @@ final class ExtensionToolbarManager: CoreUpdateObserver {
             let button = NSButton(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
             button.bezelStyle = .recessed
             button.isBordered = false
-            button.image = NSImage(systemSymbolName: "puzzlepiece.extension", accessibilityDescription: extId)
+            button.image = MahoIcon.imageForSFSymbol("puzzlepiece.extension", accessibilityDescription: extId)
             button.imagePosition = .imageOnly
             button.toolTip = extId
             button.target = self

@@ -13,11 +13,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -38,6 +33,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.maho.browser.support.PageSummarizer
 import dev.maho.browser.ui.theme.BrowserShellTheme
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 @Composable
 fun SummaryOverlay(
@@ -154,7 +151,7 @@ fun SummaryOverlay(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.AutoAwesome,
+                                    painter = painterResource(id = MahoIcon.SparklesAi.drawableRes),
                                     contentDescription = null,
                                     tint = actionColor,
                                     modifier = Modifier.size(16.dp),
@@ -178,7 +175,7 @@ fun SummaryOverlay(
                                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.VisibilityOff,
+                                        painter = painterResource(id = MahoIcon.VisibilityOff.drawableRes),
                                         contentDescription = null,
                                         tint = shellColors.incognitoAccent,
                                         modifier = Modifier.size(14.dp),
@@ -226,7 +223,7 @@ fun SummaryOverlay(
                 ) {
                     IconButton(onClick = onDismiss) {
                         Icon(
-                            imageVector = Icons.Default.Close,
+                            painter = painterResource(id = MahoIcon.Close.drawableRes),
                             contentDescription = "Close",
                             tint = shellColors.textSecondary,
                         )
@@ -349,7 +346,7 @@ fun SummaryOverlay(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.Warning,
+                                    painter = painterResource(id = MahoIcon.Warning.drawableRes),
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.error,
                                     modifier = Modifier.size(18.dp),

@@ -5,6 +5,7 @@
 #include "maho/browser/ui/views/location_bar/maho_dom_screenshot_handler.h"
 #include "maho/browser/ui/views/location_bar/maho_full_page_capture_client.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_provider.h"
+#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 
 #include "base/functional/bind.h"
 #include <optional>
@@ -66,18 +67,18 @@ namespace maho {
 
 namespace internal {
 
-constexpr char kExtensionsSymbolName[] = "puzzlepiece.extension";
-constexpr char kDeveloperModeSymbolName[] = "hammer";
-constexpr char kAutoPipSymbolName[] = "pip.enter";
-constexpr char kShieldsSymbolName[] = "shield.lefthalf.filled";
-constexpr char kShareSymbolName[] = "square.and.arrow.up";
-constexpr char kCameraSymbolName[] = "camera";
-constexpr char kViewfinderSymbolName[] = "viewfinder";
-constexpr char kZoomInSymbolName[] = "plus.magnifyingglass";
-constexpr char kZoomOutSymbolName[] = "minus.magnifyingglass";
-constexpr char kZoomResetSymbolName[] = "1.magnifyingglass";
-constexpr char kAddChipSymbolName[] = "plus";
-constexpr char kBlockAdsAndTrackersSymbolName[] = "shield.lefthalf.filled";
+const gfx::VectorIcon& kExtensionsIcon = maho_lucide_icons::kPuzzleIcon;
+const gfx::VectorIcon& kDeveloperModeIcon = maho_lucide_icons::kHammerIcon;
+const gfx::VectorIcon& kAutoPipIcon = maho_lucide_icons::kPictureInPicture2Icon;
+const gfx::VectorIcon& kShieldsIcon = maho_lucide_icons::kShieldHalfIcon;
+const gfx::VectorIcon& kShareIcon = maho_lucide_icons::kShareIcon;
+const gfx::VectorIcon& kCameraIcon = maho_lucide_icons::kCameraIcon;
+const gfx::VectorIcon& kViewfinderIcon = maho_lucide_icons::kScanIcon;
+const gfx::VectorIcon& kZoomInIcon = maho_lucide_icons::kZoomInIcon;
+const gfx::VectorIcon& kZoomOutIcon = maho_lucide_icons::kZoomOutIcon;
+const gfx::VectorIcon& kZoomResetIcon = maho_lucide_icons::kSearchIcon;
+const gfx::VectorIcon& kAddChipIcon = maho_lucide_icons::kPlusIcon;
+const gfx::VectorIcon& kBlockAdsAndTrackersIcon = maho_lucide_icons::kShieldHalfIcon;
 
 content::WebContents* GetActiveWebContents(Browser* browser);
 const GURL& GetVisibleOrCommittedUrl(content::WebContents* contents);
@@ -119,14 +120,14 @@ std::u16string DescribeSecurityLevel(int security_level) {
 MahoLocationBarUtilityPanelAction MakeAction(
     std::u16string title,
     std::u16string subtitle,
-    std::string sf_symbol_name,
+    const gfx::VectorIcon& icon,
     MahoLocationBarUtilityPanelDataState data_state,
     bool enabled) {
   MahoLocationBarUtilityPanelAction action;
   action.title = std::move(title);
   action.subtitle = std::move(subtitle);
   action.accessible_name = BuildAccessibleName(action.title, action.subtitle);
-  action.sf_symbol_name = std::move(sf_symbol_name);
+  action.icon = &icon;
   action.data_state = data_state;
   action.enabled = enabled;
   return action;
@@ -134,15 +135,16 @@ MahoLocationBarUtilityPanelAction MakeAction(
 
 MahoLocationBarUtilityPanelAction MakeDisabledStubAction(
     std::u16string title,
-    std::string sf_symbol_name) {
-  return MakeAction(std::move(title), std::u16string(), std::move(sf_symbol_name),
+    const gfx::VectorIcon& icon) {
+  return MakeAction(std::move(title), std::u16string(),
+                    icon,
                     MahoLocationBarUtilityPanelDataState::kUnavailable,
                     false);
 }
 
 MahoLocationBarUtilityPanelAction MakeAddExtensionChip(Browser* browser) {
   MahoLocationBarUtilityPanelAction action =
-      MakeAction(u"+", u"", kAddChipSymbolName,
+      MakeAction(u"+", u"", kAddChipIcon,
                  MahoLocationBarUtilityPanelDataState::kLive,
                  browser != nullptr);
   action.accessible_name = u"Add extension";
@@ -206,19 +208,19 @@ void ShowShieldBubbleForBrowser(Browser* browser) {
   MahoPageInfoUI::ShowShieldBubble(browser);
 }
 
-std::string GetSecuritySFSymbolNameForLevel(int security_level) {
+const gfx::VectorIcon& GetSecurityIconForLevel(int security_level) {
   switch (static_cast<security_state::SecurityLevel>(security_level)) {
     case security_state::SECURE:
-      return "checkmark.shield";
+      return maho_lucide_icons::kShieldCheckIcon;
     case security_state::WARNING:
-      return "exclamationmark.shield";
+      return maho_lucide_icons::kShieldQuestionIcon;
     case security_state::DANGEROUS:
-      return "xmark.shield";
+      return maho_lucide_icons::kShieldXIcon;
     case security_state::NONE:
     case security_state::SECURITY_LEVEL_COUNT:
       break;
   }
-  return "questionmark.shield";
+  return maho_lucide_icons::kShieldQuestionIcon;
 }
 const GURL& GetVisibleOrCommittedUrl(content::WebContents* contents) {
   CHECK(contents);
@@ -230,7 +232,7 @@ MahoLocationBarUtilityPanelAction BuildDeveloperModeAction(
     const base::Value* parsed_settings) {
   if (!parsed_settings || !parsed_settings->is_dict()) {
     return MakeAction(u"Developer mode", u"Developer mode unavailable",
-                      kDeveloperModeSymbolName,
+                      kDeveloperModeIcon,
                       MahoLocationBarUtilityPanelDataState::kUnavailable,
                       false);
   }
@@ -241,14 +243,14 @@ MahoLocationBarUtilityPanelAction BuildDeveloperModeAction(
       advanced ? advanced->FindBool("developer_mode") : std::nullopt;
   if (!developer_mode.has_value()) {
     return MakeAction(u"Developer mode", u"Developer mode unavailable",
-                      kDeveloperModeSymbolName,
+                      kDeveloperModeIcon,
                       MahoLocationBarUtilityPanelDataState::kUnavailable,
                       false);
   }
 
   return MakeAction(u"Developer mode",
                     *developer_mode ? u"Enabled" : u"Disabled",
-                    kDeveloperModeSymbolName,
+                    kDeveloperModeIcon,
                     MahoLocationBarUtilityPanelDataState::kLive, false);
 }
 
@@ -278,7 +280,7 @@ MahoLocationBarUtilityPanelAction BuildAutoPipActionForContext(
                       unsupported_without_context
                           ? u"Unsupported in this window"
                           : u"No active page available",
-                      kAutoPipSymbolName,
+                      kAutoPipIcon,
                       unsupported_without_context
                           ? MahoLocationBarUtilityPanelDataState::kUnsupported
                           : MahoLocationBarUtilityPanelDataState::kUnavailable,
@@ -289,7 +291,7 @@ MahoLocationBarUtilityPanelAction BuildAutoPipActionForContext(
   if (!url.is_valid()) {
     return MakeAction(u"Automatic Picture-In-Picture",
                       u"Current page unavailable",
-                      kAutoPipSymbolName,
+                      kAutoPipIcon,
                       MahoLocationBarUtilityPanelDataState::kUnavailable,
                       false);
   }
@@ -299,7 +301,7 @@ MahoLocationBarUtilityPanelAction BuildAutoPipActionForContext(
   if (!settings_map) {
     return MakeAction(u"Automatic Picture-In-Picture",
                       u"Auto PiP settings unavailable",
-                      kAutoPipSymbolName,
+                      kAutoPipIcon,
                       MahoLocationBarUtilityPanelDataState::kUnavailable,
                       false);
   }
@@ -320,7 +322,7 @@ MahoLocationBarUtilityPanelAction BuildAutoPipActionForContext(
 
   return MakeAction(u"Automatic Picture-In-Picture",
                     DescribeAutoPipState(setting, embargoed),
-                    kAutoPipSymbolName,
+                    kAutoPipIcon,
                     MahoLocationBarUtilityPanelDataState::kLive, false);
 }
 
@@ -368,7 +370,7 @@ MahoLocationBarUtilityPanelAction BuildShareAction(Browser* browser) {
   MahoLocationBarUtilityPanelAction action = MakeAction(
       u"Share",
       has_active_page ? u"Share this page" : u"Current page unavailable",
-      kShareSymbolName,
+      kShareIcon,
       has_active_page ? MahoLocationBarUtilityPanelDataState::kLive
                       : MahoLocationBarUtilityPanelDataState::kUnavailable,
       has_active_page);
@@ -434,7 +436,7 @@ MahoLocationBarUtilityPanelAction BuildZoomInActionForState(
     bool at_max_zoom) {
   const bool enabled = has_active_page && !at_max_zoom;
   MahoLocationBarUtilityPanelAction action =
-      MakeAction(u"Zoom In", std::u16string(), kZoomInSymbolName,
+      MakeAction(u"Zoom In", std::u16string(), kZoomInIcon,
                  MahoLocationBarUtilityPanelDataState::kLive, enabled);
   action.close_after_activate = false;
   return action;
@@ -445,7 +447,7 @@ MahoLocationBarUtilityPanelAction BuildZoomOutActionForState(
     bool at_min_zoom) {
   const bool enabled = has_active_page && !at_min_zoom;
   MahoLocationBarUtilityPanelAction action =
-      MakeAction(u"Zoom Out", std::u16string(), kZoomOutSymbolName,
+      MakeAction(u"Zoom Out", std::u16string(), kZoomOutIcon,
                  MahoLocationBarUtilityPanelDataState::kLive, enabled);
   action.close_after_activate = false;
   return action;
@@ -461,7 +463,7 @@ MahoLocationBarUtilityPanelAction BuildZoomResetActionForState(
     subtitle = base::NumberToString16(*zoom_percent) + u"%";
   }
   MahoLocationBarUtilityPanelAction action =
-      MakeAction(u"Reset Zoom", std::move(subtitle), kZoomResetSymbolName,
+      MakeAction(u"Reset Zoom", std::move(subtitle), kZoomResetIcon,
                  MahoLocationBarUtilityPanelDataState::kLive, enabled);
   action.close_after_activate = false;
   return action;
@@ -472,7 +474,7 @@ MahoLocationBarUtilityPanelAction BuildShieldsAction(Browser* browser) {
   MahoLocationBarUtilityPanelAction action = MakeAction(
       u"Shields",
       has_active_page ? u"Per-site controls" : u"Current page unavailable",
-      kShieldsSymbolName,
+      kShieldsIcon,
       has_active_page ? MahoLocationBarUtilityPanelDataState::kLive
                       : MahoLocationBarUtilityPanelDataState::kUnavailable,
       has_active_page);
@@ -490,7 +492,7 @@ MahoLocationBarUtilityPanelAction BuildBlockAdsAndTrackersRowForState(
       MakeAction(u"Block Ads & Trackers",
                  blocking_enabled ? u"Blocked on every visit"
                                   : u"Allowed on this site",
-                 kBlockAdsAndTrackersSymbolName,
+                 kBlockAdsAndTrackersIcon,
                  MahoLocationBarUtilityPanelDataState::kLive,
                  true);
   action.has_toggle = true;
@@ -525,7 +527,7 @@ MahoLocationBarUtilityPanelAction BuildBlockAdsAndTrackersRow(Browser* browser) 
   const std::optional<std::string> origin = GetActiveOrigin(browser);
   if (!origin.has_value()) {
     return MakeAction(u"Block Ads & Trackers", u"Current page unavailable",
-                      kBlockAdsAndTrackersSymbolName,
+                      kBlockAdsAndTrackersIcon,
                       MahoLocationBarUtilityPanelDataState::kUnavailable,
                       false);
   }
@@ -533,7 +535,7 @@ MahoLocationBarUtilityPanelAction BuildBlockAdsAndTrackersRow(Browser* browser) 
   MahoCore* core = maho::GetCore();
   if (!core) {
     return MakeAction(u"Block Ads & Trackers", u"Core unavailable",
-                      kBlockAdsAndTrackersSymbolName,
+                      kBlockAdsAndTrackersIcon,
                       MahoLocationBarUtilityPanelDataState::kUnavailable,
                       false);
   }
@@ -595,7 +597,7 @@ MahoLocationBarUtilityPanelAction BuildCameraAction(Browser* browser) {
   MahoLocationBarUtilityPanelAction action = MakeAction(
       u"Screenshot",
       has_active_page ? u"Capture visible area" : u"Current page unavailable",
-      kCameraSymbolName,
+      kCameraIcon,
       has_active_page ? MahoLocationBarUtilityPanelDataState::kLive
                       : MahoLocationBarUtilityPanelDataState::kUnavailable,
       has_active_page);
@@ -612,7 +614,7 @@ MahoLocationBarUtilityPanelAction BuildViewfinderAction(Browser* browser) {
   MahoLocationBarUtilityPanelAction action = MakeAction(
       u"Full-Page Screenshot",
       has_active_page ? u"Capture full page" : u"Current page unavailable",
-      kViewfinderSymbolName,
+      kViewfinderIcon,
       has_active_page ? MahoLocationBarUtilityPanelDataState::kLive
                       : MahoLocationBarUtilityPanelDataState::kUnavailable,
       has_active_page);
@@ -800,7 +802,7 @@ MahoUtilityPanelZone BuildExtensionsZone(Browser* browser) {
     empty_chip.title = u"No extensions";
     empty_chip.enabled = false;
     empty_chip.data_state = MahoLocationBarUtilityPanelDataState::kLive;
-    empty_chip.sf_symbol_name = kExtensionsSymbolName;
+    empty_chip.icon = &kExtensionsIcon;
     zone.items.push_back(std::move(empty_chip));
   } else {
     for (auto& item : items) {
@@ -835,8 +837,7 @@ MahoLocationBarUtilityPanelFooter BuildFooterFromWebContents(
   footer.subtitle = u"Page security";
   footer.data_state = MahoLocationBarUtilityPanelDataState::kUnavailable;
   footer.security_level = static_cast<int>(security_state::NONE);
-  footer.sf_symbol_name =
-      GetSecuritySFSymbolNameForLevel(footer.security_level);
+  footer.icon = &GetSecurityIconForLevel(footer.security_level);
   footer.primary_action_label = u"Close";
   footer.close_after_primary_action = true;
 
@@ -852,7 +853,7 @@ MahoLocationBarUtilityPanelFooter BuildFooterFromWebContents(
 
   footer.data_state = MahoLocationBarUtilityPanelDataState::kLive;
   footer.security_level = static_cast<int>(level);
-  footer.sf_symbol_name = GetSecuritySFSymbolNameForLevel(footer.security_level);
+  footer.icon = &GetSecurityIconForLevel(footer.security_level);
   footer.title = DescribeSecurityLevel(footer.security_level);
 
   const GURL& url = GetVisibleOrCommittedUrl(web_contents);
@@ -868,8 +869,7 @@ MahoLocationBarUtilityPanelFooter BuildFooterFromModel(
   footer.subtitle = u"Page security";
   footer.data_state = MahoLocationBarUtilityPanelDataState::kUnavailable;
   footer.security_level = static_cast<int>(security_state::NONE);
-  footer.sf_symbol_name =
-      GetSecuritySFSymbolNameForLevel(footer.security_level);
+  footer.icon = &GetSecurityIconForLevel(footer.security_level);
   footer.primary_action_label = u"Close";
   footer.close_after_primary_action = true;
 
@@ -879,8 +879,7 @@ MahoLocationBarUtilityPanelFooter BuildFooterFromModel(
 
   footer.data_state = MahoLocationBarUtilityPanelDataState::kLive;
   footer.security_level = static_cast<int>(model->GetSecurityLevel());
-  footer.sf_symbol_name =
-      GetSecuritySFSymbolNameForLevel(footer.security_level);
+  footer.icon = &GetSecurityIconForLevel(footer.security_level);
   footer.title = DescribeSecurityLevel(footer.security_level);
   const std::string host(model->GetURL().host());
   footer.subtitle = host.empty() ? u"Page security" : base::UTF8ToUTF16(host);

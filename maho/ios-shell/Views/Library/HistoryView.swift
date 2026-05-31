@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 
 struct HistoryView: View {
     let onOpenURL: (String) -> Void
@@ -79,7 +80,7 @@ struct HistoryView: View {
                                 Button(role: .destructive) {
                                     deleteEntry(entry)
                                 } label: {
-                                    Label("Delete", systemImage: "trash")
+                                    Label { Text("Delete") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("trash")) }
                                 }
                             }
                     }
@@ -91,7 +92,7 @@ struct HistoryView: View {
 
     private var emptyState: some View {
         VStack(spacing: 12) {
-            Image(systemName: "clock")
+            Image(lucide: Lucide.clock)
                 .font(.system(size: 48))
                 .foregroundStyle(.secondary)
             Text(searchText.isEmpty ? "No History" : "No Results")

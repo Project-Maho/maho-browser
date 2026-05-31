@@ -18,7 +18,7 @@
 #include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
 #include "components/vector_icons/vector_icons.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_mac_sf_symbol_helper.h"
+#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "content/public/browser/page_navigator.h"
@@ -52,40 +52,11 @@ constexpr int kTopBarClusterVerticalInsetDp = 0;
 // Left margin on the sidebar-toggle button, shifting it inward from the
 // traffic-light spacer edge for optical alignment with macOS window controls.
 constexpr int kSidebarToggleLeftMarginDp = 6;
-// Icon tint alpha for enabled nav buttons (slightly subdued so they don't
-// compete with page content).
-constexpr float kTopBarNavTintAlpha = 0.68f;
-constexpr float kTopBarDisabledAlpha = 0.4f;
-
 ui::ImageModel CreateTopBarButtonImage(
-    std::string_view symbol_name,
-    std::string_view accessibility_description,
+    const gfx::VectorIcon& icon,
     int icon_size,
-    ui::ColorId color_id,
-    float icon_alpha) {
-#if BUILDFLAG(IS_MAC)
-  return maho::CreateSidebarTopBarMacSFSymbol(
-      symbol_name, accessibility_description, icon_size, color_id, icon_alpha);
-#else
-  if (symbol_name == "sidebar.left") {
-    return ui::ImageModel::FromVectorIcon(
-        vector_icons::kSelectWindowChromeRefreshIcon, color_id, icon_size);
-  }
-  if (symbol_name == "chevron.left") {
-    return ui::ImageModel::FromVectorIcon(vector_icons::kBackArrowIcon,
-                                          color_id, icon_size);
-  }
-  if (symbol_name == "chevron.right") {
-    return ui::ImageModel::FromVectorIcon(
-        vector_icons::kSubmenuArrowChromeRefreshIcon, color_id, icon_size);
-  }
-  if (symbol_name == "xmark") {
-    return ui::ImageModel::FromVectorIcon(
-        vector_icons::kCloseChromeRefreshIcon, color_id, icon_size);
-  }
-  return ui::ImageModel::FromVectorIcon(
-      vector_icons::kSyncChromeRefreshIcon, color_id, icon_size);
-#endif
+    ui::ColorId color_id) {
+  return ui::ImageModel::FromVectorIcon(icon, color_id, icon_size);
 }
 
 void ApplyButtonChrome(views::ImageButton* button) {
@@ -121,18 +92,15 @@ ui::ColorId GetTopBarButtonColor(bool enabled) {
 
 views::ImageButton* AddControlButton(views::View* parent,
                                      views::Button::PressedCallback callback,
-                                     std::string_view symbol_name,
-                                     std::string_view accessibility_description,
+                                     const gfx::VectorIcon& icon,
                                      const std::u16string& tooltip,
                                      bool enabled = true) {
   auto button = views::CreateVectorImageButton(std::move(callback));
   button->SetImageModel(
       views::Button::STATE_NORMAL,
-      CreateTopBarButtonImage(symbol_name, accessibility_description,
+      CreateTopBarButtonImage(icon,
                               sidebar_layout::kTopBarIconSizeDp,
-                              GetTopBarButtonColor(enabled),
-                              enabled ? kTopBarNavTintAlpha
-                                      : kTopBarDisabledAlpha));
+                              GetTopBarButtonColor(enabled)));
   button->SetTooltipText(tooltip);
   button->SetAccessibleName(tooltip);
   button->SetPreferredSize(gfx::Size(sidebar_layout::kTopBarButtonSizeDp,
@@ -185,7 +153,7 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
       leading_cluster_,
       base::BindRepeating(&MahoSidebarTopBarView::OnToggleSidebarPressed,
                           weak_factory_.GetWeakPtr()),
-      "sidebar.left", "Toggle Sidebar", u"Toggle Sidebar");
+      maho_lucide_icons::kPanelLeftIcon, u"Toggle Sidebar");
   sidebar_toggle_button_->SetProperty(
       views::kMarginsKey,
       gfx::Insets::TLBR(0, kSidebarToggleLeftMarginDp, 0, 0));
@@ -209,22 +177,22 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
       nav_cluster_,
       base::BindRepeating(&MahoSidebarTopBarView::OnBackPressed,
                           weak_factory_.GetWeakPtr()),
-      "chevron.left", "Back", u"Back");
+      maho_lucide_icons::kChevronLeftIcon, u"Back");
   forward_button_ = AddControlButton(
       nav_cluster_,
       base::BindRepeating(&MahoSidebarTopBarView::OnForwardPressed,
                           weak_factory_.GetWeakPtr()),
-      "chevron.right", "Forward", u"Forward");
+      maho_lucide_icons::kChevronRightIcon, u"Forward");
   reload_button_ = AddControlButton(
       nav_cluster_,
       base::BindRepeating(&MahoSidebarTopBarView::OnReloadPressed,
                           weak_factory_.GetWeakPtr()),
-      "arrow.clockwise", "Reload", u"Reload");
+      maho_lucide_icons::kRotateCwIcon, u"Reload");
   ai_button_ = AddControlButton(
       nav_cluster_,
       base::BindRepeating(&MahoSidebarTopBarView::OnAiPressed,
                           weak_factory_.GetWeakPtr()),
-      "sparkles", "AI Panel", u"AI Panel");
+      maho_lucide_icons::kWandSparklesIcon, u"AI Panel");
 
   StyleClusterView(leading_cluster_);
   StyleClusterView(nav_cluster_);
@@ -296,26 +264,26 @@ void MahoSidebarTopBarView::ApplyChromeSpacing() {
 }
 
 void MahoSidebarTopBarView::UpdateButtonImages() {
-  UpdateButtonState(sidebar_toggle_button_, true, "sidebar.left",
-                    "Toggle Sidebar", u"Toggle Sidebar");
+  UpdateButtonState(sidebar_toggle_button_, true,
+                    maho_lucide_icons::kPanelLeftIcon, u"Toggle Sidebar");
   UpdateButtonState(back_button_, model_.navigation_enabled && model_.can_go_back,
-                    "chevron.left", "Back", u"Back");
+                    maho_lucide_icons::kChevronLeftIcon, u"Back");
   UpdateButtonState(forward_button_,
                     model_.navigation_enabled && model_.can_go_forward,
-                    "chevron.right", "Forward", u"Forward");
+                    maho_lucide_icons::kChevronRightIcon, u"Forward");
   UpdateButtonState(reload_button_,
                     model_.navigation_enabled && model_.can_reload,
-                    model_.is_loading ? "xmark" : "arrow.clockwise",
-                    model_.is_loading ? "Stop" : "Reload",
+                    model_.is_loading ? maho_lucide_icons::kXIcon
+                                     : maho_lucide_icons::kRotateCwIcon,
                     model_.is_loading ? u"Stop" : u"Reload");
-  UpdateButtonState(ai_button_, true, "sparkles", "AI Panel", u"AI Panel");
+  UpdateButtonState(ai_button_, true,
+                    maho_lucide_icons::kWandSparklesIcon, u"AI Panel");
 }
 
 void MahoSidebarTopBarView::UpdateButtonState(
     views::ImageButton* button,
     bool enabled,
-    std::string_view symbol_name,
-    std::string_view accessibility_description,
+    const gfx::VectorIcon& icon,
     const std::u16string& tooltip) {
   if (!button) {
     return;
@@ -326,11 +294,9 @@ void MahoSidebarTopBarView::UpdateButtonState(
   button->SetAccessibleName(tooltip);
   button->SetImageModel(
       views::Button::STATE_NORMAL,
-      CreateTopBarButtonImage(symbol_name, accessibility_description,
+      CreateTopBarButtonImage(icon,
                               sidebar_layout::kTopBarIconSizeDp,
-                              GetTopBarButtonColor(enabled),
-                              enabled ? kTopBarNavTintAlpha
-                                      : kTopBarDisabledAlpha));
+                              GetTopBarButtonColor(enabled)));
 }
 
 void MahoSidebarTopBarView::OnBackPressed(const ui::Event& event) {

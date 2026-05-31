@@ -703,7 +703,7 @@ final class AISidePanel: NSView, AIChatHandlerDelegate, AISidePanelHeaderDelegat
         onboardingBadgeView.translatesAutoresizingMaskIntoConstraints = false
 
         onboardingIconView.translatesAutoresizingMaskIntoConstraints = false
-        onboardingIconView.image = NSImage(systemSymbolName: "sparkles.rectangle.stack", accessibilityDescription: "Set up AI")
+        onboardingIconView.image = MahoIcon.imageForSFSymbol("sparkles.rectangle.stack", accessibilityDescription: "Set up AI")
         onboardingIconView.imageScaling = .scaleProportionallyDown
         onboardingIconView.contentTintColor = AIDiaPalette.accent
         onboardingBadgeView.addSubview(onboardingIconView)
@@ -748,7 +748,7 @@ final class AISidePanel: NSView, AIChatHandlerDelegate, AISidePanelHeaderDelegat
 
         openSettingsButton.translatesAutoresizingMaskIntoConstraints = false
         openSettingsButton.setAccessibilityIdentifier("ai.panel.onboarding.openSettings")
-        openSettingsButton.image = NSImage(systemSymbolName: "slider.horizontal.3", accessibilityDescription: "Open AI Settings")
+        openSettingsButton.image = MahoIcon.imageForSFSymbol("slider.horizontal.3", accessibilityDescription: "Open AI Settings")
         openSettingsButton.imagePosition = .imageLeading
         openSettingsButton.imageScaling = .scaleProportionallyDown
         openSettingsButton.font = .systemFont(ofSize: 12, weight: .semibold)
@@ -941,7 +941,7 @@ final class AISidePanel: NSView, AIChatHandlerDelegate, AISidePanelHeaderDelegat
 
         let pageItem = NSMenuItem(title: "Include This Page", action: #selector(customizeTogglePageContext(_:)), keyEquivalent: "")
         pageItem.target = self
-        pageItem.image = NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)
+        pageItem.image = MahoIcon.imageForSFSymbol("doc.text")
         pageItem.state = composerView.isPageContextEnabled ? .on : .off
         menu.addItem(pageItem)
 
@@ -949,7 +949,7 @@ final class AISidePanel: NSView, AIChatHandlerDelegate, AISidePanelHeaderDelegat
 
         let settingsItem = NSMenuItem(title: "Open AI Settings…", action: #selector(openAISettingsTapped), keyEquivalent: ",")
         settingsItem.target = self
-        settingsItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
+        settingsItem.image = MahoIcon.imageForSFSymbol("gearshape")
         menu.addItem(settingsItem)
 
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height), in: button)
@@ -1040,14 +1040,14 @@ final class AISidePanel: NSView, AIChatHandlerDelegate, AISidePanelHeaderDelegat
 
         let pageItem = NSMenuItem(title: "Include This Page", action: #selector(entryPointTogglePageContext(_:)), keyEquivalent: "")
         pageItem.target = self
-        pageItem.image = NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)
+        pageItem.image = MahoIcon.imageForSFSymbol("doc.text")
         pageItem.state = composerView.isPageContextEnabled ? .on : .off
         menu.addItem(pageItem)
 
         let allTabs = delegate?.aiSidePanelAllTabs() ?? []
         let compareItem = NSMenuItem(title: "Compare Tabs…", action: #selector(entryPointCompareTabs(_:)), keyEquivalent: "")
         compareItem.target = self
-        compareItem.image = NSImage(systemSymbolName: "rectangle.on.rectangle", accessibilityDescription: nil)
+        compareItem.image = MahoIcon.imageForSFSymbol("rectangle.on.rectangle")
         compareItem.isEnabled = allTabs.count >= 2
         menu.addItem(compareItem)
 
@@ -1055,24 +1055,24 @@ final class AISidePanel: NSView, AIChatHandlerDelegate, AISidePanelHeaderDelegat
 
         let fileItem = NSMenuItem(title: "Upload File…", action: #selector(entryPointUploadFile(_:)), keyEquivalent: "")
         fileItem.target = self
-        fileItem.image = NSImage(systemSymbolName: "doc.badge.plus", accessibilityDescription: nil)
+        fileItem.image = MahoIcon.imageForSFSymbol("doc.badge.plus")
         menu.addItem(fileItem)
 
         menu.addItem(.separator())
 
         let toolsItem = NSMenuItem(title: "Browse Tools…", action: #selector(entryPointBrowseTools(_:)), keyEquivalent: "")
         toolsItem.target = self
-        toolsItem.image = NSImage(systemSymbolName: "wrench", accessibilityDescription: nil)
+        toolsItem.image = MahoIcon.imageForSFSymbol("wrench")
         toolsItem.isEnabled = delegate?.aiSidePanelToolRegistry() != nil
         menu.addItem(toolsItem)
 
         let appsItem = NSMenuItem(title: "Connect App…", action: #selector(entryPointConnectApp(_:)), keyEquivalent: "")
         appsItem.target = self
-        appsItem.image = NSImage(systemSymbolName: "app.connected.to.app.below.fill", accessibilityDescription: nil)
+        appsItem.image = MahoIcon.imageForSFSymbol("app.connected.to.app.below.fill")
         menu.addItem(appsItem)
 
         let formatItem = NSMenuItem(title: "Response Format", action: nil, keyEquivalent: "")
-        formatItem.image = NSImage(systemSymbolName: "text.alignleft", accessibilityDescription: nil)
+        formatItem.image = MahoIcon.imageForSFSymbol("text.alignleft")
         let formatSubmenu = NSMenu()
         for format in ["Auto", "Concise", "Detailed", "Step-by-Step"] {
             let fItem = NSMenuItem(title: format, action: #selector(entryPointSetFormat(_:)), keyEquivalent: "")
@@ -1087,7 +1087,7 @@ final class AISidePanel: NSView, AIChatHandlerDelegate, AISidePanelHeaderDelegat
 
         let tidyItem = NSMenuItem(title: "Tidy Tabs", action: #selector(entryPointTidyTabs(_:)), keyEquivalent: "")
         tidyItem.target = self
-        tidyItem.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
+        tidyItem.image = MahoIcon.imageForSFSymbol("sparkles")
         tidyItem.isEnabled = delegate?.aiSidePanelCanRequestTidyTabs() ?? false
         menu.addItem(tidyItem)
 

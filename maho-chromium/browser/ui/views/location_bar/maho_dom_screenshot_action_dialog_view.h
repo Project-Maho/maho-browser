@@ -12,6 +12,7 @@
 #include "base/scoped_observation.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/vector_icon_types.h"
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget_observer.h"
@@ -26,7 +27,7 @@ namespace maho {
 struct MahoDomScreenshotActionRow {
   MahoDomScreenshotActionRow();
   MahoDomScreenshotActionRow(std::u16string label,
-                             std::string sf_symbol_name,
+                             raw_ptr<const gfx::VectorIcon> icon,
                              bool enabled,
                              bool destructive,
                              base::OnceClosure activate);
@@ -35,7 +36,7 @@ struct MahoDomScreenshotActionRow {
   ~MahoDomScreenshotActionRow();
 
   std::u16string label;
-  std::string sf_symbol_name;
+  raw_ptr<const gfx::VectorIcon> icon = nullptr;
   bool enabled = true;
   bool destructive = false;
   base::OnceClosure activate;
@@ -48,7 +49,7 @@ struct MahoDomScreenshotActionMenu {
   ~MahoDomScreenshotActionMenu();
 
   std::u16string header_label;
-  std::string header_sf_symbol_name;
+  raw_ptr<const gfx::VectorIcon> header_icon = nullptr;
   base::OnceClosure header_activate;
   std::vector<MahoDomScreenshotActionRow> rows;
   base::OnceClosure dismiss_callback;

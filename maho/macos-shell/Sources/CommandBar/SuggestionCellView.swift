@@ -273,7 +273,7 @@ final class SuggestionCellView: NSTableCellView {
         matchRanges = nil
         hasShortcut = false
         titleLabel.stringValue = search
-        let clockIcon = NSImage(systemSymbolName: "clock", accessibilityDescription: nil)
+        let clockIcon = MahoIcon.imageForSFSymbol("clock")
         iconImageView.image = clockIcon
         iconIsTemplate = clockIcon?.isTemplate ?? false
         iconImageView.isHidden = false
@@ -311,8 +311,7 @@ final class SuggestionCellView: NSTableCellView {
         case .archivedTab: name = "archivebox"
         case .closedTab: name = "xmark.square"
         }
-        let configuration = NSImage.SymbolConfiguration(pointSize: Metrics.iconSize, weight: .medium)
-        return NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(configuration)
+        return MahoIcon.imageForSFSymbol(name, pointSize: Metrics.iconSize)
     }
 
     private func applyCustomMockupIconIfNeeded(for suggestion: SuggestionViewModel) -> Bool {

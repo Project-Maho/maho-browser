@@ -18,6 +18,7 @@
 #include "ui/views/test/button_test_api.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
+#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "content/public/test/test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h"
@@ -75,7 +76,7 @@ class UtilityPanelHostView : public views::View,
     share_action.title = u"Share";
     share_action.subtitle = u"Share this page";
     share_action.accessible_name = u"Share — Share this page";
-    share_action.sf_symbol_name = "square.and.arrow.up";
+    share_action.icon = &maho_lucide_icons::kShareIcon;
     share_action.enabled = true;
     share_action.data_state = maho::MahoLocationBarUtilityPanelDataState::kLive;
     toolbar_zone.items.push_back(share_action);
@@ -83,7 +84,7 @@ class UtilityPanelHostView : public views::View,
     maho::MahoLocationBarUtilityPanelAction magic_action;
     magic_action.title = u"Magic";
     magic_action.accessible_name = u"Magic";
-    magic_action.sf_symbol_name = "wand.and.stars";
+    magic_action.icon = &maho_lucide_icons::kWandSparklesIcon;
     magic_action.enabled = false;
     magic_action.data_state = maho::MahoLocationBarUtilityPanelDataState::kUnavailable;
     toolbar_zone.items.push_back(magic_action);
@@ -91,7 +92,7 @@ class UtilityPanelHostView : public views::View,
     maho::MahoLocationBarUtilityPanelAction camera_action;
     camera_action.title = u"Camera";
     camera_action.accessible_name = u"Camera";
-    camera_action.sf_symbol_name = "camera";
+    camera_action.icon = &maho_lucide_icons::kCameraIcon;
     camera_action.enabled = false;
     camera_action.data_state = maho::MahoLocationBarUtilityPanelDataState::kUnavailable;
     toolbar_zone.items.push_back(camera_action);
@@ -99,7 +100,7 @@ class UtilityPanelHostView : public views::View,
     maho::MahoLocationBarUtilityPanelAction viewfinder_action;
     viewfinder_action.title = u"Viewfinder";
     viewfinder_action.accessible_name = u"Viewfinder";
-    viewfinder_action.sf_symbol_name = "viewfinder";
+    viewfinder_action.icon = &maho_lucide_icons::kScanIcon;
     viewfinder_action.enabled = false;
     viewfinder_action.data_state = maho::MahoLocationBarUtilityPanelDataState::kUnavailable;
     toolbar_zone.items.push_back(viewfinder_action);
@@ -115,7 +116,7 @@ class UtilityPanelHostView : public views::View,
     extension_action.title = u"Sample extension";
     extension_action.subtitle = u"Enabled";
     extension_action.accessible_name = u"Sample extension — Enabled";
-    extension_action.sf_symbol_name = "puzzlepiece.extension";
+    extension_action.icon = &maho_lucide_icons::kPuzzleIcon;
     extension_action.enabled = true;
     extension_action.data_state = maho::MahoLocationBarUtilityPanelDataState::kLive;
     extensions_zone.items.push_back(extension_action);
@@ -123,7 +124,7 @@ class UtilityPanelHostView : public views::View,
     maho::MahoLocationBarUtilityPanelAction add_extension_action;
     add_extension_action.title = u"+";
     add_extension_action.accessible_name = u"Add extension";
-    add_extension_action.sf_symbol_name = "plus";
+    add_extension_action.icon = &maho_lucide_icons::kPlusIcon;
     add_extension_action.enabled = true;
     add_extension_action.data_state = maho::MahoLocationBarUtilityPanelDataState::kLive;
     extensions_zone.items.push_back(add_extension_action);
@@ -139,7 +140,7 @@ class UtilityPanelHostView : public views::View,
     developer_mode_action.title = u"Developer mode";
     developer_mode_action.subtitle = u"Disabled";
     developer_mode_action.accessible_name = u"Developer mode — Disabled";
-    developer_mode_action.sf_symbol_name = "hammer";
+    developer_mode_action.icon = &maho_lucide_icons::kHammerIcon;
     developer_mode_action.enabled = false;
     developer_mode_action.data_state = maho::MahoLocationBarUtilityPanelDataState::kLive;
     settings_zone.items.push_back(developer_mode_action);
@@ -148,7 +149,7 @@ class UtilityPanelHostView : public views::View,
     block_ads_action.title = u"Block Ads & Trackers";
     block_ads_action.subtitle = u"Allowed on every visit";
     block_ads_action.accessible_name = u"Block Ads & Trackers — Allowed on every visit";
-    block_ads_action.sf_symbol_name = "shield.lefthalf.filled";
+    block_ads_action.icon = &maho_lucide_icons::kShieldHalfIcon;
     block_ads_action.enabled = true;
     block_ads_action.data_state = maho::MahoLocationBarUtilityPanelDataState::kLive;
     settings_zone.items.push_back(block_ads_action);

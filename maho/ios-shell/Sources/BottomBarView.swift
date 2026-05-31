@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 
 struct BottomBarView: View {
     @ObservedObject var state: BrowserState
@@ -9,13 +10,13 @@ struct BottomBarView: View {
     var body: some View {
         HStack(spacing: 16) {
             Button(action: { state.goBack() }) {
-                Image(systemName: "arrow.backward")
+                Image(lucide: Lucide.arrowLeft)
             }
             .disabled(!state.canGoBack)
             .accessibilityIdentifier("backButton")
 
             Button(action: { state.goForward() }) {
-                Image(systemName: "arrow.forward")
+                Image(lucide: Lucide.arrowRight)
             }
             .disabled(!state.canGoForward)
             .accessibilityIdentifier("forwardButton")
@@ -28,7 +29,7 @@ struct BottomBarView: View {
             .accessibilityIdentifier("addressBarButton")
 
             Button(action: { showTabSwitcher = true }) {
-                Image(systemName: "square.on.square")
+                Image(lucide: Lucide.copy)
             }
             .accessibilityIdentifier("tabsButton")
 
@@ -40,7 +41,7 @@ struct BottomBarView: View {
                 Button("Content Blocker") { showContentBlocker = true }
                 Button("Settings") { state.showSettings = true }
             } label: {
-                Image(systemName: "ellipsis.circle")
+                Image(lucide: Lucide.circleEllipsis)
             }
             .accessibilityIdentifier("menuButton")
         }

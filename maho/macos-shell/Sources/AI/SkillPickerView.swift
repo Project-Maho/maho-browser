@@ -175,7 +175,7 @@ private final class SkillRowView: NSView {
         addSubview(iconBadgeView)
 
         iconView.translatesAutoresizingMaskIntoConstraints = false
-        iconView.image = NSImage(systemSymbolName: skill.icon, accessibilityDescription: skill.name)
+        iconView.image = MahoIcon.imageForSFSymbol(skill.icon, accessibilityDescription: skill.name)
         iconView.contentTintColor = AIDiaPalette.bodyText
         iconView.imageScaling = .scaleProportionallyDown
         iconBadgeView.addSubview(iconView)

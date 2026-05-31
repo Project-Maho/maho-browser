@@ -832,8 +832,7 @@ final class SpaceCreateSheetController: NSViewController, NSTextFieldDelegate {
     }
 
     private func configuredSymbolImage(named symbolName: String, pointSize: CGFloat, weight: NSFont.Weight) -> NSImage? {
-        let configuration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
-        return NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?.withSymbolConfiguration(configuration)
+        return MahoIcon.imageForSFSymbol(symbolName, pointSize: pointSize)
     }
 
     private func previewName() -> String {

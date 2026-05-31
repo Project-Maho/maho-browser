@@ -54,6 +54,8 @@ maho-chromium/
 | Maho-core FFI bridge | `third_party/maho/maho_bridge.cc` + `maho_ffi.h` |
 | Build config | `build/config/args_{mac,linux,win}.gn` |
 | Mojo interfaces | `browser/ui/webui/maho_{feature}/maho_{feature}.mojom` |
+| Native Views icons (C++) | `browser/ui/views/maho_lucide_icons/` — Lucide-backed `aggregate_vector_icons` GN target. Use via `ui::ImageModel::FromVectorIcon(maho_lucide_icons::kFooIcon, color, size)`. See `../docs/icon-system.md`. |
+| WebUI icons (per-feature SVGs) | `browser/resources/maho_{feature}/icons/*.svg` — vendored Lucide SVGs with `currentColor` stroke; served via `chrome://maho-{feature}/icons/<kebab>.svg` |
 
 ## CONVENTIONS
 - **WebUI pattern**: Each feature = `{feature}.mojom` + `_page_handler.cc/h` + `_ui.cc/h` + `resources/{feature}/app.ts` + `BUILD.gn`

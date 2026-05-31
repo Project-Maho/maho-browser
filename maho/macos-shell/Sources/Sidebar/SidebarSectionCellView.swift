@@ -72,13 +72,7 @@ class SidebarSectionCellView: NSTableCellView {
             titleLabel.textColor = MahoAppColors.primaryText.withAlphaComponent(0.84)
             folderIcon.isHidden = false
             let symbolName = section.isExpanded ? "folder" : "folder.fill"
-            let folderSymbol = NSImage(
-                systemSymbolName: symbolName,
-                accessibilityDescription: section.isExpanded ? "Expanded" : "Collapsed"
-            )
-            folderIcon.image = folderSymbol?.withSymbolConfiguration(
-                NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
-            )
+            folderIcon.image = MahoIcon.imageForSFSymbol(symbolName, pointSize: 13, accessibilityDescription: section.isExpanded ? "Expanded" : "Collapsed")
             folderIcon.contentTintColor = MahoAppColors.folderIconColor
 
             if let folderId = section.folderId {

@@ -11,7 +11,7 @@
 #include "base/memory/raw_ref.h"
 #include "build/buildflag.h"
 #include "components/vector_icons/vector_icons.h"
-#include "maho/browser/ui/views/maho_mac_sf_symbol_helper.h"
+#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/theme/maho_color_id.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -51,67 +51,31 @@ constexpr int kLibraryRailLabelLineHeightDp = 11;
 constexpr int kLibraryRailLabelFontSizeDeltaDp = -2;
 constexpr int kLibraryRailIconOpticalSizeDp = 22;
 
-static constexpr gfx::PathElement kArchiveboxPath[] = {
-    gfx::CANVAS_DIMENSIONS, 24,        gfx::STROKE,
-    1.5f,                 gfx::MOVE_TO, 20.25f,
-    7.5f,                 gfx::LINE_TO, 19.6246f,
-    18.1321f,             gfx::CUBIC_TO, 19.5546f,
-    19.3214f,             18.5698f,   20.25f,
-    17.3785f,             20.25f,     gfx::H_LINE_TO,
-    6.62154f,             gfx::CUBIC_TO, 5.43022f,
-    20.25f,               4.44538f,   19.3214f,
-    4.37542f,             18.1321f,   gfx::LINE_TO,
-    3.75f,                7.5f,       gfx::MOVE_TO,
-    9.99976f,             11.25f,     gfx::H_LINE_TO,
-    13.9998f,             gfx::MOVE_TO, 3.375f,
-    7.5f,                 gfx::H_LINE_TO, 20.625f,
-    gfx::CUBIC_TO,        21.2463f,   7.5f,
-    21.75f,               6.99632f,   21.75f,
-    6.375f,               gfx::V_LINE_TO, 4.875f,
-    gfx::CUBIC_TO,        21.75f,     4.25368f,
-    21.2463f,             3.75f,      20.625f,
-    3.75f,                gfx::H_LINE_TO, 3.375f,
-    gfx::CUBIC_TO,        2.75368f,   3.75f,
-    2.25f,                4.25368f,   2.25f,
-    4.875f,               gfx::V_LINE_TO, 6.375f,
-    gfx::CUBIC_TO,        2.25f,      6.99632f,
-    2.75368f,             7.5f,       3.375f,
-    7.5f,                 gfx::CLOSE,
-};
-
-constexpr char kArchiveboxIconId[] = "kSidebarLibraryRailArchiveboxIcon";
-static constexpr gfx::VectorIconRep kArchiveboxRepList[] = {{kArchiveboxPath}};
-constexpr gfx::VectorIcon kArchiveboxIcon(kArchiveboxRepList, 1,
-                                          kArchiveboxIconId);
-
 struct RailCategorySpec {
   MahoSidebarLibraryRailView::Category category;
   std::u16string_view title;
   std::u16string_view visible_label;
   raw_ptr<const gfx::VectorIcon> icon;
-  // SF Symbol name used on macOS instead of the vector icon. Empty string
-  // means "no SF Symbol defined; always use vector icon".
-  std::string_view sf_symbol_name;
   std::string_view ascii_title;
   bool visible_in_first_entry_rail;
 };
 
 constexpr RailCategorySpec kRailCategories[] = {
     {MahoSidebarLibraryRailView::Category::kDownloads, u"Downloads",
-     u"Downloads", &vector_icons::kFileDownloadOffChromeRefreshIcon,
-     "arrow.down.to.line", "Downloads", true},
+     u"Downloads", &maho_lucide_icons::kArrowDownToLineIcon,
+     "Downloads", true},
     {MahoSidebarLibraryRailView::Category::kArchivedTabs, u"Archived Tabs",
-     u"Archived\nTabs", &kArchiveboxIcon,
-     "archivebox", "Archived Tabs", true},
+     u"Archived\nTabs", &maho_lucide_icons::kArchiveIcon,
+     "Archived Tabs", true},
     {MahoSidebarLibraryRailView::Category::kSpaces, u"Spaces", u"Spaces",
-     &vector_icons::kHomeIcon, "square.on.square", "Spaces", true},
+     &vector_icons::kHomeIcon, "Spaces", true},
     {MahoSidebarLibraryRailView::Category::kMedia, u"Media", u"Media",
-     &vector_icons::kVideoLibraryIcon, "photo.on.rectangle.angled", "Media",
+     &maho_lucide_icons::kImagesIcon, "Media",
      false},
     {MahoSidebarLibraryRailView::Category::kEasels, u"Easels", u"Easels",
-     &vector_icons::kStickyNote2Icon, "pencil.and.scribble", "Easels", false},
+     &maho_lucide_icons::kPencilLineIcon, "Easels", false},
     {MahoSidebarLibraryRailView::Category::kNotes, u"Notes", u"Notes",
-     &vector_icons::kStickyNote2Icon, "note.text", "Notes", false},
+     &maho_lucide_icons::kNotebookTextIcon, "Notes", false},
 };
 
 void StyleIconButton(views::ImageButton* button) {
@@ -131,7 +95,7 @@ ui::ColorId GetRailItemForegroundColor(bool selected) {
 }  // namespace
 
 const gfx::VectorIcon& GetMahoSidebarArchiveboxIcon() {
-  return kArchiveboxIcon;
+  return maho_lucide_icons::kArchiveIcon;
 }
 
 class MahoSidebarLibraryRailItemButton : public views::Button {
@@ -142,7 +106,6 @@ class MahoSidebarLibraryRailItemButton : public views::Button {
                                    std::u16string title,
                                    std::u16string visible_label,
                                    const gfx::VectorIcon& icon,
-                                   std::string sf_symbol_name,
                                    std::string accessibility_name,
                                    bool enabled,
                                    PressedCallback callback)
@@ -151,7 +114,6 @@ class MahoSidebarLibraryRailItemButton : public views::Button {
         title_(std::move(title)),
         visible_label_(std::move(visible_label)),
         icon_(icon),
-        sf_symbol_name_(std::move(sf_symbol_name)),
         accessibility_name_(std::move(accessibility_name)) {
     SetAccessibleName(title_);
     GetViewAccessibility().SetIsSelected(false);
@@ -256,13 +218,6 @@ class MahoSidebarLibraryRailItemButton : public views::Button {
 
     icon_view_->SetImage(ui::ImageModel::FromVectorIcon(
         icon_.get(), foreground, kLibraryRailIconOpticalSizeDp));
-#if BUILDFLAG(IS_MAC)
-    if (!sf_symbol_name_.empty()) {
-      icon_view_->SetImage(CreateMahoMacSFSymbol(
-          sf_symbol_name_, accessibility_name_, kLibraryRailIconOpticalSizeDp,
-          foreground));
-    }
-#endif
     label_->SetEnabledColor(foreground);
     label_->SetFontList(base_label_font_list_.Derive(
         0, gfx::Font::NORMAL,
@@ -274,7 +229,6 @@ class MahoSidebarLibraryRailItemButton : public views::Button {
   const std::u16string title_;
   const std::u16string visible_label_;
   const base::raw_ref<const gfx::VectorIcon> icon_;
-  const std::string sf_symbol_name_;
   const std::string accessibility_name_;
   gfx::FontList base_label_font_list_;
   raw_ptr<views::ImageView> icon_view_ = nullptr;
@@ -342,7 +296,7 @@ MahoSidebarLibraryRailView::MahoSidebarLibraryRailView() {
     auto button = std::make_unique<MahoSidebarLibraryRailItemButton>(
         spec.category, std::u16string(spec.title),
         std::u16string(spec.visible_label), *spec.icon,
-        std::string(spec.sf_symbol_name), std::string(spec.ascii_title),
+        std::string(spec.ascii_title),
         enabled,
         base::BindRepeating(&MahoSidebarLibraryRailView::HandleCategoryPressed,
                             weak_factory_.GetWeakPtr(), spec.category));
@@ -504,16 +458,10 @@ void MahoSidebarLibraryRailView::UpdateBackButtonAppearance() {
 
   const ui::ColorId back_color = enabled ? kMahoColorLibraryRailItemSelectedText
                                           : kMahoColorLibraryRailItemText;
-#if BUILDFLAG(IS_MAC)
   back_button_->SetImageModel(
       views::Button::STATE_NORMAL,
-      CreateMahoMacSFSymbol("chevron.backward", "Back", 12, back_color));
-#else
-  back_button_->SetImageModel(
-      views::Button::STATE_NORMAL,
-      ui::ImageModel::FromVectorIcon(vector_icons::kBackArrowIcon,
+      ui::ImageModel::FromVectorIcon(maho_lucide_icons::kChevronLeftIcon,
                                      back_color, 12));
-#endif
   back_button_->layer()->SetOpacity(enabled ? 1.0f : kBackButtonDisabledAlpha);
 }
 

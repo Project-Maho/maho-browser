@@ -168,8 +168,7 @@ final class SpaceSwitcherItemView: NSView, NSDraggingSource {
     }
 
     private func configuredSymbol(named symbolName: String, pointSize: CGFloat) -> NSImage? {
-        let configuration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .medium)
-        return NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?.withSymbolConfiguration(configuration)
+        return MahoIcon.imageForSFSymbol(symbolName, pointSize: pointSize)
     }
 
     private func isEmoji(_ value: String) -> Bool {

@@ -175,7 +175,7 @@ private final class MentionRowView: NSView {
         addSubview(iconBadgeView)
 
         iconView.translatesAutoresizingMaskIntoConstraints = false
-        iconView.image = NSImage(systemSymbolName: "globe", accessibilityDescription: "Tab")
+        iconView.image = MahoIcon.imageForSFSymbol("globe", accessibilityDescription: "Tab")
         iconView.contentTintColor = AIDiaPalette.bodyText
         iconView.imageScaling = .scaleProportionallyDown
         iconBadgeView.addSubview(iconView)

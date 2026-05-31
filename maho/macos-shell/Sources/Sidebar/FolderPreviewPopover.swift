@@ -96,8 +96,7 @@ final class FolderPreviewPopoverController: NSViewController {
         if let faviconData = tab.favicon, let image = NSImage(data: Data(faviconData.data)) {
             iconView.image = image
         } else {
-            let config = NSImage.SymbolConfiguration(pointSize: 10, weight: .medium)
-            iconView.image = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)?.withSymbolConfiguration(config)
+            iconView.image = MahoIcon.imageForSFSymbol("globe", pointSize: 10)
             iconView.contentTintColor = MahoAppColors.secondaryText
         }
 

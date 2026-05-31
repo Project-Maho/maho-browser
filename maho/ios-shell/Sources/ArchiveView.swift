@@ -13,7 +13,7 @@ struct ArchiveView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if state.archivedTabs.isEmpty {
                     ContentUnavailableView {
-                        Label("No Archived Tabs", systemImage: "archivebox")
+                        Label { Text("No Archived Tabs") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("archivebox")) }
                     } description: {
                         Text("Tabs archived in this space will appear here.")
                     }

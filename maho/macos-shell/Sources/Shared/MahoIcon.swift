@@ -1,4 +1,5 @@
 import AppKit
+import LucideIcons
 
 public enum MahoIcon: String, CaseIterable {
     case navBack = "nav_back"
@@ -88,121 +89,286 @@ public enum MahoIcon: String, CaseIterable {
     case microphone = "microphone"
     case siteGithub = "site_github"
 
-    public var symbolName: String {
-        switch self {
-        case .navBack: return "chevron.backward"
-        case .navForward: return "chevron.forward"
-        case .close: return "xmark"
-        case .reloadSync: return "arrow.clockwise"
-        case .search: return "magnifyingglass"
-        case .globe: return "globe"
-        case .downloads: return "arrow.down.to.line"
-        case .archive: return "archivebox"
-        case .spaces: return "square.on.square"
-        case .boosts: return "bolt"
-        case .media: return "photo.on.rectangle.angled"
-        case .easels: return "pencil.and.scribble"
-        case .notes: return "note.text"
-        case .bookmarks: return "bookmark"
-        case .history: return "clock"
-        case .readingList: return "eyeglasses"
-        case .settings: return "gearshape"
-        case .profiles: return "person.crop.circle"
-        case .notifications: return "bell"
-        case .autofillKey: return "key"
-        case .privacy: return "shield"
-        case .helpFeedback: return "envelope"
-        case .clearSweep: return "arrow.counterclockwise"
-        case .delete: return "trash"
-        case .share: return "square.and.arrow.up"
-        case .moreActions: return "ellipsis.circle"
-        case .infoLock: return "lock.fill"
-        case .audioIndicator: return "speaker.wave.2"
-        case .sparklesAi: return "sparkles"
-        case .add: return "plus"
-        case .checkCircle: return "checkmark.circle.fill"
-        case .expandMore: return "chevron.down"
-        case .filter: return "line.3.horizontal.decrease"
-        case .folder: return "folder"
-        case .launch: return "arrow.up.forward"
-        case .searchAlt: return "magnifyingglass"
-        case .sidebarLeft: return "sidebar.left"
-        case .audioMuted: return "speaker.slash.fill"
-        case .stopLoading: return "xmark"
-        case .notSecure: return "exclamationmark.triangle.fill"
-        case .aiOnboarding: return "sparkles.rectangle.stack"
-        case .aiSettings: return "slider.horizontal.3"
-        case .documentText: return "doc.text"
-        case .compareTabs: return "rectangle.on.rectangle"
-        case .uploadFile: return "doc.badge.plus"
-        case .tools: return "wrench"
-        case .connectApp: return "app.connected.to.app.below.fill"
-        case .responseFormat: return "text.alignleft"
-        case .stopGeneration: return "stop.fill"
-        case .send: return "arrow.right"
-        case .removeContext: return "xmark"
-        case .restore: return "arrow.up.left"
-        case .gradientToggle: return "circle.lefthalf.filled"
-        case .themeLight: return "sun.max.fill"
-        case .themeDark: return "moon.fill"
-        case .brightnessDown: return "minus"
-        case .splitView: return "rectangle.split.2x1"
-        case .extensions: return "puzzlepiece.extension"
-        case .autofillLocation: return "mappin.and.ellipse"
-        case .autofillCard: return "creditcard"
-        case .navBackForward: return "chevron.left.chevron.right"
-        case .flexibleSpacer: return "arrow.left.and.right"
-        case .customToolbarItem: return "star"
-        case .navigation: return "safari"
-        case .calculator: return "function"
-        case .unitConversion: return "arrow.left.arrow.right"
-        case .closedTab: return "xmark.square"
-        case .historySync: return "clock.arrow.circlepath"
-        case .chevronLeft: return "chevron.left"
-        case .chevronRight: return "chevron.right"
-        case .moreOptions: return "ellipsis"
-        case .favoriteFilled: return "star.fill"
-        case .siteFigma: return "square.grid.2x2"
-        case .siteSlack: return "bubble.left.and.bubble.right"
-        case .siteVercel: return "triangle"
-        case .newSpace: return "square.grid.2x2"
-        case .newTab: return "plus.square.on.square"
-        case .archiveFilled: return "archivebox.fill"
-        case .audioPlaying: return "speaker.wave.2.fill"
-        case .folderFilled: return "folder.fill"
-        case .editContext: return "square.and.pencil"
-        case .assistantStyle: return "lines.measurement.horizontal"
-        case .spacer: return "minus"
-        case .camera: return "video"
-        case .microphone: return "mic"
-        case .siteGithub: return "chevron.left.forwardslash.chevron.right"
-        }
-    }
-
     public var image: NSImage? {
-        return NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
+        guard let copy = lucideImage.copy() as? NSImage else { return nil }
+        copy.isTemplate = true
+        return copy
     }
 
     public func image(
-        withConfiguration config: NSImage.SymbolConfiguration? = nil,
+        pointSize: CGFloat,
+        weight: NSFont.Weight = .regular,
         accessibilityDescription: String? = nil
     ) -> NSImage? {
-        let img = NSImage(systemSymbolName: symbolName, accessibilityDescription: accessibilityDescription)
-        if let config = config {
-            return img?.withSymbolConfiguration(config)
-        }
-        return img
+        guard let copy = lucideImage.copy() as? NSImage else { return nil }
+        copy.isTemplate = true
+        copy.size = NSSize(width: pointSize, height: pointSize)
+        copy.accessibilityDescription = accessibilityDescription
+        return copy
     }
 
-    public static func dynamicSymbol(
-        named name: String,
-        accessibilityDescription: String? = nil,
-        configuration: NSImage.SymbolConfiguration? = nil
-    ) -> NSImage? {
-        let image = NSImage(systemSymbolName: name, accessibilityDescription: accessibilityDescription)
-        if let configuration = configuration {
-            return image?.withSymbolConfiguration(configuration)
+    private var lucideImage: NSImage {
+        switch self {
+        case .navBack: return Lucide.chevronLeft
+        case .navForward: return Lucide.chevronRight
+        case .close: return Lucide.x
+        case .reloadSync: return Lucide.rotateCw
+        case .search: return Lucide.search
+        case .globe: return Lucide.globe
+        case .downloads: return Lucide.arrowDownToLine
+        case .archive: return Lucide.archive
+        case .spaces: return Lucide.copy
+        case .boosts: return Lucide.zap
+        case .media: return Lucide.images
+        case .easels: return Lucide.pencilLine
+        case .notes: return Lucide.notebookText
+        case .bookmarks: return Lucide.bookmark
+        case .history: return Lucide.clock
+        case .readingList: return Lucide.glasses
+        case .settings: return Lucide.settings
+        case .profiles: return Lucide.circleUser
+        case .notifications: return Lucide.bell
+        case .autofillKey: return Lucide.keyRound
+        case .privacy: return Lucide.shield
+        case .helpFeedback: return Lucide.mail
+        case .clearSweep: return Lucide.rotateCcw
+        case .delete: return Lucide.trash2
+        case .share: return Lucide.share
+        case .moreActions: return Lucide.circleEllipsis
+        case .infoLock: return Lucide.lock
+        case .audioIndicator: return Lucide.volume2
+        case .sparklesAi: return Lucide.sparkles
+        case .add: return Lucide.plus
+        case .checkCircle: return Lucide.circleCheck
+        case .expandMore: return Lucide.chevronDown
+        case .filter: return Lucide.listFilter
+        case .folder: return Lucide.folder
+        case .launch: return Lucide.arrowUpRight
+        case .searchAlt: return Lucide.search
+        case .sidebarLeft: return Lucide.panelLeft
+        case .audioMuted: return Lucide.volumeOff
+        case .stopLoading: return Lucide.x
+        case .notSecure: return Lucide.triangleAlert
+        case .aiOnboarding: return Lucide.sparkles
+        case .aiSettings: return Lucide.slidersHorizontal
+        case .documentText: return Lucide.fileText
+        case .compareTabs: return Lucide.copy
+        case .uploadFile: return Lucide.filePlus
+        case .tools: return Lucide.wrench
+        case .connectApp: return Lucide.appWindowMac
+        case .responseFormat: return Lucide.alignLeft
+        case .stopGeneration: return Lucide.circleStop
+        case .send: return Lucide.arrowRight
+        case .removeContext: return Lucide.x
+        case .restore: return Lucide.arrowUpLeft
+        case .gradientToggle: return Lucide.contrast
+        case .themeLight: return Lucide.sun
+        case .themeDark: return Lucide.moon
+        case .brightnessDown: return Lucide.minus
+        case .splitView: return Lucide.panelLeftClose
+        case .extensions: return Lucide.puzzle
+        case .autofillLocation: return Lucide.mapPin
+        case .autofillCard: return Lucide.creditCard
+        case .navBackForward: return Lucide.chevronsLeftRight
+        case .flexibleSpacer: return Lucide.moveHorizontal
+        case .customToolbarItem: return Lucide.star
+        case .navigation: return Lucide.compass
+        case .calculator: return Lucide.functionSquare
+        case .unitConversion: return Lucide.arrowLeftRight
+        case .closedTab: return Lucide.squareX
+        case .historySync: return Lucide.history
+        case .chevronLeft: return Lucide.chevronLeft
+        case .chevronRight: return Lucide.chevronRight
+        case .moreOptions: return Lucide.ellipsis
+        case .favoriteFilled: return Lucide.star
+        case .siteFigma: return Lucide.layoutGrid
+        case .siteSlack: return Lucide.messagesSquare
+        case .siteVercel: return Lucide.triangle
+        case .newSpace: return Lucide.layoutGrid
+        case .newTab: return Lucide.copyPlus
+        case .archiveFilled: return Lucide.archive
+        case .audioPlaying: return Lucide.volume2
+        case .folderFilled: return Lucide.folder
+        case .editContext: return Lucide.squarePen
+        case .assistantStyle: return Lucide.ruler
+        case .spacer: return Lucide.minus
+        case .camera: return Lucide.video
+        case .microphone: return Lucide.mic
+        case .siteGithub: return Lucide.code
         }
-        return image
     }
+
+    // MARK: - SF Symbol Migration Helper
+
+    /// Looks up a Lucide icon by its former SF Symbol name.
+    /// Used by call sites that pass SF Symbol names as dynamic strings.
+    public static func imageForSFSymbol(
+        _ sfSymbolName: String,
+        pointSize: CGFloat? = nil,
+        accessibilityDescription: String? = nil
+    ) -> NSImage? {
+        guard let baseImage = sfSymbolMapping[sfSymbolName] else { return nil }
+        guard let copy = baseImage.copy() as? NSImage else { return nil }
+        copy.isTemplate = true
+        if let pointSize = pointSize {
+            copy.size = NSSize(width: pointSize, height: pointSize)
+        }
+        copy.accessibilityDescription = accessibilityDescription
+        return copy
+    }
+
+    // swiftlint:disable function_body_length
+    private static let sfSymbolMapping: [String: NSImage] = [
+        "app.badge.checkmark": Lucide.appWindow,
+        "app.connected.to.app.below.fill": Lucide.appWindowMac,
+        "archivebox": Lucide.archive,
+        "archivebox.fill": Lucide.archive,
+        "arrow.backward": Lucide.arrowLeft,
+        "arrow.triangle.branch": Lucide.gitBranch,
+        "arrow.clockwise": Lucide.rotateCw,
+        "arrow.counterclockwise": Lucide.rotateCcw,
+        "arrow.down.circle": Lucide.arrowDownCircle,
+        "arrow.down.circle.fill": Lucide.arrowDownCircle,
+        "arrow.down.to.line": Lucide.arrowDownToLine,
+        "arrow.forward": Lucide.arrowRight,
+        "arrow.left.and.right": Lucide.moveHorizontal,
+        "arrow.left.arrow.right": Lucide.arrowLeftRight,
+        "arrow.right": Lucide.arrowRight,
+        "arrow.triangle.2.circlepath": Lucide.refreshCw,
+        "arrow.up.forward": Lucide.arrowUpRight,
+        "arrow.up.left": Lucide.arrowUpLeft,
+        "arrow.up.right": Lucide.arrowUpRight,
+        "arrow.uturn.backward": Lucide.undo2,
+        "bell": Lucide.bell,
+        "bolt": Lucide.zap,
+        "book": Lucide.bookOpen,
+        "bookmark": Lucide.bookmark,
+        "briefcase": Lucide.briefcase,
+        "bubble.left.and.bubble.right": Lucide.messagesSquare,
+        "camera": Lucide.camera,
+        "checkmark": Lucide.check,
+        "checkmark.circle": Lucide.circleCheck,
+        "checkmark.circle.fill": Lucide.circleCheck,
+        "checkmark.shield": Lucide.shieldCheck,
+        "chevron.backward": Lucide.chevronLeft,
+        "chevron.down": Lucide.chevronDown,
+        "chevron.forward": Lucide.chevronRight,
+        "chevron.left": Lucide.chevronLeft,
+        "chevron.left.chevron.right": Lucide.chevronsLeftRight,
+        "chevron.left.forwardslash.chevron.right": Lucide.code,
+        "chevron.right": Lucide.chevronRight,
+        "chevron.up": Lucide.chevronUp,
+        "circle": Lucide.circle,
+        "circle.fill": Lucide.circle,
+        "circle.lefthalf.filled": Lucide.contrast,
+        "clock": Lucide.clock,
+        "clock.arrow.circlepath": Lucide.history,
+        "creditcard": Lucide.creditCard,
+        "desktopcomputer": Lucide.monitor,
+        "doc.badge.plus": Lucide.filePlus,
+        "doc.on.doc": Lucide.copy,
+        "doc.text": Lucide.fileText,
+        "doc.text.magnifyingglass": Lucide.fileSearch,
+        "ellipsis": Lucide.ellipsis,
+        "ellipsis.circle": Lucide.circleEllipsis,
+        "envelope": Lucide.mail,
+        "exclamationmark.shield": Lucide.shieldAlert,
+        "exclamationmark.triangle.fill": Lucide.triangleAlert,
+        "eye.slash": Lucide.eyeOff,
+        "eye.slash.fill": Lucide.eyeOff,
+        "eyeglasses": Lucide.glasses,
+        "folder": Lucide.folder,
+        "folder.badge.minus": Lucide.folderMinus,
+        "folder.fill": Lucide.folder,
+        "function": Lucide.functionSquare,
+        "gearshape": Lucide.settings,
+        "gearshape.2": Lucide.settings2,
+        "globe": Lucide.globe,
+        "gamecontroller": Lucide.gamepad2,
+        "hand.thumbsdown": Lucide.thumbsDown,
+        "hand.thumbsup": Lucide.thumbsUp,
+        "hourglass": Lucide.hourglass,
+        "house": Lucide.home,
+        "key": Lucide.keyRound,
+        "keyboard": Lucide.keyboard,
+        "leaf": Lucide.leaf,
+        "lightbulb": Lucide.lightbulb,
+        "line.3.horizontal": Lucide.menu,
+        "line.3.horizontal.decrease": Lucide.listFilter,
+        "line.3.horizontal.decrease.circle": Lucide.filter,
+        "lines.measurement.horizontal": Lucide.ruler,
+        "link": Lucide.link,
+        "lock.fill": Lucide.lock,
+        "lock": Lucide.lock,
+        "lock.open": Lucide.lockOpen,
+        "magnifyingglass": Lucide.search,
+        "mappin.and.ellipse": Lucide.mapPin,
+        "message": Lucide.messageSquare,
+        "mic": Lucide.mic,
+        "minus": Lucide.minus,
+        "minus.circle": Lucide.circleMinus,
+        "minus.magnifyingglass": Lucide.zoomOut,
+        "moon.fill": Lucide.moon,
+        "music.note": Lucide.music,
+        "note.text": Lucide.notebookText,
+        "paintbrush": Lucide.paintbrush,
+        "paintbrush.pointed": Lucide.palette,
+        "paperplane": Lucide.send,
+        "pause": Lucide.pause,
+        "pencil": Lucide.pencil,
+        "pencil.and.scribble": Lucide.pencilLine,
+        "pencil.line": Lucide.pencilLine,
+        "pencil.tip.crop.circle": Lucide.pencilLine,
+        "person.2": Lucide.users,
+        "person.crop.circle": Lucide.circleUser,
+        "photo": Lucide.image,
+        "photo.on.rectangle": Lucide.image,
+        "photo.on.rectangle.angled": Lucide.images,
+        "pin": Lucide.pin,
+        "pin.fill": Lucide.pin,
+        "pin.slash": Lucide.pinOff,
+        "pip.enter": Lucide.pictureInPicture2,
+        "play": Lucide.play,
+        "plus": Lucide.plus,
+        "plus.magnifyingglass": Lucide.zoomIn,
+        "plus.square.on.square": Lucide.copyPlus,
+        "puzzlepiece.extension": Lucide.puzzle,
+        "questionmark.shield": Lucide.shieldQuestion,
+        "rectangle.on.rectangle": Lucide.copy,
+        "rectangle.split.2x1": Lucide.panelLeftClose,
+        "safari": Lucide.compass,
+        "shield": Lucide.shield,
+        "shield.lefthalf.filled": Lucide.shieldHalf,
+        "sidebar.left": Lucide.panelLeft,
+        "sidebar.right": Lucide.panelRight,
+        "slider.horizontal.3": Lucide.slidersHorizontal,
+        "sparkles": Lucide.sparkles,
+        "sparkles.rectangle.stack": Lucide.sparkles,
+        "speaker.slash": Lucide.volumeOff,
+        "speaker.slash.fill": Lucide.volumeOff,
+        "speaker.wave.2": Lucide.volume2,
+        "speaker.wave.2.fill": Lucide.volume2,
+        "square.and.arrow.up": Lucide.share,
+        "square.and.pencil": Lucide.squarePen,
+        "square.grid.2x2": Lucide.layoutGrid,
+        "square.on.square": Lucide.copy,
+        "star": Lucide.star,
+        "star.fill": Lucide.star,
+        "stop.fill": Lucide.circleStop,
+        "storefront": Lucide.store,
+        "sun.max.fill": Lucide.sun,
+        "text.alignleft": Lucide.alignLeft,
+        "trash": Lucide.trash2,
+        "tray.and.arrow.down": Lucide.inbox,
+        "triangle": Lucide.triangle,
+        "video": Lucide.video,
+        "wifi.slash": Lucide.wifiOff,
+        "wrench": Lucide.wrench,
+        "xmark": Lucide.x,
+        "xmark.circle": Lucide.circleX,
+        "xmark.circle.fill": Lucide.circleX,
+        "xmark.shield": Lucide.shieldX,
+        "xmark.square": Lucide.squareX,
+    ]
+    // swiftlint:enable function_body_length
 }

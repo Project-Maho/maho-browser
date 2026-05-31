@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 
 struct NotesView: View {
     @State private var notes: [NoteViewModel] = []
@@ -35,16 +36,16 @@ struct NotesView: View {
                         Button {
                             showCreateSheet = true
                         } label: {
-                            Label("New Note", systemImage: "plus")
+                            Label { Text("New Note") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("plus")) }
                         }
                         Button {
                             exportAllNotes()
                         } label: {
-                            Label("Export All", systemImage: "square.and.arrow.up")
+                            Label { Text("Export All") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("square.and.arrow.up")) }
                         }
                         .disabled(notes.isEmpty)
                     } label: {
-                        Image(systemName: "ellipsis.circle")
+                        Image(lucide: Lucide.circleEllipsis)
                     }
                 }
             }
@@ -85,14 +86,14 @@ struct NotesView: View {
                         Button(role: .destructive) {
                             deleteNote(id: note.id)
                         } label: {
-                            Label("Delete", systemImage: "trash")
+                            Label { Text("Delete") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("trash")) }
                         }
                     }
                     .swipeActions(edge: .leading) {
                         Button {
                             exportSingleNote(id: note.id)
                         } label: {
-                            Label("Export", systemImage: "square.and.arrow.up")
+                            Label { Text("Export") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("square.and.arrow.up")) }
                         }
                         .tint(.blue)
                     }
@@ -103,7 +104,7 @@ struct NotesView: View {
 
     private var emptyState: some View {
         VStack(spacing: 12) {
-            Image(systemName: "note.text")
+            Image(lucide: Lucide.notebookText)
                 .font(.system(size: 48))
                 .foregroundStyle(.secondary)
             Text(searchText.isEmpty ? "No Notes" : "No Results")
@@ -167,7 +168,7 @@ private struct NoteRow: View {
 
             if let linkedUrl = note.linkedUrl, !linkedUrl.isEmpty {
                 HStack(spacing: 4) {
-                    Image(systemName: "link")
+                    Image(lucide: Lucide.link)
                         .font(.caption2)
                     Text(linkedUrl)
                         .font(.caption)

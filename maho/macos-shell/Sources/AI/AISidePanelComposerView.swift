@@ -483,7 +483,7 @@ final class AISidePanelComposerView: NSView, NSTextViewDelegate {
         contextRemoveButton.translatesAutoresizingMaskIntoConstraints = false
         contextRemoveButton.setAccessibilityLabel("Remove page context")
         contextRemoveButton.title = ""
-        contextRemoveButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Remove page context")?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11, weight: .bold))
+        contextRemoveButton.image = MahoIcon.imageForSFSymbol("xmark", pointSize: 11, accessibilityDescription: "Remove page context")
         contextRemoveButton.imagePosition = .imageOnly
         contextRemoveButton.imageScaling = .scaleProportionallyDown
         contextRemoveButton.isBordered = false
@@ -548,7 +548,7 @@ final class AISidePanelComposerView: NSView, NSTextViewDelegate {
         stopButton.translatesAutoresizingMaskIntoConstraints = false
         stopButton.setAccessibilityIdentifier("ai.panel.composer.stop")
         stopButton.title = "Stop"
-        stopButton.image = NSImage(systemSymbolName: "stop.fill", accessibilityDescription: "Stop")
+        stopButton.image = MahoIcon.imageForSFSymbol("stop.fill", accessibilityDescription: "Stop")
         stopButton.imagePosition = .imageLeading
         stopButton.imageScaling = .scaleProportionallyDown
         stopButton.font = .systemFont(ofSize: 11, weight: .semibold)
@@ -614,7 +614,7 @@ final class AISidePanelComposerView: NSView, NSTextViewDelegate {
         sendButton.setAccessibilityIdentifier("ai.panel.composer.send")
         sendButton.setAccessibilityLabel("Send")
         sendButton.title = ""
-        sendButton.image = NSImage(systemSymbolName: "arrow.right", accessibilityDescription: "Send")?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 18, weight: .bold))
+        sendButton.image = MahoIcon.imageForSFSymbol("arrow.right", pointSize: 18, accessibilityDescription: "Send")
         sendButton.imagePosition = .imageOnly
         sendButton.imageScaling = .scaleProportionallyDown
         sendButton.isBordered = false
@@ -776,7 +776,7 @@ final class AISidePanelComposerView: NSView, NSTextViewDelegate {
         button.setAccessibilityIdentifier(accessibilityIdentifier)
         button.setAccessibilityLabel(accessibilityLabel)
         button.title = ""
-        button.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: accessibilityLabel)?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: pointSize, weight: .medium))
+        button.image = MahoIcon.imageForSFSymbol(symbolName, pointSize: pointSize, accessibilityDescription: accessibilityLabel)
         button.imagePosition = .imageOnly
         button.imageScaling = .scaleProportionallyDown
         button.isBordered = false

@@ -12,13 +12,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -49,6 +42,8 @@ import dev.maho.browser.bridge.BridgeDownloads
 import dev.maho.browser.models.CoreUpdate
 import dev.maho.browser.models.DownloadState
 import dev.maho.browser.models.DownloadViewModel
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,7 +65,7 @@ fun DownloadsScreen(
                 title = { Text("Downloads") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(painter = painterResource(id = MahoIcon.NavBack.drawableRes), contentDescription = "Back")
                     }
                 },
             )
@@ -96,8 +91,7 @@ fun DownloadsScreen(
                         contentAlignment = Alignment.Center,
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                Icons.Filled.Download,
+                            Icon(painter = painterResource(id = MahoIcon.Downloads.drawableRes),
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -181,8 +175,7 @@ private fun DownloadItem(
                     .padding(horizontal = 16.dp),
                 contentAlignment = Alignment.CenterEnd,
             ) {
-                Icon(
-                    Icons.Filled.Delete,
+                Icon(painter = painterResource(id = MahoIcon.Delete.drawableRes),
                     contentDescription = "Delete",
                     tint = Color.White,
                 )
@@ -225,7 +218,7 @@ private fun DownloadItem(
             trailingContent = {
                 Box {
                     IconButton(onClick = { expanded = true }) {
-                        Icon(Icons.Filled.MoreVert, contentDescription = "Actions")
+                        Icon(painter = painterResource(id = MahoIcon.MoreActions.drawableRes), contentDescription = "Actions")
                     }
                     DropdownMenu(
                         expanded = expanded,
@@ -236,7 +229,7 @@ private fun DownloadItem(
                                 DropdownMenuItem(
                                     text = { Text("Pause") },
                                     leadingIcon = {
-                                        Icon(Icons.Filled.Pause, contentDescription = null)
+                                        Icon(painter = painterResource(id = MahoIcon.Pause.drawableRes), contentDescription = null)
                                     },
                                     onClick = {
                                         expanded = false
@@ -246,7 +239,7 @@ private fun DownloadItem(
                                 DropdownMenuItem(
                                     text = { Text("Cancel") },
                                     leadingIcon = {
-                                        Icon(Icons.Filled.Delete, contentDescription = null)
+                                        Icon(painter = painterResource(id = MahoIcon.Delete.drawableRes), contentDescription = null)
                                     },
                                     onClick = {
                                         expanded = false
@@ -258,7 +251,7 @@ private fun DownloadItem(
                                 DropdownMenuItem(
                                     text = { Text("Resume") },
                                     leadingIcon = {
-                                        Icon(Icons.Filled.PlayArrow, contentDescription = null)
+                                        Icon(painter = painterResource(id = MahoIcon.Play.drawableRes), contentDescription = null)
                                     },
                                     onClick = {
                                         expanded = false
@@ -268,7 +261,7 @@ private fun DownloadItem(
                                 DropdownMenuItem(
                                     text = { Text("Cancel") },
                                     leadingIcon = {
-                                        Icon(Icons.Filled.Delete, contentDescription = null)
+                                        Icon(painter = painterResource(id = MahoIcon.Delete.drawableRes), contentDescription = null)
                                     },
                                     onClick = {
                                         expanded = false
@@ -280,7 +273,7 @@ private fun DownloadItem(
                                 DropdownMenuItem(
                                     text = { Text("Remove") },
                                     leadingIcon = {
-                                        Icon(Icons.Filled.Delete, contentDescription = null)
+                                        Icon(painter = painterResource(id = MahoIcon.Delete.drawableRes), contentDescription = null)
                                     },
                                     onClick = {
                                         expanded = false

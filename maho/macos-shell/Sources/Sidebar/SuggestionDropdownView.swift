@@ -323,6 +323,6 @@ private final class SuggestionDropdownCellView: NSTableCellView {
         case .archivedTab: name = "archivebox"
         case .closedTab: name = "xmark.square"
         }
-        return NSImage(systemSymbolName: name, accessibilityDescription: nil)
+        return MahoIcon.imageForSFSymbol(name)
     }
 }

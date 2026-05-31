@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 
 struct NavigationButtonsView: View {
     @ObservedObject var viewModel: BrowserViewModel
@@ -19,7 +20,7 @@ struct NavigationButtonsView: View {
         Button {
             viewModel.goBack()
         } label: {
-            Image(systemName: "chevron.backward")
+            Image(lucide: Lucide.chevronLeft)
                 .font(.title3)
                 .frame(width: 44, height: 44)
         }
@@ -30,7 +31,7 @@ struct NavigationButtonsView: View {
         Button {
             viewModel.goForward()
         } label: {
-            Image(systemName: "chevron.forward")
+            Image(lucide: Lucide.chevronRight)
                 .font(.title3)
                 .frame(width: 44, height: 44)
         }
@@ -45,7 +46,7 @@ struct NavigationButtonsView: View {
                 viewModel.reload()
             }
         } label: {
-            Image(systemName: viewModel.isLoading ? "xmark" : "arrow.clockwise")
+            Image(lucide: viewModel.isLoading ? Lucide.x : Lucide.rotateCw)
                 .font(.title3)
                 .frame(width: 44, height: 44)
         }
@@ -54,7 +55,7 @@ struct NavigationButtonsView: View {
     private var tabsPlaceholder: some View {
         Button {
         } label: {
-            Image(systemName: "square.on.square")
+            Image(lucide: Lucide.copy)
                 .font(.title3)
                 .frame(width: 44, height: 44)
         }

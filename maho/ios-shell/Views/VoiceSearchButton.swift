@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 
 struct VoiceSearchButton: View {
     @Bindable var manager: VoiceSearchManager
@@ -18,7 +19,7 @@ struct VoiceSearchButton: View {
                         .frame(width: 44, height: 44)
                 }
 
-                Image(systemName: iconName)
+                Image(lucide: voiceIcon)
                     .font(.title3)
                     .foregroundStyle(iconColor)
                     .frame(width: 32, height: 32)
@@ -31,16 +32,16 @@ struct VoiceSearchButton: View {
         }
     }
 
-    private var iconName: String {
+    private var voiceIcon: UIImage {
         switch manager.state {
         case .listening:
-            "mic.fill"
+            Lucide.mic
         case .processing:
-            "ellipsis"
+            Lucide.ellipsis
         case .error:
-            "mic.slash"
+            Lucide.micOff
         default:
-            "mic"
+            Lucide.mic
         }
     }
 

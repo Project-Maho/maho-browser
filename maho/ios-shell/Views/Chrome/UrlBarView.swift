@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import LucideIcons
 
 struct UrlBarView: View {
     @ObservedObject var viewModel: BrowserViewModel
@@ -25,7 +26,7 @@ struct UrlBarView: View {
     @ViewBuilder
     private var secureIndicator: some View {
         if !viewModel.isUrlBarEditing {
-            Image(systemName: viewModel.isSecure ? "lock.fill" : "lock.open")
+            Image(lucide: viewModel.isSecure ? Lucide.lock : Lucide.lockOpen)
                 .font(.caption)
                 .foregroundStyle(viewModel.isSecure ? .green : .secondary)
         }
@@ -65,7 +66,7 @@ struct UrlBarView: View {
                     isFocused = false
                     editingText = ""
                 } label: {
-                    Image(systemName: "xmark.circle.fill")
+                    Image(lucide: Lucide.circleX)
                         .foregroundStyle(.secondary)
                 }
             } else {
@@ -78,7 +79,7 @@ struct UrlBarView: View {
         Button {
             shareCurrentUrl()
         } label: {
-            Image(systemName: "square.and.arrow.up")
+            Image(lucide: Lucide.share)
                 .font(.subheadline)
                 .foregroundStyle(.primary)
         }

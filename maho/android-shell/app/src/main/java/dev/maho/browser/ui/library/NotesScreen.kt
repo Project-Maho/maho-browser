@@ -14,11 +14,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Link
-import androidx.compose.material.icons.filled.NoteAlt
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -50,6 +45,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.maho.browser.bridge.BridgeNotes
 import dev.maho.browser.models.NoteViewModel
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,7 +79,7 @@ fun NotesScreen(
                 title = { Text("Notes") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(painter = painterResource(id = MahoIcon.NavBack.drawableRes), contentDescription = "Back")
                     }
                 },
                 actions = {
@@ -90,14 +87,14 @@ fun NotesScreen(
                         onClick = { BridgeNotes.exportAllNotes() },
                         enabled = notes.isNotEmpty(),
                     ) {
-                        Icon(Icons.Filled.NoteAlt, contentDescription = "Export")
+                        Icon(painter = painterResource(id = MahoIcon.Notes.drawableRes), contentDescription = "Export")
                     }
                 },
             )
         },
         floatingActionButton = {
             FloatingActionButton(onClick = { showCreateSheet = true }) {
-                Icon(Icons.Filled.NoteAlt, contentDescription = "New Note")
+                Icon(painter = painterResource(id = MahoIcon.Notes.drawableRes), contentDescription = "New Note")
             }
         },
     ) { padding ->
@@ -131,8 +128,7 @@ fun NotesScreen(
                         contentAlignment = Alignment.Center,
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                Icons.Filled.NoteAlt,
+                            Icon(painter = painterResource(id = MahoIcon.Notes.drawableRes),
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(48.dp),
@@ -222,7 +218,7 @@ private fun NoteItem(
                     .padding(horizontal = 16.dp),
                 contentAlignment = Alignment.CenterEnd,
             ) {
-                Icon(Icons.Filled.Delete, contentDescription = "Delete", tint = Color.White)
+                Icon(painter = painterResource(id = MahoIcon.Delete.drawableRes), contentDescription = "Delete", tint = Color.White)
             }
         },
         enableDismissFromStartToEnd = false,
@@ -238,8 +234,7 @@ private fun NoteItem(
             supportingContent = if (note.linkedUrl != null) {
                 {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Filled.Link,
+                        Icon(painter = painterResource(id = MahoIcon.Link.drawableRes),
                             contentDescription = null,
                             modifier = Modifier.size(14.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -275,7 +275,7 @@ extension ToolbarCustomizationController: NSTableViewDelegate, NSTableViewDataSo
         switch colId {
         case "Icon":
             let imageView = NSImageView()
-            imageView.image = NSImage(systemSymbolName: iconName(for: item.kind), accessibilityDescription: item.label)
+            imageView.image = MahoIcon.imageForSFSymbol(iconName(for: item.kind), accessibilityDescription: item.label)
             imageView.contentTintColor = .secondaryLabelColor
             let cell = NSTableCellView()
             cell.imageView = imageView

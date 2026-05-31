@@ -3,7 +3,7 @@
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h"
 
 #include "base/functional/bind.h"
-#include "maho/browser/ui/views/maho_mac_sf_symbol_helper.h"
+#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/color/color_id.h"
@@ -28,8 +28,8 @@ constexpr int kUtilityIconSize = 12;      // SF Symbol render size; small to avo
 constexpr int kUtilityButtonCornerRadius = 8;  // Matches the pill's inner rounding.
 
 ui::ImageModel CreateUtilityButtonImage(ui::ColorId color_id) {
-  return CreateMahoMacSFSymbol("slider.horizontal.3", "Show utility panel",
-                               kUtilityIconSize, color_id);
+  return ui::ImageModel::FromVectorIcon(
+      maho_lucide_icons::kSlidersHorizontalIcon, color_id, kUtilityIconSize);
 }
 
 void UpdateUtilityButtonImages(views::ToggleImageButton* button) {

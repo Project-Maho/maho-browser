@@ -54,8 +54,7 @@ final class LibraryRailItemView: NSView {
 
         iconView.translatesAutoresizingMaskIntoConstraints = false
         iconView.imageScaling = .scaleProportionallyDown
-        iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
-        if let img = NSImage(systemSymbolName: category.iconName, accessibilityDescription: category.rawValue) {
+        if let img = MahoIcon.imageForSFSymbol(category.iconName, pointSize: 16, accessibilityDescription: category.rawValue) {
             iconView.image = img
         }
         addSubview(iconView)
@@ -185,11 +184,7 @@ final class LibraryRailView: NSView {
         backButton.translatesAutoresizingMaskIntoConstraints = false
         backButton.bezelStyle = .accessoryBarAction
         backButton.isBordered = false
-        backButton.image = NSImage(
-            systemSymbolName: "chevron.left",
-            accessibilityDescription: "Back"
-        )
-        backButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
+        backButton.image = MahoIcon.imageForSFSymbol("chevron.left", pointSize: 13, accessibilityDescription: "Back")
         backButton.contentTintColor = MahoAppColors.libraryRailItemText
         backButton.target = self
         backButton.action = #selector(handleBack)

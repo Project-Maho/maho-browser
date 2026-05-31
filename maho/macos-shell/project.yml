@@ -14,6 +14,9 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     from: 2.9.1
+  LucideIcons:
+    url: https://github.com/JakubMazur/lucide-icons-swift
+    from: 1.0.0
 
 targets:
   Maho:
@@ -46,6 +49,8 @@ targets:
     dependencies:
       - package: Sparkle
         product: Sparkle
+      - package: LucideIcons
+        product: LucideIcons
 
   MahoUITests:
     type: bundle.ui-testing

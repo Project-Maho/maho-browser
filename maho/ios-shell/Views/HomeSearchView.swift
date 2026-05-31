@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 
 struct HomeSearchView: View {
     let activeSpaceName: String
@@ -85,7 +86,7 @@ struct HomeSearchView: View {
                         onSelectSite(site.url)
                     } label: {
                         VStack(alignment: .leading, spacing: 8) {
-                            Image(systemName: site.isFavorite ? "star.fill" : "globe")
+                            Image(lucide: site.isFavorite ? Lucide.star : Lucide.globe)
                                 .font(.headline)
                                 .foregroundStyle(ShellTheme.Palette.accent)
                                 .frame(width: ShellTheme.Size.topSiteIcon, height: ShellTheme.Size.topSiteIcon)
@@ -133,7 +134,7 @@ struct HomeSearchView: View {
                         onResumeTab(tab.id)
                     } label: {
                         HStack(spacing: ShellTheme.Spacing.medium) {
-                            Image(systemName: tab.isFavorite ? "star.fill" : "clock.arrow.circlepath")
+                            Image(lucide: tab.isFavorite ? Lucide.star : Lucide.history)
                                 .font(.headline)
                                 .foregroundStyle(ShellTheme.Palette.accent)
                                 .frame(width: ShellTheme.Size.topSiteIcon, height: ShellTheme.Size.topSiteIcon)
@@ -156,7 +157,7 @@ struct HomeSearchView: View {
 
                             Spacer(minLength: 0)
 
-                            Image(systemName: "arrow.up.forward")
+                            Image(lucide: Lucide.arrowUpRight)
                                 .font(.footnote.weight(.semibold))
                                 .foregroundStyle(.secondary)
                         }

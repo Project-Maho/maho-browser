@@ -29,23 +29,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.automirrored.filled.MenuBook
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Computer
-import androidx.compose.material.icons.filled.PictureInPictureAlt
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.Tab
-import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material.icons.filled.ZoomIn
-import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -65,7 +48,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
@@ -82,6 +64,8 @@ import dev.maho.browser.models.SpaceViewModel
 import dev.maho.browser.ui.theme.BrowserShellTheme
 import dev.maho.browser.ui.theme.bottomBarContainerColor
 import kotlin.math.roundToInt
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 @Composable
 fun ArcBottomBar(
@@ -168,9 +152,9 @@ fun ArcBottomBar(
         else -> displayHost(currentUrl)
     }
     val pageGlyph = when {
-        isIncognito -> Icons.Default.VisibilityOff
-        currentUrl.isBlank() -> Icons.Default.Search
-        else -> Icons.Default.Tab
+        isIncognito -> MahoIcon.VisibilityOff
+        currentUrl.isBlank() -> MahoIcon.Search
+        else -> MahoIcon.Tab
     }
     val tabGestureDescription = buildString {
         append("$tabCount tab")
@@ -287,7 +271,7 @@ fun ArcBottomBar(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
                                 SwipeCue(
-                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    icon = MahoIcon.NavBack,
                                     enabled = canSwipeToPreviousTab,
                                     tint = contentColor,
                                 )
@@ -302,7 +286,7 @@ fun ArcBottomBar(
                                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                                     ) {
                                         Icon(
-                                            imageVector = Icons.Default.Tab,
+                                            painter = painterResource(id = MahoIcon.Tab.drawableRes),
                                             contentDescription = "Tabs",
                                             modifier = Modifier.size(16.dp),
                                             tint = if (isIncognito) shellColors.incognitoAccent else contentColor,
@@ -316,7 +300,7 @@ fun ArcBottomBar(
                                 }
 
                                 SwipeCue(
-                                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                                    icon = MahoIcon.NavForward,
                                     enabled = canSwipeToNextTab,
                                     tint = contentColor,
                                 )
@@ -385,7 +369,7 @@ fun ArcBottomBar(
                                 .clickable(onClick = onGoBack)
                                 .testTag("arcBottomBarBackButton"),
                             color = controlColor,
-                            icon = Icons.AutoMirrored.Filled.ArrowBack,
+                            icon = MahoIcon.NavBack,
                             contentDescription = "Back",
                             tint = contentColor,
                         )
@@ -395,7 +379,7 @@ fun ArcBottomBar(
                                 .clickable(onClick = onGoForward)
                                 .testTag("arcBottomBarForwardButton"),
                             color = controlColor,
-                            icon = Icons.AutoMirrored.Filled.ArrowForward,
+                            icon = MahoIcon.NavForward,
                             contentDescription = "Forward",
                             tint = contentColor,
                         )
@@ -421,7 +405,7 @@ fun ArcBottomBar(
                                     color = controlHighlightColor,
                                 ) {
                                     Icon(
-                                        imageVector = pageGlyph,
+                                        painter = painterResource(id = pageGlyph.drawableRes),
                                         contentDescription = null,
                                         modifier = Modifier
                                             .padding(7.dp)
@@ -520,7 +504,7 @@ fun ArcBottomBar(
                                         )
                                     },
                                     leadingIcon = {
-                                        Icon(Icons.Default.AutoAwesome, contentDescription = null)
+                                        Icon(painter = painterResource(id = MahoIcon.SparklesAi.drawableRes), contentDescription = null)
                                     },
                                     onClick = {
                                         expanded = false
@@ -536,7 +520,7 @@ fun ArcBottomBar(
                                         )
                                     },
                                     leadingIcon = {
-                                        Icon(Icons.Default.Search, contentDescription = null)
+                                        Icon(painter = painterResource(id = MahoIcon.Search.drawableRes), contentDescription = null)
                                     },
                                     onClick = {
                                         expanded = false
@@ -552,7 +536,7 @@ fun ArcBottomBar(
                                         )
                                     },
                                     leadingIcon = {
-                                        Icon(Icons.Default.Share, contentDescription = null)
+                                        Icon(painter = painterResource(id = MahoIcon.Share.drawableRes), contentDescription = null)
                                     },
                                     onClick = {
                                         expanded = false
@@ -568,7 +552,7 @@ fun ArcBottomBar(
                                         )
                                     },
                                     leadingIcon = {
-                                        Icon(Icons.Default.Refresh, contentDescription = null)
+                                        Icon(painter = painterResource(id = MahoIcon.ReloadSync.drawableRes), contentDescription = null)
                                     },
                                     onClick = {
                                         expanded = false
@@ -590,7 +574,7 @@ fun ArcBottomBar(
                                     )
                                 },
                                 leadingIcon = {
-                                    Icon(Icons.Default.Schedule, contentDescription = null)
+                                    Icon(painter = painterResource(id = MahoIcon.Archive.drawableRes), contentDescription = null)
                                 },
                                 onClick = {
                                     expanded = false
@@ -611,7 +595,7 @@ fun ArcBottomBar(
                                         )
                                     },
                                     leadingIcon = {
-                                        Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = null)
+                                        Icon(painter = painterResource(id = MahoIcon.Book.drawableRes), contentDescription = null)
                                     },
                                     trailingIcon = {
                                         ArcMenuStateLabel(
@@ -639,7 +623,7 @@ fun ArcBottomBar(
                                         )
                                     },
                                     leadingIcon = {
-                                        Icon(Icons.Default.Computer, contentDescription = null)
+                                        Icon(painter = painterResource(id = MahoIcon.Monitor.drawableRes), contentDescription = null)
                                     },
                                     trailingIcon = {
                                         ArcMenuStateLabel(
@@ -663,7 +647,7 @@ fun ArcBottomBar(
                                         )
                                     },
                                     leadingIcon = {
-                                        Icon(Icons.Default.ZoomIn, contentDescription = null)
+                                        Icon(painter = painterResource(id = MahoIcon.ZoomIn.drawableRes), contentDescription = null)
                                     },
                                     onClick = {
                                         expanded = false
@@ -679,7 +663,7 @@ fun ArcBottomBar(
                                         )
                                     },
                                     leadingIcon = {
-                                        Icon(Icons.Default.ZoomOut, contentDescription = null)
+                                        Icon(painter = painterResource(id = MahoIcon.ZoomOut.drawableRes), contentDescription = null)
                                     },
                                     onClick = {
                                         expanded = false
@@ -696,7 +680,7 @@ fun ArcBottomBar(
                                     )
                                 },
                                 leadingIcon = {
-                                    Icon(Icons.Default.VisibilityOff, contentDescription = null)
+                                    Icon(painter = painterResource(id = MahoIcon.VisibilityOff.drawableRes), contentDescription = null)
                                 },
                                 trailingIcon = {
                                     ArcMenuStateLabel(
@@ -720,7 +704,7 @@ fun ArcBottomBar(
                                     )
                                 },
                                 leadingIcon = {
-                                    Icon(Icons.Default.Settings, contentDescription = null)
+                                    Icon(painter = painterResource(id = MahoIcon.Settings.drawableRes), contentDescription = null)
                                 },
                                 onClick = {
                                     expanded = false
@@ -737,7 +721,7 @@ fun ArcBottomBar(
                                         )
                                     },
                                     leadingIcon = {
-                                        Icon(Icons.Default.PictureInPictureAlt, contentDescription = null)
+                                        Icon(painter = painterResource(id = MahoIcon.PictureInPicture.drawableRes), contentDescription = null)
                                     },
                                     onClick = {
                                         expanded = false
@@ -878,7 +862,7 @@ private fun HomeSearchField(
             color = controlHighlightColor,
         ) {
             Icon(
-                imageVector = if (isIncognito) Icons.Default.VisibilityOff else Icons.Default.Search,
+                painter = painterResource(id = if (isIncognito) MahoIcon.VisibilityOff.drawableRes else MahoIcon.Search.drawableRes),
                 contentDescription = null,
                 tint = if (isIncognito) contentColor else textSecondary,
                 modifier = Modifier
@@ -943,7 +927,7 @@ private fun HomeSearchField(
                 color = controlHighlightColor,
             ) {
                 Icon(
-                    imageVector = Icons.Default.Close,
+                    painter = painterResource(id = MahoIcon.Close.drawableRes),
                     contentDescription = null,
                     tint = textSecondary,
                     modifier = Modifier
@@ -964,7 +948,7 @@ private fun HomeSearchField(
             color = if (canSubmitHomeQuery) controlHighlightColor else controlHighlightColor.copy(alpha = 0.42f),
         ) {
             Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                painter = painterResource(id = MahoIcon.NavForward.drawableRes),
                 contentDescription = null,
                 tint = if (canSubmitHomeQuery) contentColor else textSecondary.copy(alpha = 0.52f),
                 modifier = Modifier
@@ -979,7 +963,7 @@ private fun HomeSearchField(
 private fun BottomBarIconControl(
     modifier: Modifier,
     color: Color,
-    icon: ImageVector,
+    icon: MahoIcon,
     contentDescription: String,
     tint: Color,
     shape: Shape = RoundedCornerShape(18.dp),
@@ -994,7 +978,7 @@ private fun BottomBarIconControl(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                imageVector = icon,
+                painter = painterResource(id = icon.drawableRes),
                 contentDescription = contentDescription,
                 modifier = Modifier.size(17.dp),
                 tint = tint,
@@ -1005,12 +989,12 @@ private fun BottomBarIconControl(
 
 @Composable
 private fun SwipeCue(
-    imageVector: ImageVector,
+    icon: MahoIcon,
     enabled: Boolean,
     tint: Color,
 ) {
     Icon(
-        imageVector = imageVector,
+        painter = painterResource(id = icon.drawableRes),
         contentDescription = null,
         modifier = Modifier.size(14.dp),
         tint = if (enabled) tint.copy(alpha = 0.72f) else tint.copy(alpha = 0.22f),

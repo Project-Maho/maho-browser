@@ -3,17 +3,14 @@ package dev.maho.browser.ui.chrome
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 @Composable
 fun NavigationButtons(
@@ -32,13 +29,13 @@ fun NavigationButtons(
     ) {
         IconButton(onClick = onBack, enabled = canGoBack) {
             Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                painter = painterResource(id = MahoIcon.NavBack.drawableRes),
                 contentDescription = "Back",
             )
         }
         IconButton(onClick = onForward, enabled = canGoForward) {
             Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                painter = painterResource(id = MahoIcon.NavForward.drawableRes),
                 contentDescription = "Forward",
             )
         }
@@ -46,14 +43,14 @@ fun NavigationButtons(
         if (isLoading) {
             IconButton(onClick = onStop) {
                 Icon(
-                    imageVector = Icons.Default.Close,
+                    painter = painterResource(id = MahoIcon.Close.drawableRes),
                     contentDescription = "Stop",
                 )
             }
         } else {
             IconButton(onClick = onReload) {
                 Icon(
-                    imageVector = Icons.Default.Refresh,
+                    painter = painterResource(id = MahoIcon.ReloadSync.drawableRes),
                     contentDescription = "Reload",
                 )
             }

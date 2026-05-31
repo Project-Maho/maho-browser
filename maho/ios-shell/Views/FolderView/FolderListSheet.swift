@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import LucideIcons
 
 struct FolderListSheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -34,7 +35,7 @@ struct FolderListSheet: View {
                         newFolderName = ""
                         showNewFolderAlert = true
                     } label: {
-                        Image(systemName: "plus")
+                        Image(lucide: Lucide.plus)
                     }
                 }
             }
@@ -98,7 +99,7 @@ struct FolderListSheet: View {
 
     private var emptyState: some View {
         VStack(spacing: 12) {
-            Image(systemName: "folder")
+            Image(lucide: Lucide.folder)
                 .font(.system(size: 48))
                 .foregroundStyle(.secondary)
             Text("No Folders")
@@ -150,7 +151,7 @@ struct FolderListSheet: View {
                                 )
                                 reloadFolders()
                             } label: {
-                                Label("Remove", systemImage: "folder.badge.minus")
+                                Label { Text("Remove") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("folder.badge.minus")) }
                             }
                         }
                     }

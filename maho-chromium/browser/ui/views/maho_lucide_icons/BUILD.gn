@@ -1,0 +1,55 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+import("//components/vector_icons/vector_icons.gni")
+
+aggregate_vector_icons("maho_lucide_icons") {
+  icon_directory = "."
+
+  sources = [
+    "archive.icon",
+    "arrow_down_to_line.icon",
+    "camera.icon",
+    "chevron_left.icon",
+    "chevron_right.icon",
+    "copy.icon",
+    "hammer.icon",
+    "images.icon",
+    "inbox.icon",
+    "message_square.icon",
+    "notebook_text.icon",
+    "panel_left.icon",
+    "pencil_line.icon",
+    "picture_in_picture_2.icon",
+    "plus.icon",
+    "puzzle.icon",
+    "rotate_cw.icon",
+    "scan.icon",
+    "search.icon",
+    "share.icon",
+    "shield_check.icon",
+    "shield_half.icon",
+    "shield_question.icon",
+    "shield_x.icon",
+    "sliders_horizontal.icon",
+    "wand_sparkles.icon",
+    "x.icon",
+    "zoom_in.icon",
+    "zoom_out.icon",
+  ]
+}
+
+source_set("maho_lucide_icon_library") {
+  sources = [
+    "$target_gen_dir/vector_icons.cc",
+    "$target_gen_dir/vector_icons.h",
+  ]
+
+  deps = [
+    ":maho_lucide_icons",
+    "//ui/gfx",
+  ]
+
+  public_deps = [
+    "//ui/gfx",
+  ]
+}

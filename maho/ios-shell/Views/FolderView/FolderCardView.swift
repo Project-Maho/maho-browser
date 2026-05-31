@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 
 struct FolderCardView: View {
     let folder: FolderViewModel
@@ -19,7 +20,7 @@ struct FolderCardView: View {
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 12) {
-                Image(systemName: folder.isExpanded ? "folder.fill" : "folder")
+                Image(lucide: Lucide.folder)
                     .font(.title3)
                     .foregroundStyle(.secondary)
                     .frame(width: 28)
@@ -48,12 +49,12 @@ struct FolderCardView: View {
                 Spacer()
 
                 if folder.isPinned {
-                    Image(systemName: "pin.fill")
+                    Image(lucide: Lucide.pin)
                         .font(.caption2)
                         .foregroundStyle(.orange)
                 }
 
-                Image(systemName: "chevron.right")
+                Image(lucide: Lucide.chevronRight)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
@@ -72,7 +73,7 @@ struct FolderCardView: View {
                 editedName = folder.name
                 isEditing = true
             } label: {
-                Label("Rename", systemImage: "pencil")
+                Label { Text("Rename") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("pencil")) }
             }
 
             Button {
@@ -82,16 +83,13 @@ struct FolderCardView: View {
                     bridge.sendEvent(.pinFolder(spaceId: spaceId, folderId: folder.id))
                 }
             } label: {
-                Label(
-                    folder.isPinned ? "Unpin" : "Pin",
-                    systemImage: folder.isPinned ? "pin.slash" : "pin"
-                )
+                Label { Text(folder.isPinned ? "Unpin" : "Pin") } icon: { Image(lucide: MahoIcon.imageForSFSymbol(folder.isPinned ? "pin.slash" : "pin")) }
             }
 
             Divider()
 
             Button(role: .destructive, action: onDelete) {
-                Label("Delete", systemImage: "trash")
+                Label { Text("Delete") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("trash")) }
             }
         }
     }

@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 
 struct SpaceSwitcherSheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -60,7 +61,7 @@ struct SpaceSwitcherSheet: View {
                         newSpaceName = ""
                         showNewSpaceAlert = true
                     } label: {
-                        Image(systemName: "plus")
+                        Image(lucide: Lucide.plus)
                     }
                 }
             }

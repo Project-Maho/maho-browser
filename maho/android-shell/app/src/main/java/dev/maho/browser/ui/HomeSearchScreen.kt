@@ -22,14 +22,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.AccessTime
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Language
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -52,6 +44,8 @@ import dev.maho.browser.models.TabId
 import dev.maho.browser.models.TabViewModel
 import dev.maho.browser.ui.theme.BrowserShellTheme
 import dev.maho.browser.ui.theme.homeBackgroundBrush
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 @Composable
 fun HomeSearchScreen(
@@ -104,7 +98,7 @@ fun HomeSearchScreen(
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        imageVector = if (isIncognito) Icons.Default.VisibilityOff else Icons.Default.AutoAwesome,
+                        painter = painterResource(id = if (isIncognito) MahoIcon.VisibilityOff.drawableRes else MahoIcon.SparklesAi.drawableRes),
                         contentDescription = null,
                         tint = if (isIncognito) shellColors.incognitoAccent else shellColors.accent,
                         modifier = Modifier.size(18.dp),
@@ -229,7 +223,7 @@ private fun HomeStartPanel(
                 ) {
                     HomeMetaChip(
                         text = activeSpaceName,
-                        icon = Icons.Default.AutoAwesome,
+                        icon = MahoIcon.SparklesAi,
                         tint = accentColor,
                         modifier = Modifier.weight(1f),
                         isIncognito = isIncognito,
@@ -240,7 +234,7 @@ private fun HomeStartPanel(
                         } else {
                             "Search below"
                         },
-                        icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        icon = MahoIcon.ChevronRight,
                         tint = if (isIncognito) shellColors.incognitoAccent else shellColors.textSecondary,
                         modifier = Modifier.weight(1f),
                         isIncognito = isIncognito,
@@ -271,7 +265,7 @@ private fun HomeStartPanel(
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        painter = painterResource(id = MahoIcon.ChevronRight.drawableRes),
                         contentDescription = null,
                         tint = accentColor,
                     )
@@ -333,7 +327,7 @@ private fun HomeBrandLockup(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = Icons.Default.AutoAwesome,
+                    painter = painterResource(id = MahoIcon.SparklesAi.drawableRes),
                     contentDescription = null,
                     tint = accentColor,
                     modifier = Modifier.size(18.dp),
@@ -362,7 +356,7 @@ private fun HomeBrandLockup(
 @Composable
 private fun HomeMetaChip(
     text: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: MahoIcon,
     tint: Color,
     isIncognito: Boolean,
     modifier: Modifier = Modifier,
@@ -393,7 +387,7 @@ private fun HomeMetaChip(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = icon,
+                    painter = painterResource(id = icon.drawableRes),
                     contentDescription = null,
                     tint = tint,
                     modifier = Modifier.size(15.dp),
@@ -484,7 +478,7 @@ private fun HomeRecentTabRow(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = if (tab.isFavorite) Icons.Default.Star else Icons.Default.AccessTime,
+                    painter = painterResource(id = if (tab.isFavorite) MahoIcon.Star.drawableRes else MahoIcon.Clock.drawableRes),
                     contentDescription = null,
                     tint = shellColors.accent,
                 )
@@ -509,7 +503,7 @@ private fun HomeRecentTabRow(
             }
 
             Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                painter = painterResource(id = MahoIcon.NavForward.drawableRes),
                 contentDescription = null,
                 tint = shellColors.textSecondary,
             )
@@ -595,7 +589,7 @@ private fun HomeTopSiteCard(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = if (tab.isFavorite) Icons.Default.Star else Icons.Default.Language,
+                    painter = painterResource(id = if (tab.isFavorite) MahoIcon.Star.drawableRes else MahoIcon.Globe.drawableRes),
                     contentDescription = null,
                     tint = shellColors.textPrimary,
                 )

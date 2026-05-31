@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 
 struct SummaryOverlayView: View {
     let state: PageSummarizer.State
@@ -36,7 +37,7 @@ struct SummaryOverlayView: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: ShellTheme.Spacing.medium) {
-            summaryIcon(symbol: heroIcon)
+            summaryIcon(icon: heroIcon)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Browse for Me")
@@ -60,7 +61,7 @@ struct SummaryOverlayView: View {
             Button {
                 onDismiss()
             } label: {
-                Image(systemName: "xmark.circle.fill")
+                Image(lucide: Lucide.circleX)
                     .font(.title3)
                     .foregroundStyle(.secondary)
             }
@@ -111,7 +112,7 @@ struct SummaryOverlayView: View {
                 accessibilityIdentifier: "browseForMeErrorState"
             ) {
                 HStack(alignment: .top, spacing: ShellTheme.Spacing.medium) {
-                    Image(systemName: "exclamationmark.triangle.fill")
+                    Image(lucide: Lucide.triangleAlert)
                         .foregroundStyle(.orange)
 
                     Text(message)
@@ -147,7 +148,11 @@ struct SummaryOverlayView: View {
     }
 
     private var statusPill: some View {
-        Label(stateLabel, systemImage: heroIcon)
+        Label {
+            Text(stateLabel)
+        } icon: {
+            Image(lucide: heroIcon)
+        }
             .font(.caption.weight(.semibold))
             .foregroundStyle(.secondary)
             .padding(.horizontal, ShellTheme.Spacing.medium)
@@ -158,16 +163,16 @@ struct SummaryOverlayView: View {
             )
     }
 
-    private var heroIcon: String {
+    private var heroIcon: UIImage {
         switch state {
         case .loading:
-            return "sparkles"
+            return Lucide.sparkles
         case .result:
-            return "list.bullet.rectangle.portrait"
+            return Lucide.list
         case .error:
-            return "exclamationmark.bubble"
+            return Lucide.triangleAlert
         case .idle:
-            return "sparkles"
+            return Lucide.sparkles
         }
     }
 
@@ -247,13 +252,13 @@ struct SummaryOverlayView: View {
         .accessibilityIdentifier(accessibilityIdentifier)
     }
 
-    private func summaryIcon(symbol: String) -> some View {
+    private func summaryIcon(icon: UIImage) -> some View {
         ZStack {
             RoundedRectangle(cornerRadius: ShellTheme.Radius.card, style: .continuous)
                 .fill(ShellTheme.Palette.summaryHeroFill)
                 .frame(width: ShellTheme.Size.summaryStateIcon + 2, height: ShellTheme.Size.summaryStateIcon + 2)
 
-            Image(systemName: symbol)
+            Image(lucide: icon)
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(ShellTheme.Palette.summaryAccent)
         }

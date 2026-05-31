@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 
 struct PermissionSheet: View {
     let permissionType: String
@@ -10,7 +11,7 @@ struct PermissionSheet: View {
 
     var body: some View {
         VStack(spacing: 24) {
-            Image(systemName: iconName)
+            Image(lucide: permissionIcon)
                 .font(.system(size: 48))
                 .foregroundStyle(Color.accentColor)
                 .padding(.top, 24)
@@ -44,13 +45,13 @@ struct PermissionSheet: View {
         .presentationDetents([.height(300)])
     }
 
-    private var iconName: String {
+    private var permissionIcon: UIImage {
         switch permissionType {
-        case "camera": return "camera"
-        case "microphone": return "mic"
-        case "location": return "location"
-        case "notifications": return "bell"
-        default: return "lock.shield"
+        case "camera": return Lucide.camera
+        case "microphone": return Lucide.mic
+        case "location": return Lucide.mapPin
+        case "notifications": return Lucide.bell
+        default: return Lucide.shieldCheck
         }
     }
 

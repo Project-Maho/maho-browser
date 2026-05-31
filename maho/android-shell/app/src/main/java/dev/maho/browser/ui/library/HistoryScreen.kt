@@ -10,11 +10,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.DeleteSweep
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -46,6 +41,8 @@ import dev.maho.browser.models.HistoryEntry
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -92,7 +89,7 @@ fun HistoryScreen(
                 title = { Text("History") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(painter = painterResource(id = MahoIcon.NavBack.drawableRes), contentDescription = "Back")
                     }
                 },
                 actions = {
@@ -100,7 +97,7 @@ fun HistoryScreen(
                         onClick = { showClearDialog = true },
                         enabled = entries.isNotEmpty(),
                     ) {
-                        Icon(Icons.Filled.DeleteSweep, contentDescription = "Clear all")
+                        Icon(painter = painterResource(id = MahoIcon.ClearSweep.drawableRes), contentDescription = "Clear all")
                     }
                 },
             )
@@ -136,8 +133,7 @@ fun HistoryScreen(
                         contentAlignment = Alignment.Center,
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                Icons.Filled.History,
+                            Icon(painter = painterResource(id = MahoIcon.History.drawableRes),
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -212,8 +208,7 @@ private fun HistoryItem(
                     .padding(horizontal = 16.dp),
                 contentAlignment = Alignment.CenterEnd,
             ) {
-                Icon(
-                    Icons.Filled.Delete,
+                Icon(painter = painterResource(id = MahoIcon.Delete.drawableRes),
                     contentDescription = "Delete",
                     tint = Color.White,
                 )

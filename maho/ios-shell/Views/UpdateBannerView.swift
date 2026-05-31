@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 
 struct UpdateBannerView: View {
     @ObservedObject var checker: AppStoreUpdateChecker
@@ -6,7 +7,7 @@ struct UpdateBannerView: View {
     var body: some View {
         if checker.updateAvailable, let version = checker.latestVersion {
             HStack {
-                Image(systemName: "arrow.down.circle.fill")
+                Image(lucide: Lucide.arrowDownCircle)
                     .foregroundStyle(.white)
                 Text("Maho \(version) is available")
                     .font(.subheadline.weight(.medium))
@@ -24,7 +25,7 @@ struct UpdateBannerView: View {
                 Button {
                     withAnimation { checker.updateAvailable = false }
                 } label: {
-                    Image(systemName: "xmark")
+                    Image(lucide: Lucide.x)
                         .foregroundStyle(.white.opacity(0.8))
                 }
                 .buttonStyle(.plain)

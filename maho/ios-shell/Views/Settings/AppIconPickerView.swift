@@ -1,19 +1,20 @@
 import SwiftUI
+import LucideIcons
 
 struct AppIconPickerView: View {
     struct IconOption: Identifiable {
         let id: String
         let name: String
-        let iconName: String
+        let icon: UIImage
         let alternateIconName: String?
     }
 
     private let options: [IconOption] = [
-        IconOption(id: "default", name: "Default", iconName: "app.fill", alternateIconName: nil),
-        IconOption(id: "dark", name: "Dark", iconName: "moon.fill", alternateIconName: "AppIcon-Dark"),
-        IconOption(id: "light", name: "Light", iconName: "sun.max.fill", alternateIconName: "AppIcon-Light"),
-        IconOption(id: "minimal", name: "Minimal", iconName: "square.fill", alternateIconName: "AppIcon-Minimal"),
-        IconOption(id: "neon", name: "Neon", iconName: "bolt.fill", alternateIconName: "AppIcon-Neon")
+        IconOption(id: "default", name: "Default", icon: Lucide.appWindow, alternateIconName: nil),
+        IconOption(id: "dark", name: "Dark", icon: Lucide.moon, alternateIconName: "AppIcon-Dark"),
+        IconOption(id: "light", name: "Light", icon: Lucide.sun, alternateIconName: "AppIcon-Light"),
+        IconOption(id: "minimal", name: "Minimal", icon: Lucide.square, alternateIconName: "AppIcon-Minimal"),
+        IconOption(id: "neon", name: "Neon", icon: Lucide.zap, alternateIconName: "AppIcon-Neon")
     ]
 
     @State private var currentIcon: String = UIApplication.shared.alternateIconName ?? "default"
@@ -33,7 +34,7 @@ struct AppIconPickerView: View {
                                         .fill(currentIcon == option.id ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.1))
                                         .frame(width: 72, height: 72)
 
-                                    Image(systemName: option.iconName)
+                                    Image(lucide: option.icon)
                                         .font(.system(size: 32))
                                         .foregroundStyle(currentIcon == option.id ? Color.accentColor : Color.primary)
                                 }

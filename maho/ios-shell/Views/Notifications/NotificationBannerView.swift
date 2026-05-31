@@ -1,9 +1,10 @@
 import SwiftUI
+import LucideIcons
 
 struct NotificationBannerView: View {
     let title: String
     let message: String
-    let iconName: String
+    let icon: UIImage
     var actions: [BannerAction] = []
     var onDismiss: () -> Void
 
@@ -15,7 +16,7 @@ struct NotificationBannerView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: iconName)
+            Image(lucide: icon)
                 .font(.title2)
                 .foregroundStyle(Color.accentColor)
                 .frame(width: 32)
@@ -37,7 +38,7 @@ struct NotificationBannerView: View {
                 Button {
                     onDismiss()
                 } label: {
-                    Image(systemName: "xmark")
+                    Image(lucide: Lucide.x)
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
                 }

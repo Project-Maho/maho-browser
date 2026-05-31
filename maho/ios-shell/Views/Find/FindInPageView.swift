@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 
 struct FindInPageView: View {
     let tabId: TabId
@@ -27,21 +28,21 @@ struct FindInPageView: View {
                     Button {
                         findPrevious()
                     } label: {
-                        Image(systemName: "chevron.up")
+                        Image(lucide: Lucide.chevronUp)
                     }
                     .disabled(totalMatches == 0)
 
                     Button {
                         findNext()
                     } label: {
-                        Image(systemName: "chevron.down")
+                        Image(lucide: Lucide.chevronDown)
                     }
                     .disabled(totalMatches == 0)
 
                     Button {
                         dismissFind()
                     } label: {
-                        Image(systemName: "xmark")
+                        Image(lucide: Lucide.x)
                     }
                 }
             }

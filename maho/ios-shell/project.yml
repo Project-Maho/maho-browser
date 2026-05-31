@@ -1,4 +1,8 @@
 name: Maho
+packages:
+  LucideIcons:
+    url: https://github.com/JakubMazur/lucide-icons-swift
+    from: "1.0.0"
 options:
   bundleIdPrefix: dev.maho
   deploymentTarget:
@@ -49,7 +53,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.maho.browser
         INFOPLIST_FILE: Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-    dependencies: []
+    dependencies:
+      - package: LucideIcons
 
   MahoTests:
     type: bundle.unit-test

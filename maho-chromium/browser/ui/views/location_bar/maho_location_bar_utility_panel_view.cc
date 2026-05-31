@@ -23,7 +23,7 @@
 #include "extensions/browser/extension_icon_image.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
-#include "maho/browser/ui/views/maho_mac_sf_symbol_helper.h"
+#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
@@ -233,9 +233,11 @@ class MahoLocationBarUtilityPanelActionView
     if (is_icon_chip && (icon_factory_ || icon_image_)) {
       UpdateIconImage();
     } else {
-      icon_image->SetImage(CreateMahoMacSFSymbol(
-          action_.sf_symbol_name, base::UTF16ToUTF8(BuildAccessibleName(action_)),
-          icon_size, ui::kColorSysOnSurfaceSubtle));
+      icon_image->SetImage(action_.icon
+          ? ui::ImageModel::FromVectorIcon(*action_.icon,
+                                           ui::kColorSysOnSurfaceSubtle,
+                                           icon_size)
+          : ui::ImageModel());
     }
 
     if (!is_toolbar && !is_icon_chip) {
@@ -487,9 +489,11 @@ class MahoLocationBarUtilityPanelSecuritySummaryView : public views::View {
     auto* icon_image = AddChildView(std::make_unique<views::ImageView>());
     icon_image->SetImageSize(gfx::Size(kFooterIconSize, kFooterIconSize));
     icon_image->SetCanProcessEventsWithinSubtree(false);
-    icon_image->SetImage(CreateMahoMacSFSymbol(
-        footer.sf_symbol_name, base::UTF16ToUTF8(footer.title), kFooterIconSize,
-        ui::kColorSysOnSurfaceSubtle));
+    icon_image->SetImage(footer.icon
+        ? ui::ImageModel::FromVectorIcon(*footer.icon,
+                                         ui::kColorSysOnSurfaceSubtle,
+                                         kFooterIconSize)
+        : ui::ImageModel());
 
     auto* title = AddChildView(std::make_unique<views::Label>(
         footer.title, views::style::CONTEXT_LABEL,
@@ -555,7 +559,17 @@ MahoLocationBarUtilityPanelView::MahoLocationBarUtilityPanelView(
   }
 }
 
-MahoLocationBarUtilityPanelView::~MahoLocationBarUtilityPanelView() = default;
+MahoLocationBarUtilityPanelView::~MahoLocationBarUtilityPanelView() {
+  // Stop observing before any further teardown so that a bridge notification
+  // posted just before shutdown cannot fire into a half-destroyed view.
+  bridge_observation_.Reset();
+
+  // Cancel any live context-menu runner and release the model deterministically.
+  // MenuRunner holds a raw pointer to the model; resetting runner first avoids
+  // a dangling reference during the model's destructor.
+  context_menu_runner_.reset();
+  current_menu_model_.reset();
+}
 
 views::View* MahoLocationBarUtilityPanelView::GetActionViewForTesting(
     const std::u16string& title) const {
@@ -748,9 +762,20 @@ void MahoLocationBarUtilityPanelView::OnInstalledExtensionsChanged() {
     return;
   }
 
+  views::Widget* widget = GetWidget();
+  if (!widget || widget->IsClosed()) {
+    return;
+  }
+
   base::AutoReset<bool> auto_reset(&rebuilding_extensions_, true);
 
   if (extensions_container_) {
+    // Cancel any open context menu before removing the chip views it is
+    // anchored to, to prevent the menu runner from referencing destroyed
+    // child views.
+    context_menu_runner_.reset();
+    current_menu_model_.reset();
+
     for (auto it = action_views_for_testing_.begin(); it != action_views_for_testing_.end(); ) {
       if (it->second && extensions_container_->Contains(it->second)) {
         it = action_views_for_testing_.erase(it);

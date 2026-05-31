@@ -27,8 +27,6 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Icon
@@ -82,6 +80,8 @@ import dev.maho.browser.ui.settings.ReaderSettingsScreen
 import dev.maho.browser.ui.settings.SettingsScreen
 import dev.maho.browser.ui.settings.SyncSettingsScreen
 import dev.maho.browser.ui.theme.BrowserShellTheme
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 private enum class BrowserOverlay {
     Settings,
@@ -184,7 +184,6 @@ fun MainBrowserScreen(externalUrl: String? = null) {
         selectedSearchEngine.value = engine
         browserPrefs.edit().putString("search_engine", engine).apply()
     }
-
 
     fun clearBrowsingData() {
         CookieManager.getInstance().removeAllCookies(null)
@@ -957,7 +956,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Icon(
-                            imageVector = Icons.Default.VisibilityOff,
+                            painter = painterResource(id = MahoIcon.VisibilityOff.drawableRes),
                             contentDescription = null,
                             tint = shellColors.incognitoAccent,
                             modifier = Modifier.size(15.dp),

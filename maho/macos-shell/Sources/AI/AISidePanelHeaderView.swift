@@ -219,8 +219,7 @@ final class AISidePanelHeaderView: NSView {
         button.setAccessibilityIdentifier(accessibilityIdentifier)
         button.setAccessibilityLabel(description)
         button.title = ""
-        let configuration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .medium)
-        button.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: description)?.withSymbolConfiguration(configuration)
+        button.image = MahoIcon.imageForSFSymbol(symbolName, pointSize: pointSize, accessibilityDescription: description)
         button.isBordered = false
         button.imageScaling = .scaleProportionallyDown
         button.bezelStyle = .regularSquare

@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 
 struct SpaceCardView: View {
     let space: SpaceViewModel
@@ -52,7 +53,7 @@ struct SpaceCardView: View {
                 Spacer()
 
                 if isActive {
-                    Image(systemName: "checkmark.circle.fill")
+                    Image(lucide: Lucide.circleCheck)
                         .foregroundStyle(spaceColor)
                 }
             }
@@ -69,13 +70,13 @@ struct SpaceCardView: View {
                 editedName = space.name
                 isEditing = true
             } label: {
-                Label("Rename", systemImage: "pencil")
+                Label { Text("Rename") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("pencil")) }
             }
 
             Divider()
 
             Button(role: .destructive, action: onDelete) {
-                Label("Delete", systemImage: "trash")
+                Label { Text("Delete") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("trash")) }
             }
         }
     }

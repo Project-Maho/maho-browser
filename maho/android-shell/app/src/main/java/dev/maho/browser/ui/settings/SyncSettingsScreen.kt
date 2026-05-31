@@ -7,18 +7,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.CloudOff
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.DesktopWindows
-import androidx.compose.material.icons.filled.Error
-import androidx.compose.material.icons.filled.PhoneAndroid
-import androidx.compose.material.icons.filled.Sync
-import androidx.compose.material.icons.filled.Tablet
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -55,6 +43,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.DateFormat
 import java.util.Date
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -110,7 +100,7 @@ fun SyncSettingsScreen(
                 title = { Text("Sync") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(painter = painterResource(id = MahoIcon.NavBack.drawableRes), contentDescription = "Back")
                     }
                 },
             )
@@ -236,7 +226,7 @@ fun SyncSettingsScreen(
             if (syncError != null) {
                 ListItem(
                     leadingContent = {
-                        Icon(Icons.Filled.Error, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                        Icon(painter = painterResource(id = MahoIcon.CircleAlert.drawableRes), contentDescription = null, tint = MaterialTheme.colorScheme.error)
                     },
                     headlineContent = { Text("Sync Error") },
                     supportingContent = { Text(syncError!!) },
@@ -270,13 +260,13 @@ fun SyncSettingsScreen(
             ListItem(
                 leadingContent = {
                     val (icon, tint) = when (val state = syncState) {
-                        is AccountSyncState.Idle -> Icons.Filled.Cloud to MaterialTheme.colorScheme.onSurfaceVariant
-                        is AccountSyncState.Syncing -> Icons.Filled.Sync to MaterialTheme.colorScheme.primary
-                        is AccountSyncState.Synced -> Icons.Filled.CheckCircle to MaterialTheme.colorScheme.primary
-                        is AccountSyncState.Error -> Icons.Filled.Error to MaterialTheme.colorScheme.error
-                        is AccountSyncState.Offline -> Icons.Filled.CloudOff to MaterialTheme.colorScheme.onSurfaceVariant
+                        is AccountSyncState.Idle -> MahoIcon.Cloud to MaterialTheme.colorScheme.onSurfaceVariant
+                        is AccountSyncState.Syncing -> MahoIcon.SyncIcon to MaterialTheme.colorScheme.primary
+                        is AccountSyncState.Synced -> MahoIcon.CheckCircle to MaterialTheme.colorScheme.primary
+                        is AccountSyncState.Error -> MahoIcon.CircleAlert to MaterialTheme.colorScheme.error
+                        is AccountSyncState.Offline -> MahoIcon.CloudOff to MaterialTheme.colorScheme.onSurfaceVariant
                     }
-                    Icon(icon, contentDescription = null, tint = tint)
+                    Icon(painter = painterResource(id = icon.drawableRes), contentDescription = null, tint = tint)
                 },
                 headlineContent = {
                     Text(
@@ -307,12 +297,12 @@ fun SyncSettingsScreen(
                     ListItem(
                         leadingContent = {
                             val icon = when (device.deviceType.lowercase()) {
-                                "desktop", "mac", "pc" -> Icons.Filled.DesktopWindows
-                                "phone", "iphone", "android" -> Icons.Filled.PhoneAndroid
-                                "tablet", "ipad" -> Icons.Filled.Tablet
-                                else -> Icons.Filled.DesktopWindows
+                                "desktop", "mac", "pc" -> MahoIcon.Monitor
+                                "phone", "iphone", "android" -> MahoIcon.Smartphone
+                                "tablet", "ipad" -> MahoIcon.TabletSmartphone
+                                else -> MahoIcon.Monitor
                             }
-                            Icon(icon, contentDescription = null)
+                            Icon(painter = painterResource(id = icon.drawableRes), contentDescription = null)
                         },
                         headlineContent = { Text(device.name) },
                         supportingContent = {
@@ -323,14 +313,13 @@ fun SyncSettingsScreen(
                                 IconButton(onClick = {
                                     BridgeSync.sendTabToDevice(url = "", title = "", deviceId = device.id)
                                 }) {
-                                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send Tab")
+                                    Icon(painter = painterResource(id = MahoIcon.Send.drawableRes), contentDescription = "Send Tab")
                                 }
                                 IconButton(onClick = {
                                     BridgeSync.removeSyncDevice(device.id)
                                     devices.remove(device)
                                 }) {
-                                    Icon(
-                                        Icons.Filled.Delete,
+                                    Icon(painter = painterResource(id = MahoIcon.Delete.drawableRes),
                                         contentDescription = "Remove Device",
                                         tint = MaterialTheme.colorScheme.error,
                                     )

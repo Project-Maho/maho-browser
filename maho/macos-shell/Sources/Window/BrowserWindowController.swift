@@ -554,8 +554,7 @@ final class BrowserWindowController: NSWindowController, CoreUpdateObserver {
     }
 
     private func configuredSymbol(named symbolName: String, pointSize: CGFloat, accessibilityDescription: String?) -> NSImage? {
-        let configuration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .medium)
-        return NSImage(systemSymbolName: symbolName, accessibilityDescription: accessibilityDescription)?.withSymbolConfiguration(configuration)
+        return MahoIcon.imageForSFSymbol(symbolName, pointSize: pointSize, accessibilityDescription: accessibilityDescription)
     }
 
     private func setEmptyStateVisible(_ visible: Bool) {
@@ -1583,8 +1582,7 @@ private final class ArchiveDetailSurfaceView: NSView {
         glyphContainerView.addSubview(glyphImageView)
 
         glyphImageView.translatesAutoresizingMaskIntoConstraints = false
-        glyphImageView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: Metrics.glyphSize, weight: .regular)
-        glyphImageView.image = NSImage(systemSymbolName: "archivebox.fill", accessibilityDescription: "Archive")
+        glyphImageView.image = MahoIcon.archiveFilled.image(pointSize: Metrics.glyphSize, accessibilityDescription: "Archive")
         glyphImageView.imageScaling = .scaleProportionallyDown
 
         detailTitleLabel.translatesAutoresizingMaskIntoConstraints = false

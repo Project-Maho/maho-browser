@@ -8,10 +8,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BookmarkBorder
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -25,6 +21,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.maho.browser.models.TabViewModel
 import dev.maho.browser.ui.theme.BrowserShellTheme
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 @Composable
 fun TabPreview(
@@ -82,13 +80,13 @@ fun TabPreview(
                     }
                     context.startActivity(Intent.createChooser(sendIntent, null))
                 }) {
-                    Icon(Icons.Filled.Share, contentDescription = "Share")
+                    Icon(painter = painterResource(id = MahoIcon.Share.drawableRes), contentDescription = "Share")
                 }
                 IconButton(onClick = onBookmark) {
-                    Icon(Icons.Filled.BookmarkBorder, contentDescription = "Bookmark")
+                    Icon(painter = painterResource(id = MahoIcon.BookmarkBorder.drawableRes), contentDescription = "Bookmark")
                 }
                 IconButton(onClick = onClose) {
-                    Icon(Icons.Filled.Close, contentDescription = "Close")
+                    Icon(painter = painterResource(id = MahoIcon.Close.drawableRes), contentDescription = "Close")
                 }
             }
         }

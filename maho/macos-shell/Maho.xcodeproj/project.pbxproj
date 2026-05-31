@@ -35,6 +35,7 @@
 		207095D57E7108054B9B3277 /* MahoBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6976ABBFD9C6500C1DE0B95D /* MahoBridge.swift */; };
 		2288CFA12DE71FC6308CC3B0 /* LiveFolderManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5FF9BAD8151C04C99DB0873 /* LiveFolderManager.swift */; };
 		237568412465D2B98A0627A6 /* SharingSheetController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CCDFC76FC39E9EFBF0090FC /* SharingSheetController.swift */; };
+		246E84956A18039C970D74A6 /* RelayAuthManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 192F4E9EAD77F4B429F18F8D /* RelayAuthManager.swift */; };
 		25580E1243C22BB79C742236 /* SyncConflictController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6178842AD352F6C53AD54F17 /* SyncConflictController.swift */; };
 		2577913F61FF8C5F6F2656E3 /* MCPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2954904A99079DB001065FCC /* MCPServer.swift */; };
 		2A13669BF19BF50D88BFCD44 /* MahoBridge+Mods.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E2AB608DC125B48949B54D1 /* MahoBridge+Mods.swift */; };
@@ -42,9 +43,11 @@
 		2DF1C3A90C297E9E1AC70F43 /* AISidePanelHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4EE60E5E59CF50BB10A96B60 /* AISidePanelHeaderView.swift */; };
 		31EFF6B3E44A956FC11898AE /* LLMToolTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = E27F431D14272E86F5771959 /* LLMToolTypes.swift */; };
 		33C6B086DA6C73328BEEEF9E /* FindBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CCAE30A4CE0E3F5E93B7C1C /* FindBarView.swift */; };
+		35CFE6C60383540C173B123F /* LucideIcons in Frameworks */ = {isa = PBXBuildFile; productRef = B927FE061448A6B3CDAACBEC /* LucideIcons */; };
 		372D5430924DCE8035AAC48E /* Identifiers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93C7A43E2C0BEB3672639EFF /* Identifiers.swift */; };
 		38A59E2AB25F7F586F48DA20 /* APIKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C5AA6081B1CB2F0A93E4FBF /* APIKeyStore.swift */; };
 		3926002185DF70A2A9D4AD09 /* DomainModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9519BFA755C5B72FD7120A2E /* DomainModels.swift */; };
+		396FED80BFEF82DE8583F087 /* MahoIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = E06188AB2ACF828F6A991BED /* MahoIcon.swift */; };
 		399D486E2F2379A0F39E44CC /* EaselCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 831ED85D028D45EB6FB8A24C /* EaselCanvasView.swift */; };
 		3A2E9684A8416B32EE86D42B /* ProfilesSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 370A09B9E7B1BB8C148031DD /* ProfilesSettingsView.swift */; };
 		3B03A5724FCE37ADC5F9FE64 /* PeekWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38F42560A3797D7204FE7776 /* PeekWindowController.swift */; };
@@ -208,6 +211,7 @@
 		13115B93C3E2BD2DE8C62CF7 /* SiteControlPopover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteControlPopover.swift; sourceTree = "<group>"; };
 		1497CA086C40294F9ADA3259 /* MahoBridge+Settings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MahoBridge+Settings.swift"; sourceTree = "<group>"; };
 		1749EBD18C92AE12D9773DAE /* ToolbarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolbarController.swift; sourceTree = "<group>"; };
+		192F4E9EAD77F4B429F18F8D /* RelayAuthManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayAuthManager.swift; sourceTree = "<group>"; };
 		19CD046BB27E4BBA656174E3 /* CommandBarWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandBarWindowController.swift; sourceTree = "<group>"; };
 		1C5AA6081B1CB2F0A93E4FBF /* APIKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIKeyStore.swift; sourceTree = "<group>"; };
 		1D39F3B6BAFB287BBE4410BC /* DebugTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugTests.swift; sourceTree = "<group>"; };
@@ -321,6 +325,7 @@
 		CFD7C28B0891247B01F8F709 /* Maho.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Maho.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D7C6536626F68FBC3DD9DD66 /* SuggestionChipView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuggestionChipView.swift; sourceTree = "<group>"; };
 		E012FB8F29C6EACA1613EBE4 /* AddToEaselService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddToEaselService.swift; sourceTree = "<group>"; };
+		E06188AB2ACF828F6A991BED /* MahoIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MahoIcon.swift; sourceTree = "<group>"; };
 		E1225BC5B087DBD8E3BA2F24 /* AutofillHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutofillHandler.swift; sourceTree = "<group>"; };
 		E2353020F534DC4B774F94A2 /* SyncManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncManager.swift; sourceTree = "<group>"; };
 		E27F431D14272E86F5771959 /* LLMToolTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMToolTypes.swift; sourceTree = "<group>"; };
@@ -356,6 +361,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				BFEB32B4554E17F5C8AA6A5F /* Sparkle in Frameworks */,
+				35CFE6C60383540C173B123F /* LucideIcons in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -442,6 +448,7 @@
 		1F73EC3A953CD62ADC2A26CE /* Sync */ = {
 			isa = PBXGroup;
 			children = (
+				192F4E9EAD77F4B429F18F8D /* RelayAuthManager.swift */,
 				6178842AD352F6C53AD54F17 /* SyncConflictController.swift */,
 				E2353020F534DC4B774F94A2 /* SyncManager.swift */,
 				FF1AFF85313E8530CEF4B167 /* SyncTransport.swift */,
@@ -485,6 +492,7 @@
 			isa = PBXGroup;
 			children = (
 				0C029BE02BE43ED03F7BA113 /* FaviconPalette.swift */,
+				E06188AB2ACF828F6A991BED /* MahoIcon.swift */,
 				9EF1F0A891860A379170E7FA /* NSColor+ProfileAvatar.swift */,
 				37F188B0FF95A8EF2B035539 /* SuggestionDestinationResolver.swift */,
 				B15D28D4B44146228D585BBC /* UrlSubmissionHelper.swift */,
@@ -561,13 +569,6 @@
 			path = Bridge;
 			sourceTree = "<group>";
 		};
-		80FD63CD6F00867E37848804 /* Boost */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = Boost;
-			sourceTree = "<group>";
-		};
 		8637F1D8EAD4339DA236609B /* CommandBar */ = {
 			isa = PBXGroup;
 			children = (
@@ -614,7 +615,6 @@
 				AEDE65DF5439392C1BF24B7D /* AI */,
 				881AC20FCCBEF95068297A20 /* App */,
 				078DD3CBEDF24916ED313FEE /* Autofill */,
-				80FD63CD6F00867E37848804 /* Boost */,
 				7BDD931CB4B5F0673E9B93E2 /* Bridge */,
 				8637F1D8EAD4339DA236609B /* CommandBar */,
 				A3DA5E09E891FE3634A8ADDB /* ContextMenu */,
@@ -807,6 +807,7 @@
 			name = Maho;
 			packageProductDependencies = (
 				E5FC9D13E6CBFAF3C5B635BB /* Sparkle */,
+				B927FE061448A6B3CDAACBEC /* LucideIcons */,
 			);
 			productName = Maho;
 			productReference = CFD7C28B0891247B01F8F709 /* Maho.app */;
@@ -854,6 +855,7 @@
 			mainGroup = 149BE07F64547B749CCFA389;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				1094525BF3B201F3DA0BBD8C /* XCRemoteSwiftPackageReference "lucide-icons-swift" */,
 				5C2D9EEDC6DAC068CA24C583 /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -965,6 +967,7 @@
 				D814ABA24234D8F12DBA4211 /* MahoBridge+Spaces.swift in Sources */,
 				1FB1AF60EDAA10F64CB66872 /* MahoBridge+Tabs.swift in Sources */,
 				207095D57E7108054B9B3277 /* MahoBridge.swift in Sources */,
+				396FED80BFEF82DE8583F087 /* MahoIcon.swift in Sources */,
 				CEC8DD2449666A93CBA29DCE /* MediaSessionBridge.swift in Sources */,
 				6C78211E42B19466052058FB /* MiniPlayerView.swift in Sources */,
 				19F7554C875C188D46606493 /* MiniPlayerWindowController.swift in Sources */,
@@ -983,6 +986,7 @@
 				3A2E9684A8416B32EE86D42B /* ProfilesSettingsView.swift in Sources */,
 				E70D0F77AC9495BC12E37D77 /* ReaderModeController.swift in Sources */,
 				4D5C71BE7268A7A0DC1E1EEB /* RecoveryPhraseController.swift in Sources */,
+				246E84956A18039C970D74A6 /* RelayAuthManager.swift in Sources */,
 				DC3B631F7BC10DBA0B76EA62 /* SecureLocalStore.swift in Sources */,
 				47CC6D7B6CC3650942AE4F32 /* Settings.swift in Sources */,
 				F434C1874E589528F10B360A /* SettingsWindowController.swift in Sources */,
@@ -1309,6 +1313,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		1094525BF3B201F3DA0BBD8C /* XCRemoteSwiftPackageReference "lucide-icons-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/JakubMazur/lucide-icons-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.0;
+			};
+		};
 		5C2D9EEDC6DAC068CA24C583 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/sparkle-project/Sparkle";
@@ -1320,6 +1332,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		B927FE061448A6B3CDAACBEC /* LucideIcons */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1094525BF3B201F3DA0BBD8C /* XCRemoteSwiftPackageReference "lucide-icons-swift" */;
+			productName = LucideIcons;
+		};
 		E5FC9D13E6CBFAF3C5B635BB /* Sparkle */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 5C2D9EEDC6DAC068CA24C583 /* XCRemoteSwiftPackageReference "Sparkle" */;

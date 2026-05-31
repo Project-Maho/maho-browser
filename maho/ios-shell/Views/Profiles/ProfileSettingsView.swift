@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 
 struct ProfileSettingsView: View {
     @State private var profiles: [ProfileConfig] = []
@@ -27,7 +28,7 @@ struct ProfileSettingsView: View {
                     Button {
                         showCreateSheet = true
                     } label: {
-                        Image(systemName: "plus")
+                        Image(lucide: Lucide.plus)
                     }
                 }
             }
@@ -81,14 +82,14 @@ struct ProfileSettingsView: View {
                         profileToDelete = profile
                         showDeleteConfirmation = true
                     } label: {
-                        Label("Delete", systemImage: "trash")
+                        Label { Text("Delete") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("trash")) }
                     }
                 }
                 .swipeActions(edge: .leading) {
                     Button {
                         editingProfile = profile
                     } label: {
-                        Label("Edit", systemImage: "pencil")
+                        Label { Text("Edit") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("pencil")) }
                     }
                     .tint(.blue)
                 }
@@ -99,7 +100,7 @@ struct ProfileSettingsView: View {
 
     private var emptyState: some View {
         VStack(spacing: 12) {
-            Image(systemName: "person.crop.circle")
+            Image(lucide: Lucide.circleUser)
                 .font(.system(size: 48))
                 .foregroundStyle(.secondary)
             Text("No Profiles")
@@ -178,7 +179,7 @@ private struct ProfileRow: View {
             Spacer()
 
             if isActive {
-                Image(systemName: "checkmark.circle.fill")
+                Image(lucide: Lucide.circleCheck)
                     .foregroundStyle(.blue)
             }
         }

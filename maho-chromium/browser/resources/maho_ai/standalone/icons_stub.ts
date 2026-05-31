@@ -1,5 +1,5 @@
 // Standalone-only stub for views/icons.ts.
-// In Chromium, getSFSymbolUrl returns a chrome://maho-ai/sf-symbol/... URL
+// In Chromium, getIconUrl returns a chrome://maho-ai/icons/... URL
 // that only works inside the browser process. In the standalone dev harness
 // that URL is blocked, flooding the console. This stub returns an empty
 // string so the CSS url("") is a no-op and icons degrade gracefully.
@@ -9,7 +9,7 @@ export type IconSymbol =
     'panelSpark'|'plus'|'retry'|'settingsGear'|'stop'|'thumbDown'|
     'thumbUp'|'trash'|'viewModeToggle'|'xmark';
 
-export function getSFSymbolUrl(_symbol: IconSymbol): string {
+export function getIconUrl(_symbol: IconSymbol): string {
   return '';
 }
 

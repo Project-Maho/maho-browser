@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 
 struct AutofillSettingsView: View {
     @State private var addressesEnabled: Bool = true
@@ -27,7 +28,7 @@ struct AutofillSettingsView: View {
 
             Section("Saved Passwords") {
                 HStack {
-                    Image(systemName: "magnifyingglass")
+                    Image(lucide: Lucide.search)
                         .foregroundStyle(.secondary)
                     TextField("Search passwords", text: $passwordSearchQuery)
                         .textInputAutocapitalization(.never)

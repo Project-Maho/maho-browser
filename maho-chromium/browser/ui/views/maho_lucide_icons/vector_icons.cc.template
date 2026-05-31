@@ -1,0 +1,16 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+// Lucide vector icons for Maho Browser.
+
+#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
+
+#include "components/vector_icons/cc_macros.h"
+#include "ui/gfx/vector_icon_types.h"
+
+#define DECLARE_VECTOR_COMMAND(x) using gfx::x;
+DECLARE_VECTOR_COMMANDS
+
+namespace maho_lucide_icons {
+
+TEMPLATE_PLACEHOLDER
+
+}  // namespace maho_lucide_icons

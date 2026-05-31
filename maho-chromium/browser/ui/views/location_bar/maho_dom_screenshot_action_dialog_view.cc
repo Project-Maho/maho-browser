@@ -9,9 +9,11 @@
 
 #include "base/check.h"
 #include "base/functional/bind.h"
+#include "base/memory/raw_ref.h"
 #include "base/strings/utf_string_conversions.h"
 #include "maho/browser/ui/theme/maho_color_id.h"
-#include "maho/browser/ui/views/maho_mac_sf_symbol_helper.h"
+#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
+#include "ui/gfx/paint_vector_icon.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/color/color_id.h"
@@ -39,12 +41,12 @@ namespace maho {
 MahoDomScreenshotActionRow::MahoDomScreenshotActionRow() = default;
 MahoDomScreenshotActionRow::MahoDomScreenshotActionRow(
     std::u16string label,
-    std::string sf_symbol_name,
+    raw_ptr<const gfx::VectorIcon> icon,
     bool enabled,
     bool destructive,
     base::OnceClosure activate)
     : label(std::move(label)),
-      sf_symbol_name(std::move(sf_symbol_name)),
+      icon(icon),
       enabled(enabled),
       destructive(destructive),
       activate(std::move(activate)) {}
@@ -72,14 +74,14 @@ constexpr int kSeparatorThickness = 1;
 constexpr gfx::Insets kDialogInsets = gfx::Insets::TLBR(10, 10, 10, 10);
 constexpr gfx::Insets kRowInsets = gfx::Insets::TLBR(0, 10, 0, 10);
 constexpr float kDisabledRowOpacity = 0.55f;
-constexpr char kSendToSymbolName[] = "square.and.arrow.up";
-constexpr char kCopySymbolName[] = "doc.on.doc";
-constexpr char kSaveSymbolName[] = "arrow.down.to.line";
-constexpr char kRetakeSymbolName[] = "arrow.clockwise";
-constexpr char kEditSymbolName[] = "pencil.tip.crop.circle";
-constexpr char kImessageSymbolName[] = "message";
-constexpr char kSaveToLibrarySymbolName[] = "tray.and.arrow.down";
-constexpr char kChevronSymbolName[] = "chevron.right";
+
+using maho_lucide_icons::kShareIcon;
+using maho_lucide_icons::kCopyIcon;
+using maho_lucide_icons::kArrowDownToLineIcon;
+using maho_lucide_icons::kRotateCwIcon;
+using maho_lucide_icons::kPencilLineIcon;
+using maho_lucide_icons::kMessageSquareIcon;
+using maho_lucide_icons::kChevronRightIcon;
 
 class MenuSeparator : public views::View {
   METADATA_HEADER(MenuSeparator, views::View)
@@ -101,14 +103,14 @@ class ActionMenuButton : public views::Button {
   METADATA_HEADER(ActionMenuButton, views::Button)
  public:
   ActionMenuButton(std::u16string label,
-                   std::string sf_symbol_name,
+                   const gfx::VectorIcon& icon,
                    PressedCallback callback,
                    bool enabled,
                    bool is_header,
                    bool show_chevron)
       : views::Button(std::move(callback)),
         label_text_(std::move(label)),
-        sf_symbol_name_(std::move(sf_symbol_name)),
+        icon_(icon),
         is_header_(is_header),
         show_chevron_(show_chevron) {
     SetFocusBehavior(enabled ? FocusBehavior::ALWAYS : FocusBehavior::NEVER);
@@ -194,18 +196,18 @@ class ActionMenuButton : public views::Button {
             : static_cast<ui::ColorId>(ui::kColorSysOnSurfaceSubtle);
     label_view_->SetEnabledColor(text_color);
 
-    icon_view_->SetImage(CreateMahoMacSFSymbol(
-        sf_symbol_name_, base::UTF16ToUTF8(label_text_), kLeadingIconSize,
-        text_color));
+    icon_view_->SetImage(
+        ui::ImageModel::FromVectorIcon(*icon_, text_color, kLeadingIconSize));
     if (chevron_view_) {
-      chevron_view_->SetImage(CreateMahoMacSFSymbol(
-          kChevronSymbolName, base::UTF16ToUTF8(label_text_),
-          kChevronIconSize, ui::kColorSysOnSurfaceSubtle));
+      chevron_view_->SetImage(
+          ui::ImageModel::FromVectorIcon(
+              kChevronRightIcon, ui::kColorSysOnSurfaceSubtle,
+              kChevronIconSize));
     }
   }
 
   const std::u16string label_text_;
-  const std::string sf_symbol_name_;
+  const raw_ref<const gfx::VectorIcon> icon_;
   const bool is_header_;
   const bool show_chevron_;
   raw_ptr<views::View> background_container_ = nullptr;
@@ -216,26 +218,26 @@ class ActionMenuButton : public views::Button {
 BEGIN_METADATA(ActionMenuButton)
 END_METADATA
 
-std::string SymbolNameForLabel(const std::u16string& label) {
+const gfx::VectorIcon& IconForLabel(const std::u16string& label) {
   if (label == u"Copy") {
-    return kCopySymbolName;
+    return kCopyIcon;
   }
   if (label == u"Save...") {
-    return kSaveSymbolName;
+    return kArrowDownToLineIcon;
   }
   if (label == u"Retake") {
-    return kRetakeSymbolName;
+    return kRotateCwIcon;
   }
   if (label == u"Edit") {
-    return kEditSymbolName;
+    return kPencilLineIcon;
   }
   if (label == u"Send via iMessage...") {
-    return kImessageSymbolName;
+    return kMessageSquareIcon;
   }
   if (label == u"Save to Library") {
-    return kSaveToLibrarySymbolName;
+    return kArrowDownToLineIcon;
   }
-  return std::string();
+  return gfx::VectorIcon::EmptyIcon();
 }
 
 MahoDomScreenshotActionMenu BuildLegacyMenu(base::OnceClosure copy_callback,
@@ -243,18 +245,18 @@ MahoDomScreenshotActionMenu BuildLegacyMenu(base::OnceClosure copy_callback,
                                             base::OnceClosure dismiss_callback) {
   MahoDomScreenshotActionMenu menu;
   menu.header_label = u"Send To...";
-  menu.header_sf_symbol_name = kSendToSymbolName;
+  menu.header_icon = &kShareIcon;
   menu.rows.push_back(
-      {u"Copy", kCopySymbolName, true, false, std::move(copy_callback)});
+      {u"Copy", &kCopyIcon, true, false, std::move(copy_callback)});
   menu.rows.push_back(
-      {u"Save...", kSaveSymbolName, true, false, std::move(download_callback)});
-  menu.rows.push_back({u"Retake", kRetakeSymbolName, false, false,
+      {u"Save...", &kArrowDownToLineIcon, true, false, std::move(download_callback)});
+  menu.rows.push_back({u"Retake", &kRotateCwIcon, false, false,
                        base::OnceClosure()});
   menu.rows.push_back(
-      {u"Edit", kEditSymbolName, false, false, base::OnceClosure()});
-  menu.rows.push_back({u"Send via iMessage...", kImessageSymbolName, false,
+      {u"Edit", &kPencilLineIcon, false, false, base::OnceClosure()});
+  menu.rows.push_back({u"Send via iMessage...", &kMessageSquareIcon, false,
                        false, base::OnceClosure()});
-  menu.rows.push_back({u"Save to Library", kSaveToLibrarySymbolName, false,
+  menu.rows.push_back({u"Save to Library", &kArrowDownToLineIcon, false,
                        false, base::OnceClosure()});
   menu.dismiss_callback = std::move(dismiss_callback);
   return menu;
@@ -283,7 +285,8 @@ MahoDomScreenshotActionDialogView::MahoDomScreenshotActionDialogView(
   if (!menu_.header_label.empty()) {
     const bool header_enabled = !menu_.header_activate.is_null();
     auto* header_button = AddChildView(std::make_unique<ActionMenuButton>(
-        menu_.header_label, menu_.header_sf_symbol_name,
+        menu_.header_label,
+        menu_.header_icon ? *menu_.header_icon : gfx::VectorIcon::EmptyIcon(),
         base::BindRepeating(&MahoDomScreenshotActionDialogView::ActivateHeader,
                             base::Unretained(this)),
         header_enabled, true, true));
@@ -302,8 +305,7 @@ MahoDomScreenshotActionDialogView::MahoDomScreenshotActionDialogView(
 
     auto* row_button = AddChildView(std::make_unique<ActionMenuButton>(
         row.label,
-        row.sf_symbol_name.empty() ? SymbolNameForLabel(row.label)
-                                   : row.sf_symbol_name,
+        row.icon ? *row.icon : IconForLabel(row.label),
         base::BindRepeating(&MahoDomScreenshotActionDialogView::ActivateRow,
                             base::Unretained(this), i),
         row.enabled, false, false));

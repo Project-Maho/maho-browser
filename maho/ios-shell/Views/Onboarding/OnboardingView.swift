@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -11,7 +12,7 @@ struct OnboardingView: View {
             Spacer()
 
             VStack(spacing: ShellTheme.Spacing.large) {
-                Image(systemName: "globe")
+                Image(lucide: Lucide.globe)
                     .font(.system(size: ShellTheme.Size.onboardingHeroIcon))
                     .foregroundStyle(ShellTheme.Palette.accent)
 
@@ -34,7 +35,7 @@ struct OnboardingView: View {
                     }
                     #endif
                 } label: {
-                    Label("Set as Default Browser", systemImage: "safari")
+                    Label { Text("Set as Default Browser") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("safari")) }
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                         .padding(ShellTheme.Spacing.large)

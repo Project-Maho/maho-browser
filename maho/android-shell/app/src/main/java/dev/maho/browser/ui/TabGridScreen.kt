@@ -11,9 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Tab
-import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -45,6 +42,8 @@ import dev.maho.browser.ui.space.SpaceChipRow
 import dev.maho.browser.ui.tab.TabGrid
 import dev.maho.browser.ui.tab.TabGridToolbar
 import dev.maho.browser.ui.theme.BrowserShellTheme
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 @Composable
 fun TabGridScreen(
@@ -155,7 +154,7 @@ fun TabGridScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             Icon(
-                                imageVector = if (isIncognito) Icons.Default.VisibilityOff else Icons.Default.Tab,
+                                painter = painterResource(id = if (isIncognito) MahoIcon.VisibilityOff.drawableRes else MahoIcon.Tab.drawableRes),
                                 contentDescription = null,
                                 tint = accentColor,
                                 modifier = Modifier.size(18.dp),
@@ -188,7 +187,7 @@ fun TabGridScreen(
                                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.VisibilityOff,
+                                        painter = painterResource(id = MahoIcon.VisibilityOff.drawableRes),
                                         contentDescription = null,
                                         tint = accentColor,
                                         modifier = Modifier.size(14.dp),

@@ -15,9 +15,7 @@ final class SplitToolbarButton: NSButton {
     private func commonInit() {
         bezelStyle = .texturedRounded
         isBordered = false
-        let config = NSImage.SymbolConfiguration(pointSize: 10.5, weight: .medium)
-        image = NSImage(systemSymbolName: "rectangle.split.2x1", accessibilityDescription: "Split View")?
-            .withSymbolConfiguration(config)
+        image = MahoIcon.imageForSFSymbol("rectangle.split.2x1", pointSize: 10.5, accessibilityDescription: "Split View")
         contentTintColor = MahoAppColors.titlebarControlTint.withAlphaComponent(0.80)
         imageScaling = .scaleProportionallyDown
         toolTip = "Toggle Split View"

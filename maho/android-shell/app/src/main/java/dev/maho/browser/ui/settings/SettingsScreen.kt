@@ -5,23 +5,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Book
-import androidx.compose.material.icons.filled.Bookmark
-import androidx.compose.material.icons.filled.ClearAll
-import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.Feedback
-import androidx.compose.material.icons.filled.Key
-import androidx.compose.material.icons.filled.Language
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.RestartAlt
-import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.Sync
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -39,9 +22,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import dev.maho.browser.ui.theme.BrowserShellTheme
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -107,7 +91,7 @@ fun SettingsScreen(
                 ),
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(painter = painterResource(id = MahoIcon.NavBack.drawableRes), contentDescription = "Back")
                     }
                 },
             )
@@ -128,39 +112,39 @@ fun SettingsScreen(
             ListItem(
                 headlineContent = { Text("Clear Browsing Data") },
                 supportingContent = { Text("Remove cookies, storage, and cached page state") },
-                leadingContent = { Icon(Icons.Filled.ClearAll, contentDescription = null) },
+                leadingContent = { Icon(painter = painterResource(id = MahoIcon.ClearSweep.drawableRes), contentDescription = null) },
                 modifier = Modifier.clickable { showClearDialog = true },
             )
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
-            SettingsNavItem(Icons.Filled.Settings, "General", onClick = onNavigateToGeneral)
-            SettingsNavItem(Icons.Filled.Palette, "Appearance", onClick = onNavigateToAppearance)
-            SettingsNavItem(Icons.Filled.Security, "Privacy & Security", onClick = onNavigateToPrivacy)
-            SettingsNavItem(Icons.Filled.Sync, "Sync", onClick = onNavigateToSync)
+            SettingsNavItem(MahoIcon.Settings, "General", onClick = onNavigateToGeneral)
+            SettingsNavItem(MahoIcon.Palette, "Appearance", onClick = onNavigateToAppearance)
+            SettingsNavItem(MahoIcon.Privacy, "Privacy & Security", onClick = onNavigateToPrivacy)
+            SettingsNavItem(MahoIcon.SyncIcon, "Sync", onClick = onNavigateToSync)
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-            SettingsNavItem(Icons.Filled.Book, "Reader Mode", onClick = onNavigateToReader)
-            SettingsNavItem(Icons.Filled.Key, "Autofill & Passwords", onClick = onNavigateToAutofill)
-            SettingsNavItem(Icons.Filled.Notifications, "Notifications", onClick = onNavigateToNotifications)
+            SettingsNavItem(MahoIcon.Book, "Reader Mode", onClick = onNavigateToReader)
+            SettingsNavItem(MahoIcon.AutofillKey, "Autofill & Passwords", onClick = onNavigateToAutofill)
+            SettingsNavItem(MahoIcon.Notifications, "Notifications", onClick = onNavigateToNotifications)
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-            SettingsNavItem(Icons.Filled.Star, "Max AI", onClick = onNavigateToMax)
-            SettingsNavItem(Icons.Filled.Tune, "Advanced", onClick = onNavigateToAdvanced)
+            SettingsNavItem(MahoIcon.Star, "Max AI", onClick = onNavigateToMax)
+            SettingsNavItem(MahoIcon.Tune, "Advanced", onClick = onNavigateToAdvanced)
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-            SettingsNavItem(Icons.Filled.Code, "Profiles", onClick = onNavigateToProfiles)
+            SettingsNavItem(MahoIcon.Code, "Profiles", onClick = onNavigateToProfiles)
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-            SettingsNavItem(Icons.Filled.Bookmark, "Bookmarks", onClick = onNavigateToBookmarks)
-            SettingsNavItem(Icons.Filled.Security, "History", onClick = onNavigateToHistory)
-            SettingsNavItem(Icons.Filled.Notifications, "Downloads", onClick = onNavigateToDownloads)
-            SettingsNavItem(Icons.Filled.Book, "Notes", onClick = onNavigateToNotes)
-            SettingsNavItem(Icons.Filled.Star, "Reading List", onClick = onNavigateToReadingList)
+            SettingsNavItem(MahoIcon.Bookmarks, "Bookmarks", onClick = onNavigateToBookmarks)
+            SettingsNavItem(MahoIcon.Privacy, "History", onClick = onNavigateToHistory)
+            SettingsNavItem(MahoIcon.Notifications, "Downloads", onClick = onNavigateToDownloads)
+            SettingsNavItem(MahoIcon.Book, "Notes", onClick = onNavigateToNotes)
+            SettingsNavItem(MahoIcon.Star, "Reading List", onClick = onNavigateToReadingList)
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-            SettingsNavItem(Icons.Filled.Palette, "App Icon", onClick = onNavigateToAppIcon)
-            SettingsNavItem(Icons.Filled.Language, "Language", onClick = onNavigateToLanguage)
-            SettingsNavItem(Icons.Filled.Feedback, "Feedback", onClick = onNavigateToFeedback)
+            SettingsNavItem(MahoIcon.Palette, "App Icon", onClick = onNavigateToAppIcon)
+            SettingsNavItem(MahoIcon.Globe, "Language", onClick = onNavigateToLanguage)
+            SettingsNavItem(MahoIcon.HelpFeedback, "Feedback", onClick = onNavigateToFeedback)
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
             ListItem(
                 headlineContent = {
                     TextButton(onClick = onResetSettings) {
-                        Icon(Icons.Filled.RestartAlt, contentDescription = null)
+                        Icon(painter = painterResource(id = MahoIcon.RestartAlt.drawableRes), contentDescription = null)
                         Text("Reset All Settings", modifier = Modifier.padding(start = 8.dp))
                     }
                 },
@@ -171,13 +155,13 @@ fun SettingsScreen(
 
 @Composable
 private fun SettingsNavItem(
-    icon: ImageVector,
+    icon: MahoIcon,
     title: String,
     onClick: () -> Unit,
 ) {
     ListItem(
         headlineContent = { Text(title) },
-        leadingContent = { Icon(icon, contentDescription = title) },
+        leadingContent = { Icon(painter = painterResource(id = icon.drawableRes), contentDescription = title) },
         modifier = Modifier.clickable(onClick = onClick),
     )
 }

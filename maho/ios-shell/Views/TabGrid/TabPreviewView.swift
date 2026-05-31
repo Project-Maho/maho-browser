@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -34,7 +35,7 @@ struct TabPreviewView: View {
                     .aspectRatio(4.0 / 3.0, contentMode: .fit)
                     .overlay {
                         VStack(spacing: 8) {
-                            Image(systemName: "photo")
+                            Image(lucide: Lucide.image)
                                 .font(.title)
                                 .foregroundStyle(.tertiary)
                             Text("No Preview")
@@ -49,7 +50,7 @@ struct TabPreviewView: View {
                 .aspectRatio(4.0 / 3.0, contentMode: .fit)
                 .overlay {
                     VStack(spacing: ShellTheme.Spacing.small) {
-                        Image(systemName: "photo")
+                        Image(lucide: Lucide.image)
                             .font(.title)
                             .foregroundStyle(.tertiary)
                         Text("No Preview")
@@ -80,17 +81,17 @@ struct TabPreviewView: View {
 
             HStack(spacing: 12) {
                 if tab.isPinned {
-                    Label("Pinned", systemImage: "pin.fill")
+                    Label { Text("Pinned") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("pin.fill")) }
                         .font(.caption2)
                         .foregroundStyle(.orange)
                 }
                 if tab.isMuted {
-                    Label("Muted", systemImage: "speaker.slash.fill")
+                    Label { Text("Muted") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("speaker.slash.fill")) }
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
                 if tab.isPlayingAudio {
-                    Label("Playing", systemImage: "speaker.wave.2.fill")
+                    Label { Text("Playing") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("speaker.wave.2.fill")) }
                         .font(.caption2)
                         .foregroundStyle(.blue)
                 }
@@ -102,13 +103,13 @@ struct TabPreviewView: View {
     private var actionBar: some View {
         HStack(spacing: 24) {
             Button(action: onShare) {
-                Label("Share", systemImage: "square.and.arrow.up")
+                Label { Text("Share") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("square.and.arrow.up")) }
             }
 
             Spacer()
 
             Button(role: .destructive, action: onClose) {
-                Label("Close Tab", systemImage: "xmark")
+                Label { Text("Close Tab") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("xmark")) }
             }
         }
         .buttonStyle(.bordered)

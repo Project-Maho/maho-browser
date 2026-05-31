@@ -93,8 +93,7 @@ class SidebarTreeDataSource: NSObject, NSOutlineViewDataSource, NSOutlineViewDel
 
                 let iconView = NSImageView()
                 iconView.translatesAutoresizingMaskIntoConstraints = false
-                let config = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
-                iconView.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)?.withSymbolConfiguration(config)
+                iconView.image = MahoIcon.imageForSFSymbol("plus", pointSize: 12)
                 iconView.contentTintColor = MahoAppColors.primaryText.withAlphaComponent(0.60)
                 container.addSubview(iconView)
 

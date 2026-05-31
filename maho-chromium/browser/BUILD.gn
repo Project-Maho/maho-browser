@@ -223,6 +223,7 @@ source_set("maho_location_bar_views") {
     "//content/public/browser",
     "//content/public/common",
     "//maho/browser/ui/site_control:maho_site_control",
+    "//maho/browser/ui/views/maho_lucide_icons:maho_lucide_icon_library",
     "//maho/third_party/maho:maho_core_prebuilt",
     "//maho/third_party/maho:maho_ffi_headers",
     "//net",
@@ -511,25 +512,6 @@ source_set("maho_os_crypt_key_provider") {
     "//components/os_crypt/async/common:common",
     "//crypto",
     "//third_party/boringssl",
-  ]
-}
-
-source_set("maho_mac_sf_symbol_helper") {
-  sources = [
-    "ui/views/maho_mac_sf_symbol_helper.h",
-  ]
-  if (is_mac) {
-    sources += [
-      "ui/views/maho_mac_sf_symbol_helper.mm",
-    ]
-  }
-  public_deps = [
-    "//ui/base",
-    "//ui/color",
-    "//ui/gfx",
-  ]
-  deps = [
-    "//base",
   ]
 }
 

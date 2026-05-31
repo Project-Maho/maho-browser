@@ -663,9 +663,7 @@ private final class AutofillEmptyStateView: NSView {
         addSubview(badgeView)
 
         iconView.translatesAutoresizingMaskIntoConstraints = false
-        iconView.image = NSImage(systemSymbolName: iconName, accessibilityDescription: nil)?.withSymbolConfiguration(
-            .init(pointSize: 16, weight: .semibold)
-        )
+        iconView.image = MahoIcon.imageForSFSymbol(iconName, pointSize: 16)
         iconView.contentTintColor = MahoAppColors.accentBlueBright.withAlphaComponent(0.96)
         addSubview(iconView)
 

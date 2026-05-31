@@ -18,9 +18,7 @@ final class DownloadToolbarButton: NSButton, CoreUpdateObserver {
     private func commonInit() {
         bezelStyle = .texturedRounded
         isBordered = false
-        let config = NSImage.SymbolConfiguration(pointSize: 10.5, weight: .medium)
-        image = NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: "Downloads")?
-            .withSymbolConfiguration(config)
+        image = MahoIcon.imageForSFSymbol("arrow.down.circle", pointSize: 10.5, accessibilityDescription: "Downloads")
         contentTintColor = MahoAppColors.titlebarControlTint.withAlphaComponent(0.80)
         imageScaling = .scaleProportionallyDown
         toolTip = "Downloads"

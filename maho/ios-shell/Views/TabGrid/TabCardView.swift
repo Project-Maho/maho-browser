@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import LucideIcons
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -48,7 +49,7 @@ struct TabCardView: View {
             Button {
                 MahoBridge.shared.duplicateTab(tabId: tab.id)
             } label: {
-                Label("Duplicate", systemImage: "plus.square.on.square")
+                Label { Text("Duplicate") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("plus.square.on.square")) }
             }
 
             Button {
@@ -58,7 +59,7 @@ struct TabCardView: View {
                     MahoBridge.shared.pinTab(tabId: tab.id)
                 }
             } label: {
-                Label(tab.isPinned ? "Unpin" : "Pin", systemImage: tab.isPinned ? "pin.slash" : "pin")
+                Label { Text(tab.isPinned ? "Unpin" : "Pin") } icon: { Image(lucide: MahoIcon.imageForSFSymbol(tab.isPinned ? "pin.slash" : "pin")) }
             }
 
             Button {
@@ -68,7 +69,7 @@ struct TabCardView: View {
                     MahoBridge.shared.muteTab(tabId: tab.id)
                 }
             } label: {
-                Label(tab.isMuted ? "Unmute" : "Mute", systemImage: tab.isMuted ? "speaker.wave.2" : "speaker.slash")
+                Label { Text(tab.isMuted ? "Unmute" : "Mute") } icon: { Image(lucide: MahoIcon.imageForSFSymbol(tab.isMuted ? "speaker.wave.2" : "speaker.slash")) }
             }
 
             Divider()
@@ -76,7 +77,7 @@ struct TabCardView: View {
             Button(role: .destructive) {
                 onClose()
             } label: {
-                Label("Close", systemImage: "xmark")
+                Label { Text("Close") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("xmark")) }
             }
         }
         .accessibilityIdentifier("tabCard_\(tab.id)")
@@ -125,7 +126,7 @@ struct TabCardView: View {
             Button {
                 onClose()
             } label: {
-                Image(systemName: "xmark")
+                Image(lucide: Lucide.x)
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(Color.primary.opacity(0.75))
                     .padding(ShellTheme.Spacing.xSmall)
@@ -177,14 +178,14 @@ struct TabCardView: View {
                 Spacer(minLength: 0)
 
                 if isActive {
-                    Image(systemName: "circle.fill")
+                    Image(lucide: Lucide.circle)
                         .font(.caption)
                         .foregroundStyle(ShellTheme.Palette.accent)
                 }
             }
 
             HStack(spacing: ShellTheme.Spacing.small) {
-                Label(statusLabel, systemImage: tab.isLoading ? "hourglass" : "circle.fill")
+                Label { Text(statusLabel) } icon: { Image(lucide: MahoIcon.imageForSFSymbol(tab.isLoading ? "hourglass" : "circle.fill")) }
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
 
@@ -192,15 +193,15 @@ struct TabCardView: View {
 
                 HStack(spacing: ShellTheme.Spacing.small) {
                     if tab.isPinned {
-                        metaIcon("pin.fill")
+                        metaIcon(Lucide.pin)
                     }
 
                     if tab.isMuted {
-                        metaIcon("speaker.slash.fill")
+                        metaIcon(Lucide.volumeOff)
                     }
 
                     if tab.isPlayingAudio {
-                        metaIcon("speaker.wave.2.fill")
+                        metaIcon(Lucide.volume2)
                     }
                 }
             }
@@ -222,7 +223,7 @@ struct TabCardView: View {
         )
         .overlay {
             VStack(spacing: ShellTheme.Spacing.small) {
-                Image(systemName: "globe")
+                Image(lucide: Lucide.globe)
                     .font(.title2)
                     .foregroundStyle(.secondary)
 
@@ -244,14 +245,14 @@ struct TabCardView: View {
                 .fill(ShellTheme.Palette.tabGridMetaFill)
                 .frame(width: ShellTheme.Size.tabGridFavicon, height: ShellTheme.Size.tabGridFavicon)
 
-            Image(systemName: tab.isFavorite ? "star.fill" : "globe")
+            Image(lucide: tab.isFavorite ? Lucide.star : Lucide.globe)
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(tab.isFavorite ? Color.orange : ShellTheme.Palette.accent)
         }
     }
 
-    private func metaIcon(_ systemName: String) -> some View {
-        Image(systemName: systemName)
+    private func metaIcon(_ icon: UIImage) -> some View {
+        Image(lucide: icon)
             .font(.caption2.weight(.semibold))
             .foregroundStyle(.secondary)
     }

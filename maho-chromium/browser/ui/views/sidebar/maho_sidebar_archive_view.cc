@@ -27,7 +27,7 @@
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/ui/theme/maho_color_id.h"
 #include "maho/browser/maho_space_profile_bridge.h"
-#include "maho/browser/ui/views/maho_mac_sf_symbol_helper.h"
+#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_library_tile_helpers.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
@@ -155,21 +155,10 @@ const gfx::Insets kArchiveInsets = gfx::Insets();
 const gfx::Insets kHeaderInsets = gfx::Insets::TLBR(16, 16, 12, 16);
 const gfx::Insets kListInsets = gfx::Insets::TLBR(0, 10, 10, 10);
 
-ui::ImageModel CreateArchivePaneIcon(std::string_view sf_symbol_name,
-                                     std::string_view accessibility_name,
-                                     const gfx::VectorIcon& fallback_icon,
+ui::ImageModel CreateArchivePaneIcon(const gfx::VectorIcon& icon,
                                      ui::ColorId color_id,
-                                     int size,
-                                     float alpha = 1.0f,
-                                     float vertical_offset = 0.0f,
-                                     MahoMacSFSymbolScale scale =
-                                         MahoMacSFSymbolScale::kMedium) {
-#if BUILDFLAG(IS_MAC)
-  return CreateMahoMacSFSymbol(sf_symbol_name, accessibility_name, size,
-                               color_id, alpha, vertical_offset, scale);
-#else
-  return ui::ImageModel::FromVectorIcon(fallback_icon, color_id, size);
-#endif
+                                     int size) {
+  return ui::ImageModel::FromVectorIcon(icon, color_id, size);
 }
 
 base::Time ParseArchivedAt(const std::string& date_str) {
@@ -351,7 +340,7 @@ class ArchiveRowView : public views::View,
         tile_icon_ = tile_container_->AddChildView(
             std::make_unique<views::ImageView>());
         tile_icon_->SetImage(CreateArchivePaneIcon(
-            "globe", "Archived tab globe icon", vector_icons::kGlobeIcon,
+            vector_icons::kGlobeIcon,
             kMahoColorPrimaryText, kRowFallbackGlyphSize));
         tile_icon_->SetPreferredSize(
             gfx::Size(kRowFallbackGlyphSize, kRowFallbackGlyphSize));
@@ -392,10 +381,8 @@ class ArchiveRowView : public views::View,
     restore_glyph_->SetPreferredSize(
         gfx::Size(kRowRestoreGlyphSize, kRowRestoreGlyphSize));
     restore_glyph_->SetImage(CreateArchivePaneIcon(
-        "arrow.uturn.backward", "Restore archived tab",
-        vector_icons::kLaunchIcon, kMahoColorSecondaryText,
-        kRowRestoreGlyphSize,
-        1.0f, 0.0f, MahoMacSFSymbolScale::kSmall));
+        maho_lucide_icons::kRotateCwIcon, kMahoColorSecondaryText,
+        kRowRestoreGlyphSize));
     restore_glyph_->SetPaintToLayer();
 
     SetPreferredSize(gfx::Size(0, 0));
@@ -672,10 +659,8 @@ class ArchiveEmptyStateView : public views::View {
         sidebar_layout::kArchiveEmptyStateIconSizeDp,
         sidebar_layout::kArchiveEmptyStateIconSizeDp));
     icon_view->SetImage(CreateArchivePaneIcon(
-        "archivebox", "Archive empty state icon",
-        GetMahoSidebarArchiveboxIcon(), kMahoColorSecondaryText,
-        sidebar_layout::kArchiveEmptyStateIconSizeDp, 0.92f, 0.0f,
-        MahoMacSFSymbolScale::kMedium));
+        maho_lucide_icons::kArchiveIcon, kMahoColorSecondaryText,
+        sidebar_layout::kArchiveEmptyStateIconSizeDp));
 
     title_label_ = content->AddChildView(
         std::make_unique<views::Label>(u"Nothing archived yet"));
@@ -797,8 +782,8 @@ void MahoSidebarArchiveView::BuildUi() {
   search_icon_->SetPreferredSize(gfx::Size(kSearchFieldIconSize,
                                            kSearchFieldIconSize));
   search_icon_->SetImage(CreateArchivePaneIcon(
-      "magnifyingglass", "Search archive", vector_icons::kSearchIcon,
-      kMahoColorSecondaryText, kSearchFieldIconSize));
+      maho_lucide_icons::kSearchIcon, kMahoColorSecondaryText,
+      kSearchFieldIconSize));
 
   search_field_ = search_shell_->AddChildView(std::move(search_field));
   search_field_->SetPlaceholderText(u"Search archived tabs...");
@@ -817,8 +802,7 @@ void MahoSidebarArchiveView::BuildUi() {
           u"Filter"));
   filter_button_->SetImageModel(
       views::Button::STATE_NORMAL,
-      CreateArchivePaneIcon("line.3.horizontal.decrease.circle", "Filter",
-                            vector_icons::kFilterIcon,
+      CreateArchivePaneIcon(maho_lucide_icons::kSlidersHorizontalIcon,
                             kMahoColorSecondaryText,
                             kFilterButtonIconSize));
   filter_button_->SetMinSize(gfx::Size(0, kFilterButtonHeight));
@@ -1277,8 +1261,7 @@ void MahoSidebarArchiveView::UpdateFilterButtonAppearance() {
     filter_button_->SetEnabledTextColors(kMahoColorPrimaryText);
     filter_button_->SetImageModel(
         views::Button::STATE_NORMAL,
-        CreateArchivePaneIcon("line.3.horizontal.decrease.circle", "Filter",
-                              vector_icons::kFilterIcon,
+        CreateArchivePaneIcon(maho_lucide_icons::kSlidersHorizontalIcon,
                               kMahoColorPrimaryText,
                               kFilterButtonIconSize));
   } else {
@@ -1289,8 +1272,7 @@ void MahoSidebarArchiveView::UpdateFilterButtonAppearance() {
     filter_button_->SetEnabledTextColors(kMahoColorSecondaryText);
     filter_button_->SetImageModel(
         views::Button::STATE_NORMAL,
-        CreateArchivePaneIcon("line.3.horizontal.decrease.circle", "Filter",
-                              vector_icons::kFilterIcon,
+        CreateArchivePaneIcon(maho_lucide_icons::kSlidersHorizontalIcon,
                               kMahoColorSecondaryText,
                               kFilterButtonIconSize));
   }

@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 
 struct ArcBottomBar: View {
     struct SpaceMenuItem: Identifiable {
@@ -121,7 +122,7 @@ struct ArcBottomBar: View {
     private var tabButton: some View {
         Button(action: onTabsTapped) {
             ZStack(alignment: .topTrailing) {
-                Image(systemName: "square.on.square")
+                Image(lucide: Lucide.copy)
                     .font(.body.weight(.semibold))
                     .frame(width: ShellTheme.Size.touchTarget, height: ShellTheme.Size.touchTarget)
                     .foregroundStyle(foregroundColor)
@@ -145,7 +146,7 @@ struct ArcBottomBar: View {
                 Button {
                     onSelectSpace(space.id)
                 } label: {
-                    Label(space.name, systemImage: space.isActive ? "checkmark.circle.fill" : "circle")
+                    Label { Text(space.name) } icon: { Image(lucide: MahoIcon.imageForSFSymbol(space.isActive ? "checkmark.circle.fill" : "circle")) }
                 }
             }
         })
@@ -168,7 +169,7 @@ struct ArcBottomBar: View {
     private var browsingCenterCapsule: some View {
         HStack(spacing: 2) {
             chromeNavButton(
-                systemName: "chevron.backward",
+                icon: Lucide.chevronLeft,
                 isEnabled: canGoBack,
                 action: onGoBack,
                 identifier: "arcBackButton",
@@ -186,7 +187,7 @@ struct ArcBottomBar: View {
             .accessibilityHint("Double tap to search or enter an address. Swipe left or right to move between tabs.")
 
             chromeNavButton(
-                systemName: "chevron.forward",
+                icon: Lucide.chevronRight,
                 isEnabled: canGoForward,
                 action: onGoForward,
                 identifier: "arcForwardButton",
@@ -216,7 +217,7 @@ struct ArcBottomBar: View {
 
     private var homeCenterCapsule: some View {
         HStack(spacing: ShellTheme.Spacing.xSmall) {
-            Image(systemName: isIncognito ? "eye.slash" : "magnifyingglass")
+            Image(lucide: isIncognito ? Lucide.eyeOff : Lucide.search)
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(mutedForegroundColor)
 
@@ -238,7 +239,7 @@ struct ArcBottomBar: View {
                         homeQuery = ""
                         isHomeSearchFocused = true
                     } label: {
-                        Image(systemName: "xmark.circle.fill")
+                        Image(lucide: Lucide.circleX)
                             .font(.footnote)
                             .foregroundStyle(mutedForegroundColor)
                             .frame(width: ShellTheme.Size.touchTarget - ShellTheme.Spacing.medium, height: ShellTheme.Size.touchTarget - ShellTheme.Spacing.medium)
@@ -250,7 +251,7 @@ struct ArcBottomBar: View {
                 }
 
                 Button(action: onHomeSubmit) {
-                    Image(systemName: "arrow.up.forward")
+                    Image(lucide: Lucide.arrowUpRight)
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(homeQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? mutedForegroundColor : foregroundColor)
                         .frame(width: ShellTheme.Size.touchTarget - ShellTheme.Spacing.medium, height: ShellTheme.Size.touchTarget - ShellTheme.Spacing.medium)
@@ -282,7 +283,7 @@ struct ArcBottomBar: View {
 
     private var searchButtonLabel: some View {
         HStack(spacing: ShellTheme.Spacing.xSmall) {
-            Image(systemName: isIncognito ? "eye.slash" : "magnifyingglass")
+            Image(lucide: isIncognito ? Lucide.eyeOff : Lucide.search)
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(mutedForegroundColor)
 
@@ -301,11 +302,11 @@ struct ArcBottomBar: View {
             Spacer(minLength: 0)
 
             if isReaderMode {
-                Image(systemName: "book")
+                Image(lucide: Lucide.bookOpen)
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(mutedForegroundColor)
             } else if isDesktopMode {
-                Image(systemName: "desktopcomputer")
+                Image(lucide: Lucide.monitor)
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(mutedForegroundColor)
             }
@@ -325,7 +326,7 @@ struct ArcBottomBar: View {
 
     private var menuButton: some View {
         Button(action: onMenuTapped) {
-            Image(systemName: "line.3.horizontal")
+            Image(lucide: Lucide.menu)
                 .font(.body.weight(.semibold))
                 .frame(width: ShellTheme.Size.touchTarget, height: ShellTheme.Size.touchTarget)
                 .foregroundStyle(foregroundColor)
@@ -341,7 +342,7 @@ struct ArcBottomBar: View {
     }
 
     private func chromeNavButton(
-        systemName: String,
+        icon: UIImage,
         isEnabled: Bool,
         action: @escaping () -> Void,
         identifier: String,
@@ -349,7 +350,7 @@ struct ArcBottomBar: View {
         hint: String
     ) -> some View {
         Button(action: action) {
-            Image(systemName: systemName)
+            Image(lucide: icon)
                 .font(.caption.weight(.bold))
                 .frame(width: ShellTheme.Size.touchTarget, height: ShellTheme.Size.touchTarget)
                 .foregroundStyle(isEnabled ? foregroundColor : mutedForegroundColor)

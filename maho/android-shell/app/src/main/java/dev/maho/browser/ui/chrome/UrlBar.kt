@@ -11,9 +11,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -35,6 +32,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 @Composable
 fun UrlBar(
@@ -66,7 +65,7 @@ fun UrlBar(
         ) {
             if (isSecure && currentUrl.startsWith("https://")) {
                 Icon(
-                    imageVector = Icons.Default.Lock,
+                    painter = painterResource(id = MahoIcon.InfoLock.drawableRes),
                     contentDescription = "Secure",
                     modifier = Modifier.size(16.dp),
                     tint = MaterialTheme.colorScheme.primary,
@@ -116,7 +115,7 @@ fun UrlBar(
 
             IconButton(onClick = onShare) {
                 Icon(
-                    imageVector = Icons.Default.Share,
+                    painter = painterResource(id = MahoIcon.Share.drawableRes),
                     contentDescription = "Share",
                 )
             }

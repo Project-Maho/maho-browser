@@ -48,8 +48,7 @@ final class SidebarAddressBarView: NSView, NSTextFieldDelegate {
         btn.isBordered = false
         btn.bezelStyle = .inline
         btn.title = ""
-        let config = NSImage.SymbolConfiguration(pointSize: 10, weight: .medium)
-        btn.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "Site controls")?.withSymbolConfiguration(config)
+        btn.image = MahoIcon.imageForSFSymbol("ellipsis.circle", pointSize: 10, accessibilityDescription: "Site controls")
         btn.contentTintColor = MahoAppColors.secondaryText.withAlphaComponent(0.60)
         btn.target = nil
         btn.action = nil
@@ -522,8 +521,7 @@ final class SidebarAddressBarView: NSView, NSTextFieldDelegate {
     }
 
     private func configuredSymbol(named symbolName: String, pointSize: CGFloat, accessibilityDescription: String?) -> NSImage? {
-        let configuration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .medium)
-        return NSImage(systemSymbolName: symbolName, accessibilityDescription: accessibilityDescription)?.withSymbolConfiguration(configuration)
+        return MahoIcon.imageForSFSymbol(symbolName, pointSize: pointSize, accessibilityDescription: accessibilityDescription)
     }
 }
 

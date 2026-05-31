@@ -5,10 +5,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.NavigateBefore
-import androidx.compose.material.icons.automirrored.filled.NavigateNext
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +26,8 @@ import dev.maho.browser.bridge.BridgeFind
 import dev.maho.browser.models.CoreUpdate
 import dev.maho.browser.models.TabId
 import kotlinx.coroutines.delay
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 @Composable
 fun FindInPageSheet(
@@ -110,7 +108,7 @@ fun FindInPageSheet(
                 },
                 enabled = matchCount > 0,
             ) {
-                Icon(Icons.AutoMirrored.Filled.NavigateBefore, contentDescription = "Previous")
+                Icon(painter = painterResource(id = MahoIcon.NavBack.drawableRes), contentDescription = "Previous")
             }
 
             IconButton(
@@ -123,7 +121,7 @@ fun FindInPageSheet(
                 },
                 enabled = matchCount > 0,
             ) {
-                Icon(Icons.AutoMirrored.Filled.NavigateNext, contentDescription = "Next")
+                Icon(painter = painterResource(id = MahoIcon.NavForward.drawableRes), contentDescription = "Next")
             }
 
             IconButton(
@@ -132,7 +130,7 @@ fun FindInPageSheet(
                     onDismiss()
                 },
             ) {
-                Icon(Icons.Filled.Close, contentDescription = "Close")
+                Icon(painter = painterResource(id = MahoIcon.Close.drawableRes), contentDescription = "Close")
             }
         }
     }

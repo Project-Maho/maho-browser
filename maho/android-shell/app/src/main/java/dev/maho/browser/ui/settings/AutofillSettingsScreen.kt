@@ -4,9 +4,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -30,6 +27,8 @@ import dev.maho.browser.bridge.sendEvent
 import dev.maho.browser.MahoBridge
 import dev.maho.browser.models.AutofillSettingsUpdate
 import dev.maho.browser.models.ShellEvent
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -52,7 +51,7 @@ fun AutofillSettingsScreen(
                 title = { Text("Autofill & Passwords") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(painter = painterResource(id = MahoIcon.NavBack.drawableRes), contentDescription = "Back")
                     }
                 },
             )
@@ -79,7 +78,7 @@ fun AutofillSettingsScreen(
                 value = passwordSearchQuery,
                 onValueChange = { passwordSearchQuery = it },
                 label = { Text("Search passwords") },
-                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                leadingIcon = { Icon(painter = painterResource(id = MahoIcon.Search.drawableRes), contentDescription = null) },
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
             Text(

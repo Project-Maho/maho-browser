@@ -45,6 +45,7 @@ maho-workspace/
 | Build Chromium | `chromium/src/out/Default/` | Canonical: `python3 maho-chromium/build/scripts/build_maho.py` from repo root. Optional: `autoninja -C out/Default chrome` for narrower rebuilds. |
 | Build maho-core lib | `maho-chromium/build/scripts/build_maho_core.py` | Produces prebuilt static lib |
 | Regression tests | `maho/appium-tests/` | Appium runners |
+| Icon system (canonical) | `docs/icon-system.md` + `maho/assets/icons/sf-to-lucide-mapping.json` | Lucide is the unified icon library across all surfaces. Per-platform: `lucide-react` (Mail/WebUI), vendored SVGs (`browser/resources/<feature>/icons/`), `aggregate_vector_icons` GN target at `maho-chromium/browser/ui/views/maho_lucide_icons/` (Native Views), `lucide-icons-swift` SwiftPM (macOS/iOS), AVDs at `maho/android-shell/app/src/main/res/drawable/ic_*.xml`. License: `LICENSES/lucide.txt` |
 
 ## CONVENTIONS
 - `bun run` for repo scripts, `bunx` for one-off CLIs

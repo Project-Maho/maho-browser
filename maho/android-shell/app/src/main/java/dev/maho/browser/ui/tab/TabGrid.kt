@@ -18,9 +18,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Tab
-import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -35,6 +32,8 @@ import androidx.compose.ui.unit.dp
 import dev.maho.browser.models.TabId
 import dev.maho.browser.models.TabViewModel
 import dev.maho.browser.ui.theme.BrowserShellTheme
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 @Composable
 fun TabGrid(
@@ -90,7 +89,7 @@ fun TabGrid(
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            imageVector = if (isIncognito) Icons.Default.VisibilityOff else Icons.Filled.Tab,
+                            painter = painterResource(id = if (isIncognito) MahoIcon.VisibilityOff.drawableRes else MahoIcon.Tab.drawableRes),
                             contentDescription = null,
                             tint = accentColor,
                         )
@@ -150,7 +149,7 @@ fun TabGrid(
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            imageVector = if (isIncognito) Icons.Default.VisibilityOff else Icons.Default.Tab,
+                            painter = painterResource(id = if (isIncognito) MahoIcon.VisibilityOff.drawableRes else MahoIcon.Tab.drawableRes),
                             contentDescription = null,
                             tint = accentColor,
                             modifier = Modifier.size(16.dp),

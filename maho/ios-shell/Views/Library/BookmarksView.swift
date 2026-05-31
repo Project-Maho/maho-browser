@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 
 struct BookmarksView: View {
     let onOpenURL: (String) -> Void
@@ -46,7 +47,7 @@ struct BookmarksView: View {
                             folderPath.removeLast()
                         } label: {
                             HStack(spacing: 4) {
-                                Image(systemName: "chevron.left")
+                                Image(lucide: Lucide.chevronLeft)
                                 Text("Back")
                             }
                         }
@@ -71,14 +72,14 @@ struct BookmarksView: View {
                         Button(role: .destructive) {
                             deleteBookmark(bookmark)
                         } label: {
-                            Label("Delete", systemImage: "trash")
+                            Label { Text("Delete") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("trash")) }
                         }
                     }
                     .swipeActions(edge: .leading) {
                         Button {
                             moveBookmarkToRoot(bookmark)
                         } label: {
-                            Label("Move", systemImage: "folder")
+                            Label { Text("Move") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("folder")) }
                         }
                         .tint(.blue)
                     }
@@ -89,7 +90,7 @@ struct BookmarksView: View {
 
     private var emptyState: some View {
         VStack(spacing: 12) {
-            Image(systemName: "bookmark")
+            Image(lucide: Lucide.bookmark)
                 .font(.system(size: 48))
                 .foregroundStyle(.secondary)
             Text(searchText.isEmpty ? "No Bookmarks" : "No Results")

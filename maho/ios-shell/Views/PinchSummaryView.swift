@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -52,7 +53,7 @@ struct PinchSummaryView: View {
                         Spacer(minLength: 0)
 
                         Button(action: onDismiss) {
-                            Image(systemName: "xmark.circle.fill")
+                            Image(lucide: Lucide.circleX)
                                 .font(.title2)
                                 .foregroundStyle(.tertiary)
                         }
@@ -94,7 +95,7 @@ struct PinchSummaryView: View {
                     .padding(.vertical, ShellTheme.Spacing.small)
 
                     HStack {
-                        Label("Page context", systemImage: "doc.text")
+                        Label { Text("Page context") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("doc.text")) }
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, ShellTheme.Spacing.medium)
@@ -160,7 +161,7 @@ struct PinchSummaryView: View {
                 .fill(ShellTheme.Palette.summaryHeroFill)
                 .frame(width: ShellTheme.Size.summaryStateIcon + 4, height: ShellTheme.Size.summaryStateIcon + 4)
 
-            Image(systemName: "doc.text.magnifyingglass")
+            Image(lucide: Lucide.fileSearch)
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(ShellTheme.Palette.summaryAccent)
         }

@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -229,19 +230,19 @@ struct SyncSettingsView: View {
         Group {
             switch syncStatus {
             case .idle:
-                Image(systemName: "minus.circle")
+                Image(lucide: Lucide.circleMinus)
                     .foregroundStyle(.secondary)
             case .syncing:
-                Image(systemName: "arrow.triangle.2.circlepath")
+                Image(lucide: Lucide.refreshCw)
                     .foregroundStyle(ShellTheme.Palette.accent)
             case .synced:
-                Image(systemName: "checkmark.circle.fill")
+                Image(lucide: Lucide.circleCheck)
                     .foregroundStyle(.green)
             case .error:
-                Image(systemName: "exclamationmark.triangle.fill")
+                Image(lucide: Lucide.triangleAlert)
                     .foregroundStyle(.red)
             case .offline:
-                Image(systemName: "wifi.slash")
+                Image(lucide: Lucide.wifiOff)
                     .foregroundStyle(.orange)
             }
         }
@@ -281,7 +282,7 @@ struct SyncSettingsView: View {
             Section {
                 ForEach(devices) { device in
                     HStack {
-                        Image(systemName: deviceIcon(device.deviceType))
+                        Image(lucide: deviceIcon(device.deviceType))
                             .foregroundStyle(.secondary)
                         VStack(alignment: .leading) {
                             Text(device.name)
@@ -296,7 +297,7 @@ struct SyncSettingsView: View {
                         Button {
                             bridge.sendTabToDevice(url: "", title: "", deviceId: device.id)
                         } label: {
-                            Image(systemName: "paperplane")
+                            Image(lucide: Lucide.send)
                         }
                         .buttonStyle(.borderless)
                     }
@@ -313,12 +314,12 @@ struct SyncSettingsView: View {
         }
     }
 
-    private func deviceIcon(_ type: String) -> String {
+    private func deviceIcon(_ type: String) -> UIImage {
         switch type.lowercased() {
-        case "desktop", "mac", "pc": return "desktopcomputer"
-        case "phone", "iphone", "android": return "iphone"
-        case "tablet", "ipad": return "ipad"
-        default: return "laptopcomputer"
+        case "desktop", "mac", "pc": return Lucide.monitor
+        case "phone", "iphone", "android": return Lucide.smartphone
+        case "tablet", "ipad": return Lucide.tablet
+        default: return Lucide.laptop
         }
     }
 

@@ -4,8 +4,6 @@ package dev.maho.browser.ui.space
 
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -25,6 +23,8 @@ import dev.maho.browser.bridge.BridgeSpaces
 import dev.maho.browser.models.SpaceColor
 import dev.maho.browser.models.SpaceId
 import dev.maho.browser.models.SpaceViewModel
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 @Composable
 fun SpaceSwitcherSheet(
@@ -62,7 +62,7 @@ fun SpaceSwitcherSheet(
                     )
                     spaces = BridgeSpaces.getSpaceViewModels()
                 }) {
-                    Icon(Icons.Filled.Add, contentDescription = "New Space")
+                    Icon(painter = painterResource(id = MahoIcon.Add.drawableRes), contentDescription = "New Space")
                 }
             },
         ) { padding ->

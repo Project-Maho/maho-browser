@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import LucideIcons
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -43,7 +44,7 @@ struct TabGridView: View {
                 .fill(ShellTheme.Materials.tabGridCard)
                 .frame(width: ShellTheme.Size.tabGridEmptyDeckFrontWidth, height: ShellTheme.Size.tabGridEmptyDeckFrontHeight)
                 .overlay {
-                    Image(systemName: "sparkles.rectangle.stack")
+                    Image(lucide: Lucide.sparkles)
                         .font(.system(size: 30, weight: .semibold))
                         .foregroundStyle(ShellTheme.Palette.accent)
                 }

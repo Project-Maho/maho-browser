@@ -8,12 +8,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -27,6 +21,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,11 +35,11 @@ fun PermissionSheet(
 ) {
     val sheetState = rememberModalBottomSheetState()
     val icon = when (permissionType) {
-        "camera" -> Icons.Filled.CameraAlt
-        "microphone" -> Icons.Filled.Mic
-        "location" -> Icons.Filled.LocationOn
-        "notifications" -> Icons.Filled.Notifications
-        else -> Icons.Filled.Shield
+        "camera" -> MahoIcon.Camera
+        "microphone" -> MahoIcon.Mic
+        "location" -> MahoIcon.MapPin
+        "notifications" -> MahoIcon.Notifications
+        else -> MahoIcon.Privacy
     }
     val description = when (permissionType) {
         "camera" -> "This site wants to use your camera. You can change this later in Privacy settings."
@@ -64,7 +60,7 @@ fun PermissionSheet(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Icon(
-                imageVector = icon,
+                painter = painterResource(id = icon.drawableRes),
                 contentDescription = permissionType,
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(48.dp),

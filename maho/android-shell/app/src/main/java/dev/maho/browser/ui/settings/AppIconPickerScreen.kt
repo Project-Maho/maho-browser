@@ -17,14 +17,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.DarkMode
-import androidx.compose.material.icons.filled.Flare
-import androidx.compose.material.icons.filled.LightMode
-import androidx.compose.material.icons.filled.Minimize
-import androidx.compose.material.icons.filled.Public
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -40,13 +32,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import dev.maho.browser.ui.icons.MahoIcon
+import androidx.compose.ui.res.painterResource
 
 data class AppIconOption(
     val name: String,
-    val icon: ImageVector,
+    val icon: MahoIcon,
     val aliasClassName: String,
 )
 
@@ -60,11 +53,11 @@ fun AppIconPickerScreen(
     val options = remember {
         val pkg = context.packageName
         listOf(
-            AppIconOption("Default", Icons.Default.Public, "\$pkg.MainActivity"),
-            AppIconOption("Dark", Icons.Default.DarkMode, "\$pkg.MainActivityDark"),
-            AppIconOption("Light", Icons.Default.LightMode, "\$pkg.MainActivityLight"),
-            AppIconOption("Minimal", Icons.Default.Minimize, "\$pkg.MainActivityMinimal"),
-            AppIconOption("Neon", Icons.Default.Flare, "\$pkg.MainActivityNeon"),
+            AppIconOption("Default", MahoIcon.Globe, "\$pkg.MainActivity"),
+            AppIconOption("Dark", MahoIcon.Moon, "\$pkg.MainActivityDark"),
+            AppIconOption("Light", MahoIcon.Sun, "\$pkg.MainActivityLight"),
+            AppIconOption("Minimal", MahoIcon.Minus, "\$pkg.MainActivityMinimal"),
+            AppIconOption("Neon", MahoIcon.SparklesAi, "\$pkg.MainActivityNeon"),
         )
     }
 
@@ -95,7 +88,7 @@ fun AppIconPickerScreen(
                 title = { Text("App Icon") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(painter = painterResource(id = MahoIcon.NavBack.drawableRes), contentDescription = "Back")
                     }
                 },
             )
@@ -123,7 +116,7 @@ fun AppIconPickerScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         Icon(
-                            imageVector = option.icon,
+                            painter = painterResource(id = option.icon.drawableRes),
                             contentDescription = option.name,
                             modifier = Modifier.size(48.dp),
                             tint = MaterialTheme.colorScheme.primary,
@@ -133,7 +126,7 @@ fun AppIconPickerScreen(
                         if (selected == option) {
                             Spacer(modifier = Modifier.height(4.dp))
                             Icon(
-                                imageVector = Icons.Default.Check,
+                                painter = painterResource(id = MahoIcon.Check.drawableRes),
                                 contentDescription = "Selected",
                                 tint = MaterialTheme.colorScheme.primary,
                             )

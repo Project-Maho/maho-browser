@@ -10,6 +10,7 @@
 #include "base/memory/weak_ptr.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/vector_icon_types.h"
 #include "ui/views/view.h"
 
 class Browser;
@@ -57,8 +58,7 @@ class MahoSidebarTopBarView : public views::View {
   void UpdateButtonImages();
   void UpdateButtonState(views::ImageButton* button,
                          bool enabled,
-                         std::string_view symbol_name,
-                         std::string_view accessibility_description,
+                         const gfx::VectorIcon& icon,
                          const std::u16string& tooltip);
   void OnBackPressed(const ui::Event& event);
   void OnForwardPressed(const ui::Event& event);

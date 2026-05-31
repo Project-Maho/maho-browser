@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 
 struct SpaceChipRow: View {
     let spaces: [SpaceViewModel]
@@ -14,7 +15,7 @@ struct SpaceChipRow: View {
                 }
 
                 Button(action: onShowAll) {
-                    Image(systemName: "ellipsis")
+                    Image(lucide: Lucide.ellipsis)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 12)

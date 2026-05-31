@@ -26,16 +26,9 @@ source_set("maho_ai") {
   sources = [
     "maho_ai_page_handler.cc",
     "maho_ai_page_handler.h",
-    "maho_ai_sf_symbol_source.h",
     "maho_ai_ui.cc",
     "maho_ai_ui.h",
   ]
-
-  if (is_mac) {
-    sources += [ "maho_ai_sf_symbol_source.mm" ]
-  } else {
-    sources += [ "maho_ai_sf_symbol_source.cc" ]
-  }
 
   public_deps = [
     ":maho_ai_prefs",
@@ -63,8 +56,4 @@ source_set("maho_ai") {
     "//ui/webui",
     "//url",
   ]
-
-  if (is_mac) {
-    deps += [ "//maho/browser:maho_mac_sf_symbol_helper" ]
-  }
 }

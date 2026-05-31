@@ -1,0 +1,22 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+// Lucide vector icons for Maho Browser.
+
+#ifndef MAHO_BROWSER_UI_VIEWS_MAHO_LUCIDE_ICONS_VECTOR_ICONS_H_
+#define MAHO_BROWSER_UI_VIEWS_MAHO_LUCIDE_ICONS_VECTOR_ICONS_H_
+
+namespace gfx {
+struct VectorIcon;
+}
+
+#define VECTOR_ICON_TEMPLATE_H(icon_name) \
+extern const gfx::VectorIcon icon_name;
+
+namespace maho_lucide_icons {
+
+TEMPLATE_PLACEHOLDER
+
+}  // namespace maho_lucide_icons
+
+#undef VECTOR_ICON_TEMPLATE_H
+
+#endif  // MAHO_BROWSER_UI_VIEWS_MAHO_LUCIDE_ICONS_VECTOR_ICONS_H_
