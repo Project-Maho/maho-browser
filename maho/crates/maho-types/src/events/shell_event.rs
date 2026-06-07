@@ -96,6 +96,8 @@ pub enum ShellEvent {
     ClearSplitView,
     CloseTab {
         tab_id: TabId,
+        #[serde(default)]
+        expected_space_id: Option<SpaceId>,
     },
     ActivateTab {
         tab_id: TabId,
@@ -129,6 +131,9 @@ pub enum ShellEvent {
         tab_id: TabId,
     },
     UnfreezeTab {
+        tab_id: TabId,
+    },
+    SuspendTab {
         tab_id: TabId,
     },
     MoveTab {
@@ -662,6 +667,9 @@ pub enum ShellEvent {
         #[serde(default)]
         page_context: Option<PageContext>,
     },
+    ChatSessionEnded {
+        session_id: String,
+    },
 }
 
 impl ShellEvent {
@@ -693,6 +701,7 @@ impl ShellEvent {
                 | Self::UnmuteTab { .. }
                 | Self::FreezeTab { .. }
                 | Self::UnfreezeTab { .. }
+                | Self::SuspendTab { .. }
                 | Self::MoveTab { .. }
                 | Self::MoveTabToSpace { .. }
                 | Self::SetTabParent { .. }

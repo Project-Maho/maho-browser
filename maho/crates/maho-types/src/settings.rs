@@ -65,7 +65,7 @@ pub enum PinnedCloseBehavior {
 }
 
 fn default_pinned_close_behavior() -> PinnedCloseBehavior {
-    PinnedCloseBehavior::Switch
+    PinnedCloseBehavior::UnloadSwitch
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

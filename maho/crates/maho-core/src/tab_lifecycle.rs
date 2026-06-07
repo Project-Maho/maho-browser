@@ -176,9 +176,11 @@ impl TabLifecycleManager {
         Some(tab)
     }
 
-    fn collect_child_ids(&self, parent_id: &TabId) -> Vec<TabId> {
+    pub fn collect_child_ids(&self, parent_id: &TabId) -> Vec<TabId> {
         let mut result = Vec::new();
         let mut queue = vec![parent_id.clone()];
+        let mut visited = std::collections::HashSet::new();
+        visited.insert(parent_id.clone());
 
         while let Some(current_parent) = queue.pop() {
             let children: Vec<TabId> = self
@@ -189,8 +191,10 @@ impl TabLifecycleManager {
                 .collect();
 
             for child in children {
-                queue.push(child.clone());
-                result.push(child);
+                if visited.insert(child.clone()) {
+                    queue.push(child.clone());
+                    result.push(child);
+                }
             }
         }
 
@@ -1073,6 +1077,7 @@ impl TabLifecycleManager {
                 t.space_id == *space_id
                     && t.id != *tab_id
                     && !matches!(t.state, TabLifecycleState::Archived { .. })
+                    && !t.is_pinned
             })
             .map(|t| t.id.clone())
             .collect();
@@ -1112,6 +1117,7 @@ impl TabLifecycleManager {
                 t.space_id == *space_id
                     && t.id != *tab_id
                     && !matches!(t.state, TabLifecycleState::Archived { .. })
+                    && !t.is_pinned
                     && self.creation_timestamps.get(&t.id).copied().unwrap_or(0) > reference_ts
             })
             .map(|t| t.id.clone())
@@ -1152,6 +1158,7 @@ impl TabLifecycleManager {
                 t.space_id == *space_id
                     && t.id != *tab_id
                     && !matches!(t.state, TabLifecycleState::Archived { .. })
+                    && !t.is_pinned
                     && self.creation_timestamps.get(&t.id).copied().unwrap_or(0) < reference_ts
             })
             .map(|t| t.id.clone())
@@ -1407,5 +1414,38 @@ mod tests {
             "reopened tab must stay Active after tick, got {:?}",
             tab_after.state
         );
+    }
+
+    #[test]
+    fn test_update_tab_url() {
+        let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
+        let space_id = SpaceId::new("space-1");
+        let tab = manager.create_tab(space_id, Some(Url::new("https://example.com")), None, None);
+        let tab_id = tab.id.clone();
+
+        assert_eq!(manager.get_tab(&tab_id).unwrap().url.0.as_str(), "https://example.com");
+
+        manager.update_tab_url(&tab_id, Url::new("https://maho.dev"));
+        assert_eq!(manager.get_tab(&tab_id).unwrap().url.0.as_str(), "https://maho.dev");
+    }
+
+    #[test]
+    fn collect_child_ids_terminates_on_cycle() {
+        let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
+        let space_id = SpaceId::new("space-1");
+        let tab1 = manager.create_tab(space_id.clone(), Some(Url::new("https://a.com")), None, None);
+        let tab1_id = tab1.id.clone();
+        let tab2 = manager.create_tab(space_id.clone(), Some(Url::new("https://b.com")), None, None);
+        let tab2_id = tab2.id.clone();
+
+        if let Some(t1) = manager.tabs.get_mut(&tab1_id) {
+            t1.parent_id = Some(tab2_id.clone());
+        }
+        if let Some(t2) = manager.tabs.get_mut(&tab2_id) {
+            t2.parent_id = Some(tab1_id.clone());
+        }
+
+        let children = manager.collect_child_ids(&tab1_id);
+        assert!(children.len() <= 2);
     }
 }

@@ -46,10 +46,44 @@ class Replacement:
 # absent from this map is treated as enabled on all platforms.
 FILE_PLATFORMS: dict[str, frozenset[str]] = {
     "chrome/app/app-Info.plist": frozenset({"mac"}),
+    "chrome/browser/app_controller_mac.mm": frozenset({"mac"}),
+    "chrome/browser/global_keyboard_shortcuts_mac.mm": frozenset({"mac"}),
+    "chrome/browser/global_keyboard_shortcuts_mac_unittest.mm": frozenset({"mac"}),
 }
 
 
 REPLACEMENTS: dict[str, list[Replacement]] = {
+    # ── generated_resources.grd ────────────────────────────────────────────────
+    "chrome/app/generated_resources.grd": [
+        Replacement(
+            old=(
+                '      <message name="IDS_LINK_COPIED_TOAST_BODY" desc="Text on a toast notification that is shown when a link is successfully copied.">\n'
+                '        Link copied\n'
+                '      </message>\n'
+            ),
+            new=(
+                '      <message name="IDS_LINK_COPIED_TOAST_BODY" desc="Text on a toast notification that is shown when a link is successfully copied.">\n'
+                '        Link copied\n'
+                '      </message>\n'
+                '      <message name="IDS_MAHO_TOAST_LINK_COPIED" desc="Maho: Text shown when a link is successfully copied to the clipboard.">\n'
+                '        Link copied\n'
+                '      </message>\n'
+                '      <message name="IDS_MAHO_TOAST_EXPORTED" desc="Maho: Text shown when an export operation succeeds.">\n'
+                '        Exported\n'
+                '      </message>\n'
+                '      <message name="IDS_MAHO_TOAST_CLOSED_TABS" desc="Maho: Text shown when one or more tabs are closed. [ICU Syntax]">\n'
+                '        {NUM_TABS, plural, =1 {Closed 1 tab} other {Closed # tabs}}\n'
+                '      </message>\n'
+                '      <message name="IDS_MAHO_EXPORT_THEME_FAILED_TITLE" desc="Maho: Title for theme export failure dialog.">\n'
+                '        Export Failed\n'
+                '      </message>\n'
+                '      <message name="IDS_MAHO_EXPORT_THEME_FAILED_MESSAGE" desc="Maho: Message for theme export failure dialog.">\n'
+                '        Could not export space theme to the selected file.\n'
+                '      </message>\n'
+            ),
+            description="Add Maho transient notification string resources",
+        ),
+    ],
     # ── parse_html_subset.ts ──────────────────────────────────────────────────
     "ui/webui/resources/js/parse_html_subset.ts": [
         Replacement(
@@ -162,7 +196,285 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "\n"
                 "  return extra_data;\n"
             ),
-            description="Write stable tab ID into session extra_data in GetExtraDataForTab()",
+             description="Write stable tab ID into session extra_data in GetExtraDataForTab()",
+        ),
+    ],
+    # ── session_startup_pref.cc ───────────────────────────────────────────────
+    "chrome/browser/prefs/session_startup_pref.cc": [
+        Replacement(
+            old="  return SessionStartupPref::DEFAULT;\n",
+            new="  return SessionStartupPref::LAST;\n",
+            description=(
+                "Make Maho default to restoring last session (continue where you "
+                "left off) instead of opening NTP. Bypasses kSetDefaultToContinueSession "
+                "feature flag and Chromium pref tracking by changing the registered "
+                "default value itself. User explicit override via Settings still wins."
+            ),
+        ),
+    ],
+    "chrome/browser/ui/browser_command_controller.cc": [
+        Replacement(
+            old='#include "base/strings/utf_string_conversions.h"\n',
+            new=(
+                '#include "base/strings/utf_string_conversions.h"\n'
+                '#include "base/task/single_thread_task_runner.h"\n'
+            ),
+            description=(
+                "Include SingleThreadTaskRunner for deferred Maho new-tab "
+                "command palette retry"
+            ),
+            guard='#include "base/task/single_thread_task_runner.h"',
+        ),
+        Replacement(
+            old=(
+                '#include "chrome/browser/ui/views/frame/browser_view.h"\n'
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"\n'
+            ),
+            new='#include "chrome/browser/ui/views/frame/browser_view.h"\n',
+            description=(
+                "Remove unused Maho sidebar include after routing new-tab "
+                "commands through BrowserView"
+            ),
+        ),
+        Replacement(
+            old='constexpr char kShortcutTracePrefix[] = "[maho-shortcut-trace]";\n\n',
+            new=(
+                'constexpr char kShortcutTracePrefix[] = "[maho-shortcut-trace]";\n'
+                "\n"
+                "void ShowMahoCommandOverlayForNewTabWhenReady(base::WeakPtr<Browser> browser,\n"
+                "                                              int remaining_attempts) {\n"
+                "  if (!browser) {\n"
+                "    return;\n"
+                "  }\n"
+                "\n"
+                "  if (!browser->is_type_normal()) {\n"
+                "    NewTab(browser.get());\n"
+                "    return;\n"
+                "  }\n"
+                "\n"
+                "  if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser.get())) {\n"
+                "    if (!browser_view->maho_sidebar_container()) {\n"
+                "      NewTab(browser.get());\n"
+                "      return;\n"
+                "    }\n"
+                "    browser_view->ShowMahoCommandOverlayForNewTab();\n"
+                "    return;\n"
+                "  }\n"
+                "\n"
+                "  if (remaining_attempts <= 0) {\n"
+                "    NewTab(browser.get());\n"
+                "    return;\n"
+                "  }\n"
+                "\n"
+                "  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(\n"
+                "      FROM_HERE,\n"
+                "      base::BindOnce(&ShowMahoCommandOverlayForNewTabWhenReady, browser,\n"
+                "                     remaining_attempts - 1),\n"
+                "      base::Milliseconds(25));\n"
+                "}\n"
+                "\n"
+                "bool ShouldDeferStartupCommandUntilTabSelected(int id) {\n"
+                "  switch (id) {\n"
+                "    case IDC_SELECT_NEXT_TAB:\n"
+                "    case IDC_SELECT_PREVIOUS_TAB:\n"
+                "    case IDC_SELECT_TAB_0:\n"
+                "    case IDC_SELECT_TAB_1:\n"
+                "    case IDC_SELECT_TAB_2:\n"
+                "    case IDC_SELECT_TAB_3:\n"
+                "    case IDC_SELECT_TAB_4:\n"
+                "    case IDC_SELECT_TAB_5:\n"
+                "    case IDC_SELECT_TAB_6:\n"
+                "    case IDC_SELECT_TAB_7:\n"
+                "    case IDC_SELECT_LAST_TAB:\n"
+                "    case IDC_FOCUS_LOCATION:\n"
+                "    case IDC_FOCUS_SEARCH:\n"
+                "    case IDC_SHOW_HISTORY:\n"
+                "    case IDC_SHOW_DOWNLOADS:\n"
+                "    case IDC_SHOW_BOOKMARK_MANAGER:\n"
+                "    case IDC_MAHO_COMMAND_BAR:\n"
+                "    case IDC_MAHO_AI_PANEL:\n"
+                "      return true;\n"
+                "    default:\n"
+                "      return false;\n"
+                "  }\n"
+                "}\n"
+                "\n"
+                "void ExecuteStartupCommandWhenTabSelected(base::WeakPtr<Browser> browser,\n"
+                "                                          int id,\n"
+                "                                          WindowOpenDisposition disposition,\n"
+                "                                          base::TimeTicks time_stamp,\n"
+                "                                          int remaining_attempts) {\n"
+                "  if (!browser) {\n"
+                "    return;\n"
+                "  }\n"
+                "\n"
+                "  if (browser->tab_strip_model()->active_index() != TabStripModel::kNoTab) {\n"
+                "    browser->command_controller()->ExecuteCommandWithDisposition(\n"
+                "        id, disposition, time_stamp);\n"
+                "    return;\n"
+                "  }\n"
+                "\n"
+                "  if (remaining_attempts <= 0) {\n"
+                "    return;\n"
+                "  }\n"
+                "\n"
+                "  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(\n"
+                "      FROM_HERE,\n"
+                "      base::BindOnce(&ExecuteStartupCommandWhenTabSelected, browser, id,\n"
+                "                     disposition, time_stamp, remaining_attempts - 1),\n"
+                "      base::Milliseconds(25));\n"
+                "}\n"
+                "\n"
+            ),
+            description=(
+                "Add deferred startup shortcut retry while BrowserView or the "
+                "startup tab is not ready yet"
+            ),
+            guard="ShowMahoCommandOverlayForNewTabWhenReady",
+        ),
+        Replacement(
+            old=(
+                "    case IDC_NEW_TAB: {\n"
+                "      if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_)) {\n"
+                "        if (auto* sidebar_container =\n"
+                "                views::AsViewClass<maho::MahoSidebarContainerView>(\n"
+                "                    browser_view->maho_sidebar_container())) {\n"
+                "          sidebar_container->ShowCommandOverlayForNewTab();\n"
+                "          break;\n"
+                "        }\n"
+                "      }\n"
+                "      NewTab(browser_);\n"
+                "      break;\n"
+                "    }\n"
+            ),
+            new=(
+                "    case IDC_NEW_TAB: {\n"
+                "      if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_)) {\n"
+                "        if (browser_->is_type_normal() &&\n"
+                "            browser_view->maho_sidebar_container()) {\n"
+                "          browser_view->ShowMahoCommandOverlayForNewTab();\n"
+                "        } else {\n"
+                "          NewTab(browser_);\n"
+                "        }\n"
+                "        break;\n"
+                "      }\n"
+                "      ShowMahoCommandOverlayForNewTabWhenReady(browser_->AsWeakPtr(), 200);\n"
+                "      break;\n"
+                "    }\n"
+            ),
+            description=(
+                "Route IDC_NEW_TAB through BrowserView so startup Cmd+T can "
+                "use the deferred Maho command palette path"
+            ),
+        ),
+        Replacement(
+            old=(
+                "  if (browser_->tab_strip_model()->active_index() == TabStripModel::kNoTab) {\n"
+                "    return true;\n"
+                "  }\n"
+            ),
+            new=(
+                "  if (browser_->tab_strip_model()->active_index() == TabStripModel::kNoTab) {\n"
+                "    if (id == IDC_NEW_TAB && browser_->is_type_normal()) {\n"
+                "      ShowMahoCommandOverlayForNewTabWhenReady(browser_->AsWeakPtr(), 200);\n"
+                "    } else if (ShouldDeferStartupCommandUntilTabSelected(id)) {\n"
+                "      ExecuteStartupCommandWhenTabSelected(browser_->AsWeakPtr(), id,\n"
+                "                                           disposition, time_stamp, 200);\n"
+                "    }\n"
+                "    return true;\n"
+                "  }\n"
+            ),
+            description=(
+                "Schedule startup-safe shortcuts even when they arrive before "
+                "any tab is selected"
+            ),
+        ),
+    ],
+    "chrome/browser/app_controller_mac.mm": [
+        Replacement(
+            old=(
+                "    case IDC_NEW_TAB:\n"
+                "      // Create a new tab in an existing browser window (which we activate) if\n"
+                "      // possible.\n"
+                "      if (Browser* browser = ActivateBrowser(profile)) {\n"
+                "        chrome::ExecuteCommand(browser, IDC_NEW_TAB);\n"
+                "        break;\n"
+                "      }\n"
+                "      [[fallthrough]];  // To create new window.\n"
+                "    case IDC_NEW_WINDOW:\n"
+                "      CreateBrowser(profile->GetOriginalProfile());\n"
+                "      break;\n"
+            ),
+            new=(
+                "    case IDC_NEW_TAB:\n"
+                "      if (Browser* browser = ActivateBrowser(profile)) {\n"
+                "        chrome::ExecuteCommand(browser, IDC_NEW_TAB);\n"
+                "        break;\n"
+                "      }\n"
+                "      if (BrowserWindowInterface* browser_window =\n"
+                "              CreateBrowser(profile->GetOriginalProfile())) {\n"
+                "        if (Browser* browser =\n"
+                "                browser_window->GetBrowserForMigrationOnly()) {\n"
+                "          chrome::ExecuteCommand(browser, IDC_NEW_TAB);\n"
+                "        }\n"
+                "      }\n"
+                "      break;\n"
+                "    case IDC_NEW_WINDOW:\n"
+                "      CreateBrowser(profile->GetOriginalProfile());\n"
+                "      break;\n"
+            ),
+            description=(
+                "After no-key-window Cmd+T creates the first browser, dispatch "
+                "IDC_NEW_TAB into that browser so Maho opens the command palette"
+            ),
+        ),
+    ],
+    "chrome/browser/ui/browser_command_controller_unittest.cc": [
+        Replacement(
+            old=(
+                "TEST_F(BrowserCommandControllerTest,\n"
+                "       SavePageDisabledByAllowFileSelectionDialogsPolicy) {\n"
+                "  chrome::BrowserCommandController command_controller(browser());\n"
+                "  const CommandUpdater* command_updater = &command_controller;\n"
+                "\n"
+                "  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_SAVE_PAGE));\n"
+                "  g_browser_process->local_state()->SetBoolean(\n"
+                "      prefs::kAllowFileSelectionDialogs, false);\n"
+                "  EXPECT_FALSE(command_updater->IsCommandEnabled(IDC_SAVE_PAGE));\n"
+                "}\n"
+            ),
+            new=(
+                "TEST_F(BrowserCommandControllerTest,\n"
+                "       SavePageDisabledByAllowFileSelectionDialogsPolicy) {\n"
+                "  chrome::BrowserCommandController command_controller(browser());\n"
+                "  const CommandUpdater* command_updater = &command_controller;\n"
+                "\n"
+                "  EXPECT_TRUE(command_updater->IsCommandEnabled(IDC_SAVE_PAGE));\n"
+                "  g_browser_process->local_state()->SetBoolean(\n"
+                "      prefs::kAllowFileSelectionDialogs, false);\n"
+                "  EXPECT_FALSE(command_updater->IsCommandEnabled(IDC_SAVE_PAGE));\n"
+                "}\n"
+                "\n"
+                "TEST_F(BrowserCommandControllerTest, SelectTabCommandWaitsForStartupTab) {\n"
+                "  chrome::BrowserCommandController command_controller(browser());\n"
+                "  browser()->tab_strip_model()->CloseAllTabs();\n"
+                "  ASSERT_EQ(TabStripModel::kNoTab, browser()->tab_strip_model()->active_index());\n"
+                "\n"
+                "  EXPECT_TRUE(command_controller.ExecuteCommand(IDC_SELECT_TAB_0));\n"
+                "  AddTab(browser(), GURL(\"https://example.com/first\"));\n"
+                "  AddTab(browser(), GURL(\"https://example.com/second\"));\n"
+                "  browser()->tab_strip_model()->ActivateTabAt(1);\n"
+                "  ASSERT_EQ(1, browser()->tab_strip_model()->active_index());\n"
+                "\n"
+                "  task_environment()->RunUntilIdle();\n"
+                "  EXPECT_EQ(0, browser()->tab_strip_model()->active_index());\n"
+                "}\n"
+            ),
+            description=(
+                "Add regression coverage for startup tab-selection shortcut "
+                "deferral"
+            ),
+            guard="SelectTabCommandWaitsForStartupTab",
         ),
     ],
     # ── browser_tabrestore.cc ─────────────────────────────────────────────────
@@ -473,6 +785,47 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard='      "//maho/browser/ui/tab_preview/maho_tab_preview_controller.cc",\n',
         ),
     ],
+    "chrome/browser/ui/views/frame/browser_view.h": [
+        Replacement(
+            old=(
+                "  // Copy the accelerator table from the app resources into something we can\n"
+                "  // use.\n"
+                "  void LoadAccelerators();\n"
+            ),
+            new=(
+                "  // Copy the accelerator table from the app resources into something we can\n"
+                "  // use.\n"
+                "  void LoadAccelerators();\n"
+                "\n"
+                "  void MaybeShowPendingMahoCommandOverlayForNewTab();\n"
+            ),
+            description=(
+                "Declare deferred Maho new-tab command palette opener for "
+                "startup Cmd+T before BrowserView widget initialization"
+            ),
+            guard="MaybeShowPendingMahoCommandOverlayForNewTab",
+        ),
+        Replacement(
+            old=(
+                "  std::unique_ptr<maho::MahoCommandOverlayController>\n"
+                "      maho_command_overlay_controller_;\n"
+                "  std::unique_ptr<maho::MahoSpacesOverlayController>\n"
+                "      maho_spaces_overlay_controller_;\n"
+            ),
+            new=(
+                "  std::unique_ptr<maho::MahoCommandOverlayController>\n"
+                "      maho_command_overlay_controller_;\n"
+                "  std::unique_ptr<maho::MahoSpacesOverlayController>\n"
+                "      maho_spaces_overlay_controller_;\n"
+                "  bool pending_maho_command_overlay_new_tab_ = false;\n"
+            ),
+            description=(
+                "Track one pending Maho new-tab command palette request while "
+                "BrowserView is still attaching to its widget"
+            ),
+            guard="pending_maho_command_overlay_new_tab_",
+        ),
+    ],
     # ── browser_view.cc ───────────────────────────────────────────────────────
     "chrome/browser/ui/views/frame/browser_view.cc": [
         Replacement(
@@ -685,6 +1038,87 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Remove [maho-cmdl-trace] LOG(WARNING) calls from ShowMahoCommandOverlayForCurrentTab",
             idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "void BrowserView::ShowMahoCommandOverlayForNewTab() {\n"
+                "  auto* controller = GetOrCreateMahoCommandOverlayController();\n"
+                "  if (!controller) {\n"
+                "    return;\n"
+                "  }\n"
+                "\n"
+                "  controller->Show(this, maho::CommandOverlayMode::kNewTab);\n"
+                "}\n"
+            ),
+            new=(
+                "void BrowserView::ShowMahoCommandOverlayForNewTab() {\n"
+                "  if (!GetIsNormalType()) {\n"
+                "    chrome::NewTab(browser_);\n"
+                "    return;\n"
+                "  }\n"
+                "\n"
+                "  if (!initialized_ || !GetWidget()) {\n"
+                "    pending_maho_command_overlay_new_tab_ = true;\n"
+                "    if (GetWidget()) {\n"
+                "      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(\n"
+                "          FROM_HERE,\n"
+                "          base::BindOnce(\n"
+                "              &BrowserView::MaybeShowPendingMahoCommandOverlayForNewTab,\n"
+                "              weak_ptr_factory_.GetWeakPtr()));\n"
+                "    }\n"
+                "    return;\n"
+                "  }\n"
+                "\n"
+                "  auto* controller = GetOrCreateMahoCommandOverlayController();\n"
+                "  if (!controller) {\n"
+                "    return;\n"
+                "  }\n"
+                "\n"
+                "  controller->Show(this, maho::CommandOverlayMode::kNewTab);\n"
+                "}\n"
+                "\n"
+                "void BrowserView::MaybeShowPendingMahoCommandOverlayForNewTab() {\n"
+                "  if (!pending_maho_command_overlay_new_tab_ || !initialized_ ||\n"
+                "      !GetWidget()) {\n"
+                "    return;\n"
+                "  }\n"
+                "  pending_maho_command_overlay_new_tab_ = false;\n"
+                "  ShowMahoCommandOverlayForNewTab();\n"
+                "}\n"
+            ),
+            description=(
+                "Defer Cmd+T command palette opening until BrowserView has a "
+                "widget, fixing immediate-startup shortcut drops"
+            ),
+            guard="MaybeShowPendingMahoCommandOverlayForNewTab",
+        ),
+        Replacement(
+            old=(
+                "  dialog_anchor_ = std::make_unique<user_education::ViewSubregionAnchor>(\n"
+                "      kBrowserDialogAnchorElementId, *this);\n"
+                "\n"
+                "  initialized_ = true;\n"
+                "}\n"
+            ),
+            new=(
+                "  dialog_anchor_ = std::make_unique<user_education::ViewSubregionAnchor>(\n"
+                "      kBrowserDialogAnchorElementId, *this);\n"
+                "\n"
+                "  initialized_ = true;\n"
+                "  if (pending_maho_command_overlay_new_tab_) {\n"
+                "    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(\n"
+                "        FROM_HERE,\n"
+                "        base::BindOnce(\n"
+                "            &BrowserView::MaybeShowPendingMahoCommandOverlayForNewTab,\n"
+                "            weak_ptr_factory_.GetWeakPtr()));\n"
+                "  }\n"
+                "}\n"
+            ),
+            description=(
+                "Flush pending Maho new-tab command palette request after "
+                "BrowserView finishes widget initialization"
+            ),
+            guard="pending_maho_command_overlay_new_tab_)",
         ),
         # ── key-hook cleanup: remove stale AddPreTargetHandler/RemovePreTargetHandler
         # and own the OnKeyEvent Maho shortcut interception ────────────────────────
@@ -1113,6 +1547,121 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard=(
                 "// Maho: kTranslatePageActionElementId is owned by the Maho\n"
             ),
+        ),
+    ],
+    # ── webstore_install_helper.cc ────────────────────────────────────────────
+    "extensions/browser/webstore_install_helper.cc": [
+        Replacement(
+            old='#include "base/values.h"\n',
+            new=(
+                '#include "base/logging.h"\n'
+                '#include "base/values.h"\n'
+            ),
+            description=(
+                "Inject base/logging.h before base/values.h in "
+                "webstore_install_helper.cc so LOG(ERROR) is available for the "
+                "[maho-diag] icon-fetch diagnostic"
+            ),
+            guard='#include "base/logging.h"',
+        ),
+        Replacement(
+            old='  error_ = kImageDecodeError;\n',
+            new=(
+                '  LOG(ERROR) << "[maho-diag] WebstoreInstallHelper::OnFetchComplete"\n'
+                '             << " icon_url=" << icon_url_.spec()\n'
+                '             << " http_code=" << metadata.http_response_code\n'
+                '             << " image_empty=" << fetched_image.IsEmpty();\n'
+                '  error_ = kImageDecodeError;\n'
+            ),
+            description=(
+                "Inject [maho-diag] LOG(ERROR) in OnFetchComplete() image-decode "
+                "error path to surface icon_url, HTTP response code, and image "
+                "emptiness for diagnostic purposes"
+            ),
+            guard='"[maho-diag] WebstoreInstallHelper::OnFetchComplete"',
+        ),
+    ],
+    # ── chrome_web_ui_configs.cc ──────────────────────────────────────────────
+    "chrome/browser/ui/webui/chrome_web_ui_configs.cc": [
+        Replacement(
+            old='#include "maho/browser/ui/webui/maho_test/maho_test_ui.h"\n',
+            new=(
+                '#include "build/buildflag.h"\n'
+                '#include "maho/build/config/maho_test_buildflags.h"\n'
+                '#if BUILDFLAG(ENABLE_MAHO_TEST_WEBUI)\n'
+                '#include "maho/browser/ui/webui/maho_test/maho_test_ui.h"\n'
+                '#endif\n'
+            ),
+            description="Conditionally include maho_test_ui.h using buildflag",
+            guard='#include "maho/build/config/maho_test_buildflags.h"',
+        ),
+        Replacement(
+            old='  map.AddWebUIConfig(std::make_unique<MahoTestUIConfig>());\n',
+            new=(
+                '#if BUILDFLAG(ENABLE_MAHO_TEST_WEBUI)\n'
+                '  map.AddWebUIConfig(std::make_unique<MahoTestUIConfig>());\n'
+                '#endif\n'
+            ),
+            description="Conditionally register MahoTestUIConfig using buildflag",
+            guard='#if BUILDFLAG(ENABLE_MAHO_TEST_WEBUI)\n  map.AddWebUIConfig',
+        ),
+    ],
+    "chrome/browser/global_keyboard_shortcuts_mac.mm": [
+        Replacement(
+            old=(
+                '      {true,  false, false, false, kVK_ANSI_E,            IDC_MAHO_AI_PANEL},\n'
+            ),
+            new=(
+                '      {true,  false, false, false, kVK_ANSI_E,            IDC_MAHO_AI_PANEL},\n'
+                '      {true,  true,  false, false, kVK_ANSI_Y,            IDC_SHOW_HISTORY},\n'
+            ),
+            description="Add CMD+SHIFT+Y mapping for IDC_SHOW_HISTORY in hidden shortcuts",
+        ),
+    ],
+    "chrome/browser/global_keyboard_shortcuts_mac_unittest.mm": [
+        Replacement(
+            old=(
+                '#include "chrome/browser/global_keyboard_shortcuts_mac.h"\n'
+            ),
+            new=(
+                '#include "chrome/browser/global_keyboard_shortcuts_mac.h"\n'
+                '#include "chrome/browser/ui/cocoa/accelerators_cocoa.h"\n'
+                '#include "ui/base/accelerators/accelerator.h"\n'
+            ),
+            description="Include Accelerator and AcceleratorsCocoa headers in keyboard shortcut tests",
+        ),
+        Replacement(
+            old=(
+                '  EXPECT_EQ(\n'
+                '      IDC_SELECT_TAB_0,\n'
+                '      CommandForKeys(kVK_ANSI_1, CommandKeyState::kDown, ShiftKeyState::kUp,\n'
+                '                     OptionKeyState::kUp, ControlKeyState::kUp));\n'
+                '}\n'
+            ),
+            new=(
+                '  EXPECT_EQ(\n'
+                '      IDC_SELECT_TAB_0,\n'
+                '      CommandForKeys(kVK_ANSI_1, CommandKeyState::kDown, ShiftKeyState::kUp,\n'
+                '                     OptionKeyState::kUp, ControlKeyState::kUp));\n'
+                '}\n'
+                '\n'
+                'TEST(GlobalKeyboardShortcuts, HistoryShortcuts) {\n'
+                '  // Test Command+Shift+Y resolves to IDC_SHOW_HISTORY (registered as a non-menu shortcut)\n'
+                '  EXPECT_EQ(\n'
+                '      IDC_SHOW_HISTORY,\n'
+                '      CommandForKeys(kVK_ANSI_Y, CommandKeyState::kDown, ShiftKeyState::kDown,\n'
+                '                     OptionKeyState::kUp, ControlKeyState::kUp));\n'
+                '\n'
+                '  // Test Command+Y is mapped to IDC_SHOW_HISTORY in AcceleratorsCocoa\n'
+                '  const ui::Accelerator* menu_accelerator =\n'
+                '      AcceleratorsCocoa::GetInstance()->GetAcceleratorForCommand(\n'
+                '          IDC_SHOW_HISTORY);\n'
+                '  ASSERT_TRUE(menu_accelerator);\n'
+                '  EXPECT_EQ(menu_accelerator->key_code(), ui::VKEY_Y);\n'
+                '  EXPECT_EQ(menu_accelerator->modifiers(), ui::EF_COMMAND_DOWN);\n'
+                '}\n'
+            ),
+            description="Assert CMD+SHIFT+Y and CMD+Y both resolve to IDC_SHOW_HISTORY",
         ),
     ],
 }

@@ -3,6 +3,7 @@
 
 #include <memory>
 
+#include "base/callback_list.h"
 #include "base/files/file_path.h"
 #include "chrome/browser/chrome_browser_main_extra_parts.h"
 #include "base/memory/raw_ptr_exclusion.h"
@@ -29,6 +30,7 @@ class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts {
   RAW_PTR_EXCLUSION MahoCore* core_ = nullptr;
 
   std::unique_ptr<maho::MahoExtensionStateBridge> extension_state_bridge_;
+  base::CallbackListSubscription session_restored_subscription_;
 };
 
 #endif  // MAHO_BROWSER_MAHO_BROWSER_MAIN_EXTRA_PARTS_H_

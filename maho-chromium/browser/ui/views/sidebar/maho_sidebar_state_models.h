@@ -73,6 +73,21 @@ inline bool IsInternalBrowserPage(const GURL& url) {
   return false;
 }
 
+// Returns true for browser-internal "system surface" URLs that historically
+// did not appear in the sidebar tab list (NTP, downloads, history, about:*).
+// Used by the tab-strip fallback path; the core-driven path no longer
+// filters here because tab URLs are now plumbed through tab_url_updated.
+inline bool IsSystemSurfaceUrl(const GURL& url) {
+  if (!url.is_valid() || url.is_empty()) return true;
+  if (url.SchemeIs("about")) return true;
+  if (url.SchemeIs("chrome")) {
+    return url.host() == "newtab" ||
+           url.host() == "downloads" ||
+           url.host() == "history";
+  }
+  return false;
+}
+
 inline bool IsGhostTab(const std::string& url, const std::u16string& title) {
   return url.empty() && title.empty();
 }
@@ -153,6 +168,7 @@ struct MahoSidebarFavoriteItemModel {
   // Stable tab ID from maho-core, empty if no matching tab.
   std::string tab_id;
   bool is_favorite = true;
+  bool is_active = false;
 };
 
 struct MahoSidebarFavoritesModel {
@@ -266,6 +282,12 @@ struct MahoSidebarTabListModel {
 
   // Active space ID (needed for ShellEvent dispatch).
   std::string active_space_id;
+
+  // Active space's icon (raw emoji string, e.g. "💼"). Empty if no icon set.
+  std::string active_space_icon;
+
+  // Active space's display name. Empty if no active space resolved.
+  std::u16string active_space_name;
 };
 
 // --- Drag/Drop payload ---

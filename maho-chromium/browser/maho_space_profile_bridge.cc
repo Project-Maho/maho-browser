@@ -101,8 +101,9 @@ bool MahoSpaceProfileBridge::SwitchToSpace(Browser* browser,
   // value.
   if (browser) {
     browser_active_space_[browser] = space_id;
+  } else {
+    active_space_id_ = space_id;
   }
-  active_space_id_ = space_id;
 
   if (profile_changed) {
     profiles::SwitchToProfile(it->second, /*always_create=*/false);

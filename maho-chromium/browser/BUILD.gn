@@ -83,28 +83,6 @@ source_set("maho_prompt_utils") {
   ]
 }
 
-source_set("maho_chat_orchestration") {
-  sources = [
-    "ai/maho_chat_orchestration_service.cc",
-    "ai/maho_chat_orchestration_service.h",
-  ]
-  public_deps = [
-    ":maho_ai_client",
-    ":maho_browser_ai_tools",
-    ":maho_prompt_utils",
-    "//base",
-  ]
-  deps = [
-    ":maho_core_holder",
-    "//chrome/browser/profiles:profile",
-    "//chrome/browser/ui/tabs:tab_strip",
-    "//content/public/browser",
-    "//maho/browser/ui/webui/maho_ai:mojo_bindings",
-    "//maho/third_party/maho:maho_bridge",
-    "//services/network/public/cpp",
-    "//url",
-  ]
-}
 
 source_set("maho_browser_ai_tools") {
   sources = [
@@ -333,14 +311,26 @@ source_set("maho_theme_support") {
     "ui/tab_preview/maho_tab_preview_controller.cc",
     "ui/tab_preview/maho_tab_preview_controller.h",
   ]
+  if (is_mac) {
+    sources += [
+      "ui/notifications/maho_notification_share_mac.h",
+      "ui/notifications/maho_notification_share_mac.mm",
+    ]
+    frameworks = [ "AppKit.framework" ]
+  }
   deps = [
     ":maho_core_holder",
     "//base",
     "//chrome/browser/ui/color:color_headers",
     "//content/public/browser",
     "//maho/browser/net",
+    "//maho/browser/ui/views/maho_lucide_icons:maho_lucide_icon_library",
     "//maho/third_party/maho:maho_bridge",
+    "//net",
     "//ui/color",
+    "//ui/gfx",
+    "//ui/views",
+    "//url",
   ]
 }
 
@@ -420,6 +410,7 @@ source_set("maho_browser_main_extra_parts") {
     "//base",
     "//chrome/browser:main_extra_parts",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/sessions:sessions",
     "//maho/third_party/maho:maho_bridge",
     "//ui/color",
   ]
@@ -485,6 +476,7 @@ source_set("maho_tab_registry") {
     ":maho_space_profile_bridge",
     ":maho_tab_id_helper",
     "//base",
+    "//chrome/browser/lifetime:lifetime",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/tab_list:tab_list",
     "//chrome/browser/ui/browser_window:browser_window",

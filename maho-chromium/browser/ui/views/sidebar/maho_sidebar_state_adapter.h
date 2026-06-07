@@ -3,6 +3,7 @@
 #ifndef MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_STATE_ADAPTER_H_
 #define MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_STATE_ADAPTER_H_
 
+#include <memory>
 #include <string>
 
 #include "base/values.h"
@@ -69,11 +70,11 @@ class MahoSidebarStateAdapter {
   MahoSidebarViewStateModel BuildViewStateModel(Browser* browser) const;
 
  private:
+  struct CycleSpaceCache;
+  mutable std::unique_ptr<CycleSpaceCache> cycle_space_cache_;
   MahoSidebarFavoritesModel favorites_model_;
   std::u16string GetActiveHostText(Browser* browser) const;
 };
-
-bool IsSidebarIneligibleUrl(const GURL& url);
 
 }  // namespace maho
 

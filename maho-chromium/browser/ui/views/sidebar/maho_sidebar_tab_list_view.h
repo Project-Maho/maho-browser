@@ -13,6 +13,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "components/tabs/public/tab_interface.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
@@ -40,6 +41,7 @@ class ImageButton;
 class ImageView;
 class LabelButton;
 class MenuRunner;
+class ScrollView;
 class Textfield;
 class View;
 class Widget;
@@ -54,6 +56,7 @@ namespace maho {
 class SidebarTabRowView;
 class SidebarFolderRowView;
 class MahoTabPreviewController;
+class MahoSidebarFolderHoverController;
 
 const ui::ClipboardFormatType& GetMahoDragFormatType();
 
@@ -64,6 +67,11 @@ void WriteMahoDragData(const SidebarDragPayload& payload,
                        ui::OSExchangeData* data);
 bool ReadMahoDragData(const ui::OSExchangeData& data,
                       SidebarDragPayload& out);
+
+std::unique_ptr<views::View> CreateSidebarSpaceHeaderRow();
+void UpdateSidebarSpaceHeaderRow(views::View* row,
+                                 const std::string& icon,
+                                 const std::u16string& name);
 
 class MahoSidebarTabListView : public views::View,
                                public views::ContextMenuController {
@@ -92,6 +100,11 @@ class MahoSidebarTabListView : public views::View,
   int OnDragUpdated(const ui::DropTargetEvent& event) override;
   DropCallback GetDropCallback(const ui::DropTargetEvent& event) override;
   void OnDragExited() override;
+
+  void SetAutoScrollScrollView(views::ScrollView* scroll_view);
+
+  void OnAutoScrollDragOver(const gfx::Point& screen_point);
+  void OnAutoScrollDragEnded();
 
   views::View* FindSectionDropTargetForTesting(MahoSidebarTabSection section);
   SidebarTabRowView* FindTabRowByIdForTesting(const std::string& tab_id);
@@ -146,6 +159,7 @@ class MahoSidebarTabListView : public views::View,
   std::u16string GetNodeTooltipText(const SidebarTreeNode& node) const;
   void ActivateTab(int tab_index);
   void ActivateTabById(const std::string& tab_id);
+  void WakeSuspendedTab(const std::string& tab_id);
   void CloseTab(int tab_index);
   void CloseTabById(const std::string& tab_id);
   int ResolveTabStripIndexForTabId(const std::string& tab_id) const;
@@ -177,6 +191,11 @@ class MahoSidebarTabListView : public views::View,
   std::unique_ptr<ui::SimpleMenuModel> active_menu_model_;
   std::unique_ptr<views::MenuRunner> active_menu_runner_;
   std::unique_ptr<MahoTabPreviewController> tab_preview_controller_;
+  std::unique_ptr<MahoSidebarFolderHoverController> folder_hover_controller_;
+
+  class SidebarAutoScroller;
+  std::unique_ptr<SidebarAutoScroller> auto_scroller_;
+
   base::WeakPtrFactory<MahoSidebarTabListView> weak_factory_{this};
 };
 
@@ -278,6 +297,9 @@ class SidebarTabRowView : public views::View,
   views::Textfield* title_field_for_testing() { return title_field_; }
   views::LabelButton* title_button_for_testing() { return title_button_; }
 
+  void SetSuspended(bool suspended);
+  bool is_suspended() const { return is_suspended_; }
+
  private:
   void ActivateTabFromEvent(const ui::Event& event);
   void ActivateFromRowClick(const ui::MouseEvent& event);
@@ -290,7 +312,6 @@ class SidebarTabRowView : public views::View,
 
   const bool active_;
   const bool pinned_;
-  const bool loading_;
   const bool audible_;
   const bool muted_;
   const std::string tab_id_;
@@ -311,6 +332,7 @@ class SidebarTabRowView : public views::View,
   base::RepeatingCallback<int(const std::string&)> resolve_tab_index_;
   base::RepeatingCallback<void(views::View*, int)> preview_show_callback_;
   base::RepeatingClosure preview_hide_callback_;
+  views::Button::PressedCallback activate_callback_;
   base::RepeatingCallback<void(const std::string&)>
       favorites_drop_accepted_callback_;
   base::RepeatingClosure reveal_empty_pinned_drop_lane_callback_;
@@ -318,6 +340,7 @@ class SidebarTabRowView : public views::View,
   SidebarTabDropZone active_drop_zone_ = SidebarTabDropZone::kNone;
   bool activate_pending_ = false;
   bool activation_handled_for_current_press_ = false;
+  bool is_suspended_ = false;
 };
 
 class SidebarFolderRowView : public views::View,
@@ -382,6 +405,17 @@ class SidebarFolderRowView : public views::View,
     reveal_empty_pinned_drop_lane_callback_ = std::move(callback);
   }
 
+  void SetHoverPopupCallbacks(base::RepeatingClosure show, base::RepeatingClosure hide) {
+    show_popup_callback_ = std::move(show);
+    hide_popup_callback_ = std::move(hide);
+  }
+
+  void SetSpringExpandCallback(base::RepeatingClosure callback) {
+    spring_expand_callback_ = std::move(callback);
+  }
+
+  std::vector<SidebarTreeNode> children_snapshot_;
+
   bool is_drop_indicator_visible_for_testing() const {
     return drag_over_drop_target_;
   }
@@ -420,6 +454,10 @@ class SidebarFolderRowView : public views::View,
   base::RepeatingCallback<void(const std::string&)>
       favorites_drop_accepted_callback_;
   base::RepeatingClosure reveal_empty_pinned_drop_lane_callback_;
+  base::RepeatingClosure show_popup_callback_;
+  base::RepeatingClosure hide_popup_callback_;
+  base::RepeatingClosure spring_expand_callback_;
+  base::OneShotTimer spring_load_timer_;
   std::u16string committed_name_;
   bool is_editing_name_ = false;
   raw_ptr<views::ImageView> chevron_ = nullptr;

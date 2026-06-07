@@ -42,7 +42,7 @@ maho-workspace/
 | Maho Website | `website/src/` | Astro pages & Starlight docs |
 | Upstream overrides | `maho-chromium/chromium_src/` | Brave-style #define + #include |
 | Sync relay server | `maho/relay/` | Standalone workspace; do NOT add to root Cargo.toml |
-| Build Chromium | `chromium/src/out/Default/` | Canonical: `python3 maho-chromium/build/scripts/build_maho.py` from repo root. Optional: `autoninja -C out/Default chrome` for narrower rebuilds. |
+| Build Chromium | `chromium/src/out/Default/` | Canonical: `python3 maho-chromium/build/scripts/build_maho.py` from repo root. Pass `--ninja-target <T>` (repeatable) to build a narrower target through the same lock-backed wrapper, e.g. `--ninja-target unit_tests`. Falling back to `autoninja -C out/Default <target>` from `chromium/src` skips the wrapper entirely (no maho-core rebuild, no overlay/override apply). |
 | Build maho-core lib | `maho-chromium/build/scripts/build_maho_core.py` | Produces prebuilt static lib |
 | Regression tests | `maho/appium-tests/` | Appium runners |
 | Icon system (canonical) | `docs/icon-system.md` + `maho/assets/icons/sf-to-lucide-mapping.json` | Lucide is the unified icon library across all surfaces. Per-platform: `lucide-react` (Mail/WebUI), vendored SVGs (`browser/resources/<feature>/icons/`), `aggregate_vector_icons` GN target at `maho-chromium/browser/ui/views/maho_lucide_icons/` (Native Views), `lucide-icons-swift` SwiftPM (macOS/iOS), AVDs at `maho/android-shell/app/src/main/res/drawable/ic_*.xml`. License: `LICENSES/lucide.txt` |
@@ -104,10 +104,12 @@ cd website && bun run dev             # Astro dev (port 5555)
 cd website && bun run build           # Build site
 
 # Chromium build
-python3 maho-chromium/build/scripts/build_maho.py    # canonical repo-root build
+python3 maho-chromium/build/scripts/build_maho.py    # canonical, builds chrome target
+python3 maho-chromium/build/scripts/build_maho.py --skip-rust --ninja-target unit_tests  # narrow target through the wrapper
 
-# Chromium-only rebuilds, from chromium/src
+# Chromium-only rebuilds, from chromium/src (skips Rust prebuild + overlay apply)
 autoninja -C out/Default chrome
+autoninja -C out/Default unit_tests
 
 # Build maho-core static lib for Chromium
 python3 maho-chromium/build/scripts/build_maho_core.py

@@ -38,6 +38,7 @@ use crate::find_manager::FindManager;
 use crate::import_export_manager::ImportExportManager;
 use crate::llm_manager::LLMManager;
 use crate::mcp_manager::McpManager;
+use crate::memory_manager::{MemoryManager, MemoryResult, AuthSnapshot};
 use crate::note_manager::NoteManager;
 use crate::notification_manager::NotificationManager;
 use crate::password_manager::PasswordManager;
@@ -484,7 +485,7 @@ mod tests {
             "pre-condition: favorited tab not in root_order"
         );
 
-        core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone() });
+        core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone(), expected_space_id: None });
         core.handle_event(ShellEvent::ReopenLastClosed);
 
         assert!(
@@ -499,7 +500,7 @@ mod tests {
         let space_id = core.get_active_space_id().clone();
         let tab_id = create_tab(&mut core);
 
-        core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone() });
+        core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone(), expected_space_id: None });
         core.handle_event(ShellEvent::ReopenLastClosed);
 
         assert!(
@@ -708,6 +709,7 @@ pub struct MahoCore {
     mcp_manager: McpManager,
     skills_manager: SkillsManager,
     sharing_manager: SharingManager,
+    memory_manager: MemoryManager,
 }
 
 impl Default for MahoCore {
@@ -717,6 +719,18 @@ impl Default for MahoCore {
 }
 
 impl MahoCore {
+    pub fn space_manager(&self) -> &SpaceManager {
+        &self.space_manager
+    }
+
+    pub fn space_manager_mut(&mut self) -> &mut SpaceManager {
+        &mut self.space_manager
+    }
+
+    pub fn tab_manager(&self) -> &TabLifecycleManager {
+        &self.tab_manager
+    }
+
     pub fn new() -> Self {
         let update_listeners: UpdateListeners = Rc::new(RefCell::new(Vec::new()));
 
@@ -949,6 +963,7 @@ impl MahoCore {
             mcp_manager: McpManager::new(),
             skills_manager: SkillsManager::new(),
             sharing_manager: SharingManager::new(),
+            memory_manager: MemoryManager::new(),
         };
 
         core
@@ -993,6 +1008,10 @@ impl MahoCore {
             .set_last_active_tab(&active_space_id, Some(favorite_tab.id));
     }
 
+    pub fn storage_ref(&self) -> Option<&maho_storage::sqlite::SqliteStorage> {
+        self.storage.as_ref()
+    }
+
     pub fn with_storage(mut self, path: &str) -> Self {
         match maho_storage::sqlite::SqliteStorage::open(path) {
             Ok(storage) => {
@@ -1017,6 +1036,9 @@ impl MahoCore {
                             }
                         }
                     }
+                    // Memory feature: build HNSW from persisted embeddings
+                    let _ = self.memory_manager.rebuild_index(storage);
+                    self.memory_manager.start_browsing_summary_loop();
                 }
             }
             Err(_) => {
@@ -1045,6 +1067,13 @@ impl MahoCore {
             .ok_or_else(|| PersistenceError::Storage("LMDB storage not initialized".to_string()))?;
 
         let tabs: Vec<&maho_types::tab::Tab> = self.tab_manager.get_all_tabs();
+        let favorite_count = tabs.iter().filter(|t| t.is_favorite).count();
+        eprintln!(
+            "[Maho] save_state: persisting {} tabs ({} favorites), {} spaces",
+            tabs.len(),
+            favorite_count,
+            self.space_manager.get_all_spaces().len(),
+        );
         let tabs_json = serde_json::to_vec(&tabs)
             .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
         lmdb.put("tabs", &tabs_json)
@@ -1093,6 +1122,8 @@ impl MahoCore {
             .get("profiles")
             .map_err(|e| PersistenceError::Storage(e.to_string()))?;
 
+        let is_first_run = tabs_data.is_none() && spaces_data.is_none();
+
         if tabs_data.is_some() || spaces_data.is_some() || profiles_data.is_some() {
             self.tab_manager.clear();
         }
@@ -1100,6 +1131,12 @@ impl MahoCore {
         if let Some(tabs_data) = tabs_data {
             let tabs: Vec<maho_types::tab::Tab> = serde_json::from_slice(&tabs_data)
                 .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+            let fav_count = tabs.iter().filter(|t| t.is_favorite).count();
+            eprintln!(
+                "[Maho] load_state: restoring {} tabs ({} favorites)",
+                tabs.len(),
+                fav_count,
+            );
             for tab in tabs {
                 self.tab_manager.restore_tab(tab);
             }
@@ -1119,6 +1156,21 @@ impl MahoCore {
             let spaces: Vec<maho_types::space::Space> = serde_json::from_slice(&spaces_data)
                 .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
             self.space_manager.restore_spaces(spaces, active_space_id);
+
+            // Heal cross-space tab_order/root_order duplication that may have
+            // been persisted before the invariant was enforced. tab.space_id
+            // is the single ground truth for tab residency.
+            let tab_owners: std::collections::HashMap<
+                maho_types::identifiers::TabId,
+                maho_types::identifiers::SpaceId,
+            > = self
+                .tab_manager
+                .get_all_tabs()
+                .into_iter()
+                .map(|t| (t.id.clone(), t.space_id.clone()))
+                .collect();
+            self.space_manager
+                .enforce_cross_space_tab_residency(&tab_owners);
 
             let favorited_ids: std::collections::HashSet<maho_types::identifiers::TabId> = self
                 .tab_manager
@@ -1147,6 +1199,11 @@ impl MahoCore {
         }
 
         self.load_persisted_data()?;
+
+        if is_first_run {
+            let active_id = self.get_active_space_id();
+            self.seed_default_favorite_for_space(&active_id);
+        }
 
         Ok(())
     }
@@ -1729,8 +1786,14 @@ impl MahoCore {
         self.boost_manager.get_boost(boost_id).cloned()
     }
 
-    pub fn compose_css_for_boost(&self, boost_id: &BoostId) -> Option<String> {
-        self.boost_manager.get_boost(boost_id).map(|b| self.boost_manager.compose_css(b))
+    pub fn compose_css_for_boost(
+        &self,
+        boost_id: &BoostId,
+        workspace_gradient_hue_deg: Option<f64>,
+    ) -> Option<String> {
+        self.boost_manager
+            .get_boost(boost_id)
+            .map(|b| self.boost_manager.compose_css(b, workspace_gradient_hue_deg))
     }
 
     pub fn create_temp_boost_persisted(&mut self, domain: String) -> Boost {
@@ -2334,6 +2397,11 @@ impl MahoCore {
             }
             ShellEvent::SignOut => {
                 self.account_manager.sign_out();
+                // Memory: wipe all user-scoped memory data on sign-out
+                if let Some(ref storage) = self.storage {
+                    let _ = storage.delete_all_memories();
+                    let _ = self.memory_manager.rebuild_index(storage);
+                }
                 return vec![
                     CoreUpdate::AccountChanged { account: None },
                     CoreUpdate::AccountAuthStateChanged {
@@ -2658,76 +2726,97 @@ impl MahoCore {
                     },
                 }];
             }
-            ShellEvent::CloseTab { ref tab_id } => {
+            ShellEvent::CloseTab { ref tab_id, ref expected_space_id } => {
+                if let Some(ref expected_sid) = expected_space_id {
+                    if let Some(tab) = self.tab_manager.get_tab(tab_id) {
+                        debug_assert_eq!(
+                            &tab.space_id, expected_sid,
+                            "CloseTab expected_space_id mismatch: tab has space {}, expected {}",
+                            tab.space_id, expected_sid
+                        );
+                        if &tab.space_id != expected_sid {
+                            eprintln!(
+                                "CloseTab ignored due to expected_space_id mismatch (tab has space {}, expected {})",
+                                tab.space_id, expected_sid
+                            );
+                            return vec![];
+                        }
+                    }
+                }
+
                 let behavior = self
                     .settings_manager
                     .get_settings()
                     .general
                     .pinned_close_behavior
                     .clone();
-                let is_pinned = self
-                    .tab_manager
-                    .get_tab(tab_id)
-                    .map(|t| t.is_pinned)
+                let tab_opt = self.tab_manager.get_tab(tab_id);
+                let is_pinned = tab_opt.map(|t| t.is_pinned).unwrap_or(false);
+                let already_suspended = tab_opt
+                    .map(|t| matches!(t.state, TabLifecycleState::Suspended { .. }))
                     .unwrap_or(false);
 
                 if is_pinned && !matches!(behavior, PinnedCloseBehavior::Close) {
-                    let space_id =
-                        match self.tab_manager.get_tab(tab_id).map(|t| t.space_id.clone()) {
-                            Some(sid) => sid,
-                            None => return vec![],
-                        };
+                    if already_suspended {
+                        // 2nd close on a ghost pinned tab -> fall through to full delete
+                    } else {
+                        let space_id =
+                            match self.tab_manager.get_tab(tab_id).map(|t| t.space_id.clone()) {
+                                Some(sid) => sid,
+                                None => return vec![],
+                            };
 
-                    let needs_reset = matches!(
-                        behavior,
-                        PinnedCloseBehavior::Reset
-                            | PinnedCloseBehavior::ResetSwitch
-                            | PinnedCloseBehavior::ResetUnloadSwitch
-                    );
-                    if needs_reset {
-                        self.tab_manager.reset_pinned_tab(tab_id);
-                    }
-
-                    let needs_unload = matches!(
-                        behavior,
-                        PinnedCloseBehavior::UnloadSwitch | PinnedCloseBehavior::ResetUnloadSwitch
-                    );
-                    if needs_unload {
-                        self.tab_manager.suspend_tab(tab_id);
-                    }
-
-                    let needs_focus_switch = matches!(
-                        behavior,
-                        PinnedCloseBehavior::Switch
-                            | PinnedCloseBehavior::ResetSwitch
-                            | PinnedCloseBehavior::UnloadSwitch
-                            | PinnedCloseBehavior::ResetUnloadSwitch
-                    );
-                    if needs_focus_switch {
-                        let currently_active =
-                            self.space_manager.get_last_active_tab(&space_id).cloned();
-                        if currently_active.as_ref() == Some(tab_id) {
-                            let next_active = self
-                                .space_manager
-                                .get_tab_order(&space_id)
-                                .into_iter()
-                                .filter(|id| id != tab_id)
-                                .find(|id| {
-                                    self.tab_manager
-                                        .get_tab(id)
-                                        .map(|t| {
-                                            !matches!(
-                                                t.state,
-                                                TabLifecycleState::Archived { .. }
-                                            )
-                                        })
-                                        .unwrap_or(false)
-                                });
-                            self.space_manager.set_last_active_tab(&space_id, next_active);
+                        let needs_reset = matches!(
+                            behavior,
+                            PinnedCloseBehavior::Reset
+                                | PinnedCloseBehavior::ResetSwitch
+                                | PinnedCloseBehavior::ResetUnloadSwitch
+                        );
+                        if needs_reset {
+                            self.tab_manager.reset_pinned_tab(tab_id);
                         }
-                    }
 
-                    return vec![];
+                        let needs_unload = matches!(
+                            behavior,
+                            PinnedCloseBehavior::UnloadSwitch | PinnedCloseBehavior::ResetUnloadSwitch
+                        );
+                        if needs_unload {
+                            self.tab_manager.suspend_tab(tab_id);
+                        }
+
+                        let needs_focus_switch = matches!(
+                            behavior,
+                            PinnedCloseBehavior::Switch
+                                | PinnedCloseBehavior::ResetSwitch
+                                | PinnedCloseBehavior::UnloadSwitch
+                                | PinnedCloseBehavior::ResetUnloadSwitch
+                        );
+                        if needs_focus_switch {
+                            let currently_active =
+                                self.space_manager.get_last_active_tab(&space_id).cloned();
+                            if currently_active.as_ref() == Some(tab_id) {
+                                let next_active = self
+                                    .space_manager
+                                    .get_tab_order(&space_id)
+                                    .into_iter()
+                                    .filter(|id| id != tab_id)
+                                    .find(|id| {
+                                        self.tab_manager
+                                            .get_tab(id)
+                                            .map(|t| {
+                                                !matches!(
+                                                    t.state,
+                                                    TabLifecycleState::Archived { .. }
+                                                )
+                                            })
+                                            .unwrap_or(false)
+                                    });
+                                self.space_manager.set_last_active_tab(&space_id, next_active);
+                            }
+                        }
+
+                        return vec![];
+                    }
                 }
             }
             ShellEvent::ResetPinnedTab { ref tab_id } => {
@@ -2897,8 +2986,16 @@ impl MahoCore {
                 ref message,
                 ref context,
             } => {
-                // Browser-side orchestration owns page-context assembly. Core only
-                // forwards the typed chat payload for compatibility and persistence.
+                // Memory: persist user turn for future fact extraction
+                if let Some(ref storage) = self.storage {
+                    let id = uuid::Uuid::new_v4().to_string();
+                    let session_id = context.session_id.clone()
+                        .unwrap_or_else(|| "default".to_string());
+                    let url_ctx = context.page_url.clone();
+                    let _ = storage.insert_conversation_turn(
+                        &id, &session_id, "user", message, url_ctx.as_deref(),
+                    );
+                }
                 return vec![self.llm_manager.request_chat_completion(message, context)];
             }
             ShellEvent::UseSkill {
@@ -2927,6 +3024,17 @@ impl MahoCore {
                 return vec![];
             }
             ShellEvent::LlmResult { ref request_id, ref result } => {
+                // Memory: persist assistant turn
+                if let Some(ref storage) = self.storage {
+                    if let Some(session_id) =
+                        self.llm_manager.lookup_session_for_request(request_id)
+                    {
+                        let id = uuid::Uuid::new_v4().to_string();
+                        let _ = storage.insert_conversation_turn(
+                            &id, &session_id, "assistant", result, None,
+                        );
+                    }
+                }
                 // Try to detect tool_calls in the response
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(result) {
                     if let Some(tool_calls) = json.get("tool_calls").and_then(|tc| tc.as_array()) {
@@ -2971,6 +3079,22 @@ impl MahoCore {
             }
             ShellEvent::LlmError { ref request_id, ref error } => {
                 return self.llm_manager.handle_error(request_id, error);
+            }
+            ShellEvent::ChatSessionEnded { ref session_id } => {
+                if let Some(ref storage) = self.storage {
+                    if let Ok(turns) = storage.load_conversation_session(session_id) {
+                        let raw_text = turns.iter()
+                            .map(|(role, content)| format!("[{}] {}", role, content))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        if !raw_text.is_empty() {
+                            self.memory_manager.extract_from_session(
+                                session_id.clone(), raw_text,
+                            );
+                        }
+                    }
+                }
+                return vec![];
             }
             ShellEvent::ToolPermissionResponse { ref call_id, granted } => {
                 return self.mcp_manager.handle_tool_permission_response(call_id, *granted);
@@ -3109,11 +3233,16 @@ impl MahoCore {
             .and_then(|p| p.archive_timeout_hours)
             .unwrap_or(global_archive_timeout);
         let today_timeout = self.settings_manager.get_settings().general.today_tab_timeout_hours;
-        let updates = self.tab_manager.tick_with_settings(archive_timeout, today_timeout);
+        let mut updates = self.tab_manager.tick_with_settings(archive_timeout, today_timeout);
 
         let evicted = self.tab_manager.enforce_archive_cap();
         for (tab_id, space_id) in &evicted {
             self.space_manager.remove_tab_from_space(space_id, tab_id);
+        }
+
+        // Memory: drain background extraction/embedding/summary jobs
+        for result in self.memory_manager.drain_results() {
+            self.handle_memory_result(result, &mut updates);
         }
 
         updates
@@ -3193,12 +3322,27 @@ impl MahoCore {
 
     pub fn create_space(&mut self, name: &str, color: SpaceColor, profile_id: ProfileId) -> Space {
         let space = self.space_manager.create_space(name, color, profile_id);
+        self.seed_default_favorite_for_space(&space.id);
         let vm = self.space_manager.to_view_model(&space);
         let update = CoreUpdate::SpaceCreated { space: vm };
         for listener in self.update_listeners.borrow().iter() {
             listener(update.clone());
         }
         space
+    }
+
+    fn seed_default_favorite_for_space(&mut self, space_id: &SpaceId) {
+        let google_url = maho_types::common::Url::new("https://www.google.com");
+        let tab = self.tab_manager.create_tab(
+            space_id.clone(),
+            Some(google_url),
+            None,
+            None,
+        );
+        self.tab_manager.update_tab_title(&tab.id, "Google".to_string());
+        self.space_manager
+            .add_tab_to_space(space_id, tab.id.clone(), None);
+        self.tab_manager.favorite_tab(&tab.id);
     }
 
     pub fn delete_space(&mut self, space_id: &SpaceId) {
@@ -3758,9 +3902,21 @@ impl MahoCore {
 
         self.tab_manager.favorite_tab(tab_id);
 
-        if let Some(space_id) = self.tab_manager.get_tab(tab_id).map(|t| t.space_id.clone()) {
-            self.space_manager.remove_tab_from_root_order(&space_id, tab_id);
-        }
+        // Strip the now-favorited tab from EVERY space's root_order, not just
+        // the home space. Stale entries can survive in other spaces from
+        // pre-invariant persisted state, so a single-space cleanup leaves the
+        // tab visible as a regular row in those spaces' sidebars.
+        let mut favorited = std::collections::HashSet::new();
+        favorited.insert(tab_id.clone());
+        self.space_manager
+            .strip_favorited_tabs_from_root_orders(&favorited);
+
+        // Defense in depth: enforce tab.space_id-as-ground-truth across every
+        // space's tab_order/root_order/folders. Catches any runtime path that
+        // may have leaked this tab into another space without updating
+        // tab.space_id (e.g. legacy code that bypasses add_tab_to_space's
+        // cross-space guard).
+        self.enforce_residency_for_tab(tab_id);
 
         true
     }
@@ -3773,6 +3929,19 @@ impl MahoCore {
                 self.space_manager.add_tab_to_root_order_if_absent(&space_id, tab_id);
             }
         }
+
+        self.enforce_residency_for_tab(tab_id);
+    }
+
+    fn enforce_residency_for_tab(&mut self, tab_id: &TabId) {
+        let owner = match self.tab_manager.get_tab(tab_id).map(|t| t.space_id.clone()) {
+            Some(s) => s,
+            None => return,
+        };
+        let mut owners = std::collections::HashMap::new();
+        owners.insert(tab_id.clone(), owner);
+        self.space_manager
+            .enforce_cross_space_tab_residency(&owners);
     }
 
     pub fn reset_pinned_tab(&mut self, tab_id: &TabId) -> bool {
@@ -3807,7 +3976,7 @@ impl MahoCore {
                     id: b.id.clone(),
                     domain: b.domain.clone(),
                     name: b.name.clone(),
-                    custom_css: Some(self.boost_manager.compose_css(b)),
+                    custom_css: Some(self.boost_manager.compose_css(b, None)),
                     enabled,
                 }
             })
@@ -3893,7 +4062,7 @@ impl MahoCore {
                     id: active.id.clone(),
                     domain: active.domain.clone(),
                     name: active.name.clone(),
-                    custom_css: Some(self.boost_manager.compose_css(&active)),
+                    custom_css: Some(self.boost_manager.compose_css(&active, None)),
                     enabled,
                 }];
             }
@@ -5340,6 +5509,7 @@ impl MahoCore {
             device_name: std::env::var("HOSTNAME").unwrap_or_else(|_| "Maho Device".to_string()),
             auto_sync: true,
             sync_interval_secs: 30,
+            disabled_entity_types: std::collections::HashSet::new(),
         };
         let sm = crate::sync_manager::SyncManager::new(config);
         self.sync_manager = Some(sm);
@@ -5528,6 +5698,212 @@ impl MahoCore {
         }
         Ok(())
     }
+
+    fn handle_memory_result(&mut self, result: MemoryResult, updates: &mut Vec<CoreUpdate>) {
+        match result {
+            MemoryResult::FactsExtracted { session_id, facts } => {
+                if let Some(ref storage) = self.storage {
+                    let mut new_ids = Vec::new();
+                    for fact in &facts {
+                        let id = uuid::Uuid::new_v4().to_string();
+                        let categories = serde_json::json!([fact.category]).to_string();
+                        let _ = storage.insert_memory(
+                            &id, &fact.fact, "chat", Some(&session_id),
+                            &categories, fact.importance as f64, None,
+                        );
+                        self.memory_manager.embed_fact(id.clone(), fact.fact.clone());
+                        new_ids.push(id);
+                    }
+                    updates.push(CoreUpdate::MemoryFactsExtracted {
+                        session_id,
+                        fact_count: facts.len(),
+                    });
+                }
+            }
+            MemoryResult::EmbeddingsReady { fact_id, embedding } => {
+                if let Some(ref storage) = self.storage {
+                    let bytes = crate::embedding::vec_to_bytes(&embedding);
+                    let _ = storage.update_memory_embedding(&fact_id, &bytes);
+                    let _ = self.memory_manager.rebuild_index(storage);
+                    updates.push(CoreUpdate::MemoryUpdated {
+                        changed_ids: vec![fact_id],
+                    });
+                }
+            }
+            MemoryResult::BrowsingSummaryReady { content } => {
+                if let Some(ref storage) = self.storage {
+                    let token_count = (content.len() / 4) as i64;
+                    let _ = storage.upsert_memory_block(
+                        "browsing_summary", &content, "warm", token_count,
+                    );
+                    let now = chrono::Utc::now();
+                    let now_iso = now.to_rfc3339();
+                    let _ = storage.upsert_memory_block(
+                        "_meta:last_browsing_summary", &now_iso, "cold", 0,
+                    );
+                    self.memory_manager.note_summary_completed(now);
+                }
+            }
+            MemoryResult::BrowsingSummaryDue => {
+                if let Some(ref storage) = self.storage {
+                    let mut last_summary_at = None;
+                    if let Ok(Some(content)) = storage.get_memory_block("_meta:last_browsing_summary") {
+                        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&content) {
+                            last_summary_at = Some(dt.with_timezone(&chrono::Utc));
+                        }
+                    }
+                    let now = chrono::Utc::now();
+                    let should_summarize = match last_summary_at {
+                        Some(last) => now - last >= chrono::Duration::hours(24),
+                        None => true,
+                    };
+                    if should_summarize {
+                        let since_dt = now - chrono::Duration::hours(24);
+                        let since_iso = since_dt.to_rfc3339();
+                        if let Ok(sessions) = storage.list_browse_sessions_since(&since_iso) {
+                            if !sessions.is_empty() {
+                                let mut formatted_text = String::new();
+                                for (_id, url, title) in sessions {
+                                    let t = title.unwrap_or_else(|| "Untitled".to_string());
+                                    formatted_text.push_str(&format!("- [{}] {}\n", t, url));
+                                }
+                                self.memory_manager.summarize_browsing(formatted_text);
+                            }
+                        }
+                    }
+                }
+            }
+            MemoryResult::Failed { reason } => {
+                eprintln!("memory: job failed: {}", reason);
+            }
+        }
+    }
+
+    /// Set Memory auth from the shell (called when AI prefs change)
+    pub fn set_memory_auth(&mut self, auth: Option<AuthSnapshot>) {
+        self.memory_manager.set_auth(auth);
+    }
+
+    /// Get top-K relevant memory ids for a query embedding
+    pub fn search_memories(&self, query_embedding: &[f32], top_k: usize) -> Vec<String> {
+        self.memory_manager.search(query_embedding, top_k)
+    }
+
+    /// Set or replace a hot/warm memory block (used by Personalization UI)
+    pub fn set_memory_block(&self, label: &str, content: &str, tier: &str)
+        -> Result<(), crate::error::CoreError>
+    {
+        if let Some(ref storage) = self.storage {
+            let token_count = (content.len() / 4) as i64;
+            storage.upsert_memory_block(label, content, tier, token_count)
+                .map_err(|e| crate::error::CoreError::Storage(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    pub fn get_memory_block(&self, label: &str) -> Option<String> {
+        self.storage.as_ref()?.get_memory_block(label).ok().flatten()
+    }
+
+    pub fn delete_memory(&mut self, id: &str) -> bool {
+        let Some(ref storage) = self.storage else { return false; };
+        let deleted = storage.delete_memory(id).unwrap_or(false);
+        if deleted {
+            let _ = self.memory_manager.rebuild_index(storage);
+        }
+        deleted
+    }
+
+    pub fn clear_all_memories(&mut self) -> bool {
+        let Some(ref storage) = self.storage else { return false; };
+        let ok = storage.delete_all_memories().is_ok();
+        if ok {
+            let _ = self.memory_manager.rebuild_index(storage);
+        }
+        ok
+    }
+
+    /// Toggle Memory entity sync per opt-out UX
+    pub fn set_entity_sync_enabled(&mut self, type_str: &str, enabled: bool) {
+        let entity_type = match type_str {
+            "Memory" => crate::sync_models::SyncEntityType::Memory,
+            _ => return,
+        };
+        if let Some(ref mut sm) = self.sync_manager {
+            sm.set_entity_sync_enabled(entity_type, enabled);
+        }
+    }
+
+    /// Hot block compose for system prompt injection
+    pub fn build_personalization_system_prompt(&self) -> Option<String> {
+        const HOT_BUDGET_TOKENS: usize = 2000;
+        const WARM_BUDGET_TOKENS: usize = 1000;
+        const CHARS_PER_TOKEN: usize = 4;
+
+        let storage = self.storage.as_ref()?;
+        let mut out = String::new();
+
+        let hot_budget_chars = HOT_BUDGET_TOKENS * CHARS_PER_TOKEN;
+        let mut hot_used = 0usize;
+        let hot_blocks = storage.list_memory_blocks_by_tier("hot").ok()?;
+        for (label, content) in &hot_blocks {
+            if content.trim().is_empty() { continue; }
+            let entry_chars = label.len() + content.len() + 8;
+            let truncated = if hot_used + entry_chars > hot_budget_chars {
+                let remaining = hot_budget_chars.saturating_sub(hot_used + label.len() + 8);
+                if remaining == 0 { break; }
+                let mut end = remaining.min(content.len());
+                while !content.is_char_boundary(end) && end > 0 { end -= 1; }
+                &content[..end]
+            } else {
+                content.as_str()
+            };
+            out.push_str(&format!("## {}\n{}\n\n", label, truncated));
+            hot_used += label.len() + truncated.len() + 8;
+            if hot_used >= hot_budget_chars { break; }
+        }
+
+        let warm_budget_chars = WARM_BUDGET_TOKENS * CHARS_PER_TOKEN;
+        let mut warm_used = 0usize;
+        let warm_blocks = storage.list_memory_blocks_by_tier("warm").ok().unwrap_or_default();
+        for (label, content) in &warm_blocks {
+            if content.trim().is_empty() { continue; }
+            let entry_chars = label.len() + content.len() + 8;
+            let truncated = if warm_used + entry_chars > warm_budget_chars {
+                let remaining = warm_budget_chars.saturating_sub(warm_used + label.len() + 8);
+                if remaining == 0 { break; }
+                let mut end = remaining.min(content.len());
+                while !content.is_char_boundary(end) && end > 0 { end -= 1; }
+                &content[..end]
+            } else {
+                content.as_str()
+            };
+            out.push_str(&format!("## {}\n{}\n\n", label, truncated));
+            warm_used += label.len() + truncated.len() + 8;
+            if warm_used >= warm_budget_chars { break; }
+        }
+
+        if out.is_empty() { None } else { Some(out) }
+    }
+
+    pub fn fts_relevant_memories(&self, query: &str, top_k: usize) -> Vec<(String, String, f64)> {
+        let Some(storage) = self.storage.as_ref() else { return Vec::new(); };
+        const COLD_BUDGET_TOKENS: usize = 1000;
+        const CHARS_PER_TOKEN: usize = 4;
+        let budget_chars = COLD_BUDGET_TOKENS * CHARS_PER_TOKEN;
+        let raw = storage.search_memories_fts(query, top_k).unwrap_or_default();
+        let mut out = Vec::new();
+        let mut used = 0usize;
+        for (id, content, importance) in raw {
+            let next = used + content.len() + 4;
+            if next > budget_chars && !out.is_empty() {
+                break;
+            }
+            used = next;
+            out.push((id, content, importance));
+        }
+        out
+    }
 }
 
 fn parse_sync_entity_type(s: &str) -> SyncEntityType {
@@ -5540,6 +5916,7 @@ fn parse_sync_entity_type(s: &str) -> SyncEntityType {
         "ReadingListItem" => SyncEntityType::ReadingListItem,
         "SearchEngine" => SyncEntityType::SearchEngine,
         "Shortcut" => SyncEntityType::Shortcut,
+        "Memory" => SyncEntityType::Memory,
         _ => SyncEntityType::Tab, // fallback
     }
 }
@@ -5698,6 +6075,10 @@ impl TabManagerInterface for TabLifecycleManager {
 
     fn release_window_tabs(&mut self, window_id: i64) -> Vec<TabId> {
         self.release_window_tabs(window_id)
+    }
+
+    fn collect_child_ids(&self, parent_id: &TabId) -> Vec<TabId> {
+        self.collect_child_ids(parent_id)
     }
 }
 

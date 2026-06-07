@@ -96,11 +96,15 @@ maho-chromium/
 
 ## COMMANDS
 ```bash
-# Canonical build from the overlay repo root
+# Canonical build from the overlay repo root (builds chrome target)
 python3 build/scripts/build_maho.py
 
-# Optional Chromium-only rebuild from chromium/src/
+# Narrow target through the wrapper (lock + maho-core + overrides applied)
+python3 build/scripts/build_maho.py --skip-rust --ninja-target unit_tests
+
+# Bypass the wrapper entirely (skips maho-core rebuild + overlay apply)
 autoninja -C out/Default chrome
+autoninja -C out/Default unit_tests
 
 # Build maho-core prebuilt
 python3 build/scripts/build_maho_core.py

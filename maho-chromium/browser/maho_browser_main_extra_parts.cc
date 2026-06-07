@@ -10,6 +10,12 @@
 #include "base/values.h"
 #include "base/functional/bind.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/sessions/exit_type_service.h"
+#include "chrome/browser/prefs/session_startup_pref.h"
+#include "chrome/common/pref_names.h"
+#include "components/prefs/pref_service.h"
 #include "chrome/common/chrome_paths.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -17,6 +23,8 @@
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_registry.h"
+#include "chrome/browser/sessions/session_restore.h"
+#include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/ui/theme/maho_color_mixer.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/third_party/maho/maho_bridge.h"
@@ -105,6 +113,57 @@ void PopulateBridgeFromCore(MahoCore* core) {
             << bridge->GetRegisteredSpaceCount() << " spaces";
 }
 
+void OnSessionRestoreFinished(Profile* profile, int num_tabs_restored) {
+  LOG(INFO) << "Session restore finished. Restored " << num_tabs_restored << " tabs.";
+  
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return;
+  }
+  
+  char* json_str = maho_core_get_tab_view_models(core);
+  if (!json_str) {
+    return;
+  }
+  std::string json(json_str);
+  maho_string_free(json_str);
+
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_list()) {
+    return;
+  }
+
+  std::set<std::string> core_tab_ids;
+  for (const auto& item : parsed->GetList()) {
+    const auto* dict = item.GetIfDict();
+    if (dict) {
+      const std::string* id = dict->FindString("id");
+      if (id) {
+        core_tab_ids.insert(*id);
+      }
+    }
+  }
+
+  std::set<std::string> live_tab_ids =
+      maho::MahoTabRegistry::GetLiveTabIdsForProfile(profile);
+  int live_tab_count = live_tab_ids.size();
+
+  int restored_count = 0;
+  int suspended_count = 0;
+  for (const auto& tab_id : core_tab_ids) {
+    if (live_tab_ids.count(tab_id)) {
+      restored_count++;
+    } else {
+      suspended_count++;
+    }
+  }
+
+  LOG(INFO) << "Reconciliation: " << core_tab_ids.size()
+            << " LMDB tabs, " << restored_count << " restored, "
+            << suspended_count << " suspended (live count: " << live_tab_count << ")";
+}
+
 }  // namespace
 
 void MahoBrowserMainExtraParts::PostEarlyInitialization() {
@@ -144,10 +203,42 @@ void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
   if (profile && !profile->IsOffTheRecord()) {
     extension_state_bridge_ =
         std::make_unique<maho::MahoExtensionStateBridge>(profile);
+
+    // If user hasn't explicitly set the value, override the default to LAST
+    // so SessionService restore kicks in.
+    PrefService* prefs = profile->GetPrefs();
+    const PrefService::Preference* p = prefs->FindPreference(prefs::kRestoreOnStartup);
+    if (p && p->IsDefaultValue()) {
+      SessionStartupPref::SetStartupPref(profile,
+          SessionStartupPref(SessionStartupPref::LAST));
+    }
+
+    session_restored_subscription_ =
+        SessionRestore::RegisterOnSessionRestoredCallback(
+            base::BindRepeating(&OnSessionRestoreFinished));
   }
 }
 
 void MahoBrowserMainExtraParts::PostMainMessageLoopRun() {
+  ProfileManager* manager = g_browser_process->profile_manager();
+  if (manager) {
+    for (Profile* profile : manager->GetLoadedProfiles()) {
+      if (profile && profile->IsRegularProfile()) {
+        // ExitTypeService::SetCurrentSessionExitType stashes (does not write
+        // to prefs) when waiting_for_user_to_ack_crash_ is true — so a
+        // perpetually-Crashed profile never auto-recovers. Write the prefs
+        // value directly to break the loop, then mirror via the service so
+        // any in-process state stays consistent. CommitPendingWrite forces
+        // an immediate disk flush before the message loop tears down.
+        profile->GetPrefs()->SetString(prefs::kSessionExitType, "Normal");
+        profile->GetPrefs()->CommitPendingWrite();
+        if (auto* svc = ExitTypeService::GetInstanceForProfile(profile)) {
+          svc->SetCurrentSessionExitType(ExitType::kClean);
+        }
+      }
+    }
+  }
+
   if (core_) {
     MahoSpaceThemeState::Clear();
     maho::core::SaveState(core_);

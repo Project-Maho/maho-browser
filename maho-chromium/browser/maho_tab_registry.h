@@ -4,6 +4,9 @@
 #define MAHO_BROWSER_MAHO_TAB_REGISTRY_H_
 
 #include <memory>
+#include <set>
+#include <string>
+#include <unordered_map>
 
 #include "base/containers/flat_map.h"
 #include "base/no_destructor.h"
@@ -13,9 +16,15 @@
 
 class BrowserWindowInterface;
 class GlobalBrowserCollection;
+class Profile;
 class TabStripModel;
 
 namespace maho {
+
+struct LastDispatchedTabState {
+  std::string url;
+  std::string title;
+};
 
 // Architectural invariant: the canonical tab UUID is the one issued by
 // `MahoTabIdHelper` on each `WebContents`. The Rust maho-core never invents
@@ -39,6 +48,13 @@ class MahoTabRegistry : public BrowserCollectionObserver {
   void OnBrowserCreated(BrowserWindowInterface* browser) override;
   void OnBrowserClosed(BrowserWindowInterface* browser) override;
 
+  static std::set<std::string> GetLiveTabIdsForProfile(Profile* profile);
+
+  LastDispatchedTabState& GetOrCreateDispatchCache(const std::string& tab_id);
+  void EraseDispatchCache(const std::string& tab_id);
+  void MigrateDispatchCache(const std::string& from_tab_id,
+                            const std::string& to_tab_id);
+
  private:
   friend class base::NoDestructor<MahoTabRegistry>;
   class StripObserver;
@@ -54,8 +70,13 @@ class MahoTabRegistry : public BrowserCollectionObserver {
   base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
       browser_collection_observation_{this};
 
+  std::unordered_map<std::string, LastDispatchedTabState> dispatch_cache_;
+
   SEQUENCE_CHECKER(sequence_checker_);
 };
+
+class ShellEventObserver;
+void SetTabRegistryShellEventObserverForTesting(ShellEventObserver* observer);
 
 }  // namespace maho
 

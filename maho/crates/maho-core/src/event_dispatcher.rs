@@ -58,6 +58,7 @@ pub trait TabManagerInterface {
     fn close_tabs_to_left(&mut self, space_id: &SpaceId, tab_id: &TabId) -> Vec<TabId>;
     fn toggle_freeze(&mut self, tab_id: &TabId);
     fn release_window_tabs(&mut self, window_id: i64) -> Vec<TabId>;
+    fn collect_child_ids(&self, parent_id: &TabId) -> Vec<TabId>;
 }
 
 pub trait SpaceManagerInterface {
@@ -263,19 +264,78 @@ impl EventDispatcher {
                 // browser knows which page to load. Substitute None with the canonical NTP
                 // URL rather than letting about:blank silently create a ghost/url-less tab.
                 let resolved_url = Some(url.unwrap_or_else(|| Url::new("chrome://newtab")));
+                let tab_id_clone = tab_id.clone();
                 let tab = if let Some(explicit_id) = tab_id {
-                    tab_mgr.create_tab_with_id(explicit_id, space_id.clone(), resolved_url, parent_id, window_id)
+                    // Re-announce of an existing tab: if the shell asks for a different
+                    // space than the tab currently lives in, treat it as a move.
+                    // Otherwise create_tab_with_id silently returns the existing tab and
+                    // add_tab_to_space below would leak the same tab_id into two spaces.
+                    if let Some(existing) = tab_mgr.get_tab(&explicit_id).cloned() {
+                        if existing.space_id != space_id {
+                            let source = existing.space_id.clone();
+                            tab_mgr.move_tab(&explicit_id, space_id.clone(), 0);
+                            space_mgr.remove_tab_from_space(&source, &explicit_id);
+                        }
+                        // Re-announce always means a new WebContents exists for this tab,
+                        // so reset lifecycle to Active. Otherwise a Suspended ghost waking
+                        // up via WakeSuspendedTab → Navigate would stay marked Suspended,
+                        // making the next close_tab event hit the 2nd-close (delete) path
+                        // instead of the 1st-close (suspend) path.
+                        if !matches!(existing.state, maho_types::tab::TabLifecycleState::Active) {
+                            tab_mgr.activate_tab(&explicit_id);
+                        }
+                        existing
+                    } else {
+                        tab_mgr.create_tab_with_id(explicit_id, space_id.clone(), resolved_url, parent_id, window_id)
+                    }
                 } else {
                     tab_mgr.create_tab(space_id.clone(), resolved_url, parent_id, window_id)
                 };
                 space_mgr.add_tab_to_space(&space_id, tab.id.clone(), None);
+                if let Some(explicit_id) = tab_id_clone {
+                    let is_in_folder = space_mgr.is_tab_in_folder(&space_id, &explicit_id);
+                    space_mgr.apply_tab_residency(&space_id, &explicit_id, tab.is_favorite, is_in_folder);
+                }
                 space_mgr.set_last_active_tab(&space_id, Some(tab.id.clone()));
                 vec![CoreUpdate::TabCreated {
                     tab: tab_mgr.to_tab_view_model(&tab),
                 }]
             }
-            ShellEvent::CloseTab { tab_id } => {
+            ShellEvent::CloseTab { tab_id, expected_space_id } => {
+                if let Some(expected_sid) = expected_space_id {
+                    if let Some(tab) = tab_mgr.get_tab(&tab_id) {
+                        debug_assert_eq!(
+                            tab.space_id, expected_sid,
+                            "CloseTab expected_space_id mismatch: tab has space {}, expected {}",
+                            tab.space_id, expected_sid
+                        );
+                        if tab.space_id != expected_sid {
+                            eprintln!(
+                                "CloseTab ignored due to expected_space_id mismatch (tab has space {}, expected {})",
+                                tab.space_id, expected_sid
+                            );
+                            return vec![];
+                        }
+                    }
+                }
+                // Capture descendants and their owning spaces BEFORE close_tab
+                // removes them from tab_manager — otherwise we lose the
+                // (child_id, space_id) mapping needed to clean their tab_order
+                // entries in every space they may live in.
+                let descendant_spaces: Vec<(SpaceId, TabId)> = tab_mgr
+                    .collect_child_ids(&tab_id)
+                    .into_iter()
+                    .filter_map(|cid| {
+                        tab_mgr.get_tab(&cid).map(|t| (t.space_id.clone(), cid))
+                    })
+                    .collect();
                 if let Some(tab) = tab_mgr.close_tab(&tab_id) {
+                    for (sid, cid) in &descendant_spaces {
+                        space_mgr.remove_tab_from_space(sid, cid);
+                        if space_mgr.get_last_active_tab(sid) == Some(cid) {
+                            space_mgr.set_last_active_tab(sid, None);
+                        }
+                    }
                     space_mgr.remove_tab_from_space(&tab.space_id, &tab.id);
                     if space_mgr.get_last_active_tab(&tab.space_id) == Some(&tab.id) {
                         space_mgr.set_last_active_tab(&tab.space_id, None);
@@ -386,6 +446,10 @@ impl EventDispatcher {
                 tab_mgr.toggle_freeze(&tab_id);
                 vec![]
             }
+            ShellEvent::SuspendTab { tab_id } => {
+                tab_mgr.suspend_tab(&tab_id);
+                vec![]
+            }
             ShellEvent::MoveTab {
                 tab_id,
                 target_space,
@@ -487,12 +551,28 @@ impl EventDispatcher {
             }
             ShellEvent::ReopenLastClosed => {
                 if let Some(tab) = tab_mgr.reopen_last_closed() {
-                    let is_in_folder = space_mgr.is_tab_in_folder(&tab.space_id, &tab.id);
-                    space_mgr.add_tab_to_space(&tab.space_id, tab.id.clone(), None);
-                    space_mgr.apply_tab_residency(&tab.space_id, &tab.id, tab.is_favorite, is_in_folder);
-                    vec![CoreUpdate::TabCreated {
-                        tab: tab_mgr.to_tab_view_model(&tab),
-                    }]
+                    // The closed tab's space_id was frozen at close time; that
+                    // space may have been deleted in the meantime. Fall back to
+                    // the active space so the reopened tab is never an orphan.
+                    let target_space = if space_mgr.get_space(&tab.space_id).is_some() {
+                        tab.space_id.clone()
+                    } else {
+                        let active = space_mgr.get_active_space_id().clone();
+                        tab_mgr.move_tab(&tab.id, active.clone(), 0);
+                        active
+                    };
+                    let is_in_folder = space_mgr.is_tab_in_folder(&target_space, &tab.id);
+                    space_mgr.add_tab_to_space(&target_space, tab.id.clone(), None);
+                    space_mgr.apply_tab_residency(&target_space, &tab.id, tab.is_favorite, is_in_folder);
+                    let view_model = if target_space == tab.space_id {
+                        tab_mgr.to_tab_view_model(&tab)
+                    } else {
+                        tab_mgr
+                            .get_tab(&tab.id)
+                            .map(|t| tab_mgr.to_tab_view_model(t))
+                            .unwrap_or_else(|| tab_mgr.to_tab_view_model(&tab))
+                    };
+                    vec![CoreUpdate::TabCreated { tab: view_model }]
                 } else {
                     vec![]
                 }
@@ -658,14 +738,20 @@ impl EventDispatcher {
                 tab_id,
             } => {
                 space_mgr.add_tab_to_folder(&space_id, &folder_id, tab_id);
-                vec![CoreUpdate::FolderUpdated {
-                    folder_id,
-                    changes: FolderUpdate {
-                        name: None,
-                        is_expanded: None,
-                        is_pinned: None,
+                vec![
+                    CoreUpdate::FolderUpdated {
+                        folder_id,
+                        changes: FolderUpdate {
+                            name: None,
+                            is_expanded: None,
+                            is_pinned: None,
+                        },
                     },
-                }]
+                    CoreUpdate::TabOrderChanged {
+                        space_id,
+                        order: vec![],
+                    },
+                ]
             }
             ShellEvent::ReorderTabInFolder {
                 space_id,
@@ -910,7 +996,10 @@ impl EventDispatcher {
                 QuickAction::ScrollToTop => vec![],
                 QuickAction::ScrollToBottom => vec![],
                 QuickAction::ClearBrowsingData => vec![],
-                // Shell-handled actions (no core state change needed)
+                // Shell-handled actions (no core state change needed).
+                // These return no CoreUpdates — the shell must handle them locally
+                // (e.g., ShortcutDispatcher dispatches directly to SpaceContextMenu,
+                // AppDelegate, or the relevant shell controller).
                 QuickAction::NewTab
                 | QuickAction::NewSpace
                 | QuickAction::CloseTab
@@ -1214,7 +1303,8 @@ impl EventDispatcher {
             ShellEvent::ExportSpaceIntoFolder { .. } => vec![],
 
             ShellEvent::RequestSkillsList | ShellEvent::UseSkill { .. } | ShellEvent::ChatMessage { .. }
-            | ShellEvent::ToolPermissionResponse { .. } | ShellEvent::ToolActionResult { .. } => vec![],
+            | ShellEvent::ToolPermissionResponse { .. } | ShellEvent::ToolActionResult { .. }
+            | ShellEvent::ChatSessionEnded { .. } => vec![],
         }
     }
 }

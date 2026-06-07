@@ -20,6 +20,8 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/values.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_navigator.h"
+#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
@@ -32,6 +34,7 @@
 #include "content/public/browser/web_contents.h"
 #include "components/tabs/public/tab_interface.h"
 #include "maho/browser/ui/tab_preview/maho_tab_preview_controller.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_folder_hover_controller.h"
 #include "components/split_tabs/split_tab_visual_data.h"
 #include "maho/browser/ui/context_menu/maho_folder_context_menu.h"
 #include "maho/browser/ui/context_menu/maho_space_context_menu.h"
@@ -50,6 +53,7 @@
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/models/image_model.h"
+#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_tree_owner.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/base/dragdrop/drop_target_event.h"
@@ -63,6 +67,7 @@
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/image_button_factory.h"
+#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
@@ -77,9 +82,17 @@
 #include "ui/views/view_utils.h"
 #include "ui/views/vector_icons.h"
 #include "url/gurl.h"
+#include "base/timer/timer.h"
+#include "ui/views/controls/scroll_view.h"
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_drag_util.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_drop_planner.h"
+
+namespace maho {
+void ForwardDragToAutoScroller(views::View* child,
+                               const ui::DropTargetEvent& event);
+void ForwardDragEnded(views::View* child);
+}  // namespace maho
 
 namespace {
 
@@ -87,17 +100,21 @@ using namespace maho;  // NOLINT(build/namespaces)
 
 constexpr int kRowSpacingDp = 0;
 constexpr int kRowHeightDp = 32;
-constexpr int kRowCornerRadiusDp = 9;
+constexpr int kRowCornerRadiusDp = 6;
 constexpr int kRowIconSizeDp = 16;
+constexpr int kCloseButtonSizeDp = 24;
+constexpr int kCloseIconSizeDp = 14;
 constexpr int kRowIconTextSpacingDp = 6;
 constexpr int kRowTrailingSpacingDp = 0;
-constexpr int kCloseButtonSizeDp = 16;
 constexpr int kSectionSpacingDp = 4;
 constexpr int kFolderIndentDp = 13;
 constexpr int kFolderRowHeightDp = 33;
 constexpr int kSectionSeparatorHeightDp = 8;
 constexpr int kSectionSeparatorLineHeightDp = 2;
 constexpr int kFolderGlyphSizeDp = 13;
+constexpr int kAutoScrollEdgeDp = 24;
+constexpr int kAutoScrollStepDp = 4;
+constexpr int kAutoScrollHz = 30;
 constexpr int kFolderGlyphContainerSizeDp = 16;
 constexpr int kChevronSizeDp = 12;
 constexpr int kDragStartThresholdDp = 5;
@@ -294,6 +311,7 @@ class SidebarSectionDropTarget : public views::View {
   }
 
   int OnDragUpdated(const ui::DropTargetEvent& event) override {
+    ForwardDragToAutoScroller(this, event);
     if (populated_) {
       return static_cast<int>(ui::mojom::DragOperation::kNone);
     }
@@ -303,6 +321,7 @@ class SidebarSectionDropTarget : public views::View {
   }
 
   DropCallback GetDropCallback(const ui::DropTargetEvent& event) override {
+    ForwardDragEnded(this);
     if (populated_) {
       return base::BindOnce(
           [](const ui::DropTargetEvent&,
@@ -338,6 +357,7 @@ class SidebarSectionDropTarget : public views::View {
   }
 
   void OnDragExited() override {
+    ForwardDragEnded(this);
     drag_over_drop_target_ = false;
     UpdateAppearance();
   }
@@ -543,6 +563,7 @@ class SidebarInsertionLaneView : public views::View {
   }
 
   int OnDragUpdated(const ui::DropTargetEvent& event) override {
+    ForwardDragToAutoScroller(this, event);
     SidebarDragPayload payload;
     if (!ReadMahoDragData(event.data(), payload) || payload.node_id == item_id_) {
       drag_over_drop_target_ = false;
@@ -562,6 +583,7 @@ class SidebarInsertionLaneView : public views::View {
   }
 
   DropCallback GetDropCallback(const ui::DropTargetEvent& event) override {
+    ForwardDragEnded(this);
     return base::BindOnce(
         [](std::string space_id, std::string item_id,
            SidebarNodeKind target_kind, std::string target_id, bool append,
@@ -686,6 +708,7 @@ class SidebarInsertionLaneView : public views::View {
   }
 
   void OnDragExited() override {
+    ForwardDragEnded(this);
     drag_over_drop_target_ = false;
     UpdateAppearance();
   }
@@ -1108,7 +1131,6 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
                                      base::RepeatingClosure preview_hide_callback)
     : active_(node.is_active),
       pinned_(node.is_pinned),
-      loading_(node.is_loading),
       audible_(node.is_audible),
       muted_(node.is_muted),
       tab_id_(node.tab_id),
@@ -1122,7 +1144,8 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
       rename_callback_(std::move(rename_callback)),
       resolve_tab_index_(std::move(resolve_tab_index)),
       preview_show_callback_(std::move(preview_show_callback)),
-      preview_hide_callback_(std::move(preview_hide_callback)) {
+      preview_hide_callback_(std::move(preview_hide_callback)),
+      activate_callback_(std::move(activate_callback)) {
   SetNotifyEnterExitOnChild(true);
   const int indent = node.depth * kFolderIndentDp;
   auto row_insets = gfx::Insets::TLBR(0, 9 + indent, 0, 7);
@@ -1134,13 +1157,7 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
       views::BoxLayout::CrossAxisAlignment::kCenter);
 
   favicon_view_ = AddChildView(std::make_unique<views::ImageView>());
-  if (loading_) {
-    favicon_view_->SetImage(ui::ImageModel::FromVectorIcon(
-        vector_icons::kSyncChromeRefreshIcon, ui::kColorSysOnSurfaceSubtle,
-        kRowIconSizeDp));
-  } else {
-    favicon_view_->SetImage(std::move(favicon));
-  }
+  favicon_view_->SetImage(std::move(favicon));
   favicon_view_->SetImageSize(gfx::Size(kRowIconSizeDp, kRowIconSizeDp));
 
   std::u16string display_text = committed_title_.empty() ? node.host : committed_title_;
@@ -1197,8 +1214,8 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
   }
 
   close_button_ = AddChildView(views::CreateVectorImageButtonWithNativeTheme(
-      std::move(close_callback), vector_icons::kCloseChromeRefreshIcon,
-      10, ui::kColorSysOnSurfaceSubtle, ui::kColorSysOnSurface,
+      std::move(close_callback), maho_lucide_icons::kXIcon,
+      kCloseIconSizeDp, ui::kColorSysOnSurfaceSubtle, ui::kColorSysOnSurface,
       ui::kColorSysOnSurface));
   close_button_->SetBorder(nullptr);
   close_button_->SetPreferredSize(
@@ -1223,6 +1240,14 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
 }
 
 SidebarTabRowView::~SidebarTabRowView() = default;
+
+void SidebarTabRowView::SetSuspended(bool suspended) {
+  if (is_suspended_ == suspended) {
+    return;
+  }
+  is_suspended_ = suspended;
+  UpdateAppearance();
+}
 
 int SidebarTabRowView::live_tab_index_for_testing() const {
   if (resolve_tab_index_) {
@@ -1346,6 +1371,7 @@ bool SidebarTabRowView::CanDrop(const ui::OSExchangeData& data) {
 }
 
 int SidebarTabRowView::OnDragUpdated(const ui::DropTargetEvent& event) {
+  ForwardDragToAutoScroller(this, event);
   SidebarDragPayload payload;
   if (!ReadMahoDragData(event.data(), payload)) {
     active_drop_zone_ = SidebarTabDropZone::kNone;
@@ -1373,6 +1399,7 @@ int SidebarTabRowView::OnDragUpdated(const ui::DropTargetEvent& event) {
 
 views::View::DropCallback SidebarTabRowView::GetDropCallback(
     const ui::DropTargetEvent& event) {
+  ForwardDragEnded(this);
   SidebarDragPayload drag_payload;
   const bool has_drag_payload = ReadMahoDragData(event.data(), drag_payload);
   const SidebarTabDropZone drop_zone =
@@ -1493,6 +1520,7 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
 }
 
 void SidebarTabRowView::OnDragExited() {
+  ForwardDragEnded(this);
   active_drop_zone_ = SidebarTabDropZone::kNone;
   drag_over_drop_target_ = false;
   UpdateAppearance();
@@ -1567,7 +1595,14 @@ void SidebarTabRowView::ActivateFromRowClick(const ui::MouseEvent& event) {
   }
   const int live_index =
       resolve_tab_index_ ? resolve_tab_index_.Run(tab_id_) : tab_index_;
-  if (live_index < 0 || !browser_ || !browser_->tab_strip_model() ||
+  if (live_index < 0) {
+    if (activate_callback_) {
+      activation_handled_for_current_press_ = true;
+      activate_callback_.Run(event);
+    }
+    return;
+  }
+  if (!browser_ || !browser_->tab_strip_model() ||
       !browser_->tab_strip_model()->ContainsIndex(live_index)) {
     return;
   }
@@ -1578,7 +1613,14 @@ void SidebarTabRowView::ActivateFromRowClick(const ui::MouseEvent& event) {
 void SidebarTabRowView::ActivateTabFromEvent(const ui::Event& event) {
   const int live_index =
       resolve_tab_index_ ? resolve_tab_index_.Run(tab_id_) : tab_index_;
-  if (live_index < 0 || !browser_ || !browser_->tab_strip_model() ||
+  if (live_index < 0) {
+    if (activate_callback_) {
+      activation_handled_for_current_press_ = true;
+      activate_callback_.Run(event);
+    }
+    return;
+  }
+  if (!browser_ || !browser_->tab_strip_model() ||
       !browser_->tab_strip_model()->ContainsIndex(live_index)) {
     return;
   }
@@ -1600,7 +1642,7 @@ void SidebarTabRowView::WriteDragDataForView(views::View* sender,
   payload.source_folder_child_index = folder_child_index_;
   WriteMahoDragData(payload, data);
   data->provider().SetDragImage(CreateSidebarDragImage(sender),
-                                press_pt.OffsetFromOrigin());
+                                gfx::Vector2d(0, 0));
 }
 
 int SidebarTabRowView::GetDragOperationsForView(views::View* sender,
@@ -1644,6 +1686,24 @@ void SidebarTabRowView::UpdateAppearance() {
                               ui::kColorSysOnSurface);
   title_button_->SetTextColor(views::Button::STATE_PRESSED,
                               ui::kColorSysOnSurface);
+  if (favicon_view_ && favicon_view_->layer()) {
+    favicon_view_->DestroyLayer();
+  }
+  // Pinned + active (loaded WebContents) shows minus = unload affordance.
+  // Pinned + suspended OR normal tab shows X = full close affordance.
+  const bool show_minus =
+      (section_ == MahoSidebarTabSection::kPinned) && !is_suspended_;
+  const gfx::VectorIcon& close_icon =
+      show_minus ? maho_lucide_icons::kMinusIcon
+                 : maho_lucide_icons::kXIcon;
+  views::SetImageFromVectorIconWithColor(
+      close_button_, close_icon, kCloseIconSizeDp,
+      views::IconColors(ui::kColorSysOnSurfaceSubtle, ui::kColorSysOnSurface,
+                        ui::kColorSysOnSurface));
+  const std::u16string close_tooltip =
+      show_minus ? u"Unload tab" : u"Close tab";
+  close_button_->SetTooltipText(close_tooltip);
+  close_button_->SetAccessibleName(close_tooltip);
   if (title_field_) {
     title_field_->SetVisible(is_editing_title_);
   }
@@ -1876,11 +1936,17 @@ void SidebarFolderRowView::OnThemeChanged() {
 void SidebarFolderRowView::OnMouseEntered(const ui::MouseEvent& event) {
   views::View::OnMouseEntered(event);
   UpdateAppearance();
+  if (show_popup_callback_ && !children_snapshot_.empty()) {
+    show_popup_callback_.Run();
+  }
 }
 
 void SidebarFolderRowView::OnMouseExited(const ui::MouseEvent& event) {
   views::View::OnMouseExited(event);
   UpdateAppearance();
+  if (hide_popup_callback_) {
+    hide_popup_callback_.Run();
+  }
 }
 
 bool SidebarFolderRowView::GetDropFormats(
@@ -1897,6 +1963,7 @@ bool SidebarFolderRowView::CanDrop(const ui::OSExchangeData& data) {
 }
 
 int SidebarFolderRowView::OnDragUpdated(const ui::DropTargetEvent& event) {
+  ForwardDragToAutoScroller(this, event);
   SidebarDragPayload payload;
   if (!ReadMahoDragData(event.data(), payload)) {
     active_drop_zone_ = SidebarFolderDropZone::kNone;
@@ -1918,11 +1985,28 @@ int SidebarFolderRowView::OnDragUpdated(const ui::DropTargetEvent& event) {
   }
   drag_over_drop_target_ = true;
   UpdateAppearance();
+
+  if (active_drop_zone_ == SidebarFolderDropZone::kInto && !is_expanded_ &&
+      spring_expand_callback_ && !spring_load_timer_.IsRunning()) {
+    spring_load_timer_.Start(
+        FROM_HERE, base::Milliseconds(700),
+        base::BindOnce(
+            [](base::WeakPtr<SidebarFolderRowView> self) {
+              if (self && self->spring_expand_callback_) {
+                self->spring_expand_callback_.Run();
+              }
+            },
+            weak_factory_.GetWeakPtr()));
+  } else if (active_drop_zone_ != SidebarFolderDropZone::kInto) {
+    spring_load_timer_.Stop();
+  }
+
   return static_cast<int>(ui::mojom::DragOperation::kMove);
 }
 
 views::View::DropCallback SidebarFolderRowView::GetDropCallback(
     const ui::DropTargetEvent& event) {
+  ForwardDragEnded(this);
   SidebarDragPayload payload;
   SidebarFolderDropZone drop_zone = SidebarFolderDropZone::kNone;
   if (ReadMahoDragData(event.data(), payload)) {
@@ -1967,7 +2051,12 @@ views::View::DropCallback SidebarFolderRowView::GetDropCallback(
             favorites_drop_accepted.Run(payload.node_id);
           }
         }
-        ExecuteDropPlan(plan);
+        if (payload.node_kind == SidebarNodeKind::kTab &&
+            drop_zone == SidebarFolderDropZone::kInto) {
+          ExecuteDropPlanTransitionsOnly(plan);
+        } else {
+          ExecuteDropPlan(plan);
+        }
         output_drag_op = ui::mojom::DragOperation::kMove;
         if (payload.node_kind == SidebarNodeKind::kTab) {
           if (drop_zone == SidebarFolderDropZone::kBefore) {
@@ -2045,12 +2134,15 @@ views::View::DropCallback SidebarFolderRowView::GetDropCallback(
 }
 
 void SidebarFolderRowView::OnDragExited() {
+  spring_load_timer_.Stop();
+  ForwardDragEnded(this);
   active_drop_zone_ = SidebarFolderDropZone::kNone;
   drag_over_drop_target_ = false;
   UpdateAppearance();
 }
 
 void SidebarFolderRowView::OnDragDone() {
+  spring_load_timer_.Stop();
   views::View::OnDragDone();
   NotifySidebarDragEnded(this);
 }
@@ -2067,7 +2159,7 @@ void SidebarFolderRowView::WriteDragDataForView(views::View* sender,
   payload.source_parent_folder_id = parent_folder_id_;
   WriteMahoDragData(payload, data);
   data->provider().SetDragImage(CreateSidebarDragImage(sender),
-                                press_pt.OffsetFromOrigin());
+                                gfx::Vector2d(0, 0));
 }
 
 int SidebarFolderRowView::GetDragOperationsForView(views::View* sender,
@@ -2157,11 +2249,170 @@ SidebarFolderRowView::SidebarFolderDropZone SidebarFolderRowView::ResolveDropZon
   return SidebarFolderDropZone::kNone;
 }
 
+class SidebarSpaceHeaderRow : public views::View {
+  METADATA_HEADER(SidebarSpaceHeaderRow, views::View)
+
+ public:
+  SidebarSpaceHeaderRow() {
+    auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kHorizontal,
+        gfx::Insets::TLBR(4, 12, 4, 12),
+        8));
+    layout->set_cross_axis_alignment(
+        views::BoxLayout::CrossAxisAlignment::kCenter);
+
+    icon_label_ = AddChildView(std::make_unique<views::Label>());
+    icon_label_->SetFontList(
+        views::Label::GetDefaultFontList().Derive(4, gfx::Font::NORMAL, gfx::Font::Weight::NORMAL));
+    icon_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+    icon_label_->SetVerticalAlignment(gfx::ALIGN_MIDDLE);
+    icon_label_->SetVisible(false);
+
+    name_label_ = AddChildView(std::make_unique<views::Label>());
+    name_label_->SetTextStyle(views::style::STYLE_BODY_4_MEDIUM);
+    name_label_->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
+    name_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+    name_label_->SetVerticalAlignment(gfx::ALIGN_MIDDLE);
+
+    SetBackground(nullptr);
+    SetBorder(nullptr);
+  }
+
+  SidebarSpaceHeaderRow(const SidebarSpaceHeaderRow&) = delete;
+  SidebarSpaceHeaderRow& operator=(const SidebarSpaceHeaderRow&) = delete;
+  ~SidebarSpaceHeaderRow() override = default;
+
+  void Configure(const std::string& icon, const std::u16string& name) {
+    icon_label_->SetText(base::UTF8ToUTF16(icon));
+    icon_label_->SetVisible(!icon.empty());
+    name_label_->SetText(name);
+    InvalidateLayout();
+  }
+
+ private:
+  raw_ptr<views::Label> icon_label_ = nullptr;
+  raw_ptr<views::Label> name_label_ = nullptr;
+};
+
+BEGIN_METADATA(SidebarSpaceHeaderRow)
+END_METADATA
+
+void ForwardDragToAutoScroller(views::View* child, const ui::DropTargetEvent& event) {
+  for (views::View* v = child; v; v = v->parent()) {
+    if (auto* list = views::AsViewClass<MahoSidebarTabListView>(v)) {
+      gfx::Point screen_point = event.location();
+      views::View::ConvertPointToScreen(child, &screen_point);
+      list->OnAutoScrollDragOver(screen_point);
+      return;
+    }
+  }
+}
+
+void ForwardDragEnded(views::View* child) {
+  for (views::View* v = child; v; v = v->parent()) {
+    if (auto* list = views::AsViewClass<MahoSidebarTabListView>(v)) {
+      list->OnAutoScrollDragEnded();
+      return;
+    }
+  }
+}
+
+// --- public SidebarSpaceHeaderRow APIs ---
+std::unique_ptr<views::View> CreateSidebarSpaceHeaderRow() {
+  return std::make_unique<SidebarSpaceHeaderRow>();
+}
+
+void UpdateSidebarSpaceHeaderRow(views::View* row,
+                                 const std::string& icon,
+                                 const std::u16string& name) {
+  if (!row) {
+    return;
+  }
+  auto* header = views::AsViewClass<SidebarSpaceHeaderRow>(row);
+  CHECK(header) << "UpdateSidebarSpaceHeaderRow received non-SidebarSpaceHeaderRow";
+  header->Configure(icon, name);
+}
+
+// --- MahoSidebarTabListView::SidebarAutoScroller implementation ---
+class MahoSidebarTabListView::SidebarAutoScroller {
+ public:
+  explicit SidebarAutoScroller(views::ScrollView* scroll_view)
+      : scroll_view_(scroll_view) {}
+
+  SidebarAutoScroller(const SidebarAutoScroller&) = delete;
+  SidebarAutoScroller& operator=(const SidebarAutoScroller&) = delete;
+  ~SidebarAutoScroller() {
+    timer_.Stop();
+  }
+
+  void OnDragOver(const gfx::Point& screen_point) {
+    if (!scroll_view_) {
+      return;
+    }
+    gfx::Point local_point = screen_point;
+    views::View::ConvertPointFromScreen(scroll_view_, &local_point);
+
+    const int height = scroll_view_->height();
+
+    if (local_point.y() >= 0 && local_point.y() < kAutoScrollEdgeDp) {
+      direction_ = -1;
+      if (!timer_.IsRunning()) {
+        timer_.Start(FROM_HERE, base::Hertz(kAutoScrollHz), this, &SidebarAutoScroller::ScrollTick);
+      }
+    } else if (local_point.y() > height - kAutoScrollEdgeDp && local_point.y() <= height) {
+      direction_ = 1;
+      if (!timer_.IsRunning()) {
+        timer_.Start(FROM_HERE, base::Hertz(kAutoScrollHz), this, &SidebarAutoScroller::ScrollTick);
+      }
+    } else {
+      timer_.Stop();
+    }
+  }
+
+  void OnDragEnded() {
+    timer_.Stop();
+  }
+
+ private:
+  void ScrollTick() {
+    if (!scroll_view_) {
+      return;
+    }
+    scroll_view_->ScrollByOffset(gfx::PointF(0, kAutoScrollStepDp * direction_));
+  }
+
+  const raw_ptr<views::ScrollView> scroll_view_;
+  base::RepeatingTimer timer_;
+  int direction_ = 0;
+};
+
+void MahoSidebarTabListView::SetAutoScrollScrollView(views::ScrollView* scroll_view) {
+  if (scroll_view) {
+    auto_scroller_ = std::make_unique<SidebarAutoScroller>(scroll_view);
+  } else {
+    auto_scroller_.reset();
+  }
+}
+
+void MahoSidebarTabListView::OnAutoScrollDragOver(const gfx::Point& screen_point) {
+  if (auto_scroller_) {
+    auto_scroller_->OnDragOver(screen_point);
+  }
+}
+
+void MahoSidebarTabListView::OnAutoScrollDragEnded() {
+  if (auto_scroller_) {
+    auto_scroller_->OnDragEnded();
+  }
+}
+
 // --- MahoSidebarTabListView ---
 
 MahoSidebarTabListView::MahoSidebarTabListView(Browser* browser)
     : browser_(browser),
       tab_preview_controller_(std::make_unique<MahoTabPreviewController>(
+          browser)),
+      folder_hover_controller_(std::make_unique<MahoSidebarFolderHoverController>(
           browser)) {
   auto* root_layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical, kRootInsets, kRowSpacingDp));
@@ -2273,6 +2524,7 @@ bool MahoSidebarTabListView::CanDrop(const ui::OSExchangeData& data) {
 }
 
 int MahoSidebarTabListView::OnDragUpdated(const ui::DropTargetEvent& event) {
+  ForwardDragToAutoScroller(this, event);
   SidebarDragPayload payload;
   if (ReadMahoDragData(event.data(), payload)) {
     if (payload.origin == SidebarDragOrigin::kPinnedSection ||
@@ -2286,6 +2538,7 @@ int MahoSidebarTabListView::OnDragUpdated(const ui::DropTargetEvent& event) {
 
 views::View::DropCallback MahoSidebarTabListView::GetDropCallback(
     const ui::DropTargetEvent& event) {
+  ForwardDragEnded(this);
   return base::BindOnce(
       [](Browser* browser, std::string space_id,
          base::RepeatingCallback<void(const std::string&)>
@@ -2339,6 +2592,7 @@ views::View::DropCallback MahoSidebarTabListView::GetDropCallback(
 }
 
 void MahoSidebarTabListView::OnDragExited() {
+  ForwardDragEnded(this);
   HideEmptyPinnedDropLane();
 }
 
@@ -2406,7 +2660,12 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
 
   const MahoSidebarTabListModel* effective_model = &model;
   MahoSidebarTabListModel fallback_model;
-  if (!has_tree) {
+  // Only fall back to the live strip when there is genuinely no space
+  // context yet (bridge not initialized). An empty per-space tree for a
+  // valid active_space_id is a legitimate state — that space simply has no
+  // tabs of its own. Falling back in that case would leak every other
+  // space's strip tabs into this space's sidebar.
+  if (!has_tree && active_space_id_.empty()) {
     fallback_model =
         BuildLiveStripFallbackTabListModel(browser, active_space_id_);
     effective_model = &fallback_model;
@@ -2442,6 +2701,11 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
     for (views::View* current = this; current; current = current->parent()) {
       current->DeprecatedLayoutImmediately();
     }
+    if (GetWidget()->HasCapture()) {
+      // Active mouse-press in progress; synthesizing a mouse move would reset
+      // the pressed button's STATE_PRESSED and kill NotifyClick.
+      return;
+    }
     GetWidget()->SynthesizeMouseMoveEvent();
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
@@ -2451,7 +2715,7 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
                 return;
               }
               views::Widget* widget = weak_self->GetWidget();
-              if (widget && widget->IsVisible()) {
+              if (widget && widget->IsVisible() && !widget->HasCapture()) {
                 widget->SynthesizeMouseMoveEvent();
               }
             },
@@ -2548,6 +2812,19 @@ void MahoSidebarTabListView::RebuildTreeNodes(
           base::BindRepeating(&MahoSidebarTabListView::RevealEmptyPinnedDropLane,
                               base::Unretained(this)));
 
+      folder_row->children_snapshot_ = node.children;
+
+      folder_row->SetHoverPopupCallbacks(
+          base::BindRepeating(&MahoSidebarFolderHoverController::ScheduleShow,
+                              folder_hover_controller_->AsWeakPtr(),
+                              folder_row, node.folder_id, node.folder_name),
+          base::BindRepeating(&MahoSidebarFolderHoverController::OnRowMouseExited,
+                              folder_hover_controller_->AsWeakPtr()));
+
+      folder_row->SetSpringExpandCallback(
+          base::BindRepeating(&MahoSidebarTabListView::ToggleFolderExpanded,
+                              weak_factory_.GetWeakPtr(), node.folder_id));
+
       if (node.is_expanded && !node.children.empty()) {
         RebuildTreeNodes(parent, node.children, section, browser,
                          node.folder_id);
@@ -2582,9 +2859,7 @@ void MahoSidebarTabListView::RebuildTreeNodes(
       const int live_index = node.tab_strip_index >= 0
                                  ? node.tab_strip_index
                                  : ResolveTabStripIndexForTabId(node.tab_id);
-      if (live_index < 0) {
-        continue;
-      }
+      const bool is_suspended = (live_index < 0);
       content::WebContents* contents = nullptr;
       tabs::TabInterface* tab_iface = nullptr;
       if (browser && browser->tab_strip_model() && live_index >= 0) {
@@ -2596,6 +2871,11 @@ void MahoSidebarTabListView::RebuildTreeNodes(
       TabUIHelper* tab_ui =
           tab_iface ? TabUIHelper::From(tab_iface) : nullptr;
       ui::ImageModel fav = tab_ui ? tab_ui->GetFavicon() : ui::ImageModel();
+      if (fav.IsEmpty()) {
+        fav = ui::ImageModel::FromVectorIcon(vector_icons::kGlobeIcon,
+                                             ui::kColorSysOnSurfaceSubtle,
+                                             kRowIconSizeDp);
+      }
 
       auto* before_tab_lane =
           parent->AddChildView(std::make_unique<SidebarInsertionLaneView>(
@@ -2625,6 +2905,7 @@ void MahoSidebarTabListView::RebuildTreeNodes(
                               base::Unretained(this)),
           base::BindRepeating(&MahoSidebarTabListView::HandleTabRowHoverEnd,
                               base::Unretained(this))));
+      row_view->SetSuspended(is_suspended);
       if (favorites_drop_accepted_callback_) {
         row_view->SetFavoritesDropAcceptedCallback(
             favorites_drop_accepted_callback_);
@@ -2677,10 +2958,83 @@ void MahoSidebarTabListView::ActivateTab(int tab_index) {
   model->ActivateTabAt(tab_index);
 }
 
+namespace {
+
+struct PersistedTabInfo {
+  std::string url;
+  std::string title;
+  bool is_pinned = false;
+};
+
+std::optional<PersistedTabInfo> QueryTabFromCore(const std::string& tab_id) {
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return std::nullopt;
+  }
+  char* json_str = maho_core_get_tab_view_models(core);
+  if (!json_str) {
+    return std::nullopt;
+  }
+  std::string json(json_str);
+  maho_string_free(json_str);
+
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_list()) {
+    return std::nullopt;
+  }
+
+  for (const auto& item : parsed->GetList()) {
+    const auto* dict = item.GetIfDict();
+    if (!dict) {
+      continue;
+    }
+    const std::string* id = dict->FindString("id");
+    if (id && *id == tab_id) {
+      const std::string* url = dict->FindString("url");
+      const std::string* title = dict->FindString("title");
+      std::optional<bool> is_pinned = dict->FindBool("isPinned");
+      PersistedTabInfo info;
+      if (url) info.url = *url;
+      if (title) info.title = *title;
+      if (is_pinned) info.is_pinned = *is_pinned;
+      return info;
+    }
+  }
+  return std::nullopt;
+}
+
+}  // namespace
+
 void MahoSidebarTabListView::ActivateTabById(const std::string& tab_id) {
   const int index = ResolveTabStripIndexForTabId(tab_id);
   if (index >= 0) {
     ActivateTab(index);
+  } else {
+    WakeSuspendedTab(tab_id);
+  }
+}
+
+void MahoSidebarTabListView::WakeSuspendedTab(const std::string& tab_id) {
+  auto persisted = QueryTabFromCore(tab_id);
+  if (!persisted) {
+    return;
+  }
+
+  MahoTabIdHelper::SetPendingRestoredTabId(tab_id);
+
+  NavigateParams params(browser_, GURL(persisted->url),
+                        ui::PAGE_TRANSITION_AUTO_BOOKMARK);
+  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  Navigate(&params);
+
+  // If the persisted tab was pinned, re-pin in the new WebContents' tab strip slot
+  if (persisted->is_pinned && params.navigated_or_inserted_contents) {
+    TabStripModel* model = browser_->tab_strip_model();
+    int new_idx = model->GetIndexOfWebContents(params.navigated_or_inserted_contents);
+    if (new_idx != TabStripModel::kNoTab && !model->IsTabPinned(new_idx)) {
+      model->SetTabPinned(new_idx, true);
+    }
   }
 }
 
@@ -2693,7 +3047,21 @@ void MahoSidebarTabListView::CloseTab(int tab_index) {
   if (content::WebContents* wc = model->GetWebContentsAt(tab_index)) {
     if (auto* helper = MahoTabIdHelper::FromWebContents(wc);
         helper && !helper->stable_tab_id().empty()) {
-      maho::DispatchShellEvent("close_tab", {{"tab_id", helper->stable_tab_id()}});
+      auto* bridge = MahoSpaceProfileBridge::GetInstance();
+      std::string active_space_id = bridge ? bridge->GetActiveSpaceId(browser_) : std::string();
+      if (!active_space_id.empty()) {
+        maho::DispatchShellEvent("close_tab", {
+            {"tab_id", helper->stable_tab_id()},
+            {"expected_space_id", active_space_id}
+        });
+      } else {
+        // expected_space_id is intentionally omitted when active_space_id is empty
+        // (bridge not yet initialized — startup window). Rust core's CloseTab handler
+        // treats None as "no validation"; the close is processed against tab.space_id
+        // directly, which is the correct fallback during startup before the bridge
+        // has a space context.
+        maho::DispatchShellEvent("close_tab", {{"tab_id", helper->stable_tab_id()}});
+      }
     }
   }
   model->CloseWebContentsAt(tab_index, TabCloseTypes::CLOSE_USER_GESTURE |
@@ -2704,6 +3072,23 @@ void MahoSidebarTabListView::CloseTabById(const std::string& tab_id) {
   const int index = ResolveTabStripIndexForTabId(tab_id);
   if (index >= 0) {
     CloseTab(index);
+  } else {
+    // If it's a suspended tab (index < 0), close it directly in rust core
+    auto* bridge = MahoSpaceProfileBridge::GetInstance();
+    std::string active_space_id = bridge ? bridge->GetActiveSpaceId(browser_) : std::string();
+    if (!active_space_id.empty()) {
+      maho::DispatchShellEvent("close_tab", {
+          {"tab_id", tab_id},
+          {"expected_space_id", active_space_id}
+      });
+    } else {
+      // expected_space_id is intentionally omitted when active_space_id is empty
+      // (bridge not yet initialized — startup window). Rust core's CloseTab handler
+      // treats None as "no validation"; the close is processed against tab.space_id
+      // directly, which is the correct fallback during startup before the bridge
+      // has a space context.
+      maho::DispatchShellEvent("close_tab", {{"tab_id", tab_id}});
+    }
   }
 }
 
