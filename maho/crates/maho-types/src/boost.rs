@@ -28,20 +28,15 @@ pub enum CaseMode {
 /// Backward-compat alias for external crates that still reference `TextCase`.
 pub type TextCase = CaseMode;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SizeMode {
     K90,
+    #[default]
     K100,
     K110,
     K125,
     K150,
-}
-
-impl Default for SizeMode {
-    fn default() -> Self {
-        Self::K100
-    }
 }
 
 impl SizeMode {
@@ -303,7 +298,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_zen_autoTheme_alias_deserializes() {
+    fn test_zen_auto_theme_alias_deserializes() {
         let json = r#"{"autoTheme": true}"#;
         let update: ColorBoostUpdate = serde_json::from_str(json).unwrap();
         assert_eq!(update.magic_theme, Some(true));

@@ -31,7 +31,7 @@ pub fn derive_key(password_file_path: &str, out_key: &mut [u8; 16], out_status: 
         rand::thread_rng().fill_bytes(&mut bytes);
         password = bytes;
 
-        if let Err(_) = write_atomically(path, &password) {
+        if write_atomically(path, &password).is_err() {
             *out_status = 1; // IoError
             return false;
         }
@@ -60,15 +60,15 @@ pub fn key_path_is_secure(path_str: &str, out_status: &mut u32) -> bool {
                 let mode = metadata.permissions().mode() & 0o777;
                 if mode == 0o600 {
                     *out_status = 0;
-                    return true;
+                    true
                 } else {
                     *out_status = 2; // PermissionError
-                    return false;
+                    false
                 }
             }
             Err(_) => {
                 *out_status = 1;
-                return false;
+                false
             }
         }
     }
@@ -102,9 +102,8 @@ fn write_atomically(path: &Path, content: &[u8]) -> std::io::Result<()> {
         }
     }
 
-    std::fs::rename(&temp_path, path).map_err(|e| {
+    std::fs::rename(&temp_path, path).inspect_err(|_| {
         let _ = std::fs::remove_file(&temp_path);
-        e
     })?;
     Ok(())
 }

@@ -1,5 +1,29 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
+
+const LMDB_DIRTY_TABS: u8 = 0b00001;
+const LMDB_DIRTY_SPACES: u8 = 0b00010;
+const LMDB_DIRTY_ACTIVE_SPACE: u8 = 0b00100;
+const LMDB_DIRTY_PROFILES: u8 = 0b01000;
+const LMDB_DIRTY_ACTIVE_PROFILE: u8 = 0b10000;
+const LMDB_DIRTY_ALL: u8 = 0b11111;
+
+const PERSIST_THROTTLE_MS: u64 = 50;
+
+struct PersistThrottle {
+    pending_bits: u8,
+    last_flush: Instant,
+}
+
+impl PersistThrottle {
+    fn new() -> Self {
+        Self {
+            pending_bits: 0,
+            last_flush: Instant::now() - Duration::from_secs(3600),
+        }
+    }
+}
 
 use maho_types::account::{AccountInfo, AuthState};
 use maho_types::boost::{Boost, BoostUpdate};
@@ -710,6 +734,7 @@ pub struct MahoCore {
     skills_manager: SkillsManager,
     sharing_manager: SharingManager,
     memory_manager: MemoryManager,
+    persist_throttle: RefCell<PersistThrottle>,
 }
 
 impl Default for MahoCore {
@@ -964,6 +989,7 @@ impl MahoCore {
             skills_manager: SkillsManager::new(),
             sharing_manager: SharingManager::new(),
             memory_manager: MemoryManager::new(),
+            persist_throttle: RefCell::new(PersistThrottle::new()),
         };
 
         core
@@ -1061,49 +1087,105 @@ impl MahoCore {
     }
 
     pub fn save_state(&self) -> Result<(), PersistenceError> {
+        self.save_state_partial(LMDB_DIRTY_ALL)
+    }
+
+    fn save_state_partial(&self, dirty: u8) -> Result<(), PersistenceError> {
+        if dirty == 0 {
+            return Ok(());
+        }
+
         let lmdb = self
             .lmdb_storage
             .as_ref()
             .ok_or_else(|| PersistenceError::Storage("LMDB storage not initialized".to_string()))?;
 
-        let tabs: Vec<&maho_types::tab::Tab> = self.tab_manager.get_all_tabs();
-        let favorite_count = tabs.iter().filter(|t| t.is_favorite).count();
-        eprintln!(
-            "[Maho] save_state: persisting {} tabs ({} favorites), {} spaces",
-            tabs.len(),
-            favorite_count,
-            self.space_manager.get_all_spaces().len(),
-        );
-        let tabs_json = serde_json::to_vec(&tabs)
-            .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
-        lmdb.put("tabs", &tabs_json)
-            .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+        if dirty & LMDB_DIRTY_TABS != 0 {
+            let tabs: Vec<&maho_types::tab::Tab> = self.tab_manager.get_all_tabs();
+            let favorite_count = tabs.iter().filter(|t| t.is_favorite).count();
+            eprintln!(
+                "[Maho] save_state: persisting {} tabs ({} favorites), {} spaces",
+                tabs.len(),
+                favorite_count,
+                self.space_manager.get_all_spaces().len(),
+            );
+            let tabs_json = serde_json::to_vec(&tabs)
+                .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+            lmdb.put("tabs", &tabs_json)
+                .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+        }
 
-        let spaces: Vec<&maho_types::space::Space> = self.space_manager.get_all_spaces();
-        let spaces_json = serde_json::to_vec(&spaces)
-            .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
-        lmdb.put("spaces", &spaces_json)
-            .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+        if dirty & LMDB_DIRTY_SPACES != 0 {
+            let spaces: Vec<&maho_types::space::Space> = self.space_manager.get_all_spaces();
+            let spaces_json = serde_json::to_vec(&spaces)
+                .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+            lmdb.put("spaces", &spaces_json)
+                .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+        }
 
-        let active_space_id = self.space_manager.get_active_space_id();
-        let active_space_json = serde_json::to_vec(active_space_id)
-            .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
-        lmdb.put("active_space_id", &active_space_json)
-            .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+        if dirty & LMDB_DIRTY_ACTIVE_SPACE != 0 {
+            let active_space_id = self.space_manager.get_active_space_id();
+            let active_space_json = serde_json::to_vec(active_space_id)
+                .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+            lmdb.put("active_space_id", &active_space_json)
+                .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+        }
 
-        let profiles = self.profile_manager.list_profiles();
-        let profiles_json = serde_json::to_vec(&profiles)
-            .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
-        lmdb.put("profiles", &profiles_json)
-            .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+        if dirty & LMDB_DIRTY_PROFILES != 0 {
+            let profiles = self.profile_manager.list_profiles();
+            let profiles_json = serde_json::to_vec(&profiles)
+                .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+            lmdb.put("profiles", &profiles_json)
+                .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+        }
 
-        let active_profile_id = self.profile_manager.get_active_profile_id();
-        let active_profile_json = serde_json::to_vec(&active_profile_id)
-            .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
-        lmdb.put("active_profile_id", &active_profile_json)
-            .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+        if dirty & LMDB_DIRTY_ACTIVE_PROFILE != 0 {
+            let active_profile_id = self.profile_manager.get_active_profile_id();
+            let active_profile_json = serde_json::to_vec(&active_profile_id)
+                .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+            lmdb.put("active_profile_id", &active_profile_json)
+                .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+        }
 
         Ok(())
+    }
+
+    fn persist_lmdb_now_partial(&self, bits: u8) {
+        if self.lmdb_storage.is_none() || bits == 0 {
+            return;
+        }
+        let to_flush = {
+            let mut t = self.persist_throttle.borrow_mut();
+            t.pending_bits |= bits;
+            let elapsed = t.last_flush.elapsed();
+            if elapsed < Duration::from_millis(PERSIST_THROTTLE_MS) {
+                return;
+            }
+            let bits = t.pending_bits;
+            t.pending_bits = 0;
+            t.last_flush = Instant::now();
+            bits
+        };
+        if let Err(e) = self.save_state_partial(to_flush) {
+            eprintln!("[Maho] persist_lmdb_now_partial failed: {}", e);
+            self.persist_throttle.borrow_mut().pending_bits |= to_flush;
+        }
+    }
+
+    fn persist_lmdb_force_flush(&self) {
+        if self.lmdb_storage.is_none() {
+            return;
+        }
+        let to_flush = {
+            let mut t = self.persist_throttle.borrow_mut();
+            let bits = t.pending_bits | LMDB_DIRTY_ALL;
+            t.pending_bits = 0;
+            t.last_flush = Instant::now();
+            bits
+        };
+        if let Err(e) = self.save_state_partial(to_flush) {
+            eprintln!("[Maho] persist_lmdb_force_flush failed: {}", e);
+        }
     }
 
     pub fn load_state(&mut self) -> Result<(), PersistenceError> {
@@ -2244,6 +2326,89 @@ impl MahoCore {
     }
 
     pub fn handle_event(&mut self, event: ShellEvent) -> Vec<CoreUpdate> {
+        let dirty_bits = Self::event_dirty_flags(&event);
+        let result = self.handle_event_inner(event);
+        if dirty_bits != 0 {
+            self.persist_lmdb_now_partial(dirty_bits);
+        }
+        result
+    }
+
+    fn event_dirty_flags(event: &ShellEvent) -> u8 {
+        match event {
+            ShellEvent::TabTitleUpdated { .. }
+            | ShellEvent::TabUrlUpdated { .. }
+            | ShellEvent::TabFaviconUpdated { .. }
+            | ShellEvent::NavigateTo { .. }
+            | ShellEvent::GoBack { .. }
+            | ShellEvent::GoForward { .. }
+            | ShellEvent::SetZoom { .. }
+            | ShellEvent::ResetZoom { .. }
+            | ShellEvent::MuteTab { .. }
+            | ShellEvent::UnmuteTab { .. }
+            | ShellEvent::FreezeTab { .. }
+            | ShellEvent::UnfreezeTab { .. }
+            | ShellEvent::SuspendTab { .. }
+            | ShellEvent::FavoriteTab { .. }
+            | ShellEvent::UnfavoriteTab { .. }
+            | ShellEvent::PinTab { .. }
+            | ShellEvent::UnpinTab { .. }
+            | ShellEvent::SetTabCustomTitle { .. }
+            | ShellEvent::ResetPinnedTab { .. }
+            | ShellEvent::SetTabParent { .. } => LMDB_DIRTY_TABS,
+
+            ShellEvent::CreateTab { .. }
+            | ShellEvent::CloseTab { .. }
+            | ShellEvent::ActivateTab { .. }
+            | ShellEvent::CloseOtherTabs { .. }
+            | ShellEvent::CloseTabsToRight { .. }
+            | ShellEvent::CloseTabsToLeft { .. }
+            | ShellEvent::ReopenLastClosed
+            | ShellEvent::DuplicateTab { .. }
+            | ShellEvent::RestoreArchivedTab { .. }
+            | ShellEvent::DeleteArchivedTab { .. }
+            | ShellEvent::ReorderTab { .. }
+            | ShellEvent::ReorderFavorite { .. }
+            | ShellEvent::MoveTab { .. }
+            | ShellEvent::MoveTabToSpace { .. }
+            | ShellEvent::MoveTabToRoot { .. }
+            | ShellEvent::MoveTabToFolder { .. }
+            | ShellEvent::RemoveTabFromFolder { .. }
+            | ShellEvent::CreateFolder { .. }
+            | ShellEvent::RenameFolder { .. }
+            | ShellEvent::DeleteFolder { .. }
+            | ShellEvent::ConvertFolderToSpace { .. }
+            | ShellEvent::MoveFolderIntoFolder { .. }
+            | ShellEvent::MoveFolderToRoot { .. }
+            | ShellEvent::ReorderFolder { .. }
+            | ShellEvent::ReorderTabInFolder { .. }
+            | ShellEvent::ReorderRootItem { .. }
+            | ShellEvent::ApplyTidyTabs { .. } => LMDB_DIRTY_TABS | LMDB_DIRTY_SPACES,
+
+            ShellEvent::CreateSpace { .. } | ShellEvent::DeleteSpace { .. } => {
+                LMDB_DIRTY_SPACES | LMDB_DIRTY_ACTIVE_SPACE
+            }
+
+            ShellEvent::RenameSpace { .. }
+            | ShellEvent::RecolorSpace { .. }
+            | ShellEvent::ReorderSpace { .. }
+            | ShellEvent::UpdateSpaceConfig { .. }
+            | ShellEvent::ExportSpaceIntoFolder { .. } => LMDB_DIRTY_SPACES,
+
+            ShellEvent::ActivateSpace { .. } => LMDB_DIRTY_ACTIVE_SPACE,
+
+            ShellEvent::CreateProfile { .. } | ShellEvent::DeleteProfile { .. } => {
+                LMDB_DIRTY_PROFILES | LMDB_DIRTY_ACTIVE_PROFILE
+            }
+            ShellEvent::UpdateProfile { .. } => LMDB_DIRTY_PROFILES,
+
+            ShellEvent::SwitchProfile { .. } => LMDB_DIRTY_ACTIVE_PROFILE,
+
+            _ => 0,
+        }
+    }
+
+    fn handle_event_inner(&mut self, event: ShellEvent) -> Vec<CoreUpdate> {
         // Handle command bar mutation events before dispatch (dispatcher only has read-only access)
         match &event {
             ShellEvent::ClearSplitView => {
@@ -2264,7 +2429,7 @@ impl MahoCore {
                 }];
             }
             ShellEvent::CommandBarSelect { key, .. } => {
-                self.record_command_bar_usage(&key);
+                self.record_command_bar_usage(key);
                 return vec![];
             }
             ShellEvent::AddSearchEngine { engine } => {
@@ -2292,7 +2457,7 @@ impl MahoCore {
                 )];
             }
             ShellEvent::AppWillTerminate => {
-                let _ = self.save_state();
+                self.persist_lmdb_force_flush();
                 return vec![];
             }
             ShellEvent::CreateProfile { name } => {
@@ -3328,6 +3493,7 @@ impl MahoCore {
         for listener in self.update_listeners.borrow().iter() {
             listener(update.clone());
         }
+        self.persist_lmdb_now_partial(LMDB_DIRTY_TABS | LMDB_DIRTY_SPACES);
         space
     }
 
@@ -3580,7 +3746,7 @@ impl MahoCore {
             .update_profile(id, name, avatar_color, download_path, archive_timeout_hours)
             .cloned();
         if result.is_some() {
-            let _ = self.save_state();
+            self.persist_lmdb_now_partial(LMDB_DIRTY_PROFILES);
         }
         let switched = self.profile_manager.switch_profile(id);
         if switched {
@@ -3918,6 +4084,7 @@ impl MahoCore {
         // cross-space guard).
         self.enforce_residency_for_tab(tab_id);
 
+        self.persist_lmdb_now_partial(LMDB_DIRTY_TABS | LMDB_DIRTY_SPACES);
         true
     }
 
