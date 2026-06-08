@@ -6,7 +6,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../../ui/dropdown-menu.js';
-import {ViewMode} from '../../../types.js';
+import {AppState, ViewMode} from '../../../types.js';
 
 export function CompactTopbar(
     {
@@ -21,6 +21,7 @@ export function CompactTopbar(
       onSetViewMode: (mode: ViewMode) => void;
       onGetViewMode: () => Promise<ViewMode>;
       onStartSession: () => void;
+      state: AppState;
     }) {
   const [currentMode, setCurrentMode] = useState<ViewMode>(ViewMode.kSidebar);
 
@@ -47,6 +48,9 @@ export function CompactTopbar(
           onClick={onStartSession}
         />
       </div>
+
+      <div className="compact-panel__topbar-center" />
+
       <div className="compact-panel__topbar-right">
         <IconButton
           ariaLabel="Open settings"

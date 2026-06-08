@@ -1,20 +1,16 @@
-import {FormEvent, useEffect, useState} from 'react';
+import React, {FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState} from 'react';
 
 import type {
   AppState,
   ComposerAttachment,
   HistoryItemRecord,
-  BookmarkItemRecord,
   OpenTabRecord,
 } from '../../../types.js';
 import {
   createHistoryAttachment,
-  createBookmarkAttachment,
   createTabAttachment,
   getHistoryItemDetail,
   getHistoryItemTitle,
-  getBookmarkItemDetail,
-  getBookmarkItemTitle,
   getHistoryVisitedLabel,
   getOpenTabDetail,
   getOpenTabTitle,
@@ -30,7 +26,16 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '../../ui/popover.js';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '../../ui/dropdown-menu.js';
 import {Icon} from '../../ui/icon.js';
+import type {IconSymbol} from '../../ui/icon.js';
 import {IconButton} from '../../ui/icon-button.js';
 import {ComposerTextarea} from '../../ui/textarea.js';
 
@@ -41,33 +46,55 @@ export interface ComposerHandlers {
   onRefreshOpenTabs: () => void;
   onResetHistorySearch: () => void;
   onSearchHistory: (query: string) => void;
-  onResetBookmarksSearch: () => void;
-  onSearchBookmarks: (query: string) => void;
   onStartSession: () => void;
   onSubmit: () => void;
   onToggleBrowserContext: () => void;
   onToggleHistoryAttachment: (attachment: ComposerAttachment) => void;
   onToggleTabAttachment: (attachment: ComposerAttachment) => void;
-  onToggleBookmarkAttachment: (attachment: ComposerAttachment) => void;
+  onAttachFiles: (files: FileList | File[]) => void;
+  onRequestFileChooser: () => void;
+  onRemoveAttachment: (attachment: ComposerAttachment) => void;
+  onSetActiveAI: (providerId: string, modelId: string) => Promise<void>;
+}
+
+function Favicon({pageUrl}: {pageUrl: string}) {
+  if (!pageUrl) return null;
+  let src = '';
+  try {
+    const url = new URL('chrome://favicon2/');
+    url.searchParams.set('pageUrl', pageUrl);
+    url.searchParams.set('size', '16');
+    url.searchParams.set('allowGoogleServerFallback', '0');
+    src = url.toString();
+  } catch {
+    return null;
+  }
+  return (
+    <img
+      alt=""
+      aria-hidden="true"
+      className="compact-context-picker__favicon"
+      height={16}
+      src={src}
+      width={16}
+    />
+  );
 }
 
 function PickerStatus(
     {
-      badge,
-      detail,
       title,
     }: {
-      badge: string;
+      badge?: string;
       detail?: string;
       title: string;
     }) {
   return (
     <div className="compact-context-picker__status">
-      <span className="compact-context-picker__row-copy">
-        <span className="compact-context-picker__row-title">{title}</span>
-        {detail ? <span className="compact-context-picker__row-detail">{detail}</span> : null}
+      <span className="compact-context-picker__row-icon">
+        <Icon symbol="globe" />
       </span>
-      <span className="compact-context-picker__badge">{badge}</span>
+      <span className="compact-context-picker__row-title">{title}</span>
     </div>
   );
 }
@@ -75,16 +102,19 @@ function PickerStatus(
 function PickerOptionRow(
     {
       active,
-      detail,
       disabled,
+      faviconUrl,
+      iconSymbol,
       metaLabel,
       onClick,
       title,
     }: {
       active: boolean;
-      detail: string;
+      detail?: string;
       disabled: boolean;
-      metaLabel: string;
+      faviconUrl?: string;
+      iconSymbol?: IconSymbol;
+      metaLabel?: string;
       onClick: () => void;
       title: string;
     }) {
@@ -99,19 +129,13 @@ function PickerOptionRow(
       disabled={disabled}
       type="button"
       onClick={onClick}>
-      <span className="compact-context-picker__row-copy">
-        <span className="compact-context-picker__row-title">{title}</span>
-        <span className="compact-context-picker__row-detail">{detail}</span>
+      <span className="compact-context-picker__row-icon">
+        {faviconUrl ? <Favicon pageUrl={faviconUrl} /> : <Icon symbol={iconSymbol ?? 'globe'} />}
       </span>
-      <span className="compact-context-picker__row-meta">
+      <span className="compact-context-picker__row-title">{title}</span>
+      {metaLabel ? (
         <span className="compact-context-picker__badge">{metaLabel}</span>
-        <span className={cn(
-            'compact-context-picker__badge',
-            'compact-context-picker__badge--action',
-            active && 'compact-context-picker__badge--active')}>
-          {active ? 'Attached' : 'Attach'}
-        </span>
-      </span>
+      ) : null}
     </button>
   );
 }
@@ -147,50 +171,43 @@ function TabsSection(
       <PickerOptionRow
         key={attachment.id}
         active={attached}
-        detail={getOpenTabDetail(tab)}
         disabled={readOnly}
-        metaLabel={tab.isActive ? 'Active' : `Tab ${tab.index + 1}`}
+        faviconUrl={tab.url}
+        metaLabel={tab.isActive ? 'Active' : undefined}
         title={getOpenTabTitle(tab)}
         onClick={() => handlers.onToggleTabAttachment(attachment)}
       />
     );
   };
 
-  const statusText =
-      openTabs.loading ?
-        'Loading…' :
-        (openTabs.loaded ? `${filteredItems.length} open` : 'Load to browse');
-
   return (
     <div className="compact-context-picker__section">
       <div className="compact-context-picker__section-head">
         <div className="compact-context-picker__section-label">Open tabs</div>
-        <div className="compact-context-picker__section-actions">
-          <span className="compact-context-picker__section-meta">{statusText}</span>
-          <Button
-            className="compact-context-picker__mini-action"
-            disabled={openTabs.loading}
-            variant="overflow-item"
-            onClick={openTabs.loaded ? handlers.onRefreshOpenTabs : handlers.onLoadOpenTabs}>
-            {openTabs.loaded ? 'Refresh' : 'Load'}
-          </Button>
-        </div>
       </div>
 
       {openTabs.loading ? (
-        <PickerStatus badge="Loading" detail="Fetching live tabs from this window." title="Loading open tabs" />
+        <PickerStatus title="Loading open tabs…" />
       ) : null}
 
       {openTabs.error ? (
-        <PickerStatus badge="Unavailable" detail={openTabs.error} title="Couldn’t load tabs" />
+        <PickerStatus title="Couldn’t load tabs" />
+      ) : null}
+
+      {!openTabs.loaded && !openTabs.loading && !openTabs.error ? (
+        <button
+          aria-label="Load open tabs"
+          className="compact-context-picker__row"
+          disabled={readOnly}
+          type="button"
+          onClick={handlers.onLoadOpenTabs}>
+          <span className="compact-context-picker__row-icon"><Icon symbol="globe" /></span>
+          <span className="compact-context-picker__row-title">Load open tabs</span>
+        </button>
       ) : null}
 
       {openTabs.loaded && !openTabs.loading && !openTabs.error && filteredItems.length === 0 ? (
-        <PickerStatus
-          badge="Empty"
-          detail={searchQuery ? "Try a broader title, domain, or keyword." : "This window did not report any attachable tabs."}
-          title={searchQuery ? "No tab matches" : "No open tabs available"}
-        />
+        <PickerStatus title={searchQuery ? "No tab matches" : "No open tabs"} />
       ) : null}
 
       {filteredItems.length > 0 ? (
@@ -221,59 +238,39 @@ function HistorySection(
   const renderHistoryRow = (item: HistoryItemRecord) => {
     const attachment = createHistoryAttachment(item);
     const attached = selectedIds.has(attachment.id);
-    const visitedLabel = getHistoryVisitedLabel(item);
 
     return (
       <PickerOptionRow
         key={attachment.id}
         active={attached}
-        detail={getHistoryItemDetail(item)}
         disabled={readOnly}
-        metaLabel={visitedLabel || 'Visited'}
+        faviconUrl={item.url}
         title={getHistoryItemTitle(item)}
         onClick={() => handlers.onToggleHistoryAttachment(attachment)}
       />
     );
   };
 
-  const resultCountText =
-      historySearch.loading ?
-        'Searching…' :
-        (hasQuery ? `${historySearch.items.length} found` : 'Search above');
-
   return (
     <div className="compact-context-picker__section">
       <div className="compact-context-picker__section-head">
         <div className="compact-context-picker__section-label">{hasQuery ? 'History results' : 'History'}</div>
-        <span className="compact-context-picker__section-meta">{resultCountText}</span>
       </div>
 
       {historySearch.loading ? (
-        <PickerStatus
-          badge="Loading"
-          detail={`Pulling matches for “${historySearch.query.trim()}”.`}
-          title="Searching history"
-        />
+        <PickerStatus title="Searching history…" />
       ) : null}
 
       {historySearch.error ? (
-        <PickerStatus badge="Unavailable" detail={historySearch.error} title="Couldn’t search history" />
+        <PickerStatus title="Couldn’t search history" />
       ) : null}
 
       {!hasQuery && !historySearch.loading && !historySearch.error ? (
-        <PickerStatus
-          badge="Search"
-          detail="Use the search field above to attach pages from browsing history."
-          title="Search your history"
-        />
+        <PickerStatus title="Search to find history" />
       ) : null}
 
       {hasQuery && !historySearch.loading && !historySearch.error && historySearch.items.length === 0 ? (
-        <PickerStatus
-          badge="Empty"
-          detail="Try a broader title, domain, or keyword."
-          title="No history matches"
-        />
+        <PickerStatus title="No history matches" />
       ) : null}
 
       {historySearch.items.length > 0 ? (
@@ -285,85 +282,58 @@ function HistorySection(
   );
 }
 
-function BookmarksSection(
+function PinnedTabsSection(
     {
       handlers,
-      hasQuery,
-      bookmarksSearch,
+      openTabs,
       readOnly,
       selectedAttachments,
     }: {
       handlers: ComposerHandlers;
-      hasQuery: boolean;
-      bookmarksSearch: AppState['bookmarksSearch'];
+      openTabs: AppState['openTabs'];
       readOnly: boolean;
       selectedAttachments: ComposerAttachment[];
     }) {
-  const selectedIds = new Set(
-      selectedAttachments.filter(a => a.kind === 'bookmark').map(item => item.id));
+  const selectedIds = new Set(selectedAttachments.filter(isTabAttachment).map(item => item.id));
+  const pinnedItems = openTabs.items.filter(tab => tab.isPinned);
 
-  const renderBookmarkRow = (item: BookmarkItemRecord) => {
-    const attachment = createBookmarkAttachment(item);
+  const renderPinnedRow = (tab: OpenTabRecord) => {
+    const attachment = createTabAttachment(tab);
     const attached = selectedIds.has(attachment.id);
-
     return (
       <PickerOptionRow
         key={attachment.id}
         active={attached}
-        detail={getBookmarkItemDetail(item)}
         disabled={readOnly}
-        metaLabel="Bookmark"
-        title={getBookmarkItemTitle(item)}
-        onClick={() => handlers.onToggleBookmarkAttachment(attachment)}
+        faviconUrl={tab.url}
+        metaLabel={tab.isActive ? 'Active' : undefined}
+        title={getOpenTabTitle(tab)}
+        onClick={() => handlers.onToggleTabAttachment(attachment)}
       />
     );
   };
 
-  const resultCountText =
-      bookmarksSearch.loading ?
-        'Searching…' :
-        (hasQuery ? `${bookmarksSearch.items.length} found` : 'Search above');
-
   return (
     <div className="compact-context-picker__section">
       <div className="compact-context-picker__section-head">
-        <div className="compact-context-picker__section-label">
-          {hasQuery ? 'Bookmark results' : 'Bookmarks'}
-        </div>
-        <span className="compact-context-picker__section-meta">{resultCountText}</span>
+        <div className="compact-context-picker__section-label">Pinned tabs</div>
       </div>
 
-      {bookmarksSearch.loading ? (
-        <PickerStatus
-          badge="Loading"
-          detail={`Pulling matches for “${bookmarksSearch.query.trim()}”.`}
-          title="Searching bookmarks"
-        />
+      {openTabs.loading ? (
+        <PickerStatus title="Loading pinned tabs…" />
       ) : null}
 
-      {bookmarksSearch.error ? (
-        <PickerStatus badge="Unavailable" detail={bookmarksSearch.error} title="Couldn’t search bookmarks" />
+      {openTabs.error ? (
+        <PickerStatus title="Couldn’t load pinned tabs" />
       ) : null}
 
-      {!hasQuery && !bookmarksSearch.loading && !bookmarksSearch.error ? (
-        <PickerStatus
-          badge="Search"
-          detail="Use the search field above to attach pages from bookmarks."
-          title="Search your bookmarks"
-        />
+      {openTabs.loaded && !openTabs.loading && !openTabs.error && pinnedItems.length === 0 ? (
+        <PickerStatus title="No pinned tabs" />
       ) : null}
 
-      {hasQuery && !bookmarksSearch.loading && !bookmarksSearch.error && bookmarksSearch.items.length === 0 ? (
-        <PickerStatus
-          badge="Empty"
-          detail="Try a broader title, domain, or keyword."
-          title="No bookmark matches"
-        />
-      ) : null}
-
-      {bookmarksSearch.items.length > 0 ? (
+      {pinnedItems.length > 0 ? (
         <div className="compact-context-picker__results">
-          {bookmarksSearch.items.map(renderBookmarkRow)}
+          {pinnedItems.map(renderPinnedRow)}
         </div>
       ) : null}
     </div>
@@ -373,6 +343,8 @@ function BookmarksSection(
 export function Composer({handlers, state}: {handlers: ComposerHandlers; state: AppState}) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [draftSearchQuery, setDraftSearchQuery] = useState(state.historySearch.query);
+  const [focusedRowIndex, setFocusedRowIndex] = useState(0);
+  const pickerRef = useRef<HTMLDivElement>(null);
   const session = state.currentSessionId ? state.sessionsById[state.currentSessionId] : null;
   const readOnly = isSessionReadOnly(session);
   const currentPageAttached = hasCurrentPageAttachment(state.composer.attachments);
@@ -381,7 +353,6 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
       !readOnly && !!state.currentSessionId &&
       !!state.turnPendingBySessionId[state.currentSessionId];
   const submitDisabled = readOnly || !state.composer.prompt.trim();
-  const submitLabel = state.currentSessionId ? 'Send' : 'Start';
   const searchQuery = state.historySearch.query.trim();
   const trimmedDraftSearchQuery = draftSearchQuery.trim();
   const hasSearchQuery = searchQuery.length > 0;
@@ -392,18 +363,64 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
     setDraftSearchQuery(state.historySearch.query);
   }, [state.historySearch.query]);
 
+  useEffect(() => {
+    if (!pickerOpen) {
+      return;
+    }
+    setFocusedRowIndex(0);
+  }, [pickerOpen, hasSearchQuery, state.openTabs.items.length, state.historySearch.items.length]);
+
+  useEffect(() => {
+    if (!pickerOpen || !pickerRef.current) {
+      return;
+    }
+    const rows = pickerRef.current.querySelectorAll<HTMLButtonElement>(
+        '.compact-context-picker__row:not([disabled])');
+    rows.forEach((row, index) => {
+      if (index === focusedRowIndex) {
+        row.setAttribute('data-focused', 'true');
+        row.scrollIntoView({block: 'nearest'});
+      } else {
+        row.removeAttribute('data-focused');
+      }
+    });
+  });
+
+  const handlePickerKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!pickerRef.current) {
+      return;
+    }
+    const rows = pickerRef.current.querySelectorAll<HTMLButtonElement>(
+        '.compact-context-picker__row:not([disabled])');
+    if (rows.length === 0) {
+      return;
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setFocusedRowIndex(prev => Math.min(prev + 1, rows.length - 1));
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setFocusedRowIndex(prev => Math.max(prev - 1, 0));
+    } else if (event.key === 'Enter' &&
+        (event.target as HTMLElement)?.tagName !== 'BUTTON') {
+      const target = rows[focusedRowIndex];
+      if (target) {
+        event.preventDefault();
+        target.click();
+      }
+    }
+  };
+
   const handleSearchSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!trimmedDraftSearchQuery) {
       if (searchQuery) {
         handlers.onResetHistorySearch();
-        handlers.onResetBookmarksSearch();
       }
       return;
     }
 
     handlers.onSearchHistory(trimmedDraftSearchQuery);
-    handlers.onSearchBookmarks(trimmedDraftSearchQuery);
   };
 
   return (
@@ -413,13 +430,14 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
         readOnly && 'compact-composer--read-only')}>
       <div className="compact-composer__body">
         <ComposerTextarea
+          onPasteFiles={files => handlers.onAttachFiles(files)}
           onSubmit={handlers.onSubmit}
           onValueChange={handlers.onPromptChange}
           placeholder={readOnly ?
             'This archived session is view-only. Start a new live session to continue.' :
             'Ask anything about this page…'}
           readOnly={readOnly}
-          rows={3}
+          rows={1}
           value={state.composer.prompt}
         />
       </div>
@@ -443,53 +461,52 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
              align="start"
              className="compact-context-picker"
              side="top">
-            <div className="compact-context-picker__search-area">
-              <div className="compact-context-picker__header">
-                <span className="compact-context-picker__badge">
-                  {state.composer.attachments.length} attached
-                </span>
-              </div>
-
+             <div ref={pickerRef} onKeyDown={handlePickerKeyDown}>
+             <div className="compact-context-picker__search-area">
               <form className="compact-context-picker__search-form" onSubmit={handleSearchSubmit}>
+                <span aria-hidden="true" className="compact-context-picker__search-icon">
+                  <svg fill="none" height="14" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" viewBox="0 0 24 24" width="14" xmlns="http://www.w3.org/2000/svg">
+                    <circle cx="11" cy="11" r="7" />
+                    <path d="m20 20-3.5-3.5" />
+                  </svg>
+                </span>
                 <input
                   className="console-input compact-context-picker__search-input"
-                  disabled={readOnly}
-                  placeholder="Search tabs, history, and bookmarks"
-                  type="search"
-                  value={draftSearchQuery}
-                  onChange={event => {
-                    const nextValue = event.currentTarget.value;
-                    setDraftSearchQuery(nextValue);
-                    if (!nextValue.trim() && searchQuery) {
-                      handlers.onResetHistorySearch();
-                      handlers.onResetBookmarksSearch();
-                    }
-                  }}
-                />
-                {canSubmitSearch ? (
-                  <Button
-                    className="compact-context-picker__mini-action"
-                    disabled={readOnly || state.historySearch.loading || state.bookmarksSearch.loading}
-                    type="submit"
-                    variant="overflow-item">
-                    Search
-                  </Button>
-                ) : (hasSearchQuery || trimmedDraftSearchQuery) ? (
-                  <Button
-                    className="compact-context-picker__mini-action"
-                    disabled={readOnly}
-                    type="button"
-                    variant="overflow-item"
-                    onClick={() => {
-                      setDraftSearchQuery('');
-                      handlers.onResetHistorySearch();
-                      handlers.onResetBookmarksSearch();
-                    }}>
-                    Clear
-                  </Button>
-                ) : null}
-              </form>
-            </div>
+                   disabled={readOnly}
+                   placeholder="Search tabs and history"
+                   type="search"
+                   value={draftSearchQuery}
+                   onChange={event => {
+                     const nextValue = event.currentTarget.value;
+                     setDraftSearchQuery(nextValue);
+                     if (!nextValue.trim() && searchQuery) {
+                       handlers.onResetHistorySearch();
+                     }
+                   }}
+                 />
+                 {canSubmitSearch ? (
+                   <Button
+                     className="compact-context-picker__mini-action"
+                     disabled={readOnly || state.historySearch.loading}
+                     type="submit"
+                     variant="overflow-item">
+                     Search
+                   </Button>
+                 ) : (hasSearchQuery || trimmedDraftSearchQuery) ? (
+                   <Button
+                     className="compact-context-picker__mini-action"
+                     disabled={readOnly}
+                     type="button"
+                     variant="overflow-item"
+                     onClick={() => {
+                       setDraftSearchQuery('');
+                       handlers.onResetHistorySearch();
+                     }}>
+                     Clear
+                   </Button>
+                 ) : null}
+               </form>
+             </div>
 
             <div className="compact-context-picker__menu">
               <HistorySection
@@ -500,10 +517,9 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
                 selectedAttachments={state.composer.attachments}
               />
 
-              <BookmarksSection
+              <PinnedTabsSection
                 handlers={handlers}
-                hasQuery={hasSearchQuery}
-                bookmarksSearch={state.bookmarksSearch}
+                openTabs={state.openTabs}
                 readOnly={readOnly}
                 selectedAttachments={state.composer.attachments}
               />
@@ -511,13 +527,10 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
               <div className="compact-context-picker__section">
                 <div className="compact-context-picker__section-head">
                   <div className="compact-context-picker__section-label">Current page</div>
-                  <span className="compact-context-picker__section-meta">Live snapshot</span>
                 </div>
                 <PickerOptionRow
                   active={currentPageAttached}
-                  detail="Attach the active page snapshot from the browser."
                   disabled={!canToggleCurrentPage}
-                  metaLabel="Live"
                   title="Current page"
                   onClick={handlers.onToggleBrowserContext}
                 />
@@ -530,21 +543,108 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
                 selectedAttachments={state.composer.attachments}
                 searchQuery={searchQuery}
               />
+
+              <div className="compact-context-picker__section">
+                <div className="compact-context-picker__section-head">
+                  <div className="compact-context-picker__section-label">Files</div>
+                </div>
+                <button
+                  className={cn(
+                      'compact-context-picker__row',
+                      readOnly && 'compact-context-picker__row--muted')}
+                  disabled={readOnly}
+                  type="button"
+                  onClick={() => {
+                    setPickerOpen(false);
+                    handlers.onRequestFileChooser();
+                  }}>
+                  <span className="compact-context-picker__row-icon">
+                    <Icon symbol="plus" />
+                  </span>
+                  <span className="compact-context-picker__row-title">Upload file from computer</span>
+                </button>
+              </div>
+            </div>
             </div>
           </PopoverContent>
         </Popover>
         {state.composer.attachments.length > 0 ? (
           <div className="compact-composer__attachments" aria-label="Attached context">
-            {state.composer.attachments.map(attachment => (
-              <span
-                key={attachment.id}
-                className="compact-composer__attachment-chip"
-                title={attachment.detail || attachment.label}>
-                <span className="compact-composer__attachment-chip-label">{attachment.label}</span>
-              </span>
-            ))}
+            {state.composer.attachments.map(attachment => {
+              const isImage = attachment.kind === 'file' &&
+                  !!attachment.mimeType?.startsWith('image/') &&
+                  !!attachment.dataUrl;
+              return (
+                <span
+                  key={attachment.id}
+                  className={cn(
+                      'compact-composer__attachment-chip',
+                      isImage && 'compact-composer__attachment-chip--image')}
+                  title={attachment.detail || attachment.label}>
+                  {isImage ? (
+                    <img
+                      alt=""
+                      aria-hidden="true"
+                      className="compact-composer__attachment-thumb"
+                      src={attachment.dataUrl}
+                    />
+                  ) : null}
+                  <span className="compact-composer__attachment-chip-label">{attachment.label}</span>
+                  <button
+                    aria-label={`Remove ${attachment.label}`}
+                    className="compact-composer__attachment-chip-remove"
+                    type="button"
+                    onClick={() => handlers.onRemoveAttachment(attachment)}>
+                    <svg fill="none" height="10" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24" width="10" xmlns="http://www.w3.org/2000/svg">
+                      <line x1="18" y1="6" x2="6" y2="18" />
+                      <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                  </button>
+                </span>
+              );
+            })}
           </div>
         ) : null}
+        {(() => {
+          const aiSettings = state.aiSettings;
+          const allProviders = state.aiProviders || [];
+          const activeProvider = allProviders.find(p => p.id === aiSettings?.activeProviderId);
+          const providers = activeProvider ? [activeProvider] : [];
+          const activeModel = aiSettings?.activeModelId;
+          return (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button type="button" className="compact-composer__model-selector-btn" aria-label="Select model">
+                  <span className="compact-composer__model-name">
+                    {activeModel ? activeModel.split('/').pop() : 'Model'}
+                  </span>
+                  <span className="compact-composer__model-selector-arrow">▾</span>
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" side="top">
+                {providers.length === 0 ? (
+                  <DropdownMenuLabel>No models configured</DropdownMenuLabel>
+                ) : (
+                  providers.map((provider, providerIdx) => (
+                    <React.Fragment key={provider.id}>
+                      {providerIdx > 0 && <DropdownMenuSeparator />}
+                      <DropdownMenuLabel>{provider.displayName}</DropdownMenuLabel>
+                      {provider.models.map(model => (
+                        <DropdownMenuItem
+                          key={model}
+                          disabled={aiSettings?.activeProviderId === provider.id && aiSettings?.activeModelId === model}
+                          onSelect={() => handlers.onSetActiveAI(provider.id, model)}>
+                          {model.split('/').pop() || model}
+                          {aiSettings?.activeProviderId === provider.id && aiSettings?.activeModelId === model && ' ✓'}
+                        </DropdownMenuItem>
+                      ))}
+                    </React.Fragment>
+                  ))
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          );
+        })()}
         <Button
           aria-label={canCancel ?
             'Stop current turn' :
@@ -554,10 +654,7 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
           variant="composer-send"
           onClick={canCancel ? handlers.onCancel : handlers.onSubmit}>
           <span className="compact-composer__send-icon">
-            <Icon symbol={canCancel ? 'stop' : 'composerSpark'} />
-          </span>
-          <span className="compact-composer__send-label">
-            {canCancel ? 'Stop' : submitLabel}
+            <Icon symbol={canCancel ? 'stop' : 'send'} />
           </span>
         </Button>
       </div>

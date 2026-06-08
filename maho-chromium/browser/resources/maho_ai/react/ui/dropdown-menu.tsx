@@ -54,5 +54,32 @@ export const DropdownMenuItem = React.forwardRef<
 
 DropdownMenuItem.displayName = DropdownMenuPrimitive.Item.displayName;
 
-export const DropdownMenuSeparator = DropdownMenuPrimitive.Separator;
-export const DropdownMenuLabel = DropdownMenuPrimitive.Label;
+export const DropdownMenuSeparator = React.forwardRef<
+    React.ElementRef<typeof DropdownMenuPrimitive.Separator>,
+    React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Separator>>(
+        function DropdownMenuSeparator({className, ...props}, ref) {
+          return (
+            <DropdownMenuPrimitive.Separator
+              {...props}
+              ref={ref}
+              className={cn('compact-overflow-menu__separator', className)}
+            />
+          );
+        });
+
+DropdownMenuSeparator.displayName = DropdownMenuPrimitive.Separator.displayName;
+
+export const DropdownMenuLabel = React.forwardRef<
+    React.ElementRef<typeof DropdownMenuPrimitive.Label>,
+    React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Label>>(
+        function DropdownMenuLabel({className, ...props}, ref) {
+          return (
+            <DropdownMenuPrimitive.Label
+              {...props}
+              ref={ref}
+              className={cn('compact-overflow-menu__label', className)}
+            />
+          );
+        });
+
+DropdownMenuLabel.displayName = DropdownMenuPrimitive.Label.displayName;

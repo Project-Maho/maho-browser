@@ -37,6 +37,7 @@ export function CompactShell(
         onOpenSettings={onOpenSettings}
         onSetViewMode={onSetViewMode}
         onStartSession={onStartSession}
+        state={state}
       />
       {hasMessages || thinkingLabel ? (
         <ConversationThread

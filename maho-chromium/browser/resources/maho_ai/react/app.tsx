@@ -3,12 +3,13 @@ import type {ErrorInfo, ReactNode} from 'react';
 import {createRoot} from 'react-dom/client';
 
 import type {MahoAiStore} from '../store.js';
-import {isSessionReadOnly, RuntimeEventKind, ViewMode} from '../types.js';
+import {createFileAttachment, isSessionReadOnly, RuntimeEventKind, ViewMode} from '../types.js';
 import type {AppState, TimelineEntry} from '../types.js';
 import {getToolProgressLabel} from '../views/conversation_thread.js';
 import {bootstrapStore, createMahoAiStore} from './store.js';
 import {runWithBootGuard} from './boot-guard.js';
 import {CompactShell} from './features/compact/compact-shell.js';
+import {Toast} from './features/compact/toast.js';
 import {
   Composer,
   type ComposerHandlers,
@@ -178,12 +179,6 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
     onSearchHistory: (query: string) => {
       void store.searchHistory(query);
     },
-    onResetBookmarksSearch: () => {
-      store.resetBookmarksSearch();
-    },
-    onSearchBookmarks: (query: string) => {
-      void store.searchBookmarks(query);
-    },
     onToggleBrowserContext: () => store.toggleBrowserContext(),
     onToggleHistoryAttachment: attachment => {
       store.toggleAttachment(attachment);
@@ -191,8 +186,27 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
     onToggleTabAttachment: attachment => {
       store.toggleAttachment(attachment);
     },
-    onToggleBookmarkAttachment: attachment => {
+    onAttachFiles: async files => {
+      const list = Array.from(files);
+      for (const file of list) {
+        try {
+          const attachment = await createFileAttachment(file);
+          store.addAttachment(attachment);
+        } catch (e: unknown) {
+          const errMsg = e instanceof Error ? e.message : String(e);
+          console.error('Failed to attach file', file.name, e);
+          store.addToast(errMsg, 'danger');
+        }
+      }
+    },
+    onRequestFileChooser: () => {
+      void store.requestFileChooser();
+    },
+    onRemoveAttachment: attachment => {
       store.toggleAttachment(attachment);
+    },
+    onSetActiveAI: (providerId: string, modelId: string) => {
+      return store.setActiveAI(providerId, modelId);
     },
     onSubmit: () => {
       if (!store.getSnapshot().currentSessionId) {
@@ -228,6 +242,9 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
     onSetViewMode: (mode: ViewMode) => {
       void store.setViewMode(mode);
     },
+    onSetActiveAI: (providerId: string, modelId: string) => {
+      return store.setActiveAI(providerId, modelId);
+    },
   }), [store]);
 
   const sessionEvents = state.currentSessionId ?
@@ -246,6 +263,13 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
   return (
     <div className={cn('console-shell', state.developerMode && 'console-shell--developer')}>
       <section className={cn('compact-panel', state.developerMode && 'compact-panel--developer')}>
+        {state.toast && (
+          <Toast
+            text={state.toast.text}
+            tone={state.toast.tone}
+            onDismiss={() => store.clearToast()}
+          />
+        )}
         {state.bootError ? <BootErrorCard message={state.bootError} /> : (
           <>
             <div className="compact-panel__stage-host">
