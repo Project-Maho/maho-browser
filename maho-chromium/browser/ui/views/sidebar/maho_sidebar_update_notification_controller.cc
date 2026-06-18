@@ -1,0 +1,155 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+
+#include "maho/browser/ui/views/sidebar/maho_sidebar_update_notification_controller.h"
+
+#include <utility>
+
+#include "base/check.h"
+#include "base/functional/bind.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_navigator.h"
+#include "chrome/browser/ui/browser_navigator_params.h"
+#include "components/prefs/pref_service.h"
+#include "components/version_info/version_info.h"
+#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
+#include "maho/browser/updates/maho_update_pref_names.h"
+#include "ui/base/models/image_model.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/color/color_id.h"
+#include "url/gurl.h"
+
+namespace maho {
+
+namespace {
+
+constexpr char kReleaseNotesUrlTemplate[] = "https://maho.dev/release-notes/";
+
+}  // namespace
+
+MahoSidebarUpdateNotificationController::
+    MahoSidebarUpdateNotificationController(
+        Browser* browser,
+        base::RepeatingClosure on_state_changed)
+    : browser_(browser), on_state_changed_(std::move(on_state_changed)) {
+  CHECK(on_state_changed_);
+  MahoUpdateManager::GetInstance()->AddObserver(this);
+}
+
+MahoSidebarUpdateNotificationController::
+    ~MahoSidebarUpdateNotificationController() {
+  MahoUpdateManager::GetInstance()->RemoveObserver(this);
+}
+
+MahoSidebarUpdateNotificationModel
+MahoSidebarUpdateNotificationController::BuildModel() {
+  MahoSidebarUpdateNotificationModel model;
+  auto* manager = MahoUpdateManager::GetInstance();
+
+  const bool simulate_only_show =
+      manager->is_simulating_for_testing() &&
+      manager->GetState() == UpdateState::kReadyToInstall;
+
+  bool should_show = false;
+  if (manager->GetState() == UpdateState::kReadyToInstall &&
+      !dismissed_in_session_) {
+    PrefService* local_state =
+        g_browser_process ? g_browser_process->local_state() : nullptr;
+    const std::string current = CurrentVersion();
+    const std::string last_seen =
+        local_state ? local_state->GetString(prefs::kMahoUpdateLastSeenVersion)
+                    : std::string();
+    should_show = simulate_only_show || (current != last_seen);
+  } else if (simulate_only_show) {
+    should_show = true;
+  }
+
+  if (!should_show) {
+    return model;
+  }
+
+  model.visible = true;
+  model.heading = u"Maho is ready to update";
+  model.accessible_heading =
+      u"A new version of Maho is downloaded and ready to install.";
+  model.on_dismiss = base::BindRepeating(
+      &MahoSidebarUpdateNotificationController::Dismiss,
+      base::Unretained(this));
+
+  PrefService* local_state =
+      g_browser_process ? g_browser_process->local_state() : nullptr;
+  MahoSidebarUpdateCheckboxModel auto_install;
+  auto_install.label = u"Automatically install updates";
+  auto_install.accessible_label =
+      u"Install future updates automatically without prompting";
+  auto_install.checked = local_state
+                             ? local_state->GetBoolean(
+                                   prefs::kMahoUpdateAutoInstall)
+                             : false;
+  auto_install.on_toggle = base::BindRepeating(
+      &MahoSidebarUpdateNotificationController::OnAutoInstallToggled,
+      base::Unretained(this));
+  model.checkbox = std::move(auto_install);
+
+  MahoSidebarUpdateActionModel restart;
+  restart.label = u"Restart and update";
+  restart.accessible_label = u"Restart Maho to apply the update";
+  restart.special = true;
+  restart.on_activate = base::BindRepeating(
+      &MahoSidebarUpdateNotificationController::OnRestartActivated,
+      base::Unretained(this));
+  model.actions.push_back(std::move(restart));
+
+  return model;
+}
+
+void MahoSidebarUpdateNotificationController::OnAutoInstallToggled(
+    bool checked) {
+  PrefService* local_state =
+      g_browser_process ? g_browser_process->local_state() : nullptr;
+  if (local_state) {
+    local_state->SetBoolean(prefs::kMahoUpdateAutoInstall, checked);
+  }
+}
+
+void MahoSidebarUpdateNotificationController::Dismiss() {
+  dismissed_in_session_ = true;
+  PrefService* local_state =
+      g_browser_process ? g_browser_process->local_state() : nullptr;
+  if (local_state) {
+    local_state->SetString(prefs::kMahoUpdateLastSeenVersion, CurrentVersion());
+  }
+  on_state_changed_.Run();
+}
+
+void MahoSidebarUpdateNotificationController::OnRestartActivated() {
+  Dismiss();
+  MahoUpdateManager::GetInstance()->ApplyUpdateAndRestart();
+}
+
+void MahoSidebarUpdateNotificationController::OnReleaseNotesActivated() {
+  if (!browser_) {
+    return;
+  }
+  GURL url(std::string(kReleaseNotesUrlTemplate) + CurrentVersion());
+  NavigateParams params(browser_, url, ui::PAGE_TRANSITION_LINK);
+  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  Navigate(&params);
+  Dismiss();
+}
+
+void MahoSidebarUpdateNotificationController::OnUpdateStateChanged(
+    UpdateState state) {
+  on_state_changed_.Run();
+}
+
+void MahoSidebarUpdateNotificationController::OnUpdateProgress(double percent) {
+}
+
+std::string MahoSidebarUpdateNotificationController::CurrentVersion() const {
+  return std::string(version_info::GetVersionNumber());
+}
+
+}  // namespace maho

@@ -109,8 +109,8 @@ constexpr int kRowTrailingSpacingDp = 0;
 constexpr int kSectionSpacingDp = 4;
 constexpr int kFolderIndentDp = 13;
 constexpr int kFolderRowHeightDp = 33;
-constexpr int kSectionSeparatorHeightDp = 8;
-constexpr int kSectionSeparatorLineHeightDp = 2;
+constexpr int kSectionSeparatorHeightDp = 6;
+constexpr int kSectionSeparatorLineHeightDp = 1;
 constexpr int kFolderGlyphSizeDp = 13;
 constexpr int kAutoScrollEdgeDp = 24;
 constexpr int kAutoScrollStepDp = 4;
@@ -124,9 +124,9 @@ constexpr int kDropIndicatorOutlineThicknessDp = 1;
 const gfx::Insets kRootInsets = gfx::Insets::TLBR(0, 0, 0, 0);
 const gfx::Insets kInlineRowInsets = gfx::Insets::TLBR(0, 10, 0, 8);
 const gfx::Insets kPlaceholderInsets = gfx::Insets::TLBR(1, 12, 0, 9);
-const gfx::Insets kNewTabRowMargins = gfx::Insets::TLBR(1, 0, 0, 0);
+const gfx::Insets kNewTabRowMargins = gfx::Insets::TLBR(0, 0, 0, 0);
 const gfx::Insets kSectionInsets = gfx::Insets::TLBR(0, 0, 0, 0);
-const gfx::Insets kSectionSeparatorInsets = gfx::Insets::TLBR(3, 8, 3, 8);
+const gfx::Insets kSectionSeparatorInsets = gfx::Insets::TLBR(2, 8, 2, 8);
 
 ui::DropTargetEvent ForwardDropTargetEventToView(const ui::DropTargetEvent& event,
                                                  views::View* source,

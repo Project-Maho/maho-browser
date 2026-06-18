@@ -84,8 +84,9 @@ inline constexpr int kHoverTriggerWidthDp = 2;      // Invisible trigger zone wi
 inline constexpr int kSidebarRevealDurationMs = 250; // Reveal animation duration
 inline constexpr int kSidebarHideDelayMs = 300;      // Delay before hide on mouse exit
 
-inline const gfx::Insets kRailInsets = gfx::Insets::TLBR(8, 8, 8, 8);
+inline const gfx::Insets kRailInsets = gfx::Insets::TLBR(6, 8, 8, 8);
 inline const gfx::Insets kSectionInsets = gfx::Insets::TLBR(2, 0, 2, 0);
+inline constexpr int kContentInsetDp = 4;
 inline const gfx::Insets kRowInsets = gfx::Insets::TLBR(2, 5, 2, 5);
 // Top-bar row padding: 1dp horizontal keeps icons off the rail edge; 2dp
 // bottom separates the action row from the search pill below it (no top

@@ -56,6 +56,8 @@ class MahoSidebarLibraryActionPaneView;
 class MahoSidebarMediaView;
 class MahoSidebarSearchView;
 class MahoSidebarTabListView;
+class MahoSidebarUpdateNotificationController;
+class MahoSidebarUpdateNotificationView;
 class MahoSidebarTopBarView;
 class MahoSidebarNotesView;
 class MahoSidebarEaselsView;
@@ -211,6 +213,10 @@ class MahoSidebarView
   raw_ptr<MahoSidebarFavoritesGridView> favorites_view_ = nullptr;
   raw_ptr<MahoSidebarTabListView> tab_list_view_ = nullptr;
   raw_ptr<MahoSidebarFooterView> footer_view_ = nullptr;
+  std::unique_ptr<MahoSidebarUpdateNotificationController>
+      update_notification_controller_;
+  raw_ptr<MahoSidebarUpdateNotificationView> update_notification_view_ =
+      nullptr;
   raw_ptr<MahoSidebarCreateSpaceView> create_space_view_ = nullptr;
   std::unique_ptr<views::ViewTracker> last_focused_body_view_tracker_;
   MahoSidebarStateAdapter state_adapter_;

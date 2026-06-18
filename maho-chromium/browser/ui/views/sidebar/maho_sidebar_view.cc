@@ -42,6 +42,8 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_library_action_pane_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_media_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_update_notification_controller.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_update_notification_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_library_rail_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_search_view.h"
@@ -248,6 +250,14 @@ void MahoSidebarView::BuildUi() {
 
   library_layout->SetFlexForView(library_content_host_, 1, true);
 
+
+  update_notification_controller_ =
+      std::make_unique<MahoSidebarUpdateNotificationController>(
+          browser_,
+          base::BindRepeating(&MahoSidebarView::ScheduleRefreshAll,
+                              base::Unretained(this)));
+  update_notification_view_ = body_host_->AddChildView(
+      std::make_unique<MahoSidebarUpdateNotificationView>());
 
   footer_view_ = body_host_->AddChildView(
       std::make_unique<MahoSidebarFooterView>(browser_));
@@ -678,6 +688,10 @@ void MahoSidebarView::UpdateTabList(const MahoSidebarTabListModel& model) {
 void MahoSidebarView::UpdateFooter(const MahoSidebarFooterModel& model) {
   if (footer_view_) {
     footer_view_->Update(model);
+  }
+  if (update_notification_view_ && update_notification_controller_) {
+    update_notification_view_->Update(
+        update_notification_controller_->BuildModel());
   }
 }
 
