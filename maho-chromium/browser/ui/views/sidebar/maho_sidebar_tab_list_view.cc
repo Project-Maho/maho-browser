@@ -2286,12 +2286,68 @@ class SidebarSpaceHeaderRow : public views::View {
     icon_label_->SetText(base::UTF8ToUTF16(icon));
     icon_label_->SetVisible(!icon.empty());
     name_label_->SetText(name);
+    // Invariant: name is non-empty when an active space exists.
+    // Empty name == no active space (transitional/zero-context) → hide row.
+    SetVisible(!name.empty());
     InvalidateLayout();
+  }
+
+  // --- Drop target overrides ---
+  bool GetDropFormats(int* formats,
+                      std::set<ui::ClipboardFormatType>* format_types) override {
+    format_types->insert(GetMahoDragFormatType());
+    return true;
+  }
+
+  bool AreDropTypesRequired() override { return true; }
+
+  bool CanDrop(const ui::OSExchangeData& data) override {
+    SidebarDragPayload payload;
+    if (!ReadMahoDragData(data, payload)) {
+      return false;
+    }
+    return payload.origin == SidebarDragOrigin::kNormalSection ||
+           payload.origin == SidebarDragOrigin::kPinnedSection;
+  }
+
+  int OnDragUpdated(const ui::DropTargetEvent& event) override {
+    if (!drag_hover_active_) {
+      drag_hover_active_ = true;
+      SetBackground(
+          views::CreateRoundedRectBackground(ui::kColorSysSurface4,
+                                             kRowCornerRadiusDp));
+    }
+    return static_cast<int>(ui::mojom::DragOperation::kMove);
+  }
+
+  void OnDragExited() override {
+    drag_hover_active_ = false;
+    SetBackground(nullptr);
+  }
+
+  DropCallback GetDropCallback(const ui::DropTargetEvent& event) override {
+    drag_hover_active_ = false;
+    SetBackground(nullptr);
+    return base::BindOnce(
+        [](const ui::DropTargetEvent& event,
+           ui::mojom::DragOperation& output_drag_op,
+           std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner) {
+          SidebarDragPayload payload;
+          if (!ReadMahoDragData(event.data(), payload)) {
+            output_drag_op = ui::mojom::DragOperation::kNone;
+            return;
+          }
+          output_drag_op = ui::mojom::DragOperation::kMove;
+          const SidebarDropPlan plan =
+              PlanSectionDrop(MahoSidebarTabSection::kPinned, payload);
+          ExecuteDropPlan(plan);
+        });
   }
 
  private:
   raw_ptr<views::Label> icon_label_ = nullptr;
   raw_ptr<views::Label> name_label_ = nullptr;
+  bool drag_hover_active_ = false;
 };
 
 BEGIN_METADATA(SidebarSpaceHeaderRow)

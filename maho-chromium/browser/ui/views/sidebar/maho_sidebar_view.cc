@@ -35,6 +35,7 @@
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
+#include "ui/views/controls/scroll_view.h"
 #include "ui/views/view_tracker.h"
 #include "ui/views/view_class_properties.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_downloads_view.h"
@@ -212,8 +213,27 @@ void MahoSidebarView::BuildUi() {
       top_region->AddChildView(std::make_unique<MahoSidebarSearchView>(browser_));
   favorites_view_ =
       top_region->AddChildView(std::make_unique<MahoSidebarFavoritesGridView>(browser_));
-  tab_list_view_ = tabs_surface_->AddChildView(
-      std::make_unique<MahoSidebarTabListView>(browser_));
+  space_header_view_ =
+      top_region->AddChildView(CreateSidebarSpaceHeaderRow());
+  space_header_view_->SetVisible(false);  // Hidden until first model update.
+
+  auto scroll = std::make_unique<views::ScrollView>();
+  scroll->SetBackgroundColor(std::nullopt);
+  scroll->SetHorizontalScrollBarMode(
+      views::ScrollView::ScrollBarMode::kDisabled);
+  scroll->SetVerticalScrollBarMode(
+      views::ScrollView::ScrollBarMode::kHiddenButEnabled);
+  scroll->SetDrawOverflowIndicator(false);
+  // Use (0, 0) so ScrollView reports preferred height = 0 and accepts whatever
+  // height the parent BoxLayout flex assigns. (0, INT_MAX) would make preferred
+  // height equal to content height, pushing footer_view_ off-screen.
+  scroll->ClipHeightTo(0, 0);
+
+  auto tab_list = std::make_unique<MahoSidebarTabListView>(browser_);
+  tab_list_view_ = scroll->SetContents(std::move(tab_list));
+  tab_scroll_view_ = tabs_surface_->AddChildView(std::move(scroll));
+
+  tab_list_view_->SetAutoScrollScrollView(tab_scroll_view_);
 
   library_container_ =
       content_host_->AddChildView(std::make_unique<views::View>());
@@ -264,7 +284,7 @@ void MahoSidebarView::BuildUi() {
   footer_view_ = body_host_->AddChildView(
       std::make_unique<MahoSidebarFooterView>(browser_));
 
-  normal_body_layout->SetFlexForView(tab_list_view_, 1, true);
+  normal_body_layout->SetFlexForView(tab_scroll_view_, 1, true);
   body_layout->SetFlexForView(content_host_, 1, true);
   root_layout->SetFlexForView(body_host_, 1, true);
 
@@ -684,6 +704,11 @@ void MahoSidebarView::UpdateFavorites(const MahoSidebarFavoritesModel& model) {
 void MahoSidebarView::UpdateTabList(const MahoSidebarTabListModel& model) {
   if (tab_list_view_) {
     tab_list_view_->Update(model, browser_);
+  }
+  if (space_header_view_) {
+    UpdateSidebarSpaceHeaderRow(space_header_view_, model.active_space_icon,
+                                model.active_space_name);
+    space_header_view_->SetVisible(!model.active_space_name.empty());
   }
 }
 

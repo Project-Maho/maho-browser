@@ -47,7 +47,7 @@ bool IsInlineRowButton(views::View* view, std::u16string expected_text) {
 void ExpectEmptyPinnedSectionLayout(views::View* rows) {
   ASSERT_TRUE(rows);
   ASSERT_EQ(4u, rows->children().size())
-      << "Idle empty-pinned layout should keep the hidden pinned section and separator in the view tree, plus + New Tab and the normal section";
+      << "Idle empty-pinned layout should keep hidden pinned section and separator in the view tree, plus + New Tab and the normal section";
 
   EXPECT_FALSE(rows->children()[0]->GetVisible())
       << "Pinned section should be hidden when empty";
@@ -1352,6 +1352,110 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   tab_list_->Update(empty_model, /*browser=*/nullptr);
 
   ExpectNoTabsRows(tab_list_->tab_rows_for_testing());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                        SpaceHeader_TopRegionLayout) {
+  SeedProfile(2);
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+
+  MahoSidebarTabListModel model;
+  model.active_space_icon = "💼";
+  model.active_space_name = u"Work";
+  model.active_space_id = "space-header-view-test-1";
+  model.normal_tree.push_back([] {
+    SidebarTreeNode n;
+    n.kind = SidebarNodeKind::kTab;
+    n.tab_id = "tab-header-view-1";
+    n.tab_strip_index = 0;
+    n.title = u"Test Tab";
+    return n;
+  }());
+
+  tab_list_->Update(model, browser());
+  views::View* header = sidebar_->space_header_view_for_testing();
+  ASSERT_NE(header, nullptr);
+  UpdateSidebarSpaceHeaderRow(header, model.active_space_icon,
+                              model.active_space_name);
+  header->SetVisible(!model.active_space_name.empty());
+  EXPECT_TRUE(header->GetVisible());
+
+  views::View* top_region = sidebar_->tabs_surface_for_testing()->children()[0];
+  ASSERT_GE(top_region->children().size(), 3u);
+  EXPECT_EQ(top_region->children()[2], header);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                        SpaceHeader_VisibilityFollowsActiveSpaceName) {
+  SeedProfile(2);
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+
+  MahoSidebarTabListModel visible_model;
+  visible_model.active_space_icon = "🚀";
+  visible_model.active_space_name = u"Work";
+  visible_model.active_space_id = "space-header-vis-test";
+  visible_model.normal_tree.push_back([] {
+    SidebarTreeNode n;
+    n.kind = SidebarNodeKind::kTab;
+    n.tab_id = "tab-vis-1";
+    n.tab_strip_index = 0;
+    n.title = u"Test Tab";
+    return n;
+  }());
+
+  tab_list_->Update(visible_model, browser());
+  views::View* header = sidebar_->space_header_view_for_testing();
+  ASSERT_NE(header, nullptr);
+  UpdateSidebarSpaceHeaderRow(header, visible_model.active_space_icon,
+                              visible_model.active_space_name);
+  header->SetVisible(!visible_model.active_space_name.empty());
+  EXPECT_TRUE(header->GetVisible());
+
+  MahoSidebarTabListModel hidden_model;
+  hidden_model.active_space_icon = "";
+  hidden_model.active_space_name = u"";
+  hidden_model.active_space_id = "space-header-vis-test";
+  hidden_model.normal_tree.push_back([] {
+    SidebarTreeNode n;
+    n.kind = SidebarNodeKind::kTab;
+    n.tab_id = "tab-vis-2";
+    n.tab_strip_index = 0;
+    n.title = u"Test Tab";
+    return n;
+  }());
+
+  tab_list_->Update(hidden_model, browser());
+  UpdateSidebarSpaceHeaderRow(header, hidden_model.active_space_icon,
+                              hidden_model.active_space_name);
+  header->SetVisible(!hidden_model.active_space_name.empty());
+  EXPECT_FALSE(header->GetVisible());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                        TabScrollView_WrapsTabListView) {
+  SeedProfile(2);
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+
+  views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
+  ASSERT_NE(scroll, nullptr);
+  EXPECT_EQ(scroll->contents(), tab_list_);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                        TabScrollView_ScrollBarConfig) {
+  SeedProfile(2);
+  base::RunLoop().RunUntilIdle();
+  ResolveViews();
+
+  views::ScrollView* scroll = sidebar_->tab_scroll_view_for_testing();
+  ASSERT_NE(scroll, nullptr);
+  EXPECT_EQ(scroll->GetHorizontalScrollBarMode(),
+            views::ScrollView::ScrollBarMode::kDisabled);
+  EXPECT_EQ(scroll->GetVerticalScrollBarMode(),
+            views::ScrollView::ScrollBarMode::kHiddenButEnabled);
 }
 
 }  // namespace

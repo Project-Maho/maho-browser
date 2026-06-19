@@ -120,6 +120,7 @@ class MahoSidebarTabListView : public views::View,
   views::LabelButton* new_tab_button_for_testing() { return new_tab_button_; }
   views::View* tab_rows_for_testing() { return tab_rows_; }
   views::View* pinned_separator_for_testing() { return pinned_separator_; }
+
   bool IsTabPreviewShowingForTesting() const;
   views::Widget* tab_preview_widget_for_testing() const;
   const std::u16string& tab_preview_title_for_testing() const;
@@ -187,6 +188,7 @@ class MahoSidebarTabListView : public views::View,
   bool has_last_model_ = false;
   bool pinned_drop_lane_revealed_ = false;
   raw_ptr<views::View> pinned_separator_ = nullptr;
+
   std::unique_ptr<MahoTabContextMenu> active_context_menu_;
   std::unique_ptr<ui::SimpleMenuModel> active_menu_model_;
   std::unique_ptr<views::MenuRunner> active_menu_runner_;

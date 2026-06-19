@@ -23,6 +23,7 @@
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/views/view.h"
 #include "ui/views/view_observer.h"
+#include "ui/views/controls/scroll_view.h"
 #include "url/gurl.h"
 
 class Browser;
@@ -117,6 +118,8 @@ class MahoSidebarView
   MahoSidebarSearchView* search_view_for_testing() { return search_view_; }
   MahoSidebarTopBarView* top_bar_view_for_testing() { return top_bar_view_; }
   views::View* tabs_surface_for_testing() { return tabs_surface_; }
+  views::View* space_header_view_for_testing() { return space_header_view_; }
+  views::ScrollView* tab_scroll_view_for_testing() { return tab_scroll_view_; }
   MahoSidebarArchiveView* archive_view_for_testing() { return archive_view_; }
   MahoSidebarDownloadsView* downloads_view_for_testing() {
     return downloads_view_;
@@ -219,6 +222,8 @@ class MahoSidebarView
   raw_ptr<MahoSidebarSearchView> search_view_ = nullptr;
   raw_ptr<MahoSidebarFavoritesGridView> favorites_view_ = nullptr;
   raw_ptr<MahoSidebarTabListView> tab_list_view_ = nullptr;
+  raw_ptr<views::View> space_header_view_ = nullptr;
+  raw_ptr<views::ScrollView> tab_scroll_view_ = nullptr;
   raw_ptr<MahoSidebarFooterView> footer_view_ = nullptr;
   std::unique_ptr<MahoSidebarUpdateNotificationController>
       update_notification_controller_;
