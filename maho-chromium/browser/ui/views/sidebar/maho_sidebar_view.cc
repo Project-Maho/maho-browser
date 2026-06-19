@@ -256,8 +256,10 @@ void MahoSidebarView::BuildUi() {
           browser_,
           base::BindRepeating(&MahoSidebarView::ScheduleRefreshAll,
                               base::Unretained(this)));
-  update_notification_view_ = body_host_->AddChildView(
+  update_notification_view_ = AddChildView(
       std::make_unique<MahoSidebarUpdateNotificationView>());
+  update_notification_view_->SetProperty(views::kViewIgnoredByLayoutKey, true);
+  update_notification_view_->AddObserver(this);
 
   footer_view_ = body_host_->AddChildView(
       std::make_unique<MahoSidebarFooterView>(browser_));
@@ -692,7 +694,46 @@ void MahoSidebarView::UpdateFooter(const MahoSidebarFooterModel& model) {
   if (update_notification_view_ && update_notification_controller_) {
     update_notification_view_->Update(
         update_notification_controller_->BuildModel());
+    PositionUpdateNotification();
   }
+}
+
+void MahoSidebarView::OnViewPreferredSizeChanged(views::View* observed_view) {
+  if (observed_view == update_notification_view_) {
+    PositionUpdateNotification();
+  }
+}
+
+void MahoSidebarView::OnViewBoundsChanged(views::View* observed_view) {
+  if (observed_view == footer_view_ || observed_view == this) {
+    PositionUpdateNotification();
+  }
+}
+
+void MahoSidebarView::PositionUpdateNotification() {
+  if (!update_notification_view_ || !footer_view_ || !body_host_) {
+    return;
+  }
+  const gfx::Rect local_bounds = GetLocalBounds();
+  if (local_bounds.IsEmpty()) {
+    return;
+  }
+  // Anchor the floating card to the same horizontal extent as `body_host_`
+  // (the visible sidebar rail) and add an inner gutter so the card does not
+  // bleed to the rail's edge.
+  constexpr int kHorizontalMargin = 10;
+  const int rail_x = body_host_->x();
+  const int rail_w = body_host_->width();
+  const int width = std::max(0, rail_w - kHorizontalMargin * 2);
+  const gfx::Size pref =
+      update_notification_view_->GetPreferredSize(views::SizeBounds(width, {}));
+  const int footer_top =
+      footer_view_->GetVisible()
+          ? body_host_->y() + footer_view_->y()
+          : local_bounds.bottom();
+  const int top = footer_top - pref.height();
+  update_notification_view_->SetBoundsRect(
+      gfx::Rect(rail_x + kHorizontalMargin, top, width, pref.height()));
 }
 
 TabStripModel* MahoSidebarView::tab_strip_model() const {

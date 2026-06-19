@@ -411,6 +411,7 @@ source_set("maho_browser_main_extra_parts") {
     "//chrome/browser:main_extra_parts",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/sessions:sessions",
+    "//maho/browser/updates:maho_updates_lib",
     "//maho/third_party/maho:maho_bridge",
     "//ui/color",
   ]

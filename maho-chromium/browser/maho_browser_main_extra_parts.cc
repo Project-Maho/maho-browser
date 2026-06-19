@@ -23,6 +23,7 @@
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_registry.h"
+#include "maho/browser/updates/maho_update_manager.h"
 #include "chrome/browser/sessions/session_restore.h"
 #include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/ui/theme/maho_color_mixer.h"
@@ -203,6 +204,8 @@ void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
   if (profile && !profile->IsOffTheRecord()) {
     extension_state_bridge_ =
         std::make_unique<maho::MahoExtensionStateBridge>(profile);
+
+    maho::MahoUpdateManager::GetInstance()->Initialize(profile);
 
     // If user hasn't explicitly set the value, override the default to LAST
     // so SessionService restore kicks in.

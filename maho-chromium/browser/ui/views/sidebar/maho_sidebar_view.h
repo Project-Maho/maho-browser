@@ -22,6 +22,7 @@
 #include "ui/base/dragdrop/drop_target_event.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/views/view.h"
+#include "ui/views/view_observer.h"
 #include "url/gurl.h"
 
 class Browser;
@@ -65,6 +66,7 @@ class MahoSidebarSpacesView;
 
 class MahoSidebarView
     : public views::View,
+      public views::ViewObserver,
       public TabStripModelObserver,
       public MahoSpaceProfileBridge::Observer,
       public translate::ContentTranslateDriver::TranslationObserver {
@@ -171,6 +173,11 @@ class MahoSidebarView
   void UpdateFavorites(const MahoSidebarFavoritesModel& model);
   void UpdateTabList(const MahoSidebarTabListModel& model);
   void UpdateFooter(const MahoSidebarFooterModel& model);
+  void PositionUpdateNotification();
+
+  // views::ViewObserver:
+  void OnViewPreferredSizeChanged(views::View* observed_view) override;
+  void OnViewBoundsChanged(views::View* observed_view) override;
 
   void OpenWebUIInNewTab(const GURL& url);
 

@@ -47,7 +47,6 @@ class MahoSidebarUpdateNotificationController : public MahoUpdateObserver {
 
  private:
   void OnRestartActivated();
-  void OnReleaseNotesActivated();
   void OnAutoInstallToggled(bool checked);
   std::string CurrentVersion() const;
 

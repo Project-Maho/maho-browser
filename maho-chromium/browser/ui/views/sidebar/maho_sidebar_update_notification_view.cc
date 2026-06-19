@@ -8,27 +8,21 @@
 #include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
-#include "base/i18n/rtl.h"
+#include "base/timer/timer.h"
 #include "cc/paint/draw_looper.h"
-#include "cc/paint/paint_canvas.h"
 #include "cc/paint/paint_flags.h"
 #include "cc/paint/paint_shader.h"
-#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
-#include "third_party/skia/include/core/SkBlendMode.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkPoint.h"
-#include "third_party/skia/include/core/SkRect.h"
 #include "third_party/skia/include/core/SkScalar.h"
 #include "third_party/skia/include/core/SkTileMode.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
 #include "ui/compositor/layer.h"
-#include "ui/gfx/animation/throb_animation.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/geometry/insets.h"
-#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/geometry/transform.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/animation_builder.h"
@@ -64,7 +58,6 @@ constexpr int kShadowBlurRadius = 4;
 constexpr SkAlpha kShadowAlpha = 0x20;
 constexpr int kAnimationDurationMs = 200;
 constexpr int kAnimationSlideOffsetDip = 12;
-constexpr int kGradientCycleMs = 1800;
 constexpr int kExpandAnimationMs = 200;
 constexpr int kPillVerticalPadding = 6;
 
@@ -116,9 +109,10 @@ BEGIN_METADATA(HeaderView)
 END_METADATA
 
 // ActionRowButton renders a horizontal icon + label row. When `special` is
-// true, the button paints an animated linear-gradient background that sweeps
-// continuously, mirroring Arc's "Restart and Update" CTA + Zen's
-// `zen-text-gradient` keyframe applied to a button surface.
+// true, the button paints an animated 3-stop linear-gradient at 135 degrees
+// whose hue rotates continuously through the full 360-degree wheel, mirroring
+// the CSS `filter: hue-rotate` keyframe used in the design HTML reference.
+// Hue rotation 0deg <-> 360deg is identical, so the loop is seamless.
 class ActionRowButton : public views::Button {
   METADATA_HEADER(ActionRowButton, views::Button)
 
@@ -133,11 +127,10 @@ public:
     if (special_) {
       layout->set_main_axis_alignment(
           views::BoxLayout::MainAxisAlignment::kCenter);
-      gradient_delegate_ = std::make_unique<GradientDelegate>(this);
-      animation_ = std::make_unique<gfx::ThrobAnimation>(gradient_delegate_.get());
-      animation_->SetThrobDuration(base::Milliseconds(kGradientCycleMs));
-      animation_->SetTweenType(gfx::Tween::LINEAR);
-      animation_->StartThrobbing(/*cycles_til_stop=*/-1);
+      animation_timer_.Start(
+          FROM_HERE, base::Milliseconds(kFrameMs),
+          base::BindRepeating(&ActionRowButton::OnAnimationTick,
+                              base::Unretained(this)));
     }
   }
   ActionRowButton(const ActionRowButton &) = delete;
@@ -146,76 +139,65 @@ public:
 
   // views::Button:
   void OnPaintBackground(gfx::Canvas *canvas) override {
-    if (!special_ || !animation_) {
+    if (!special_) {
       views::Button::OnPaintBackground(canvas);
-      return;
-    }
-    const auto *color_provider = GetColorProvider();
-    if (!color_provider) {
       return;
     }
     const gfx::Rect bounds = GetLocalBounds();
     const float w = static_cast<float>(bounds.width());
     const float h = static_cast<float>(bounds.height());
-    const float t = static_cast<float>(animation_->GetCurrentValue());
 
-    const SkColor accent = color_provider->GetColor(ui::kColorSysPrimary);
-    const gfx::RectF rect_f(bounds);
+    // 3 base stops define the rainbow at phase=0; per-frame each one is
+    // hue-rotated by `phase_` turns so the whole gradient pans around the
+    // hue wheel without changing saturation or lightness.
+    constexpr SkColor kBaseColors[3] = {
+        SkColorSetRGB(0xff, 0x5e, 0x8a),
+        SkColorSetRGB(0x7c, 0x5c, 0xff),
+        SkColorSetRGB(0x5c, 0xe0, 0xff)};
+    const SkColor4f colors[3] = {
+        SkColor4f::FromColor(RotateHue(kBaseColors[0], phase_)),
+        SkColor4f::FromColor(RotateHue(kBaseColors[1], phase_)),
+        SkColor4f::FromColor(RotateHue(kBaseColors[2], phase_))};
+    const SkScalar stops[3] = {0.0f, 0.5f, 1.0f};
+    const SkPoint pts[2] = {SkPoint::Make(0.0f, 0.0f), SkPoint::Make(w, h)};
 
-    // Step 1: paint the solid accent base behind everything so the button
-    // reads as a single colored CTA (matching Arc's solid-fill button).
-    cc::PaintFlags base_flags;
-    base_flags.setAntiAlias(true);
-    base_flags.setStyle(cc::PaintFlags::kFill_Style);
-    base_flags.setColor(accent);
-    canvas->DrawRoundRect(rect_f, kSpecialRowCornerRadius, base_flags);
-
-    // Step 2: overlay a moving diagonal highlight that translates from
-    // off-screen left to off-screen right over a single throb cycle. The
-    // gradient stops are transparent on each side and bright in the middle
-    // so a clear shine band sweeps across the solid base.
-    const float band_offset = (t * 2.0f - 0.5f) * w * 2.0f;
-    const SkColor4f highlight_colors[5] = {
-        SkColor4f::FromColor(SkColorSetA(SK_ColorWHITE, 0)),
-        SkColor4f::FromColor(SkColorSetA(SK_ColorWHITE, 0)),
-        SkColor4f::FromColor(SkColorSetA(SK_ColorWHITE, 0xB0)),
-        SkColor4f::FromColor(SkColorSetA(SK_ColorWHITE, 0)),
-        SkColor4f::FromColor(SkColorSetA(SK_ColorWHITE, 0))};
-    const SkScalar highlight_stops[5] = {0.0f, 0.42f, 0.5f, 0.58f, 1.0f};
-    const SkPoint highlight_pts[2] = {
-        SkPoint::Make(band_offset - w * 1.5f, -h),
-        SkPoint::Make(band_offset + w * 1.5f, h * 2.0f)};
-
-    cc::PaintFlags highlight_flags;
-    highlight_flags.setAntiAlias(true);
-    highlight_flags.setStyle(cc::PaintFlags::kFill_Style);
-    highlight_flags.setShader(cc::PaintShader::MakeLinearGradient(
-        highlight_pts, highlight_colors, highlight_stops, 5,
-        SkTileMode::kClamp));
-    canvas->DrawRoundRect(rect_f, kSpecialRowCornerRadius, highlight_flags);
+    cc::PaintFlags flags;
+    flags.setAntiAlias(true);
+    flags.setStyle(cc::PaintFlags::kFill_Style);
+    flags.setShader(cc::PaintShader::MakeLinearGradient(
+        pts, colors, stops, 3, SkTileMode::kClamp));
+    canvas->DrawRoundRect(gfx::RectF(bounds), kSpecialRowCornerRadius, flags);
   }
 
   bool is_special() const { return special_; }
 
 private:
-  // Inner AnimationDelegate so that the gradient animation does not collide
-  // with views::Button's own AnimationDelegate inheritance (used by ink-drop
-  // and state animations). The delegate forwards AnimationProgressed to the
-  // owning button's SchedulePaint.
-  class GradientDelegate : public gfx::AnimationDelegate {
-  public:
-    explicit GradientDelegate(ActionRowButton *button) : button_(button) {}
-    void AnimationProgressed(const gfx::Animation * /*animation*/) override {
-      button_->SchedulePaint();
+  static SkColor RotateHue(SkColor color, double turns) {
+    color_utils::HSL hsl;
+    color_utils::SkColorToHSL(color, &hsl);
+    hsl.h = std::fmod(hsl.h + turns, 1.0);
+    if (hsl.h < 0.0) {
+      hsl.h += 1.0;
     }
+    return color_utils::HSLToSkColor(hsl, SkColorGetA(color));
+  }
 
-  private:
-    raw_ptr<ActionRowButton> button_;
-  };
+  void OnAnimationTick() {
+    phase_ += kPhaseIncrement;
+    if (phase_ >= 1.0f) {
+      phase_ -= 1.0f;
+    }
+    SchedulePaint();
+  }
+
+  static constexpr int kFrameMs = 16;
+  static constexpr float kCycleMs = 5000.0f;
+  static constexpr float kPhaseIncrement =
+      static_cast<float>(kFrameMs) / kCycleMs;
 
   const bool special_;
-  std::unique_ptr<GradientDelegate> gradient_delegate_;
-  std::unique_ptr<gfx::ThrobAnimation> animation_;
+  base::RepeatingTimer animation_timer_;
+  float phase_ = 0.0f;
 };
 
 BEGIN_METADATA(ActionRowButton)

@@ -1,0 +1,75 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+source_set("maho_updates_prefs") {
+  sources = [
+    "maho_update_pref_names.h",
+    "maho_update_prefs.cc",
+    "maho_update_prefs.h",
+  ]
+  deps = [ "//components/prefs" ]
+}
+
+source_set("maho_updates_lib") {
+  sources = [
+    "crash_loop_sentinel.cc",
+    "crash_loop_sentinel.h",
+    "maho_update_manager.cc",
+    "maho_update_manager.h",
+    "maho_update_server_url.cc",
+    "maho_update_server_url.h",
+    "maho_update_signature.cc",
+    "maho_update_signature.h",
+    "platform_updater_delegate.h",
+    "rollout_bucket.cc",
+    "rollout_bucket.h",
+  ]
+  if (is_mac) {
+    sources += [ "maho_update_delegate_stub.cc" ]
+  }
+  if (is_win) {
+    sources += [
+      "maho_update_delegate_win.cc",
+      "maho_update_signature_win.cc",
+      "maho_update_signature_win.h",
+    ]
+  }
+  if (is_linux) {
+    sources += [
+      "maho_update_delegate_linux_appimage.cc",
+      "maho_update_delegate_linux_flatpak.cc",
+      "maho_update_delegate_linux_noop.cc",
+      "maho_update_delegate_linux_pkg.cc",
+    ]
+  }
+  deps = [
+    ":maho_updates_prefs",
+    "//base",
+    "//chrome/browser:browser_process",
+    "//chrome/browser/profiles:profile",
+    "//components/prefs",
+    "//components/version_info",
+    "//content/public/browser",
+    "//crypto",
+    "//net",
+    "//services/network/public/cpp",
+    "//third_party/boringssl",
+  ]
+}
+
+source_set("maho_updates_unittests") {
+  testonly = true
+  sources = [
+    "maho_update_manager_unittest.cc",
+    "maho_update_signature_unittest.cc",
+  ]
+  deps = [
+    ":maho_updates_lib",
+    ":maho_updates_prefs",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/test:test_support",
+    "//components/prefs",
+    "//components/prefs:test_support",
+    "//testing/gtest",
+  ]
+}

@@ -6,28 +6,14 @@
 
 #include "base/check.h"
 #include "base/functional/bind.h"
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "components/prefs/pref_service.h"
 #include "components/version_info/version_info.h"
-#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "maho/browser/updates/maho_update_pref_names.h"
-#include "ui/base/models/image_model.h"
-#include "ui/base/page_transition_types.h"
-#include "ui/color/color_id.h"
-#include "url/gurl.h"
 
 namespace maho {
-
-namespace {
-
-constexpr char kReleaseNotesUrlTemplate[] = "https://maho.dev/release-notes/";
-
-}  // namespace
 
 MahoSidebarUpdateNotificationController::
     MahoSidebarUpdateNotificationController(
@@ -129,24 +115,13 @@ void MahoSidebarUpdateNotificationController::OnRestartActivated() {
   MahoUpdateManager::GetInstance()->ApplyUpdateAndRestart();
 }
 
-void MahoSidebarUpdateNotificationController::OnReleaseNotesActivated() {
-  if (!browser_) {
-    return;
-  }
-  GURL url(std::string(kReleaseNotesUrlTemplate) + CurrentVersion());
-  NavigateParams params(browser_, url, ui::PAGE_TRANSITION_LINK);
-  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
-  Navigate(&params);
-  Dismiss();
-}
-
 void MahoSidebarUpdateNotificationController::OnUpdateStateChanged(
-    UpdateState state) {
+    UpdateState /*state*/) {
   on_state_changed_.Run();
 }
 
-void MahoSidebarUpdateNotificationController::OnUpdateProgress(double percent) {
-}
+void MahoSidebarUpdateNotificationController::OnUpdateProgress(
+    double /*percent*/) {}
 
 std::string MahoSidebarUpdateNotificationController::CurrentVersion() const {
   return std::string(version_info::GetVersionNumber());
