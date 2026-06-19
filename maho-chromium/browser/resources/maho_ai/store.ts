@@ -10,16 +10,17 @@ import {
   ViewMode,
 } from './maho_ai.mojom-webui.js';
 import {
-  AppState,
-  ComposerAttachment,
-  CURRENT_PAGE_ATTACHMENT,
-  DEFAULT_HISTORY_SEARCH_STATE,
-  DEFAULT_BOOKMARKS_SEARCH_STATE,
-  DEFAULT_OPEN_TABS_STATE,
-  createInitialState,
-  getSubmitContextAttachments,
-  hasCurrentPageAttachment,
-  isRenderableTimelineEvent,
+   AppState,
+   ComposerAttachment,
+   CURRENT_PAGE_ATTACHMENT,
+   DEFAULT_HISTORY_SEARCH_STATE,
+   DEFAULT_BOOKMARKS_SEARCH_STATE,
+   DEFAULT_OPEN_TABS_STATE,
+   createFileAttachment,
+   createInitialState,
+   getSubmitContextAttachments,
+   hasCurrentPageAttachment,
+   isRenderableTimelineEvent,
   TimelineEntry,
 } from './types.js';
 import {notifyListeners} from '../maho_common/react/store_utils.js';
@@ -43,6 +44,9 @@ function cloneState(state: AppState): AppState {
     openTabs: {...state.openTabs, items: [...state.openTabs.items]},
     historySearch: {...state.historySearch, items: [...state.historySearch.items]},
     bookmarksSearch: {...state.bookmarksSearch, items: [...state.bookmarksSearch.items]},
+    toast: state.toast ? {...state.toast} : null,
+    aiProviders: state.aiProviders.map(provider => ({...provider, models: [...provider.models]})),
+    aiSettings: {...state.aiSettings},
     turnPendingBySessionId: {...state.turnPendingBySessionId},
     contextsBySessionId: Object.fromEntries(
         Object.entries(state.contextsBySessionId).map(([key, value]) => [key, [...value]])),
@@ -213,13 +217,34 @@ export class MahoAiStore {
     }
   }
 
-  async loadHistory(sessionId: string): Promise<void> {
-    const {events, totalCount} = await this.pageHandler.getSessionHistory(sessionId, 0, 200);
+  async loadHistory(sessionId: string, pageSize = 200): Promise<void> {
+    const {events, totalCount} = await this.pageHandler.getSessionHistory(sessionId, 0, pageSize);
     this.patch(state => {
       this.updateContextSnapshot(state, sessionId, events);
-      state.eventsBySessionId[sessionId] = events.filter(isRenderableTimelineEvent)
-                                        .map(event => ({sessionId, event}));
-      state.historiesBySessionId[sessionId] = {loaded: true, totalCount};
+      const entries = events.filter(isRenderableTimelineEvent).map(event => ({sessionId, event}));
+      state.eventsBySessionId[sessionId] = entries;
+      state.historiesBySessionId[sessionId] = {loaded: true, totalCount, loadedCount: entries.length};
+    });
+  }
+
+  async loadEarlierHistory(sessionId: string, pageSize = 200): Promise<void> {
+    const hist = this.state.historiesBySessionId[sessionId];
+    if (!hist || hist.loadedCount >= hist.totalCount) {
+      return;
+    }
+
+    const {events} = await this.pageHandler.getSessionHistory(sessionId, hist.loadedCount, pageSize);
+    this.patch(state => {
+      const incoming = events.filter(isRenderableTimelineEvent).map(event => ({sessionId, event}));
+      const existing = state.eventsBySessionId[sessionId] || [];
+      state.eventsBySessionId[sessionId] = [...incoming, ...existing];
+      const current = state.historiesBySessionId[sessionId];
+      if (current) {
+        state.historiesBySessionId[sessionId] = {
+          ...current,
+          loadedCount: current.loadedCount + incoming.length,
+        };
+      }
     });
   }
 
@@ -364,6 +389,61 @@ export class MahoAiStore {
   resetBookmarksSearch() {
     this.patch(state => {
       state.bookmarksSearch = {...DEFAULT_BOOKMARKS_SEARCH_STATE};
+    });
+  }
+
+  addToast(text: string, tone: AppState['toast'] extends infer T ? (T extends {tone: infer Tone} ? Tone : never) : never = 'info') {
+    this.patch(state => {
+      state.toast = {text, tone};
+    });
+  }
+
+  clearToast() {
+    this.patch(state => {
+      state.toast = null;
+    });
+  }
+
+  async requestFileChooser(): Promise<void> {
+    if (typeof document === 'undefined') {
+      return;
+    }
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.style.display = 'none';
+    document.body.appendChild(input);
+
+    const cleanup = () => {
+      input.remove();
+    };
+
+    input.addEventListener('change', () => {
+      const files = Array.from(input.files || []);
+      cleanup();
+      void (async () => {
+        for (const file of files) {
+          try {
+            const attachment = await createFileAttachment(file);
+            this.addAttachment(attachment);
+          } catch (error) {
+            this.addToast(error instanceof Error ? error.message : String(error), 'danger');
+          }
+        }
+      })();
+    }, {once: true});
+
+    input.addEventListener('cancel', cleanup, {once: true});
+    input.click();
+  }
+
+  async setActiveAI(providerId: string, modelId: string): Promise<void> {
+    this.patch(state => {
+      state.aiSettings = {
+        activeModelId: modelId,
+        activeProviderId: providerId,
+      };
     });
   }
 

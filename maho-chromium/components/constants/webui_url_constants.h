@@ -40,6 +40,9 @@ inline constexpr char kMahoSyncURL[] = "chrome://maho-sync/";
 inline constexpr char kMahoSidebarHost[] = "maho-sidebar";
 inline constexpr char kMahoSidebarURL[] = "chrome://maho-sidebar/";
 
+inline constexpr char kMahoWelcomeHost[] = "maho-welcome";
+inline constexpr char kMahoWelcomeURL[] = "chrome://maho-welcome/";
+
 inline constexpr char kMahoSidebarLegacyHost[] = "maho-sidebar-legacy";
 inline constexpr char kMahoSidebarLegacyURL[] = "chrome://maho-sidebar-legacy/";
 

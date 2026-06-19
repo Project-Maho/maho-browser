@@ -142,10 +142,10 @@
   height: 28px;
   margin-inline-start: auto;
   padding: 0 var(--maho-ai-space-2);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--maho-ai-border-soft);
   border-radius: var(--maho-ai-radius-control);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--maho-ai-text-secondary);
+  background: var(--maho-ai-bg-chip-quiet);
+  color: var(--maho-ai-text-muted);
   font-family: var(--maho-ai-font-sans);
   font-size: var(--maho-ai-text-xs);
   font-weight: 500;
@@ -158,8 +158,8 @@
 }
 
 .compact-composer__model-selector-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.16);
+  background: var(--maho-ai-bg-panel-strong);
+  border-color: var(--maho-ai-border);
   color: var(--maho-ai-text-primary);
 }
 
@@ -171,7 +171,7 @@
 
 .compact-composer__model-selector-arrow {
   flex-shrink: 0;
-  color: var(--maho-ai-text-faint);
+  color: var(--maho-ai-text-muted);
   font-size: 10px;
 }
 
@@ -190,7 +190,7 @@
 }
 
 .compact-composer__send:hover:not(:disabled) {
-  background: #fff;
+  background: var(--maho-ai-bg-send-hover);
 }
 
 .compact-composer__send:active:not(:disabled) {
@@ -208,7 +208,7 @@
 }
 
 .compact-composer__send--stop:hover:not(:disabled) {
-  background: #fff;
+  background: var(--maho-ai-bg-send-hover);
 }
 
 .compact-composer__send-icon {
@@ -281,8 +281,10 @@
   color: var(--maho-ai-text-faint);
 }
 
-.compact-context-picker__search-input:focus {
+.compact-context-picker__search-input:focus,
+.compact-context-picker__search-input:focus-visible {
   outline: none;
+  box-shadow: 0 0 0 1px var(--maho-ai-focus-ring);
   background: rgba(255, 255, 255, 0.10);
 }
 
@@ -309,10 +311,8 @@
 
 .compact-context-picker__section-label {
   color: var(--maho-ai-text-faint);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 .compact-context-picker__results {

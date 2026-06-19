@@ -8,6 +8,7 @@ import {
 
 interface ComposerTextareaProps {
   className?: string;
+  onPasteFiles?: (files: File[]) => void;
   onSubmit: () => void;
   onValueChange: (value: string) => void;
   placeholder: string;
@@ -19,6 +20,7 @@ interface ComposerTextareaProps {
 export function ComposerTextarea(
     {
       className = 'compact-composer__input',
+      onPasteFiles,
       onSubmit,
       onValueChange,
       placeholder,
@@ -80,6 +82,15 @@ export function ComposerTextarea(
         compositionActiveRef.current = true;
       }}
       onInput={event => onValueChange(event.currentTarget.value)}
+      onPaste={event => {
+        const files = Array.from(event.clipboardData?.files || []);
+        if (!files.length || !onPasteFiles) {
+          return;
+        }
+
+        event.preventDefault();
+        onPasteFiles(files);
+      }}
       onKeyDown={event => {
         if (readOnly) {
           return;

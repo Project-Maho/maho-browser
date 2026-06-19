@@ -10,6 +10,11 @@
 
 :host(:is(.anonymous-content-host, notification-message)),
 :root {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'kern', 'liga';
+
   /* Default values */
   --zen-border-radius: 7px;
   --zen-primary-color: AccentColor;
@@ -276,19 +281,11 @@
 
   /** Other theme-related styles */
   @media (-moz-platform: macos) {
-    font-family:
-      SF Pro,
-      ui-sans-serif,
-      system-ui,
-      sans-serif,
-      Apple Color Emoji,
-      Segoe UI Emoji,
-      Segoe UI Symbol,
-      Noto Color Emoji;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   }
 
   @media (-moz-platform: windows) {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   }
 }
 

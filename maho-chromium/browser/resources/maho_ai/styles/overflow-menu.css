@@ -27,6 +27,13 @@
   text-transform: uppercase;
 }
 
+.compact-overflow-menu__empty {
+  padding: 8px 12px;
+  color: var(--maho-ai-text-muted);
+  font-size: var(--maho-ai-text-sm);
+  line-height: var(--maho-ai-leading-snug);
+}
+
 .compact-overflow-menu__item {
   display: flex;
   align-items: center;

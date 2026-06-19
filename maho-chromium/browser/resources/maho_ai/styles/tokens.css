@@ -1,8 +1,10 @@
 :root {
   color-scheme: dark light;
 
-  --maho-ai-font-body: 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
-  --maho-ai-font-display: 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif;
+  --maho-ai-font-body: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --maho-ai-font-display: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --maho-ai-font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --maho-ai-font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
   --maho-ai-space-1: 4px;
   --maho-ai-space-2: 8px;
@@ -37,8 +39,10 @@
   --maho-ai-bg-card-dock: rgba(18, 22, 30, 0.98);
   --maho-ai-bg-chip: rgba(28, 32, 42, 0.9);
   --maho-ai-bg-chip-quiet: rgba(255, 255, 255, 0.04);
-  --maho-ai-bg-send: #edf2fb;
-  --maho-ai-bg-send-disabled: rgba(237, 242, 251, 0.24);
+  --maho-ai-bg-glass: rgba(28, 32, 42, 0.98);
+  --maho-ai-bg-send: #f1f3f6;
+  --maho-ai-bg-send-hover: #fff;
+  --maho-ai-bg-send-disabled: rgba(241, 243, 246, 0.34);
 
   --maho-ai-border: rgba(255, 255, 255, 0.08);
   --maho-ai-border-idle: rgba(255, 255, 255, 0.06);
@@ -46,10 +50,10 @@
   --maho-ai-border-soft: rgba(255, 255, 255, 0.04);
 
   --maho-ai-text-primary: #f5f7fb;
-  --maho-ai-text-secondary: #d7deea;
-  --maho-ai-text-muted: #98a3b8;
-  --maho-ai-text-faint: rgba(215, 222, 234, 0.56);
-  --maho-ai-text-dark: #12151d;
+  --maho-ai-text-secondary: #d9dee6;
+  --maho-ai-text-muted: #a4acb4;
+  --maho-ai-text-faint: rgba(229, 233, 238, 0.66);
+  --maho-ai-text-dark: #171b21;
   --maho-ai-success-fg: #d7f6e8;
   --maho-ai-warning-fg: #f7e0b3;
   --maho-ai-danger-fg: #ffd3da;
@@ -69,7 +73,7 @@
   --maho-ai-bg-input-well: rgba(8, 11, 17, 0.22);
   --maho-ai-bg-pre: rgba(0, 0, 0, 0.18);
   --maho-ai-scrollbar-thumb: rgba(255, 255, 255, 0.12);
-  --maho-ai-text-send-disabled: rgba(18, 21, 29, 0.58);
+  --maho-ai-text-send-disabled: rgba(23, 27, 33, 0.74);
   --maho-ai-focus-ring: rgba(178, 194, 235, 0.55);
   --maho-ai-focus-outline: var(--maho-ai-accent);
   --maho-ai-focus-shadow: 0 0 0 3px var(--maho-ai-focus-ring);
@@ -81,6 +85,7 @@
   --maho-ai-shadow-dock: 0 20px 56px rgba(0, 0, 0, 0.32);
   --maho-ai-shadow-action: 0 12px 28px rgba(0, 0, 0, 0.22);
   --maho-ai-shadow-soft: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --maho-ai-shadow-glass: 0 18px 48px rgba(0, 0, 0, 0.42);
 
   --maho-ai-text-xs: 11px;
   --maho-ai-text-sm: 12px;
@@ -112,8 +117,10 @@
     --maho-ai-bg-card-dock: rgba(248, 250, 255, 0.98);
     --maho-ai-bg-chip: rgba(223, 230, 244, 0.86);
     --maho-ai-bg-chip-quiet: rgba(43, 55, 83, 0.05);
-    --maho-ai-bg-send: #182236;
-    --maho-ai-bg-send-disabled: rgba(24, 34, 54, 0.22);
+    --maho-ai-bg-glass: rgba(255, 255, 255, 0.98);
+    --maho-ai-bg-send: #1d2533;
+    --maho-ai-bg-send-hover: #242e40;
+    --maho-ai-bg-send-disabled: rgba(29, 37, 51, 0.3);
 
     --maho-ai-border: rgba(52, 68, 98, 0.16);
     --maho-ai-border-idle: rgba(52, 68, 98, 0.12);
@@ -121,10 +128,10 @@
     --maho-ai-border-soft: rgba(52, 68, 98, 0.1);
 
     --maho-ai-text-primary: #172033;
-    --maho-ai-text-secondary: #33415f;
-    --maho-ai-text-muted: #5d6b88;
-    --maho-ai-text-faint: rgba(51, 65, 95, 0.64);
-    --maho-ai-text-dark: #f8faff;
+    --maho-ai-text-secondary: #394459;
+    --maho-ai-text-muted: #697381;
+    --maho-ai-text-faint: rgba(57, 68, 89, 0.62);
+    --maho-ai-text-dark: #f7f8fa;
     --maho-ai-success-fg: #215f47;
     --maho-ai-warning-fg: #8a5d20;
     --maho-ai-danger-fg: #8f3140;
@@ -144,7 +151,7 @@
     --maho-ai-bg-input-well: rgba(67, 95, 155, 0.08);
     --maho-ai-bg-pre: rgba(233, 238, 247, 0.92);
     --maho-ai-scrollbar-thumb: rgba(77, 97, 138, 0.26);
-    --maho-ai-text-send-disabled: rgba(248, 250, 255, 0.68);
+    --maho-ai-text-send-disabled: rgba(247, 248, 250, 0.82);
     --maho-ai-focus-ring: rgba(67, 95, 155, 0.22);
 
     --maho-ai-shadow-shell: 0 24px 72px rgba(88, 108, 145, 0.18);
@@ -152,5 +159,6 @@
     --maho-ai-shadow-card: 0 10px 28px rgba(88, 108, 145, 0.12);
     --maho-ai-shadow-dock: 0 18px 42px rgba(88, 108, 145, 0.16);
     --maho-ai-shadow-soft: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+    --maho-ai-shadow-glass: 0 14px 38px rgba(88, 108, 145, 0.2);
   }
 }

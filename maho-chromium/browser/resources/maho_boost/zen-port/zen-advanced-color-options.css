@@ -7,6 +7,10 @@
 #zen-boost-advanced-color-options-panel {
   color-scheme: light;
   --panel-padding: 15px;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'kern', 'liga';
 
   & p {
     color: #3a3a3b;

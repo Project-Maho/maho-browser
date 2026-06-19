@@ -63,18 +63,15 @@ body {
       var(--maho-notes-bg);
   color: var(--maho-notes-text-primary);
   font-family: var(--maho-font-family);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'kern', 'liga';
 }
 
-body,
 button,
 input,
 textarea {
   font: inherit;
-}
-
-button,
-input,
-textarea {
   appearance: none;
 }
 

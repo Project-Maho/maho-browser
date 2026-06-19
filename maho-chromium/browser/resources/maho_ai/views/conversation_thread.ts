@@ -24,6 +24,8 @@ export interface ConversationItem {
     approvalId: string;
     reason?: string;
     status: 'approved'|'denied'|'pending';
+    toolAction?: string;
+    toolName?: string;
   };
   chips?: ConversationChip[];
   kind?: 'activity'|'approval'|'thinking';
@@ -91,6 +93,11 @@ function normalizeToolName(toolName?: string): string {
   }
 
   return toolName.split('.').at(-1)?.toLowerCase() || toolName.toLowerCase();
+}
+
+function getToolDisplayName(toolName?: string): string|undefined {
+  const trimmed = toolName?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 export function getToolProgressLabel(toolName?: string): string {
@@ -289,7 +296,7 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
           timestamp: event.timestamp,
         });
         break;
-      case RuntimeEventKind.kAssistantToken:
+      case RuntimeEventKind.kAssistantToken: {
         if (!text) {
           break;
         }
@@ -320,6 +327,7 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
           timestamp: event.timestamp,
         };
         break;
+      }
       case RuntimeEventKind.kAssistantThinking:
         if (!text) {
           break;
@@ -348,7 +356,7 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
           timestamp: event.timestamp,
         };
         break;
-      case RuntimeEventKind.kTurnComplete:
+      case RuntimeEventKind.kTurnComplete: {
         if (!text) {
           clearAssistantState();
           break;
@@ -379,6 +387,7 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
         });
         clearAssistantState();
         break;
+      }
       case RuntimeEventKind.kToolRequest:
         splitAssistantState();
         if (event.toolCall?.callId) {
@@ -434,7 +443,7 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
         }
         break;
       }
-      case RuntimeEventKind.kApprovalRequest:
+      case RuntimeEventKind.kApprovalRequest: {
         splitAssistantState();
         const approvalIndex = items.length;
         if (event.approvalRequest?.relatedToolCall?.callId) {
@@ -444,9 +453,13 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
         }
         items.push({
           approval: event.approvalRequest?.approvalId ? {
-            approvalId: event.approvalRequest.approvalId,
-            status: 'pending',
-          } : undefined,
+             approvalId: event.approvalRequest.approvalId,
+             status: 'pending',
+             toolAction: event.approvalRequest.relatedToolCall ?
+                 humanizeToolRequest(event.approvalRequest.relatedToolCall) :
+                 undefined,
+             toolName: getToolDisplayName(event.approvalRequest.relatedToolCall?.toolName),
+           } : undefined,
           kind: 'approval',
           key,
           markdown: false,
@@ -459,6 +472,7 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
           approvalItemIndexById.set(event.approvalRequest.approvalId, approvalIndex);
         }
         break;
+      }
       case RuntimeEventKind.kApprovalResult:
         splitAssistantState();
         if (event.approvalResult?.approvalId) {
@@ -470,6 +484,7 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
               items[existingApprovalIndex] = {
                 ...approvalItem,
                 approval: {
+                  ...(approvalItem.approval || {}),
                   approvalId: event.approvalResult.approvalId,
                   reason: event.approvalResult.reason || undefined,
                   status: event.approvalResult.approved ? 'approved' : 'denied',

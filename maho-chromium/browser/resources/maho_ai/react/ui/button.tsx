@@ -14,6 +14,7 @@ export const buttonVariants = cva('', {
       'compact-icon': 'compact-icon-button',
       'compact-icon-accent': 'compact-icon-button compact-icon-button--accent',
       'compact-icon-ghost': 'compact-icon-button compact-icon-button--ghost',
+      'compact-session-toggle': 'compact-panel__session-toggle',
       'composer-icon': 'compact-composer__icon-button',
       'composer-send': 'compact-composer__send',
       'console-default': 'console-button',

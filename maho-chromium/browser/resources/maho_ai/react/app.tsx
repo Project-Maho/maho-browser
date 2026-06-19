@@ -291,6 +291,7 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
                   onGetViewMode={modeHandlers.onGetViewMode}
                   onOpenSettings={modeHandlers.onOpenSettings}
                   onRespondToApproval={modeHandlers.onRespondToApproval}
+                  onResumeSession={modeHandlers.onResumeSession}
                   onSetViewMode={modeHandlers.onSetViewMode}
                   onStartSession={modeHandlers.onNewSession}
                   readOnly={readOnly}

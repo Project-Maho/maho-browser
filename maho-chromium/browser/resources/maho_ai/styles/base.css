@@ -16,9 +16,11 @@ body {
       linear-gradient(180deg, var(--maho-ai-bg-page-gradient-start), var(--maho-ai-bg-page-gradient-end));
   color: var(--maho-ai-text-secondary);
   font-family: var(--maho-ai-font-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'kern', 'liga';
 }
 
-body,
 button,
 textarea,
 input {

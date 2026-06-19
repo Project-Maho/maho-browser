@@ -48,6 +48,161 @@
   gap: var(--maho-ai-space-1);
 }
 
+.compact-panel__topbar-center {
+  display: flex;
+  flex: 1;
+  justify-content: center;
+  min-width: 0;
+  padding: 0 var(--maho-ai-space-2);
+}
+
+.compact-panel__content {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.compact-panel__session-toggle {
+  display: grid;
+  gap: 2px;
+  width: min(100%, 280px);
+  min-width: 0;
+  padding: var(--maho-ai-space-2) var(--maho-ai-space-3);
+  border: var(--maho-ai-border-width) solid var(--maho-ai-border-soft);
+  border-radius: var(--maho-ai-radius-pill);
+  background: var(--maho-ai-bg-panel-soft);
+  color: var(--maho-ai-text-secondary);
+  text-align: left;
+  box-shadow: var(--maho-ai-shadow-soft);
+  cursor: pointer;
+  transition:
+      border-color var(--maho-ai-transition-fast),
+      background-color var(--maho-ai-transition-fast),
+      color var(--maho-ai-transition-fast),
+      transform var(--maho-ai-transition-fast);
+}
+
+.compact-panel__session-toggle:hover,
+.compact-panel__session-toggle.is-open {
+  transform: translateY(-1px);
+  border-color: var(--maho-ai-border-strong);
+  background: var(--maho-ai-bg-panel-strong);
+  color: var(--maho-ai-text-primary);
+}
+
+.compact-panel__session-toggle-label,
+.compact-session-drawer__eyebrow,
+.compact-session-drawer__card-action {
+  color: var(--maho-ai-text-faint);
+  font-size: var(--maho-ai-text-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.compact-panel__session-toggle-value {
+  overflow: hidden;
+  color: var(--maho-ai-text-primary);
+  font-size: var(--maho-ai-text-sm);
+  font-weight: 600;
+  line-height: var(--maho-ai-leading-snug);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compact-session-drawer-root {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+}
+
+.compact-session-drawer__scrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(8, 11, 17, 0.58);
+  backdrop-filter: blur(calc(var(--maho-ai-blur-surface) * 0.75));
+  cursor: pointer;
+}
+
+.compact-session-drawer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--maho-ai-space-3);
+  width: min(100%, 320px);
+  padding: var(--maho-ai-space-3);
+  border: var(--maho-ai-border-width) solid var(--maho-ai-border);
+  border-radius: var(--maho-ai-radius-lg);
+  background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 30%),
+      var(--maho-ai-bg-elevated-strong);
+  box-shadow: var(--maho-ai-shadow-dock), var(--maho-ai-shadow-soft);
+}
+
+.compact-session-drawer__header,
+.compact-session-drawer__card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--maho-ai-space-3);
+}
+
+.compact-session-drawer__header-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.compact-session-drawer__eyebrow,
+.compact-session-drawer__card-action {
+  margin: 0;
+}
+
+.compact-session-drawer__title {
+  margin: 0;
+  color: var(--maho-ai-text-primary);
+  font-family: var(--maho-ai-font-display);
+  font-size: var(--maho-ai-text-lg);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+.compact-session-drawer__description {
+  margin: 0;
+  color: var(--maho-ai-text-muted);
+  font-size: var(--maho-ai-text-sm);
+  line-height: var(--maho-ai-leading-normal);
+}
+
+.compact-session-drawer__body {
+  flex: 1;
+  min-height: 0;
+}
+
+.compact-session-drawer__list {
+  height: 100%;
+}
+
+.compact-session-drawer__card {
+  gap: var(--maho-ai-space-2);
+}
+
+.compact-session-drawer__card-action {
+  color: var(--maho-ai-accent);
+  white-space: nowrap;
+}
+
+.compact-session-drawer__empty {
+  justify-content: center;
+  min-height: 100%;
+}
+
 .compact-panel__composer-host::before {
   position: absolute;
   right: 0;
@@ -154,8 +309,8 @@
   width: var(--maho-ai-icon-size);
   height: var(--maho-ai-icon-size);
   border-radius: var(--maho-ai-radius-pill);
-  background: var(--maho-ai-bg-panel-soft);
-  color: var(--maho-ai-text-secondary);
+  background: var(--maho-ai-bg-chip-quiet);
+  color: var(--maho-ai-text-muted);
   cursor: pointer;
 }
 
@@ -381,6 +536,19 @@
 
   .compact-panel {
     padding: var(--maho-ai-space-2);
+  }
+
+  .compact-panel__topbar-center {
+    padding: 0 var(--maho-ai-space-1);
+  }
+
+  .compact-panel__session-toggle {
+    width: 100%;
+  }
+
+  .compact-session-drawer {
+    width: 100%;
+    border-radius: var(--maho-ai-radius-md);
   }
 
   .compact-panel__center {

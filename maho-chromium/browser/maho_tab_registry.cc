@@ -12,7 +12,6 @@
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/values.h"
-#include "base/uuid.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/tab_list/tab_removed_reason.h"
@@ -226,8 +225,6 @@ class MahoTabRegistry::NavObserver : public content::WebContentsObserver {
     MahoCore* core = maho::GetCore();
     if (!core) return;
     maho_core_add_history_entry(core, url_spec.c_str(), title.c_str());
-    std::string visit_id = base::Uuid::GenerateRandomV4().AsLowercaseString();
-    maho::core::InsertBrowseSession(core, visit_id, url_spec, title);
   }
 
   void MaybeDispatchTabUrl() {

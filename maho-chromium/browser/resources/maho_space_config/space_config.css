@@ -30,9 +30,11 @@ body {
   height: 100%;
   overflow: hidden;
   background: var(--scfg-shell-bg);
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   color: var(--scfg-text-primary);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'kern', 'liga';
 }
 
 maho-space-config {

@@ -1,6 +1,6 @@
 export type IconSymbol =
     'arrowUpRight'|'composerSpark'|'copy'|'edit'|'ellipsis'|'globe'|
-    'panelSpark'|'plus'|'retry'|'settingsGear'|'stop'|'thumbDown'|
+    'panelSpark'|'plus'|'retry'|'send'|'settingsGear'|'stop'|'thumbDown'|
     'thumbUp'|'trash'|'viewModeToggle'|'xmark';
 
 const ICON_MAP: Record<IconSymbol, string> = {
@@ -13,6 +13,7 @@ const ICON_MAP: Record<IconSymbol, string> = {
   panelSpark: 'sparkles',
   plus: 'plus',
   retry: 'rotate-cw',
+  send: 'send',
   settingsGear: 'settings',
   stop: 'circle-stop',
   thumbDown: 'thumbs-down',

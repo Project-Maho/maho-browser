@@ -461,11 +461,14 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
              align="start"
              className="compact-context-picker"
              side="top">
-             <div ref={pickerRef} onKeyDown={handlePickerKeyDown}>
-             <div className="compact-context-picker__search-area">
-              <form className="compact-context-picker__search-form" onSubmit={handleSearchSubmit}>
-                <span aria-hidden="true" className="compact-context-picker__search-icon">
-                  <svg fill="none" height="14" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" viewBox="0 0 24 24" width="14" xmlns="http://www.w3.org/2000/svg">
+             <section
+               ref={pickerRef}
+               aria-label="Context picker"
+               onKeyDown={handlePickerKeyDown}>
+              <div className="compact-context-picker__search-area">
+               <form className="compact-context-picker__search-form" onSubmit={handleSearchSubmit}>
+                 <span aria-hidden="true" className="compact-context-picker__search-icon">
+                  <svg aria-hidden="true" fill="none" focusable="false" height="14" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" viewBox="0 0 24 24" width="14" xmlns="http://www.w3.org/2000/svg">
                     <circle cx="11" cy="11" r="7" />
                     <path d="m20 20-3.5-3.5" />
                   </svg>
@@ -563,13 +566,13 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
                   </span>
                   <span className="compact-context-picker__row-title">Upload file from computer</span>
                 </button>
-              </div>
+             </div>
             </div>
-            </div>
+            </section>
           </PopoverContent>
         </Popover>
         {state.composer.attachments.length > 0 ? (
-          <div className="compact-composer__attachments" aria-label="Attached context">
+          <section className="compact-composer__attachments" aria-label="Attached context">
             {state.composer.attachments.map(attachment => {
               const isImage = attachment.kind === 'file' &&
                   !!attachment.mimeType?.startsWith('image/') &&
@@ -595,7 +598,7 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
                     className="compact-composer__attachment-chip-remove"
                     type="button"
                     onClick={() => handlers.onRemoveAttachment(attachment)}>
-                    <svg fill="none" height="10" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24" width="10" xmlns="http://www.w3.org/2000/svg">
+                    <svg aria-hidden="true" fill="none" focusable="false" height="10" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24" width="10" xmlns="http://www.w3.org/2000/svg">
                       <line x1="18" y1="6" x2="6" y2="18" />
                       <line x1="6" y1="6" x2="18" y2="18" />
                     </svg>
@@ -603,7 +606,7 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
                 </span>
               );
             })}
-          </div>
+          </section>
         ) : null}
         {(() => {
           const aiSettings = state.aiSettings;
@@ -623,7 +626,7 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" side="top">
                 {providers.length === 0 ? (
-                  <DropdownMenuLabel>No models configured</DropdownMenuLabel>
+                  <div className="compact-overflow-menu__empty">No models configured</div>
                 ) : (
                   providers.map((provider, providerIdx) => (
                     <React.Fragment key={provider.id}>

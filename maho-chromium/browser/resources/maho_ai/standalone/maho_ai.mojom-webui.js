@@ -77,6 +77,14 @@ export const InteractionMode = {
   kDeveloper: 1,
 };
 
+export const ContextSourceKind = {
+  kCurrentPage: 0,
+  kOpenTab: 1,
+  kHistory: 2,
+  kBookmark: 3,
+  kFile: 4,
+};
+
 export const ViewMode = {
   kSidebar: 0,
   kFloating: 1,

@@ -1,8 +1,8 @@
 :root {
   color-scheme: light dark;
 
-  --maho-settings-font-body: 'SF Pro Text', 'Segoe UI Variable', 'Helvetica Neue', sans-serif;
-  --maho-settings-font-display: 'SF Pro Display', 'Segoe UI Variable Display', 'Helvetica Neue', sans-serif;
+  --maho-settings-font-body: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --maho-settings-font-display: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 
   --maho-settings-space-1: 4px;
   --maho-settings-space-2: 8px;
@@ -85,6 +85,9 @@ body {
 body {
   color: var(--maho-settings-text-primary);
   font-family: var(--maho-settings-font-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'kern', 'liga';
 }
 
 @media (prefers-color-scheme: dark) {

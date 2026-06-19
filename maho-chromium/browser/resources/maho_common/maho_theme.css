@@ -1,4 +1,7 @@
 :root {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'kern', 'liga';
   --maho-primary: #e94560;
   --maho-primary-hover: #d63d56;
   --maho-primary-alpha: rgba(233, 69, 96, 0.1);

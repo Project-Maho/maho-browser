@@ -30,10 +30,15 @@ export type ApprovalResultRecord = ApprovalResultInfo;
 export type EventKind = RuntimeEventKind;
 export type BrowserContextPayload = BrowserContextPayloadRecord;
 export type BrowserContextStatusValue = BrowserContextStatus;
-export type OpenTabRecord = TabItem;
+export interface OpenTabRecord extends TabItem {
+  isPinned?: boolean;
+}
 export type HistoryItemRecord = HistoryItem;
 export type BookmarkItemRecord = BookmarkItem;
-export type SubmitContextAttachmentRecord = ContextAttachmentRecord;
+export interface SubmitContextAttachmentRecord extends ContextAttachmentRecord {
+  bytes?: number[];
+  mimeType?: string;
+}
 
 export interface TimelineEntry {
   sessionId: string;
@@ -56,8 +61,27 @@ export interface ComposerAttachment {
   kind: ComposerAttachmentKind;
   label: string;
   detail?: string;
+  dataUrl?: string;
+  mimeType?: string;
+  size?: number;
   tabId?: number;
   url?: string;
+}
+
+export interface ToastState {
+  text: string;
+  tone: 'danger'|'info';
+}
+
+export interface AISettingsState {
+  activeModelId: string|null;
+  activeProviderId: string|null;
+}
+
+export interface AIProviderRecord {
+  displayName: string;
+  id: string;
+  models: string[];
 }
 
 export interface OpenTabsState {
@@ -127,6 +151,110 @@ export function isTabAttachment(attachment: ComposerAttachment): boolean {
 
 export function isHistoryAttachment(attachment: ComposerAttachment): boolean {
   return attachment.kind === 'history';
+}
+
+export function isFileAttachment(attachment: ComposerAttachment): boolean {
+  return attachment.kind === 'file';
+}
+
+function getFileAttachmentId(file: File): string {
+  return `file:${file.name}:${file.size}:${file.lastModified}`;
+}
+
+function inferMimeType(file: File): string {
+  const trimmedType = file.type.trim();
+  if (trimmedType) {
+    return trimmedType;
+  }
+
+  const extension = file.name.split('.').pop()?.toLowerCase();
+  switch (extension) {
+    case 'png':
+      return 'image/png';
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'gif':
+      return 'image/gif';
+    case 'webp':
+      return 'image/webp';
+    case 'pdf':
+      return 'application/pdf';
+    default:
+      return 'application/octet-stream';
+  }
+}
+
+function ensureSupportedFile(file: File, mimeType: string): void {
+  const lowerName = file.name.trim().toLowerCase();
+  if (mimeType === 'image/svg+xml' || lowerName.endsWith('.svg')) {
+    throw new Error('SVG attachments are not supported. Please upload a PNG, JPEG, WebP, GIF, PDF, or text file instead.');
+  }
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, offset + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+function dataUrlToByteArray(dataUrl?: string): number[] {
+  if (!dataUrl) {
+    return [];
+  }
+
+  const commaIndex = dataUrl.indexOf(',');
+  if (commaIndex < 0) {
+    return [];
+  }
+
+  try {
+    const decoded = atob(dataUrl.slice(commaIndex + 1));
+    return Array.from(decoded, char => char.charCodeAt(0));
+  } catch {
+    return [];
+  }
+}
+
+async function readFileBytes(file: File): Promise<Uint8Array> {
+  if (typeof file.arrayBuffer === 'function') {
+    return new Uint8Array(await file.arrayBuffer());
+  }
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error || new Error('Failed to read file attachment.'));
+    reader.onload = () => {
+      const result = reader.result;
+      if (!(result instanceof ArrayBuffer)) {
+        reject(new Error('Failed to read file attachment.'));
+        return;
+      }
+      resolve(new Uint8Array(result));
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+export async function createFileAttachment(file: File): Promise<ComposerAttachment> {
+  const mimeType = inferMimeType(file);
+  ensureSupportedFile(file, mimeType);
+
+  const bytes = await readFileBytes(file);
+  const dataUrl = `data:${mimeType};base64,${bytesToBase64(bytes)}`;
+  return {
+    dataUrl,
+    detail: `${mimeType} · ${bytes.length} byte${bytes.length === 1 ? '' : 's'}`,
+    id: getFileAttachmentId(file),
+    kind: 'file',
+    label: file.name,
+    mimeType,
+    size: bytes.length,
+  };
 }
 
 export function getTabAttachmentId(tabId: number): string {
@@ -265,44 +393,57 @@ export function createHistoryAttachment(item: HistoryItemRecord): ComposerAttach
 
 export function getSubmitContextAttachments(
     attachments: ComposerAttachment[]): SubmitContextAttachmentRecord[]|null {
-  const hasCurrentPage = hasCurrentPageAttachment(attachments);
-  const tabAttachments = attachments.filter(isTabAttachment);
-  const historyAttachments = attachments.filter(a => a.kind === 'history');
-  const bookmarkAttachments = attachments.filter(a => a.kind === 'bookmark');
-  if (!tabAttachments.length && !historyAttachments.length && !bookmarkAttachments.length) {
+  const submitAttachments = attachments.flatMap((attachment): SubmitContextAttachmentRecord[] => {
+    switch (attachment.kind) {
+      case 'currentPage':
+        return [{
+          bytes: [],
+          kind: ContextSourceKind.kCurrentPage,
+          label: attachment.label,
+          tabId: -1,
+          url: '',
+        }];
+      case 'tab':
+        return [{
+          bytes: [],
+          kind: ContextSourceKind.kOpenTab,
+          label: attachment.label,
+          tabId: attachment.tabId ?? -1,
+          url: attachment.url || '',
+        }];
+      case 'history':
+        return [{
+          bytes: [],
+          kind: ContextSourceKind.kHistory,
+          label: attachment.label,
+          tabId: -1,
+          url: attachment.url || '',
+        }];
+      case 'bookmark':
+        return [{
+          bytes: [],
+          kind: ContextSourceKind.kBookmark,
+          label: attachment.label,
+          tabId: -1,
+          url: attachment.url || '',
+        }];
+      case 'file':
+        return [{
+          bytes: dataUrlToByteArray(attachment.dataUrl),
+          kind: ContextSourceKind.kFile,
+          label: attachment.label,
+          mimeType: attachment.mimeType || 'application/octet-stream',
+          tabId: -1,
+          url: attachment.url || '',
+        }];
+      default:
+        return [];
+    }
+  });
+
+  if (!submitAttachments.length) {
     return null;
   }
-
-  const submitAttachments: SubmitContextAttachmentRecord[] = [];
-  if (hasCurrentPage) {
-    submitAttachments.push({
-      kind: ContextSourceKind.kCurrentPage,
-      tabId: -1,
-      label: CURRENT_PAGE_ATTACHMENT.label,
-      url: '',
-    });
-  }
-
-  submitAttachments.push(...tabAttachments.map(attachment => ({
-    kind: ContextSourceKind.kOpenTab,
-    tabId: attachment.tabId ?? -1,
-    label: attachment.label,
-    url: attachment.url || '',
-  })));
-
-  submitAttachments.push(...historyAttachments.map(attachment => ({
-    kind: ContextSourceKind.kHistory,
-    tabId: -1,
-    label: attachment.label,
-    url: attachment.url || '',
-  })));
-
-  submitAttachments.push(...bookmarkAttachments.map(attachment => ({
-    kind: ContextSourceKind.kBookmark,
-    tabId: -1,
-    label: attachment.label,
-    url: attachment.url || '',
-  })));
 
   return submitAttachments;
 }
@@ -310,6 +451,7 @@ export function getSubmitContextAttachments(
 export interface SessionHistoryState {
   loaded: boolean;
   totalCount: number;
+  loadedCount: number;
 }
 
 export interface AppState {
@@ -334,6 +476,9 @@ export interface AppState {
   openTabs: OpenTabsState;
   historySearch: HistorySearchState;
   bookmarksSearch: BookmarksSearchState;
+  toast: ToastState|null;
+  aiProviders: AIProviderRecord[];
+  aiSettings: AISettingsState;
   turnPendingBySessionId: Record<string, boolean>;
   contextsBySessionId: Record<string, BrowserContextPayload[]>;
 }
@@ -367,6 +512,12 @@ export function createInitialState(): AppState {
     openTabs: {...DEFAULT_OPEN_TABS_STATE, items: []},
     historySearch: {...DEFAULT_HISTORY_SEARCH_STATE},
     bookmarksSearch: {...DEFAULT_BOOKMARKS_SEARCH_STATE},
+    toast: null,
+    aiProviders: [],
+    aiSettings: {
+      activeModelId: null,
+      activeProviderId: null,
+    },
     turnPendingBySessionId: {},
     contextsBySessionId: {},
   };
