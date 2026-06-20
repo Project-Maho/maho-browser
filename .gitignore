@@ -6,6 +6,16 @@ chromium/
 maho/target/
 maho-chromium/third_party/maho/prebuilt/
 
+# JS/TS dependencies and build output
+node_modules/
+dist/
+.astro/
+.next/
+.turbo/
+.vite/
+.cache/
+*.tsbuildinfo
+
 # Python
 __pycache__/
 *.pyc
