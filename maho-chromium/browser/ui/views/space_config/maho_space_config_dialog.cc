@@ -17,7 +17,7 @@
 namespace {
 
 constexpr int kDialogWidth = 420;
-constexpr int kDialogHeight = 520;
+constexpr int kDialogHeight = 680;
 
 views::Widget* g_space_config_dialog_widget = nullptr;
 MahoSpaceConfigDialog::ActiveMode g_active_mode =

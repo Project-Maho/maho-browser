@@ -5,19 +5,854 @@ import {
   PageHandlerRemote,
 } from './maho_space_config.mojom-webui.js';
 import type {SpaceInfo} from './maho_space_config.mojom-webui.js';
-import {
-  SPACE_THEME_COLOR_PRESETS,
-  hsbToCss,
-  cssToHex,
-} from '//resources/maho_common/maho_theme_utils.js';
 
-const COLOR_PRESETS = SPACE_THEME_COLOR_PRESETS;
+interface EmojiEntry {
+  e: string;       // emoji character
+  k: string;       // search keywords (lowercase, space separated)
+}
 
-const DEFAULT_COLOR_INDEX = 7;
+interface EmojiCategory {
+  id: string;
+  label: string;
+  emojis: EmojiEntry[];
+}
+
+const EMOJI_CATEGORIES: EmojiCategory[] = [
+  {
+    id: 'smileys',
+    label: 'Smileys & People',
+    emojis: [
+      {e: '😀', k: 'grinning face smile happy'},
+      {e: '😃', k: 'smiley face smile happy'},
+      {e: '😄', k: 'smile face happy'},
+      {e: '😁', k: 'beaming grin face'},
+      {e: '😆', k: 'laugh face'},
+      {e: '😅', k: 'sweat smile face'},
+      {e: '🤣', k: 'rolling laughing rofl'},
+      {e: '😂', k: 'joy laugh tears'},
+      {e: '🙂', k: 'slight smile face'},
+      {e: '🙃', k: 'upside down face'},
+      {e: '😉', k: 'wink face'},
+      {e: '😊', k: 'blush smile face'},
+      {e: '😇', k: 'innocent halo angel'},
+      {e: '🥰', k: 'love hearts smile'},
+      {e: '😍', k: 'heart eyes love'},
+      {e: '🤩', k: 'star eyes excited'},
+      {e: '😘', k: 'kiss face love'},
+      {e: '😗', k: 'kissing face'},
+      {e: '☺️', k: 'smile relaxed'},
+      {e: '😋', k: 'savor yum tongue'},
+      {e: '😛', k: 'tongue stuck out'},
+      {e: '😜', k: 'wink tongue'},
+      {e: '🤪', k: 'zany crazy'},
+      {e: '🤨', k: 'raised eyebrow skeptical'},
+      {e: '🧐', k: 'monocle thinking'},
+      {e: '🤓', k: 'nerd geek glasses'},
+      {e: '😎', k: 'cool sunglasses'},
+      {e: '🥸', k: 'disguise'},
+      {e: '🤗', k: 'hug face'},
+      {e: '🤔', k: 'thinking hmm'},
+      {e: '🤭', k: 'hand over mouth'},
+      {e: '🤐', k: 'zipper mouth quiet'},
+      {e: '😐', k: 'neutral face'},
+      {e: '😑', k: 'expressionless'},
+      {e: '😶', k: 'no mouth speechless'},
+      {e: '🙄', k: 'eye roll'},
+      {e: '😏', k: 'smirk smug'},
+      {e: '😣', k: 'persevering face'},
+      {e: '😥', k: 'sad disappointed'},
+      {e: '😮', k: 'open mouth surprise'},
+      {e: '🤐', k: 'zipper'},
+      {e: '😯', k: 'hushed surprise'},
+      {e: '😪', k: 'sleepy tired'},
+      {e: '😫', k: 'tired weary'},
+      {e: '🥱', k: 'yawn tired'},
+      {e: '😴', k: 'sleeping zzz'},
+      {e: '😌', k: 'relieved peaceful'},
+      {e: '😛', k: 'tongue'},
+      {e: '🤤', k: 'drooling'},
+      {e: '😒', k: 'unamused meh'},
+      {e: '😓', k: 'sweat sad'},
+      {e: '😔', k: 'pensive sad'},
+      {e: '😕', k: 'confused'},
+      {e: '🙁', k: 'frown sad'},
+      {e: '☹️', k: 'frowning sad'},
+      {e: '😖', k: 'confounded'},
+      {e: '😞', k: 'disappointed'},
+      {e: '😟', k: 'worried'},
+      {e: '😤', k: 'huff frustrated'},
+      {e: '😢', k: 'cry tear sad'},
+      {e: '😭', k: 'sob loud cry'},
+      {e: '😦', k: 'frown open mouth'},
+      {e: '😧', k: 'anguished'},
+      {e: '😨', k: 'fearful scared'},
+      {e: '😩', k: 'weary tired'},
+      {e: '🤯', k: 'mind blown explode'},
+      {e: '😬', k: 'grimace'},
+      {e: '😰', k: 'cold sweat anxious'},
+      {e: '😱', k: 'scream shocked'},
+      {e: '🥵', k: 'hot heat'},
+      {e: '🥶', k: 'cold freeze'},
+      {e: '😳', k: 'flushed embarrassed'},
+      {e: '🤪', k: 'zany'},
+      {e: '😵', k: 'dizzy'},
+      {e: '🥴', k: 'woozy drunk'},
+      {e: '😡', k: 'angry mad'},
+      {e: '🤬', k: 'curse swear'},
+      {e: '😈', k: 'devil mischief'},
+      {e: '👿', k: 'angry devil'},
+      {e: '💀', k: 'skull death'},
+      {e: '👻', k: 'ghost spooky'},
+      {e: '👽', k: 'alien'},
+      {e: '🤖', k: 'robot'},
+      {e: '😺', k: 'cat smile'},
+      {e: '😸', k: 'cat grinning'},
+      {e: '😹', k: 'cat joy laugh'},
+      {e: '😻', k: 'cat heart eyes love'},
+      {e: '🙏', k: 'pray thanks'},
+      {e: '👋', k: 'wave hello hi'},
+      {e: '👍', k: 'thumbs up like'},
+      {e: '👎', k: 'thumbs down dislike'},
+      {e: '👏', k: 'clap applause'},
+      {e: '🤝', k: 'handshake deal'},
+      {e: '✌️', k: 'peace victory'},
+      {e: '🤘', k: 'rock horns'},
+      {e: '👌', k: 'ok hand'},
+      {e: '🤞', k: 'crossed fingers luck'},
+      {e: '✊', k: 'fist'},
+      {e: '👶', k: 'baby'},
+      {e: '🧒', k: 'child'},
+      {e: '👦', k: 'boy'},
+      {e: '👧', k: 'girl'},
+      {e: '🧑', k: 'person adult'},
+      {e: '👨', k: 'man'},
+      {e: '👩', k: 'woman'},
+      {e: '👨‍💻', k: 'man developer coder'},
+      {e: '👩‍💻', k: 'woman developer coder'},
+      {e: '🧠', k: 'brain mind think'},
+      {e: '👀', k: 'eyes look'},
+    ],
+  },
+  {
+    id: 'animals',
+    label: 'Animals & Nature',
+    emojis: [
+      {e: '🐶', k: 'dog face'},
+      {e: '🐱', k: 'cat face'},
+      {e: '🐭', k: 'mouse face'},
+      {e: '🐹', k: 'hamster'},
+      {e: '🐰', k: 'rabbit bunny'},
+      {e: '🦊', k: 'fox'},
+      {e: '🐻', k: 'bear'},
+      {e: '🐼', k: 'panda'},
+      {e: '🐨', k: 'koala'},
+      {e: '🐯', k: 'tiger face'},
+      {e: '🦁', k: 'lion'},
+      {e: '🐮', k: 'cow face'},
+      {e: '🐷', k: 'pig face'},
+      {e: '🐸', k: 'frog'},
+      {e: '🐵', k: 'monkey face'},
+      {e: '🙈', k: 'see no evil monkey'},
+      {e: '🙉', k: 'hear no evil monkey'},
+      {e: '🙊', k: 'speak no evil monkey'},
+      {e: '🐒', k: 'monkey'},
+      {e: '🐔', k: 'chicken'},
+      {e: '🐧', k: 'penguin'},
+      {e: '🐦', k: 'bird'},
+      {e: '🐤', k: 'baby chick'},
+      {e: '🦅', k: 'eagle'},
+      {e: '🦉', k: 'owl wisdom'},
+      {e: '🦄', k: 'unicorn'},
+      {e: '🐝', k: 'bee'},
+      {e: '🐛', k: 'bug worm'},
+      {e: '🦋', k: 'butterfly'},
+      {e: '🐢', k: 'turtle'},
+      {e: '🐍', k: 'snake'},
+      {e: '🦖', k: 'dinosaur trex'},
+      {e: '🐳', k: 'whale'},
+      {e: '🐬', k: 'dolphin'},
+      {e: '🐟', k: 'fish'},
+      {e: '🦈', k: 'shark'},
+      {e: '🐙', k: 'octopus'},
+      {e: '🌵', k: 'cactus'},
+      {e: '🌲', k: 'tree evergreen'},
+      {e: '🌳', k: 'tree deciduous'},
+      {e: '🌴', k: 'palm tree'},
+      {e: '🌱', k: 'seedling plant'},
+      {e: '🌿', k: 'herb plant'},
+      {e: '☘️', k: 'shamrock luck'},
+      {e: '🍀', k: 'four leaf clover luck'},
+      {e: '🍃', k: 'leaves'},
+      {e: '🌺', k: 'flower hibiscus'},
+      {e: '🌻', k: 'sunflower'},
+      {e: '🌹', k: 'rose flower'},
+      {e: '🌷', k: 'tulip flower'},
+      {e: '🌸', k: 'cherry blossom flower'},
+      {e: '💐', k: 'bouquet flowers'},
+      {e: '🌎', k: 'earth americas globe world'},
+      {e: '🌍', k: 'earth africa globe world'},
+      {e: '🌏', k: 'earth asia globe world'},
+      {e: '🌕', k: 'full moon'},
+      {e: '🌙', k: 'crescent moon'},
+      {e: '⭐', k: 'star'},
+      {e: '🌟', k: 'glowing star sparkle'},
+      {e: '✨', k: 'sparkles magic'},
+      {e: '☀️', k: 'sun'},
+      {e: '⛅', k: 'partly cloudy'},
+      {e: '☁️', k: 'cloud'},
+      {e: '🌤️', k: 'sun cloud'},
+      {e: '🌧️', k: 'rain cloud'},
+      {e: '⚡', k: 'lightning bolt energy'},
+      {e: '🔥', k: 'fire flame hot'},
+      {e: '❄️', k: 'snowflake cold'},
+      {e: '☃️', k: 'snowman'},
+      {e: '⛄', k: 'snowman'},
+      {e: '🌊', k: 'ocean wave water'},
+      {e: '💧', k: 'droplet water'},
+      {e: '🌈', k: 'rainbow'},
+    ],
+  },
+  {
+    id: 'food',
+    label: 'Food & Drink',
+    emojis: [
+      {e: '🍎', k: 'red apple fruit'},
+      {e: '🍐', k: 'pear fruit'},
+      {e: '🍊', k: 'orange fruit'},
+      {e: '🍋', k: 'lemon fruit'},
+      {e: '🍌', k: 'banana fruit'},
+      {e: '🍉', k: 'watermelon fruit'},
+      {e: '🍇', k: 'grapes fruit'},
+      {e: '🍓', k: 'strawberry fruit'},
+      {e: '🫐', k: 'blueberries fruit'},
+      {e: '🍈', k: 'melon fruit'},
+      {e: '🍒', k: 'cherries fruit'},
+      {e: '🍑', k: 'peach fruit'},
+      {e: '🥭', k: 'mango fruit'},
+      {e: '🍍', k: 'pineapple fruit'},
+      {e: '🥥', k: 'coconut fruit'},
+      {e: '🥝', k: 'kiwi fruit'},
+      {e: '🍅', k: 'tomato'},
+      {e: '🍆', k: 'eggplant'},
+      {e: '🥑', k: 'avocado'},
+      {e: '🥦', k: 'broccoli'},
+      {e: '🥬', k: 'leafy green'},
+      {e: '🥒', k: 'cucumber'},
+      {e: '🌶️', k: 'chili pepper hot'},
+      {e: '🫑', k: 'bell pepper'},
+      {e: '🌽', k: 'corn'},
+      {e: '🥕', k: 'carrot'},
+      {e: '🧄', k: 'garlic'},
+      {e: '🧅', k: 'onion'},
+      {e: '🥔', k: 'potato'},
+      {e: '🍠', k: 'sweet potato'},
+      {e: '🍞', k: 'bread'},
+      {e: '🥐', k: 'croissant'},
+      {e: '🥖', k: 'baguette bread'},
+      {e: '🧇', k: 'waffle'},
+      {e: '🥞', k: 'pancakes'},
+      {e: '🧀', k: 'cheese'},
+      {e: '🍖', k: 'meat bone'},
+      {e: '🍗', k: 'poultry chicken leg'},
+      {e: '🥩', k: 'steak meat'},
+      {e: '🥓', k: 'bacon'},
+      {e: '🍔', k: 'burger'},
+      {e: '🍟', k: 'fries'},
+      {e: '🍕', k: 'pizza'},
+      {e: '🌭', k: 'hot dog'},
+      {e: '🥪', k: 'sandwich'},
+      {e: '🌮', k: 'taco'},
+      {e: '🌯', k: 'burrito'},
+      {e: '🥙', k: 'wrap'},
+      {e: '🍳', k: 'egg cooking'},
+      {e: '🥘', k: 'paella pan'},
+      {e: '🍲', k: 'stew pot'},
+      {e: '🍜', k: 'ramen noodles'},
+      {e: '🍝', k: 'spaghetti pasta'},
+      {e: '🍣', k: 'sushi'},
+      {e: '🍱', k: 'bento'},
+      {e: '🍤', k: 'shrimp tempura'},
+      {e: '🥟', k: 'dumpling'},
+      {e: '🍙', k: 'rice ball'},
+      {e: '🍚', k: 'rice'},
+      {e: '🍘', k: 'rice cracker'},
+      {e: '🥠', k: 'fortune cookie'},
+      {e: '🥮', k: 'moon cake'},
+      {e: '🍢', k: 'oden skewer'},
+      {e: '🍡', k: 'dango'},
+      {e: '🍧', k: 'shaved ice'},
+      {e: '🍨', k: 'ice cream'},
+      {e: '🍦', k: 'soft ice cream'},
+      {e: '🥧', k: 'pie'},
+      {e: '🧁', k: 'cupcake'},
+      {e: '🍰', k: 'cake slice'},
+      {e: '🎂', k: 'birthday cake'},
+      {e: '🍮', k: 'pudding flan'},
+      {e: '🍭', k: 'lollipop candy'},
+      {e: '🍬', k: 'candy'},
+      {e: '🍫', k: 'chocolate'},
+      {e: '🍿', k: 'popcorn'},
+      {e: '🍩', k: 'donut'},
+      {e: '🍪', k: 'cookie'},
+      {e: '🥛', k: 'milk'},
+      {e: '☕', k: 'coffee'},
+      {e: '🍵', k: 'tea'},
+      {e: '🧃', k: 'juice box'},
+      {e: '🥤', k: 'cup straw drink'},
+      {e: '🧋', k: 'bubble tea'},
+      {e: '🍶', k: 'sake'},
+      {e: '🍺', k: 'beer'},
+      {e: '🍻', k: 'beers cheers'},
+      {e: '🥂', k: 'champagne clink'},
+      {e: '🍷', k: 'wine'},
+      {e: '🥃', k: 'whisky tumbler'},
+      {e: '🍸', k: 'cocktail'},
+      {e: '🍹', k: 'tropical drink'},
+      {e: '🍾', k: 'champagne bottle'},
+    ],
+  },
+  {
+    id: 'activity',
+    label: 'Activities',
+    emojis: [
+      {e: '⚽', k: 'soccer ball'},
+      {e: '🏀', k: 'basketball'},
+      {e: '🏈', k: 'football american'},
+      {e: '⚾', k: 'baseball'},
+      {e: '🥎', k: 'softball'},
+      {e: '🎾', k: 'tennis'},
+      {e: '🏐', k: 'volleyball'},
+      {e: '🏉', k: 'rugby'},
+      {e: '🥏', k: 'frisbee'},
+      {e: '🎱', k: 'pool 8 ball'},
+      {e: '🏓', k: 'ping pong'},
+      {e: '🏸', k: 'badminton'},
+      {e: '🥊', k: 'boxing glove'},
+      {e: '🥋', k: 'martial arts'},
+      {e: '⛳', k: 'golf hole'},
+      {e: '⛸️', k: 'ice skating'},
+      {e: '🎣', k: 'fishing'},
+      {e: '🎽', k: 'running shirt'},
+      {e: '🎿', k: 'ski'},
+      {e: '🏂', k: 'snowboarder'},
+      {e: '🏋️', k: 'weight lifting'},
+      {e: '🤸', k: 'cartwheel gymnastics'},
+      {e: '🚴', k: 'cycling'},
+      {e: '🏆', k: 'trophy winner'},
+      {e: '🏅', k: 'medal'},
+      {e: '🎖️', k: 'military medal'},
+      {e: '🥇', k: 'first place gold'},
+      {e: '🥈', k: 'second place silver'},
+      {e: '🥉', k: 'third place bronze'},
+      {e: '🎯', k: 'dart bullseye target'},
+      {e: '🎮', k: 'game controller'},
+      {e: '🎰', k: 'slot machine'},
+      {e: '🎲', k: 'dice game'},
+      {e: '🧩', k: 'puzzle'},
+      {e: '♟️', k: 'chess pawn'},
+      {e: '🪀', k: 'yo yo'},
+      {e: '🎨', k: 'art palette paint'},
+      {e: '🎭', k: 'performing arts theater'},
+      {e: '🎬', k: 'movie clapper film'},
+      {e: '🎤', k: 'microphone'},
+      {e: '🎧', k: 'headphones music'},
+      {e: '🎼', k: 'musical score'},
+      {e: '🎵', k: 'musical note'},
+      {e: '🎶', k: 'musical notes music'},
+      {e: '🎹', k: 'piano keyboard'},
+      {e: '🥁', k: 'drum'},
+      {e: '🎷', k: 'saxophone'},
+      {e: '🎺', k: 'trumpet'},
+      {e: '🎸', k: 'guitar'},
+      {e: '🪕', k: 'banjo'},
+      {e: '🎻', k: 'violin'},
+    ],
+  },
+  {
+    id: 'travel',
+    label: 'Travel & Places',
+    emojis: [
+      {e: '🚗', k: 'car automobile'},
+      {e: '🚕', k: 'taxi'},
+      {e: '🚙', k: 'suv car'},
+      {e: '🚌', k: 'bus'},
+      {e: '🚎', k: 'trolleybus'},
+      {e: '🏎️', k: 'racing car'},
+      {e: '🚓', k: 'police car'},
+      {e: '🚑', k: 'ambulance'},
+      {e: '🚒', k: 'fire engine'},
+      {e: '🚐', k: 'minibus van'},
+      {e: '🛻', k: 'pickup truck'},
+      {e: '🚚', k: 'delivery truck'},
+      {e: '🚛', k: 'lorry truck'},
+      {e: '🚜', k: 'tractor'},
+      {e: '🛵', k: 'scooter motor'},
+      {e: '🏍️', k: 'motorcycle'},
+      {e: '🛺', k: 'auto rickshaw'},
+      {e: '🚲', k: 'bicycle bike'},
+      {e: '🛴', k: 'kick scooter'},
+      {e: '🚏', k: 'bus stop'},
+      {e: '🛣️', k: 'highway motorway'},
+      {e: '🛤️', k: 'railway track'},
+      {e: '🛢️', k: 'oil drum'},
+      {e: '⛽', k: 'fuel pump gas'},
+      {e: '🚨', k: 'police siren light'},
+      {e: '🚥', k: 'horizontal traffic light'},
+      {e: '🚦', k: 'vertical traffic light'},
+      {e: '🚧', k: 'construction'},
+      {e: '⚓', k: 'anchor'},
+      {e: '⛵', k: 'sailboat'},
+      {e: '🛶', k: 'canoe'},
+      {e: '🚤', k: 'speedboat'},
+      {e: '🛳️', k: 'passenger ship'},
+      {e: '⛴️', k: 'ferry'},
+      {e: '🛥️', k: 'motor boat'},
+      {e: '🚢', k: 'ship'},
+      {e: '✈️', k: 'airplane'},
+      {e: '🛩️', k: 'small airplane'},
+      {e: '🛫', k: 'airplane departure'},
+      {e: '🛬', k: 'airplane arrival'},
+      {e: '🪂', k: 'parachute'},
+      {e: '💺', k: 'seat'},
+      {e: '🚁', k: 'helicopter'},
+      {e: '🚂', k: 'locomotive train'},
+      {e: '🚆', k: 'train'},
+      {e: '🚇', k: 'metro subway'},
+      {e: '🚊', k: 'tram'},
+      {e: '🚉', k: 'station'},
+      {e: '🚝', k: 'monorail'},
+      {e: '🚞', k: 'mountain railway'},
+      {e: '🚋', k: 'tram car'},
+      {e: '🚃', k: 'railway car'},
+      {e: '🚟', k: 'suspension railway'},
+      {e: '🚠', k: 'mountain cableway'},
+      {e: '🚡', k: 'aerial tramway'},
+      {e: '🛰️', k: 'satellite'},
+      {e: '🚀', k: 'rocket launch'},
+      {e: '🛸', k: 'flying saucer ufo'},
+      {e: '🏠', k: 'house home'},
+      {e: '🏡', k: 'house garden home'},
+      {e: '🏢', k: 'office building'},
+      {e: '🏣', k: 'japanese post office'},
+      {e: '🏥', k: 'hospital'},
+      {e: '🏦', k: 'bank'},
+      {e: '🏨', k: 'hotel'},
+      {e: '🏪', k: 'convenience store'},
+      {e: '🏫', k: 'school'},
+      {e: '🏬', k: 'department store'},
+      {e: '🏭', k: 'factory'},
+      {e: '🏯', k: 'japanese castle'},
+      {e: '🏰', k: 'european castle'},
+      {e: '💒', k: 'wedding chapel'},
+      {e: '🗼', k: 'tokyo tower'},
+      {e: '🗽', k: 'statue of liberty'},
+      {e: '⛪', k: 'church'},
+      {e: '🕌', k: 'mosque'},
+      {e: '🛕', k: 'hindu temple'},
+      {e: '🕍', k: 'synagogue'},
+      {e: '⛩️', k: 'shinto shrine'},
+      {e: '🌋', k: 'volcano'},
+      {e: '⛰️', k: 'mountain'},
+      {e: '🏔️', k: 'snow capped mountain'},
+      {e: '🗻', k: 'mount fuji'},
+      {e: '🏕️', k: 'camping'},
+      {e: '🏖️', k: 'beach umbrella'},
+      {e: '🏜️', k: 'desert'},
+      {e: '🏝️', k: 'desert island'},
+      {e: '🏞️', k: 'national park'},
+    ],
+  },
+  {
+    id: 'objects',
+    label: 'Objects',
+    emojis: [
+      {e: '⌚', k: 'watch'},
+      {e: '📱', k: 'mobile phone smartphone'},
+      {e: '💻', k: 'laptop computer'},
+      {e: '⌨️', k: 'keyboard'},
+      {e: '🖥️', k: 'desktop computer'},
+      {e: '🖨️', k: 'printer'},
+      {e: '🖱️', k: 'computer mouse'},
+      {e: '🖲️', k: 'trackball'},
+      {e: '💾', k: 'floppy disk save'},
+      {e: '💿', k: 'optical disk cd'},
+      {e: '📀', k: 'dvd'},
+      {e: '🎞️', k: 'film frames'},
+      {e: '📷', k: 'camera'},
+      {e: '📸', k: 'camera flash'},
+      {e: '📹', k: 'video camera'},
+      {e: '🎥', k: 'movie camera'},
+      {e: '📞', k: 'telephone'},
+      {e: '☎️', k: 'phone'},
+      {e: '📟', k: 'pager'},
+      {e: '📠', k: 'fax'},
+      {e: '📺', k: 'television tv'},
+      {e: '📻', k: 'radio'},
+      {e: '🎙️', k: 'studio microphone'},
+      {e: '🎚️', k: 'level slider'},
+      {e: '🎛️', k: 'control knobs'},
+      {e: '⏱️', k: 'stopwatch timer'},
+      {e: '⏲️', k: 'timer clock'},
+      {e: '⏰', k: 'alarm clock'},
+      {e: '🕰️', k: 'mantelpiece clock'},
+      {e: '⌛', k: 'hourglass done'},
+      {e: '⏳', k: 'hourglass flowing'},
+      {e: '📡', k: 'satellite antenna'},
+      {e: '🔋', k: 'battery'},
+      {e: '🔌', k: 'plug power'},
+      {e: '💡', k: 'light bulb idea'},
+      {e: '🔦', k: 'flashlight torch'},
+      {e: '🕯️', k: 'candle'},
+      {e: '🪔', k: 'diya lamp'},
+      {e: '🧯', k: 'fire extinguisher'},
+      {e: '🛢️', k: 'oil drum'},
+      {e: '💸', k: 'money wings'},
+      {e: '💵', k: 'dollar money'},
+      {e: '💴', k: 'yen banknote'},
+      {e: '💶', k: 'euro banknote'},
+      {e: '💷', k: 'pound banknote'},
+      {e: '💰', k: 'money bag'},
+      {e: '💳', k: 'credit card'},
+      {e: '💎', k: 'gem diamond'},
+      {e: '⚖️', k: 'balance scale'},
+      {e: '🧰', k: 'toolbox'},
+      {e: '🔧', k: 'wrench'},
+      {e: '🔨', k: 'hammer'},
+      {e: '⚒️', k: 'hammer pick'},
+      {e: '🛠️', k: 'tools'},
+      {e: '⛏️', k: 'pick'},
+      {e: '🪓', k: 'axe'},
+      {e: '🔩', k: 'nut and bolt'},
+      {e: '⚙️', k: 'gear settings'},
+      {e: '🧱', k: 'brick'},
+      {e: '⛓️', k: 'chains'},
+      {e: '🧲', k: 'magnet'},
+      {e: '🔫', k: 'water pistol'},
+      {e: '💣', k: 'bomb'},
+      {e: '🧨', k: 'firecracker'},
+      {e: '🪃', k: 'boomerang'},
+      {e: '🏹', k: 'bow and arrow'},
+      {e: '🛡️', k: 'shield'},
+      {e: '🗡️', k: 'dagger'},
+      {e: '⚔️', k: 'crossed swords'},
+      {e: '🪜', k: 'ladder'},
+      {e: '🪞', k: 'mirror'},
+      {e: '🪟', k: 'window'},
+      {e: '🛏️', k: 'bed'},
+      {e: '🛋️', k: 'couch lamp'},
+      {e: '🪑', k: 'chair'},
+      {e: '🚽', k: 'toilet'},
+      {e: '🚿', k: 'shower'},
+      {e: '🛁', k: 'bathtub'},
+      {e: '🪒', k: 'razor'},
+      {e: '🧴', k: 'lotion bottle'},
+      {e: '🧷', k: 'safety pin'},
+      {e: '🧹', k: 'broom'},
+      {e: '🧺', k: 'basket'},
+      {e: '🧻', k: 'toilet paper'},
+      {e: '🪣', k: 'bucket'},
+      {e: '🧼', k: 'soap'},
+      {e: '🪥', k: 'toothbrush'},
+      {e: '🧽', k: 'sponge'},
+      {e: '🛒', k: 'shopping cart'},
+      {e: '📚', k: 'books'},
+      {e: '📖', k: 'open book'},
+      {e: '📓', k: 'notebook'},
+      {e: '📔', k: 'notebook decorative'},
+      {e: '📒', k: 'ledger'},
+      {e: '📕', k: 'closed book red'},
+      {e: '📗', k: 'green book'},
+      {e: '📘', k: 'blue book'},
+      {e: '📙', k: 'orange book'},
+      {e: '📰', k: 'newspaper'},
+      {e: '🗞️', k: 'rolled newspaper'},
+      {e: '📜', k: 'scroll'},
+      {e: '📃', k: 'page curl'},
+      {e: '📄', k: 'page facing up'},
+      {e: '📑', k: 'bookmark tabs'},
+      {e: '🔖', k: 'bookmark'},
+      {e: '🏷️', k: 'label tag'},
+      {e: '✏️', k: 'pencil'},
+      {e: '✒️', k: 'pen'},
+      {e: '🖋️', k: 'fountain pen'},
+      {e: '🖊️', k: 'pen ballpoint'},
+      {e: '🖌️', k: 'paintbrush'},
+      {e: '🖍️', k: 'crayon'},
+      {e: '📝', k: 'memo note write'},
+      {e: '💼', k: 'briefcase work'},
+      {e: '📁', k: 'folder file'},
+      {e: '📂', k: 'open file folder'},
+      {e: '🗂️', k: 'card index dividers'},
+      {e: '📅', k: 'calendar'},
+      {e: '📆', k: 'tear off calendar'},
+      {e: '🗒️', k: 'spiral notepad'},
+      {e: '🗓️', k: 'spiral calendar'},
+      {e: '📇', k: 'card index'},
+      {e: '📈', k: 'chart up trend'},
+      {e: '📉', k: 'chart down trend'},
+      {e: '📊', k: 'bar chart'},
+      {e: '📋', k: 'clipboard'},
+      {e: '📌', k: 'pushpin'},
+      {e: '📍', k: 'round pushpin'},
+      {e: '📎', k: 'paperclip'},
+      {e: '🖇️', k: 'linked paperclips'},
+      {e: '📏', k: 'straight ruler'},
+      {e: '📐', k: 'triangular ruler'},
+      {e: '✂️', k: 'scissors'},
+      {e: '🗃️', k: 'card file box'},
+      {e: '🗄️', k: 'file cabinet'},
+      {e: '🗑️', k: 'wastebasket'},
+      {e: '🔒', k: 'locked'},
+      {e: '🔓', k: 'unlocked'},
+      {e: '🔏', k: 'locked with pen'},
+      {e: '🔐', k: 'locked with key'},
+      {e: '🔑', k: 'key'},
+      {e: '🗝️', k: 'old key'},
+    ],
+  },
+  {
+    id: 'symbols',
+    label: 'Symbols',
+    emojis: [
+      {e: '❤️', k: 'red heart love'},
+      {e: '🧡', k: 'orange heart'},
+      {e: '💛', k: 'yellow heart'},
+      {e: '💚', k: 'green heart'},
+      {e: '💙', k: 'blue heart'},
+      {e: '💜', k: 'purple heart'},
+      {e: '🖤', k: 'black heart'},
+      {e: '🤍', k: 'white heart'},
+      {e: '🤎', k: 'brown heart'},
+      {e: '💔', k: 'broken heart'},
+      {e: '❣️', k: 'heart exclamation'},
+      {e: '💕', k: 'two hearts'},
+      {e: '💞', k: 'revolving hearts'},
+      {e: '💓', k: 'beating heart'},
+      {e: '💗', k: 'growing heart'},
+      {e: '💖', k: 'sparkling heart'},
+      {e: '💘', k: 'heart arrow'},
+      {e: '💝', k: 'heart ribbon gift'},
+      {e: '💟', k: 'heart decoration'},
+      {e: '☮️', k: 'peace'},
+      {e: '✝️', k: 'cross christianity'},
+      {e: '☪️', k: 'star crescent islam'},
+      {e: '🕉️', k: 'om hindu'},
+      {e: '☸️', k: 'wheel dharma buddhism'},
+      {e: '✡️', k: 'star david judaism'},
+      {e: '🔯', k: 'six pointed star'},
+      {e: '🕎', k: 'menorah'},
+      {e: '☯️', k: 'yin yang'},
+      {e: '☦️', k: 'orthodox cross'},
+      {e: '🛐', k: 'place of worship'},
+      {e: '⛎', k: 'ophiuchus'},
+      {e: '♈', k: 'aries'},
+      {e: '♉', k: 'taurus'},
+      {e: '♊', k: 'gemini'},
+      {e: '♋', k: 'cancer'},
+      {e: '♌', k: 'leo'},
+      {e: '♍', k: 'virgo'},
+      {e: '♎', k: 'libra'},
+      {e: '♏', k: 'scorpio'},
+      {e: '♐', k: 'sagittarius'},
+      {e: '♑', k: 'capricorn'},
+      {e: '♒', k: 'aquarius'},
+      {e: '♓', k: 'pisces'},
+      {e: '🆔', k: 'id button'},
+      {e: '⚛️', k: 'atom science'},
+      {e: '🉑', k: 'acceptable'},
+      {e: '☢️', k: 'radioactive'},
+      {e: '☣️', k: 'biohazard'},
+      {e: '📴', k: 'mobile off'},
+      {e: '📳', k: 'vibration mode'},
+      {e: '🈶', k: 'not free of charge'},
+      {e: '🈚', k: 'free of charge'},
+      {e: '🈸', k: 'application'},
+      {e: '🈺', k: 'open for business'},
+      {e: '🈷️', k: 'monthly amount'},
+      {e: '✴️', k: 'eight pointed star'},
+      {e: '🆚', k: 'vs versus'},
+      {e: '💮', k: 'white flower'},
+      {e: '🉐', k: 'bargain'},
+      {e: '㊙️', k: 'secret'},
+      {e: '㊗️', k: 'congratulations'},
+      {e: '🈴', k: 'passing grade'},
+      {e: '🈵', k: 'no vacancy'},
+      {e: '🈹', k: 'discount'},
+      {e: '🈲', k: 'prohibited'},
+      {e: '🅰️', k: 'a button'},
+      {e: '🅱️', k: 'b button'},
+      {e: '🆎', k: 'ab button'},
+      {e: '🆑', k: 'cl button'},
+      {e: '🅾️', k: 'o button'},
+      {e: '🆘', k: 'sos help'},
+      {e: '❌', k: 'cross mark x'},
+      {e: '⭕', k: 'hollow red circle'},
+      {e: '🛑', k: 'stop sign'},
+      {e: '⛔', k: 'no entry'},
+      {e: '📛', k: 'name badge'},
+      {e: '🚫', k: 'prohibited no'},
+      {e: '💯', k: 'hundred 100'},
+      {e: '💢', k: 'anger'},
+      {e: '♨️', k: 'hot springs'},
+      {e: '🚷', k: 'no pedestrians'},
+      {e: '🚯', k: 'no littering'},
+      {e: '🚳', k: 'no bicycles'},
+      {e: '🚱', k: 'non potable water'},
+      {e: '🔞', k: 'no one under eighteen'},
+      {e: '📵', k: 'no mobile phones'},
+      {e: '🚭', k: 'no smoking'},
+      {e: '❗', k: 'exclamation mark'},
+      {e: '❕', k: 'white exclamation'},
+      {e: '❓', k: 'question mark'},
+      {e: '❔', k: 'white question'},
+      {e: '‼️', k: 'double exclamation'},
+      {e: '⁉️', k: 'exclamation question'},
+      {e: '🔅', k: 'dim button'},
+      {e: '🔆', k: 'bright button'},
+      {e: '〽️', k: 'part alternation'},
+      {e: '⚠️', k: 'warning'},
+      {e: '🚸', k: 'children crossing'},
+      {e: '🔱', k: 'trident'},
+      {e: '⚜️', k: 'fleur de lis'},
+      {e: '🔰', k: 'japanese symbol beginner'},
+      {e: '♻️', k: 'recycling'},
+      {e: '✅', k: 'check mark green'},
+      {e: '🈯', k: 'reserved'},
+      {e: '💹', k: 'chart yen'},
+      {e: '❇️', k: 'sparkle'},
+      {e: '✳️', k: 'eight spoked asterisk'},
+      {e: '❎', k: 'cross mark button'},
+      {e: '🌐', k: 'globe meridians'},
+      {e: '💠', k: 'diamond dot'},
+      {e: 'Ⓜ️', k: 'circled m'},
+      {e: '🌀', k: 'cyclone spiral'},
+      {e: '💤', k: 'zzz sleep'},
+      {e: '🏧', k: 'atm'},
+      {e: '🚾', k: 'water closet wc'},
+      {e: '♿', k: 'wheelchair accessible'},
+      {e: '🅿️', k: 'parking'},
+      {e: '🛗', k: 'elevator'},
+      {e: '🈳', k: 'vacancy'},
+      {e: '🛂', k: 'passport control'},
+      {e: '🛃', k: 'customs'},
+      {e: '🛄', k: 'baggage claim'},
+      {e: '🛅', k: 'left luggage'},
+      {e: '🚹', k: 'mens room'},
+      {e: '🚺', k: 'womens room'},
+      {e: '🚼', k: 'baby symbol'},
+      {e: '🚻', k: 'restroom'},
+      {e: '🚮', k: 'litter bin'},
+      {e: '🎦', k: 'cinema'},
+      {e: '📶', k: 'antenna bars signal'},
+      {e: '🆁', k: 'r registered'},
+      {e: '🆖', k: 'ng button'},
+      {e: '🆗', k: 'ok button'},
+      {e: '🆙', k: 'up button'},
+      {e: '🆒', k: 'cool button'},
+      {e: '🆕', k: 'new button'},
+      {e: '🆓', k: 'free button'},
+      {e: '0️⃣', k: 'keycap zero'},
+      {e: '1️⃣', k: 'keycap one'},
+      {e: '2️⃣', k: 'keycap two'},
+      {e: '3️⃣', k: 'keycap three'},
+      {e: '4️⃣', k: 'keycap four'},
+      {e: '5️⃣', k: 'keycap five'},
+      {e: '6️⃣', k: 'keycap six'},
+      {e: '7️⃣', k: 'keycap seven'},
+      {e: '8️⃣', k: 'keycap eight'},
+      {e: '9️⃣', k: 'keycap nine'},
+      {e: '🔟', k: 'keycap ten'},
+      {e: '🔢', k: 'numbers'},
+      {e: '#️⃣', k: 'keycap hash'},
+      {e: '*️⃣', k: 'keycap asterisk'},
+      {e: '⏏️', k: 'eject'},
+      {e: '▶️', k: 'play forward'},
+      {e: '⏸️', k: 'pause'},
+      {e: '⏯️', k: 'play pause'},
+      {e: '⏹️', k: 'stop'},
+      {e: '⏺️', k: 'record'},
+      {e: '⏭️', k: 'next track'},
+      {e: '⏮️', k: 'last track'},
+      {e: '⏩', k: 'fast forward'},
+      {e: '⏪', k: 'rewind'},
+      {e: '⏫', k: 'fast up'},
+      {e: '⏬', k: 'fast down'},
+      {e: '◀️', k: 'reverse'},
+      {e: '🔼', k: 'upward triangle'},
+      {e: '🔽', k: 'downward triangle'},
+      {e: '➡️', k: 'right arrow'},
+      {e: '⬅️', k: 'left arrow'},
+      {e: '⬆️', k: 'up arrow'},
+      {e: '⬇️', k: 'down arrow'},
+      {e: '↗️', k: 'up right arrow'},
+      {e: '↘️', k: 'down right arrow'},
+      {e: '↙️', k: 'down left arrow'},
+      {e: '↖️', k: 'up left arrow'},
+      {e: '↕️', k: 'up down arrow'},
+      {e: '↔️', k: 'left right arrow'},
+      {e: '↪️', k: 'right hook arrow'},
+      {e: '↩️', k: 'left hook arrow'},
+      {e: '⤴️', k: 'right curve up'},
+      {e: '⤵️', k: 'right curve down'},
+      {e: '🔀', k: 'shuffle tracks'},
+      {e: '🔁', k: 'repeat'},
+      {e: '🔂', k: 'repeat one'},
+      {e: '🔄', k: 'counterclockwise refresh'},
+      {e: '🔃', k: 'clockwise refresh'},
+      {e: '🎵', k: 'music note'},
+      {e: '🎶', k: 'music notes'},
+      {e: '➕', k: 'plus'},
+      {e: '➖', k: 'minus'},
+      {e: '➗', k: 'divide'},
+      {e: '✖️', k: 'multiply'},
+      {e: '🟰', k: 'heavy equals'},
+      {e: '♾️', k: 'infinity'},
+      {e: '💲', k: 'dollar'},
+      {e: '💱', k: 'currency exchange'},
+      {e: '™️', k: 'trademark'},
+      {e: '©️', k: 'copyright'},
+      {e: '®️', k: 'registered'},
+      {e: '〰️', k: 'wavy dash'},
+      {e: '➰', k: 'curly loop'},
+      {e: '➿', k: 'double curly loop'},
+      {e: '🔚', k: 'end arrow'},
+      {e: '🔙', k: 'back arrow'},
+      {e: '🔛', k: 'on arrow'},
+      {e: '🔝', k: 'top arrow'},
+      {e: '🔜', k: 'soon arrow'},
+      {e: '🔘', k: 'radio button'},
+      {e: '⚪', k: 'white circle'},
+      {e: '⚫', k: 'black circle'},
+      {e: '🔴', k: 'red circle'},
+      {e: '🔵', k: 'blue circle'},
+      {e: '🟠', k: 'orange circle'},
+      {e: '🟡', k: 'yellow circle'},
+      {e: '🟢', k: 'green circle'},
+      {e: '🟣', k: 'purple circle'},
+      {e: '🟤', k: 'brown circle'},
+      {e: '🔶', k: 'large orange diamond'},
+      {e: '🔷', k: 'large blue diamond'},
+      {e: '🔸', k: 'small orange diamond'},
+      {e: '🔹', k: 'small blue diamond'},
+      {e: '🔺', k: 'red triangle up'},
+      {e: '🔻', k: 'red triangle down'},
+      {e: '🔲', k: 'black square button'},
+      {e: '🔳', k: 'white square button'},
+      {e: '⚪', k: 'circle white'},
+      {e: '⬜', k: 'white square'},
+      {e: '⬛', k: 'black square'},
+      {e: '🟧', k: 'orange square'},
+      {e: '🟨', k: 'yellow square'},
+      {e: '🟩', k: 'green square'},
+      {e: '🟦', k: 'blue square'},
+      {e: '🟪', k: 'purple square'},
+      {e: '🟫', k: 'brown square'},
+    ],
+  },
+];
 
 let handler: PageHandlerRemote;
 let currentSpace: SpaceInfo | null = null;
-let selectedColorIndex = DEFAULT_COLOR_INDEX;
 let spaceName = '';
 let spaceIcon = '⊞';
 let saving = false;
@@ -25,23 +860,17 @@ let saving = false;
 interface DomRefs {
   root: HTMLElement;
   nameInput: HTMLInputElement;
-  iconInput: HTMLInputElement;
+  iconDisplay: HTMLElement;
+  pickerSearch: HTMLInputElement;
+  pickerCategoryRow: HTMLElement;
+  pickerScroll: HTMLElement;
+  pickerEmpty: HTMLElement;
   profileSelect: HTMLSelectElement;
   saveBtn: HTMLButtonElement;
-  headerIcon: HTMLElement;
-  colorDot: HTMLElement;
-  palette: HTMLElement;
 }
 
 let dom: DomRefs;
-
-function getColorHex(): string {
-  const c = COLOR_PRESETS[selectedColorIndex];
-  if (!c) {
-    return '#5F8BFF';
-  }
-  return cssToHex(hsbToCss(c.hue, c.saturation, c.brightness));
-}
+let activeCategoryId = EMOJI_CATEGORIES[0]?.id ?? '';
 
 function el<K extends keyof HTMLElementTagNameMap>(
     tag: K, className?: string,
@@ -56,41 +885,66 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return e;
 }
 
-function updateSwatchSelection(): void {
-  dom.palette.querySelectorAll('.scfg-color-swatch').forEach((s, i) => {
-    s.classList.toggle('active', i === selectedColorIndex);
-  });
-  const c = COLOR_PRESETS[selectedColorIndex];
-  if (c) {
-    dom.colorDot.style.background = hsbToCss(c.hue, c.saturation, c.brightness);
-  }
+function setIcon(value: string): void {
+  spaceIcon = value;
+  dom.iconDisplay.textContent = value || '⊞';
 }
 
-function buildPalette(): void {
-  dom.palette.textContent = '';
-  COLOR_PRESETS.forEach((c, i) => {
-    const swatch = el('div', 'scfg-color-swatch');
-    if (i === selectedColorIndex) {
-      swatch.classList.add('active');
+function renderPickerGrid(): void {
+  const query = dom.pickerSearch.value.trim().toLowerCase();
+  dom.pickerScroll.textContent = '';
+  dom.pickerCategoryRow.style.display = query ? 'none' : '';
+  let total = 0;
+
+  if (query) {
+    for (const cat of EMOJI_CATEGORIES) {
+      for (const ent of cat.emojis) {
+        if (ent.k.includes(query) || ent.e === query) {
+          dom.pickerScroll.appendChild(buildEmojiCell(ent.e));
+          total++;
+        }
+      }
     }
-    swatch.style.background = hsbToCss(c.hue, c.saturation, c.brightness);
-    swatch.addEventListener('click', () => {
-      selectedColorIndex = i;
-      updateSwatchSelection();
+  } else {
+    const cat = EMOJI_CATEGORIES.find((c) => c.id === activeCategoryId);
+    if (cat) {
+      for (const ent of cat.emojis) {
+        dom.pickerScroll.appendChild(buildEmojiCell(ent.e));
+        total++;
+      }
+    }
+  }
+
+  dom.pickerEmpty.style.display = total === 0 ? '' : 'none';
+}
+
+function buildEmojiCell(emoji: string): HTMLButtonElement {
+  const btn = el('button', 'scfg-emoji-cell', emoji);
+  btn.type = 'button';
+  btn.title = emoji;
+  btn.addEventListener('click', () => setIcon(emoji));
+  return btn;
+}
+
+function buildCategoryButtons(): void {
+  dom.pickerCategoryRow.textContent = '';
+  for (const cat of EMOJI_CATEGORIES) {
+    const btn = el('button', 'scfg-emoji-cat-btn', cat.label);
+    btn.type = 'button';
+    if (cat.id === activeCategoryId) {
+      btn.classList.add('active');
+    }
+    btn.addEventListener('click', () => {
+      activeCategoryId = cat.id;
+      buildCategoryButtons();
+      renderPickerGrid();
     });
-    dom.palette.appendChild(swatch);
-  });
+    dom.pickerCategoryRow.appendChild(btn);
+  }
 }
 
 function buildUI(): void {
   const root = dom.root;
-
-  const header = el('div', 'scfg-header');
-  const headerIcon = el('div', 'scfg-header-icon');
-  headerIcon.textContent = spaceIcon;
-  dom.headerIcon = headerIcon;
-  const headerTitle = el('div', 'scfg-header-title', 'Space Settings');
-  header.append(headerIcon, headerTitle);
 
   const nameRow = el('div', 'scfg-card-row');
   const nameLabel = el('div', 'scfg-card-row-label', 'Space name');
@@ -105,39 +959,34 @@ function buildUI(): void {
   nameRow.append(nameLabel, nameInput);
 
   const iconRow = el('div', 'scfg-card-row');
-  const iconInner = el('div', 'scfg-icon-row');
-  const iconIcon = el('div', 'scfg-icon-row-icon', '🎨');
-  const iconText = el('div', 'scfg-icon-row-text');
+  const iconHeader = el('div', 'scfg-icon-row');
+  const iconLabel = el('div', 'scfg-icon-row-text');
   const iconTitle = el('div', 'scfg-icon-row-title', 'Icon');
-  const iconDesc = el('div', 'scfg-icon-row-desc', 'Emoji or symbol for this space');
-  iconText.append(iconTitle, iconDesc);
-  const iconInput = el('input', 'scfg-icon-input');
-  iconInput.type = 'text';
-  iconInput.maxLength = 4;
-  iconInput.value = spaceIcon;
-  iconInput.addEventListener('input', () => {
-    spaceIcon = iconInput.value;
-    dom.headerIcon.textContent = spaceIcon || '⊞';
-  });
-  dom.iconInput = iconInput;
-  iconInner.append(iconIcon, iconText, iconInput);
-  iconRow.appendChild(iconInner);
+  const iconDesc = el('div', 'scfg-icon-row-desc', 'Pick a unicode symbol');
+  iconLabel.append(iconTitle, iconDesc);
+  const iconDisplay = el('div', 'scfg-icon-display', spaceIcon || '⊞');
+  dom.iconDisplay = iconDisplay;
+  iconHeader.append(iconLabel, iconDisplay);
 
-  const colorRow = el('div', 'scfg-card-row');
-  const colorInner = el('div', 'scfg-icon-row');
-  const colorIcon = el('div', 'scfg-icon-row-icon', '✦');
-  const colorText = el('div', 'scfg-icon-row-text');
-  const colorTitle = el('div', 'scfg-icon-row-title', 'Color');
-  const colorDesc = el('div', 'scfg-icon-row-desc', 'Theme color for tabs and sidebar');
-  colorText.append(colorTitle, colorDesc);
-  const colorDot = el('div', 'scfg-color-dot');
-  dom.colorDot = colorDot;
-  colorInner.append(colorIcon, colorText, colorDot);
+  const pickerSearch = el('input', 'scfg-emoji-search');
+  pickerSearch.type = 'search';
+  pickerSearch.placeholder = 'Search emoji…';
+  pickerSearch.addEventListener('input', () => renderPickerGrid());
+  dom.pickerSearch = pickerSearch;
 
-  const palette = el('div', 'scfg-color-palette');
-  dom.palette = palette;
+  const pickerCategoryRow = el('div', 'scfg-emoji-cat-row');
+  dom.pickerCategoryRow = pickerCategoryRow;
 
-  colorRow.append(colorInner, palette);
+  const pickerScrollContainer = el('div', 'scfg-emoji-scroll-container');
+  const pickerScroll = el('div', 'scfg-emoji-scroll');
+  dom.pickerScroll = pickerScroll;
+  const pickerEmpty = el('div', 'scfg-emoji-empty', 'No matches');
+  pickerEmpty.style.display = 'none';
+  dom.pickerEmpty = pickerEmpty;
+  pickerScrollContainer.append(pickerScroll, pickerEmpty);
+
+  iconRow.append(iconHeader, pickerSearch, pickerCategoryRow,
+                 pickerScrollContainer);
 
   const profileRow = el('div', 'scfg-card-row');
   const profileInner = el('div', 'scfg-icon-row');
@@ -167,7 +1016,10 @@ function buildUI(): void {
   dom.saveBtn = saveBtn;
   actions.append(cancelBtn, saveBtn);
 
-  root.append(header, nameRow, iconRow, colorRow, profileRow, spacer, actions);
+  root.append(nameRow, iconRow, profileRow, spacer, actions);
+
+  buildCategoryButtons();
+  renderPickerGrid();
 }
 
 async function handleSave(): Promise<void> {
@@ -180,7 +1032,6 @@ async function handleSave(): Promise<void> {
 
   const nameChanged = spaceName !== currentSpace.name;
   const iconChanged = spaceIcon !== currentSpace.icon;
-  const colorChanged = getColorHex() !== currentSpace.color;
   const profileChanged =
       (dom.profileSelect.value || null) !== (currentSpace.profileId || null);
 
@@ -191,9 +1042,6 @@ async function handleSave(): Promise<void> {
   }
   if (iconChanged) {
     promises.push(handler.updateIcon(spaceIcon));
-  }
-  if (colorChanged) {
-    promises.push(handler.updateColor(getColorHex(), ''));
   }
   if (profileChanged) {
     promises.push(handler.updateProfile(dom.profileSelect.value || null));
@@ -245,12 +1093,7 @@ function applyInitialFocus(focus: InitialFocus): void {
         dom.nameInput.select();
         break;
       case InitialFocus.kIcon:
-        dom.iconInput.focus();
-        dom.iconInput.select();
-        break;
-      case InitialFocus.kColor:
-        dom.palette.querySelector('.scfg-color-swatch.active')
-            ?.scrollIntoView({block: 'center'});
+        dom.pickerSearch.focus();
         break;
       case InitialFocus.kProfile:
         dom.profileSelect.focus();
@@ -286,8 +1129,6 @@ async function initialize(): Promise<void> {
   spaceIcon = info.icon || '⊞';
 
   buildUI();
-  buildPalette();
-  updateSwatchSelection();
 
   void loadProfiles();
   applyInitialFocus(focus);

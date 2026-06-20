@@ -20,6 +20,7 @@
 #include "ui/views/widget/widget_observer.h"
 
 class Browser;
+class MahoSpaceContextMenu;
 
 namespace ui {
 class Event;
@@ -131,6 +132,9 @@ class MahoSidebarFooterView : public views::View,
   int selected_dot_index_ = -1;
   raw_ptr<views::View> drop_indicator_ = nullptr;
   int drag_source_index_ = -1;
+  std::unique_ptr<MahoSpaceContextMenu> active_space_context_menu_;
+  std::unique_ptr<ui::SimpleMenuModel> active_context_menu_model_;
+  std::unique_ptr<views::MenuRunner> context_menu_runner_;
   base::WeakPtrFactory<MahoSidebarFooterView> weak_factory_{this};
 };
 

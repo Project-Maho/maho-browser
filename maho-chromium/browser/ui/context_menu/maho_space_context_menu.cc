@@ -21,6 +21,9 @@
 #include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
 #include "maho/browser/ui/theme/maho_space_theme_io.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
+#include "maho/browser/ui/views/space_config/maho_space_config_dialog.h"
+#include "maho/browser/ui/views/space_create/maho_space_theme_picker_dialog.h"
+#include "maho/browser/ui/webui/maho_space_config/maho_space_config.mojom.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "url/gurl.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
@@ -369,11 +372,46 @@ void MahoSpaceContextMenu::ExecuteCommand(int command_id, int event_flags) {
   (void)event_flags;
   switch (command_id) {
     case IDC_MAHO_SPACE_RENAME:
+      MahoSpaceConfigDialog::Open(
+          browser_->profile(), browser_->window()->GetNativeWindow(),
+          space_id_, maho_space_config::mojom::InitialFocus::kName);
       break;
     case IDC_MAHO_SPACE_CHANGE_ICON:
+      MahoSpaceConfigDialog::Open(
+          browser_->profile(), browser_->window()->GetNativeWindow(),
+          space_id_, maho_space_config::mojom::InitialFocus::kIcon);
       break;
-    case IDC_MAHO_SPACE_EDIT_THEME:
+    case IDC_MAHO_SPACE_EDIT_THEME: {
+      MahoCore* core = maho::GetCore();
+      if (!core) {
+        break;
+      }
+      std::string initial_json =
+          maho_theme::SerializeSpaceThemeJson(core, space_id_)
+              .value_or(std::string());
+      MahoSpaceThemePickerDialog::Open(
+          browser_, initial_json,
+          base::BindOnce(
+              [](std::string space_id,
+                 const std::string& committed_theme_json,
+                 bool cancelled) {
+                if (cancelled || committed_theme_json.empty()) {
+                  return;
+                }
+                MahoCore* core = maho::GetCore();
+                if (!core) {
+                  return;
+                }
+                if (!maho_theme::ApplyThemeJsonToSpace(core, space_id,
+                                                      committed_theme_json)) {
+                  return;
+                }
+                MahoSpaceThemeState::UpdateFromCore();
+                ui::ColorProviderManager::Get().ResetColorProviderCache();
+              },
+              space_id_));
       break;
+    }
     case IDC_MAHO_SPACE_DELETE:
       LOG(INFO) << "MahoSpaceContextMenu: delete space confirmation pending";
       break;
@@ -429,14 +467,7 @@ void MahoSpaceContextMenu::ExecuteCommand(int command_id, int event_flags) {
 }
 
 bool MahoSpaceContextMenu::IsCommandIdEnabled(int command_id) const {
-  switch (command_id) {
-    case IDC_MAHO_SPACE_RENAME:
-    case IDC_MAHO_SPACE_CHANGE_ICON:
-    case IDC_MAHO_SPACE_EDIT_THEME:
-      return false;
-    default:
-      return true;
-  }
+  return true;
 }
 
 bool MahoSpaceContextMenu::IsCommandIdChecked(int command_id) const {

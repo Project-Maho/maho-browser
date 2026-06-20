@@ -47,6 +47,8 @@ class MahoSpaceConfigPageHandler
                      UpdateProfileCallback callback) override;
   void CloseDialog() override;
 
+  void RefreshSidebar();
+
   mojo::Receiver<maho_space_config::mojom::PageHandler> receiver_;
   mojo::Remote<maho_space_config::mojom::Page> page_;
   raw_ptr<Browser> browser_;

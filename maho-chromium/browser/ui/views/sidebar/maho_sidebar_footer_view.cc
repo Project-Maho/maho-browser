@@ -72,14 +72,14 @@ MahoSidebarView* FindSidebarViewAncestor(views::View* view) {
 
 constexpr int kUpdatePillCornerRadius = 11;
 constexpr int kUpdateIndicatorSize = 5;
-constexpr int kFooterRowHeight = 24;
-constexpr int kFooterControlSize = 20;
-constexpr int kFooterControlCornerRadius = 10;
-constexpr int kFooterButtonIconSize = 10;
+constexpr int kFooterRowHeight = 32;
+constexpr int kFooterControlSize = 28;
+constexpr int kFooterControlCornerRadius = 14;
+constexpr int kFooterButtonIconSize = 14;
 constexpr int kFooterRowSpacing = 0;
 constexpr int kDotSpacing = 4;
 constexpr int kFadeWidth = 8;
-constexpr int kDotTrackHeight = 9;
+constexpr int kDotTrackHeight = 14;
 
 constexpr float kFooterButtonEnabledOpacity = 0.58f;
 constexpr float kFooterButtonDisabledOpacity = 0.28f;
@@ -363,13 +363,19 @@ void MahoSidebarFooterView::ShowContextMenuForViewImpl(
     return;
   }
 
-  MahoSpaceContextMenu context_menu(browser_, "sidebar-spaces");
-  auto menu_model = context_menu.BuildMenuModel();
-  views::MenuRunner menu_runner(menu_model.get(),
-                                views::MenuRunner::CONTEXT_MENU);
-  menu_runner.RunMenuAt(source->GetWidget(), nullptr,
-                        gfx::Rect(point, gfx::Size()),
-                        views::MenuAnchorPosition::kTopLeft, source_type);
+  context_menu_runner_.reset();
+  active_context_menu_model_.reset();
+  active_space_context_menu_.reset();
+
+  active_space_context_menu_ =
+      std::make_unique<MahoSpaceContextMenu>(browser_, "sidebar-spaces");
+  active_context_menu_model_ = active_space_context_menu_->BuildMenuModel();
+  context_menu_runner_ = std::make_unique<views::MenuRunner>(
+      active_context_menu_model_.get(), views::MenuRunner::CONTEXT_MENU);
+  context_menu_runner_->RunMenuAt(source->GetWidget(), nullptr,
+                                  gfx::Rect(point, gfx::Size()),
+                                  views::MenuAnchorPosition::kTopLeft,
+                                  source_type);
 }
 
 void MahoSidebarFooterView::ExecuteCommand(int command_id, int event_flags) {
@@ -498,19 +504,53 @@ void MahoSidebarFooterView::RebuildDots(
     const std::vector<std::string>& space_icons,
     const std::vector<std::string>& space_names,
     const std::vector<std::string>& space_colors) {
-  dot_container_->RemoveAllChildViews();
   const int clamped_count = std::max(space_count, 0);
-  const int visible_count = space_ids.empty()
-                                ? clamped_count
-                                : std::min(clamped_count,
-                                           static_cast<int>(space_ids.size()));
-  if (visible_count == 0) {
+  const int target_count = space_ids.empty()
+                               ? clamped_count
+                               : std::min(clamped_count,
+                                          static_cast<int>(space_ids.size()));
+
+  if (target_count == 0) {
+    dot_container_->RemoveAllChildViews();
     selected_dot_index_ = -1;
     return;
   }
 
-  for (int i = 0; i < visible_count; ++i) {
-    const bool active = i == active_index;
+  const auto& existing = dot_container_->children();
+  const int existing_count = static_cast<int>(existing.size());
+
+  // Phase 1 — reuse existing dots; Phase 2 — trim tail; Phase 3 — append new.
+  const int reuse_count = std::min(existing_count, target_count);
+  for (int i = 0; i < reuse_count; ++i) {
+    auto* dot =
+        views::AsViewClass<MahoSidebarSpaceDotView>(existing[i].get());
+    if (!dot) {
+      continue;
+    }
+
+    const std::string& sid =
+        i < static_cast<int>(space_ids.size()) ? space_ids[i] : std::string();
+    const bool active = (i == active_index);
+    const std::string& icon =
+        i < static_cast<int>(space_icons.size()) ? space_icons[i]
+                                                  : std::string();
+    const std::string& name =
+        i < static_cast<int>(space_names.size()) ? space_names[i]
+                                                  : std::string();
+    SkColor dot_color = SK_ColorGRAY;
+    if (i < static_cast<int>(space_colors.size())) {
+      ParseHexColor(space_colors[i], &dot_color);
+    }
+    dot->Configure(sid, name, icon, dot_color, active);
+  }
+
+  while (static_cast<int>(dot_container_->children().size()) > target_count) {
+    dot_container_->RemoveChildViewT(
+        dot_container_->children().back().get());
+  }
+
+  for (int i = existing_count; i < target_count; ++i) {
+    const bool active = (i == active_index);
     const std::string& sid =
         i < static_cast<int>(space_ids.size()) ? space_ids[i] : std::string();
     const std::string& icon =
@@ -627,11 +667,16 @@ void MahoSidebarFooterView::OnSpaceDotContextMenu(
   if (!browser_ || !dot) {
     return;
   }
-  MahoSpaceContextMenu context_menu(browser_, dot->space_id());
-  auto menu_model = context_menu.BuildMenuModel();
-  views::MenuRunner menu_runner(menu_model.get(),
-                                views::MenuRunner::CONTEXT_MENU);
-  menu_runner.RunMenuAt(
+  context_menu_runner_.reset();
+  active_context_menu_model_.reset();
+  active_space_context_menu_.reset();
+
+  active_space_context_menu_ =
+      std::make_unique<MahoSpaceContextMenu>(browser_, dot->space_id());
+  active_context_menu_model_ = active_space_context_menu_->BuildMenuModel();
+  context_menu_runner_ = std::make_unique<views::MenuRunner>(
+      active_context_menu_model_.get(), views::MenuRunner::CONTEXT_MENU);
+  context_menu_runner_->RunMenuAt(
       dot->GetWidget(), nullptr,
       gfx::Rect(screen_point, gfx::Size()),
       views::MenuAnchorPosition::kTopLeft,

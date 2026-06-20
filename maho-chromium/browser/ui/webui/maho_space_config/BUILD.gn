@@ -25,6 +25,7 @@ source_set("maho_space_config") {
     "//maho/browser:maho_space_profile_bridge",
     "//maho/browser:maho_theme_support",
     "//maho/browser/resources/maho_space_config:resources",
+    "//maho/browser/ui/views/space_config:maho_space_config_dialog",
     "//maho/components/constants",
     "//net",
     "//maho/third_party/maho:maho_core_prebuilt",

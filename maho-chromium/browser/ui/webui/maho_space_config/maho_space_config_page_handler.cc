@@ -10,12 +10,17 @@
 #include "base/task/thread_pool.h"
 #include "base/values.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "content/public/browser/web_contents.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
+#include "maho/browser/ui/views/space_config/maho_space_config_dialog.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "ui/color/color_provider_manager.h"
+#include "ui/views/view_utils.h"
 
 namespace {
 
@@ -218,7 +223,15 @@ void MahoSpaceConfigPageHandler::UpdateName(
       FROM_HERE,
       {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
       base::BindOnce(&RenameSpaceOnPool, space_id_, name),
-      std::move(callback));
+      base::BindOnce(
+          [](base::WeakPtr<MahoSpaceConfigPageHandler> weak_self,
+             UpdateNameCallback cb, bool success) {
+            if (weak_self && success) {
+              weak_self->RefreshSidebar();
+            }
+            std::move(cb).Run(success);
+          },
+          weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void MahoSpaceConfigPageHandler::UpdateIcon(
@@ -234,47 +247,35 @@ void MahoSpaceConfigPageHandler::UpdateIcon(
               return false;
             }
 
-            char* json_str = maho_core_get_space_view_models(core);
-            if (!json_str) {
+            base::DictValue changes;
+            changes.Set("spaceId", space_id);
+            changes.Set("icon", icon);
+            base::DictValue event;
+            event.Set("kind", "update_space_config");
+            event.Set("changes", std::move(changes));
+
+            std::string event_json;
+            if (!base::JSONWriter::Write(event, &event_json)) {
               return false;
             }
-            std::string json(json_str);
-            maho_string_free(json_str);
-
-            std::optional<base::Value> parsed =
-                base::JSONReader::Read(json, base::JSON_PARSE_RFC);
-            if (!parsed || !parsed->is_list()) {
+            char* result = maho_core_handle_event(core, event_json.c_str());
+            if (!result) {
               return false;
             }
-
-            for (const auto& item : parsed->GetList()) {
-              const auto* dict = item.GetIfDict();
-              if (!dict) {
-                continue;
-              }
-              const std::string* id = dict->FindString("id");
-              if (!id || *id != space_id) {
-                continue;
-              }
-              const std::string* existing_color = dict->FindString("color");
-              std::string current_color =
-                  (existing_color && !existing_color->empty())
-                      ? *existing_color
-                      : "#5F8BFF";
-
-              base::DictValue color_dict;
-              color_dict.Set("color", current_color);
-              color_dict.Set("icon", icon);
-              std::string color_json;
-              base::JSONWriter::Write(color_dict, &color_json);
-              maho_core_recolor_space(core, space_id.c_str(),
-                                      color_json.c_str());
-              return true;
-            }
-            return false;
+            maho_string_free(result);
+            maho_core_save_state(core);
+            return true;
           },
           space_id_, icon),
-      std::move(callback));
+      base::BindOnce(
+          [](base::WeakPtr<MahoSpaceConfigPageHandler> weak_self,
+             UpdateIconCallback cb, bool success) {
+            if (weak_self && success) {
+              weak_self->RefreshSidebar();
+            }
+            std::move(cb).Run(success);
+          },
+          weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void MahoSpaceConfigPageHandler::UpdateColor(
@@ -314,4 +315,31 @@ void MahoSpaceConfigPageHandler::UpdateProfile(
 
 void MahoSpaceConfigPageHandler::CloseDialog() {
   MahoSpaceConfigDialog::CloseActiveDialog();
+}
+
+void MahoSpaceConfigPageHandler::RefreshSidebar() {
+  if (!browser_) {
+    return;
+  }
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser_);
+  if (!browser_view) {
+    return;
+  }
+  views::View* container_raw = browser_view->maho_sidebar_container();
+  if (!container_raw) {
+    return;
+  }
+  auto* container = views::AsViewClass<maho::MahoSidebarContainerView>(container_raw);
+  if (!container) {
+    return;
+  }
+  views::View* sidebar_view_raw = container->sidebar_view();
+  if (!sidebar_view_raw) {
+    return;
+  }
+  auto* sidebar_view = views::AsViewClass<maho::MahoSidebarView>(sidebar_view_raw);
+  if (!sidebar_view) {
+    return;
+  }
+  sidebar_view->ScheduleRefreshAll();
 }

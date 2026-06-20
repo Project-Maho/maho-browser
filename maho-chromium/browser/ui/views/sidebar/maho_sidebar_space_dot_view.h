@@ -8,6 +8,10 @@
 #include "base/memory/raw_ptr.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/compositor/layer.h"
+#include "ui/gfx/animation/animation_delegate.h"
+#include "ui/gfx/animation/slide_animation.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/view.h"
 
 namespace views {
@@ -36,7 +40,8 @@ class MahoSidebarSpaceDotDelegate {
 // at rest in all states. If it doesn't have an icon, it falls back to drawing
 // a circle dot at a size tier depending on state (active, selected, hovered).
 // Active spaces also render a subtle outer halo ring.
-class MahoSidebarSpaceDotView : public views::View {
+class MahoSidebarSpaceDotView : public views::View,
+                                public gfx::AnimationDelegate {
   METADATA_HEADER(MahoSidebarSpaceDotView, views::View)
 
  public:
@@ -60,6 +65,17 @@ class MahoSidebarSpaceDotView : public views::View {
 
   const std::string& space_id() const { return space_id_; }
   bool is_active() const { return is_active_; }
+  bool has_icon_for_testing() const { return has_icon_; }
+  float dot_opacity_for_testing() const { return dot_opacity_; }
+  float icon_layer_opacity_for_testing() const {
+    return icon_label_ && icon_label_->layer()
+               ? icon_label_->layer()->GetTargetOpacity()
+               : 0.0f;
+  }
+  float current_dot_size_for_testing() const { return GetCurrentDotSize(); }
+  gfx::SlideAnimation& hover_animation_for_testing() {
+    return hover_animation_;
+  }
 
   // views::View:
   gfx::Size CalculatePreferredSize(
@@ -72,15 +88,19 @@ class MahoSidebarSpaceDotView : public views::View {
   void OnMouseReleased(const ui::MouseEvent& event) override;
   void OnMouseCaptureLost() override;
 
+  // gfx::AnimationDelegate:
+  void AnimationProgressed(const gfx::Animation* animation) override;
+
  private:
   static constexpr int kViewSize = 15;
   static constexpr int kIndicatorSize = 11;
   // Size tier constants for icon-less fallback dots. Tuned to read as a
   // footer navigation affordance.
-  static constexpr float kDotSizeDefault = 4.0f;
-  static constexpr float kDotSizeSelected = 4.8f;
-  static constexpr float kDotSizeHoveredNoIcon = 5.8f;
-  static constexpr float kDotSizeActive = 7.6f;
+  static constexpr float kDotSizeDefault = 8.0f;
+  static constexpr float kDotSizeSelected = 9.0f;
+  static constexpr float kDotSizeHoveredNoIcon = 11.0f;
+  static constexpr float kDotSizeActive = 10.0f;
+  static constexpr float kDotSizeActiveHovered = 12.0f;
   static constexpr float kDragStartThreshold = 4.0f;
 
   float GetCurrentDotSize() const;
@@ -96,6 +116,8 @@ class MahoSidebarSpaceDotView : public views::View {
   bool has_icon_ = false;
 
   float dot_opacity_ = 1.0f;
+
+  gfx::SlideAnimation hover_animation_{this};
 
   raw_ptr<views::Label> icon_label_ = nullptr;
   raw_ptr<views::View> profile_badge_ = nullptr;

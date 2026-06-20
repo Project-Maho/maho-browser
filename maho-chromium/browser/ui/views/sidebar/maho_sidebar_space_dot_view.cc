@@ -4,6 +4,7 @@
 
 #include <cmath>
 
+#include "base/logging.h"
 #include "base/time/time.h"
 #include "cc/paint/paint_flags.h"
 #include "ui/accessibility/ax_enums.mojom.h"
@@ -16,7 +17,7 @@
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect_f.h"
-#include "ui/views/animation/animation_builder.h"
+#include "ui/gfx/geometry/transform.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/label.h"
@@ -33,14 +34,16 @@ MahoSidebarSpaceDotView::MahoSidebarSpaceDotView() {
   SetPaintToLayer();
   layer()->SetFillsBoundsOpaquely(false);
 
+  hover_animation_.SetSlideDuration(base::Milliseconds(160));
+  hover_animation_.SetTweenType(gfx::Tween::EASE_IN_OUT);
+
   icon_label_ = AddChildView(std::make_unique<views::Label>());
   icon_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
   icon_label_->SetVerticalAlignment(gfx::ALIGN_MIDDLE);
   icon_label_->SetAutoColorReadabilityEnabled(false);
   icon_label_->SetVisible(true);
-  icon_label_->SetBoundsRect(gfx::Rect(
-      (kViewSize - kIndicatorSize) / 2, (kViewSize - kIndicatorSize) / 2,
-      kIndicatorSize, kIndicatorSize));
+  icon_label_->SetBoundsRect(gfx::Rect(-12, -12, kViewSize + 24, kViewSize + 24));
+  icon_label_->SetCanProcessEventsWithinSubtree(false);
   icon_label_->SetPaintToLayer();
   icon_label_->layer()->SetFillsBoundsOpaquely(false);
   icon_label_->SetSubpixelRenderingEnabled(false);
@@ -69,7 +72,12 @@ void MahoSidebarSpaceDotView::Configure(const std::string& space_id,
   icon_ = icon;
   dot_color_ = color;
   is_active_ = is_active;
-  has_icon_ = !icon.empty();
+  bool has_visible = false;
+  for (unsigned char c : icon) {
+    if (c >= 0x80) { has_visible = true; break; }
+    if (c > 0x20 && c != 0x7F) { has_visible = true; break; }
+  }
+  has_icon_ = has_visible;
 
   SetTooltipText(base::UTF8ToUTF16(name));
   SetAccessibleName(base::UTF8ToUTF16(name));
@@ -112,6 +120,7 @@ void MahoSidebarSpaceDotView::OnPaint(gfx::Canvas* canvas) {
   if (dot_opacity_ > 0.0f) {
     const float dot_size = GetCurrentDotSize();
     const float radius = dot_size / 2.0f;
+    const float h = static_cast<float>(hover_animation_.GetCurrentValue());
 
     const auto* cp = GetColorProvider();
     const bool is_hovered_no_icon = is_hovered_ && !has_icon_ && !is_active_;
@@ -123,8 +132,12 @@ void MahoSidebarSpaceDotView::OnPaint(gfx::Canvas* canvas) {
                                    : (is_hovered_no_icon
                                           ? SkColorSetRGB(0xE8, 0xEF, 0xFB)
                                           : SkColorSetRGB(0xA2, 0xA8, 0xB6)));
-    const int alpha = is_active_ ? static_cast<int>(dot_opacity_ * 212)
-                                 : static_cast<int>(dot_opacity_ * 72);
+    const int base_alpha = is_active_ ? 212 : 72;
+    const int peak_alpha = is_active_ ? 240 : 200;
+    const float lerped_alpha =
+        static_cast<float>(base_alpha) +
+        (static_cast<float>(peak_alpha - base_alpha)) * h;
+    const int alpha = static_cast<int>(dot_opacity_ * lerped_alpha);
 
     cc::PaintFlags flags;
     flags.setAntiAlias(true);
@@ -149,12 +162,14 @@ void MahoSidebarSpaceDotView::OnPaint(gfx::Canvas* canvas) {
 void MahoSidebarSpaceDotView::OnMouseEntered(const ui::MouseEvent& event) {
   views::View::OnMouseEntered(event);
   is_hovered_ = true;
+  hover_animation_.Show();
   UpdateAppearance();
 }
 
 void MahoSidebarSpaceDotView::OnMouseExited(const ui::MouseEvent& event) {
   views::View::OnMouseExited(event);
   is_hovered_ = false;
+  hover_animation_.Hide();
   UpdateAppearance();
 }
 
@@ -223,28 +238,54 @@ void MahoSidebarSpaceDotView::OnMouseCaptureLost() {
 
 float MahoSidebarSpaceDotView::GetCurrentDotSize() const {
   if (is_active_) {
-    return kDotSizeActive;
+    return gfx::Tween::FloatValueBetween(hover_animation_.GetCurrentValue(),
+                                         kDotSizeActive,
+                                         kDotSizeActiveHovered);
   }
   if (is_selected_) {
     return kDotSizeSelected;
   }
-  if (is_hovered_ && !has_icon_) {
-    return kDotSizeHoveredNoIcon;
+  if (!has_icon_) {
+    return gfx::Tween::FloatValueBetween(hover_animation_.GetCurrentValue(),
+                                         kDotSizeDefault,
+                                         kDotSizeHoveredNoIcon);
   }
   return kDotSizeDefault;
 }
 
+void MahoSidebarSpaceDotView::AnimationProgressed(
+    const gfx::Animation* animation) {
+  UpdateAppearance();
+}
+
 void MahoSidebarSpaceDotView::UpdateAppearance() {
-  const bool show_icon = has_icon_;
-  const float target_icon_opacity = show_icon ? 1.0f : 0.0f;
+  const float h = static_cast<float>(hover_animation_.GetCurrentValue());
 
-  dot_opacity_ = show_icon ? 0.0f : 1.0f;
+  float icon_opacity = 0.0f;
+  if (has_icon_) {
+    icon_opacity = is_active_ ? 1.0f : h;
+  }
 
-  views::AnimationBuilder()
-      .Once()
-      .SetDuration(base::Milliseconds(160))
-      .SetOpacity(icon_label_->layer(), target_icon_opacity,
-                  gfx::Tween::EASE_IN_OUT);
+  if (!has_icon_) {
+    dot_opacity_ = 1.0f;
+  } else if (is_active_) {
+    dot_opacity_ = 0.0f;
+  } else {
+    dot_opacity_ = 1.0f - h;
+  }
+
+  icon_label_->layer()->SetOpacity(icon_opacity);
+
+  const gfx::Rect bounds = icon_label_->bounds();
+  const float cx = bounds.width() / 2.0f;
+  const float cy = bounds.height() / 2.0f;
+  const float base_scale = is_active_ ? 1.0f : 0.7f;
+  const float scale = base_scale + (1.0f - base_scale) * h;
+  gfx::Transform transform;
+  transform.Translate(cx, cy);
+  transform.Scale(scale, scale);
+  transform.Translate(-cx, -cy);
+  icon_label_->layer()->SetTransform(transform);
 
   SchedulePaint();
 }
