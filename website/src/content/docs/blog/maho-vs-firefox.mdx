@@ -1,0 +1,114 @@
+---
+title: "Maho vs Firefox: two takes on user agency"
+description: "Firefox has the longest claim to user agency in browsers. Maho rebuilds that claim for the agentic era. Privacy, agency, defaults, telemetry compared."
+date: 2026-09-22
+tags:
+  - browser
+  - comparison
+  - privacy
+excerpt: "Firefox built the user-agency case for the page-rendering era. Maho is building it for an era where the browser also runs models and tools. Both arguments are still right."
+authors:
+  - name: Maho Team
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Firefox is not the most-used browser anymore. It is still the one with the cleanest claim to user agency. The mission predates the agentic era, the engine is not a Chromium fork, and the project sits inside Mozilla's stewardship as open-source code that anyone can audit. None of that has gone away, and none of it should be sneered at.
+
+Maho is a different argument for the same goal. Where Firefox built the user-agency case for the page-rendering era, we are building it for an era where the browser also runs models and calls tools. This post is a direct comparison, with the parts where Firefox is still ahead written first.
+
+![Two browsers, one mission](/assets/blog/maho-vs-firefox/hero.png)
+
+## The Mozilla mission, fairly stated
+
+Mozilla exists to keep the web open. Firefox is the proof of work. The Mozilla Manifesto names the web as a public resource, the user as more than a target for ads, and the browser as a tool the user should own. Firefox is the codebase that backs those words.
+
+A few things follow from that history that nobody else can claim.
+
+The engine is Gecko, not Chromium. That matters because Chromium's near-monopoly on browser engines is a real problem for web standards. A standard with one implementation is not a standard. It is a vendor decision with a spec attached. Gecko's continued existence keeps the W3C honest in a way no Chromium fork can.
+
+The code is open-source under Mozilla's stewardship. Reviewers can read the build, security researchers can audit it, downstream forks (Tor Browser, LibreWolf, Waterfox) exist because the source allows them. That ecosystem is part of the agency story. You can leave Firefox while still using something that started as Firefox.
+
+The org is a foundation, not a public company with quarterly pressure to monetize attention. The Mozilla Corporation is structured to fund the foundation, which keeps the incentive arrows roughly pointing the right way. The arrows have wobbled at points (the search-deal dependency on Google is the obvious one), but the structure holds.
+
+When we talk about user agency in a browser in 2026, Firefox is the older, longer argument. We do not need to win against it. We need to extend it.
+
+## Where Firefox is still ahead
+
+A fair comparison names what the other side does better. Three places where Firefox is the answer.
+
+**Engine diversity.** Gecko is not Blink. If you care about the open web as a multi-implementation ecosystem, the only desktop browser that helps that case is Firefox. Maho ships on Chromium. We are not pretending that is a contribution to engine diversity, because it is not. A user whose top axis is "do not consolidate the web on one engine" should pick Firefox for that reason alone, and we will not argue them out of it.
+
+**Customization depth.** `about:config` exposes more knobs than any other browser. Userchrome.css is alive. The extensions API supports patterns Maho does not, like deep request-rewriting webextensions and full-page overlay extensions. Power users who tune their browser the way some people tune their editor have decades of muscle memory in Firefox. We are not going to match that depth in year one, year two, or honestly year three.
+
+**Track record.** Firefox has been shipping for over twenty years. Mozilla has stood up to ad-tech in legal filings, has shipped Total Cookie Protection, has pushed back on attribution-by-default proposals from larger players. A track record like that is not transferable. It is earned, slowly, and we have not earned it yet. We are aware that "we will" is not the same as "we have".
+
+If your axis of choice is one of those three, Firefox is the right pick today and will remain so. The rest of this post is about the axis where the answer changes.
+
+## Where Firefox left agentic on the table
+
+The browser as a place where models run is not a thing Firefox has built into the product.
+
+There is a side panel for an assistant. There are AI features in Pocket. There is research from Mozilla on responsible AI. None of that adds up to an agentic browser by the working definition (page context, tab awareness, tool calls, per-call permissions). The assistant in current Firefox is a chat panel. It can read the page. It cannot call tools, has no per-tool permission UI, and is not the architectural backbone of a workflow.
+
+This is not a criticism, it is a description. Firefox was not designed for tool-calling models. The extensions API, which is the closest thing to a tool surface in Firefox, was designed for scripts the user installs deliberately, not for an LLM to choose between calls in a loop. Bolting an agent onto that architecture would either give the model too much (extension-level access on a per-call decision) or too little (extensions cannot plan, only react). Neither is the shape of an agentic browser.
+
+The result is a product that ships in 2026 with a strong privacy posture and no native answer to the "what does my browser do when it can act" question. That is the gap. It is not Mozilla's fault. It is what happens when a 2003 architecture meets a 2026 capability.
+
+![Where the gap sits](/assets/blog/maho-vs-firefox/body-1.png)
+
+## Maho's coverage of the gap
+
+Maho is built around the idea that the browser is also a model host and a tool runtime. Three pieces of that are worth comparing directly.
+
+**Native side panel with tool use.** The side panel in Maho is not a chat overlay. It is a first-class surface that can read the active tab, see other tabs in the conversation with explicit scope, and call a typed tool from a registered MCP server. The browser knows about the tools. The user knows about the tools. The model picks one.
+
+**Permission model with three axes.** Per tool, per origin, per session. A grant for `create_issue` on `linear.app` does not extend to `delete_issue`. It does not extend to a different host. It expires at the end of the conversation unless the user explicitly says otherwise. The full breakdown is in the agentic browser permission model post.
+
+**Encrypted local stores with a keychain-resident key.** History, sync state, and grant records sit in encrypted SQLite stores. The key lives in the macOS Keychain, scoped to the signed binary. The relay sees encrypted payloads only. The security boundaries are documented in detail in the [security overview](/security/).
+
+None of these features is Maho's invention. Each of them is what an agentic browser should ship in 2026 and most do not. The contribution is putting them all in the same product, with defaults that lean toward agency rather than convenience.
+
+## Privacy posture comparison
+
+A direct comparison, written narrowly so it is verifiable.
+
+| Dimension | Firefox | Maho |
+|---|---|---|
+| Engine | Gecko | Chromium fork |
+| Default search | Google (paid placement) | DuckDuckGo |
+| Telemetry on by default | Yes, opt-out | No, off entirely |
+| Tracking protection default | Standard ETP | Aggressive equivalent |
+| Cookie isolation | Total Cookie Protection | Per-site partitioning |
+| AI side panel | Optional, vendor cloud | Native, BYOK |
+| Tool-calling agent | None | Per-tool, per-origin grants |
+| History at rest | Unencrypted SQLite | AES-256-GCM, keychain key |
+| Sync transport | E2E encrypted, Mozilla-hosted | E2E encrypted, self-hostable |
+| Source availability | Open-source, public repo | Pre-release, closed for now |
+
+Two rows are worth a sentence each.
+
+The "default search" row is the one that funds the rest of Firefox today. Mozilla's revenue is dominated by the Google deal, which is a real dependency that the Mozilla side has acknowledged. Maho ships DuckDuckGo as the default and takes no search-placement money, because we do not want that incentive in the loop.
+
+The "source availability" row goes the other way. Firefox is openly licensed today, with public commits and reviewable history.
+Our codebase is closed during pre-release, with code review on request for partners. We will not pretend the two are equivalent. Public auditability is a real property Mozilla has and we do not yet match.
+
+For a wider comparison set covering Chrome, Safari, Arc, and the agentic browsers, see the [comparison hub](/compare/).
+
+## Pick guide
+
+Three plain recommendations.
+
+**Pick Firefox if** your top axis is engine diversity, customizability via `about:config` and userchrome, or a multi-decade track record. Pick it if you do not need agentic features, or if you actively prefer to keep agents out of your browser. Pick it if open-source code availability is a hard requirement today.
+
+**Pick Maho if** you live in a side panel, you want tool calls with a real permission model, you want bring-your-own-model rather than a vendor cloud, and you accept Chromium under the hood. Pick it if your workflow already involves an LLM and you would rather it run inside your browser than in a separate window with copy-paste between them.
+
+**Run both if** you can. The two browsers solve overlapping problems with different tradeoffs. Firefox for the open web, Maho for the agentic surface. Profiles on each for the workloads they serve. We use both ourselves.
+
+![Pick guide visual](/assets/blog/maho-vs-firefox/body-2.png)
+
+The world is better with more than one browser that takes user agency seriously. Firefox has been carrying that argument longer than we have. We are not trying to replace it. We are trying to extend the case to a part of the browser Firefox was not designed to cover.
+
+## Join the waitlist
+
+Maho is a pre-release agentic browser for macOS. Native side panel, tool calls with per-call permissions, encrypted local stores, BYOK. [Join the waitlist](/waitlist).

@@ -1,0 +1,120 @@
+---
+title: "Agentic vs chat: when the browser should act, not talk"
+description: "When to chat. When to call a tool. When to refuse to do either. The mode problem in agentic browsers, and how Maho signals each mode to you, in plain text."
+date: 2026-10-30
+tags:
+  - browser
+  - agentic
+excerpt: "Every agentic browser has three modes hiding inside it: chat, act, and refuse. The bug is when the user cannot tell which mode the assistant is in. Here is how Maho makes that visible."
+authors:
+  - name: Maho Team
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+An agentic browser is not one thing. It is at least three things wearing the same panel.
+
+It is a chat assistant when you ask "what is a feature flag". It is a tool runner when you ask "summarize the page I am on". It is a refusal surface when you ask "buy me a hundred shares of NVDA at market". The three modes look almost identical from the outside. The first writes prose, the second writes prose plus a side effect, the third writes prose plus a hard "no". The interesting work is choosing the mode at all. The interesting failure is when the user thinks they are in one mode and the assistant is in another.
+
+This post is about that gap. Not the philosophy of agents, the small concrete question: when should an agentic browser chat, when should it act, when should it refuse, and how does the user know which one is happening at this moment.
+
+For background on what an agentic browser even is, see [what is an agentic browser](/blog/what-is-an-agentic-browser/). For the broader Maho approach, see [the AI overview](/browser/ai/).
+
+![A side panel pill showing chat, act, and refuse modes, with act highlighted](/assets/blog/agentic-vs-chat/hero.png)
+
+## The mode problem
+
+The mode problem is older than agentic browsers. Modal editors had it in the 1970s. Voice assistants have it now. The gist is the same in all three eras.
+
+A system has more than one set of behaviors. The same input produces different outputs depending on which set is active. If the user does not know which set is active, the user will give input that meant one thing and get a result that means another. The user will then blame the system, or themselves, depending on temperament. They will rarely blame the mode signal, because the mode signal is usually invisible.
+
+In a chat-only assistant, there is one mode. You type, the assistant types back. There is nothing to confuse.
+
+In an agentic browser, the assistant can also do things. Open tabs, fill forms, send messages, file issues, search your history, fetch external pages. Once those tools exist, every prompt has an implicit question attached: should this be a sentence or an action. The model decides, often correctly, sometimes wrongly. The user has no way to inspect the decision before it lands.
+
+The mode problem in 2026 is not "build smarter mode detection". The model is already good at it. The problem is that the user is not in the loop on the decision, and so a wrong decision is invisible until after it has done damage.
+
+![A flowchart showing chat, act, and refuse decisions](/assets/blog/agentic-vs-chat/body-1.png)
+
+## When chat is the right answer
+
+The chat mode is right when the user wants information, not action.
+
+Examples that are clearly chat:
+
+- "What is a feature flag."
+- "Explain how OAuth works."
+- "Why is my CSS specificity not winning here."
+- "Summarize the difference between WebGPU and WebGL."
+
+The signal is that the user is asking a question whose answer is words. There is no side effect they expect. There is nothing to be modified. The right output is prose, with maybe a code block, and the conversation ends or continues into more questions.
+
+Chat is also the right mode when the user is exploring. They have not yet decided what to do. They are thinking out loud at the assistant. A premature tool call here is not just wrong, it is annoying. It pushes the user toward a decision they were not ready to make.
+
+A clue: if the user says "what" or "why" or "explain" or "compare" or "tell me about", the right mode is almost always chat. The model can chat without a single tool call and the user is well served.
+
+## When action is the right answer
+
+Action mode is right when the user has named a thing they want done, and the doing involves either reading from a tool or writing to a target.
+
+Examples that are clearly action:
+
+- "Summarize the page I am on." (read from the active tab)
+- "File an issue on this PR with the failing test output." (write to GitHub)
+- "Search my history for the Stripe doc I read last week." (read from local store)
+- "Translate the selection to Korean and replace it." (write to the page)
+
+The signal is a verb that points at a target. "Summarize" points at the current page. "File" points at the issue tracker. "Search" points at history. "Translate and replace" points at the selection. The verb plus the target tells the model which tool to consider.
+
+Action mode is harder than chat mode because action mode has consequences. A summary that is slightly wrong is a small annoyance. An issue filed against the wrong repo is a real problem. The bar for "I am sure this is the right tool" is higher in action mode, and the host has to be willing to pause and ask when it is not sure.
+
+A subtle case: a question that looks like chat but expects action. "Can you summarize this." reads like a request for permission, but in practice the user wants the summary now. A polite assistant that responds "yes, I can summarize the page" without doing it is wasting the user's time. The right mode is action with a clear announcement of the action.
+
+## When neither is the right answer
+
+The third mode is refusal. It is the one most agentic browsers are bad at and many do not advertise.
+
+Examples where refusal is the right answer:
+
+- "Buy me a hundred shares of NVDA at market." (a transaction tool that needs an account the assistant should not be holding)
+- "Delete all my browser history." (irreversible, almost certainly not what the user actually means)
+- "Send a message to every contact in my address book." (mass action, easy to regret, and the address book is not the assistant's to drive)
+- "Pretend you are my doctor and tell me what dose to take." (a role-play that is unsafe regardless of what the model knows)
+
+The signal is that the request crosses a line the assistant should not cross, even if the model could technically write a passable response. The lines are different per category: financial transactions, irreversible deletes, mass communication, regulated advice. None of them are "the model cannot do this". All of them are "the assistant should not do this on the user's behalf".
+
+A refusal is not a non-answer. It is an answer with a reason. "I cannot place trades. You can do that in your broker's app." "I will not delete history without you confirming the date range and seeing the count first." The user gets a clear signal about why and what they can do instead.
+
+The key thing about refusal mode is that it has to be visible. A silent refusal, where the assistant just changes the subject, leaves the user thinking they are in chat mode and the assistant simply did not feel like helping. That is worse than a clear "no". The user cannot reason about a "no" they did not see.
+
+## The mode signal in Maho
+
+Maho's panel shows the mode at the top, as a small pill with three states: Chat, Act, Refuse. One of the three is highlighted at any given moment.
+
+When you type "what is a feature flag", the pill stays on Chat. The model writes prose. No tool is called. No side effect is queued. You can read the answer, ask a follow-up, or close the panel.
+
+When you type "summarize the page I am on", the pill flips to Act before the response begins. You see the model's plan: which tool it is calling, against which page, with what input. If the action is a read (summarize the active tab) the call runs and the result streams back. If the action is a write (file an issue) the host pauses for a permission grant the first time, with the origin in plain text.
+
+When you type "buy me a hundred shares of NVDA at market", the pill flips to Refuse. The model writes a short reason: "I do not run trades. You can do this in your broker's app." There is no silent change of subject. There is no half-attempt. The refusal is the response.
+
+The pill is not just decoration. It is a signal you can scan in half a second. If you typed something that looked like a question and the pill says Act, you have a chance to stop the action before it runs. If you typed something that looked like an action and the pill says Chat, you can rephrase. If you typed something that should have run and the pill says Refuse, you know to take that path elsewhere.
+
+## The cost of getting the mode wrong
+
+Each wrong mode has a different cost.
+
+A chat-when-it-should-be-action burns the user's time. They asked for a summary, they got an offer to summarize. They have to ask twice. Mild annoyance, no damage.
+
+An action-when-it-should-be-chat burns trust. They asked a question, the assistant did something. Maybe it filed an issue against the wrong repo. Maybe it sent a Slack message that was just supposed to be a draft. Now they have to clean up. Worse, they now distrust the assistant on every future prompt, and they will start prefixing every question with "do not actually do anything, just".
+
+A chat-when-it-should-be-refuse is the worst of the three. The user asked for something the assistant should not do. The assistant did not refuse. The assistant tried to help. Maybe it produced a passable answer to a question that should not have been answered. Maybe it produced an answer that does damage. Either way, the user now has a worse mental model of the assistant's limits than they would have had with a clear refusal.
+
+The reason Maho shows the pill is not because the model needs help picking. The model is fine. The reason is that the user needs to see the pick before they live with the consequence. A visible mode is a contract the user can verify in real time.
+
+![The Maho panel showing the active mode pill](/assets/blog/agentic-vs-chat/body-2.png)
+
+## Join the waitlist
+
+Modes are a small thing that decides a large thing. The right mode at the right time is the difference between an assistant that helps and an assistant you have to babysit.
+
+If you want to try a browser that names its mode out loud, before it acts, [join the waitlist](/waitlist).

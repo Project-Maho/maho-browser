@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@astrojs/react": "^5.0.3",
+    "@astrojs/sitemap": "^3.7.3",
     "@astrojs/starlight": "^0.38.3",
     "@codemirror/commands": "6.10.3",
     "@codemirror/lang-css": "6.3.1",

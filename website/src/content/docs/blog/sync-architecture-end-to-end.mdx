@@ -1,0 +1,142 @@
+---
+title: "Maho sync architecture, end to end"
+description: "The relay-based sync architecture in detail. Pairing, X25519 key derivation, the wire format, and a full threat model. Verifiable from public traffic."
+date: 2026-10-20
+tags:
+  - browser
+  - privacy
+excerpt: "We described the shape of Maho sync in an earlier post. This is the long version. Real primitives, real wire format, real threat model."
+authors:
+  - name: Maho Team
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+We wrote earlier about [why Maho sync does not need an account](/blog/sync-without-an-account/). That post described the shape of the system in plain terms. This one is the long version. The primitives we use, the bytes that go on the wire, the things the relay can and cannot see, and the failure modes we know we have not solved yet.
+
+Sync is a place where waving your hands is not good enough. If we say "end to end encrypted", you should be able to verify it from a packet capture and from the source. So this post is written to be checked.
+
+![Maho sync architecture, end to end](/assets/blog/sync-architecture-end-to-end/hero.png)
+
+## The pairing handshake
+
+Pairing is the moment two devices decide they belong to the same group. Everything that happens later is downstream of getting this step right.
+
+The flow is short. Device A asks the relay for a pairing slot and receives a slot ID. A shows the user a six-digit numeric code derived from the slot ID and a fresh nonce. Device B opens the same screen, types the slot ID (encoded in a QR code in practice), and asks the relay to forward.
+
+Now the cryptography starts. Both devices generate ephemeral X25519 keypairs. They exchange public keys through the relay. Each side computes a shared secret with X25519 ECDH. From that secret, both sides derive a short verification string and display it. The user reads the string on both devices and confirms they match.
+
+If the strings match, neither side is talking to a man in the middle, because a MITM would have had to negotiate two different shared secrets and cannot make both sides display the same six digits without the secret being identical.
+
+The verification string is short on purpose. Six digits is enough to make active interception expensive (one in a million per attempt) and short enough that a human will actually compare both sides. We do not extend it. Longer codes get skipped, and skipped codes are how MITM wins.
+
+Once the user confirms, both devices upgrade the ephemeral session into a long-term group key. We will get to the derivation in the next section.
+
+The thing this protects against, concretely, is a compromised relay or compromised network during the very first handshake. The relay is in the path. It sees the public keys go past. It cannot derive the shared secret from public keys alone, but a relay that wanted to be hostile could try to substitute its own keys to both sides and run two parallel sessions, one with each device, decrypting and re-encrypting in the middle. The verification code defeats this because the two parallel sessions yield two different shared secrets and therefore two different verification codes. The user sees the mismatch and aborts.
+
+![The pairing handshake on two devices](/assets/blog/sync-architecture-end-to-end/body-1.png)
+
+## Key derivation
+
+The shared secret out of X25519 is 32 bytes. We do not use it directly. We feed it to HKDF-SHA256 to derive purpose-specific keys, because reusing one key for many things is the kind of decision that looks fine until it is not.
+
+The derivation tree is:
+
+```
+shared_secret (X25519)
+  └── HKDF-Extract(salt = "maho-sync/v1")
+        └── HKDF-Expand(info = "group-root", L=32) → group_root_key
+              ├── HKDF-Expand(info = "payload", L=32) → payload_key
+              ├── HKDF-Expand(info = "metadata", L=32) → metadata_key
+              └── HKDF-Expand(info = "device-{id}", L=32) → per_device_key
+```
+
+`payload_key` encrypts the user's data. `metadata_key` authenticates the small headers we attach to each message. `per_device_key` is what lets a single device be revoked without rotating the whole group.
+
+The salt is a constant tied to the protocol version. When we rotate the protocol, the salt changes, which is the same as saying old derivations stop being valid. This is the boring path to a clean cutover.
+
+The mnemonic the user sees during pairing is not the key. It is a recovery seed for the device's local keystore, encoded as a BIP39 mnemonic so it transcribes well. Losing the mnemonic does not give an attacker the group key on its own. It does mean that device is now the only copy.
+
+## The relay's role (and what it cannot see)
+
+The relay is a small server that forwards opaque blobs between devices in a group. It is the part of the system most people ask about, because in most other browsers the equivalent server reads everything.
+
+The relay sees:
+
+- A group ID. This is a random 128-bit value, not derived from any user attribute.
+- A device ID per connection. Also random.
+- The size of each message and the timestamp it arrived.
+- Which device IDs are currently online for a given group ID.
+
+The relay does not see:
+
+- The contents of any message. The payload is encrypted with `payload_key`, which the relay never holds.
+- A name, an email, a phone number, an account, or any user attribute.
+- What kind of payload it is. The metadata header is encrypted under `metadata_key`. The relay only sees an opaque envelope.
+
+Because the relay does not see content, the things you might want it to do (search, dedupe, server-side merge) it cannot do. We picked that trade. The cost is paid in features that have to live on the device. It is the right cost.
+
+Operationally, the relay is stateless apart from a short queue. Buffered messages expire after seven days. If every device in a group has been offline for longer than that, the queue is empty and the late device gets nothing. This is intentional: a relay that holds data forever becomes a target.
+
+## Message format
+
+Every sync message on the wire has the same outer shape. The structure is small enough to write on a napkin.
+
+```
++---------------------+
+|  group_id (16 B)    |
+|  device_id (8 B)    |
+|  seq (8 B)          |   monotonic per device
+|  nonce (12 B)       |   random, never reused
+|  ciphertext (var)   |   AES-256-GCM(payload_key, plaintext)
+|  tag (16 B)         |   GCM auth tag
++---------------------+
+```
+
+`seq` is a per-device monotonically increasing counter. The recipient tracks the highest `seq` it has seen from each peer device and rejects anything lower. This is how we prevent replay even when the relay is hostile.
+
+`nonce` is fresh random bytes for every message. We do not use a deterministic nonce. We considered it (deterministic nonces simplify some bookkeeping) and rejected it because the cost of nonce reuse with AES-GCM is total, not partial. Random plus a sequence-number deduplication check is the conservative choice.
+
+The plaintext inside the ciphertext is a typed envelope: an integer kind, a size, and a body. Kinds today include tab updates, history rows, bookmark deltas, and Spaces deltas. New kinds get added with a kind ID; old devices that do not understand a kind ignore it.
+
+There is no field in the format that tells the relay what kind a message is. If you wanted to know whether a 1KB blob was a bookmark or a tab title, you cannot tell from the wire.
+
+Why this format and not protobuf or JSON. We did consider both. Protobuf would have given us a clean schema language and good tooling. JSON would have made debugging easier. We picked a fixed binary header plus an opaque ciphertext because the wire format is simple enough that a clean-room reimplementation is two afternoons of work, and a simple wire format is easier to audit than a generated one. The internal envelope inside the ciphertext is a small typed structure; that is where the schema work happens, and it is decrypted before any parsing runs. Parsing untrusted input before authentication is the kind of mistake we wanted to make impossible.
+
+![A captured sync message, header and ciphertext](/assets/blog/sync-architecture-end-to-end/body-2.png)
+
+## Threat model
+
+We owe an honest threat model. Here is what we defend against and how.
+
+**Compromised relay.** The relay is treated as untrusted. It can drop messages, delay them, reorder them, or hand them to a third party. It cannot read them. The worst it can do to a healthy group is delay sync. It cannot inject a message because it does not have the group's `payload_key`.
+
+**Network MITM during pairing.** The X25519 handshake plus the six-digit verification code defends here. An attacker that controls the network during pairing has to make two devices display the same six-digit code without holding the shared secret. The probability is one in a million per attempt and the user gets a visual mismatch when it fails.
+
+**Network MITM after pairing.** After the group key exists, every message is authenticated with GCM. A network attacker can drop or reorder messages. They cannot forge one.
+
+**Lost device.** A lost device has its `per_device_key` revoked from the group. Other devices stop accepting messages signed under that device ID. The lost device, if recovered later by an attacker, cannot rejoin without a fresh pairing flow.
+
+**Mnemonic loss.** The mnemonic is the recovery path for one device's local keystore. Losing it on a single device is not catastrophic if any other device is still in the group: pair the new device against an existing one. Losing it on the only device in the group means the group is gone. We do not have a vendor-side recovery, by design.
+
+**Endpoint compromise.** Out of scope. If your laptop is fully compromised, encryption between laptops does not save you. Nothing in this design pretends otherwise.
+
+For the broader product threat model, see the [security overview](/security/).
+
+## Limits and known gaps
+
+A short list of things we know about and have not solved yet.
+
+The relay sees traffic patterns. We do not pad messages to a fixed size. A long enough observation can plausibly distinguish a tab sync from a bookmark sync just by message size. We are working on chunked uniform-size frames as a follow-up. It is not in the current build.
+
+There is no group rotation on a regular schedule. If a group has been alive for years, the same group root key has been alive for years. We rotate on revocation events. We do not rotate on a calendar.
+
+Bookmarks larger than a single message get split. Each fragment is encrypted independently. The split logic is straightforward, but it adds two corners to the protocol where bugs can live, and we treat them with extra care.
+
+The relay is a server we run. If you do not want to trust us to be online, you cannot sync. Self-hostable relay is on the list. It is not in the current build.
+
+## Get early access
+
+Maho sync ships with the browser preview. Public docs and source pointers come with the release.
+
+[Get early access](/waitlist).

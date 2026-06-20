@@ -1,0 +1,88 @@
+---
+title: "What is BYOK? Bring Your Own Key, explained"
+description: "Bring Your Own Key, defined. Why BYOK differs from 'we use OpenAI', what it guarantees in practice, the common traps, and when it actually matters."
+date: 2026-07-14
+tags:
+  - browser
+  - glossary
+  - byok
+excerpt: "BYOK is a four-letter acronym hiding a real architectural choice. The choice changes who pays, who sees your prompts, and who owns the lock-in."
+authors:
+  - name: Maho Team
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+BYOK stands for Bring Your Own Key. In an AI tool, it means the tool calls a model provider using your API key, not the vendor's. You pay the provider for tokens. The vendor stays out of the billing path and out of the prompt path.
+
+That is the short version. The interesting part is what changes when a product makes that choice, and what stays the same.
+
+![What BYOK is, in one card](/assets/blog/what-is-byok-bring-your-own-key/hero.png)
+
+## The short definition
+
+A BYOK tool exposes a place to paste a model provider's API key. When the tool needs to call a model, it builds the request, attaches your key, and sends it directly to the provider. Common providers are Anthropic, OpenAI, OpenRouter, Together, Groq, and a long tail of others. Some BYOK tools also accept local endpoints like Ollama, LM Studio, or a self-hosted vLLM, in which case there is no key, just a URL.
+
+The phrase is most often used in contrast to a managed AI tier, where the vendor pays for inference and rolls the cost into a subscription.
+
+## A short history
+
+BYOK is older than the LLM wave. Early SaaS apps used the phrase to mean "bring your own AWS S3 bucket" or "bring your own SMTP credentials". The pattern was the same: keep the secret and the bill on the customer's side, ship a thinner product, sidestep a class of compliance concerns.
+
+The current usage came out of 2023, when AI features in productivity apps hit two walls. Token cost made flat-fee subscriptions unprofitable for power users. Data residency made enterprise buyers refuse to send sensitive content through a vendor's contract with OpenAI when their company already had its own. BYOK answered both. By 2026, it is the default in tools that target developers, and a growing pattern in tools that target everyone else.
+
+## What BYOK guarantees, and what it does not
+
+The marketing around BYOK is loose. Here is what the architecture actually buys you, and what it does not.
+
+**It guarantees the bill goes to the provider.** Token usage shows up in your provider dashboard at the provider's price. There is no middle layer marking up tokens.
+
+**It guarantees the prompt path bypasses the vendor backend.** A BYOK request is a TLS connection from the tool to the provider. The vendor's servers are not in the data path.
+
+**It does not guarantee privacy from the provider itself.** OpenAI still sees what you send to OpenAI. BYOK changes who is in the prompt path, not whether anyone is. If you want zero third-party reads, point BYOK at a local model.
+
+**It does not guarantee the tool does not log locally.** A poorly written BYOK app can still log prompts to a local file or sync them elsewhere. BYOK is about who handles inference, not what the surrounding app does with your text.
+
+**It does not guarantee you control the model.** The provider can deprecate a model, change its safety behavior, or rate-limit you. BYOK gives you the choice of provider, not control over the provider.
+
+The first two are the wins. The last three are where the work still has to happen.
+
+![BYOK request path vs managed AI request path](/assets/blog/what-is-byok-bring-your-own-key/body-1.png)
+
+## Common implementation traps
+
+A handful of patterns turn a BYOK feature into theatre.
+
+**The proxy trap.** The app accepts a key, then routes the request through its own backend "for analytics" before forwarding it to the provider. The bill is right. The privacy posture is not.
+
+**The stored-prompt trap.** The app sends the prompt directly, then logs prompt and response to its own database for replay or help features. Data path is fine. Data residency is not.
+
+**The unsalted key trap.** The app stores the API key in plaintext in `localStorage` or a config file. Any other process on the machine can read it. A platform Keychain is the right floor.
+
+**The fake-fallback trap.** When a BYOK call fails, the app falls back to a vendor-hosted model without telling you. Your prompts you thought were going to OpenAI on your key end up on the vendor's contract instead.
+
+**The rate-limit lie.** The app rate-limits in software on top of the provider's rate limits, because something else is paying for a hidden component. You are paying twice.
+
+The fix for all five is the same. The user can verify what is happening with system tools in five minutes. We cover the verification path in [the BYOK architecture post](/blog/byok-architecture-explained/).
+
+![Where the key flows from paste to provider](/assets/blog/what-is-byok-bring-your-own-key/body-2.png)
+
+## When BYOK matters most
+
+BYOK is not always the right shape. For users who do not want to think about a provider, a managed tier is fine. The categories where BYOK matters most are narrower:
+
+- You already have an AI provider account, and adding another bill is friction.
+- You want to use a model the vendor does not bundle.
+- You handle data that should not pass through a third party.
+- You want a local model. Managed tiers cannot route to your laptop.
+- You want predictable costs at high volume.
+
+If none of those describe you, you can ignore the acronym.
+
+## Where this fits in Maho
+
+In the browser, BYOK is the only AI shape we ship. There is no managed tier above it. The reasons stack with the categories above: the browser sees sensitive context, local models exist, and the project does not want to be in the prompt path. The mechanics, the providers we accept, and the verification steps are in the [browser AI docs](/browser/ai/).
+
+## Get notified
+
+The browser is in pre-release. AI features are BYOK from the first build, with no paid tier above. [Get notified](/waitlist) when builds are ready.

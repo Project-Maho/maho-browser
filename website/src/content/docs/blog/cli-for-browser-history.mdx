@@ -1,0 +1,177 @@
+---
+title: "A CLI for your browser history"
+description: "Search and pipe your Maho browser history from the command line. Real query examples, schema notes, and a handful of one-liners worth keeping around."
+date: 2026-11-10
+tags:
+  - browser
+  - how-to
+  - terminal
+excerpt: "Browser history is one of the most useful local datasets you have, and one of the worst exposed by browsers. Here is the Maho CLI for it, with three queries worth keeping in your dotfiles."
+authors:
+  - name: Maho Team
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Your browser history is one of the most useful datasets on your machine. It is also one of the most awkwardly exposed. Most browsers give you a search box, a date list, and nothing else. You cannot pipe it. You cannot count it. You cannot grep it. The data is right there, locked behind a UI built for "what was that thing I read on Tuesday".
+
+Maho ships a CLI for browser history. Not because the GUI is bad, but because once you have the data on the command line a different shape of question becomes easy. Which domains did I spend the most time on last week. What did I open from a Slack link in the past month. Which page did I close in the last ten minutes that I want back.
+
+This post walks the schema and three queries. Then a section on backup and export, because if your browser history is going to be a real database, you want a copy of it that does not live only inside the browser.
+
+For the broader CLI, see the [CLI reference](/cli/). For the related headless tool, see [headless browsing with Maho](/blog/headless-browsing-with-maho/).
+
+![A terminal showing maho history search piped into fzf](/assets/blog/cli-for-browser-history/hero.png)
+
+## The case for a CLI here
+
+There are three reasons a history CLI is more useful than a search box.
+
+The first is composition. A CLI returns lines. Lines pipe to grep, to fzf, to awk, to anything you already use. A search box returns a rendered list inside a panel. The list is fine for one query and useless for a chain of three.
+
+The second is repetition. The same query, run weekly, becomes a habit. "What did I read on Mondays" or "what new domains showed up this week" is the kind of thing you can put in a cron or a launchd job and have a small report waiting. The GUI does not let you do this without writing a screen scraper.
+
+The third is honesty. The CLI is a thin layer over the underlying SQLite store. What you see is what is there. A search box is a curated view. A CLI is the raw data with a small wrapper. If you want to know what your browser actually knows about you, the CLI tells you faster than the GUI does.
+
+![A schema diagram of the history table with sample rows](/assets/blog/cli-for-browser-history/body-1.png)
+
+## The schema, in plain terms
+
+The history table is small and intentional.
+
+```
+history(
+  id        INTEGER PRIMARY KEY,
+  url       TEXT NOT NULL,
+  title     TEXT,
+  ts        INTEGER NOT NULL,  -- unix seconds, UTC
+  space     TEXT,              -- the Maho space the visit happened in
+  tab_id    INTEGER            -- the tab that produced the visit, may be null
+)
+```
+
+A few notes.
+
+Each row is a visit, not a unique URL. If you load the same page three times, three rows. If you want unique URLs, that is a `GROUP BY url` away.
+
+`ts` is unix seconds in UTC. The CLI presents it in local time by default. Anyone writing a SQL query directly should remember the underlying value is UTC.
+
+`space` is the Maho space the visit happened in. Spaces are how Maho separates work, personal, and projects. A history search can scope to one space or span all of them. Spaces are not visible to the page, only to you.
+
+`tab_id` is the tab the visit came from. It is null for some legacy and imported entries. It is useful for "show me all visits in the same browsing session" without writing a session inference algorithm yourself.
+
+The store is a SQLite file. The CLI reads it through a small library that handles the WAL and the concurrent writes from the GUI. Do not open the file with the `sqlite3` CLI directly while the browser is running. You can corrupt the journal in rare cases. The Maho CLI takes the right locks for you.
+
+For more on what the file looks like at rest and how it is encrypted, see the [browser history encryption explainer](/blog/browser-history-encryption-explained/).
+
+## Query 1: last seven days, by domain
+
+The first query is the one that pays for the CLI by itself.
+
+```bash
+maho history list --since 7d --domain
+```
+
+Output:
+
+```
+2147  github.com
+1832  news.ycombinator.com
+1124  app.linear.app
+ 941  google.com
+ 612  vercel.com
+ 487  notion.so
+ ...
+```
+
+A count and a domain, one per line, sorted by count. The flag `--since 7d` accepts the usual short forms: `1h`, `30m`, `7d`, `4w`, or an ISO date for the cut.
+
+This is the query that tells you what the past week looked like. It is honest in a way that makes some weeks uncomfortable. If you have ever wondered whether you really spent that much time on a specific site, this query answers it.
+
+Two related forms worth knowing.
+
+```bash
+maho history list --since 24h --domain --limit 5
+```
+
+Top five domains in the last day. Useful as a quick report.
+
+```bash
+maho history list --since 7d --space work --domain
+```
+
+Same query scoped to the work space. If you keep your work tabs in one space and your reading in another, this is the version of the query that gives you actual work data without your morning HN reading drowning it out.
+
+## Query 2: anything you visited from a Slack link
+
+The second query is one most browsers cannot answer at all. It uses the referrer.
+
+```bash
+maho history search --referrer-domain slack.com --since 30d --format json
+```
+
+Output:
+
+```json
+[
+  {"id": 14123, "url": "https://github.com/maho/...", "title": "PR #482", "ts": 1761456720, "space": "work"},
+  {"id": 14217, "url": "https://www.notion.so/...", "title": "Q4 plan", "ts": 1761482101, "space": "work"},
+  ...
+]
+```
+
+This is the "what did the team share with me this month" query. Slack messages with links are easy to lose track of in Slack itself. Once they have been clicked, they live in the history with the Slack referrer. The CLI surfaces them.
+
+The `search` subcommand is the one to use when you want filters beyond a time window. It takes `--url-substring`, `--title-substring`, `--referrer-domain`, `--space`, and `--since`. All of them combine with AND.
+
+A small ergonomic note: `--format json` returns a JSON array, one record per element. `--format ndjson` returns NDJSON for streaming. The default human format is a simple two-line block per record (URL, then title and time). The default is fine for eyeballing. Pick a JSON format when you are piping to `jq`.
+
+## Query 3: pipe to fzf for live search
+
+The third query is the one you keep in your shell config.
+
+```bash
+maho history search --since 30d --format tsv | fzf --with-nth=2.. | awk '{print $1}' | xargs maho open
+```
+
+What this does, in order. List visits from the last 30 days as tab-separated values, with `id` first, then URL, then title. Pipe to `fzf` for a fuzzy live search, hiding the id column from the picker but keeping it in the output. Take the chosen line. Pull the id with `awk`. Hand the id to `maho open`, which reopens the page in the foreground browser.
+
+The result is a one-keystroke way to fuzzy-search the last month of your browsing and reopen anything. It is faster than the history panel and faster than a search engine, because it is searching only what you have already seen.
+
+A short alias is worth setting:
+
+```bash
+alias h='maho history search --since 30d --format tsv | fzf --with-nth=2.. | awk "{print \$1}" | xargs maho open'
+```
+
+After that, `h` from the terminal is a small superpower.
+
+## Backup and export
+
+A history database that lives only inside one browser is a single point of failure. Maho ships an export.
+
+```bash
+maho history export --out ~/backups/history-$(date +%Y-%m-%d).ndjson
+```
+
+The output is NDJSON, one record per line, with the same fields as the schema above plus a wall-clock timestamp for human readability. The file is plaintext after export. If you keep these on disk, encrypt the directory or pipe through `age` on the way out.
+
+```bash
+maho history export | age -r $YOUR_AGE_KEY > ~/backups/history.ndjson.age
+```
+
+A nightly version of this in a launchd job is fifteen lines of plist and a habit you will be glad of the first time a disk dies.
+
+Re-importing into a fresh Maho install is the obvious mirror:
+
+```bash
+maho history import ~/backups/history-2026-11-09.ndjson
+```
+
+The import is idempotent. Records that are already in the local store are skipped. You can run it twice without doubling rows.
+
+![A split terminal showing fzf filtering history results live](/assets/blog/cli-for-browser-history/body-2.png)
+
+## Get notified
+
+A browser history that is just a database, and a CLI that treats it like one, is a small thing that changes how you work. If you want it on your machine when the beta opens, [get notified](/waitlist).

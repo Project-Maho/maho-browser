@@ -52,6 +52,22 @@
     font-style: italic;
   }
 
+  /* Blog comparison tables: scroll horizontally instead of clipping cell text. */
+  :is(article, .sl-markdown-content) > table,
+  .sl-markdown-content table {
+    display: block;
+    inline-size: 100%;
+    max-inline-size: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .sl-markdown-content table thead th {
+    font-weight: 600;
+    background-color: var(--sl-color-bg-nav, transparent);
+  }
+
+  /* Splash-template comparison post: wider layout but same scroll-not-clip behavior. */
   :root:has(.blog-post--agentic-browser-comparison-2026) {
     --sl-content-width: min(90rem, calc(100vw - 4rem));
   }
@@ -61,9 +77,18 @@
   }
 
   :root:has(.blog-post--agentic-browser-comparison-2026) .sl-markdown-content table {
-    inline-size: max-content;
-    min-inline-size: 100%;
-    white-space: nowrap;
+    display: block;
+    inline-size: 100%;
+    max-inline-size: 100%;
+    overflow-x: auto;
+    white-space: normal;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  :root:has(.blog-post--agentic-browser-comparison-2026) .sl-markdown-content table th,
+  :root:has(.blog-post--agentic-browser-comparison-2026) .sl-markdown-content table td {
+    white-space: normal;
+    min-inline-size: 8rem;
   }
 
 }

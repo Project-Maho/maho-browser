@@ -1,0 +1,98 @@
+---
+title: "Maho vs Zen Browser: two ambitious 2026 macOS browsers"
+description: "Zen Browser is Firefox-based and 2026's community darling. Maho is Chromium-based with an agentic core. Engine, AI, and ceiling compared honestly."
+date: 2026-10-13
+tags:
+  - browser
+  - comparison
+  - power-user
+excerpt: "Zen and Maho both reach for a better browser in 2026, from different starting points. One is Firefox with taste. One is Chromium with an agent. The choice is not a tie."
+authors:
+  - name: Maho Team
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Zen Browser and Maho are the two most discussed new browsers of 2026 on macOS. They share an ambition: that the browser is not done, that the defaults set in the Chrome era are not the right ones, and that someone has to ship the alternative. They disagree about almost everything else.
+
+This post is the comparison from someone who has used both daily. The goal is not to declare a winner. It is to say what each one bets on, where the bets pay off, and which kind of person should pick which.
+
+![Zen and Maho compared, side by side](/assets/blog/maho-vs-zen-browser/hero.png)
+
+## Zen's premise
+
+Zen is a Firefox fork built by a small, passionate, community-driven team. It launched its first stable release in early 2025 and grew through 2026 by being the browser that took taste seriously in a market that had stopped trying. Zen is open-source, free, and ships on macOS, Linux, and Windows.
+
+The pitch, as the Zen team writes it, is that Firefox under the hood and a beautiful sidebar on top is a good combination. The defaults are aggressive: vertical tabs, workspaces, split view, compact mode, and a polished theme system. Mozilla's engine and extension model come along free. Mozilla's container tabs come along free. uBlock Origin still works the way it always did, because Zen is Firefox.
+
+The audience, in our reading, is people who liked Arc's ideas, did not want a Chromium browser, and wanted a project they could read the source of and contribute to. Zen makes that audience real. The community on the Zen Discord and the contribution rate on the public repos are not small numbers.
+
+Zen's roadmap, as of late 2026, leans into more customization and theming, better split view, and tighter integration with Mozilla's privacy stack. The roadmap does not lean hard into AI. That is a real product choice, not an oversight.
+
+## Maho's premise
+
+Maho is an agentic browser for macOS, built on Chromium with a Rust core. It is in waitlist, not stable. The pitch is different from Zen's: that the next thing the browser has to learn is how to act on your behalf, and that learning has to happen at the layer below the page, not as a chat sidebar bolted to a Chrome window.
+
+Maho ships an AI panel that hosts MCP tools, a permission gate that scopes those tools per origin and per session, BYOK for the model providers you trust, and a keyboard model that treats the mouse as the fallback. The product point of view is that browsing in 2026 is becoming a sequence of small agentic tasks (research, summarize, fill, navigate, lookup) and the browser is the only software with the context to make those tasks safe.
+
+The audience is power users, developers, and people who want their browser to do a category of work for them, not just display pages. Maho is not aiming at the Firefox-purist crowd. We are honest about that.
+
+The roadmap, as of late 2026, is the AI surface, the MCP host story, and the keyboard model. The visual polish is real, and we care about it, but it is not the headline.
+
+## Engine comparison and what it implies (Firefox vs Chromium)
+
+Zen is built on Gecko, Mozilla's engine. Maho is built on Chromium with our own overlay. The choice is not arbitrary, and the implications run further than most comparisons admit.
+
+Gecko has fewer engineers behind it than Blink, but the people behind it are steady. The privacy posture, by default, is stronger. Mozilla's container model is best-in-the-Firefox-world. The extension API is the older, more permissive WebExtensions surface, which means uBlock Origin keeps its full power instead of the limited form Manifest V3 enforces. For anyone who lived through the Manifest V3 fight in 2024, that is a meaningful win.
+
+The cost is the long tail of compatibility. A nontrivial slice of the modern web is tested against Chromium and not against Gecko. WebRTC corner cases, video DRM in some configurations, niche enterprise SSO flows, certain WebGPU paths. Most of the time it works. Sometimes it does not. Zen inherits that risk because Mozilla inherits it.
+
+Chromium pays the opposite tax. The compatibility bench is enormous. The privacy posture by default is weaker, which is why Maho ships more aggressive defaults than upstream Chrome. The extension surface is Manifest V3, which is real and which we cannot rewrite alone. We use [our overlay](/browser/) to harden where we can: stronger fingerprinting protection, stricter third-party cookies, and the agent permission gate the upstream does not have. We cannot fix Manifest V3. We can do the rest.
+
+Neither engine choice is wrong. Zen picks safety, audit, and Firefox heritage. Maho picks compatibility ceiling and a platform we can extend deeply enough to host an agent. Both are defensible. They are different bets.
+
+![Engine choice and what it implies](/assets/blog/maho-vs-zen-browser/body-1.png)
+
+## Customization comparison
+
+Zen wins this category clearly. Theming is built into the product. The sidebar layout is configurable. The tab strip orientation is a setting. The compact mode is a setting. There is a theme store. There is a CSS injection layer that any user with a few minutes can use to restyle the chrome. The community has shipped hundreds of themes, and the velocity of that community is one of the reasons Zen gets installed.
+
+Maho is more conservative on visual customization. The layout is opinionated. There is no theme store. There is dark and light, and there are accent colors, and there is Spaces for organizing sidebars by context, but there is not (and may not ever be) a userChrome.css equivalent. The reasoning is that we want to ship one consistent surface for the agentic features to live in, and we do not want every keyboard shortcut and every panel position to be a moving target the user has to learn twice.
+
+If picking your own theme and arranging the chrome to your taste is what you want from a browser, Zen is the better tool. We are honest about it. The [browser comparison hub](/compare/) lists the other browsers in the same category if customization is the deciding axis.
+
+## AI comparison
+
+This is where the two products diverge most. The clearest way to lay it out is a table.
+
+| Capability | Zen Browser | Maho |
+|---|---|---|
+| Built-in chat panel | No | Yes, side panel |
+| MCP host | No | Yes, with permission gate |
+| BYOK (own API keys) | N/A | Yes, OpenAI, Anthropic, local |
+| Local model support | N/A | Yes, Ollama, LM Studio |
+| Page summary command | Via extension | Built in (`⌘⇧S`) |
+| Per-origin agent grants | N/A | Yes, three-axis grant model |
+| Audit log of tool calls | N/A | Yes |
+
+Zen's position is that AI is not its product. You can install an extension that adds a chat sidebar (most of them work, since Firefox extensions do). You can paste pages into ChatGPT. The browser does not get in the way of those workflows, and it does not enable them either.
+
+Maho's position is that the browser is the right host for an agent, that the agent has to be a first-class citizen with a permission model and an audit log, and that bolting a chat to the chrome is not the same product. See [the AI surface docs](/browser/ai/) for the long version.
+
+If you do not want an agentic browser, the Maho AI section is not a feature you bought, it is a panel you ignore. But the AI is the spine of the product, not a sticker. That is the design tradeoff.
+
+![How the AI surfaces compare across the two browsers](/assets/blog/maho-vs-zen-browser/body-2.png)
+
+## Pick guide
+
+Pick Zen if: you want a Firefox-based browser, you want strong default privacy, you want extensive theming and a community that ships customizations weekly, you do not want an AI panel built into the chrome, and you want a product whose source you can read and audit.
+
+Pick Maho if: you want an agentic browser as a primary capability, you want MCP tools you control with a permission model you can reason about, you want BYOK or local-model setups, you are on macOS and care about the platform feel, and you accept Chromium's tradeoffs in exchange for a deeper agent integration.
+
+Pick both: a lot of power users will run both. Zen for reading and customization, Maho for agentic work. The browsers do not exclude each other. The decision the comparison forces is which one is your default, not which one you are allowed to use.
+
+## Join the waitlist
+
+If the agentic side of the picture is what you want, the waitlist is open. Zen is a great browser. So is Maho, for a different person.
+
+[Join the waitlist](/waitlist).
