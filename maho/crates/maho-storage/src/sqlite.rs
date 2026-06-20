@@ -321,7 +321,51 @@ impl SqliteStorage {
                 member_count INTEGER NOT NULL DEFAULT 1,
                 share_link TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );",
+            );
+            CREATE TABLE IF NOT EXISTS conversations (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                space_id TEXT,
+                model TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS conversation_turns (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                url_context TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_conversation_turns_session ON conversation_turns(session_id, created_at);
+            CREATE TABLE IF NOT EXISTS memory_facts (
+                id TEXT PRIMARY KEY,
+                fact TEXT NOT NULL,
+                source TEXT NOT NULL,
+                session_id TEXT,
+                categories TEXT NOT NULL DEFAULT '[]',
+                importance REAL NOT NULL DEFAULT 0.5,
+                metadata TEXT,
+                embedding BLOB,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS memory_facts_fts USING fts5(id UNINDEXED, fact, tokenize='porter unicode61');
+            CREATE TABLE IF NOT EXISTS memory_blocks (
+                label TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                tier TEXT NOT NULL,
+                token_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_memory_blocks_tier ON memory_blocks(tier);
+            CREATE TABLE IF NOT EXISTS browse_sessions (
+                id TEXT PRIMARY KEY,
+                url TEXT NOT NULL,
+                title TEXT,
+                started_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_browse_sessions_started ON browse_sessions(started_at);",
         )?;
         Ok(())
     }
@@ -1967,5 +2011,307 @@ mod tests {
         assert_eq!(change_was_made, 0);
 
         db.run_migrations().unwrap();
+    }
+}
+
+
+impl SqliteStorage {
+    // === Memory facts ===
+
+    pub fn delete_all_memories(&self) -> Result<(), StorageError> {
+        self.conn.execute("DELETE FROM memory_facts", [])?;
+        self.conn.execute("DELETE FROM memory_facts_fts", [])?;
+        Ok(())
+    }
+
+    pub fn delete_memory(&self, id: &str) -> Result<bool, StorageError> {
+        let affected = self.conn.execute(
+            "DELETE FROM memory_facts WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
+        if affected > 0 {
+            let _ = self.conn.execute(
+                "DELETE FROM memory_facts_fts WHERE id = ?1",
+                rusqlite::params![id],
+            );
+        }
+        Ok(affected > 0)
+    }
+
+    pub fn insert_memory(
+        &self,
+        id: &str,
+        fact: &str,
+        source: &str,
+        session_id: Option<&str>,
+        categories: &str,
+        importance: f64,
+        metadata: Option<&str>,
+    ) -> Result<(), StorageError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO memory_facts \
+             (id, fact, source, session_id, categories, importance, metadata) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![id, fact, source, session_id, categories, importance, metadata],
+        )?;
+        let _ = self.conn.execute(
+            "DELETE FROM memory_facts_fts WHERE id = ?1",
+            rusqlite::params![id],
+        );
+        self.conn.execute(
+            "INSERT INTO memory_facts_fts (id, fact) VALUES (?1, ?2)",
+            rusqlite::params![id, fact],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_memory_embedding(&self, fact_id: &str, bytes: &[u8]) -> Result<(), StorageError> {
+        self.conn.execute(
+            "UPDATE memory_facts SET embedding = ?1 WHERE id = ?2",
+            rusqlite::params![bytes, fact_id],
+        )?;
+        Ok(())
+    }
+
+    // === Memory blocks ===
+
+    pub fn upsert_memory_block(
+        &self,
+        label: &str,
+        content: &str,
+        tier: &str,
+        token_count: i64,
+    ) -> Result<(), StorageError> {
+        self.conn.execute(
+            "INSERT INTO memory_blocks (label, content, tier, token_count, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, datetime('now')) \
+             ON CONFLICT(label) DO UPDATE SET \
+               content = excluded.content, \
+               tier = excluded.tier, \
+               token_count = excluded.token_count, \
+               updated_at = excluded.updated_at",
+            rusqlite::params![label, content, tier, token_count],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_memory_block(&self, label: &str) -> Result<Option<String>, StorageError> {
+        match self.conn.query_row(
+            "SELECT content FROM memory_blocks WHERE label = ?1",
+            rusqlite::params![label],
+            |row| row.get::<_, String>(0),
+        ) {
+            Ok(c) => Ok(Some(c)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::from(e)),
+        }
+    }
+
+    pub fn list_memory_blocks_by_tier(&self, tier: &str) -> Result<Vec<(String, String)>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT label, content FROM memory_blocks WHERE tier = ?1 ORDER BY updated_at DESC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![tier], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows { out.push(row?); }
+        Ok(out)
+    }
+
+    // === Browse sessions ===
+
+    pub fn list_browse_sessions_since(
+        &self,
+        since_iso: &str,
+    ) -> Result<Vec<(String, String, Option<String>)>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, url, title FROM browse_sessions WHERE started_at >= ?1 ORDER BY started_at DESC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![since_iso], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows { out.push(row?); }
+        Ok(out)
+    }
+
+    // === Memory embeddings ===
+
+    pub fn load_all_active_memory_embeddings(&self) -> Result<Vec<(String, Vec<u8>)>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, embedding FROM memory_facts WHERE embedding IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows { out.push(row?); }
+        Ok(out)
+    }
+
+    pub fn search_memories_fts(
+        &self,
+        query: &str,
+        top_k: usize,
+    ) -> Result<Vec<(String, String, f64)>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT f.id, f.fact, bm25(memory_facts_fts) AS score \
+             FROM memory_facts_fts \
+             JOIN memory_facts f ON f.id = memory_facts_fts.id \
+             WHERE memory_facts_fts MATCH ?1 \
+             ORDER BY score \
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![query, top_k as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, f64>(2)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows { out.push(row?); }
+        Ok(out)
+    }
+
+    // === Conversation turns (low-level) ===
+
+    pub fn insert_conversation_turn(
+        &self,
+        id: &str,
+        session_id: &str,
+        role: &str,
+        content: &str,
+        url_context: Option<&str>,
+    ) -> Result<(), StorageError> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO conversation_turns \
+             (id, session_id, role, content, url_context) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![id, session_id, role, content, url_context],
+        )?;
+        let _ = self.conn.execute(
+            "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?1",
+            rusqlite::params![session_id],
+        );
+        Ok(())
+    }
+
+    pub fn load_conversation_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<(String, String)>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT role, content FROM conversation_turns WHERE session_id = ?1 ORDER BY created_at ASC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![session_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows { out.push(row?); }
+        Ok(out)
+    }
+
+    // === Conversations (high-level CRUD) ===
+
+    pub fn list_conversations(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<maho_types::chat::Conversation>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, space_id, model, created_at, updated_at \
+             FROM conversations ORDER BY updated_at DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![limit as i64], |row| {
+            Ok(maho_types::chat::Conversation {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                space_id: row.get(2)?,
+                model: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows { out.push(row?); }
+        Ok(out)
+    }
+
+    pub fn get_conversation_messages(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<maho_types::chat::ConversationTurn>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, role, content, url_context, created_at \
+             FROM conversation_turns WHERE session_id = ?1 ORDER BY created_at ASC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![session_id], |row| {
+            Ok(maho_types::chat::ConversationTurn {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                role: row.get(2)?,
+                content: row.get(3)?,
+                url_context: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows { out.push(row?); }
+        Ok(out)
+    }
+
+    pub fn create_conversation(
+        &self,
+        id: &str,
+        title: Option<&str>,
+        space_id: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<(), StorageError> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO conversations (id, title, space_id, model) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![id, title, space_id, model],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_conversation(&self, id: &str) -> Result<bool, StorageError> {
+        let affected = self.conn.execute(
+            "DELETE FROM conversations WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
+        Ok(affected > 0)
+    }
+
+    pub fn rename_conversation(&self, id: &str, title: &str) -> Result<bool, StorageError> {
+        let affected = self.conn.execute(
+            "UPDATE conversations SET title = ?1, updated_at = datetime('now') WHERE id = ?2",
+            rusqlite::params![title, id],
+        )?;
+        Ok(affected > 0)
+    }
+
+    pub fn save_conversation_message(
+        &self,
+        session_id: &str,
+        role: &str,
+        content: &str,
+        url_context: Option<&str>,
+    ) -> Result<bool, StorageError> {
+        let id = uuid::Uuid::new_v4().to_string();
+        self.conn.execute(
+            "INSERT INTO conversation_turns (id, session_id, role, content, url_context) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![id, session_id, role, content, url_context],
+        )?;
+        let _ = self.conn.execute(
+            "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?1",
+            rusqlite::params![session_id],
+        );
+        Ok(true)
     }
 }

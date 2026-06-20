@@ -1251,8 +1251,13 @@ impl MahoCore {
                 .into_iter()
                 .map(|t| (t.id.clone(), t.space_id.clone()))
                 .collect();
-            self.space_manager
-                .enforce_cross_space_tab_residency(&tab_owners);
+            {
+                let tm = &self.tab_manager;
+                self.space_manager
+                    .enforce_cross_space_tab_residency(&tab_owners, &|tid| {
+                        tm.get_tab(tid).map(|t| t.is_favorite).unwrap_or(false)
+                    });
+            }
 
             let favorited_ids: std::collections::HashSet<maho_types::identifiers::TabId> = self
                 .tab_manager
@@ -4107,8 +4112,13 @@ impl MahoCore {
         };
         let mut owners = std::collections::HashMap::new();
         owners.insert(tab_id.clone(), owner);
-        self.space_manager
-            .enforce_cross_space_tab_residency(&owners);
+        {
+            let tm = &self.tab_manager;
+            self.space_manager
+                .enforce_cross_space_tab_residency(&owners, &|tid| {
+                    tm.get_tab(tid).map(|t| t.is_favorite).unwrap_or(false)
+                });
+        }
     }
 
     pub fn reset_pinned_tab(&mut self, tab_id: &TabId) -> bool {

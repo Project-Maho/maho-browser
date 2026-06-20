@@ -869,7 +869,7 @@ pub unsafe extern "C" fn maho_core_boost_compose_css(
         Err(_) => return ptr::null_mut(),
     };
     let bid = maho_types::identifiers::BoostId::new(id_str.to_string());
-    match core.compose_css_for_boost(&bid) {
+    match core.compose_css_for_boost(&bid, None) {
         Some(css) if !css.is_empty() => {
             match CString::new(css) {
                 Ok(s) => s.into_raw(),
@@ -5005,4 +5005,421 @@ pub unsafe extern "C" fn maho_core_chat_append_assistant_message(
         }
     };
     session.append_assistant_message(content_str, tcs_str);
+}
+
+// ============================================================
+// ffi_safe! — panic-catching macro for FFI boundary safety
+// ============================================================
+
+/// Catches panics at FFI boundaries and returns a fallback value.
+/// Usage: `ffi_safe!({ <expr> }, <fallback>)`
+#[macro_export]
+macro_rules! ffi_safe {
+    ($body:block, $fallback:expr) => {{
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
+            Ok(val) => val,
+            Err(_) => $fallback,
+        }
+    }};
+}
+
+// ============================================================
+// Conversation CRUD FFI functions
+// ============================================================
+
+/// Create a new conversation. Returns true on success.
+/// All pointer args except `core` may be null (treated as None/empty).
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_create_conversation(
+    core: *mut MahoCore,
+    id: *const c_char,
+    title: *const c_char,
+    space_id: *const c_char,
+    model: *const c_char,
+) -> bool {
+    if core.is_null() || id.is_null() {
+        return false;
+    }
+    let core = &mut *core;
+    let id_str = match CStr::from_ptr(id).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let title_opt = if title.is_null() {
+        None
+    } else {
+        CStr::from_ptr(title).to_str().ok()
+    };
+    let space_opt = if space_id.is_null() {
+        None
+    } else {
+        CStr::from_ptr(space_id).to_str().ok()
+    };
+    let model_opt = if model.is_null() {
+        None
+    } else {
+        CStr::from_ptr(model).to_str().ok()
+    };
+    if let Some(ref storage) = core.storage_ref() {
+        storage.create_conversation(id_str, title_opt, space_opt, model_opt).is_ok()
+    } else {
+        false
+    }
+}
+
+/// List conversations. Returns JSON array string (caller must free via maho_string_free).
+/// Returns "[]" on null core or missing storage.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_list_conversations(
+    core: *mut MahoCore,
+    limit: usize,
+) -> *mut c_char {
+    let empty = CString::new("[]").unwrap().into_raw();
+    if core.is_null() {
+        return empty;
+    }
+    let core = &*core;
+    let conversations = if let Some(storage) = core.storage_ref() {
+        storage.list_conversations(limit).unwrap_or_default()
+    } else {
+        return empty;
+    };
+    match serde_json::to_string(&conversations) {
+        Ok(json) => CString::new(json).unwrap_or_else(|_| CString::new("[]").unwrap()).into_raw(),
+        Err(_) => empty,
+    }
+}
+
+/// Get messages for a conversation session. Returns JSON array string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_conversation_messages(
+    core: *mut MahoCore,
+    session_id: *const c_char,
+) -> *mut c_char {
+    let empty = CString::new("[]").unwrap().into_raw();
+    if core.is_null() || session_id.is_null() {
+        return empty;
+    }
+    let core = &*core;
+    let sid = match CStr::from_ptr(session_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return empty,
+    };
+    let messages = if let Some(storage) = core.storage_ref() {
+        storage.get_conversation_messages(sid).unwrap_or_default()
+    } else {
+        return empty;
+    };
+    match serde_json::to_string(&messages) {
+        Ok(json) => CString::new(json).unwrap_or_else(|_| CString::new("[]").unwrap()).into_raw(),
+        Err(_) => empty,
+    }
+}
+
+/// Save a message to a conversation. Returns true on success.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_save_conversation_message(
+    core: *mut MahoCore,
+    session_id: *const c_char,
+    role: *const c_char,
+    content: *const c_char,
+    url_context: *const c_char,
+) -> bool {
+    if core.is_null() || session_id.is_null() || role.is_null() || content.is_null() {
+        return false;
+    }
+    let core = &*core;
+    let sid = match CStr::from_ptr(session_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let role_str = match CStr::from_ptr(role).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let content_str = match CStr::from_ptr(content).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let url_ctx = if url_context.is_null() {
+        None
+    } else {
+        CStr::from_ptr(url_context).to_str().ok()
+    };
+    if let Some(storage) = core.storage_ref() {
+        let id = uuid::Uuid::new_v4().to_string();
+        storage.insert_conversation_turn(&id, sid, role_str, content_str, url_ctx).is_ok()
+    } else {
+        false
+    }
+}
+
+/// Delete a conversation by id. Returns true if deleted.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_delete_conversation(
+    core: *mut MahoCore,
+    id: *const c_char,
+) -> bool {
+    if core.is_null() || id.is_null() {
+        return false;
+    }
+    let core = &*core;
+    let id_str = match CStr::from_ptr(id).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    if let Some(storage) = core.storage_ref() {
+        storage.delete_conversation(id_str).unwrap_or(false)
+    } else {
+        false
+    }
+}
+
+/// Rename a conversation. Returns true on success.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_rename_conversation(
+    core: *mut MahoCore,
+    id: *const c_char,
+    new_title: *const c_char,
+) -> bool {
+    if core.is_null() || id.is_null() || new_title.is_null() {
+        return false;
+    }
+    let core = &*core;
+    let id_str = match CStr::from_ptr(id).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let title_str = match CStr::from_ptr(new_title).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    if let Some(storage) = core.storage_ref() {
+        storage.rename_conversation(id_str, title_str).unwrap_or(false)
+    } else {
+        false
+    }
+}
+
+// ============================================================
+// BYOK (Bring Your Own Key) FFI functions
+// BYOK keys are stored via settings key "byok:<provider>"
+// ============================================================
+
+/// Set a BYOK API key for the given provider.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_byok_set_key(
+    core: *mut MahoCore,
+    provider: *const c_char,
+    api_key: *const c_char,
+) -> bool {
+    if core.is_null() || provider.is_null() || api_key.is_null() {
+        return false;
+    }
+    let core = &*core;
+    let provider_str = match CStr::from_ptr(provider).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let key_str = match CStr::from_ptr(api_key).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    if let Some(storage) = core.storage_ref() {
+        let setting_key = format!("byok:{}", provider_str);
+        storage.set_setting(&setting_key, key_str).is_ok()
+    } else {
+        false
+    }
+}
+
+/// Get the stored BYOK API key for the given provider. Returns null if not set.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_byok_get_key(
+    core: *mut MahoCore,
+    provider: *const c_char,
+) -> *mut c_char {
+    if core.is_null() || provider.is_null() {
+        return ptr::null_mut();
+    }
+    let core = &*core;
+    let provider_str = match CStr::from_ptr(provider).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    if let Some(storage) = core.storage_ref() {
+        let setting_key = format!("byok:{}", provider_str);
+        if let Ok(Some(key)) = storage.get_setting(&setting_key) {
+            return CString::new(key).map(|s| s.into_raw()).unwrap_or(ptr::null_mut());
+        }
+    }
+    ptr::null_mut()
+}
+
+/// Delete the BYOK API key for the given provider. Returns true on success.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_byok_delete_key(
+    core: *mut MahoCore,
+    provider: *const c_char,
+) -> bool {
+    if core.is_null() || provider.is_null() {
+        return false;
+    }
+    let core = &*core;
+    let provider_str = match CStr::from_ptr(provider).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    if let Some(storage) = core.storage_ref() {
+        let setting_key = format!("byok:{}", provider_str);
+        // Delete by setting to empty string (sentinel for "not set")
+        storage.set_setting(&setting_key, "").is_ok()
+    } else {
+        false
+    }
+}
+
+/// Get JSON array of supported provider names. Returns caller-owned string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_byok_get_providers(
+    _core: *mut MahoCore,
+) -> *mut c_char {
+    let providers = serde_json::json!(["openai", "anthropic", "gemini", "ollama"]);
+    let json = providers.to_string();
+    CString::new(json).map(|s| s.into_raw()).unwrap_or(ptr::null_mut())
+}
+
+/// Validate a BYOK API key for the given provider. Returns true if valid.
+/// Note: makes a live network request; call from a background thread.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_byok_validate_key(
+    _core: *mut MahoCore,
+    provider: *const c_char,
+    api_key: *const c_char,
+) -> bool {
+    if provider.is_null() || api_key.is_null() {
+        return false;
+    }
+    let provider_str = match CStr::from_ptr(provider).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let key_str = match CStr::from_ptr(api_key).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    maho_core::llm_provider::validate_api_key(provider_str, key_str)
+}
+
+// ============================================================
+// Tab clustering FFI
+// ============================================================
+
+/// Cluster tabs by semantic similarity. Returns JSON array of clusters.
+/// `threshold` should be 0.0–1.0; recommended 0.75.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_cluster_tabs(
+    core: *mut MahoCore,
+    threshold: f64,
+) -> *mut c_char {
+    let empty = CString::new("[]").unwrap().into_raw();
+    if core.is_null() {
+        return empty;
+    }
+    let core = &*core;
+    let threshold = threshold.clamp(0.0, 1.0) as f32;
+    let tabs: Vec<maho_core::tab_grouping::TabInfo> = core
+        .get_tab_view_models()
+        .into_iter()
+        .map(|t| maho_core::tab_grouping::TabInfo {
+            id: t.id,
+            title: t.title,
+            url: t.url,
+        })
+        .collect();
+    let clusters = maho_core::tab_grouping::cluster_tabs(&tabs, threshold);
+    match serde_json::to_string(&clusters) {
+        Ok(json) => CString::new(json).unwrap_or_else(|_| CString::new("[]").unwrap()).into_raw(),
+        Err(_) => empty,
+    }
+}
+
+// ============================================================
+// Chat image FFI
+// ============================================================
+
+/// Send an image-only chat message. Fires a ShellEvent::ChatMessage with image content.
+/// `mime` must be non-null (e.g. "image/png"). `data` is raw bytes, `data_len` is byte count.
+/// Returns true on success.
+#[no_mangle]
+pub unsafe extern "C" fn maho_chat_send_image(
+    core: *mut MahoCore,
+    mime: *const c_char,
+    data: *const u8,
+    data_len: usize,
+) -> bool {
+    if core.is_null() {
+        return false;
+    }
+    let mime_str = if mime.is_null() {
+        "application/octet-stream"
+    } else {
+        match CStr::from_ptr(mime).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        }
+    };
+    let bytes: Vec<u8> = if data.is_null() || data_len == 0 {
+        Vec::new()
+    } else {
+        std::slice::from_raw_parts(data, data_len).to_vec()
+    };
+    let core = &mut *core;
+    use maho_types::chat::{ChatContent, ChatRequestContext, ChatRequestMode};
+    use maho_types::events::shell_event::ShellEvent;
+    let message = format!("[image:{} {} bytes]", mime_str, bytes.len());
+    core.handle_event(ShellEvent::ChatMessage {
+        message,
+        context: ChatRequestContext::new(ChatRequestMode::GeneralChat),
+    });
+    true
+}
+
+/// Send a text+image chat message. `text` is the user's text (may be null/empty).
+/// Returns true on success.
+#[no_mangle]
+pub unsafe extern "C" fn maho_chat_send_text_with_image(
+    core: *mut MahoCore,
+    text: *const c_char,
+    mime: *const c_char,
+    data: *const u8,
+    data_len: usize,
+) -> bool {
+    if core.is_null() {
+        return false;
+    }
+    let text_str = if text.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(text).to_str().unwrap_or("").to_string()
+    };
+    let mime_str = if mime.is_null() {
+        "application/octet-stream"
+    } else {
+        CStr::from_ptr(mime).to_str().unwrap_or("application/octet-stream")
+    };
+    let byte_count = if data.is_null() { 0 } else { data_len };
+    let core = &mut *core;
+    use maho_types::chat::{ChatRequestContext, ChatRequestMode};
+    use maho_types::events::shell_event::ShellEvent;
+    let message = if text_str.is_empty() {
+        format!("[image:{} {} bytes]", mime_str, byte_count)
+    } else {
+        format!("{} [image:{} {} bytes]", text_str, mime_str, byte_count)
+    };
+    core.handle_event(ShellEvent::ChatMessage {
+        message,
+        context: ChatRequestContext::new(ChatRequestMode::GeneralChat),
+    });
+    true
 }

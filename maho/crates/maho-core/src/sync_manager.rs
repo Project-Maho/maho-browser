@@ -325,6 +325,7 @@ mod tests {
             device_name: "Test Device".to_string(),
             auto_sync: true,
             sync_interval_secs: 30,
+            disabled_entity_types: std::collections::HashSet::new(),
         }
     }
 
@@ -623,5 +624,16 @@ mod tests {
         assert_eq!(tabs.len(), 2);
         // After drain, received_tabs should be empty
         assert!(mgr.drain_received_tabs().is_empty());
+    }
+}
+
+impl SyncManager {
+    /// Enable or disable syncing of a specific entity type.
+    pub fn set_entity_sync_enabled(&mut self, entity_type: crate::sync_models::SyncEntityType, enabled: bool) {
+        if enabled {
+            self.config.disabled_entity_types.remove(&entity_type);
+        } else {
+            self.config.disabled_entity_types.insert(entity_type);
+        }
     }
 }

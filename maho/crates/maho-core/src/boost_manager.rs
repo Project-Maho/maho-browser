@@ -396,7 +396,7 @@ impl BoostManager {
     ///     be invisible on grayscale pages because it preserves luminosity)
     ///   * Media re-invert when smart_invert is on
     ///   * Hue +180° compensation when invert is on (so the visible tint matches user intent)
-    pub fn compose_css(&self, boost: &Boost) -> String {
+    pub fn compose_css(&self, boost: &Boost, _workspace_gradient_hue_deg: Option<f64>) -> String {
         let mut css = String::new();
 
         let mut zap_block = String::new();

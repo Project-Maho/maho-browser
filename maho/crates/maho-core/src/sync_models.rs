@@ -71,6 +71,8 @@ pub struct SyncConfig {
     pub device_name: String,
     pub auto_sync: bool,
     pub sync_interval_secs: u64,
+    #[serde(default, skip_serializing_if = "std::collections::HashSet::is_empty")]
+    pub disabled_entity_types: std::collections::HashSet<SyncEntityType>,
 }
 
 impl Default for SyncConfig {
@@ -82,12 +84,13 @@ impl Default for SyncConfig {
             device_name: hostname(),
             auto_sync: true,
             sync_interval_secs: 30,
+            disabled_entity_types: std::collections::HashSet::new(),
         }
     }
 }
 
 /// Syncable entity types
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum SyncEntityType {
@@ -99,6 +102,7 @@ pub enum SyncEntityType {
     ReadingListItem,
     SearchEngine,
     Shortcut,
+    Memory,
 }
 
 /// A versioned entity for LWW sync

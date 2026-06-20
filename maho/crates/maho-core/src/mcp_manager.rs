@@ -292,6 +292,8 @@ impl McpManager {
                         request_mode: maho_types::chat::ChatRequestMode::ToolAssistedTask,
                         page_context: None,
                         tools: None,
+                        session_id: None,
+                        page_url: None,
                     },
                 },
             });
@@ -346,6 +348,8 @@ impl McpManager {
                     request_mode: maho_types::chat::ChatRequestMode::ToolAssistedTask,
                     page_context: None,
                     tools: None,
+                    session_id: None,
+                    page_url: None,
                 },
             },
         }]
@@ -439,6 +443,8 @@ impl McpManager {
                             request_mode: maho_types::chat::ChatRequestMode::ToolAssistedTask,
                             page_context: None,
                             tools: None,
+                            session_id: None,
+                            page_url: None,
                         },
                     },
                 }];

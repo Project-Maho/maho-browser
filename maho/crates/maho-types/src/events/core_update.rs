@@ -438,6 +438,13 @@ pub enum CoreUpdate {
         boost_id: BoostId,
         domain: String,
     },
+    MemoryFactsExtracted {
+        session_id: String,
+        fact_count: usize,
+    },
+    MemoryUpdated {
+        changed_ids: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -1932,3 +1932,20 @@ impl SpaceManager {
             .collect()
     }
 }
+
+impl SpaceManager {
+    /// Enforces correct tab bucket placement for all tabs in the provided map.
+    /// `is_favorite_fn` receives a tab_id and returns whether it is currently favorited.
+    /// For each (tab_id → space_id) pair, calls apply_tab_residency with the real status.
+    pub fn enforce_cross_space_tab_residency(
+        &mut self,
+        tab_owners: &std::collections::HashMap<maho_types::identifiers::TabId, maho_types::identifiers::SpaceId>,
+        is_favorite_fn: &dyn Fn(&maho_types::identifiers::TabId) -> bool,
+    ) {
+        for (tab_id, space_id) in tab_owners {
+            let is_favorite = is_favorite_fn(tab_id);
+            let is_in_folder = self.is_tab_in_folder(space_id, tab_id);
+            self.apply_tab_residency(space_id, tab_id, is_favorite, is_in_folder);
+        }
+    }
+}

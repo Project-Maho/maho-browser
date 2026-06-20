@@ -12,6 +12,7 @@ use maho_types::identifiers::{DownloadId, SpaceId, TabId};
 struct LLMRequest {
     request_type: LLMRequestType,
     context: LLMRequestContext,
+    session_id: Option<String>,
 }
 
 const MAX_CHAT_HISTORY: usize = 20;
@@ -71,6 +72,7 @@ impl LLMManager {
             LLMRequest {
                 request_type: LLMRequestType::TidyTabTitle,
                 context: context.clone(),
+                session_id: None,
             },
         );
         CoreUpdate::RequestLlmCompletion {
@@ -110,6 +112,7 @@ impl LLMManager {
             LLMRequest {
                 request_type: LLMRequestType::TidyDownload,
                 context: context.clone(),
+                session_id: None,
             },
         );
         CoreUpdate::RequestLlmCompletion {
@@ -142,6 +145,7 @@ impl LLMManager {
             LLMRequest {
                 request_type: LLMRequestType::PagePreview,
                 context: context.clone(),
+                session_id: None,
             },
         );
         Some(CoreUpdate::RequestLlmCompletion {
@@ -186,6 +190,7 @@ impl LLMManager {
             LLMRequest {
                 request_type: LLMRequestType::TidyTabs,
                 context: context.clone(),
+                session_id: None,
             },
         );
         CoreUpdate::RequestLlmCompletion {
@@ -265,15 +270,16 @@ impl LLMManager {
         } else {
             serde_json::to_string(&messages).unwrap_or_default()
         };
+        let session_id = request_context.session_id.clone();
         let context = LLMRequestContext::Chat {
             chat: request_context,
         };
-
         self.pending_requests.insert(
             request_id.clone(),
             LLMRequest {
                 request_type: LLMRequestType::ChatCompletion,
                 context: context.clone(),
+                session_id,
             },
         );
 
@@ -382,6 +388,14 @@ impl LLMManager {
             }
             _ => vec![],
         }
+    }
+
+
+    /// Returns the session_id associated with a pending LLM request (for memory persistence).
+    pub fn lookup_session_for_request(&self, request_id: &str) -> Option<String> {
+        self.pending_requests
+            .get(request_id)
+            .and_then(|r| r.session_id.clone())
     }
 
     pub fn has_pending(&self) -> bool {
