@@ -156,6 +156,7 @@ fn tab_close_decreases_count() {
     let before = core.get_tab_view_models().len();
     core.handle_event(ShellEvent::CloseTab {
         tab_id: tab_id.clone(),
+        expected_space_id: None,
     });
     assert_eq!(core.get_tab_view_models().len(), before - 1);
 }
@@ -466,7 +467,7 @@ fn tab_close_others_keeps_target() {
 fn tab_reopen_last_closed_no_panic() {
     let mut core = MahoCore::new();
     let tab_id = create_tab_with_url(&mut core, "https://example.com");
-    core.handle_event(ShellEvent::CloseTab { tab_id });
+    core.handle_event(ShellEvent::CloseTab { tab_id, expected_space_id: None });
     core.handle_event(ShellEvent::ReopenLastClosed);
 }
 
@@ -2549,6 +2550,7 @@ fn closing_last_active_tab_clears_space_tracking() {
 
     core.handle_event(ShellEvent::CloseTab {
         tab_id: tab.clone(),
+        expected_space_id: None,
     });
 
     let space_b = create_space(&mut core, "Other", 60.0);
@@ -2916,7 +2918,9 @@ fn pinned_close_switch_mode_keeps_tab_in_pinned_list() {
     let tab_id = pin_tab_with_url(&mut core, "https://example.com");
     let space_id = core.get_active_space_id();
 
-    core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone() });
+    core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone(),
+        expected_space_id: None,
+    });
 
     let pinned = core.get_pinned_tabs(&space_id);
     assert!(
@@ -2932,7 +2936,9 @@ fn pinned_close_close_mode_removes_tab() {
     let tab_id = pin_tab_with_url(&mut core, "https://example.com");
     let space_id = core.get_active_space_id();
 
-    core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone() });
+    core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone(),
+        expected_space_id: None,
+    });
 
     let pinned = core.get_pinned_tabs(&space_id);
     assert!(
@@ -2953,7 +2959,9 @@ fn pinned_close_reset_mode_keeps_tab_and_resets_url() {
         url: Url::new("https://other.com"),
     });
 
-    core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone() });
+    core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone(),
+        expected_space_id: None,
+    });
 
     let pinned = core.get_pinned_tabs(&space_id);
     let tab_vm = pinned.iter().find(|t| t.id == tab_id).expect("tab must remain pinned");
@@ -2978,7 +2986,9 @@ fn pinned_close_switch_mode_moves_last_active_to_another_tab() {
         "pinned tab must be last-active before CloseTab"
     );
 
-    core.handle_event(ShellEvent::CloseTab { tab_id: pinned_id.clone() });
+    core.handle_event(ShellEvent::CloseTab { tab_id: pinned_id.clone(),
+        expected_space_id: None,
+    });
 
     let last_active = core.get_last_active_tab_for_space(&space_id);
     assert_ne!(
@@ -3000,7 +3010,9 @@ fn pinned_close_unload_switch_mode_suspends_tab_and_keeps_it_pinned() {
     let tab_id = pin_tab_with_url(&mut core, "https://example.com");
     let space_id = core.get_active_space_id();
 
-    core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone() });
+    core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone(),
+        expected_space_id: None,
+    });
 
     let pinned = core.get_pinned_tabs(&space_id);
     let tab_vm = pinned.iter().find(|t| t.id == tab_id).expect("tab must remain pinned");

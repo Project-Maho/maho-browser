@@ -233,6 +233,7 @@ fn is_navigation_event() {
     assert!(nav.is_navigation_event());
     let close = ShellEvent::CloseTab {
         tab_id: TabId::new("t1"),
+        expected_space_id: None,
     };
     assert!(!close.is_navigation_event());
 }
@@ -241,6 +242,7 @@ fn is_navigation_event() {
 fn is_tab_management_event() {
     let close = ShellEvent::CloseTab {
         tab_id: TabId::new("t1"),
+        expected_space_id: None,
     };
     assert!(close.is_tab_management_event());
     let reopen = ShellEvent::ReopenLastClosed;
@@ -285,6 +287,7 @@ fn is_lifecycle_event() {
     assert!(mem.is_lifecycle_event());
     let close = ShellEvent::CloseTab {
         tab_id: TabId::new("t1"),
+        expected_space_id: None,
     };
     assert!(!close.is_lifecycle_event());
 }

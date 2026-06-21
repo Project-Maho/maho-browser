@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- API 27+ additions to Theme.Maho.Browser:
+         android:navigationBarDividerColor and android:windowLightNavigationBar
+         require API level 27. -->
+    <style name="Theme.Maho.Browser" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/shell_window_background</item>
+        <item name="android:colorBackground">@color/shell_window_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:navigationBarDividerColor">@android:color/transparent</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>

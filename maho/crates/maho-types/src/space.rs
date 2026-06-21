@@ -622,3 +622,17 @@ mod tests {
         assert!(!re.contains("schemaVersion"), "zero schema_version must be omitted: {re}");
     }
 }
+
+/// Per-space AI configuration (model preferences, system prompt, focus areas).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpaceAIConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub focus_areas: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_model: Option<String>,
+}

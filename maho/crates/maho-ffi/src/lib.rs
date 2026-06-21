@@ -1,6 +1,7 @@
 #![allow(clippy::missing_safety_doc)]
 
 pub mod acp;
+pub mod import;
 
 use std::ffi::{c_char, CStr, CString};
 use std::path::Path;

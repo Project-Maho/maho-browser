@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- API 29+ additions to Theme.Maho.Browser:
+         android:enforceStatusBarContrast and android:enforceNavigationBarContrast
+         require API level 29. -->
+    <style name="Theme.Maho.Browser" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/shell_window_background</item>
+        <item name="android:colorBackground">@color/shell_window_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:navigationBarDividerColor">@android:color/transparent</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:enforceStatusBarContrast">false</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+    </style>
+</resources>
