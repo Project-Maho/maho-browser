@@ -6,6 +6,26 @@ chromium/
 maho/target/
 maho-chromium/third_party/maho/prebuilt/
 
+# Rust local config / model caches
+maho/.cargo/
+**/.fastembed_cache/
+
+# Android Gradle build outputs
+maho/android-shell/.gradle/
+maho/android-shell/app/build/
+maho/android-shell/build/
+maho/android-shell/dev/
+maho/android-shell/META-INF/
+maho/android-shell/local.properties
+
+# iOS / Xcode build outputs
+maho/ios-shell/build/
+maho/ios-shell/DerivedData/
+maho/ios-shell/Maho.xcodeproj/xcuserdata/
+
+# Misc weird tmpdir submodule marker
+maho/${TMPDIR:-/tmp}/
+
 # JS/TS dependencies and build output
 node_modules/
 dist/
@@ -29,6 +49,15 @@ __pycache__/
 *.xcworkspace/
 *.xcuserdata/
 
-# Serena
+# Serena / Sisyphus
 .serena/
 .sisyphus/
+
+# Tool runtime artifacts
+.agent-browser-profile/
+.playwright-mcp/
+*.png/
+
+# Visual QA / debug screenshot folders that get auto-created
+visual-qa-output/
+.tui-check/
