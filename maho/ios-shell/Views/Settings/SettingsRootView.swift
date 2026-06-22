@@ -43,6 +43,9 @@ struct SettingsRootView: View {
                     NavigationLink(destination: MaxSettingsView()) {
                         Label { Text("Max AI") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("sparkles")) }
                     }
+                    NavigationLink(destination: AgentView()) {
+                        Label { Text("Web Agent") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("cpu")) }
+                    }
                     NavigationLink(destination: AdvancedSettingsView()) {
                         Label { Text("Advanced") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("gearshape.2")) }
                     }

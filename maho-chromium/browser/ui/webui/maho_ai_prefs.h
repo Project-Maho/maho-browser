@@ -29,6 +29,13 @@ inline constexpr char kSessionEventLogs[] =
 inline constexpr char kRuntimeCommand[] = "maho.ai.runtime_command";
 inline constexpr char kAiViewMode[] = "maho.ai.view_mode";
 
+// BYOK API keys encrypted at rest via Chromium OSCrypt + base64-encoded for
+// safe JSON storage. Populated by the desktop settings UI (write side TBD)
+// and read by MahoUnifiedAgentAdapter::OnAgentSecureStorage at session
+// creation. Empty string means "no key configured" → agent fails closed.
+inline constexpr char kByokOpenAIEncryptedB64[] = "maho.ai.byok.openai.encrypted_b64";
+inline constexpr char kByokAnthropicEncryptedB64[] = "maho.ai.byok.anthropic.encrypted_b64";
+
 }  // namespace maho::ai_prefs
 
 #endif  // MAHO_BROWSER_UI_WEBUI_MAHO_AI_PREFS_H_

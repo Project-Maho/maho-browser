@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <cstdbool>
 
 /**
  * Success.
@@ -49,7 +50,18 @@ typedef struct ChatSession ChatSession;
  */
 typedef struct MahoAcpHandle MahoAcpHandle;
 
+typedef struct MahoAgentSession MahoAgentSession;
+
 typedef struct MahoCore MahoCore;
+
+/**
+ * Opaque handle for an in-flight import session.
+ *
+ * Created by `maho_import_orchestrator_start`, freed by
+ * `maho_import_orchestrator_free`. The caller MUST call `free` after receiving
+ * the terminal callback (`AllComplete` or `Error`).
+ */
+typedef struct MahoImportSession MahoImportSession;
 
 typedef struct MahoChatConfig {
   const char *api_key;
@@ -59,6 +71,28 @@ typedef struct MahoChatConfig {
 } MahoChatConfig;
 
 typedef void (*EventCallback)(void*, const uint8_t*, uintptr_t);
+
+/**
+ * Progress callback type invoked from the import background thread.
+ *
+ * Parameters:
+ *  - `kind`:  0=Starting, 1=Update, 2=TypeComplete, 3=AllComplete, 4=Error
+ *  - `import_type`: bitmask bit identifying the import type
+ *       (1=History, 2=Bookmarks, 4=Passwords, 8=Autofill, 16=Cookies, 32=Workspaces, 64=Favicons, 128=Essential)
+ *  - `count`: item count (for Update/TypeComplete) or 0
+ *  - `message`: null-terminated status message or NULL
+ *  - `user_data`: opaque pointer passed back unchanged
+ *
+ * SAFETY: The callback must be safe to invoke from a non-main thread.
+ * The `message` pointer is only valid for the duration of the callback call.
+ * The caller is responsible for ensuring `user_data` remains valid until the
+ * terminal event fires.
+ */
+typedef void (*MahoImportProgressCallback)(uint32_t kind,
+                                           uint32_t import_type,
+                                           int32_t count,
+                                           const char *message,
+                                           void *user_data);
 
 #ifdef __cplusplus
 extern "C" {
@@ -110,8 +144,7 @@ char *maho_core_get_sidebar_root_order(struct MahoCore *ptr,
  * `space_id_json` must be a valid null-terminated C string containing a SpaceId JSON.
  * Caller must free the returned string with `maho_string_free`.
  */
-char *maho_core_get_sidebar_tree(struct MahoCore *ptr,
-                                 const char *space_id_json);
+char *maho_core_get_sidebar_tree(struct MahoCore *ptr, const char *space_id_json);
 
 /**
  * # Safety
@@ -226,8 +259,7 @@ void maho_core_clear_installed_extensions(struct MahoCore *ptr);
  * `ptr` must be a valid pointer returned by `maho_core_new`.
  * `extensions_json` must be a valid null-terminated C string.
  */
-void maho_core_set_installed_extensions(struct MahoCore *ptr,
-                                        const char *extensions_json);
+void maho_core_set_installed_extensions(struct MahoCore *ptr, const char *extensions_json);
 
 /**
  * # Safety
@@ -297,46 +329,163 @@ bool maho_core_update_password_username(struct MahoCore *ptr,
  */
 char *maho_core_get_boosts_for_url(struct MahoCore *ptr, const char *url);
 
+/**
+ * Returns JSON array of Boost objects for the given domain (Phase 1 API).
+ * Caller must free with `maho_string_free`.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`. `domain` must be a valid null-terminated C string.
+ */
 char *maho_core_boost_list_for_domain(struct MahoCore *ptr, const char *domain);
 
+/**
+ * Returns JSON Boost object for the given boost ID, or null if not found.
+ * Caller must free with `maho_string_free`.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`. `boost_id` must be a valid null-terminated C string.
+ */
 char *maho_core_boost_get(struct MahoCore *ptr, const char *boost_id);
 
+/**
+ * Creates a new Boost for the given domain and name. Returns the created Boost as JSON.
+ * Caller must free with `maho_string_free`.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`. `domain` and `name` must be valid null-terminated C strings.
+ */
 char *maho_core_boost_create(struct MahoCore *ptr, const char *domain, const char *name);
 
+/**
+ * Updates a Boost by ID with partial changes (JSON BoostUpdate patch).
+ * Returns the updated Boost as JSON, or null if not found.
+ * Caller must free with `maho_string_free`.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`. `boost_id` and `changes_json` must be valid null-terminated C strings.
+ */
 char *maho_core_boost_update(struct MahoCore *ptr,
                              const char *boost_id,
                              const char *changes_json);
 
+/**
+ * Deletes a Boost by ID. Returns true if deleted, false if not found.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`. `boost_id` must be a valid null-terminated C string.
+ */
 bool maho_core_boost_delete(struct MahoCore *ptr, const char *boost_id);
 
-void maho_core_boost_set_active(struct MahoCore *ptr,
-                                const char *domain,
-                                const char *boost_id);
+/**
+ * Sets the active Boost for a domain. Pass null `boost_id` to clear the active boost.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`. `domain` must be a valid null-terminated C string.
+ * `boost_id` may be null to clear.
+ */
+void maho_core_boost_set_active(struct MahoCore *ptr, const char *domain, const char *boost_id);
 
+/**
+ * Returns the active Boost for a domain as JSON, or null if none is set.
+ * Caller must free with `maho_string_free`.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`. `domain` must be a valid null-terminated C string.
+ */
 char *maho_core_boost_get_active(struct MahoCore *ptr, const char *domain);
 
+/**
+ * Returns the composed CSS string for the given Boost ID, or null if not found.
+ * Caller must free with `maho_string_free`.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`. `boost_id` must be a valid null-terminated C string.
+ */
 char *maho_core_boost_compose_css(struct MahoCore *ptr, const char *boost_id);
 
+/**
+ * Creates a temporary boost for the given domain, sets it active, and persists.
+ * Returns the created Boost as JSON. Caller must free with `maho_string_free`.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`. `domain` must be a valid null-terminated C string.
+ */
 char *maho_core_boost_create_temp(struct MahoCore *ptr, const char *domain);
 
+/**
+ * Commits a temporary boost (marks it permanent). Returns the committed Boost as JSON.
+ * Caller must free with `maho_string_free`.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`. `boost_id` must be a valid null-terminated C string.
+ */
 char *maho_core_boost_commit(struct MahoCore *ptr, const char *boost_id);
 
+/**
+ * Discards a temporary boost. Returns the previously-active boost ID as a JSON string,
+ * or null if none. Caller must free with `maho_string_free`.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`. `boost_id` must be a valid null-terminated C string.
+ */
 char *maho_core_boost_discard(struct MahoCore *ptr, const char *boost_id);
 
+/**
+ * Shuffles boost colors randomly. Returns the updated Boost as JSON.
+ * Caller must free with `maho_string_free`.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`. `boost_id` must be a valid null-terminated C string.
+ */
 char *maho_core_boost_shuffle(struct MahoCore *ptr, const char *boost_id);
 
+/**
+ * Resets a boost to defaults. Returns the updated Boost as JSON.
+ * Caller must free with `maho_string_free`.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`. `boost_id` must be a valid null-terminated C string.
+ */
 char *maho_core_boost_reset(struct MahoCore *ptr, const char *boost_id);
 
+/**
+ * Exports a boost as a JSON string for sharing/backup.
+ * Returns the export JSON string, or null if not found.
+ * Caller must free with `maho_string_free`.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`. `boost_id` must be a valid null-terminated C string.
+ */
 char *maho_core_boost_export(struct MahoCore *ptr, const char *boost_id);
 
-char *maho_core_boost_import(struct MahoCore *ptr,
-                             const char *domain,
-                             const char *json);
+/**
+ * Imports a boost from a JSON string into the given domain.
+ * Returns the newly-created Boost as JSON, or null on failure.
+ * Caller must free with `maho_string_free`.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`. `domain` and `json` must be valid null-terminated C strings.
+ */
+char *maho_core_boost_import(struct MahoCore *ptr, const char *domain, const char *json);
 
+/**
+ * Appends a zap selector to a boost. Returns the updated Boost as JSON.
+ * Caller must free with `maho_string_free`.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`. `boost_id` and `selector` must be valid null-terminated C strings.
+ */
 char *maho_core_boost_append_zap(struct MahoCore *ptr,
                                  const char *boost_id,
                                  const char *selector);
 
+/**
+ * Removes a zap selector from a boost. Returns the updated Boost as JSON.
+ * Caller must free with `maho_string_free`.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`. `boost_id` and `selector` must be valid null-terminated C strings.
+ */
 char *maho_core_boost_remove_zap(struct MahoCore *ptr,
                                  const char *boost_id,
                                  const char *selector);
@@ -1505,6 +1654,178 @@ void maho_core_chat_append_assistant_message(struct ChatSession *ptr,
                                              const char *tool_calls_json);
 
 /**
+ * Create a new conversation. Returns true on success.
+ * All pointer args except `core` may be null (treated as None/empty).
+ */
+bool maho_core_create_conversation(struct MahoCore *core,
+                                   const char *id,
+                                   const char *title,
+                                   const char *space_id,
+                                   const char *model);
+
+/**
+ * List conversations. Returns JSON array string (caller must free via maho_string_free).
+ * Returns "[]" on null core or missing storage.
+ */
+char *maho_core_list_conversations(struct MahoCore *core, uintptr_t limit);
+
+/**
+ * Get messages for a conversation session. Returns JSON array string.
+ */
+char *maho_core_get_conversation_messages(struct MahoCore *core, const char *session_id);
+
+/**
+ * Save a message to a conversation. Returns true on success.
+ */
+bool maho_core_save_conversation_message(struct MahoCore *core,
+                                         const char *session_id,
+                                         const char *role,
+                                         const char *content,
+                                         const char *url_context);
+
+/**
+ * Delete a conversation by id. Returns true if deleted.
+ */
+bool maho_core_delete_conversation(struct MahoCore *core, const char *id);
+
+/**
+ * Rename a conversation. Returns true on success.
+ */
+bool maho_core_rename_conversation(struct MahoCore *core, const char *id, const char *new_title);
+
+/**
+ * Set a BYOK API key for the given provider.
+ */
+bool maho_core_byok_set_key(struct MahoCore *core, const char *provider, const char *api_key);
+
+/**
+ * Get the stored BYOK API key for the given provider. Returns null if not set.
+ */
+char *maho_core_byok_get_key(struct MahoCore *core, const char *provider);
+
+/**
+ * Delete the BYOK API key for the given provider. Returns true on success.
+ */
+bool maho_core_byok_delete_key(struct MahoCore *core, const char *provider);
+
+/**
+ * Get JSON array of supported provider names. Returns caller-owned string.
+ */
+char *maho_core_byok_get_providers(struct MahoCore *_core);
+
+/**
+ * Validate a BYOK API key for the given provider. Returns true if valid.
+ * Note: makes a live network request; call from a background thread.
+ */
+bool maho_core_byok_validate_key(struct MahoCore *_core, const char *provider, const char *api_key);
+
+/**
+ * Cluster tabs by semantic similarity. Returns JSON array of clusters.
+ * `threshold` should be 0.0–1.0; recommended 0.75.
+ */
+char *maho_core_cluster_tabs(struct MahoCore *core, double threshold);
+
+/**
+ * Send an image-only chat message. Fires a ShellEvent::ChatMessage with image content.
+ * `mime` must be non-null (e.g. "image/png"). `data` is raw bytes, `data_len` is byte count.
+ * Returns true on success.
+ */
+bool maho_chat_send_image(struct MahoCore *core,
+                          const char *mime,
+                          const uint8_t *data,
+                          uintptr_t data_len);
+
+/**
+ * Send a text+image chat message. `text` is the user's text (may be null/empty).
+ * Returns true on success.
+ */
+bool maho_chat_send_text_with_image(struct MahoCore *core,
+                                    const char *text,
+                                    const char *mime,
+                                    const uint8_t *data,
+                                    uintptr_t data_len);
+
+typedef enum MahoAgentPermissionDecision {
+  MahoAgentPermissionDecision_Allow = 0,
+  MahoAgentPermissionDecision_Deny = 1,
+} MahoAgentPermissionDecision;
+
+typedef MahoAgentPermissionDecision (*MahoAgentPermissionCallback)(
+    void *user_data,
+    const char *tool_name,
+    const char *arguments);
+
+typedef struct MahoAgentSecureKey {
+  char *ptr;
+  uintptr_t len;
+  void (*free_fn)(char *ptr, uintptr_t len);
+} MahoAgentSecureKey;
+
+/**
+ * Contract for MahoAgentSecureKey returned by MahoAgentSecureStorageCallback:
+ *  - If `ptr` is NULL, the caller (Rust runtime) MUST NOT invoke `free_fn`
+ *    and treats the result as "no key available" (fail-closed when
+ *    allow_insecure_key_storage=false).
+ *  - If `ptr` is non-NULL and `free_fn` is non-NULL, Rust will call
+ *    `free_fn(ptr, len)` after consuming the key. The C++/Swift caller is
+ *    responsible for securely zeroing the buffer inside `free_fn` (e.g.,
+ *    via memset_s) before releasing it.
+ *  - If `ptr` is non-NULL and `free_fn` is NULL, Rust treats the buffer as
+ *    caller-owned and unmanaged; the caller is responsible for any cleanup.
+ *    This combination is discouraged for sensitive material.
+ */
+typedef struct MahoAgentSecureKey (*MahoAgentSecureStorageCallback)(
+    void *user_data,
+    const char *provider);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer to a `MahoCore`.
+ * `session_id` must be a null-terminated C string.
+ */
+struct MahoAgentSession *maho_agent_create_session(
+    struct MahoCore *core,
+    const char *session_id,
+    const char *workspace_root,
+    bool allow_insecure_key_storage,
+    MahoAgentPermissionCallback permission_cb,
+    void *permission_user_data,
+    MahoAgentSecureStorageCallback secure_storage_cb,
+    void *secure_storage_user_data);
+
+/**
+ * # Safety
+ * `session` must be a valid pointer to a `MahoAgentSession`.
+ */
+void maho_agent_session_free(struct MahoAgentSession *session);
+
+/**
+ * # Safety
+ * `session` must be a valid pointer to a `MahoAgentSession`.
+ * `message` must be a null-terminated C string.
+ */
+bool maho_agent_send_message(struct MahoAgentSession *session,
+                             const char *message,
+                             void (*on_token)(void *user_data, const char *token),
+                             void (*on_complete)(void *user_data,
+                                                 const char *full_text,
+                                                 const char *tool_calls_json),
+                             void (*on_error)(void *user_data, const char *error),
+                             void *user_data);
+
+/**
+ * # Safety
+ * `session` must be a valid pointer to a `MahoAgentSession`.
+ */
+bool maho_agent_cancel(struct MahoAgentSession *session);
+
+/**
+ * # Safety
+ * `session` must be a valid pointer to a `MahoAgentSession`.
+ */
+char *maho_agent_list_tools(struct MahoAgentSession *session);
+
+/**
  * Allocate a new ACP handle. Returns null on failure (should not happen).
  */
 struct MahoAcpHandle *maho_acp_create(void);
@@ -1610,6 +1931,186 @@ int32_t maho_acp_reply_permission(struct MahoAcpHandle *handle,
                                   int64_t json_rpc_id,
                                   uint32_t outcome_kind,
                                   const char *option_id);
+
+/**
+ * Parse Arc sidebar at `<arc_user_data_dir>/StorableSidebar.json`.
+ * Returns a JSON string `{"workspaces":[...]}` on success, NULL on error.
+ * Caller MUST free the returned string with `maho_import_string_free`.
+ */
+char *maho_import_parse_arc(const char *arc_user_data_dir);
+
+/**
+ * Parse Chromium history from a profile directory.
+ * Returns JSON array of `[{"url","title","visit_time","visit_count"},...]`.
+ * Caller MUST free with `maho_import_string_free`.
+ */
+char *maho_import_parse_chromium_history(const char *profile_dir);
+
+/**
+ * Parse Chromium bookmarks from a profile directory.
+ * Returns JSON array of bookmark tree nodes.
+ * Caller MUST free with `maho_import_string_free`.
+ */
+char *maho_import_parse_chromium_bookmarks(const char *profile_dir);
+
+/**
+ * Parse Chromium autofill data from a profile directory.
+ * Returns JSON array of `[{"field_name","value","times_used","first_used","last_used"},...]`.
+ * Caller MUST free with `maho_import_string_free`.
+ */
+char *maho_import_parse_chromium_autofill(const char *profile_dir);
+
+/**
+ * Parse Chromium cookies from a profile directory.
+ * Returns JSON array of ChromiumCookieEntry objects.
+ * Caller MUST free with `maho_import_string_free`.
+ */
+char *maho_import_parse_chromium_cookies(const char *profile_dir);
+
+/**
+ * Parse Chromium favicons from a profile directory.
+ * Returns JSON array of `[{"favicon_url","page_urls","image_data"},...]`.
+ * Note: `image_data` is a JSON array of bytes.
+ * Caller MUST free with `maho_import_string_free`.
+ */
+char *maho_import_parse_chromium_favicons(const char *profile_dir);
+
+/**
+ * Parse Firefox bookmarks from a profile directory (reads places.sqlite).
+ * Returns JSON array of bookmark tree nodes.
+ * Caller MUST free with `maho_import_string_free`.
+ */
+char *maho_import_parse_firefox_bookmarks(const char *profile_dir);
+
+/**
+ * Parse Firefox history from a profile directory (reads places.sqlite).
+ * Returns JSON array of `[{"url","title","visit_time","visit_count"},...]`.
+ * Caller MUST free with `maho_import_string_free`.
+ */
+char *maho_import_parse_firefox_history(const char *profile_dir);
+
+/**
+ * Parse Firefox cookies from a profile directory (reads cookies.sqlite).
+ * Returns JSON array of `[{"host","name","value","path","expires","is_secure","is_httponly","same_site"},...]`.
+ * Caller MUST free with `maho_import_string_free`.
+ */
+char *maho_import_parse_firefox_cookies(const char *profile_dir);
+
+/**
+ * Parse Firefox autofill from a profile directory (reads formhistory.sqlite).
+ * Returns JSON array of `[{"field_name","value","times_used","first_used","last_used"},...]`.
+ * Caller MUST free with `maho_import_string_free`.
+ */
+char *maho_import_parse_firefox_autofill(const char *profile_dir);
+
+/**
+ * Parse Safari bookmarks from the Safari data directory.
+ * Returns JSON array of bookmark tree nodes.
+ * Caller MUST free with `maho_import_string_free`.
+ */
+char *maho_import_parse_safari_bookmarks(const char *safari_dir);
+
+/**
+ * Parse Safari history from the Safari data directory.
+ * Returns JSON array of `[{"url","title","visit_time","visit_count"},...]`.
+ * Caller MUST free with `maho_import_string_free`.
+ */
+char *maho_import_parse_safari_history(const char *safari_dir);
+
+/**
+ * Parse Zen workspaces from a Zen profile directory.
+ * Returns JSON `{"active_workspace_uuid":"...","workspaces":[...]}`.
+ * Caller MUST free with `maho_import_string_free`.
+ */
+char *maho_import_parse_zen_workspaces(const char *profile_dir);
+
+/**
+ * Detect installed browsers on the system.
+ * Returns JSON array of `[{"browser_type","display_name","profile_path","services_supported","requires_full_disk_access"},...]`.
+ * Caller MUST free with `maho_import_string_free`.
+ */
+char *maho_import_detect_browsers(void);
+
+/**
+ * Parse Chromium passwords from a profile directory.
+ *
+ * `profile_dir` must contain `Login Data` SQLite database.
+ * `keychain_service` is the macOS Keychain service name (e.g. "Chrome Safe Storage").
+ * `keychain_account` is the macOS Keychain account name (e.g. "Chrome").
+ *
+ * Returns JSON `[{origin_url, action_url, username, password}, ...]` on success,
+ * NULL on failure (e.g. Keychain access denied, database not found).
+ * Caller MUST free the returned string with `maho_import_string_free`.
+ */
+char *maho_import_parse_chromium_passwords(const char *profile_dir,
+                                           const char *keychain_service,
+                                           const char *keychain_account);
+
+/**
+ * Parse Firefox passwords from a profile directory.
+ *
+ * `profile_dir` must contain `key4.db` and `logins.json`.
+ * `master_password` is the user's master password (empty string if none set).
+ *
+ * Returns JSON `[{origin_url, action_url, username, password}, ...]` on success,
+ * NULL on failure (wrong master password, missing files, etc.).
+ * Caller MUST free the returned string with `maho_import_string_free`.
+ */
+char *maho_import_parse_firefox_passwords(const char *profile_dir, const char *master_password);
+
+/**
+ * Free a string returned by `maho_import_parse_*` or `maho_import_detect_*`.
+ */
+void maho_import_string_free(char *s);
+
+/**
+ * Start an import orchestrator session on a background thread.
+ *
+ * # Parameters
+ * - `core_ptr`: valid `MahoCore*` (from `maho_core_new_with_storage`).
+ *   Must remain valid and unaccessed by other threads until the terminal
+ *   callback fires.
+ * - `browser_json`: JSON-serialized `DetectedBrowser` entry.
+ * - `items_bitmask`: which import types to run (OR of ImportServices bits).
+ * - `essentials_json`: JSON array of URL strings for essential import, or NULL.
+ * - `callback`: progress callback invoked from the background thread.
+ * - `user_data`: opaque pointer forwarded to callback.
+ *
+ * # Returns
+ * Opaque `MahoImportSession*` on success, NULL on immediate failure.
+ *
+ * # Safety
+ * All pointer parameters (except `user_data`) must be valid for the duration
+ * of this call. `core_ptr` must remain valid until the terminal callback fires.
+ */
+struct MahoImportSession *maho_import_orchestrator_start(struct MahoCore *core_ptr,
+                                                         const char *browser_json,
+                                                         uint32_t items_bitmask,
+                                                         const char *essentials_json,
+                                                         MahoImportProgressCallback callback,
+                                                         void *user_data);
+
+/**
+ * Cancel an in-flight import. Safe to call from any thread.
+ * The cancellation is cooperative — the orchestrator checks the flag between
+ * import types.
+ *
+ * # Safety
+ * `handle` must be a valid pointer returned by `maho_import_orchestrator_start`,
+ * or NULL (no-op).
+ */
+void maho_import_orchestrator_cancel(struct MahoImportSession *handle);
+
+/**
+ * Free the import session handle. MUST be called after the terminal callback
+ * (`AllComplete` or `Error`) has fired. Blocks until the background thread
+ * finishes (should be near-instant after terminal event).
+ *
+ * # Safety
+ * `handle` must be a valid pointer returned by `maho_import_orchestrator_start`,
+ * or NULL (no-op). Must not be called more than once per handle.
+ */
+void maho_import_orchestrator_free(struct MahoImportSession *handle);
 
 #ifdef __cplusplus
 }  // extern "C"

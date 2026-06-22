@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>sidebar</key>
+	<dict>
+		<key>containers</key>
+		<array>
+			<dict>
+				<key>items</key>
+				<array>
+					<dict>
+						<key>title</key>
+						<string>Google Search</string>
+						<key>url</key>
+						<string>https://example.com</string>
+					</dict>
+					<dict>
+						<key>title</key>
+						<string>GitHub Repo</string>
+						<key>url</key>
+						<string>https://example.com/github</string>
+					</dict>
+				</array>
+			</dict>
+		</array>
+	</dict>
+</dict>
+</plist>

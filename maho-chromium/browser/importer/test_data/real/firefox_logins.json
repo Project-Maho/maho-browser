@@ -1,0 +1,11 @@
+{
+  "nextId": 2,
+  "logins": [
+    {
+      "hostname": "https://example.com",
+      "username": "user@example.com",
+      "encryptedUsername": "username_blob",
+      "encryptedPassword": "password_blob"
+    }
+  ]
+}

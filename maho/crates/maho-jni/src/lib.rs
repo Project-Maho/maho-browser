@@ -2763,3 +2763,334 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeImportFirefoxBookm
         Err(_) => std::ptr::null_mut(),
     }
 }
+
+// ============================================================
+// Agent JNI Bindings
+// ============================================================
+
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::OnceLock;
+use jni::objects::GlobalRef;
+use jni::JavaVM;
+use maho_agent::{SwiftideBackend, SessionRuntime, MutexAgentStorage, ZeroizedString, AgentError, AgentRuntime};
+
+pub struct MahoAgentSession {
+    pub runtime: Arc<SwiftideBackend>,
+    pub isolation: Arc<SessionRuntime>,
+    pub session_id: String,
+    pub event_queue: Arc<Mutex<Vec<String>>>,
+}
+
+static JAVA_VM: OnceLock<JavaVM> = OnceLock::new();
+static MAHO_BRIDGE_CLASS: OnceLock<GlobalRef> = OnceLock::new();
+
+fn get_jni_env() -> Option<jni::AttachGuard<'static>> {
+    let vm = JAVA_VM.get()?;
+    vm.attach_current_thread().ok()
+}
+
+fn call_android_permission_callback(tool_name: &str, arguments: &str) -> i32 {
+    let Some(mut env_guard) = get_jni_env() else { return 1; };
+    let env = &mut *env_guard;
+    
+    let Some(cls_ref) = MAHO_BRIDGE_CLASS.get() else { return 1; };
+    let cls = unsafe { &*(cls_ref.as_obj() as *const jni::objects::JObject as *const jni::objects::JClass) };
+    
+    let Ok(tool_jstr) = env.new_string(tool_name) else { return 1; };
+    let Ok(args_jstr) = env.new_string(arguments) else { return 1; };
+    
+    let val = env.call_static_method(
+        cls,
+        "requestAgentPermission",
+        "(Ljava/lang/String;Ljava/lang/String;)I",
+        &[
+            jni::objects::JValue::Object(tool_jstr.as_ref()).into(),
+            jni::objects::JValue::Object(args_jstr.as_ref()).into(),
+        ]
+    );
+    
+    match val {
+        Ok(v) => v.i().unwrap_or(1),
+        Err(_) => 1,
+    }
+}
+
+fn call_android_secure_storage_callback(provider: &str) -> Option<String> {
+    let Some(mut env_guard) = get_jni_env() else { return None; };
+    let env = &mut *env_guard;
+    
+    let Some(cls_ref) = MAHO_BRIDGE_CLASS.get() else { return None; };
+    let cls = unsafe { &*(cls_ref.as_obj() as *const jni::objects::JObject as *const jni::objects::JClass) };
+    
+    let Ok(provider_jstr) = env.new_string(provider) else { return None; };
+    
+    let val = env.call_static_method(
+        cls,
+        "getAgentSecureStorage",
+        "(Ljava/lang/String;)Ljava/lang/String;",
+        &[jni::objects::JValue::Object(provider_jstr.as_ref()).into()]
+    );
+    
+    match val {
+        Ok(v) => {
+            let obj = v.l().ok()?;
+            if obj.is_null() {
+                None
+            } else {
+                let jstr = jni::objects::JString::from(obj);
+                env.get_string(&jstr).ok().map(|s| s.into())
+            }
+        }
+        Err(_) => None,
+    }
+}
+
+fn jni_permission_handler(req: maho_agent::PermissionRequest) -> std::pin::Pin<Box<dyn std::future::Future<Output = maho_agent::PermissionDecision> + Send>> {
+    let decision = call_android_permission_callback(&req.tool_name, &req.arguments);
+    let p_decision = if decision == 0 {
+        maho_agent::PermissionDecision::Allow
+    } else {
+        maho_agent::PermissionDecision::Deny
+    };
+    Box::pin(async move { p_decision })
+}
+
+fn jni_secure_storage_handler(provider: &str) -> Result<ZeroizedString, AgentError> {
+    if let Some(key) = call_android_secure_storage_callback(provider) {
+        Ok(ZeroizedString::new(key))
+    } else {
+        Err(AgentError::ExecutionError("Secure key not found".to_string()))
+    }
+}
+
+fn enqueue_event(queue: &Arc<Mutex<Vec<String>>>, event_type: &str, data: serde_json::Value) {
+    const MAX_EVENT_QUEUE_DEPTH: usize = 2048;
+    let payload = serde_json::json!({
+        "type": event_type,
+        "data": data
+    });
+    if let Ok(mut lock) = queue.lock() {
+        if lock.len() < MAX_EVENT_QUEUE_DEPTH {
+            lock.push(payload.to_string());
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentCreateSession<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    core_ptr: jlong,
+    session_id: JString<'local>,
+) -> jlong {
+    let core = match unsafe { get_core(core_ptr) } {
+        Some(c) => c,
+        None => return 0,
+    };
+    let sid = match get_rust_string(&mut env, &session_id) {
+        Some(s) => s,
+        None => return 0,
+    };
+    
+    if let Ok(vm) = env.get_java_vm() {
+        let _ = JAVA_VM.set(vm);
+    }
+    if let Ok(cls) = env.find_class("dev/maho/browser/MahoBridge") {
+        if let Ok(global_cls) = env.new_global_ref(cls) {
+            let _ = MAHO_BRIDGE_CLASS.set(global_cls);
+        }
+    }
+    
+    let db_path_str = match core.sqlite_db_path() {
+        Some(p) => p,
+        None => return 0,
+    };
+    let db_path = std::path::Path::new(&db_path_str);
+    let workspace_root = db_path.parent().unwrap_or(db_path).to_path_buf();
+    
+    let storage = match maho_storage::sqlite::SqliteStorage::open(&db_path_str) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    
+    let agent_storage = MutexAgentStorage(Arc::new(Mutex::new(storage)));
+    
+    let permission_cb = Box::new(|req| jni_permission_handler(req));
+    let runtime = Arc::new(SwiftideBackend::new(
+        Arc::new(agent_storage),
+        Some(permission_cb),
+        workspace_root,
+        false, // allow_insecure_key_storage = false on mobile/Android JNI
+    ));
+    
+    let secure_storage_cb = Box::new(|provider: &str| jni_secure_storage_handler(provider));
+    if runtime.set_secure_storage_callback(secure_storage_cb).is_err() {
+        return 0;
+    }
+    
+    let isolation = match SessionRuntime::new() {
+        Ok(i) => Arc::new(i),
+        Err(_) => return 0,
+    };
+    
+    let session = Box::new(MahoAgentSession {
+        runtime,
+        isolation,
+        session_id: sid,
+        event_queue: Arc::new(Mutex::new(Vec::new())),
+    });
+    
+    Box::into_raw(session) as jlong
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentFreeSession(
+    _env: JNIEnv,
+    _class: JClass,
+    session_ptr: jlong,
+) {
+    let ptr = session_ptr as *mut MahoAgentSession;
+    if !ptr.is_null() {
+        drop(Box::from_raw(ptr));
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentSendMessage<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session_ptr: jlong,
+    message: JString<'local>,
+) -> jboolean {
+    let session = session_ptr as *mut MahoAgentSession;
+    if session.is_null() {
+        return 0;
+    }
+    let session = &mut *session;
+    let msg_str = match get_rust_string(&mut env, &message) {
+        Some(s) => s,
+        None => return 0,
+    };
+    
+    let runtime = Arc::clone(&session.runtime);
+    let session_id = session.session_id.clone();
+    let q_clone = Arc::clone(&session.event_queue);
+    let q_clone_token = Arc::clone(&session.event_queue);
+    
+    let on_token = Box::new(move |token: &str| {
+        enqueue_event(&q_clone_token, "token", serde_json::json!(token));
+    });
+    
+    let fut = async move {
+        let user_chat_msg = maho_types::chat::ChatMessage::user(maho_types::chat::ChatContent::text(msg_str));
+        match runtime.run_turn(&session_id, user_chat_msg, Some(on_token)).await {
+            Ok(response) => {
+                let text = match &response.content {
+                    maho_types::chat::ChatContent::Text(t) => t.clone(),
+                    _ => String::new(),
+                };
+                let payload = serde_json::json!({
+                    "full_text": text,
+                    "tool_calls_json": "[]"
+                });
+                enqueue_event(&q_clone, "complete", payload);
+            }
+            Err(e) => {
+                let err_msg = e.to_string();
+                enqueue_event(&q_clone, "error", serde_json::json!(err_msg));
+            }
+        }
+    };
+    
+    let isolation = Arc::clone(&session.isolation);
+    let _ = isolation.block_on(async move {
+        tokio::spawn(fut);
+    });
+    
+    1
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentCancel(
+    _env: JNIEnv,
+    _class: JClass,
+    session_ptr: jlong,
+) -> jboolean {
+    let session = session_ptr as *mut MahoAgentSession;
+    if session.is_null() {
+        return 0;
+    }
+    let session = &*session;
+    let runtime = Arc::clone(&session.runtime);
+    let session_id = session.session_id.clone();
+    
+    let isolation = Arc::clone(&session.isolation);
+    let res = isolation.block_on(async move {
+        runtime.cancel(&session_id).await
+    });
+    
+    if res.is_ok() { 1 } else { 0 }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentListTools<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session_ptr: jlong,
+) -> jstring {
+    let session = session_ptr as *mut MahoAgentSession;
+    if session.is_null() {
+        return std::ptr::null_mut();
+    }
+    let session = &*session;
+    let runtime = Arc::clone(&session.runtime);
+    
+    let isolation = Arc::clone(&session.isolation);
+    let tools_res = isolation.block_on(async move {
+        runtime.list_tools().await
+    });
+    
+    let tools: Vec<maho_agent::ToolDefinition> = match tools_res {
+        Ok(Ok(t)) => t,
+        _ => return std::ptr::null_mut(),
+    };
+    
+    let json_str = serde_json::to_string(&tools).unwrap_or_else(|_| "[]".to_string());
+    match env.new_string(&json_str) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentPollEvent<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    session_ptr: jlong,
+) -> jstring {
+    let session = session_ptr as *mut MahoAgentSession;
+    if session.is_null() {
+        return std::ptr::null_mut();
+    }
+    let session = &*session;
+    
+    let event = if let Ok(mut lock) = session.event_queue.lock() {
+        if lock.is_empty() {
+            None
+        } else {
+            Some(lock.remove(0))
+        }
+    } else {
+        None
+    };
+    
+    match event {
+        Some(evt) => match env.new_string(&evt) {
+            Ok(s) => s.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        },
+        None => std::ptr::null_mut(),
+    }
+}
+

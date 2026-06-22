@@ -1,0 +1,14 @@
+{
+  "workspaces": [
+    {
+      "id": "work-space",
+      "name": "Work",
+      "userContextId": 1
+    },
+    {
+      "id": "personal-space",
+      "name": "Personal",
+      "userContextId": 2
+    }
+  ]
+}

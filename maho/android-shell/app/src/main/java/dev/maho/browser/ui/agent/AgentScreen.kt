@@ -52,8 +52,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import dev.maho.browser.MahoBridge
 import dev.maho.browser.support.AgentClient
 import dev.maho.browser.support.AgentEvent
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
@@ -82,26 +85,37 @@ fun AgentScreen(
     val scope = rememberCoroutineScope()
 
     val client = remember { AgentClient(relayUrl) }
+    var runLocally by remember { mutableStateOf(true) }
+    var activeLocalSessionPtr by remember { mutableStateOf(0L) }
+    var activeLocalSessionId by remember { mutableStateOf<String?>(null) }
 
     DisposableEffect(client) {
-        onDispose { client.close() }
+        onDispose {
+            client.close()
+            // Single-owner free: polling Job's `invokeOnCompletion` is the sole `agentFreeSession` caller.
+            if (activeLocalSessionPtr != 0L) {
+                MahoBridge.agentCancel(activeLocalSessionPtr)
+            }
+        }
     }
 
     LaunchedEffect(client) {
         client.events.collectLatest { event ->
-            eventLog.add(formatEvent(event))
-            updateTaskState(event) { newState ->
-                taskState = newState
-            }
-            if (event.summary != null) {
-                resultSummary = event.summary
+            if (!runLocally) {
+                eventLog.add(formatEvent(event))
+                updateTaskState(event) { newState ->
+                    taskState = newState
+                }
+                if (event.summary != null) {
+                    resultSummary = event.summary
+                }
             }
         }
     }
 
     LaunchedEffect(client) {
         client.connected.collectLatest { isConnected ->
-            if (isConnected && taskState == AgentTaskState.Connecting) {
+            if (!runLocally && isConnected && taskState == AgentTaskState.Connecting) {
                 taskState = AgentTaskState.Idle
             }
         }
@@ -167,6 +181,21 @@ fun AgentScreen(
                 enabled = taskState == AgentTaskState.Idle || taskState == AgentTaskState.Completed || taskState == AgentTaskState.Failed || taskState == AgentTaskState.Cancelled,
             )
 
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                androidx.compose.material3.Checkbox(
+                    checked = runLocally,
+                    onCheckedChange = { runLocally = it },
+                    enabled = taskState == AgentTaskState.Idle || taskState == AgentTaskState.Completed || taskState == AgentTaskState.Failed || taskState == AgentTaskState.Cancelled
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Run Agent Locally", style = MaterialTheme.typography.bodyMedium)
+            }
+
             Spacer(modifier = Modifier.height(20.dp))
 
             Row(
@@ -178,14 +207,88 @@ fun AgentScreen(
                 Button(
                     onClick = {
                         scope.launch {
-                            taskState = AgentTaskState.Connecting
                             eventLog.clear()
                             resultSummary = null
-                            client.connect()
-                            kotlinx.coroutines.delay(500)
-                            val seed = urlSeedInput.ifBlank { null }
-                            activeTaskId = client.submitTask(goalInput, seed)
-                            taskState = AgentTaskState.Submitted
+                            if (runLocally) {
+                                taskState = AgentTaskState.Working
+                                val sessionId = java.util.UUID.randomUUID().toString()
+                                val sessionPtr = MahoBridge.agentCreateSession(sessionId)
+                                if (sessionPtr == 0L) {
+                                    taskState = AgentTaskState.Failed
+                                    eventLog.add("[error] Failed to create local agent session")
+                                    return@launch
+                                }
+                                activeLocalSessionPtr = sessionPtr
+                                activeLocalSessionId = sessionId
+                                val sent = MahoBridge.agentSendMessage(sessionPtr, goalInput)
+                                if (!sent) {
+                                    MahoBridge.agentFreeSession(sessionPtr)
+                                    activeLocalSessionPtr = 0L
+                                    activeLocalSessionId = null
+                                    taskState = AgentTaskState.Failed
+                                    eventLog.add("[error] Failed to start agent task")
+                                    return@launch
+                                }
+                                
+                                val pollJob = scope.launch(Dispatchers.IO) {
+                                    try {
+                                        while (activeLocalSessionId == sessionId && taskState == AgentTaskState.Working) {
+                                            val eventJson = MahoBridge.agentPollEvent(sessionPtr)
+                                            if (eventJson != null) {
+                                                withContext(Dispatchers.Main) {
+                                                     val eventObj = org.json.JSONObject(eventJson as String)
+                                                     val type = eventObj.optString("type")
+                                                     val data = eventObj.opt("data")
+                                                     
+                                                     when (type) {
+                                                         "token" -> {
+                                                             val token = data as? String ?: ""
+                                                             eventLog.add("[token] $token")
+                                                         }
+                                                         "complete" -> {
+                                                             val payload = data as? org.json.JSONObject
+                                                             val fullText = payload?.optString("full_text") ?: ""
+                                                             resultSummary = fullText
+                                                             taskState = AgentTaskState.Completed
+                                                         }
+                                                         "error" -> {
+                                                             val err = data as? String ?: "Unknown error"
+                                                             resultSummary = "Error: $err"
+                                                             taskState = AgentTaskState.Failed
+                                                         }
+                                                         else -> {}
+                                                     }
+                                                }
+                                            }
+                                            kotlinx.coroutines.delay(100)
+                                        }
+                                    } catch (e: kotlinx.coroutines.CancellationException) {
+                                        throw e
+                                    } catch (e: Exception) {
+                                        withContext(Dispatchers.Main) {
+                                            eventLog.add("[error] Polling failed: ${e.message}")
+                                            taskState = AgentTaskState.Failed
+                                        }
+                                    }
+                                }
+                                // No suspension points between `scope.launch` above and `invokeOnCompletion` below:
+                                // if a future refactor inserts one, parent-scope cancellation before registration
+                                // would leak the session pointer.
+                                pollJob.invokeOnCompletion {
+                                    if (activeLocalSessionId == sessionId) {
+                                        activeLocalSessionPtr = 0L
+                                        activeLocalSessionId = null
+                                    }
+                                    MahoBridge.agentFreeSession(sessionPtr)
+                                }
+                            } else {
+                                taskState = AgentTaskState.Connecting
+                                client.connect()
+                                kotlinx.coroutines.delay(500)
+                                val seed = urlSeedInput.ifBlank { null }
+                                activeTaskId = client.submitTask(goalInput, seed)
+                                taskState = AgentTaskState.Submitted
+                            }
                         }
                     },
                     enabled = canSubmit,
@@ -203,8 +306,15 @@ fun AgentScreen(
                 ) {
                     OutlinedButton(
                         onClick = {
-                            activeTaskId?.let { client.cancelTask(it) }
-                            taskState = AgentTaskState.Cancelled
+                            if (runLocally) {
+                                if (activeLocalSessionPtr != 0L) {
+                                    MahoBridge.agentCancel(activeLocalSessionPtr)
+                                }
+                                taskState = AgentTaskState.Cancelled
+                            } else {
+                                activeTaskId?.let { client.cancelTask(it) }
+                                taskState = AgentTaskState.Cancelled
+                            }
                         },
                         colors = ButtonDefaults.outlinedButtonColors(
                             contentColor = MaterialTheme.colorScheme.error,

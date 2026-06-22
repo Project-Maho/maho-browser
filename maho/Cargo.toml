@@ -7,7 +7,7 @@ members = [
     "crates/maho-storage",
     "crates/maho-bench",
     "crates/maho-acp",
-    "crates/maho-import",
+    "crates/maho-import", "crates/maho-agent", "crates/maho-jni",
 ]
 
 [workspace.dependencies]

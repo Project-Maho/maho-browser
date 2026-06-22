@@ -9,6 +9,9 @@ object MahoBridge {
     @Volatile
     private var corePtr: Long = 0
 
+    @Volatile
+    var appContext: android.content.Context? = null
+
     val isInitialized: Boolean get() = corePtr != 0L
 
     // === Core Lifecycle ===
@@ -861,6 +864,187 @@ object MahoBridge {
         return nativeImportFirefoxBookmarks(ptr, profilePath)
     }
 
+    private const val BYOK_PREFS = "maho_byok_keys"
+
+    private object SecureStorageHelper {
+        private const val KEY_PROVIDER = "AndroidKeyStore"
+        private const val KEY_ALIAS = "MahoBYOKSecureKey"
+        private const val TRANSFORMATION = "AES/GCM/NoPadding"
+        private const val TAG_LENGTH_BITS = 128
+
+        private fun getSecretKey(): javax.crypto.SecretKey {
+            val keyStore = java.security.KeyStore.getInstance(KEY_PROVIDER)
+            keyStore.load(null)
+            val key = keyStore.getKey(KEY_ALIAS, null) as? javax.crypto.SecretKey
+            if (key != null) {
+                return key
+            }
+
+            val keyGenerator = javax.crypto.KeyGenerator.getInstance(
+                android.security.keystore.KeyProperties.KEY_ALGORITHM_AES,
+                KEY_PROVIDER
+            )
+            val keySpec = android.security.keystore.KeyGenParameterSpec.Builder(
+                KEY_ALIAS,
+                android.security.keystore.KeyProperties.PURPOSE_ENCRYPT or android.security.keystore.KeyProperties.PURPOSE_DECRYPT
+            )
+                .setBlockModes(android.security.keystore.KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(android.security.keystore.KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(256)
+                .build()
+            keyGenerator.init(keySpec)
+            return keyGenerator.generateKey()
+        }
+
+        fun encrypt(plaintext: String): String {
+            val cipher = javax.crypto.Cipher.getInstance(TRANSFORMATION)
+            cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, getSecretKey())
+            val iv = cipher.iv
+            val ciphertext = cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
+            
+            val combined = ByteArray(1 + iv.size + ciphertext.size)
+            combined[0] = iv.size.toByte()
+            System.arraycopy(iv, 0, combined, 1, iv.size)
+            System.arraycopy(ciphertext, 0, combined, 1 + iv.size, ciphertext.size)
+            
+            return android.util.Base64.encodeToString(combined, android.util.Base64.NO_WRAP)
+        }
+
+        fun decrypt(encryptedBase64: String): String? {
+            return try {
+                val combined = android.util.Base64.decode(encryptedBase64, android.util.Base64.NO_WRAP)
+                if (combined.isEmpty()) return null
+                val ivSize = combined[0].toInt()
+                if (ivSize <= 0 || ivSize > combined.size - 1) return null
+                val iv = ByteArray(ivSize)
+                System.arraycopy(combined, 1, iv, 0, ivSize)
+                
+                val ciphertext = ByteArray(combined.size - 1 - ivSize)
+                System.arraycopy(combined, 1 + ivSize, ciphertext, 0, ciphertext.size)
+                
+                val cipher = javax.crypto.Cipher.getInstance(TRANSFORMATION)
+                val spec = javax.crypto.spec.GCMParameterSpec(TAG_LENGTH_BITS, iv)
+                cipher.init(javax.crypto.Cipher.DECRYPT_MODE, getSecretKey(), spec)
+                val plaintextBytes = cipher.doFinal(ciphertext)
+                String(plaintextBytes, Charsets.UTF_8)
+            } catch (e: Exception) {
+                e.printStackTrace()
+                null
+            }
+        }
+    }
+
+    // --- BYOK Storage ---
+    fun byokGetProviders(): String? = "[\"openai\", \"anthropic\"]"
+    
+    fun byokGetKey(provider: String): String? {
+        val context = appContext ?: return null
+        val prefs = context.getSharedPreferences(BYOK_PREFS, android.content.Context.MODE_PRIVATE)
+        val encrypted = prefs.getString(provider, null) ?: return null
+        return SecureStorageHelper.decrypt(encrypted)
+    }
+
+    fun byokSetKey(provider: String, key: String): Boolean {
+        val context = appContext ?: return false
+        val prefs = context.getSharedPreferences(BYOK_PREFS, android.content.Context.MODE_PRIVATE)
+        val encrypted = SecureStorageHelper.encrypt(key)
+        return prefs.edit().putString(provider, encrypted).commit()
+    }
+
+    fun byokDeleteKey(provider: String): Boolean {
+        val context = appContext ?: return false
+        val prefs = context.getSharedPreferences(BYOK_PREFS, android.content.Context.MODE_PRIVATE)
+        return prefs.edit().remove(provider).commit()
+    }
+
+    fun byokValidateKey(provider: String, key: String): Boolean {
+        return true
+    }
+
+    // --- JVM callback bridges for JNI ---
+    @JvmStatic
+    fun requestAgentPermission(toolName: String, arguments: String): Int {
+        if (toolName == "shell_exec") {
+            return 1 // Deny
+        }
+        if (toolName == "fs_read" || toolName == "web_search" || toolName == "view_file" || toolName == "list_dir") {
+            return 0 // Allow
+        }
+        return 1 // Deny
+    }
+
+    @JvmStatic
+    fun getAgentSecureStorage(provider: String): String? {
+        return byokGetKey(provider)
+    }
+
+    // --- Agent Session Methods ---
+    fun agentCreateSession(sessionId: String): Long {
+        val ptr = corePtr
+        if (ptr == 0L) return 0L
+        return nativeAgentCreateSession(ptr, sessionId)
+    }
+
+    fun agentFreeSession(sessionPtr: Long) {
+        if (sessionPtr != 0L) nativeAgentFreeSession(sessionPtr)
+    }
+
+    fun agentSendMessage(sessionPtr: Long, message: String): Boolean {
+        if (sessionPtr == 0L) return false
+        return nativeAgentSendMessage(sessionPtr, message)
+    }
+
+    fun agentCancel(sessionPtr: Long): Boolean {
+        if (sessionPtr == 0L) return false
+        return nativeAgentCancel(sessionPtr)
+    }
+
+    fun agentListTools(sessionPtr: Long): String? {
+        if (sessionPtr == 0L) return null
+        return nativeAgentListTools(sessionPtr)
+    }
+
+    fun agentPollEvent(sessionPtr: Long): String? {
+        if (sessionPtr == 0L) return null
+        return nativeAgentPollEvent(sessionPtr)
+    }
+
+    // --- Conversation Stubs ---
+    fun createConversation(id: String, title: String?, spaceId: String?, model: String?): Boolean = true
+    fun listConversations(limit: Long = 100L): List<ConversationSession> = emptyList()
+    fun getConversationMessages(sessionId: String): List<ConversationTurn> = emptyList()
+    fun saveConversationMessage(sessionId: String, role: String, content: String, urlContext: String? = null): Boolean = true
+    fun deleteConversation(id: String): Boolean = true
+    fun renameConversation(id: String, title: String): Boolean = true
+
+    // --- Chat Stubs ---
+    fun chatSessionNew(apiKey: String, endpoint: String, model: String, systemInstruction: String): Long = 0L
+    fun chatSessionFree(sessionPtr: Long) {}
+    fun chatSendUserTurn(sessionPtr: Long, message: String): Boolean = true
+    fun chatSendTextWithImage(sessionPtr: Long, text: String, mime: String, data: ByteArray): Boolean = true
+    fun chatSendImage(sessionPtr: Long, mime: String, data: ByteArray): Boolean = true
+    fun chatCancel(sessionPtr: Long): Boolean = true
+    fun chatSessionPollEvent(sessionPtr: Long): String? = null
+    fun chatRegisterTool(sessionPtr: Long, name: String, description: String, parametersJson: String): Boolean = true
+    fun chatSendToolResult(sessionPtr: Long, toolCallId: String, name: String, output: String, isSuccess: Boolean): Boolean = true
+    fun chatAppendAssistantMessage(sessionPtr: Long, content: String, toolCallsJson: String): Boolean = true
+
+    // --- Space AI Config ---
+    fun getSpaceAIConfig(spaceId: String): SpaceAIConfig? = null
+    fun getSpaceAIConfigJson(spaceId: String): String? = null
+    fun setSpaceAIConfig(spaceId: String, config: SpaceAIConfig): Boolean = true
+    fun setSpaceAIConfig(spaceId: String, configJson: String): Boolean = true
+
+    // --- Tab Clustering ---
+    fun clusterTabs(threshold: Float): String? = null
+
+    // --- Offline Model ---
+    @kotlinx.serialization.Serializable
+    data class OfflineModelInfo(val status: String, val size: Long)
+    fun offlineModelInfo(): OfflineModelInfo? = null
+    fun offlineModelIsDownloaded(): Boolean = false
+    fun offlineModelDelete(): Boolean = true
+
     // ============================================================
     // Native extern declarations
     // ============================================================
@@ -1050,4 +1234,12 @@ object MahoBridge {
     private external fun nativeDetectBrowserProfiles(): String?
     private external fun nativeImportChromeBookmarks(ptr: Long, profilePath: String): String?
     private external fun nativeImportFirefoxBookmarks(ptr: Long, profilePath: String): String?
+
+    // --- Agent JNI ---
+    private external fun nativeAgentCreateSession(corePtr: Long, sessionId: String): Long
+    private external fun nativeAgentFreeSession(sessionPtr: Long)
+    private external fun nativeAgentSendMessage(sessionPtr: Long, message: String): Boolean
+    private external fun nativeAgentCancel(sessionPtr: Long): Boolean
+    private external fun nativeAgentListTools(sessionPtr: Long): String?
+    private external fun nativeAgentPollEvent(sessionPtr: Long): String?
 }

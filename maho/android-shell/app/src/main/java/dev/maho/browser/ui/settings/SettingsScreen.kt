@@ -37,6 +37,7 @@ fun SettingsScreen(
     onNavigateToAutofill: () -> Unit = {},
     onNavigateToNotifications: () -> Unit = {},
     onNavigateToMax: () -> Unit = {},
+    onNavigateToWebAgent: () -> Unit = {},
     onNavigateToAdvanced: () -> Unit = {},
     onNavigateToProfiles: () -> Unit = {},
     onNavigateToBookmarks: () -> Unit = {},
@@ -127,6 +128,7 @@ fun SettingsScreen(
             SettingsNavItem(MahoIcon.Notifications, "Notifications", onClick = onNavigateToNotifications)
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
             SettingsNavItem(MahoIcon.Star, "Max AI", onClick = onNavigateToMax)
+            SettingsNavItem(MahoIcon.SparklesAi, "Web Agent", onClick = onNavigateToWebAgent)
             SettingsNavItem(MahoIcon.Tune, "Advanced", onClick = onNavigateToAdvanced)
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
             SettingsNavItem(MahoIcon.Code, "Profiles", onClick = onNavigateToProfiles)

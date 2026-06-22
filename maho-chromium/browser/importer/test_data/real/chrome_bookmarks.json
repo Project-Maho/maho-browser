@@ -1,0 +1,21 @@
+{
+  "roots": {
+    "bookmark_bar": {
+      "children": [
+        {
+          "name": "Google",
+          "type": "url",
+          "url": "https://example.com"
+        },
+        {
+          "name": "GitHub",
+          "type": "url",
+          "url": "https://example.com/github"
+        }
+      ],
+      "name": "Bookmarks Bar",
+      "type": "folder"
+    }
+  },
+  "version": 1
+}

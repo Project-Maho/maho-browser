@@ -104,6 +104,7 @@ private enum class BrowserOverlay {
     Feedback,
     LanguageSettings,
     SyncSettings,
+    WebAgent,
 }
 
 private enum class ShellRoute {
@@ -987,6 +988,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                             onNavigateToAutofill = { pushOverlay(BrowserOverlay.AutofillSettings) },
                             onNavigateToNotifications = { pushOverlay(BrowserOverlay.NotificationSettings) },
                             onNavigateToMax = { pushOverlay(BrowserOverlay.MaxSettings) },
+                            onNavigateToWebAgent = { pushOverlay(BrowserOverlay.WebAgent) },
                             onNavigateToAdvanced = { pushOverlay(BrowserOverlay.AdvancedSettings) },
                             onNavigateToProfiles = { pushOverlay(BrowserOverlay.Profiles) },
                             onNavigateToBookmarks = { pushOverlay(BrowserOverlay.Bookmarks) },
@@ -1014,6 +1016,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                         BrowserOverlay.AutofillSettings -> AutofillSettingsScreen(onBack = { popOverlay() })
                         BrowserOverlay.NotificationSettings -> NotificationSettingsScreen(onBack = { popOverlay() })
                         BrowserOverlay.MaxSettings -> MaxSettingsScreen(onBack = { popOverlay() })
+                        BrowserOverlay.WebAgent -> dev.maho.browser.ui.agent.AgentScreen(onBack = { popOverlay() })
                         BrowserOverlay.AdvancedSettings -> AdvancedSettingsScreen(onBack = { popOverlay() })
                         BrowserOverlay.Profiles -> ProfileSettingsScreen(onBack = { popOverlay() })
                         BrowserOverlay.Bookmarks -> BookmarksScreen(

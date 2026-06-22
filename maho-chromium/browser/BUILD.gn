@@ -63,7 +63,7 @@ source_set("maho_ai_runtime_adapter") {
   deps = [
     ":maho_ai_runtime_adapter_interface",
     ":maho_browser_ai_tools",
-    ":maho_opencode_acp_adapter",
+    ":maho_unified_agent_adapter",
     "//chrome/browser:browser_public_dependencies",
     "//content/public/browser",
     "//maho/browser/ui/webui/maho_ai:mojo_bindings",
@@ -510,12 +510,12 @@ source_set("maho_os_crypt_key_provider") {
   ]
 }
 
-source_set("maho_opencode_acp_adapter") {
+source_set("maho_unified_agent_adapter") {
   sources = [
     "ai/maho_acp_event_decoder.cc",
     "ai/maho_acp_event_decoder.h",
-    "ai/maho_opencode_acp_adapter.cc",
-    "ai/maho_opencode_acp_adapter.h",
+    "ai/maho_unified_agent_adapter.cc",
+    "ai/maho_unified_agent_adapter.h",
   ]
   public_deps = [
     "//base",
@@ -528,14 +528,14 @@ source_set("maho_opencode_acp_adapter") {
   ]
 }
 
-source_set("maho_opencode_acp_adapter_unittests") {
+source_set("maho_unified_agent_adapter_unittests") {
   testonly = true
   sources = [
     "ai/maho_acp_event_decoder_unittest.cc",
-    "ai/maho_opencode_acp_adapter_unittest.cc",
+    "ai/maho_unified_agent_adapter_unittest.cc",
   ]
   deps = [
-    ":maho_opencode_acp_adapter",
+    ":maho_unified_agent_adapter",
     "//base",
     "//base/test:test_support",
     "//maho/browser/ui/webui/maho_ai:mojo_bindings",
@@ -550,7 +550,7 @@ source_set("maho_ai_runtime_router_unittests") {
   ]
   deps = [
     ":maho_ai_runtime_adapter",
-    ":maho_opencode_acp_adapter",
+    ":maho_unified_agent_adapter",
     "//base",
     "//base/test:test_support",
     "//components/prefs:test_support",

@@ -7,7 +7,7 @@
 #include "base/logging.h"
 #include "components/prefs/pref_service.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
-#include "maho/browser/ai/maho_opencode_acp_adapter.h"
+#include "maho/browser/ai/maho_unified_agent_adapter.h"
 
 MahoAiRuntimeRouter::MahoAiRuntimeRouter(
     PrefService* prefs,
@@ -29,11 +29,14 @@ MahoAiRuntimeAdapter* MahoAiRuntimeRouter::GetActiveAdapter() {
 
 std::string MahoAiRuntimeRouter::GetActiveAdapterName() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!active_adapter_) {
+    return "disabled";
+  }
   return active_adapter_->GetAdapterName();
 }
 
 bool MahoAiRuntimeRouter::IsAvailable() const {
-  return active_adapter_->IsAvailable();
+  return active_adapter_ && active_adapter_->IsAvailable();
 }
 
 void MahoAiRuntimeRouter::RebuildAdapterIfStale() {
@@ -41,5 +44,5 @@ void MahoAiRuntimeRouter::RebuildAdapterIfStale() {
     return;
   }
   active_adapter_ =
-      std::make_unique<MahoOpenCodeAcpAdapter>(prefs_, url_loader_factory_);
+      std::make_unique<MahoUnifiedAgentAdapter>(prefs_, url_loader_factory_);
 }

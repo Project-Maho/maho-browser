@@ -9,6 +9,10 @@ crate-type = ["cdylib"]
 [dependencies]
 maho-core = { path = "../maho-core" }
 maho-types = { path = "../maho-types" }
+maho-agent = { path = "../maho-agent" }
+maho-storage = { path = "../maho-storage" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 jni = "0.21.1"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"] }
+libc = "0.2"

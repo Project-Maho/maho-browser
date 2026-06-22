@@ -19,12 +19,20 @@ class MahoAiRuntimeRouterTest : public testing::Test {
   TestingPrefServiceSimple prefs_;
 };
 
-TEST_F(MahoAiRuntimeRouterTest, DefaultsToAcpAdapter) {
+TEST_F(MahoAiRuntimeRouterTest, UsesUnifiedAgentByDefault) {
   MahoAiRuntimeRouter router(&prefs_, nullptr);
-  EXPECT_EQ(router.GetActiveAdapterName(), "opencode-acp");
+  EXPECT_EQ(router.GetActiveAdapterName(), "unified-agent");
+  EXPECT_TRUE(router.IsAvailable());
 }
 
-TEST_F(MahoAiRuntimeRouterTest, ConstructsAcpAdapterUnconditionally) {
+TEST_F(MahoAiRuntimeRouterTest, GetActiveAdapterReturnsNonNull) {
   MahoAiRuntimeRouter router(&prefs_, nullptr);
-  EXPECT_EQ(router.GetActiveAdapterName(), "opencode-acp");
+  EXPECT_NE(router.GetActiveAdapter(), nullptr);
+}
+
+TEST_F(MahoAiRuntimeRouterTest, RebuildIsIdempotent) {
+  MahoAiRuntimeRouter router(&prefs_, nullptr);
+  MahoAiRuntimeAdapter* first = router.GetActiveAdapter();
+  MahoAiRuntimeAdapter* second = router.GetActiveAdapter();
+  EXPECT_EQ(first, second);
 }

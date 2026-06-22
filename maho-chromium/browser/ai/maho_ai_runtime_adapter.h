@@ -3,7 +3,7 @@
 // MahoAiRuntimeAdapter: Abstract interface for the AI runtime backend.
 //
 // Defines a session-oriented, event-driven contract implemented by
-// MahoOpenCodeAcpAdapter. The page handler and Mojo proxy talk to this
+// MahoUnifiedAgentAdapter. The page handler and Mojo proxy talk to this
 // interface — they never know backend details. Runtime selection is
 // handled by MahoAiRuntimeRouter.
 //
@@ -26,10 +26,8 @@ enum class ChatIntent;
 enum class InteractionMode;
 }  // namespace maho_ai::mojom
 
-// Event types that a runtime adapter can emit. This is the beginning of
-// the event-oriented contract that replaces the flat token/complete/error
-// callback shape. For now, the legacy adapter maps its callbacks into
-// these categories; the OpenCode adapter will emit them natively.
+// Event types that a runtime adapter can emit. The unified agent adapter
+// emits these natively; the page handler and Mojo proxy consume them.
 enum class MahoAiRuntimeEventType {
   // Incremental text content from the assistant.
   kAssistantToken,
@@ -78,8 +76,8 @@ struct MahoAiRuntimeEvent {
 };
 
 // Abstract runtime adapter interface. Each concrete adapter owns its own
-// connection to the underlying runtime (legacy Rust bridge, OpenCode
-// server, etc.) and translates runtime-specific events into the common
+// connection to the underlying runtime (e.g., the maho-agent FFI bridge)
+// and translates runtime-specific events into the common
 // MahoAiRuntimeEvent shape.
 class MahoAiRuntimeAdapter {
  public:
@@ -93,7 +91,8 @@ class MahoAiRuntimeAdapter {
   virtual std::string GetAdapterName() const = 0;
 
   // Whether this adapter has enough configuration to be usable
-  // (e.g., API key for legacy, server connection for OpenCode).
+  // (e.g., the unified agent adapter requires MahoCore to be initialized
+  // and at least one BYOK key in secure storage).
   virtual bool IsAvailable() const = 0;
 
   // Submit a user message to the runtime. The adapter emits events via
@@ -105,7 +104,7 @@ class MahoAiRuntimeAdapter {
   //
   // The caller must keep the adapter alive for the duration of the turn.
   // Calling SubmitMessage while a turn is in progress is undefined
-  // behavior for now (the legacy adapter serializes; OpenCode may queue).
+  // behavior; the unified agent adapter currently serializes turns.
   virtual void SubmitMessage(const std::string& message,
                              maho_ai::mojom::ChatIntent chat_intent,
                              bool attach_browser_context,
@@ -119,9 +118,9 @@ class MahoAiRuntimeAdapter {
   virtual void RespondToApproval(const std::string& approval_id,
                                  bool approved) = 0;
 
-  // Returns the runtime-owned session ID (e.g. the OpenCode server session
-  // ID), if one exists. Empty string if no session is active or the adapter
-  // does not use external session identifiers.
+  // Returns the runtime-owned session ID, if one exists. Empty string if
+  // no session is active or the adapter does not use external session
+  // identifiers.
   virtual std::string GetRuntimeSessionId() const = 0;
 
   virtual void Reset() = 0;
