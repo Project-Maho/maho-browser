@@ -1,5 +1,9 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#pragma allow_unsafe_buffers
+#endif
+
 #include "maho/browser/ai/maho_unified_agent_adapter.h"
 
 #include <cstring>
@@ -15,7 +19,9 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
-#include "components/os_crypt/sync/os_crypt.h"
+#include "chrome/browser/browser_process.h"
+#include "components/os_crypt/async/browser/os_crypt_async.h"
+#include "third_party/crashpad/crashpad/client/annotation.h"
 #include "components/prefs/pref_service.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "maho/browser/ai/maho_acp_event_decoder.h"
@@ -32,7 +38,14 @@ MahoUnifiedAgentAdapter::MahoUnifiedAgentAdapter(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
     : prefs_(prefs), url_loader_factory_(std::move(url_loader_factory)) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
+  if (g_browser_process && g_browser_process->os_crypt_async()) {
+    g_browser_process->os_crypt_async()->GetInstance(
+        base::BindOnce(&MahoUnifiedAgentAdapter::OnOsCryptReady,
+                       weak_factory_.GetWeakPtr()),
+        os_crypt_async::Encryptor::Option::kEncryptSyncCompat);
+  }
 }
+
 
 MahoUnifiedAgentAdapter::~MahoUnifiedAgentAdapter() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -94,7 +107,11 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
       ffi_user_data_->encrypted_byok_anthropic_b64 =
           prefs_->GetString(maho::ai_prefs::kByokAnthropicEncryptedB64);
     }
+    if (encryptor_) {
+      ffi_user_data_->encryptor = encryptor_;
+    }
     user_data_handle_ = new std::weak_ptr<FfiUserData>(ffi_user_data_);
+
 
     // Wire permission + secure-storage callbacks. allow_insecure_key_storage
     // is FALSE: when no encrypted key is available the agent will fail-closed
@@ -158,19 +175,22 @@ void MahoUnifiedAgentAdapter::Reset() {
 }
 
 // static
-int MahoUnifiedAgentAdapter::OnAgentPermission(void* /*user_data*/,
-                                                const char* tool_name,
-                                                const char* /*arguments*/) {
+MahoAgentPermissionDecision MahoUnifiedAgentAdapter::OnAgentPermission(void* /*user_data*/,
+                                                                        const char* tool_name,
+                                                                        const char* /*arguments*/) {
   // Mirror iOS policy: default-deny, allowlist only safe read tools.
   // shell_exec is never granted from the desktop adapter callback path.
-  if (!tool_name) return 1;  // Deny
+  if (!tool_name) return MahoAgentPermissionDecision_Deny;  // Deny
   const std::string tool(tool_name);
-  if (tool == "shell_exec") return 1;
-  if (tool == "fs_read" || tool == "web_search") return 0;  // Allow
-  return 1;  // Default deny
+  if (tool == "shell_exec") return MahoAgentPermissionDecision_Deny;
+  if (tool == "fs_read" || tool == "web_search") return MahoAgentPermissionDecision_Allow;  // Allow
+  return MahoAgentPermissionDecision_Deny;  // Default deny
 }
 
 namespace {
+
+// Annotation for tracking active secrets in memory. Crashpad reads this during dumps.
+crashpad::StringAnnotation<32> g_byok_key_status("maho-byok-key-status");
 
 // Secure-zero free_fn passed back to Rust via MahoAgentSecureKey. Scrubs
 // plaintext via volatile-write loop before returning the heap chunk to
@@ -184,6 +204,7 @@ void FreeSecureKey(char* ptr, uintptr_t len) {
     }
   }
   free(ptr);
+  g_byok_key_status.Clear();
 }
 
 MahoAgentSecureKey AllocateSecureKeyFromPlaintext(const std::string& plaintext) {
@@ -212,6 +233,10 @@ MahoAgentSecureKey MahoUnifiedAgentAdapter::OnAgentSecureStorage(
     return MahoAgentSecureKey{nullptr, 0, nullptr};
   }
 
+  if (!shared->encryptor) {
+    return MahoAgentSecureKey{nullptr, 0, nullptr};
+  }
+
   const std::string provider_str(provider);
   const std::string* encrypted_b64 = nullptr;
   if (provider_str == "openai") {
@@ -235,7 +260,8 @@ MahoAgentSecureKey MahoUnifiedAgentAdapter::OnAgentSecureStorage(
     return MahoAgentSecureKey{nullptr, 0, nullptr};
   }
   std::string plaintext;
-  const bool decrypted = ::OSCrypt::DecryptString(encrypted_bytes, &plaintext);
+  const bool decrypted = shared->encryptor->DecryptString(encrypted_bytes, &plaintext);
+
   if (!decrypted || plaintext.empty()) {
     // Scrub any partial output before returning.
     if (!plaintext.empty()) {
@@ -245,6 +271,8 @@ MahoAgentSecureKey MahoUnifiedAgentAdapter::OnAgentSecureStorage(
     return MahoAgentSecureKey{nullptr, 0, nullptr};
   }
   MahoAgentSecureKey result = AllocateSecureKeyFromPlaintext(plaintext);
+  // Set crashpad annotation to indicate a BYOK key is active in memory
+  g_byok_key_status.Set("active");
   // Scrub the local plaintext copy before std::string destructor returns
   // the buffer to the allocator.
   volatile char* p = plaintext.data();
@@ -337,3 +365,8 @@ void MahoUnifiedAgentAdapter::TransitionToError(const std::string& message) {
   event.text = message;
   EmitEvent(std::move(event));
 }
+
+void MahoUnifiedAgentAdapter::OnOsCryptReady(os_crypt_async::Encryptor encryptor) {
+  encryptor_ = std::make_shared<os_crypt_async::Encryptor>(std::move(encryptor));
+}
+

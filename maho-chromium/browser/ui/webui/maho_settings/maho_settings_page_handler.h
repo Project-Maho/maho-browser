@@ -14,7 +14,9 @@
 #include "base/timer/timer.h"
 #include "chrome/browser/extensions/extension_uninstall_dialog.h"
 #include "components/prefs/pref_change_registrar.h"
+#include "components/os_crypt/async/common/encryptor.h"
 #include "maho/browser/extensions/maho_extension_state_bridge.h"
+
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/ui/webui/maho_settings/maho_settings.mojom.h"
 #include "maho/third_party/maho/maho_ffi.h"
@@ -143,6 +145,12 @@ class MahoSettingsPageHandler
   void RemoveExtension(const std::string& id,
                        RemoveExtensionCallback callback) override;
 
+  void SetBYOKKey(const std::string& provider,
+                  const std::string& key,
+                  SetBYOKKeyCallback callback) override;
+  void ClearBYOKKey(const std::string& provider,
+                    ClearBYOKKeyCallback callback) override;
+
   // maho::MahoExtensionStateBridge::Observer:
   void OnInstalledExtensionsChanged() override;
 
@@ -204,6 +212,9 @@ class MahoSettingsPageHandler
   std::unique_ptr<network::SimpleURLLoader> theme_store_loader_;
   std::string cached_theme_store_json_;
   base::TimeTicks last_theme_store_fetch_;
+
+  std::optional<os_crypt_async::Encryptor> encryptor_;
+  void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
 
   base::WeakPtrFactory<MahoSettingsPageHandler> weak_factory_{this};
 };

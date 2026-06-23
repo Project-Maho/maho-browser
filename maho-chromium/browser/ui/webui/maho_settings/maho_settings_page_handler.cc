@@ -17,6 +17,8 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/task/thread_pool.h"
+#include "base/base64.h"
+#include "components/os_crypt/async/browser/os_crypt_async.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/extension_uninstall_dialog.h"
@@ -1069,7 +1071,15 @@ MahoSettingsPageHandler::MahoSettingsPageHandler(
                                        weak_factory_.GetWeakPtr()));
   }
 
+  if (g_browser_process && g_browser_process->os_crypt_async()) {
+    g_browser_process->os_crypt_async()->GetInstance(
+        base::BindOnce(&MahoSettingsPageHandler::OnOsCryptReady,
+                       weak_factory_.GetWeakPtr()),
+        os_crypt_async::Encryptor::Option::kEncryptSyncCompat);
+  }
+
   LoadCachedThemeStoreFromDisk();
+
 
   if (auto* bridge = maho::MahoExtensionStateBridge::FromProfile(profile_)) {
     ext_bridge_observation_.Observe(bridge);
@@ -1561,6 +1571,10 @@ void MahoSettingsPageHandler::GetAISettings(GetAISettingsCallback callback) {
   settings->approval_policy = prefs_->GetString(ai::kApprovalPolicy);
   settings->session_persistence_enabled =
       prefs_->GetBoolean(ai::kSessionPersistenceEnabled);
+  settings->has_byok_openai =
+      !prefs_->GetString(ai::kByokOpenAIEncryptedB64).empty();
+  settings->has_byok_anthropic =
+      !prefs_->GetString(ai::kByokAnthropicEncryptedB64).empty();
   std::move(callback).Run(std::move(settings));
 }
 
@@ -2222,3 +2236,51 @@ void MahoSettingsPageHandler::OnExtensionUninstallDialogClosed(
     std::move(pending_remove_callback_).Run(result);
   }
 }
+
+void MahoSettingsPageHandler::SetBYOKKey(const std::string& provider,
+                                         const std::string& key,
+                                         SetBYOKKeyCallback callback) {
+  if (key.empty()) {
+    ClearBYOKKey(provider, std::move(callback));
+    return;
+  }
+  if (!encryptor_.has_value()) {
+    std::move(callback).Run(false);
+    return;
+  }
+  std::string encrypted_bytes;
+  if (!encryptor_->EncryptString(key, &encrypted_bytes)) {
+    std::move(callback).Run(false);
+    return;
+  }
+  std::string encrypted_b64 = base::Base64Encode(encrypted_bytes);
+
+  if (provider == "openai") {
+    prefs_->SetString(ai::kByokOpenAIEncryptedB64, encrypted_b64);
+    std::move(callback).Run(true);
+  } else if (provider == "anthropic") {
+    prefs_->SetString(ai::kByokAnthropicEncryptedB64, encrypted_b64);
+    std::move(callback).Run(true);
+  } else {
+    std::move(callback).Run(false);
+  }
+}
+
+void MahoSettingsPageHandler::ClearBYOKKey(const std::string& provider,
+                                           ClearBYOKKeyCallback callback) {
+  if (provider == "openai") {
+    prefs_->SetString(ai::kByokOpenAIEncryptedB64, "");
+    std::move(callback).Run(true);
+  } else if (provider == "anthropic") {
+    prefs_->SetString(ai::kByokAnthropicEncryptedB64, "");
+    std::move(callback).Run(true);
+  } else {
+    std::move(callback).Run(false);
+  }
+}
+
+void MahoSettingsPageHandler::OnOsCryptReady(os_crypt_async::Encryptor encryptor) {
+  encryptor_ = std::move(encryptor);
+}
+
+

@@ -35,6 +35,7 @@ impl<T> MutexExt<T> for Mutex<T> {
 
 #[derive(Clone)]
 struct MahoOpenAIConfig {
+    // SAFETY: contains BYOK plaintext, exclude from crash dumps
     api_key: Arc<secrecy::SecretString>,
     api_base: String,
 }
@@ -105,6 +106,7 @@ struct PermissionGatedTool {
     inner_tool: Arc<dyn Tool>,
     permission_callback: Arc<Mutex<Option<PermissionCallback>>>,
     denied_flag: Arc<Mutex<bool>>,
+    session_id: String,
 }
 
 #[async_trait]
@@ -149,6 +151,16 @@ impl Tool for PermissionGatedTool {
                 anyhow::anyhow!("Permission Denied"),
             ));
         }
+
+        if decision == PermissionDecision::Allow {
+            tracing::info!(
+                target = "maho_agent::audit",
+                tool = %self.name(),
+                session_id = %self.session_id,
+                "Tool invocation allowed; proceeding",
+            );
+        }
+
         self.inner_tool.invoke(agent_context, tool_call).await
     }
 
@@ -518,6 +530,7 @@ impl SwiftideBackend {
         workspace_root: std::path::PathBuf,
         allow_insecure_key_storage: bool,
     ) -> Self {
+        crate::init_audit_logging();
         Self {
             storage,
             permission_callback: Arc::new(Mutex::new(permission_callback)),
@@ -533,11 +546,12 @@ impl SwiftideBackend {
         *self.llm_override.lock_unpoison() = Some(llm);
     }
 
-    fn build_gated_tool(&self, tool: Arc<dyn Tool>, denied_flag: Arc<Mutex<bool>>) -> Box<dyn Tool> {
+    fn build_gated_tool(&self, tool: Arc<dyn Tool>, denied_flag: Arc<Mutex<bool>>, session_id: &str) -> Box<dyn Tool> {
         Box::new(PermissionGatedTool {
             inner_tool: tool,
             permission_callback: Arc::clone(&self.permission_callback),
             denied_flag,
+            session_id: session_id.to_string(),
         }) as Box<dyn Tool>
     }
 
@@ -649,14 +663,14 @@ impl SwiftideBackend {
         let mut platform_tools = Vec::new();
         #[cfg(any(target_os = "ios", target_os = "android"))]
         {
-            platform_tools.push(self.build_gated_tool(Arc::new(CameraTool), denied_flag.clone()));
-            platform_tools.push(self.build_gated_tool(Arc::new(PhotoLibraryTool), denied_flag.clone()));
-            platform_tools.push(self.build_gated_tool(Arc::new(ClipboardTool), denied_flag.clone()));
+            platform_tools.push(self.build_gated_tool(Arc::new(CameraTool), denied_flag.clone(), session_id));
+            platform_tools.push(self.build_gated_tool(Arc::new(PhotoLibraryTool), denied_flag.clone(), session_id));
+            platform_tools.push(self.build_gated_tool(Arc::new(ClipboardTool), denied_flag.clone(), session_id));
         }
         #[cfg(not(any(target_os = "ios", target_os = "android")))]
         {
-            platform_tools.push(self.build_gated_tool(Arc::new(FsReadTool { workspace_root: self.workspace_root.clone() }), denied_flag.clone()));
-            platform_tools.push(self.build_gated_tool(Arc::new(ShellExecTool { workspace_root: self.workspace_root.clone() }), denied_flag.clone()));
+            platform_tools.push(self.build_gated_tool(Arc::new(FsReadTool { workspace_root: self.workspace_root.clone() }), denied_flag.clone(), session_id));
+            platform_tools.push(self.build_gated_tool(Arc::new(ShellExecTool { workspace_root: self.workspace_root.clone() }), denied_flag.clone(), session_id));
         }
 
         // Load DefaultContext with history
@@ -720,6 +734,12 @@ impl AgentRuntime for SwiftideBackend {
         message: MahoChatMessage,
         on_token: Option<Box<dyn for<'a> Fn(&'a str) + Send + Sync + 'static>>,
     ) -> Result<MahoChatMessage, AgentError> {
+        let start_time = std::time::Instant::now();
+        tracing::info!(
+            target = "maho_agent::audit",
+            session_id = %session_id,
+            event = "session_start",
+        );
         let self_clone = self.clone();
         let session_id_str = session_id.to_string();
         let denied_flag = Arc::new(Mutex::new(false));
@@ -734,6 +754,14 @@ impl AgentRuntime for SwiftideBackend {
 
         let res = join_handle.await;
         self.active_sessions.lock_unpoison().remove(session_id);
+
+        let elapsed = start_time.elapsed();
+        tracing::info!(
+            target = "maho_agent::audit",
+            session_id = %session_id,
+            event = "session_end",
+            duration_ms = elapsed.as_millis(),
+        );
 
         match res {
             Ok(result) => result,

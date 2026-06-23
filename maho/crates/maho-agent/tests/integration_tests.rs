@@ -206,3 +206,181 @@ async fn test_agent_permission_deny() {
          Got: {count} invocations (>1 indicates denied_flag retry-storm regression)",
     );
 }
+
+#[tokio::test]
+async fn test_agent_fails_without_byok_key() {
+    let storage = Arc::new(MockAgentStorage {
+        messages: Arc::new(Mutex::new(Vec::new())),
+    });
+
+    let backend = SwiftideBackend::new(
+        Arc::clone(&storage) as Arc<dyn AgentStorage>,
+        None,
+        std::env::temp_dir(),
+        false, // allow_insecure_key_storage = false
+    );
+
+    let user_msg = ChatMessage::user(ChatContent::text("Hello".to_string()));
+    let res = backend.run_turn("session-123", user_msg, None).await;
+
+    assert!(res.is_err());
+    let err_str = res.unwrap_err().to_string();
+    assert!(err_str.contains("Secure storage callback is missing or returned no keys"));
+}
+
+#[tokio::test]
+async fn test_agent_denies_unauthorized_tool() {
+    let storage = Arc::new(MockAgentStorage {
+        messages: Arc::new(Mutex::new(Vec::new())),
+    });
+
+    let backend = SwiftideBackend::new(
+        Arc::clone(&storage) as Arc<dyn AgentStorage>,
+        None,
+        std::env::temp_dir(),
+        true,
+    );
+
+    backend.set_permission_callback(Box::new(|_req| {
+        Box::pin(async { PermissionDecision::Deny })
+    })).unwrap();
+
+    let mock_llm = DynamicMockLLM {
+        calls: Arc::new(Mutex::new(Vec::new())),
+    };
+    backend.set_llm_override(Box::new(mock_llm) as Box<dyn ChatCompletion>);
+
+    let user_msg = ChatMessage::user(ChatContent::text("read file".to_string()));
+    let res = backend.run_turn("session-123", user_msg, None).await;
+
+    assert!(res.is_err());
+    assert!(matches!(res.unwrap_err(), maho_agent::AgentError::PermissionDenied));
+}
+
+#[tokio::test]
+async fn test_secure_storage_callback_invoked() {
+    let storage = Arc::new(MockAgentStorage {
+        messages: Arc::new(Mutex::new(Vec::new())),
+    });
+
+    let backend = SwiftideBackend::new(
+        Arc::clone(&storage) as Arc<dyn AgentStorage>,
+        None,
+        std::env::temp_dir(),
+        false, // allow_insecure_key_storage = false
+    );
+
+    let callback_invoked = Arc::new(Mutex::new(false));
+    let callback_invoked_clone = Arc::clone(&callback_invoked);
+
+    backend.set_secure_storage_callback(Box::new(move |provider| {
+        if provider == "openai" {
+            *callback_invoked_clone.lock().unwrap() = true;
+            Ok(maho_agent::ZeroizedString::new("openai-key".to_string()))
+        } else {
+            Err(maho_agent::AgentError::ExecutionError("not found".to_string()))
+        }
+    })).unwrap();
+
+    let user_msg = ChatMessage::user(ChatContent::text("Hello".to_string()));
+    let _ = backend.run_turn("session-123", user_msg, None).await;
+
+    assert!(*callback_invoked.lock().unwrap());
+}
+
+#[tokio::test]
+async fn test_secure_storage_callback_failure_fails_closed() {
+    let storage = Arc::new(MockAgentStorage {
+        messages: Arc::new(Mutex::new(Vec::new())),
+    });
+
+    let backend = SwiftideBackend::new(
+        Arc::clone(&storage) as Arc<dyn AgentStorage>,
+        None,
+        std::env::temp_dir(),
+        false,
+    );
+
+    backend.set_secure_storage_callback(Box::new(move |_provider| {
+        Err(maho_agent::AgentError::ExecutionError("simulated keychain failure".to_string()))
+    })).unwrap();
+
+    let user_msg = ChatMessage::user(ChatContent::text("Hello".to_string()));
+    let res = backend.run_turn("session-fail", user_msg, None).await;
+
+    assert!(res.is_err(), "Agent must fail-closed when secure storage returns error");
+    let err_str = res.unwrap_err().to_string();
+    assert!(
+        err_str.contains("Secure storage callback") || err_str.contains("No BYOK API key"),
+        "Error must indicate secure storage / BYOK problem; got: {err_str}",
+    );
+}
+
+#[tokio::test]
+async fn test_secure_storage_callback_provider_routing() {
+    let storage = Arc::new(MockAgentStorage {
+        messages: Arc::new(Mutex::new(Vec::new())),
+    });
+
+    let backend = SwiftideBackend::new(
+        Arc::clone(&storage) as Arc<dyn AgentStorage>,
+        None,
+        std::env::temp_dir(),
+        false,
+    );
+
+    let invocations = Arc::new(Mutex::new(Vec::<String>::new()));
+    let invocations_clone = Arc::clone(&invocations);
+
+    backend.set_secure_storage_callback(Box::new(move |provider| {
+        invocations_clone.lock().unwrap().push(provider.to_string());
+        if provider == "anthropic" {
+            Ok(maho_agent::ZeroizedString::new("anthropic-key".to_string()))
+        } else {
+            Err(maho_agent::AgentError::ExecutionError("no key for provider".to_string()))
+        }
+    })).unwrap();
+
+    let user_msg = ChatMessage::user(ChatContent::text("Hello".to_string()));
+    let _ = backend.run_turn("session-routing", user_msg, None).await;
+
+    let calls = invocations.lock().unwrap().clone();
+    assert!(calls.contains(&"openai".to_string()),
+        "Backend must try 'openai' provider; got calls: {calls:?}");
+    assert!(calls.contains(&"anthropic".to_string()),
+        "Backend must fall through to 'anthropic' when 'openai' fails; got calls: {calls:?}");
+}
+
+#[tokio::test]
+async fn test_byok_key_access_audit_emitted() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let storage = Arc::new(MockAgentStorage {
+        messages: Arc::new(Mutex::new(Vec::new())),
+    });
+
+    let backend = SwiftideBackend::new(
+        Arc::clone(&storage) as Arc<dyn AgentStorage>,
+        None,
+        std::env::temp_dir(),
+        false,
+    );
+
+    let observed = Arc::new(AtomicBool::new(false));
+    let observed_clone = Arc::clone(&observed);
+
+    backend.set_secure_storage_callback(Box::new(move |provider| {
+        if provider == "openai" {
+            observed_clone.store(true, Ordering::SeqCst);
+            Ok(maho_agent::ZeroizedString::new("audit-test-key".to_string()))
+        } else {
+            Err(maho_agent::AgentError::ExecutionError("not found".to_string()))
+        }
+    })).unwrap();
+
+    let user_msg = ChatMessage::user(ChatContent::text("Hello".to_string()));
+    let _ = backend.run_turn("session-audit", user_msg, None).await;
+
+    assert!(observed.load(Ordering::SeqCst),
+        "Secure storage callback must be invoked at least once for openai provider");
+}

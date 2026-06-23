@@ -77,6 +77,11 @@ pub struct MutexAgentStorage(pub std::sync::Arc<std::sync::Mutex<maho_storage::s
 #[async_trait]
 impl AgentStorage for MutexAgentStorage {
     async fn get_byok_key(&self, provider: &str) -> Result<Option<ZeroizedString>, AgentError> {
+        tracing::info!(
+            target = "maho_agent::audit",
+            event = "byok_key_access",
+            provider = %provider,
+        );
         let storage = std::sync::Arc::clone(&self.0);
         let provider = provider.to_string();
         let key_opt = tokio::task::spawn_blocking(move || {
@@ -184,4 +189,63 @@ impl AgentRuntime for MockAgentRuntime {
     ) -> Result<(), AgentError> {
         Ok(())
     }
+}
+
+pub fn init_audit_logging() {
+    static INIT: std::sync::Once = std::sync::Once::new();
+    INIT.call_once(|| {
+        use tracing_subscriber::{prelude::*, EnvFilter};
+        use std::fs::{create_dir_all, OpenOptions};
+        use std::path::PathBuf;
+
+        let mut paths: Vec<PathBuf> = Vec::new();
+
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+                paths.push(PathBuf::from(local_app_data).join("Maho").join("Logs").join("audit.json"));
+            }
+            if let Ok(temp) = std::env::var("TEMP") {
+                paths.push(PathBuf::from(temp).join("maho_audit.json"));
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(home) = std::env::var("HOME") {
+                paths.push(PathBuf::from(&home).join("Library").join("Logs").join("Maho").join("audit.json"));
+            }
+            paths.push(PathBuf::from("/var/log/maho/audit.json"));
+            paths.push(PathBuf::from("/tmp/maho_audit.json"));
+        }
+
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            if let Ok(xdg_state) = std::env::var("XDG_STATE_HOME") {
+                paths.push(PathBuf::from(xdg_state).join("maho").join("audit.json"));
+            } else if let Ok(home) = std::env::var("HOME") {
+                paths.push(PathBuf::from(&home).join(".local").join("state").join("maho").join("audit.json"));
+            }
+            paths.push(PathBuf::from("/var/log/maho/audit.json"));
+            paths.push(PathBuf::from("/tmp/maho_audit.json"));
+        }
+
+        for path in paths {
+            if let Some(parent) = path.parent() {
+                let _ = create_dir_all(parent);
+            }
+            if let Ok(file) = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+            {
+                let audit_layer = tracing_subscriber::fmt::layer()
+                    .json()
+                    .with_writer(file)
+                    .with_filter(EnvFilter::new("maho_agent::audit=info"));
+                let _ = tracing_subscriber::registry().with(audit_layer).try_init();
+                break;
+            }
+        }
+    });
 }

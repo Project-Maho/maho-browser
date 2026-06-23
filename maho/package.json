@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "typecheck": "python3 scripts/build_lock.py -- cargo check --workspace --all-targets",
-    "test": "python3 scripts/build_lock.py -- cargo test --workspace --all-targets"
+    "test": "python3 scripts/build_lock.py -- cargo test --workspace --all-targets",
+    "security-audit": "cargo audit --ignore RUSTSEC-2026-0041 --ignore RUSTSEC-2026-0104 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099 && bun audit --cwd maho-webui && bun audit --cwd web-ai && bun audit --cwd ../mail && bun audit --cwd ../website"
   }
 }

@@ -525,6 +525,7 @@ source_set("maho_unified_agent_adapter") {
     "//maho/browser/ui/webui/maho_ai:mojo_bindings",
     "//maho/third_party/maho:maho_ffi_headers",
     "//services/network/public/cpp",
+    "//third_party/crashpad/crashpad/client",
   ]
 }
 

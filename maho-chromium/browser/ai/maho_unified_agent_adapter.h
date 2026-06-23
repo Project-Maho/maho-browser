@@ -16,6 +16,10 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
 #include "maho/browser/ai/maho_ai_runtime_adapter.h"
+#include "components/os_crypt/async/common/encryptor.h"
+#include "maho/third_party/maho/maho_ffi.h"
+
+
 
 struct MahoAcpHandle;
 class PrefService;
@@ -71,11 +75,13 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
     // effect on the next session.
     std::string encrypted_byok_openai_b64;
     std::string encrypted_byok_anthropic_b64;
+    std::shared_ptr<os_crypt_async::Encryptor> encryptor;
   };
 
-  static int OnAgentPermission(void* user_data,
-                               const char* tool_name,
-                               const char* arguments);
+
+  static MahoAgentPermissionDecision OnAgentPermission(void* user_data,
+                                                        const char* tool_name,
+                                                        const char* arguments);
   static MahoAgentSecureKey OnAgentSecureStorage(void* user_data,
                                                   const char* provider);
 
@@ -104,12 +110,16 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
   // ffi_user_data_ is created and intentionally leaked at destruction
   // (~16 bytes) because pending Rust-side callbacks may still dereference
   // it. A future enhancement can free this via a Rust-side free_fn.
-  std::weak_ptr<FfiUserData>* user_data_handle_ = nullptr;
+  RAW_PTR_EXCLUSION std::weak_ptr<FfiUserData>* user_data_handle_ = nullptr;
+
 
   std::string session_id_;
   std::string accumulated_text_;
   RuntimeEventCallback current_on_event_;
   std::string pending_message_;
+
+  std::shared_ptr<os_crypt_async::Encryptor> encryptor_;
+  void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
 
   base::WeakPtrFactory<MahoUnifiedAgentAdapter> weak_factory_{this};
 };
