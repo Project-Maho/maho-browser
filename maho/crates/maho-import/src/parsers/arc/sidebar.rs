@@ -19,16 +19,26 @@ pub struct ArcParseResult {
     pub workspaces: Vec<ParsedWorkspace>,
 }
 
-pub fn parse_arc_sidebar(arc_user_data_dir: &Path) -> ImportResult<ArcParseResult> {
-    let sidebar_path = arc_user_data_dir.join("StorableSidebar.json");
-
-    let content = std::fs::read_to_string(&sidebar_path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            ImportError::FileNotFound(sidebar_path.display().to_string())
-        } else {
-            ImportError::Io(format!("{}: {}", sidebar_path.display(), e))
+fn resolve_sidebar_path(start: &Path) -> ImportResult<std::path::PathBuf> {
+    let mut candidate = Some(start.to_path_buf());
+    let mut tried: Vec<String> = Vec::new();
+    for _ in 0..4 {
+        let Some(dir) = candidate else { break };
+        let file = dir.join("StorableSidebar.json");
+        if file.exists() {
+            return Ok(file);
         }
-    })?;
+        tried.push(file.display().to_string());
+        candidate = dir.parent().map(|p| p.to_path_buf());
+    }
+    Err(ImportError::FileNotFound(tried.join(" | ")))
+}
+
+pub fn parse_arc_sidebar(arc_user_data_dir: &Path) -> ImportResult<ArcParseResult> {
+    let sidebar_path = resolve_sidebar_path(arc_user_data_dir)?;
+
+    let content = std::fs::read_to_string(&sidebar_path)
+        .map_err(|e| ImportError::Io(format!("{}: {}", sidebar_path.display(), e)))?;
 
     if content.is_empty() {
         return Ok(ArcParseResult::default());
@@ -124,7 +134,14 @@ pub fn parse_arc_sidebar(arc_user_data_dir: &Path) -> ImportResult<ArcParseResul
 
                 if let Some(item) = find_item_by_id(&all_items, target_uuid) {
                     if let Some(children) = find_children_ids(item) {
-                        parse_items_into_workspace(&mut ws, &all_items, children, is_pinned);
+                        parse_items_into_workspace(
+                            &mut ws,
+                            &all_items,
+                            children,
+                            is_pinned,
+                            None,
+                            &mut std::collections::HashSet::new(),
+                        );
                     }
                 }
             }
@@ -178,11 +195,15 @@ fn is_tab_item(item: &serde_json::Map<String, Value>) -> bool {
         .is_some()
 }
 
+/// A "real" user-visible folder has `data.list`. Items with `data.itemContainer`
+/// are space-level root containers (pinned/unpinned roots), not user folders —
+/// they have null titles and exist as structural roots only. Treating them as
+/// folders pollutes LMDB with empty-named placeholder folders.
 fn is_folder_item(item: &serde_json::Map<String, Value>) -> bool {
-    let Some(data) = item.get("data").and_then(|v| v.as_object()) else {
-        return false;
-    };
-    data.get("list").is_some() || data.get("itemContainer").is_some()
+    item.get("data")
+        .and_then(|v| v.as_object())
+        .and_then(|d| d.get("list"))
+        .is_some()
 }
 
 fn extract_tab_url(item: &serde_json::Map<String, Value>) -> String {
@@ -208,10 +229,16 @@ fn extract_tab_title(item: &serde_json::Map<String, Value>) -> String {
 }
 
 fn extract_item_title(item: &serde_json::Map<String, Value>) -> String {
-    item.get("title")
+    let raw = item
+        .get("title")
         .and_then(|v| v.as_str())
         .unwrap_or("")
-        .to_string()
+        .trim();
+    if raw.is_empty() {
+        "Untitled".to_string()
+    } else {
+        raw.to_string()
+    }
 }
 
 fn find_item_by_id<'a>(
@@ -234,6 +261,8 @@ fn parse_items_into_workspace(
     all_items: &[&serde_json::Map<String, Value>],
     container_ids: &[Value],
     is_pinned_section: bool,
+    current_folder_id: Option<&str>,
+    visited: &mut std::collections::HashSet<String>,
 ) {
     let mut i = 1;
     while i < container_ids.len() {
@@ -241,40 +270,69 @@ fn parse_items_into_workspace(
             i += 2;
             continue;
         };
+        i += 2;
 
-        if let Some(item) = find_item_by_id(all_items, item_id) {
-            if is_tab_item(item) {
-                let url = extract_tab_url(item);
-                if !url.is_empty() {
-                    if let Ok(parsed) = url::Url::parse(&url) {
-                        let scheme = parsed.scheme();
-                        if scheme == "http" || scheme == "https" {
-                            let tab = ParsedTab {
-                                url,
-                                title: extract_tab_title(item),
-                                is_pinned: is_pinned_section,
-                                is_essential: false,
-                            };
-                            if is_pinned_section {
-                                ws.pinned_tabs.push(tab);
-                            } else {
-                                ws.regular_tabs.push(tab);
-                            }
-                        }
-                    }
-                }
-            } else if is_folder_item(item) {
-                ws.folders.push(ParsedFolder {
-                    id: item_id.to_string(),
-                    name: extract_item_title(item),
-                    parent_id: String::new(),
-                    workspace_id: ws.uuid.clone(),
-                    tabs: Vec::new(),
-                });
-            }
+        if !visited.insert(item_id.to_string()) {
+            continue;
         }
 
-        i += 2;
+        let Some(item) = find_item_by_id(all_items, item_id) else {
+            continue;
+        };
+
+        if is_tab_item(item) {
+            let url = extract_tab_url(item);
+            if url.is_empty() {
+                continue;
+            }
+            let Ok(parsed) = url::Url::parse(&url) else {
+                continue;
+            };
+            let scheme = parsed.scheme();
+            if scheme != "http" && scheme != "https" {
+                continue;
+            }
+            let tab = ParsedTab {
+                url,
+                title: extract_tab_title(item),
+                is_pinned: is_pinned_section,
+                is_essential: false,
+            };
+            match current_folder_id {
+                Some(fid) => {
+                    if let Some(folder) = ws.folders.iter_mut().find(|f| f.id == fid) {
+                        folder.tabs.push(tab);
+                    }
+                }
+                None => {
+                    if is_pinned_section {
+                        ws.pinned_tabs.push(tab);
+                    } else {
+                        ws.regular_tabs.push(tab);
+                    }
+                }
+            }
+        } else if is_folder_item(item) {
+            let folder_id = item_id.to_string();
+            ws.folders.push(ParsedFolder {
+                id: folder_id.clone(),
+                name: extract_item_title(item),
+                parent_id: current_folder_id.map(String::from).unwrap_or_default(),
+                workspace_id: ws.uuid.clone(),
+                tabs: Vec::new(),
+            });
+
+            if let Some(children) = find_children_ids(item) {
+                parse_items_into_workspace(
+                    ws,
+                    all_items,
+                    children,
+                    is_pinned_section,
+                    Some(&folder_id),
+                    visited,
+                );
+            }
+        }
     }
 }
 
@@ -418,5 +476,173 @@ mod tests {
         let res = parse_arc_sidebar(&tmp).unwrap();
         assert_eq!(res.workspaces.len(), 1);
         assert!(res.workspaces[0].pinned_tabs.is_empty());
+    }
+
+    fn write_fixture(name: &str, fixture: serde_json::Value) -> std::path::PathBuf {
+        let tmp = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(
+            tmp.join("StorableSidebar.json"),
+            serde_json::to_string(&fixture).unwrap(),
+        )
+        .unwrap();
+        tmp
+    }
+
+    #[test]
+    fn tabs_inside_folder_are_nested_not_flat() {
+        let fixture = serde_json::json!({
+            "sidebar": {
+                "containers": [
+                    {},
+                    {
+                        "spaces": [
+                            "u",
+                            { "title": "S", "containerIDs": ["pinned", "root"] }
+                        ],
+                        "items": [
+                            "u",
+                            { "id": "root", "data": { "list": {} }, "childrenIds": ["u", "folder-a", "u", "loose-tab"] },
+                            "u",
+                            { "id": "folder-a", "title": "Bookmarks",
+                              "data": { "list": {} },
+                              "childrenIds": ["u", "tab-in-folder"] },
+                            "u",
+                            { "id": "tab-in-folder",
+                              "data": { "tab": { "savedURL": "https://nested.example.com", "savedTitle": "Nested" } } },
+                            "u",
+                            { "id": "loose-tab",
+                              "data": { "tab": { "savedURL": "https://loose.example.com", "savedTitle": "Loose" } } }
+                        ]
+                    }
+                ]
+            }
+        });
+        let tmp = write_fixture("maho-import-test-arc-nested-tab", fixture);
+        let res = parse_arc_sidebar(&tmp).unwrap();
+        let ws = &res.workspaces[0];
+        assert_eq!(ws.folders.len(), 1);
+        assert_eq!(ws.folders[0].name, "Bookmarks");
+        assert_eq!(ws.folders[0].tabs.len(), 1);
+        assert_eq!(ws.folders[0].tabs[0].url, "https://nested.example.com");
+        assert_eq!(ws.pinned_tabs.len(), 1);
+        assert_eq!(ws.pinned_tabs[0].url, "https://loose.example.com");
+    }
+
+    #[test]
+    fn nested_folder_has_parent_id() {
+        let fixture = serde_json::json!({
+            "sidebar": {
+                "containers": [
+                    {},
+                    {
+                        "spaces": [
+                            "u",
+                            { "title": "S", "containerIDs": ["pinned", "root"] }
+                        ],
+                        "items": [
+                            "u", { "id": "root", "data": { "list": {} }, "childrenIds": ["u", "outer"] },
+                            "u", { "id": "outer", "title": "Outer",
+                                   "data": { "list": {} },
+                                   "childrenIds": ["u", "inner"] },
+                            "u", { "id": "inner", "title": "Inner",
+                                   "data": { "list": {} },
+                                   "childrenIds": [] }
+                        ]
+                    }
+                ]
+            }
+        });
+        let tmp = write_fixture("maho-import-test-arc-nested-folder", fixture);
+        let res = parse_arc_sidebar(&tmp).unwrap();
+        let ws = &res.workspaces[0];
+        assert_eq!(ws.folders.len(), 2);
+        let outer = ws.folders.iter().find(|f| f.name == "Outer").unwrap();
+        let inner = ws.folders.iter().find(|f| f.name == "Inner").unwrap();
+        assert!(outer.parent_id.is_empty(), "outer should be root-level");
+        assert_eq!(inner.parent_id, outer.id, "inner parent_id should be outer's id");
+    }
+
+    #[test]
+    fn item_container_is_not_classified_as_folder() {
+        let fixture = serde_json::json!({
+            "sidebar": {
+                "containers": [
+                    {},
+                    {
+                        "spaces": [
+                            "u",
+                            { "title": "S", "containerIDs": ["pinned", "root"] }
+                        ],
+                        "items": [
+                            "u",
+                            { "id": "root", "data": { "list": {} }, "childrenIds": ["u", "structural"] },
+                            "u",
+                            { "id": "structural", "title": null,
+                              "data": { "itemContainer": { "containerType": { "spaceItems": { "_0": "space-xyz" } } } },
+                              "childrenIds": [] }
+                        ]
+                    }
+                ]
+            }
+        });
+        let tmp = write_fixture("maho-import-test-arc-itemcontainer", fixture);
+        let res = parse_arc_sidebar(&tmp).unwrap();
+        let ws = &res.workspaces[0];
+        assert!(ws.folders.is_empty(), "itemContainer must not become a folder");
+    }
+
+    #[test]
+    fn folder_with_empty_title_falls_back_to_untitled() {
+        let fixture = serde_json::json!({
+            "sidebar": {
+                "containers": [
+                    {},
+                    {
+                        "spaces": [
+                            "u",
+                            { "title": "S", "containerIDs": ["pinned", "root"] }
+                        ],
+                        "items": [
+                            "u", { "id": "root", "data": { "list": {} }, "childrenIds": ["u", "blank"] },
+                            "u", { "id": "blank", "title": "   ", "data": { "list": {} }, "childrenIds": [] }
+                        ]
+                    }
+                ]
+            }
+        });
+        let tmp = write_fixture("maho-import-test-arc-blank-title", fixture);
+        let res = parse_arc_sidebar(&tmp).unwrap();
+        assert_eq!(res.workspaces[0].folders[0].name, "Untitled");
+    }
+
+    #[test]
+    fn cycle_in_children_does_not_infinite_loop() {
+        let fixture = serde_json::json!({
+            "sidebar": {
+                "containers": [
+                    {},
+                    {
+                        "spaces": [
+                            "u",
+                            { "title": "S", "containerIDs": ["pinned", "root"] }
+                        ],
+                        "items": [
+                            "u", { "id": "root", "data": { "list": {} }, "childrenIds": ["u", "a"] },
+                            "u", { "id": "a", "title": "A",
+                                   "data": { "list": {} },
+                                   "childrenIds": ["u", "b"] },
+                            "u", { "id": "b", "title": "B",
+                                   "data": { "list": {} },
+                                   "childrenIds": ["u", "a"] }
+                        ]
+                    }
+                ]
+            }
+        });
+        let tmp = write_fixture("maho-import-test-arc-cycle", fixture);
+        let res = parse_arc_sidebar(&tmp).unwrap();
+        assert_eq!(res.workspaces[0].folders.len(), 2);
     }
 }

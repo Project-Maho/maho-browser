@@ -1,45 +1,17 @@
 //! FFI surface for browser data import.
 //!
-//! Phase 1 exposes one parser per browser source. The C++ orchestrator owns
-//! the import flow and calls these to get parsed JSON, which it then feeds
-//! into existing C++ workers (`importers/*_importer.cc`).
+//! Phase 2 surface (post-cleanup): 5 functions
+//! - `maho_import_detect_browsers` — enumerate installed browsers
+//! - `maho_import_orchestrator_start` — kick off the async import session
+//! - `maho_import_orchestrator_cancel` — cooperative cancel
+//! - `maho_import_orchestrator_free` — free session handle after terminal callback
+//! - `maho_import_string_free` — free strings returned by detect_browsers
 
 use std::ffi::{c_char, CStr, CString};
-use std::path::PathBuf;
 use std::ptr;
-
-use maho_import::parsers::arc::sidebar::parse_arc_sidebar;
-use maho_import::parsers::chromium::autofill::parse_chromium_autofill;
-use maho_import::parsers::chromium::bookmarks::parse_chromium_bookmarks;
-use maho_import::parsers::chromium::cookies::parse_chromium_cookies;
-use maho_import::parsers::chromium::favicons::parse_chromium_favicons;
-use maho_import::parsers::chromium::history::parse_chromium_history;
-use maho_import::parsers::firefox::autofill::parse_firefox_autofill;
-use maho_import::parsers::firefox::bookmarks::parse_firefox_bookmarks;
-use maho_import::parsers::firefox::cookies::parse_firefox_cookies;
-use maho_import::parsers::firefox::history::parse_firefox_history;
-use maho_import::parsers::safari::bookmarks::parse_safari_bookmarks;
-use maho_import::parsers::safari::history::parse_safari_history;
-use maho_import::parsers::zen::workspaces::parse_zen_workspaces;
 
 use maho_import::detect::detect_installed_browsers;
 
-// ─── View types for serialization ───────────────────────────────────────────
-
-#[derive(serde::Serialize)]
-struct ArcParseResultView {
-    workspaces: Vec<maho_import::ParsedWorkspace>,
-}
-
-#[derive(serde::Serialize)]
-struct ZenParseResultView {
-    active_workspace_uuid: String,
-    workspaces: Vec<maho_import::ParsedWorkspace>,
-}
-
-// ─── Helper ─────────────────────────────────────────────────────────────────
-
-/// Serialize a value to JSON and return as a raw C string, or null on failure.
 fn to_json_cstring<T: serde::Serialize>(val: &T) -> *mut c_char {
     match serde_json::to_string(val) {
         Ok(json) => CString::new(json)
@@ -49,404 +21,301 @@ fn to_json_cstring<T: serde::Serialize>(val: &T) -> *mut c_char {
     }
 }
 
-/// Extract a `&Path` from a nullable C string, returning None on null/bad UTF-8.
-unsafe fn path_from_c(ptr: *const c_char) -> Option<PathBuf> {
-    if ptr.is_null() {
-        return None;
-    }
-    CStr::from_ptr(ptr).to_str().ok().map(PathBuf::from)
-}
-
-// ─── Arc ────────────────────────────────────────────────────────────────────
-
-/// Parse Arc sidebar at `<arc_user_data_dir>/StorableSidebar.json`.
-/// Returns a JSON string `{"workspaces":[...]}` on success, NULL on error.
-/// Caller MUST free the returned string with `maho_import_string_free`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_import_parse_arc(
-    arc_user_data_dir: *const c_char,
-) -> *mut c_char {
-    let path = match path_from_c(arc_user_data_dir) {
-        Some(p) => p,
-        None => return ptr::null_mut(),
-    };
-    let result = match parse_arc_sidebar(&path) {
-        Ok(r) => r,
-        Err(_) => return ptr::null_mut(),
-    };
-    let view = ArcParseResultView {
-        workspaces: result.workspaces,
-    };
-    to_json_cstring(&view)
-}
-
-// ─── Chromium parsers ───────────────────────────────────────────────────────
-
-/// Parse Chromium history from a profile directory.
-/// Returns JSON array of `[{"url","title","visit_time","visit_count"},...]`.
-/// Caller MUST free with `maho_import_string_free`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_import_parse_chromium_history(
-    profile_dir: *const c_char,
-) -> *mut c_char {
-    let path = match path_from_c(profile_dir) {
-        Some(p) => p,
-        None => return ptr::null_mut(),
-    };
-    match parse_chromium_history(&path) {
-        Ok(entries) => to_json_cstring(&entries),
-        Err(_) => ptr::null_mut(),
-    }
-}
-
-/// Parse Chromium bookmarks from a profile directory.
-/// Returns JSON array of bookmark tree nodes.
-/// Caller MUST free with `maho_import_string_free`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_import_parse_chromium_bookmarks(
-    profile_dir: *const c_char,
-) -> *mut c_char {
-    let path = match path_from_c(profile_dir) {
-        Some(p) => p,
-        None => return ptr::null_mut(),
-    };
-    match parse_chromium_bookmarks(&path) {
-        Ok(entries) => to_json_cstring(&entries),
-        Err(_) => ptr::null_mut(),
-    }
-}
-
-/// Parse Chromium autofill data from a profile directory.
-/// Returns JSON array of `[{"field_name","value","times_used","first_used","last_used"},...]`.
-/// Caller MUST free with `maho_import_string_free`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_import_parse_chromium_autofill(
-    profile_dir: *const c_char,
-) -> *mut c_char {
-    let path = match path_from_c(profile_dir) {
-        Some(p) => p,
-        None => return ptr::null_mut(),
-    };
-    match parse_chromium_autofill(&path) {
-        Ok(entries) => to_json_cstring(&entries),
-        Err(_) => ptr::null_mut(),
-    }
-}
-
-/// Parse Chromium cookies from a profile directory.
-/// Returns JSON array of ChromiumCookieEntry objects.
-/// Caller MUST free with `maho_import_string_free`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_import_parse_chromium_cookies(
-    profile_dir: *const c_char,
-) -> *mut c_char {
-    let path = match path_from_c(profile_dir) {
-        Some(p) => p,
-        None => return ptr::null_mut(),
-    };
-    match parse_chromium_cookies(&path) {
-        Ok(entries) => to_json_cstring(&entries),
-        Err(_) => ptr::null_mut(),
-    }
-}
-
-/// Parse Chromium favicons from a profile directory.
-/// Returns JSON array of `[{"favicon_url","page_urls","image_data"},...]`.
-/// Note: `image_data` is a JSON array of bytes.
-/// Caller MUST free with `maho_import_string_free`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_import_parse_chromium_favicons(
-    profile_dir: *const c_char,
-) -> *mut c_char {
-    let path = match path_from_c(profile_dir) {
-        Some(p) => p,
-        None => return ptr::null_mut(),
-    };
-    match parse_chromium_favicons(&path) {
-        Ok(entries) => to_json_cstring(&entries),
-        Err(_) => ptr::null_mut(),
-    }
-}
-
-// ─── Firefox parsers ────────────────────────────────────────────────────────
-
-/// Parse Firefox bookmarks from a profile directory (reads places.sqlite).
-/// Returns JSON array of bookmark tree nodes.
-/// Caller MUST free with `maho_import_string_free`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_import_parse_firefox_bookmarks(
-    profile_dir: *const c_char,
-) -> *mut c_char {
-    let path = match path_from_c(profile_dir) {
-        Some(p) => p,
-        None => return ptr::null_mut(),
-    };
-    match parse_firefox_bookmarks(&path) {
-        Ok(entries) => to_json_cstring(&entries),
-        Err(_) => ptr::null_mut(),
-    }
-}
-
-/// Parse Firefox history from a profile directory (reads places.sqlite).
-/// Returns JSON array of `[{"url","title","visit_time","visit_count"},...]`.
-/// Caller MUST free with `maho_import_string_free`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_import_parse_firefox_history(
-    profile_dir: *const c_char,
-) -> *mut c_char {
-    let path = match path_from_c(profile_dir) {
-        Some(p) => p,
-        None => return ptr::null_mut(),
-    };
-    match parse_firefox_history(&path) {
-        Ok(entries) => to_json_cstring(&entries),
-        Err(_) => ptr::null_mut(),
-    }
-}
-
-/// Parse Firefox cookies from a profile directory (reads cookies.sqlite).
-/// Returns JSON array of `[{"host","name","value","path","expires","is_secure","is_httponly","same_site"},...]`.
-/// Caller MUST free with `maho_import_string_free`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_import_parse_firefox_cookies(
-    profile_dir: *const c_char,
-) -> *mut c_char {
-    let path = match path_from_c(profile_dir) {
-        Some(p) => p,
-        None => return ptr::null_mut(),
-    };
-    match parse_firefox_cookies(&path) {
-        Ok(entries) => to_json_cstring(&entries),
-        Err(_) => ptr::null_mut(),
-    }
-}
-
-/// Parse Firefox autofill from a profile directory (reads formhistory.sqlite).
-/// Returns JSON array of `[{"field_name","value","times_used","first_used","last_used"},...]`.
-/// Caller MUST free with `maho_import_string_free`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_import_parse_firefox_autofill(
-    profile_dir: *const c_char,
-) -> *mut c_char {
-    let path = match path_from_c(profile_dir) {
-        Some(p) => p,
-        None => return ptr::null_mut(),
-    };
-    match parse_firefox_autofill(&path) {
-        Ok(entries) => to_json_cstring(&entries),
-        Err(_) => ptr::null_mut(),
-    }
-}
-
-// ─── Safari parsers ─────────────────────────────────────────────────────────
-
-/// Parse Safari bookmarks from the Safari data directory.
-/// Returns JSON array of bookmark tree nodes.
-/// Caller MUST free with `maho_import_string_free`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_import_parse_safari_bookmarks(
-    safari_dir: *const c_char,
-) -> *mut c_char {
-    let path = match path_from_c(safari_dir) {
-        Some(p) => p,
-        None => return ptr::null_mut(),
-    };
-    match parse_safari_bookmarks(&path) {
-        Ok(entries) => to_json_cstring(&entries),
-        Err(_) => ptr::null_mut(),
-    }
-}
-
-/// Parse Safari history from the Safari data directory.
-/// Returns JSON array of `[{"url","title","visit_time","visit_count"},...]`.
-/// Caller MUST free with `maho_import_string_free`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_import_parse_safari_history(
-    safari_dir: *const c_char,
-) -> *mut c_char {
-    let path = match path_from_c(safari_dir) {
-        Some(p) => p,
-        None => return ptr::null_mut(),
-    };
-    match parse_safari_history(&path) {
-        Ok(entries) => to_json_cstring(&entries),
-        Err(_) => ptr::null_mut(),
-    }
-}
-
-// ─── Zen parser ─────────────────────────────────────────────────────────────
-
-/// Parse Zen workspaces from a Zen profile directory.
-/// Returns JSON `{"active_workspace_uuid":"...","workspaces":[...]}`.
-/// Caller MUST free with `maho_import_string_free`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_import_parse_zen_workspaces(
-    profile_dir: *const c_char,
-) -> *mut c_char {
-    let path = match path_from_c(profile_dir) {
-        Some(p) => p,
-        None => return ptr::null_mut(),
-    };
-    match parse_zen_workspaces(&path) {
-        Ok(result) => {
-            let view = ZenParseResultView {
-                active_workspace_uuid: result.active_workspace_uuid,
-                workspaces: result.workspaces,
-            };
-            to_json_cstring(&view)
-        }
-        Err(_) => ptr::null_mut(),
-    }
-}
-
-// ─── Browser detector ───────────────────────────────────────────────────────
-
-/// Detect installed browsers on the system.
-/// Returns JSON array of `[{"browser_type","display_name","profile_path","services_supported","requires_full_disk_access"},...]`.
-/// Caller MUST free with `maho_import_string_free`.
+/// Detect installed browsers on the system. Returns a JSON array; caller MUST
+/// free the returned string via `maho_import_string_free`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_import_detect_browsers() -> *mut c_char {
     let browsers = detect_installed_browsers();
     to_json_cstring(&browsers)
 }
 
-// ─── Phase 3: Password parsers ──────────────────────────────────────────────
-
-/// FFI-safe serialization wrapper for [`maho_import::PasswordEntry`].
-///
-/// SAFETY: This struct deliberately includes the plaintext password field for
-/// the FFI boundary. The C++ side consumes the buffer immediately and passes
-/// passwords directly to maho-core's password store — never logged or persisted
-/// to disk in plaintext form.
-#[derive(serde::Serialize)]
-struct PasswordEntryFfi {
-    origin_url: String,
-    action_url: String,
-    username: String,
-    password: String,
-}
-
-impl From<maho_import::PasswordEntry> for PasswordEntryFfi {
-    fn from(e: maho_import::PasswordEntry) -> Self {
-        Self {
-            origin_url: e.origin_url,
-            action_url: e.action_url,
-            username: e.username,
-            password: e.password,
-        }
-    }
-}
-
-/// Parse Chromium passwords from a profile directory.
-///
-/// `profile_dir` must contain `Login Data` SQLite database.
-/// `keychain_service` is the macOS Keychain service name (e.g. "Chrome Safe Storage").
-/// `keychain_account` is the macOS Keychain account name (e.g. "Chrome").
-///
-/// Returns JSON `[{origin_url, action_url, username, password}, ...]` on success,
-/// NULL on failure (e.g. Keychain access denied, database not found).
-/// Caller MUST free the returned string with `maho_import_string_free`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_import_parse_chromium_passwords(
-    profile_dir: *const c_char,
-    keychain_service: *const c_char,
-    keychain_account: *const c_char,
-) -> *mut c_char {
-    if profile_dir.is_null() || keychain_service.is_null() || keychain_account.is_null() {
-        return ptr::null_mut();
-    }
-
-    let dir_str = match CStr::from_ptr(profile_dir).to_str() {
-        Ok(s) => s,
-        Err(_) => return ptr::null_mut(),
-    };
-    let service_str = match CStr::from_ptr(keychain_service).to_str() {
-        Ok(s) => s,
-        Err(_) => return ptr::null_mut(),
-    };
-    let account_str = match CStr::from_ptr(keychain_account).to_str() {
-        Ok(s) => s,
-        Err(_) => return ptr::null_mut(),
-    };
-
-    let path = PathBuf::from(dir_str);
-
-    // Fetch the Keychain password and derive the AES-128 key.
-    #[cfg(target_os = "macos")]
-    let key = {
-        use maho_import::decrypt::chromium_keychain::{fetch_and_derive_key, MacOsKeychain};
-        let keychain = MacOsKeychain;
-        match fetch_and_derive_key(&keychain, service_str, account_str) {
-            Ok(k) => k,
-            Err(_) => return ptr::null_mut(),
-        }
-    };
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        // Password import from Chromium Keychain is macOS-only.
-        let _ = (path, service_str, account_str);
-        return ptr::null_mut();
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let entries = match maho_import::parsers::chromium::passwords::parse_chromium_passwords(
-            &path, &key,
-        ) {
-            Ok(e) => e,
-            Err(_) => return ptr::null_mut(),
-        };
-
-        let ffi_entries: Vec<PasswordEntryFfi> = entries.into_iter().map(Into::into).collect();
-        to_json_cstring(&ffi_entries)
-    }
-}
-
-/// Parse Firefox passwords from a profile directory.
-///
-/// `profile_dir` must contain `key4.db` and `logins.json`.
-/// `master_password` is the user's master password (empty string if none set).
-///
-/// Returns JSON `[{origin_url, action_url, username, password}, ...]` on success,
-/// NULL on failure (wrong master password, missing files, etc.).
-/// Caller MUST free the returned string with `maho_import_string_free`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_import_parse_firefox_passwords(
-    profile_dir: *const c_char,
-    master_password: *const c_char,
-) -> *mut c_char {
-    if profile_dir.is_null() || master_password.is_null() {
-        return ptr::null_mut();
-    }
-
-    let dir_str = match CStr::from_ptr(profile_dir).to_str() {
-        Ok(s) => s,
-        Err(_) => return ptr::null_mut(),
-    };
-    let pw_str = match CStr::from_ptr(master_password).to_str() {
-        Ok(s) => s,
-        Err(_) => return ptr::null_mut(),
-    };
-
-    let path = PathBuf::from(dir_str);
-
-    let entries =
-        match maho_import::parsers::firefox::passwords::parse_firefox_passwords(&path, pw_str) {
-            Ok(e) => e,
-            Err(_) => return ptr::null_mut(),
-        };
-
-    let ffi_entries: Vec<PasswordEntryFfi> = entries.into_iter().map(Into::into).collect();
-    to_json_cstring(&ffi_entries)
-}
-
-// ─── String free ────────────────────────────────────────────────────────────
-
-/// Free a string returned by `maho_import_parse_*` or `maho_import_detect_*`.
+/// Free a string returned by `maho_import_detect_browsers`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_import_string_free(s: *mut c_char) {
     if !s.is_null() {
         drop(CString::from_raw(s));
+    }
+}
+
+use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::sync::Arc;
+use std::thread;
+
+use maho_core::maho_core::MahoCore;
+use maho_import::orchestrator::{ImportProgress, ImportType, Orchestrator, IMPORT_ESSENTIAL_BIT};
+use maho_import::{DetectedBrowser, ImportServices};
+
+use crate::import_destination::MahoCoreDestination;
+
+/// Opaque handle for an in-flight import session. Created by
+/// `maho_import_orchestrator_start`, freed by `maho_import_orchestrator_free`.
+/// The caller MUST call `free` after receiving the terminal callback
+/// (`AllComplete` or `Error`).
+pub struct MahoImportSession {
+    cancel_token: Arc<AtomicBool>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+/// Progress callback type invoked from the import background thread.
+///
+/// Parameters:
+///  - `kind`:  0=Starting, 1=Update, 2=TypeComplete, 3=AllComplete, 4=Error
+///  - `import_type`: bitmask bit identifying the import type
+///       (1=History, 2=Bookmarks, 4=Passwords, 8=Autofill, 16=Cookies, 32=Workspaces, 64=Favicons, 128=Essential)
+///  - `count`: item count (for Update/TypeComplete) or 0
+///  - `message`: null-terminated status message or NULL
+///  - `user_data`: opaque pointer passed back unchanged
+///
+/// SAFETY: callback must be safe to invoke from a non-main thread. `message`
+/// pointer is only valid for the duration of the callback call. The caller is
+/// responsible for keeping `user_data` valid until the terminal event fires.
+pub type MahoImportProgressCallback = unsafe extern "C" fn(
+    kind: u32,
+    import_type: u32,
+    count: i32,
+    message: *const c_char,
+    user_data: *mut c_void,
+);
+
+pub type MahoImportCookieCallback = unsafe extern "C" fn(
+    host: *const c_char,
+    name: *const c_char,
+    value: *const c_char,
+    path: *const c_char,
+    expires: i64,
+    is_secure: bool,
+    is_httponly: bool,
+    same_site: i32,
+    user_data: *mut c_void,
+);
+
+pub type MahoImportAutofillCallback = unsafe extern "C" fn(
+    field_name: *const c_char,
+    value: *const c_char,
+    times_used: i32,
+    first_used: i64,
+    last_used: i64,
+    user_data: *mut c_void,
+);
+
+pub type MahoImportFaviconCallback = unsafe extern "C" fn(
+    url: *const c_char,
+    png_bytes: *const u8,
+    png_len: usize,
+    user_data: *mut c_void,
+);
+
+/// Start an import orchestrator session on a background thread.
+///
+/// # Parameters
+/// - `core_ptr`: valid `MahoCore*` (from `maho_core_new_with_storage`). Must
+///   remain valid and unaccessed by other threads until the terminal callback.
+/// - `browser_json`: JSON-serialized `DetectedBrowser` entry.
+/// - `items_bitmask`: which import types to run (OR of `ImportServices` bits).
+/// - `essentials_json`: JSON array of URL strings for essential import, or NULL.
+/// - `callback`: progress callback invoked from the background thread.
+/// - `cookie_cb`: callback invoked when a cookie is imported.
+/// - `autofill_cb`: callback invoked when an autofill entry is imported.
+/// - `favicon_cb`: callback invoked when a favicon is imported.
+/// - `user_data`: opaque pointer forwarded to callback.
+///
+/// # Safety
+/// All pointer parameters (except `user_data`) must be valid for the duration
+/// of this call. `core_ptr` must remain valid until the terminal callback fires.
+#[no_mangle]
+pub unsafe extern "C" fn maho_import_orchestrator_start(
+    core_ptr: *mut MahoCore,
+    browser_json: *const c_char,
+    items_bitmask: u32,
+    essentials_json: *const c_char,
+    callback: MahoImportProgressCallback,
+    cookie_cb: Option<MahoImportCookieCallback>,
+    autofill_cb: Option<MahoImportAutofillCallback>,
+    favicon_cb: Option<MahoImportFaviconCallback>,
+    user_data: *mut c_void,
+) -> *mut MahoImportSession {
+    if core_ptr.is_null() || browser_json.is_null() {
+        return ptr::null_mut();
+    }
+
+    let browser_str = match CStr::from_ptr(browser_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let browser: DetectedBrowser = match serde_json::from_str(browser_str) {
+        Ok(b) => b,
+        Err(_) => return ptr::null_mut(),
+    };
+
+    let essentials: Vec<String> = if essentials_json.is_null() {
+        Vec::new()
+    } else {
+        match CStr::from_ptr(essentials_json).to_str() {
+            Ok(s) => serde_json::from_str(s).unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
+    };
+
+    let destination = Arc::new(MahoCoreDestination::new_with_callbacks(
+        core_ptr,
+        cookie_cb,
+        autofill_cb,
+        favicon_cb,
+        user_data,
+    ));
+    let cancel_token = Arc::new(AtomicBool::new(false));
+    let cancel_clone = cancel_token.clone();
+    let ctx = CallbackContext { callback, user_data };
+
+    let handle = thread::Builder::new()
+        .name("maho-import-orchestrator".into())
+        .spawn(move || {
+            let mut orchestrator = Orchestrator::new(destination);
+            if !essentials.is_empty() {
+                orchestrator.set_selected_essentials(essentials);
+            }
+            let orchestrator = Arc::new(orchestrator);
+            let orchestrator_worker = orchestrator.clone();
+
+            let (tx, rx) = mpsc::channel();
+            let browser_for_worker = browser.clone();
+
+            let worker = thread::Builder::new()
+                .name("maho-import-worker".into())
+                .spawn(move || {
+                    let _ = orchestrator_worker.start_import(&browser_for_worker, items_bitmask, tx);
+                })
+                .ok();
+
+            loop {
+                if cancel_clone.load(Ordering::SeqCst) {
+                    orchestrator.cancel();
+                    ctx.invoke(3, 0, 0, ptr::null());
+                    break;
+                }
+                match rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                    Ok(progress) => {
+                        ctx.forward_progress(&progress);
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        // Loop again to check cancellation
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        // Drain remaining events and exit
+                        for progress in rx.try_iter() {
+                            ctx.forward_progress(&progress);
+                        }
+                        break;
+                    }
+                }
+            }
+
+            if let Some(h) = worker {
+                let _ = h.join();
+            }
+        })
+        .ok();
+
+    match handle {
+        Some(h) => {
+            let session = Box::new(MahoImportSession {
+                cancel_token,
+                thread: Some(h),
+            });
+            Box::into_raw(session)
+        }
+        None => ptr::null_mut(),
+    }
+}
+
+/// Cancel an in-flight import. Safe to call from any thread. The cancellation
+/// is cooperative — the orchestrator checks the flag between import types.
+///
+/// # Safety
+/// `handle` must be a valid pointer returned by `maho_import_orchestrator_start`,
+/// or NULL (no-op).
+#[no_mangle]
+pub unsafe extern "C" fn maho_import_orchestrator_cancel(handle: *mut MahoImportSession) {
+    if handle.is_null() {
+        return;
+    }
+    let session = &*handle;
+    session.cancel_token.store(true, Ordering::SeqCst);
+}
+
+/// Free the import session handle. MUST be called after the terminal callback
+/// (`AllComplete` or `Error`) has fired. Blocks until the background thread
+/// finishes (should be near-instant after terminal event).
+///
+/// # Safety
+/// `handle` must be a valid pointer returned by `maho_import_orchestrator_start`,
+/// or NULL (no-op). Must not be called more than once per handle.
+#[no_mangle]
+pub unsafe extern "C" fn maho_import_orchestrator_free(handle: *mut MahoImportSession) {
+    if handle.is_null() {
+        return;
+    }
+    let mut session = Box::from_raw(handle);
+    if let Some(thread) = session.thread.take() {
+        let _ = thread.join();
+    }
+}
+
+struct CallbackContext {
+    callback: MahoImportProgressCallback,
+    user_data: *mut c_void,
+}
+
+// SAFETY: caller guarantees `user_data` validity until the terminal event.
+// Function pointers are trivially thread-safe.
+unsafe impl Send for CallbackContext {}
+
+impl CallbackContext {
+    fn invoke(&self, kind: u32, import_type: u32, count: i32, message: *const c_char) {
+        unsafe {
+            (self.callback)(kind, import_type, count, message, self.user_data);
+        }
+    }
+
+    fn forward_progress(&self, progress: &ImportProgress) {
+        match progress {
+            ImportProgress::Starting { import_type } => {
+                self.invoke(0, import_type_to_bit(*import_type), 0, ptr::null());
+            }
+            ImportProgress::Update {
+                import_type,
+                imported,
+                status,
+            } => {
+                let msg = CString::new(status.as_str()).ok();
+                let msg_ptr = msg.as_ref().map(|m| m.as_ptr()).unwrap_or(ptr::null());
+                self.invoke(1, import_type_to_bit(*import_type), *imported as i32, msg_ptr);
+            }
+            ImportProgress::TypeComplete { import_type, count } => {
+                self.invoke(2, import_type_to_bit(*import_type), *count as i32, ptr::null());
+            }
+            ImportProgress::AllComplete => {
+                self.invoke(3, 0, 0, ptr::null());
+            }
+            ImportProgress::Error { message } => {
+                let msg = CString::new(message.as_str()).ok();
+                let msg_ptr = msg.as_ref().map(|m| m.as_ptr()).unwrap_or(ptr::null());
+                self.invoke(4, 0, 0, msg_ptr);
+            }
+        }
+    }
+}
+
+fn import_type_to_bit(t: ImportType) -> u32 {
+    match t {
+        ImportType::History => ImportServices::HISTORY,
+        ImportType::Bookmarks => ImportServices::BOOKMARKS,
+        ImportType::Cookies => ImportServices::COOKIES,
+        ImportType::Autofill => ImportServices::AUTOFILL,
+        ImportType::Favicons => ImportServices::FAVICONS,
+        ImportType::Workspaces => ImportServices::WORKSPACES,
+        ImportType::Essential => IMPORT_ESSENTIAL_BIT,
     }
 }

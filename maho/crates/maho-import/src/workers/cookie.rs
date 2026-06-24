@@ -1,11 +1,11 @@
 //! Cookie import worker.
 //!
-//! Ports `importers/cookie_importer.cc`. Reads cookies from the source browser
-//! and writes them to the destination.
+//! Reads cookies from the source browser and writes them to the destination.
 //!
-//! NOTE: Chromium cookies with encrypted values are imported with their plaintext
-//! `value` field (populated only if the cookie was unencrypted/`v10` decryptable).
-//! Full Keychain decrypt support is Phase 3.
+//! For Chromium-derived browsers, v10-encrypted cookies are transparently
+//! decrypted via macOS Keychain (`<Browser> Safe Storage` entry). v20 cookies
+//! (Chrome 117+ App-Bound Encryption) are skipped — they require an extra
+//! Win32 DPAPI hop / per-app entitlement that is out of scope here.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
@@ -13,11 +13,30 @@ use std::sync::Arc;
 
 use crate::orchestrator::{ImportDestination, ImportProgress, ImportType};
 use crate::parsers;
+use crate::parsers::chromium::cookies::EncryptionVersion;
 use crate::{BrowserType, DetectedBrowser, ImportResult};
+
+#[cfg(target_os = "macos")]
+use crate::decrypt::chromium_keychain::{
+    decrypt_cookie_v10, fetch_and_derive_key, ChromiumKey, MacOsKeychain,
+};
 
 use super::{is_cancelled, send_update, ImportWorker};
 
 pub struct CookieWorker;
+
+#[cfg(target_os = "macos")]
+fn keychain_service_account(browser_type: BrowserType) -> Option<(&'static str, &'static str)> {
+    match browser_type {
+        BrowserType::Chrome => Some(("Chrome Safe Storage", "Chrome")),
+        BrowserType::Brave => Some(("Brave Safe Storage", "Brave")),
+        BrowserType::Arc => Some(("Arc Safe Storage", "Arc")),
+        BrowserType::Edge => Some(("Microsoft Edge Safe Storage", "Microsoft Edge")),
+        BrowserType::Vivaldi => Some(("Vivaldi Safe Storage", "Vivaldi")),
+        BrowserType::Opera => Some(("Opera Safe Storage", "Opera")),
+        _ => None,
+    }
+}
 
 impl ImportWorker for CookieWorker {
     fn run(
@@ -27,7 +46,6 @@ impl ImportWorker for CookieWorker {
         cancelled: &Arc<AtomicBool>,
         progress: &Sender<ImportProgress>,
     ) -> ImportResult<u32> {
-        // Safari cookies not supported (matches C++ behavior).
         if browser.browser_type == BrowserType::Safari {
             return Ok(0);
         }
@@ -72,18 +90,46 @@ impl ImportWorker for CookieWorker {
             | BrowserType::Vivaldi
             | BrowserType::Opera => {
                 let entries = parsers::chromium::cookies::parse_chromium_cookies(profile_dir)?;
+
+                #[cfg(target_os = "macos")]
+                let decryption_key: Option<ChromiumKey> = keychain_service_account(browser.browser_type)
+                    .and_then(|(service, account)| {
+                        fetch_and_derive_key(&MacOsKeychain, service, account).ok()
+                    });
+
                 for entry in &entries {
                     if is_cancelled(cancelled) {
                         break;
                     }
                     let c = &entry.cookie;
-                    if c.value.is_empty() || c.host.is_empty() {
+                    if c.host.is_empty() {
                         continue;
                     }
+
+                    let decrypted_value: Option<String> = if !c.value.is_empty() {
+                        Some(c.value.clone())
+                    } else if entry.encryption_version == EncryptionVersion::V10
+                        && !entry.encrypted_value.is_empty()
+                    {
+                        #[cfg(target_os = "macos")]
+                        {
+                            decryption_key
+                                .as_ref()
+                                .and_then(|key| decrypt_cookie_v10(&entry.encrypted_value, key).ok())
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    let Some(value) = decrypted_value else { continue };
                     destination.add_cookie(
                         &c.host,
                         &c.name,
-                        &c.value,
+                        &value,
                         &c.path,
                         c.expires,
                         c.is_secure,

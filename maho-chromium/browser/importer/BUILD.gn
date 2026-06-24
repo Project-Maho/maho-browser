@@ -2,132 +2,52 @@
 
 source_set("importer") {
   sources = [
-    "arc_sidebar_parser.cc",
-    "arc_sidebar_parser.h",
-    "chromium_autofill_parser.cc",
-    "chromium_autofill_parser.h",
-    "chromium_bookmark_parser.cc",
-    "chromium_bookmark_parser.h",
-    "chromium_history_parser.cc",
-    "chromium_history_parser.h",
-    "chromium_password_parser.cc",
-    "chromium_password_parser.h",
-    "cookie_parser.cc",
-    "cookie_parser.h",
-    "oscrypt_key_provider.cc",
-    "oscrypt_key_provider.h",
-    "favicon_parser.cc",
-    "favicon_parser.h",
-    "firefox_history_parser.cc",
-    "firefox_history_parser.h",
-    "firefox_password_parser.cc",
-    "firefox_password_parser.h",
-    "firefox_places_parser.cc",
-    "firefox_places_parser.h",
-    "maho_bookmark_importer.cc",
-    "maho_bookmark_importer.h",
+    "importers/essential_importer.cc",
+    "importers/essential_importer.h",
     "maho_browser_detector.cc",
     "maho_browser_detector.h",
     "maho_import_session_bridge.cc",
     "maho_import_session_bridge.h",
-    "mozlz4_decompressor.cc",
-    "mozlz4_decompressor.h",
-    "nss_decrypt_helper.cc",
-    "nss_decrypt_helper.h",
-    "safari_bookmark_parser.cc",
-    "safari_bookmark_parser.h",
-    "zen_workspaces_parser.cc",
-    "zen_workspaces_parser.h",
     "maho_space_ffi_client.cc",
     "maho_space_ffi_client.h",
-    "importers/essential_importer.cc",
-    "importers/essential_importer.h",
     "../ui/views/importer/maho_migration_dialog_view.cc",
     "../ui/views/importer/maho_migration_dialog_view.h",
   ]
 
   public_deps = [
     "//base",
-    "//components/autofill/core/common",
-    "//components/bookmarks/browser",
-    "//components/favicon_base",
-    "//components/password_manager/core/browser",
     "//maho/components/maho_importer:maho_importer_mojo_bindings",
     "//url",
   ]
 
   deps = [
-    "//chrome/browser/bookmarks",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/favicon",
+    "//chrome/browser/webdata_services",
+    "//components/autofill/core/browser",
+    "//components/autofill/core/common",
+    "//components/favicon/core",
+    "//components/favicon_base",
     "//content/public/browser",
     "//maho/browser:maho_core_holder",
     "//maho/browser:maho_space_profile_bridge",
     "//maho/third_party/maho:maho_bridge",
     "//maho/third_party/maho:maho_ffi_headers",
-    "//sql",
+    "//net",
     "//ui/views",
     "//ui/base",
-  ]
-
-  if (is_mac) {
-    frameworks = [
-      "CoreFoundation.framework",
-      "Security.framework",
-    ]
-  }
-}
-
-action("importer_test_gate") {
-  script = "test_data/verify_golden.py"
-  
-  inputs = [
-    "test_data/golden_hashes.json",
-    "test_data/synthetic/nss_3des_cbc.bin",
-    "test_data/synthetic/nss_aes256_cbc_sha256.bin",
-    "test_data/synthetic/nss_aes256_cbc_sha384.bin",
-    "test_data/synthetic/nss_aes256_gcm.bin",
-    "test_data/synthetic/oscrypt_v10.bin",
-    "test_data/synthetic/cookie_v10_prefix.bin",
-    "test_data/synthetic/cookie_v20_prefix.bin",
-  ]
-  
-  stamp_file = "$target_gen_dir/importer_test_gate.stamp"
-  outputs = [ stamp_file ]
-  
-  args = [
-    "--stamp",
-    rebase_path(stamp_file, root_build_dir),
-    "--synthetic-dir",
-    rebase_path("test_data/synthetic", root_build_dir),
-    "--hashes-file",
-    rebase_path("test_data/golden_hashes.json", root_build_dir),
+    "//ui/gfx/codec",
   ]
 }
 
 source_set("unit_tests") {
   testonly = true
   sources = [
-    "arc_sidebar_parser_unittest.cc",
-    "chromium_autofill_parser_unittest.cc",
-    "chromium_history_parser_unittest.cc",
-    "chromium_password_parser_unittest.cc",
-    "cookie_parser_unittest.cc",
-    "favicon_parser_unittest.cc",
-    "firefox_history_parser_unittest.cc",
-    "firefox_password_parser_unittest.cc",
-    "maho_bookmark_importer_unittest.cc",
-    "maho_browser_detector_unittest.cc",
-    "maho_space_ffi_client_unittest.cc",
-    "mozlz4_decompressor_unittest.cc",
-    "nss_decrypt_helper_unittest.cc",
-    "safari_bookmark_parser_unittest.cc",
-    "zen_workspaces_parser_unittest.cc",
     "../ui/views/importer/maho_migration_dialog_unittest.cc",
   ]
-  
+
   deps = [
     ":importer",
-    ":importer_test_gate",
     "//base",
     "//base/test:test_support",
     "//testing/gtest",

@@ -54,8 +54,14 @@ pub fn parse_firefox_autofill(profile_dir: &Path) -> ImportResult<Vec<AutofillEn
 }
 
 fn open_readonly(path: &Path) -> ImportResult<Connection> {
-    Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
-        .map_err(|e| ImportError::Io(format!("{}: {e}", path.display())))
+    let uri = format!("file:{}?immutable=1", path.display());
+    Connection::open_with_flags(
+        &uri,
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_URI,
+    )
+    .map_err(|e| ImportError::Io(format!("{}: {e}", path.display())))
 }
 
 fn table_exists(conn: &Connection, table: &str) -> bool {

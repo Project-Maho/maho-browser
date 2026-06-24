@@ -12,6 +12,7 @@
 #include "base/task/sequenced_task_runner.h"
 #include "maho/third_party/maho/maho_ffi.h"
 
+class Profile;
 class MahoWelcomePageHandler;
 
 namespace maho {
@@ -39,12 +40,14 @@ class MahoImportSessionBridge {
   // Legacy constructor for MahoWelcomePageHandler.
   MahoImportSessionBridge(
       base::WeakPtr<MahoWelcomePageHandler> handler,
-      scoped_refptr<base::SequencedTaskRunner> ui_task_runner);
+      scoped_refptr<base::SequencedTaskRunner> ui_task_runner,
+      Profile* profile);
 
   // Generic constructor — |progress_callback| is invoked on |ui_task_runner|.
   MahoImportSessionBridge(
       ProgressCallback progress_callback,
-      scoped_refptr<base::SequencedTaskRunner> ui_task_runner);
+      scoped_refptr<base::SequencedTaskRunner> ui_task_runner,
+      Profile* profile);
 
   ~MahoImportSessionBridge();
 
@@ -72,19 +75,61 @@ class MahoImportSessionBridge {
                          const char* message,
                          void* user_data);
 
+  static void OnCookieFromRust(const char* host,
+                               const char* name,
+                               const char* value,
+                               const char* path,
+                               int64_t expires,
+                               bool is_secure,
+                               bool is_httponly,
+                               int32_t same_site,
+                               void* user_data);
+
+  static void OnAutofillFromRust(const char* field_name,
+                                 const char* value,
+                                 int32_t times_used,
+                                 int64_t first_used,
+                                 int64_t last_used,
+                                 void* user_data);
+
+  static void OnFaviconFromRust(const char* url,
+                                const uint8_t* png_bytes,
+                                size_t png_len,
+                                void* user_data);
+
   // UI-thread handler for progress events.
   void HandleProgressOnUI(uint32_t kind,
                           uint32_t import_type,
                           int32_t count,
                           std::string message);
 
+  void HandleCookie(std::string host,
+                    std::string name,
+                    std::string value,
+                    std::string path,
+                    int64_t expires,
+                    bool is_secure,
+                    bool is_httponly,
+                    int32_t same_site);
+
+  void HandleAutofill(std::u16string field_name,
+                      std::u16string value,
+                      int32_t times_used,
+                      int64_t first_used,
+                      int64_t last_used);
+
+  void HandleFavicon(std::string url,
+                     std::vector<uint8_t> png_bytes);
+
   // Legacy handler (mode 1). Null when using generic callback.
   base::WeakPtr<MahoWelcomePageHandler> handler_;
   // Generic progress callback (mode 2). Null when using legacy handler.
   ProgressCallback progress_callback_;
   scoped_refptr<base::SequencedTaskRunner> ui_task_runner_;
+  raw_ptr<Profile> profile_ = nullptr;
   RAW_PTR_EXCLUSION MahoImportSession* session_ = nullptr;
   bool terminated_ = false;
+  base::WeakPtrFactory<MahoImportSessionBridge> weak_factory_{this};
 };
 
 }  // namespace maho

@@ -378,6 +378,70 @@ mod tests {
     }
 
     #[test]
+    fn test_mid_import_cancellation_terminates_early() {
+        use std::sync::atomic::AtomicU32;
+        use std::time::{Duration, Instant};
+
+        struct SlowDestination {
+            history_calls: AtomicU32,
+            sleep_per_call: Duration,
+        }
+        impl ImportDestination for SlowDestination {
+            fn create_space(&self, _: &str, _: &str, _: &str) -> Option<String> { Some("s".into()) }
+            fn create_tab(&self, _: &str, _: &str) -> Option<String> { Some("t".into()) }
+            fn create_tab_in_folder(&self, _: &str, _: &str, _: &str) -> Option<String> { Some("t".into()) }
+            fn create_folder(&self, _: &str, _: &str, _: &str) -> Option<String> { Some("f".into()) }
+            fn pin_tab(&self, _: &str) {}
+            fn favorite_tab(&self, _: &str) {}
+            fn activate_space(&self, _: &str) {}
+            fn get_active_space_id(&self) -> Option<String> { None }
+            fn add_bookmark(&self, _: &str, _: &str, _: &[String]) -> Option<String> { None }
+            fn add_history(&self, _: &str, _: &str, _: f64, _: u32) -> bool {
+                self.history_calls.fetch_add(1, Ordering::SeqCst);
+                std::thread::sleep(self.sleep_per_call);
+                true
+            }
+            fn add_cookie(&self, _: &str, _: &str, _: &str, _: &str, _: i64, _: bool, _: bool, _: i32) -> bool { false }
+            fn add_autofill(&self, _: &str, _: &str, _: i32, _: i64, _: i64) -> bool { false }
+            fn add_favicon(&self, _: &str, _: &[u8]) -> bool { false }
+        }
+
+        let dest = Arc::new(SlowDestination {
+            history_calls: AtomicU32::new(0),
+            sleep_per_call: Duration::from_millis(50),
+        });
+        let dest_ref = dest.clone();
+        let orch = Arc::new(Orchestrator::new(dest));
+        let orch_for_thread = orch.clone();
+        let orch_for_cancel = orch.clone();
+
+        let (tx, rx) = mpsc::channel();
+        let browser = make_browser(BrowserType::Chrome, ImportServices::HISTORY);
+
+        let import_start = Instant::now();
+
+        let worker = std::thread::spawn(move || {
+            orch_for_thread.start_import(&browser, ImportServices::HISTORY, tx)
+        });
+
+        std::thread::sleep(Duration::from_millis(200));
+        orch_for_cancel.cancel();
+
+        let _ = worker.join().expect("worker thread completes");
+        let elapsed = import_start.elapsed();
+
+        let msgs: Vec<_> = rx.try_iter().collect();
+
+        assert!(elapsed < Duration::from_secs(5),
+                "cancel should terminate quickly, took {:?}", elapsed);
+        let calls = dest_ref.history_calls.load(Ordering::SeqCst);
+        assert!(calls < 1000,
+                "mid-import cancel should stop history additions early, got {} calls", calls);
+        assert_eq!(msgs.last(), Some(&ImportProgress::AllComplete),
+                   "orchestrator must always emit AllComplete (INV-7), even on cancel");
+    }
+
+    #[test]
     fn test_inv7_only_orchestrator_sends_all_complete() {
         let dest = Arc::new(MockDestination::new());
         let orch = Orchestrator::new(dest);

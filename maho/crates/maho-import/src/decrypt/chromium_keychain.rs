@@ -159,6 +159,39 @@ pub fn decrypt_v10(ciphertext: &[u8], key: &ChromiumKey) -> Result<String, Decry
     String::from_utf8(decrypted.to_vec()).map_err(|_| DecryptError::InvalidUtf8)
 }
 
+/// Decrypts a v10-prefixed Chromium **cookie** blob.
+///
+/// Cookies (unlike passwords) include a 32-byte SHA-256 prefix of the
+/// canonical eTLD+1 to bind the cookie to its origin domain (Chrome 80+
+/// "encrypted_value" format). This function strips that prefix before
+/// returning the plaintext value.
+///
+/// For pre-Chrome-80 cookies (no SHA-256 binding) the function falls back to
+/// returning the full plaintext if it parses as UTF-8 without the strip.
+pub fn decrypt_cookie_v10(ciphertext: &[u8], key: &ChromiumKey) -> Result<String, DecryptError> {
+    if ciphertext.len() < 3 {
+        return Err(DecryptError::MissingPrefix);
+    }
+    if &ciphertext[..3] != V10_PREFIX {
+        return Err(DecryptError::MissingPrefix);
+    }
+    let encrypted = &ciphertext[3..];
+    if encrypted.is_empty() || encrypted.len() % AES_BLOCK_SIZE != 0 {
+        return Err(DecryptError::InvalidLength);
+    }
+    let mut buf = Zeroizing::new(encrypted.to_vec());
+    let decrypted = Aes128CbcDec::new(key.0.as_ref().into(), &IV.into())
+        .decrypt_padded_mut::<Pkcs7>(&mut buf)
+        .map_err(|_| DecryptError::InvalidPadding)?;
+
+    if decrypted.len() >= 32 {
+        if let Ok(s) = std::str::from_utf8(&decrypted[32..]) {
+            return Ok(s.to_string());
+        }
+    }
+    String::from_utf8(decrypted.to_vec()).map_err(|_| DecryptError::InvalidUtf8)
+}
+
 // ---------- Convenience: fetch + derive ----------
 
 /// Fetches the Keychain password for a browser and derives the AES key.

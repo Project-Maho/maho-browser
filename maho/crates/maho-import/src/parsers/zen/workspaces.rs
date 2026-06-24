@@ -86,14 +86,14 @@ pub fn parse_zen_workspaces(profile_dir: &Path) -> ImportResult<ZenParseResult> 
             continue;
         };
 
-        let user_context_id = match space_dict.get("userContextId") {
-            Some(Value::Number(n)) => n.as_i64().unwrap_or(0) as i32,
-            _ => continue,
-        };
-
-        if user_context_id <= 0 {
-            continue;
-        }
+        let user_context_id = space_dict
+            .get("userContextId")
+            .or_else(|| space_dict.get("containerTabId"))
+            .and_then(|v| match v {
+                Value::Number(n) => n.as_i64(),
+                _ => None,
+            })
+            .unwrap_or(0) as i32;
 
         let icon = space_dict
             .get("icon")
@@ -537,5 +537,41 @@ mod tests {
 
         let result = parse_zen_workspaces(tmp.path()).unwrap();
         assert!(result.workspaces[0].folders.is_empty());
+    }
+
+    #[test]
+    fn preserves_up_to_5_level_folder_nesting_and_rejects_deeper() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let json = serde_json::json!({
+            "spaces": [{"uuid": "ws-1", "name": "S", "userContextId": 1}],
+            "tabs": [],
+            "folders": [
+                {"id": "l0", "name": "Root",  "workspaceId": "ws-1", "parentId": ""},
+                {"id": "l1", "name": "L1",    "workspaceId": "ws-1", "parentId": "l0"},
+                {"id": "l2", "name": "L2",    "workspaceId": "ws-1", "parentId": "l1"},
+                {"id": "l3", "name": "L3",    "workspaceId": "ws-1", "parentId": "l2"},
+                {"id": "l4", "name": "L4",    "workspaceId": "ws-1", "parentId": "l3"},
+                {"id": "l5", "name": "TooDeep","workspaceId": "ws-1", "parentId": "l4"}
+            ]
+        });
+
+        let data = make_mozlz4(&serde_json::to_string(&json).unwrap());
+        std::fs::write(tmp.path().join("zen-sessions.jsonlz4"), &data).unwrap();
+
+        let result = parse_zen_workspaces(tmp.path()).unwrap();
+        let names: Vec<_> = result.workspaces[0]
+            .folders
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        assert!(names.contains(&"Root"));
+        assert!(names.contains(&"L1"));
+        assert!(names.contains(&"L2"));
+        assert!(names.contains(&"L3"));
+        assert!(names.contains(&"L4"));
+        assert!(!names.contains(&"TooDeep"),
+                "folders nested >5 ancestors deep must be rejected, got {:?}", names);
+        assert_eq!(result.workspaces[0].folders.len(), 5);
     }
 }

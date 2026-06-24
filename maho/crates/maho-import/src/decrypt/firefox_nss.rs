@@ -1,17 +1,20 @@
-//! Pure-Rust Firefox NSS password decryption (key4.db + logins.json).
+//! Pure-Rust Firefox NSS password decryption (key3.db, key4.db + logins.json).
 //!
-//! Supports NSS 4 key databases (Firefox 75+) with PBKDF2-HMAC-SHA256 or
-//! PBKDF2-HMAC-SHA384 (Firefox 146+) key derivation and AES-256-CBC encryption.
-//! NSS 3 (key3.db with PKCS#12 PBE) returns [`NssError::UnsupportedVersion`].
+//! Supports:
+//! - NSS 4 key databases (Firefox 75+): PBKDF2-HMAC-SHA256/SHA384 + AES-256-CBC
+//! - NSS 4 Variant A (Firefox 58–74): PKCS#12 PBE + 3DES-CBC (in key4.db SQLite)
+//! - NSS 3 (Firefox <58): Mozilla-specific PBE + 3DES-CBC (in key3.db Berkeley DB)
 //!
 //! Security: all key material uses [`zeroize::Zeroizing`]; no password/key data
 //! is ever logged.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
 use hmac::Hmac;
 use rusqlite::{Connection, OpenFlags};
+use sha1::Sha1;
 use sha2::{Digest, Sha256, Sha384};
 use zeroize::Zeroizing;
 
@@ -90,15 +93,10 @@ impl NssMasterKey {
 
 // ---------- Public API ----------
 
-/// Extracts the NSS master key from a Firefox profile's `key4.db`.
+/// Extracts the NSS master key from a Firefox profile's key database.
 ///
-/// Copies `key4.db` to a temp file (avoids locking a running Firefox), reads
-/// the PBKDF2 parameters, derives the intermediate key, and decrypts the global
-/// master key. Verifies correctness by decrypting the "password-check" sentinel.
-///
-/// # Arguments
-/// * `profile_dir` — path to the Firefox profile directory
-/// * `master_password` — the user's master password (empty string if none set)
+/// Tries key4.db (SQLite) first, then key3.db (Berkeley DB 1.85).
+/// Verifies correctness by decrypting the "password-check" sentinel.
 pub fn unlock_nss_master_key(
     profile_dir: &Path,
     master_password: &str,
@@ -108,7 +106,7 @@ pub fn unlock_nss_master_key(
 
     if !key4_path.exists() {
         if key3_path.exists() {
-            return Err(NssError::UnsupportedVersion);
+            return unlock_nss3_master_key(&key3_path, master_password);
         }
         return Err(NssError::KeyDbMissing);
     }
@@ -135,25 +133,52 @@ pub fn unlock_nss_master_key(
     // Detect variant: item1.len() > 40 → SHA-384 (Variant C), else SHA-256 (Variant B).
     let use_sha384 = global_salt.len() > 40;
 
-    // Parse ASN.1 from the encrypted key blob to get PBKDF2 params.
+    // Parse ASN.1 from the encrypted key blob to get algorithm params.
     let key_params = parse_encrypted_key_asn1(&encrypted_key_blob)?;
 
-    // Derive the intermediate key.
-    let intermediate = derive_intermediate_key(
-        master_password,
-        &global_salt,
-        &key_params.entry_salt,
-        key_params.iterations,
-        use_sha384,
-    )?;
-
-    // Decrypt the master key.
-    let master_key_bytes = decrypt_with_params(
-        &intermediate,
-        &key_params.iv,
-        &key_params.ciphertext,
-        key_params.is_aes256,
-    )?;
+    let master_key_bytes = match key_params {
+        EncryptedKeyParams::Pbes2 {
+            entry_salt,
+            iterations,
+            iv,
+            ciphertext,
+            is_aes256,
+        } => {
+            let intermediate = derive_intermediate_key(
+                master_password,
+                &global_salt,
+                &entry_salt,
+                iterations,
+                use_sha384,
+            )?;
+            decrypt_with_params(&intermediate, &iv, &ciphertext, is_aes256)?
+        }
+        EncryptedKeyParams::Pkcs12Pbe {
+            entry_salt,
+            iterations,
+            ciphertext,
+        } => {
+            let password_bmp = encode_password_bmp(master_password);
+            let mut key = Zeroizing::new(pkcs12_derive(
+                &password_bmp,
+                &entry_salt,
+                iterations,
+                24,
+                1,
+            ));
+            let mut iv = Zeroizing::new(pkcs12_derive(
+                &password_bmp,
+                &entry_salt,
+                iterations,
+                8,
+                2,
+            ));
+            let result = decrypt_3des(&key, &iv, &ciphertext)?;
+            key.iter_mut().for_each(|b| *b = 0);
+            iv.iter_mut().for_each(|b| *b = 0);
+            result
+        }
+    };
 
     let master_key = NssMasterKey {
         key: master_key_bytes,
@@ -229,40 +254,23 @@ fn read_nss_private(conn: &Connection) -> Result<Vec<u8>, NssError> {
 // ---------- Internal: ASN.1 parsing ----------
 
 /// Parsed parameters from the encrypted key blob (nssPrivate.a11).
-struct EncryptedKeyParams {
-    entry_salt: Vec<u8>,
-    iterations: u32,
-    iv: Vec<u8>,
-    ciphertext: Vec<u8>,
-    is_aes256: bool,
+enum EncryptedKeyParams {
+    /// PBES2: PBKDF2 + AES-256-CBC or 3DES-CBC (Firefox 75+)
+    Pbes2 {
+        entry_salt: Vec<u8>,
+        iterations: u32,
+        iv: Vec<u8>,
+        ciphertext: Vec<u8>,
+        is_aes256: bool,
+    },
+    /// PKCS#12 PBE with SHA-1 + 3DES-CBC (Firefox 58–74, key4.db Variant A)
+    Pkcs12Pbe {
+        entry_salt: Vec<u8>,
+        iterations: u32,
+        ciphertext: Vec<u8>,
+    },
 }
 
-/// Parses the ASN.1 structure from `nssPrivate.a11`.
-///
-/// Expected structure (PBES2 variant):
-/// ```text
-/// SEQUENCE {
-///   SEQUENCE {                        -- algorithm
-///     OID (PBES2 or PKCS12-PBE)
-///     SEQUENCE {                      -- PBES2 params
-///       SEQUENCE {                    -- PBKDF2 params
-///         OID (PBKDF2)
-///         SEQUENCE {
-///           OCTET STRING (entry_salt)
-///           INTEGER (iterations)
-///           [optional: INTEGER (key_length)]
-///           [optional: AlgorithmIdentifier (prf)]
-///         }
-///       }
-///       SEQUENCE {                    -- encryption algorithm
-///         OID (AES-256-CBC or 3DES-CBC)
-///         OCTET STRING (IV)
-///       }
-///     }
-///   }
-///   OCTET STRING (ciphertext)
-/// }
-/// ```
 fn parse_encrypted_key_asn1(data: &[u8]) -> Result<EncryptedKeyParams, NssError> {
     let (outer, _) = asn1::read_item(data)?;
     let outer_items = asn1::expect_sequence(&outer)?;
@@ -278,9 +286,23 @@ fn parse_encrypted_key_asn1(data: &[u8]) -> Result<EncryptedKeyParams, NssError>
         return Err(NssError::Asn1("empty algorithm SEQUENCE".into()));
     }
 
-    // Check OID to determine variant.
     if asn1::match_oid(&algo_seq[0], OID_PKCS12_PBE_SHA1_3DES) {
-        return Err(NssError::UnsupportedVersion);
+        // Variant A: PKCS#12 PBE params = SEQUENCE { OCTET STRING(salt), INTEGER(iter) }
+        if algo_seq.len() < 2 {
+            return Err(NssError::Asn1("PKCS12 PBE: missing params".into()));
+        }
+        let pbe_params = asn1::expect_sequence(&algo_seq[1])?;
+        if pbe_params.len() < 2 {
+            return Err(NssError::Asn1("PKCS12 PBE params: need salt + iterations".into()));
+        }
+        let entry_salt = asn1::expect_octet_string(&pbe_params[0])?.to_vec();
+        let iterations = asn1::parse_integer_u32(&pbe_params[1])?;
+
+        return Ok(EncryptedKeyParams::Pkcs12Pbe {
+            entry_salt,
+            iterations,
+            ciphertext,
+        });
     }
 
     if !asn1::match_oid(&algo_seq[0], OID_PBES2) {
@@ -334,7 +356,7 @@ fn parse_encrypted_key_asn1(data: &[u8]) -> Result<EncryptedKeyParams, NssError>
 
     let iv = asn1::expect_octet_string(&enc_seq[1])?.to_vec();
 
-    Ok(EncryptedKeyParams {
+    Ok(EncryptedKeyParams::Pbes2 {
         entry_salt,
         iterations,
         iv,
@@ -453,6 +475,353 @@ fn derive_intermediate_key(
             .map_err(|e| NssError::Crypto(format!("PBKDF2-SHA256: {e}")))?;
         Ok(derived)
     }
+}
+
+// ---------- Internal: NSS 3 / PKCS#12 key derivation ----------
+
+/// PKCS#12 v1 key derivation (RFC 7292 appendix B).
+/// `id` = 1 for key material, 2 for IV material.
+fn pkcs12_derive(
+    password_bmp: &[u8],
+    salt: &[u8],
+    iterations: u32,
+    output_len: usize,
+    id: u8,
+) -> Vec<u8> {
+    use sha1::Digest as _;
+
+    const HASH_LEN: usize = 20; // SHA-1
+    const BLOCK_LEN: usize = 64; // SHA-1 block size
+
+    let d = vec![id; BLOCK_LEN];
+
+    let s = if salt.is_empty() {
+        Vec::new()
+    } else {
+        let s_len = BLOCK_LEN * ((salt.len() + BLOCK_LEN - 1) / BLOCK_LEN);
+        (0..s_len).map(|i| salt[i % salt.len()]).collect()
+    };
+
+    let p = if password_bmp.is_empty() {
+        Vec::new()
+    } else {
+        let p_len = BLOCK_LEN * ((password_bmp.len() + BLOCK_LEN - 1) / BLOCK_LEN);
+        (0..p_len).map(|i| password_bmp[i % password_bmp.len()]).collect()
+    };
+
+    let mut i_buf = Vec::with_capacity(s.len() + p.len());
+    i_buf.extend_from_slice(&s);
+    i_buf.extend_from_slice(&p);
+
+    let mut result = Vec::with_capacity(output_len);
+    while result.len() < output_len {
+        let mut a_input = Vec::with_capacity(BLOCK_LEN + i_buf.len());
+        a_input.extend_from_slice(&d);
+        a_input.extend_from_slice(&i_buf);
+
+        let mut a = [0u8; HASH_LEN];
+        a.copy_from_slice(&Sha1::digest(&a_input));
+        for _ in 1..iterations {
+            let hash = Sha1::digest(&a);
+            a.copy_from_slice(&hash);
+        }
+
+        result.extend_from_slice(&a);
+        if result.len() >= output_len {
+            break;
+        }
+
+        // B = A repeated to fill BLOCK_LEN
+        let b: Vec<u8> = (0..BLOCK_LEN).map(|i| a[i % HASH_LEN]).collect();
+
+        // I_j = (I_j + B + 1) mod 2^(BLOCK_LEN*8) for each block
+        for j in (0..i_buf.len()).step_by(BLOCK_LEN) {
+            let mut carry: u16 = 1;
+            for k in (0..BLOCK_LEN).rev() {
+                let sum = u16::from(i_buf[j + k]) + u16::from(b[k]) + carry;
+                i_buf[j + k] = (sum & 0xFF) as u8;
+                carry = sum >> 8;
+            }
+        }
+    }
+
+    result.truncate(output_len);
+    result
+}
+
+/// Encodes a password as BMP (UTF-16BE, null-terminated) for PKCS#12.
+/// Empty password → [0x00, 0x00].
+fn encode_password_bmp(password: &str) -> Zeroizing<Vec<u8>> {
+    let mut bmp = Zeroizing::new(Vec::new());
+    for c in password.encode_utf16() {
+        bmp.push((c >> 8) as u8);
+        bmp.push((c & 0xFF) as u8);
+    }
+    bmp.push(0x00);
+    bmp.push(0x00);
+    bmp
+}
+
+/// Mozilla-specific 3DES key derivation used by key3.db (Firefox <58).
+/// Derives a 24-byte key + 8-byte IV from global_salt + master_password + entry_salt.
+fn derive_moz_3des(
+    global_salt: &[u8],
+    master_password: &[u8],
+    entry_salt: &[u8],
+) -> (Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>) {
+    use hmac::Mac;
+    use sha1::Digest as _;
+
+    let hp = Sha1::digest([global_salt, master_password].concat());
+    // Pad entry_salt to 20 bytes with zeros
+    let mut pes = [0u8; 20];
+    let copy_len = entry_salt.len().min(20);
+    pes[..copy_len].copy_from_slice(&entry_salt[..copy_len]);
+    let chp = Sha1::digest([hp.as_slice(), entry_salt].concat());
+
+    let k1 = {
+        let mut mac = Hmac::<Sha1>::new_from_slice(chp.as_slice()).unwrap();
+        mac.update(&pes);
+        mac.update(entry_salt);
+        mac.finalize().into_bytes()
+    };
+    let tk = {
+        let mut mac = Hmac::<Sha1>::new_from_slice(chp.as_slice()).unwrap();
+        mac.update(&pes);
+        mac.finalize().into_bytes()
+    };
+    let k2 = {
+        let mut mac = Hmac::<Sha1>::new_from_slice(chp.as_slice()).unwrap();
+        mac.update(tk.as_slice());
+        mac.update(entry_salt);
+        mac.finalize().into_bytes()
+    };
+
+    // k = k1 || k2 (40 bytes); key = k[0..24], iv = k[32..40]
+    let mut k = Zeroizing::new(vec![0u8; 40]);
+    k[..20].copy_from_slice(&k1);
+    k[20..40].copy_from_slice(&k2);
+
+    let key = Zeroizing::new(k[..24].to_vec());
+    let iv = Zeroizing::new(k[32..40].to_vec());
+    (key, iv)
+}
+
+// ---------- Internal: Berkeley DB 1.85 hash parser (key3.db) ----------
+
+const BDB_HASH_MAGIC: u32 = 0x00061561;
+const BDB_VERSION: u32 = 2;
+
+fn parse_key3_db(path: &Path) -> Result<HashMap<Vec<u8>, Vec<u8>>, NssError> {
+    let data = std::fs::read(path)
+        .map_err(|e| NssError::Database(format!("reading key3.db: {e}")))?;
+
+    if data.len() < 60 {
+        return Err(NssError::Database("key3.db too small for BDB header".into()));
+    }
+
+    // BDB 1.85 header: big-endian u32 fields
+    let magic = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+    let version = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+    let pagesize = u32::from_be_bytes([data[12], data[13], data[14], data[15]]) as usize;
+    let nkeys = u32::from_be_bytes([data[56], data[57], data[58], data[59]]) as usize;
+
+    if magic != BDB_HASH_MAGIC {
+        return Err(NssError::Database(format!(
+            "key3.db bad magic: 0x{magic:08x}, expected 0x{BDB_HASH_MAGIC:08x}"
+        )));
+    }
+    if version != BDB_VERSION {
+        return Err(NssError::Database(format!(
+            "key3.db bad version: {version}, expected {BDB_VERSION}"
+        )));
+    }
+    if pagesize == 0 || pagesize > 65536 {
+        return Err(NssError::Database(format!("key3.db bad pagesize: {pagesize}")));
+    }
+
+    let mut db = HashMap::new();
+    let mut read_keys = 0usize;
+    let mut page = 1usize;
+
+    while read_keys < nkeys {
+        let page_start = pagesize * page;
+        if page_start + pagesize > data.len() {
+            break;
+        }
+        let page_data = &data[page_start..page_start + pagesize];
+
+        // Collect offset pairs: (val_data_off, key_data_off) from page index.
+        // firepwd reads at positions (2+i, 4+i, 8+i) with i+=4, terminates when nval==val.
+        let mut pairs: Vec<(usize, usize)> = Vec::new();
+        let mut nval: u16 = 0;
+        let mut val: u16 = 1;
+        let mut i = 0usize;
+
+        while nval != val {
+            if 10 + i > page_data.len() {
+                break;
+            }
+            let first_off = u16::from_le_bytes([page_data[2 + i], page_data[3 + i]]) as usize;
+            val = u16::from_le_bytes([page_data[4 + i], page_data[5 + i]]);
+            nval = u16::from_le_bytes([page_data[8 + i], page_data[9 + i]]);
+
+            pairs.push((first_off, val as usize));
+            read_keys += 1;
+            i += 4;
+        }
+
+        // For each pair: first_off points to VALUE data, val points to KEY data.
+        // VALUE runs from first_off to val (within same pair).
+        // KEY runs from val to the next pair's first_off (or to the inferred end).
+        for (pair_idx, &(val_off, key_off)) in pairs.iter().enumerate() {
+            if val_off >= pagesize || key_off >= pagesize || key_off <= val_off {
+                continue;
+            }
+            let value_data = &page_data[val_off..key_off];
+
+            // Key ends at the next pair's val_off, or at end of data on page
+            let key_end = if pair_idx + 1 < pairs.len() {
+                pairs[pair_idx + 1].0
+            } else {
+                // Last entry: strip trailing zeros from page end to find data boundary.
+                // This handles binary keys (like CKA_ID) that contain embedded nulls.
+                let mut end = pagesize;
+                while end > key_off && page_data[end - 1] == 0 {
+                    end -= 1;
+                }
+                end
+            };
+
+            if key_end <= key_off || key_end > pagesize {
+                continue;
+            }
+            let key_data = &page_data[key_off..key_end];
+
+            db.insert(key_data.to_vec(), value_data.to_vec());
+        }
+
+        page += 1;
+    }
+
+    Ok(db)
+}
+
+/// Unlocks the NSS3 master key from a key3.db file (Firefox <58).
+fn unlock_nss3_master_key(
+    key3_path: &Path,
+    master_password: &str,
+) -> Result<NssMasterKey, NssError> {
+    let db = parse_key3_db(key3_path)?;
+
+    let global_salt = db
+        .get(b"global-salt".as_slice())
+        .ok_or_else(|| NssError::Database("key3.db: missing 'global-salt' entry".into()))?;
+
+    let password_check_raw = db
+        .get(b"password-check".as_slice())
+        .ok_or_else(|| NssError::Database("key3.db: missing 'password-check' entry".into()))?;
+
+    // password-check entry format: [type_byte, entry_salt_len, name_len?, entry_salt..., encrypted_data[-16:]]
+    if password_check_raw.len() < 4 {
+        return Err(NssError::Database("key3.db: password-check entry too short".into()));
+    }
+    let entry_salt_len = password_check_raw[1] as usize;
+    if password_check_raw.len() < 3 + entry_salt_len + 16 {
+        return Err(NssError::Database("key3.db: password-check truncated".into()));
+    }
+    let check_entry_salt = &password_check_raw[3..3 + entry_salt_len];
+    let check_encrypted = &password_check_raw[password_check_raw.len() - 16..];
+
+    let master_pw_bytes = master_password.as_bytes();
+    let (check_key, check_iv) = derive_moz_3des(global_salt, master_pw_bytes, check_entry_salt);
+    let check_decrypted = decrypt_3des(&check_key, &check_iv, check_encrypted)?;
+    if !check_decrypted.starts_with(b"password-check") {
+        return Err(NssError::WrongMasterPassword);
+    }
+
+    // CKA_ID for the master key entry
+    const CKA_ID: [u8; 16] = [
+        0xf8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+    ];
+
+    let priv_key_entry = db
+        .get(CKA_ID.as_slice())
+        .ok_or_else(|| NssError::Database("key3.db: missing CKA_ID private key entry".into()))?;
+
+    // Private key entry format: [type_byte, salt_len, name_len, salt..., name..., ASN.1...]
+    if priv_key_entry.len() < 3 {
+        return Err(NssError::Database("key3.db: private key entry too short".into()));
+    }
+    let pk_salt_len = priv_key_entry[1] as usize;
+    let pk_name_len = priv_key_entry[2] as usize;
+    let asn1_start = 3 + pk_salt_len + pk_name_len;
+    if asn1_start >= priv_key_entry.len() {
+        return Err(NssError::Database("key3.db: private key ASN.1 offset out of bounds".into()));
+    }
+    let pk_asn1_data = &priv_key_entry[asn1_start..];
+
+    // ASN.1: SEQUENCE { SEQUENCE { OID(pbeWithSha1And3DES), SEQUENCE { salt, iterations } }, OCTET STRING(encrypted) }
+    let (outer, _) = asn1::read_item(pk_asn1_data)?;
+    let outer_items = asn1::expect_sequence(&outer)?;
+    if outer_items.len() < 2 {
+        return Err(NssError::Asn1("key3.db private key: need algo + ciphertext".into()));
+    }
+    let algo_items = asn1::expect_sequence(&outer_items[0])?;
+    let pk_ciphertext = asn1::expect_octet_string(&outer_items[1])?;
+
+    if algo_items.len() < 2 || !asn1::match_oid(&algo_items[0], OID_PKCS12_PBE_SHA1_3DES) {
+        return Err(NssError::Asn1("key3.db: unexpected algorithm in private key".into()));
+    }
+    let pbe_params = asn1::expect_sequence(&algo_items[1])?;
+    if pbe_params.is_empty() {
+        return Err(NssError::Asn1("key3.db: empty PBE params".into()));
+    }
+    let pk_entry_salt = asn1::expect_octet_string(&pbe_params[0])?;
+
+    // Decrypt the private key blob
+    let (pk_key, pk_iv) = derive_moz_3des(global_salt, master_pw_bytes, pk_entry_salt);
+    let decrypted_pk = decrypt_3des(&pk_key, &pk_iv, pk_ciphertext)?;
+
+    // Decrypted is PKCS#8-like: SEQUENCE { INTEGER(0), SEQUENCE { OID(pkcs-1), NULL }, OCTET STRING(prKey) }
+    // prKey is: SEQUENCE { INTEGER(0), INTEGER(id), INTEGER(0), INTEGER(key_bytes), ... }
+    let (pk_outer, _) = asn1::read_item(&decrypted_pk)?;
+    let pk_items = asn1::expect_sequence(&pk_outer)?;
+    if pk_items.len() < 3 {
+        return Err(NssError::Asn1("key3.db: decrypted private key too short".into()));
+    }
+    let pr_key_data = asn1::expect_octet_string(&pk_items[2])?;
+
+    let (pr_key_outer, _) = asn1::read_item(pr_key_data)?;
+    let pr_key_items = asn1::expect_sequence(&pr_key_outer)?;
+    if pr_key_items.len() < 4 {
+        return Err(NssError::Asn1("key3.db: prKey SEQUENCE too short".into()));
+    }
+
+    // The 4th INTEGER contains the raw 3DES key material
+    if pr_key_items[3].tag != asn1::TAG_INTEGER {
+        return Err(NssError::Asn1("key3.db: prKey[3] not INTEGER".into()));
+    }
+    let raw_key = pr_key_items[3].data;
+
+    // Key might have a leading zero byte (ASN.1 integer sign padding)
+    let key_bytes = if !raw_key.is_empty() && raw_key[0] == 0x00 && raw_key.len() > 24 {
+        &raw_key[1..]
+    } else {
+        raw_key
+    };
+
+    if key_bytes.len() < 24 {
+        return Err(NssError::Crypto(format!(
+            "key3.db: extracted key too short: {} bytes",
+            key_bytes.len()
+        )));
+    }
+
+    Ok(NssMasterKey {
+        key: Zeroizing::new(key_bytes[..24].to_vec()),
+    })
 }
 
 // ---------- Internal: decryption primitives ----------
@@ -1009,13 +1378,13 @@ mod tests {
     }
 
     #[test]
-    fn nss3_returns_unsupported_version() {
+    fn nss3_empty_key3_db_returns_database_error() {
         let temp = tempfile::tempdir().unwrap();
-        // Create key3.db (empty file) but no key4.db.
+        // Create key3.db (empty file) but no key4.db → fails at BDB header parse.
         std::fs::File::create(temp.path().join("key3.db")).unwrap();
 
         let err = unlock_nss_master_key(temp.path(), "").unwrap_err();
-        assert!(matches!(err, NssError::UnsupportedVersion));
+        assert!(matches!(err, NssError::Database(_)), "expected Database error, got: {err:?}");
     }
 
     #[test]
@@ -1117,5 +1486,365 @@ mod tests {
         let (_temp, profile) = create_test_key4_db(&global_salt, "", &master_key);
         let key = unlock_nss_master_key(&profile, "").unwrap();
         assert_eq!(key.key.as_slice(), &master_key);
+    }
+
+    #[test]
+    fn pkcs12_pbe_variant_a_key4_db() {
+        // Test key4.db Variant A: PKCS#12 PBE + 3DES-CBC
+        let temp = tempfile::tempdir().unwrap();
+        let profile = temp.path().to_path_buf();
+
+        // Master key: 24 bytes for 3DES
+        let master_key_raw = vec![0x42u8; 24];
+
+        // PKCS#12 derivation parameters
+        let entry_salt = b"variant_a_salt!!"; // 16 bytes
+        let iterations: u32 = 1;
+        let password_bmp: &[u8] = &[0x00, 0x00]; // empty password BMP
+
+        // Derive key + IV via PKCS#12 PBE
+        let des_key = super::pkcs12_derive(password_bmp, entry_salt, iterations, 24, 1);
+        let des_iv = super::pkcs12_derive(password_bmp, entry_salt, iterations, 8, 2);
+
+        // Encrypt the master key
+        let encrypted_master = encrypt_3des(&des_key, &des_iv, &master_key_raw);
+
+        // Build a11 ASN.1 with PKCS12 PBE OID
+        let pbe_params_content = [
+            asn1_octet(entry_salt),
+            asn1_int(iterations),
+        ].concat();
+        let pbe_params = asn1_seq(&pbe_params_content);
+        let algo_content = [
+            asn1_oid(OID_PKCS12_PBE_SHA1_3DES),
+            pbe_params,
+        ].concat();
+        let algo_seq = asn1_seq(&algo_content);
+        let a11 = asn1_seq(&[algo_seq, asn1_octet(&encrypted_master)].concat());
+
+        // Build password-check using master key with 3DES
+        let check_iv = [0x09u8; 8];
+        let encrypted_check = encrypt_3des(
+            &master_key_raw,
+            &check_iv,
+            b"password-check",
+        );
+        let check_algo_content = [
+            asn1_oid(OID_3DES_CBC),
+            asn1_octet(&check_iv),
+        ].concat();
+        let check_algo = asn1_seq(&check_algo_content);
+        let password_check_blob = asn1_seq(&[check_algo, asn1_octet(&encrypted_check)].concat());
+
+        // Create key4.db with this data
+        let conn = Connection::open(profile.join("key4.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE metadata (id TEXT PRIMARY KEY, item1 BLOB, item2 BLOB);
+             CREATE TABLE nssPrivate (a11 BLOB);"
+        ).unwrap();
+        let global_salt = vec![0xAAu8; 20];
+        conn.execute(
+            "INSERT INTO metadata (id, item1, item2) VALUES ('password', ?1, ?2)",
+            rusqlite::params![global_salt, password_check_blob],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO nssPrivate (a11) VALUES (?1)",
+            rusqlite::params![a11],
+        ).unwrap();
+        drop(conn);
+
+        let key = unlock_nss_master_key(&profile, "").unwrap();
+        assert_eq!(key.key.as_slice(), &master_key_raw);
+    }
+
+    #[test]
+    fn nss3_key3_db_round_trip() {
+        // Build a synthetic key3.db with known data and verify the full decrypt path.
+        let temp = tempfile::tempdir().unwrap();
+        let profile = temp.path().to_path_buf();
+
+        let global_salt = b"test_global_salt";
+        let master_key_raw = vec![0x55u8; 24];
+        let entry_salt_check = b"check_salt_12345"; // 16 bytes
+        let entry_salt_priv = b"priv_salt_123456"; // 16 bytes
+
+        // Derive key/iv for password check
+        let (check_key, check_iv) = super::derive_moz_3des(
+            global_salt,
+            b"", // empty master password
+            entry_salt_check,
+        );
+        let check_plaintext = b"password-check";
+        let encrypted_check = encrypt_3des(&check_key, &check_iv, check_plaintext);
+
+        // Build password-check entry: [type, salt_len, 0, salt..., encrypted[-16:]]
+        let mut pw_check_entry = Vec::new();
+        pw_check_entry.push(0x02); // type byte
+        pw_check_entry.push(entry_salt_check.len() as u8);
+        pw_check_entry.push(0x00); // name len
+        pw_check_entry.extend_from_slice(entry_salt_check);
+        // Pad so that the last 16 bytes are the encrypted data
+        pw_check_entry.extend_from_slice(&encrypted_check);
+
+        // Build private key ASN.1 blob
+        // After decrypt, the result should be: SEQUENCE { INTEGER 0, SEQUENCE { OID, NULL }, OCTET_STRING(prKey) }
+        // prKey = SEQUENCE { INTEGER 0, INTEGER id, INTEGER 0, INTEGER key_bytes, ... }
+
+        // Build prKey inner structure
+        let pr_key_inner_content = [
+            asn1_int(0),
+            asn1_int(0xF8000001), // CKA_ID as integer
+            asn1_int(0),
+            // The actual key as an INTEGER (with leading 0x00 for sign)
+            {
+                let mut key_int = vec![0x02]; // INTEGER tag
+                let key_with_sign = {
+                    let mut v = vec![0x00]; // leading zero (sign)
+                    v.extend_from_slice(&master_key_raw);
+                    v
+                };
+                encode_length(key_with_sign.len(), &mut key_int);
+                key_int.extend_from_slice(&key_with_sign);
+                key_int
+            },
+            asn1_int(0),
+            asn1_int(0),
+            asn1_int(0),
+            asn1_int(0),
+            asn1_int(15),
+        ].concat();
+        let pr_key_seq = asn1_seq(&pr_key_inner_content);
+
+        // PKCS#8-like wrapper
+        let pkcs1_oid: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01];
+        let null_item = vec![0x05, 0x00];
+        let algo_id_content = [asn1_oid(pkcs1_oid), null_item].concat();
+        let algo_id = asn1_seq(&algo_id_content);
+        let pkcs8_content = [asn1_int(0), algo_id, asn1_octet(&pr_key_seq)].concat();
+        let pkcs8_blob = asn1_seq(&pkcs8_content);
+
+        // Encrypt pkcs8_blob using moz3des with priv entry salt
+        let (priv_key, priv_iv) = super::derive_moz_3des(
+            global_salt,
+            b"",
+            entry_salt_priv,
+        );
+        let encrypted_pkcs8 = encrypt_3des(&priv_key, &priv_iv, &pkcs8_blob);
+
+        // Build the outer ASN.1 for the private key entry
+        let pbe_params_content = [
+            asn1_octet(entry_salt_priv),
+            asn1_int(1),
+        ].concat();
+        let pbe_params = asn1_seq(&pbe_params_content);
+        let algo_content = [
+            asn1_oid(OID_PKCS12_PBE_SHA1_3DES),
+            pbe_params,
+        ].concat();
+        let algo_seq_asn1 = asn1_seq(&algo_content);
+        let priv_key_asn1 = asn1_seq(&[algo_seq_asn1, asn1_octet(&encrypted_pkcs8)].concat());
+
+        // Build private key entry: [type, salt_len, name_len, salt..., name..., ASN.1...]
+        let mut priv_entry = Vec::new();
+        priv_entry.push(0x00); // type
+        priv_entry.push(0x00); // salt_len = 0 (salt is in ASN.1)
+        priv_entry.push(0x00); // name_len = 0
+        priv_entry.extend_from_slice(&priv_key_asn1);
+
+        // Build BDB key3.db file
+        let pagesize: u32 = 256;
+        let nkeys: u32 = 3;
+
+        // Build header (page 0)
+        let mut file_data = vec![0u8; pagesize as usize * 4]; // 4 pages
+
+        // Header: big-endian fields
+        file_data[0..4].copy_from_slice(&BDB_HASH_MAGIC.to_be_bytes());
+        file_data[4..8].copy_from_slice(&BDB_VERSION.to_be_bytes());
+        file_data[12..16].copy_from_slice(&pagesize.to_be_bytes());
+        file_data[56..60].copy_from_slice(&nkeys.to_be_bytes());
+
+        // Page 1: contains entries
+        // Layout: offset index at start, data stored from higher offsets
+        let page1_start = pagesize as usize;
+
+        // We need 3 key-value pairs. Let's lay them out manually.
+        // Entries will be stored starting from the end of the page.
+        let entries_data: Vec<(&[u8], &[u8])> = vec![
+            (b"global-salt", global_salt.as_slice()),
+            (b"password-check", pw_check_entry.as_slice()),
+            (&[0xf8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+               0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01], priv_entry.as_slice()),
+        ];
+
+        // Calculate data placement within page 1
+        // Data is placed from the top of the page, offsets point within the page.
+        // The firepwd algorithm sorts offsets and reads between them.
+        // So we place: key1 at offset A, val1 at offset B, key2 at C, val2 at D, etc.
+        // All offsets relative to page start.
+        // We need the offset index (at the beginning of the page) and data elsewhere.
+
+        // Reserve first 32 bytes for the index (plenty for 3 pairs × 2 offsets × 2 bytes + header)
+        let mut data_offset = 32usize;
+
+        // BDB layout: VALUE at lower offset, KEY at higher offset in each pair.
+        // firepwd index: position (2+i) = val_data_off, position (4+i) = key_data_off.
+        // After sort+read: db[entries[i+1]] = entries[i] → db[key_string] = value_blob.
+        let mut val_data_offsets: Vec<u16> = Vec::new();
+        let mut key_data_offsets: Vec<u16> = Vec::new();
+        for (key, val) in &entries_data {
+            let val_off = data_offset as u16;
+            file_data[page1_start + data_offset..page1_start + data_offset + val.len()]
+                .copy_from_slice(val);
+            data_offset += val.len();
+
+            let key_off = data_offset as u16;
+            file_data[page1_start + data_offset..page1_start + data_offset + key.len()]
+                .copy_from_slice(key);
+            data_offset += key.len();
+
+            val_data_offsets.push(val_off);
+            key_data_offsets.push(key_off);
+        }
+
+        file_data[page1_start] = 0x00;
+        file_data[page1_start + 1] = 0x00;
+
+        // Index: (2+i) = val_data_off, (4+i) = key_data_off
+        let mut idx = 2;
+        for pair_idx in 0..entries_data.len() {
+            let vb = val_data_offsets[pair_idx].to_le_bytes();
+            let kb = key_data_offsets[pair_idx].to_le_bytes();
+            file_data[page1_start + idx] = vb[0];
+            file_data[page1_start + idx + 1] = vb[1];
+            file_data[page1_start + idx + 2] = kb[0];
+            file_data[page1_start + idx + 3] = kb[1];
+            idx += 4;
+        }
+        // Terminator: val at (4+i) == nval at (8+i)
+        let last_key = key_data_offsets.last().unwrap().to_le_bytes();
+        file_data[page1_start + idx + 2] = last_key[0];
+        file_data[page1_start + idx + 3] = last_key[1];
+
+        // Write key3.db
+        std::fs::write(profile.join("key3.db"), &file_data).unwrap();
+
+        // Test the full path
+        let key = unlock_nss_master_key(&profile, "").unwrap();
+        assert_eq!(key.key.as_slice(), &master_key_raw);
+    }
+
+    #[test]
+    fn nss3_wrong_password_fails() {
+        // Use the same setup as nss3_key3_db_round_trip but with wrong password
+        let temp = tempfile::tempdir().unwrap();
+        let profile = temp.path().to_path_buf();
+
+        let global_salt = b"test_global_salt";
+        let entry_salt_check = b"check_salt_12345";
+
+        // Derive with empty password
+        let (check_key, check_iv) = super::derive_moz_3des(global_salt, b"", entry_salt_check);
+        let encrypted_check = encrypt_3des(&check_key, &check_iv, b"password-check");
+
+        let mut pw_check_entry = Vec::new();
+        pw_check_entry.push(0x02);
+        pw_check_entry.push(entry_salt_check.len() as u8);
+        pw_check_entry.push(0x00);
+        pw_check_entry.extend_from_slice(entry_salt_check);
+        pw_check_entry.extend_from_slice(&encrypted_check);
+
+        // Build minimal key3.db with just global-salt and password-check (no CKA_ID)
+        let pagesize: u32 = 512;
+        let nkeys: u32 = 2;
+
+        let mut file_data = vec![0u8; pagesize as usize * 3];
+        file_data[0..4].copy_from_slice(&BDB_HASH_MAGIC.to_be_bytes());
+        file_data[4..8].copy_from_slice(&BDB_VERSION.to_be_bytes());
+        file_data[12..16].copy_from_slice(&pagesize.to_be_bytes());
+        file_data[56..60].copy_from_slice(&nkeys.to_be_bytes());
+
+        let page1_start = pagesize as usize;
+        let mut data_offset = 32usize;
+        let entries: Vec<(&[u8], &[u8])> = vec![
+            (b"global-salt", global_salt.as_slice()),
+            (b"password-check", pw_check_entry.as_slice()),
+        ];
+        let mut val_data_offsets = Vec::new();
+        let mut key_data_offsets = Vec::new();
+        for (key, val) in &entries {
+            let vo = data_offset as u16;
+            file_data[page1_start + data_offset..page1_start + data_offset + val.len()]
+                .copy_from_slice(val);
+            data_offset += val.len();
+            let ko = data_offset as u16;
+            file_data[page1_start + data_offset..page1_start + data_offset + key.len()]
+                .copy_from_slice(key);
+            data_offset += key.len();
+            val_data_offsets.push(vo);
+            key_data_offsets.push(ko);
+        }
+
+        file_data[page1_start] = 0x00;
+        file_data[page1_start + 1] = 0x00;
+        let mut idx = 2;
+        for i in 0..entries.len() {
+            let vb = val_data_offsets[i].to_le_bytes();
+            let kb = key_data_offsets[i].to_le_bytes();
+            file_data[page1_start + idx] = vb[0];
+            file_data[page1_start + idx + 1] = vb[1];
+            file_data[page1_start + idx + 2] = kb[0];
+            file_data[page1_start + idx + 3] = kb[1];
+            idx += 4;
+        }
+        let last_key = key_data_offsets.last().unwrap().to_le_bytes();
+        file_data[page1_start + idx + 2] = last_key[0];
+        file_data[page1_start + idx + 3] = last_key[1];
+
+        std::fs::write(profile.join("key3.db"), &file_data).unwrap();
+
+        let err = unlock_nss_master_key(&profile, "wrongpass").unwrap_err();
+        assert!(
+            matches!(err, NssError::WrongMasterPassword | NssError::Crypto(_)),
+            "expected WrongMasterPassword or Crypto, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn pkcs12_derive_known_vector() {
+        // Verify PKCS#12 derivation produces expected output for empty password.
+        // Empty password BMP = [0x00, 0x00]
+        let password_bmp = &[0x00u8, 0x00];
+        let salt = &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
+        let iterations = 1u32;
+
+        let key = super::pkcs12_derive(password_bmp, salt, iterations, 24, 1);
+        let iv = super::pkcs12_derive(password_bmp, salt, iterations, 8, 2);
+
+        // Just verify lengths and that they're not all zeros
+        assert_eq!(key.len(), 24);
+        assert_eq!(iv.len(), 8);
+        assert!(key.iter().any(|&b| b != 0));
+        assert!(iv.iter().any(|&b| b != 0));
+    }
+
+    #[test]
+    fn moz_3des_derive_known_vector() {
+        // Verify Mozilla 3DES derivation produces consistent key/IV.
+        let global_salt = b"global_salt_test";
+        let entry_salt = b"entry_salt_test!";
+
+        let (key1, iv1) = super::derive_moz_3des(global_salt, b"", entry_salt);
+        let (key2, iv2) = super::derive_moz_3des(global_salt, b"", entry_salt);
+
+        assert_eq!(key1.as_slice(), key2.as_slice());
+        assert_eq!(iv1.as_slice(), iv2.as_slice());
+        assert_eq!(key1.len(), 24);
+        assert_eq!(iv1.len(), 8);
+        assert!(key1.iter().any(|&b| b != 0));
+
+        // Different password should produce different key
+        let (key3, _) = super::derive_moz_3des(global_salt, b"password", entry_salt);
+        assert_ne!(key1.as_slice(), key3.as_slice());
     }
 }

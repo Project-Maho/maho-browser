@@ -539,7 +539,8 @@ void MahoMigrationDialogView::OnImportClicked() {
   import_session_bridge_ = std::make_unique<MahoImportSessionBridge>(
       base::BindRepeating(&MahoMigrationDialogView::OnImportProgress,
                           weak_factory_.GetWeakPtr()),
-      base::SequencedTaskRunner::GetCurrentDefault());
+      base::SequencedTaskRunner::GetCurrentDefault(),
+      profile_);
 
   if (!import_session_bridge_->Start(core, browser_json, mask, "")) {
     import_session_bridge_.reset();
