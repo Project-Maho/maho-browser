@@ -231,13 +231,16 @@ impl Orchestrator {
     /// Resolve the bitmask to an ordered list of import types.
     fn resolve_types(mask: u32) -> Vec<ImportType> {
         let mut types = Vec::new();
-        // Order matches C++ orchestrator: bookmarks, history, cookies, autofill, workspaces, favicons, essential
+        // Order: workspaces FIRST (most user-visible — defines sidebar spaces),
+        // then bookmarks, history (12k+ entries are slow), cookies, autofill,
+        // favicons, essential. This guarantees Arc/Zen sidebar spaces appear
+        // even if a later worker stalls (e.g., Keychain prompt on cookies).
         let ordered = [
+            (ImportServices::WORKSPACES, ImportType::Workspaces),
             (ImportServices::BOOKMARKS, ImportType::Bookmarks),
             (ImportServices::HISTORY, ImportType::History),
             (ImportServices::COOKIES, ImportType::Cookies),
             (ImportServices::AUTOFILL, ImportType::Autofill),
-            (ImportServices::WORKSPACES, ImportType::Workspaces),
             (ImportServices::FAVICONS, ImportType::Favicons),
             (IMPORT_ESSENTIAL_BIT, ImportType::Essential),
         ];
@@ -473,11 +476,11 @@ mod tests {
         assert_eq!(
             types,
             vec![
+                ImportType::Workspaces,
                 ImportType::Bookmarks,
                 ImportType::History,
                 ImportType::Cookies,
                 ImportType::Autofill,
-                ImportType::Workspaces,
                 ImportType::Favicons,
                 ImportType::Essential,
             ]

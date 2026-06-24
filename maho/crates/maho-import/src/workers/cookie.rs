@@ -38,6 +38,34 @@ fn keychain_service_account(browser_type: BrowserType) -> Option<(&'static str, 
     }
 }
 
+/// Fetches a Keychain entry on a background thread with a timeout.
+///
+/// macOS Security framework's `SecKeychainFindGenericPassword` blocks the
+/// caller indefinitely when the process is ad-hoc signed / lacks a stable ACL
+/// (the system prompt may be hidden behind the welcome window). Wrapping the
+/// call in a worker thread + recv_timeout lets us abandon the attempt after
+/// `timeout` and proceed with the rest of the import.
+///
+/// SAFETY: the spawned thread is leaked on timeout — the Keychain call will
+/// eventually return and drop the receiver send. This is acceptable because
+/// the worker is invoked at most once per import session.
+#[cfg(target_os = "macos")]
+fn fetch_keychain_with_timeout(
+    service: &'static str,
+    account: &'static str,
+    timeout: std::time::Duration,
+) -> Option<ChromiumKey> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name(format!("maho-import-keychain-{}", service))
+        .spawn(move || {
+            let result = fetch_and_derive_key(&MacOsKeychain, service, account).ok();
+            let _ = tx.send(result);
+        })
+        .ok()?;
+    rx.recv_timeout(timeout).ok().flatten()
+}
+
 impl ImportWorker for CookieWorker {
     fn run(
         &self,
@@ -94,7 +122,7 @@ impl ImportWorker for CookieWorker {
                 #[cfg(target_os = "macos")]
                 let decryption_key: Option<ChromiumKey> = keychain_service_account(browser.browser_type)
                     .and_then(|(service, account)| {
-                        fetch_and_derive_key(&MacOsKeychain, service, account).ok()
+                        fetch_keychain_with_timeout(service, account, std::time::Duration::from_secs(5))
                     });
 
                 for entry in &entries {
