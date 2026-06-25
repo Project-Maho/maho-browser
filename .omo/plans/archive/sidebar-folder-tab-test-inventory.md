@@ -1,0 +1,157 @@
+# Sidebar Folder and Tab Test Inventory
+
+Scope note: this is the current inventory for `maho-chromium/browser/ui/views/sidebar/`. It groups the folder, tab, and favorites related tests that exist today so future work can reference them quickly.
+
+## `maho_sidebar_dnd_dispatch_unittest.cc`
+
+- RootTabInsertionLaneDispatchesReorderRootItem
+- FolderChildTabDropOnRootTabDispatchesMoveTabToRootBeforeTarget
+- SameFolderTabInsertionLaneBeforeTargetDispatchesReorderTabInFolder
+- SameFolderTabInsertionLaneBeforeNextSiblingDispatchesReorderTabInFolder
+- SameFolderTabSelfDropReturnsNoOp
+- CrossFolderChildTabDropDoesNotDispatchIncorrectRootReorder
+- TabDropToPinnedSectionDispatchesPinTab
+- FolderChildTabDropToPinnedSectionDispatchesAtomicRootReturnFirst
+- FolderChildTabDropToNormalSectionDispatchesMoveTabToRootOnly
+- FavoriteReorderDispatchesReorderFavorite
+- FolderRowDropIndicatorResetsOnDragExit
+- RootFolderDropTopZoneDispatchesReorderBefore
+- RootFolderInsertionLaneBeforeNextSiblingDispatchesReorderFolder
+- RootFolderDropMiddleZoneDispatchesMoveFolderIntoFolder
+- FolderDropOntoSelfReturnsNoOp
+- NestedSameParentFolderInsertionLaneBeforeTargetDispatchesReorderFolder
+- NestedSameParentFolderInsertionLaneBeforeNextSiblingDispatchesReorderFolder
+- CrossParentNestedFolderTopZoneDoesNotDispatchIncorrectReorder
+- CrossParentNestedFolderBottomZoneDoesNotDispatchIncorrectReorder
+- TabDropOnFolderMiddleZoneDispatchesMoveTabToFolder
+- FolderChildTabDropOnFolderMiddleZoneDispatchesMoveTabToFolder
+- FolderDropToPinnedSectionDispatchesPinFolder
+- FolderDropToNormalSectionDispatchesUnpinFolder
+- NestedFolderDragPayloadContainsSourceParentFolderId
+- FolderOnTabBodyIsNoOp
+- FolderOnTabLaneDispatchesReorder
+- TabOnFolderLaneDispatchesReorderNotMoveInto
+- TabOnFolderBodyDispatchesMoveIntoFolder
+- LastItemAfterLaneAppendDispatchesReorderTab
+- LastItemAfterLaneAppendDispatchesReorderFolder
+- SameIndexFavoriteReorderStillDispatchesReorderFavorite
+- FavoriteDragDropOnNormalSectionDispatchesUnfavoriteTab
+- FavoriteDragDropOnPinnedSectionDispatchesUnfavoriteBeforePin
+- FolderNodeChildrenPreserveOrderAndKind
+- TabListViewUpdateIsStructurallyIdempotent
+- TabListViewNormalOnlyModelHidesEmptyPinnedSection
+- TabListViewPinnedNodesModelShowsPinnedSection
+- DuplicateUrlTabsGetDistinctIdentityInTree
+- DuplicateUrlTabsDragPayloadsCarryDistinctIds
+- SetFavoritesModelReplacementErasesOldItems
+- SetFavoritesModelWithEmptyModelClearsAllItems
+
+## `maho_sidebar_dnd_browser_test.cc`
+
+- LiveSidebarViewsAreReachable
+- LiveRootTabReorder
+- LiveTabToPinnedSection
+- LiveFavoriteReorder
+- LiveRootFolderReorder
+- LiveTabOutOfFolderToRoot
+- LiveSameFolderTabReorder
+- LiveTabBodySplitCreatesSplit
+- LiveFolderBodyDropRejected
+- LiveNestedFolderReorder
+- LiveSelfDropNoOp
+- CrossFolderChildTabDoesNotRootReorder
+- CrossParentFolderDoesNotReorderSameParent
+- LiveSameFolderChildReorderFinalState
+- LiveSameIndexFavoriteNoOp
+
+## `maho_sidebar_dnd_interactive_test.cc`
+
+- DragReordersFavoriteTile
+- DragTabToPinnedSection
+- DragTabIntoFolder
+- DragTabBodyCreatesSplit
+- DragReordersRegularTabs
+- DragReordersFolder
+- DragTabOutOfFolder
+- DragUnpinTab
+- DragCancelRestoresState
+- InvalidCrossAreaDropRejected
+- DuplicatePinDefended
+
+## `maho_sidebar_contract_test.cc`
+
+- SeededFavoritesMatchSnapshot
+- SeededFoldersMatchSnapshot
+- PinnedSectionContract
+- FolderSupportContract
+- TabReorderContract
+- SidebarTreeJsonContract
+- FolderCollapseExpandToggle
+- EmptyFolderRemovedAfterLastChildMove
+- LargeTabCountRenders
+- SidebarRowOrderTreeLayoutKeepsEmptyPinnedSectionContainer
+- SidebarRowOrderFlatFallbackPlacesSeparatorAboveNewTab
+- SidebarRowOrderNoTabsKeepsPlaceholderWithoutSeparator
+- RefreshProducesConsistentActiveSpaceIdAcrossSections
+- RapidTabAdditionsProduceCoherentFinalViewState
+- BuildViewStateModelPreservesActiveSpaceIdThroughUpdate
+- ViewStateModelHasAllFiveSectionsPopulatedAfterSeed
+- UpdateWithNewSpaceIdClearsStaleRows
+- FavoritesReorderPropagatesIntoViewStateAfterRefresh
+- InFolderChildReorderChangesChildOrderInViewState
+- FavoritesNoOpSameIndexStabilityAfterRefresh
+
+## `maho_sidebar_actions_interactive_test.cc`
+
+- ContextMenuCloseTab
+- ContextMenuPinTab
+- TabRenameInlineEditing
+- NewTabButtonCreatesTab
+- KeyboardNavigationMoveFocus
+- AudioIndicatorPresent
+
+## `maho_sidebar_navigation_interactive_test.cc`
+
+- LaunchShowsSidebar
+- RealTabsPopulateSidebar
+- CollapsingPanelKeepsLayoutEnabled
+- ClickSidebarTabSwitchesActive
+- TabCloseFromSidebar
+- TabTitleUpdatesOnNavigation
+- FavoriteClickActivatesTab
+- CollapseAndReopenPreservesState
+- HoverRevealAndRepin
+
+## `maho_sidebar_spaces_interactive_test.cc`
+
+- SpaceDotSwitchesTabList
+- FooterKeyboardSwitchUpdatesActiveBridgeSpace
+- BridgeActivateSpacePersistsAndRethemes
+- CommandActionNextPrevCyclesSpaces
+- SpaceDotReflectsThemeColor
+
+## `maho_sidebar_edge_cases_interactive_test.cc`
+
+- SidebarResizePersists
+- FavoritesAddViaShellEvent
+- FavoritesRemoveViaShellEvent
+- FolderRenameViaContextMenuCommitsStateAndLabel
+- MultiWindowIndependentSidebars
+- EmptyStateFavoritesDisplay
+- ParentDragForwardRevealsEmptyFavorites
+- ParentDragForwardSkipsNonTabDrag
+- ParentDragForwardNoopWhenFavoritesPopulated
+- RapidTabCloseNoCrash
+- UpdatePillVisibilityFromModel
+- FavoritesIsolatedToActiveSpaceAfterSpaceSwitch
+
+## Shared harness files
+
+- `maho_sidebar_interactive_test_base.h`
+- `maho_sidebar_interactive_test_base.cc`
+
+## BUILD target mapping
+
+- `unit_tests` -> `maho_sidebar_dnd_dispatch_unittest.cc`
+- `browser_tests` -> `maho_sidebar_dnd_browser_test.cc`
+- `interactive_tests` -> `maho_sidebar_interactive_test_base.cc/.h`, `maho_sidebar_actions_interactive_test.cc`, `maho_sidebar_contract_test.cc`, `maho_sidebar_dnd_interactive_test.cc`, `maho_sidebar_edge_cases_interactive_test.cc`, `maho_sidebar_navigation_interactive_test.cc`, `maho_sidebar_spaces_interactive_test.cc`
