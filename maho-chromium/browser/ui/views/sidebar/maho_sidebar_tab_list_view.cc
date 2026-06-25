@@ -24,6 +24,10 @@
 #include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
+#include "chrome/browser/favicon/favicon_service_factory.h"
+#include "components/favicon/core/favicon_service.h"
+#include "components/favicon_base/favicon_types.h"
+#include "components/keyed_service/core/service_access_type.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/common/referrer.h"
@@ -1240,6 +1244,14 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
 }
 
 SidebarTabRowView::~SidebarTabRowView() = default;
+
+void SidebarTabRowView::SetFavicon(ui::ImageModel image) {
+  if (!favicon_view_) {
+    return;
+  }
+  favicon_view_->SetImage(std::move(image));
+  favicon_view_->SetImageSize(gfx::Size(kRowIconSizeDp, kRowIconSizeDp));
+}
 
 void SidebarTabRowView::SetSuspended(bool suspended) {
   if (is_suspended_ == suspended) {
@@ -2933,10 +2945,27 @@ void MahoSidebarTabListView::RebuildTreeNodes(
           fav = ui::ImageModel::FromImage(png);
         }
       }
+      const bool needs_async_favicon = fav.IsEmpty();
       if (fav.IsEmpty()) {
         fav = ui::ImageModel::FromVectorIcon(vector_icons::kGlobeIcon,
                                              ui::kColorSysOnSurfaceSubtle,
                                              kRowIconSizeDp);
+      }
+      if (needs_async_favicon && browser_ && !node.url.empty()) {
+        GURL page_url(node.url);
+        if (page_url.is_valid()) {
+          favicon::FaviconService* favicon_service =
+              FaviconServiceFactory::GetForProfile(
+                  browser_->profile(), ServiceAccessType::EXPLICIT_ACCESS);
+          if (favicon_service) {
+            favicon_service->GetFaviconImageForPageURL(
+                page_url,
+                base::BindOnce(&MahoSidebarTabListView::OnFaviconLoaded,
+                               weak_factory_.GetWeakPtr(), node.tab_id,
+                               page_url),
+                &favicon_task_tracker_);
+          }
+        }
       }
 
       auto* before_tab_lane =
@@ -3297,6 +3326,45 @@ void MahoSidebarTabListView::HandleTabRowHoverStart(views::View* anchor_view,
 void MahoSidebarTabListView::HandleTabRowHoverEnd() {
   if (tab_preview_controller_) {
     tab_preview_controller_->HidePreview();
+  }
+}
+
+void MahoSidebarTabListView::OnFaviconLoaded(
+    const std::string& tab_id,
+    const GURL& requested_url,
+    const favicon_base::FaviconImageResult& result) {
+  if (!tab_rows_ || tab_id.empty()) {
+    return;
+  }
+  if (result.image.IsEmpty()) {
+    GURL origin = requested_url.DeprecatedGetOriginAsURL();
+    if (browser_ && origin.is_valid() && origin != requested_url) {
+      favicon::FaviconService* favicon_service =
+          FaviconServiceFactory::GetForProfile(
+              browser_->profile(), ServiceAccessType::EXPLICIT_ACCESS);
+      if (favicon_service) {
+        favicon_service->GetFaviconImageForPageURL(
+            origin,
+            base::BindOnce(&MahoSidebarTabListView::OnFaviconLoaded,
+                           weak_factory_.GetWeakPtr(), tab_id, origin),
+            &favicon_task_tracker_);
+      }
+    }
+    return;
+  }
+  std::vector<views::View*> stack{tab_rows_.get()};
+  while (!stack.empty()) {
+    views::View* current = stack.back();
+    stack.pop_back();
+    if (auto* row = views::AsViewClass<SidebarTabRowView>(current)) {
+      if (row->tab_id() == tab_id) {
+        row->SetFavicon(ui::ImageModel::FromImage(result.image));
+        return;
+      }
+    }
+    for (views::View* child : current->children()) {
+      stack.push_back(child);
+    }
   }
 }
 

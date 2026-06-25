@@ -12,6 +12,7 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/task/cancelable_task_tracker.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "components/tabs/public/tab_interface.h"
@@ -27,6 +28,11 @@
 #include "ui/views/controls/textfield/textfield_controller.h"
 #include "ui/views/drag_controller.h"
 #include "ui/views/view.h"
+#include "url/gurl.h"
+
+namespace favicon_base {
+struct FaviconImageResult;
+}  // namespace favicon_base
 
 class Browser;
 #include "maho/browser/ui/context_menu/maho_folder_context_menu.h"
@@ -174,6 +180,9 @@ class MahoSidebarTabListView : public views::View,
   void PruneLocalTitleCache(const MahoSidebarTabListModel& model);
   void HandleTabRowHoverStart(views::View* anchor_view, int tab_index);
   void HandleTabRowHoverEnd();
+  void OnFaviconLoaded(const std::string& tab_id,
+                       const GURL& requested_url,
+                       const favicon_base::FaviconImageResult& result);
 
   raw_ptr<Browser> browser_ = nullptr;
   raw_ptr<views::LabelButton> new_tab_button_ = nullptr;
@@ -197,6 +206,8 @@ class MahoSidebarTabListView : public views::View,
 
   class SidebarAutoScroller;
   std::unique_ptr<SidebarAutoScroller> auto_scroller_;
+
+  base::CancelableTaskTracker favicon_task_tracker_;
 
   base::WeakPtrFactory<MahoSidebarTabListView> weak_factory_{this};
 };
@@ -301,6 +312,9 @@ class SidebarTabRowView : public views::View,
 
   void SetSuspended(bool suspended);
   bool is_suspended() const { return is_suspended_; }
+
+  void SetFavicon(ui::ImageModel image);
+  const std::string& tab_id() const { return tab_id_; }
 
  private:
   void ActivateTabFromEvent(const ui::Event& event);
