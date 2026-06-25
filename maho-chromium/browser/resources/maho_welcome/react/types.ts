@@ -61,7 +61,7 @@ export function createInitialState(): WelcomeState {
     availableBrowsers: [],
     importState: {phase: 'idle', statusMessage: '', browserIndex: null},
     importItemSelections: new Map(),
-    setAsDefaultRequested: true,
+    setAsDefaultRequested: false,
     importStarted: false,
     importStage: 'A',
     searchEngines: [],
