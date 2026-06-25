@@ -13,6 +13,7 @@ maho-acp = { path = "../maho-acp" }
 maho-import = { path = "../maho-import" }
 maho-agent = { path = "../maho-agent" }
 maho-storage = { path = "../maho-storage" }
+tracing = "0.1"
 serde = { workspace = true }
 uuid = { workspace = true }
 serde_json = { workspace = true }

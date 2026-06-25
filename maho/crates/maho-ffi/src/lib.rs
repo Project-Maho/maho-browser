@@ -6211,6 +6211,11 @@ pub unsafe extern "C" fn maho_core_byok_get_key(
         Ok(s) => s,
         Err(_) => return ptr::null_mut(),
     };
+    tracing::info!(
+        target = "maho_agent::audit",
+        event = "byok_key_access",
+        provider = %provider_str,
+    );
     if let Some(storage) = core.storage_ref() {
         let setting_key = format!("byok:{}", provider_str);
         if let Ok(Some(key)) = storage.get_setting(&setting_key) {

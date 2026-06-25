@@ -32,7 +32,7 @@ fn rust_export_names() -> BTreeSet<String> {
 
     src.lines()
         .filter_map(|line| {
-            let marker = "pub extern \"system\" fn Java_dev_maho_browser_MahoBridge_";
+            let marker = "extern \"system\" fn Java_dev_maho_browser_MahoBridge_";
             let start = line.find(marker)? + marker.len();
             let rest = &line[start..];
             let name = rest.split(['(', '<']).next()?.trim();
