@@ -576,3 +576,70 @@ fn sqlite_boosts_migration_self_healing() {
     assert_eq!(loaded.len(), 1);
     assert_eq!(loaded[0].domain, "example.com");
 }
+
+#[test]
+fn sqlite_conversation_crud() {
+    let db = SqliteStorage::open_in_memory().unwrap();
+    
+    // Create conversation
+    db.create_conversation("c1", Some("Title 1"), Some("space1"), Some("model1")).unwrap();
+    
+    // List conversations
+    let list = db.list_conversations(10).unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].id, "c1");
+    assert_eq!(list[0].title.as_deref(), Some("Title 1"));
+    assert_eq!(list[0].space_id.as_deref(), Some("space1"));
+    assert_eq!(list[0].model.as_deref(), Some("model1"));
+    
+    // Rename conversation
+    assert!(db.rename_conversation("c1", "New Title").unwrap());
+    let list = db.list_conversations(10).unwrap();
+    assert_eq!(list[0].title.as_deref(), Some("New Title"));
+    
+    // Delete conversation
+    assert!(db.delete_conversation("c1").unwrap());
+    let list = db.list_conversations(10).unwrap();
+    assert!(list.is_empty());
+}
+
+#[test]
+fn sqlite_conversation_turns() {
+    let db = SqliteStorage::open_in_memory().unwrap();
+    db.create_conversation("c1", Some("Title 1"), Some("space1"), Some("model1")).unwrap();
+    
+    // Insert conversation turns
+    db.insert_conversation_turn("t1", "c1", "user", "Hello", Some("https://example.com")).unwrap();
+    db.insert_conversation_turn("t2", "c1", "assistant", "Hi there!", None).unwrap();
+    
+    // Load turns
+    let turns = db.get_conversation_messages("c1").unwrap();
+    assert_eq!(turns.len(), 2);
+    assert_eq!(turns[0].id, "t1");
+    assert_eq!(turns[0].role, "user");
+    assert_eq!(turns[0].content, "Hello");
+    assert_eq!(turns[0].url_context.as_deref(), Some("https://example.com"));
+    
+    assert_eq!(turns[1].id, "t2");
+    assert_eq!(turns[1].role, "assistant");
+    assert_eq!(turns[1].content, "Hi there!");
+    assert_eq!(turns[1].url_context, None);
+}
+
+#[test]
+fn sqlite_conversation_cascade_delete() {
+    let db = SqliteStorage::open_in_memory().unwrap();
+    db.create_conversation("c1", Some("Title 1"), Some("space1"), Some("model1")).unwrap();
+    db.insert_conversation_turn("t1", "c1", "user", "Hello", None).unwrap();
+    
+    // Verify turns exist
+    let turns = db.get_conversation_messages("c1").unwrap();
+    assert_eq!(turns.len(), 1);
+    
+    // Delete conversation
+    db.delete_conversation("c1").unwrap();
+    
+    // Verify turns are deleted (cascade)
+    let turns = db.get_conversation_messages("c1").unwrap();
+    assert!(turns.is_empty());
+}

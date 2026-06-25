@@ -32,12 +32,13 @@ pub struct AutofillAddressParams<'a> {
 /// SQLite storage for persistent data (history, bookmarks, settings)
 pub struct SqliteStorage {
     conn: Connection,
+    path: String,
 }
 
 impl SqliteStorage {
     pub fn open(path: &str) -> Result<Self, StorageError> {
         let conn = Connection::open(path)?;
-        let storage = Self { conn };
+        let storage = Self { conn, path: path.to_string() };
         storage.initialize_schema()?;
         storage.run_migrations()?;
         Ok(storage)
@@ -45,10 +46,14 @@ impl SqliteStorage {
 
     pub fn open_in_memory() -> Result<Self, StorageError> {
         let conn = Connection::open_in_memory()?;
-        let storage = Self { conn };
+        let storage = Self { conn, path: ":memory:".to_string() };
         storage.initialize_schema()?;
         storage.run_migrations()?;
         Ok(storage)
+    }
+
+    pub fn path(&self) -> &str {
+        &self.path
     }
 
     fn run_migrations(&self) -> Result<(), StorageError> {
@@ -95,6 +100,96 @@ impl SqliteStorage {
                     ELSE 'k150'
                 END;"
             )?;
+        }
+
+        // --- Conversation Migration (Legacy Schema Detection & Migration) ---
+        let table_exists = |table_name: &str| -> bool {
+            self.conn.query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
+                rusqlite::params![table_name],
+                |_| Ok(true),
+            ).unwrap_or(false)
+        };
+
+        if table_exists("chat_sessions") {
+            let mut stmt = self.conn.prepare("SELECT id, title, created_at FROM chat_sessions")?;
+            let sessions: Vec<(String, Option<String>, String)> = stmt.query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?.collect::<Result<_, _>>()?;
+            for (id, title, created_at) in sessions {
+                let _ = self.conn.execute(
+                    "INSERT OR IGNORE INTO conversations (id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
+                    rusqlite::params![id, title, created_at],
+                );
+            }
+            if table_exists("chat_messages") {
+                let mut stmt = self.conn.prepare("SELECT id, session_id, role, content, created_at FROM chat_messages")?;
+                let messages: Vec<(String, String, String, String, String)> = stmt.query_map([], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+                })?.collect::<Result<_, _>>()?;
+                for (id, session_id, role, content, created_at) in messages {
+                    let _ = self.conn.execute(
+                        "INSERT OR IGNORE INTO conversation_turns (id, session_id, role, content, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                        rusqlite::params![id, session_id, role, content, created_at],
+                    );
+                }
+                let _ = self.conn.execute("DROP TABLE chat_messages", []);
+            }
+            let _ = self.conn.execute("DROP TABLE chat_sessions", []);
+        }
+
+        if table_exists("ai_sessions") {
+            let mut stmt = self.conn.prepare("SELECT id, title, created_at FROM ai_sessions")?;
+            let sessions: Vec<(String, Option<String>, String)> = stmt.query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?.collect::<Result<_, _>>()?;
+            for (id, title, created_at) in sessions {
+                let _ = self.conn.execute(
+                    "INSERT OR IGNORE INTO conversations (id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
+                    rusqlite::params![id, title, created_at],
+                );
+            }
+            if table_exists("ai_messages") {
+                let mut stmt = self.conn.prepare("SELECT id, session_id, role, content, created_at FROM ai_messages")?;
+                let messages: Vec<(String, String, String, String, String)> = stmt.query_map([], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+                })?.collect::<Result<_, _>>()?;
+                for (id, session_id, role, content, created_at) in messages {
+                    let _ = self.conn.execute(
+                        "INSERT OR IGNORE INTO conversation_turns (id, session_id, role, content, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                        rusqlite::params![id, session_id, role, content, created_at],
+                    );
+                }
+                let _ = self.conn.execute("DROP TABLE ai_messages", []);
+            }
+            let _ = self.conn.execute("DROP TABLE ai_sessions", []);
+        }
+
+        if table_exists("session_event_logs") {
+            let has_role: bool = self.conn.query_row(
+                "SELECT 1 FROM pragma_table_info('session_event_logs') WHERE name='role'",
+                [],
+                |_| Ok(true),
+            ).unwrap_or(false);
+
+            if has_role {
+                let mut stmt = self.conn.prepare("SELECT session_id, role, content, created_at FROM session_event_logs")?;
+                let logs: Vec<(String, String, String, String)> = stmt.query_map([], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                })?.collect::<Result<_, _>>()?;
+                for (session_id, role, content, created_at) in logs {
+                    let _ = self.conn.execute(
+                        "INSERT OR IGNORE INTO conversations (id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
+                        rusqlite::params![session_id, "Migrated Session", created_at],
+                    );
+                    let turn_id = uuid::Uuid::new_v4().to_string();
+                    let _ = self.conn.execute(
+                        "INSERT OR IGNORE INTO conversation_turns (id, session_id, role, content, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                        rusqlite::params![turn_id, session_id, role, content, created_at],
+                    );
+                }
+            }
+            let _ = self.conn.execute("DROP TABLE session_event_logs", []);
         }
 
         Ok(())
@@ -1795,6 +1890,64 @@ mod tests {
     }
 
     #[test]
+    fn test_conversation_migration() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let path_str = db_path.to_str().unwrap();
+
+        {
+            let seed_conn = rusqlite::Connection::open(path_str).unwrap();
+            seed_conn.execute_batch("
+                CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, title TEXT, created_at TEXT);
+                CREATE TABLE chat_messages (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, created_at TEXT);
+                CREATE TABLE ai_sessions (id TEXT PRIMARY KEY, title TEXT, created_at TEXT);
+                CREATE TABLE ai_messages (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, created_at TEXT);
+                CREATE TABLE session_event_logs (session_id TEXT, role TEXT, content TEXT, created_at TEXT);
+            ").unwrap();
+            seed_conn.execute("INSERT INTO chat_sessions VALUES ('v1-sess', 'V1 Title', '2026-06-01 10:00:00')", []).unwrap();
+            seed_conn.execute("INSERT INTO chat_messages VALUES ('v1-msg-1', 'v1-sess', 'user', 'Hello V1', '2026-06-01 10:00:01')", []).unwrap();
+            seed_conn.execute("INSERT INTO ai_sessions VALUES ('v2-sess', 'V2 Title', '2026-06-02 10:00:00')", []).unwrap();
+            seed_conn.execute("INSERT INTO ai_messages VALUES ('v2-msg-1', 'v2-sess', 'assistant', 'Hello V2', '2026-06-02 10:00:01')", []).unwrap();
+            seed_conn.execute("INSERT INTO session_event_logs VALUES ('v3-sess', 'user', 'Hello V3', '2026-06-03 10:00:01')", []).unwrap();
+        }
+
+        // Open via SqliteStorage which will automatically run migrations!
+        let storage = SqliteStorage::open(path_str).unwrap();
+
+        // Verify the sessions are in the `conversations` table
+        let mut stmt = storage.conn.prepare("SELECT id, title FROM conversations ORDER BY id").unwrap();
+        let sessions: Vec<(String, Option<String>)> = stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        }).unwrap().collect::<Result<_, _>>().unwrap();
+
+        assert_eq!(sessions.len(), 3);
+        assert_eq!(sessions[0].0, "v1-sess");
+        assert_eq!(sessions[0].1.as_deref(), Some("V1 Title"));
+        assert_eq!(sessions[1].0, "v2-sess");
+        assert_eq!(sessions[1].1.as_deref(), Some("V2 Title"));
+        assert_eq!(sessions[2].0, "v3-sess");
+
+        // Verify conversation turns
+        let mut stmt = storage.conn.prepare("SELECT session_id, role, content FROM conversation_turns ORDER BY session_id").unwrap();
+        let turns: Vec<(String, String, String)> = stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        }).unwrap().collect::<Result<_, _>>().unwrap();
+
+        assert_eq!(turns.len(), 3);
+        assert_eq!(turns[0].0, "v1-sess");
+        assert_eq!(turns[0].1, "user");
+        assert_eq!(turns[0].2, "Hello V1");
+
+        assert_eq!(turns[1].0, "v2-sess");
+        assert_eq!(turns[1].1, "assistant");
+        assert_eq!(turns[1].2, "Hello V2");
+
+        assert_eq!(turns[2].0, "v3-sess");
+        assert_eq!(turns[2].1, "user");
+        assert_eq!(turns[2].2, "Hello V3");
+    }
+
+    #[test]
     fn test_enqueue_sync_entity() {
         let db = SqliteStorage::open_in_memory().unwrap();
         let id = db
@@ -1982,7 +2135,7 @@ mod tests {
             [],
         ).unwrap();
 
-        let db = SqliteStorage { conn };
+        let db = SqliteStorage { conn, path: ":memory:".to_string() };
         db.run_migrations().unwrap();
 
         let dot_pos_x: f64 = db.conn.query_row(
