@@ -62,4 +62,15 @@ extension MahoBridge {
     func closeOtherTabs(spaceId: SpaceId, keepTabId tabId: TabId) {
         sendEvent(.closeOtherTabs(spaceId: spaceId, tabId: tabId))
     }
+
+    func getArchivedTabs(spaceId: SpaceId) -> String? {
+        guard let jsonString = try? spaceId.mahoJSONString() else {
+            return nil
+        }
+        return withCore { ptr in
+            jsonString.withCString { cStr in
+                FFIString.consume(maho_core_get_archived_tabs(ptr, cStr))
+            }
+        } ?? nil
+    }
 }

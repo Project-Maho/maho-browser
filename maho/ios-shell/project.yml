@@ -36,8 +36,7 @@ targets:
       - path: Extensions
         excludes:
           - "ShareExtension/**"
-      - path: Sources/AppStoreUpdateChecker.swift
-      - path: Sources/Sync
+      - path: Sources
       - path: Assets.xcassets
     info:
       path: Info.plist

@@ -89,4 +89,15 @@ final class ChatSessionRegistry {
             nativeFree(ptr)
         }
     }
+
+    /// Looks up the UUID string handle registered for `ptr`.
+    func findHandle(for ptr: OpaquePointer) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return sessions.first(where: { $0.value == ptr })?.key
+    }
+
+    static let shared = ChatSessionRegistry { ptr in
+        maho_core_chat_session_free(ptr)
+    }
 }

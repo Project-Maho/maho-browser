@@ -20,7 +20,7 @@ struct ContentBlockerView: View {
             }
             .navigationTitle("Content Blocker")
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
+                SwiftUI.ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                         .accessibilityIdentifier("contentBlockerDoneButton")
                 }

@@ -527,6 +527,26 @@ enum TabLifecycleState: Codable {
 struct AnyCodable: Codable {
     let value: Any?
 
+    init(_ value: Any?) {
+        self.value = value
+    }
+
+    static func bool(_ value: Bool) -> AnyCodable {
+        AnyCodable(value)
+    }
+
+    static func string(_ value: String) -> AnyCodable {
+        AnyCodable(value)
+    }
+
+    static func int(_ value: Int) -> AnyCodable {
+        AnyCodable(value)
+    }
+
+    static func double(_ value: Double) -> AnyCodable {
+        AnyCodable(value)
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if container.decodeNil() {

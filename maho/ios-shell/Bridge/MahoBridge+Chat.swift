@@ -1,13 +1,5 @@
 import Foundation
 
-// MARK: - ChatSessionRegistry shared instance
-
-extension ChatSessionRegistry {
-    static let shared: ChatSessionRegistry = ChatSessionRegistry { ptr in
-        maho_core_chat_session_free(ptr)
-    }
-}
-
 @_silgen_name("maho_chat_send_image")
 private func maho_chat_send_image(
     _ ptr: OpaquePointer?,
@@ -168,10 +160,10 @@ extension MahoBridge {
                 FFIString.withCString(model) { modelPointer in
                     FFIString.withCString(systemInstruction) { instructionPointer in
                         var config = MahoChatConfig(
-                            api_key: apiKeyPointer,
+                            apiKey: apiKeyPointer,
                             endpoint: endpointPointer,
                             model: modelPointer,
-                            system_instruction: instructionPointer
+                            systemInstruction: instructionPointer
                         )
 
                         guard let sessionPointer = maho_core_chat_session_new(&config) else {

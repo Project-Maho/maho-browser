@@ -84,6 +84,30 @@ final class MahoBridge: @unchecked Sendable {
         return body(ptr)
     }
 
+    func getStateJson() -> String? {
+        withCore { ptr in
+            FFIString.consume(maho_core_get_tab_view_models(ptr))
+        } ?? nil
+    }
+
+    func tick() -> String? {
+        withCore { ptr in
+            FFIString.consume(maho_core_tick(ptr))
+        } ?? nil
+    }
+
+    func sendEvent(name: String, payload: [String: Any] = [:]) {
+        var dict = payload
+        dict["type"] = name
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: dict),
+              let jsonString = String(data: jsonData, encoding: .utf8) else { return }
+        _ = withCore { ptr in
+            jsonString.withCString { cStr in
+                FFIString.consume(maho_core_handle_event(ptr, cStr))
+            }
+        }
+    }
+
     deinit {
         if let ptr = corePtr {
             maho_core_free(ptr)

@@ -58,7 +58,7 @@ public enum MahoIcon: String, CaseIterable {
         case .reloadSync: return Lucide.rotateCw
         case .search: return Lucide.search
         case .globe: return Lucide.globe
-        case .downloads: return Lucide.arrowDownCircle
+        case .downloads: return Lucide.circleArrowDown
         case .archive: return Lucide.archive
         case .spaces: return Lucide.copy
         case .boosts: return Lucide.sparkles
@@ -134,7 +134,7 @@ extension MahoIcon {
         case "arrow.counterclockwise": return Lucide.rotateCcw
         case "arrow.triangle.2.circlepath": return Lucide.refreshCw
         case "arrow.up.right", "arrow.up.forward": return Lucide.arrowUpRight
-        case "arrow.down.circle", "arrow.down.circle.fill": return Lucide.arrowDownCircle
+        case "arrow.down.circle", "arrow.down.circle.fill": return Lucide.circleArrowDown
         case "arrow.down.to.line": return Lucide.arrowDownToLine
         case "square.and.arrow.up": return Lucide.share
         case "square.and.pencil": return Lucide.squarePen
@@ -191,7 +191,7 @@ extension MahoIcon {
         case "checkmark.shield": return Lucide.shieldCheck
         case "exclamationmark.shield": return Lucide.shieldAlert
         case "xmark.shield": return Lucide.shieldX
-        case "questionmark.shield": return Lucide.shieldQuestion
+        case "questionmark.shield": return Lucide.shieldQuestionMark
         case "lock.fill": return Lucide.lock
         case "lock.open": return Lucide.lockOpen
         case "key": return Lucide.keyRound
@@ -214,7 +214,7 @@ extension MahoIcon {
         case "wifi.slash": return Lucide.wifiOff
         case "eye.slash", "eye.slash.fill": return Lucide.eyeOff
         case "eyeglasses": return Lucide.glasses
-        case "function": return Lucide.functionSquare
+        case "function": return Lucide.squareFunction
         case "app.badge.checkmark": return Lucide.appWindow
         case "link": return Lucide.link
         case "mappin.and.ellipse": return Lucide.mapPin

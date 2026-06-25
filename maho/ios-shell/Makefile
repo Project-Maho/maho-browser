@@ -24,16 +24,20 @@ build-rust-sim:
 
 # Generate the C header from Rust FFI crate
 generate-header:
-	cbindgen --config $(CBINDGEN_CONFIG) --crate $(FFI_CRATE) --output $(HEADER_DIR)/maho_ffi.h
+	cbindgen --config $(CBINDGEN_CONFIG) --crate $(FFI_CRATE) --output $(HEADER_DIR)/maho_ffi.h ..
 
 # Create universal binary for device + simulator
+# Fall back to simulator binary if lipo fails (e.g. on Apple Silicon where both are arm64)
 universal-lib: build-rust-ios build-rust-sim
 	@mkdir -p $(UNIVERSAL_LIB_DIR)
 	lipo -create \
 		$(RUST_LIB_DIR)/$(RUST_TARGET_IOS)/release/$(RUST_LIB_NAME) \
 		$(RUST_LIB_DIR)/$(RUST_TARGET_SIM)/release/$(RUST_LIB_NAME) \
-		-output $(UNIVERSAL_LIB_DIR)/$(RUST_LIB_NAME)
+		-output $(UNIVERSAL_LIB_DIR)/$(RUST_LIB_NAME) || \
+	(echo "lipo failed (likely due to matching arm64 architectures), falling back to copying simulator binary" && \
+	 cp $(RUST_LIB_DIR)/$(RUST_TARGET_SIM)/release/$(RUST_LIB_NAME) $(UNIVERSAL_LIB_DIR)/$(RUST_LIB_NAME))
 	@echo "Universal library created at $(UNIVERSAL_LIB_DIR)/$(RUST_LIB_NAME)"
+
 
 # Build the iOS app via xcodebuild (requires .xcodeproj)
 build-app: generate-header

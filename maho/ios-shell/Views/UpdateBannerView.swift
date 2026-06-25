@@ -7,7 +7,7 @@ struct UpdateBannerView: View {
     var body: some View {
         if checker.updateAvailable, let version = checker.latestVersion {
             HStack {
-                Image(lucide: Lucide.arrowDownCircle)
+                Image(lucide: Lucide.circleArrowDown)
                     .foregroundStyle(.white)
                 Text("Maho \(version) is available")
                     .font(.subheadline.weight(.medium))

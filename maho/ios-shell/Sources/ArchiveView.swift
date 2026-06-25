@@ -44,7 +44,7 @@ struct ArchiveView: View {
             }
             .navigationTitle("Archive")
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
+                SwiftUI.ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                         .accessibilityIdentifier("archiveDoneButton")
                 }

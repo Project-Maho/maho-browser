@@ -82,6 +82,17 @@ enum ShellTheme {
         static let tabGridMetaFill = Color.primary.opacity(0.03)
         static let tabGridFloatingSurface = Color.white.opacity(0.66)
 
+        static var visualSearchBackground: Color { homeBackground }
+        static let visualSearchForeground = Color.primary
+        static let visualSearchMutedForeground = Color.secondary
+        static let visualSearchBorder = Color.primary.opacity(0.1)
+        static let visualSearchSurface = Color.secondary.opacity(0.1)
+        static let visualSearchSurfaceStrong = Color.secondary.opacity(0.2)
+
+        static let chatAttachmentBadgeFill = Color.black.opacity(0.48)
+        static let chatAttachmentStroke = Color.primary.opacity(0.08)
+        static let chatAttachmentPlaceholder = Color.secondary.opacity(0.1)
+
         static func bottomBarFill(tint: Color, isIncognito: Bool) -> Color {
 #if canImport(UIKit)
             let base = Color(uiColor: isIncognito ? .black : .secondarySystemBackground)
@@ -172,6 +183,8 @@ enum ShellTheme {
         static let homeTopSpacer: CGFloat = 28
         static let homeBottomSpacer: CGFloat = 52
         static let tabPreviewHeight: CGFloat = 132
+        static let tabGroupSuggestionPreviewHeight: CGFloat = 80
+        static let chatAttachmentThumbnail: CGFloat = 80
         static let tabGridCardMin: CGFloat = 152
         static let tabGridCardMax: CGFloat = 188
         static let tabGridFavicon: CGFloat = 34
@@ -183,6 +196,7 @@ enum ShellTheme {
         static let tabGridEmptyDeckFrontHeight: CGFloat = 116
         static let summaryStateIcon: CGFloat = 36
         static let incognitoBannerMaxWidth: CGFloat = 420
+        static let visualSearchPreviewMaxWidth: CGFloat = 420
         static let summaryDetentMaxWidth: CGFloat = 560
         static let bottomInsetWithBar: CGFloat = 78
         static let bottomInsetWithoutBar: CGFloat = 24

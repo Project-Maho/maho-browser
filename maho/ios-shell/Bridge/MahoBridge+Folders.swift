@@ -17,6 +17,16 @@ extension MahoBridge {
         sendEvent(.createFolder(spaceId: spaceId, name: name, isPinned: isPinned))
     }
 
+    func createFolderAndReturnModel(name: String, spaceId: SpaceId) -> FolderViewModel? {
+        let updates = handleEvent(.createFolder(spaceId: spaceId, name: name, isPinned: false))
+        for update in updates {
+            if case .folderCreated(let folder) = update {
+                return folder
+            }
+        }
+        return nil
+    }
+
     func deleteFolder(id folderId: FolderId, spaceId: SpaceId) {
         sendEvent(.deleteFolder(spaceId: spaceId, folderId: folderId))
     }

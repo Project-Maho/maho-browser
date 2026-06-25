@@ -63,29 +63,15 @@ extension MahoBridge {
     }
 
     func byokGetKey(provider: String) -> String? {
-        withCore { ptr in
-            FFIString.withCString(provider) { providerPointer in
-                FFIString.consume(ffiByokGetKey(ptr, providerPointer))
-            }
-        } ?? nil
+        return BYOKKeychain.get(provider: provider)
     }
 
     func byokSetKey(provider: String, key: String) -> Bool {
-        withCore { ptr in
-            FFIString.withCString(provider) { providerPointer in
-                FFIString.withCString(key) { keyPointer in
-                    ffiByokSetKey(ptr, providerPointer, keyPointer)
-                }
-            }
-        } ?? false
+        return BYOKKeychain.set(provider: provider, key: key)
     }
 
     func byokDeleteKey(provider: String) -> Bool {
-        withCore { ptr in
-            FFIString.withCString(provider) { providerPointer in
-                ffiByokDeleteKey(ptr, providerPointer)
-            }
-        } ?? false
+        return BYOKKeychain.delete(provider: provider)
     }
 
     func byokValidateKey(provider: String, key: String) -> Bool {

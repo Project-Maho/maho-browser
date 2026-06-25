@@ -5,17 +5,34 @@ struct RelayAccount: Codable, Equatable {
     let id: String?
     let email: String
     let displayName: String?
+
+    init(id: String? = nil, email: String, displayName: String?) {
+        self.id = id
+        self.email = email
+        self.displayName = displayName
+    }
 }
 
 struct RelayDevice: Codable, Equatable {
     let id: String?
     let name: String?
     let deviceType: String?
+
+    init(id: String? = nil, name: String? = nil, deviceType: String? = nil) {
+        self.id = id
+        self.name = name
+        self.deviceType = deviceType
+    }
 }
 
 struct RelaySessionInfo: Codable, Equatable {
     let id: String?
+
+    init(id: String? = nil) {
+        self.id = id
+    }
 }
+
 
 struct RelayAuthSession: Codable, Equatable {
     let accessToken: String
