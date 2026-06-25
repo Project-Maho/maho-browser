@@ -20,7 +20,9 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "components/favicon/core/favicon_service.h"
-#include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/favicon_status.h"
+#include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
@@ -592,6 +594,13 @@ void MahoSidebarFavoritesGridView::Update(
       }
       GURL url = contents->GetVisibleURL();
       if (!url.is_valid()) {
+        continue;
+      }
+      content::NavigationEntry* entry =
+          contents->GetController().GetLastCommittedEntry();
+      const bool has_real_favicon =
+          entry && entry->GetFavicon().valid;
+      if (!has_real_favicon) {
         continue;
       }
       auto* tab_iface = tabs::TabInterface::GetFromContents(contents);
