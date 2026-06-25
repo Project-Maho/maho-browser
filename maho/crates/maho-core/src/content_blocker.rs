@@ -262,6 +262,174 @@ impl ContentBlocker {
             .deserialize(data)
             .map_err(|e| format!("{e:?}"))
     }
+
+    pub fn get_content_rules(&self) -> String {
+        if !self.enabled {
+            return "[]".to_string();
+        }
+
+        let mut rules: serde_json::Value = serde_json::Value::Array(Vec::new());
+        let rules_arr = rules.as_array_mut().unwrap();
+
+        // 1. Add site exceptions first (ignore-previous-rules)
+        for origin in &self.site_exceptions {
+            let escaped = regex::escape(origin);
+            rules_arr.push(serde_json::json!({
+                "trigger": {
+                    "url-filter": format!("^https?://([^/]+\\.)?{}(/|$)", escaped)
+                },
+                "action": {
+                    "type": "ignore-previous-rules"
+                }
+            }));
+        }
+
+        // 2. Translate filter lists
+        for fl in &self.filter_lists {
+            if !fl.enabled {
+                continue;
+            }
+            if let Some(content) = self.filter_list_contents.get(&fl.id) {
+                for line in content.lines() {
+                    let line = line.trim();
+                    if line.is_empty() || line.starts_with('!') || line.starts_with('[') {
+                        continue;
+                    }
+
+                    // Cosmetic display-none rules
+                    if let Some(pos) = line.find("##") {
+                        let (domains_part, selector_part) = line.split_at(pos);
+                        let selector = &selector_part[2..].trim(); // skip "##"
+                        if selector.is_empty() {
+                            continue;
+                        }
+
+                        let mut trigger = serde_json::json!({
+                            "url-filter": ".*"
+                        });
+
+                        if !domains_part.is_empty() {
+                            let mut if_domains = Vec::new();
+                            let mut unless_domains = Vec::new();
+                            for dom in domains_part.split(',') {
+                                let dom = dom.trim();
+                                if dom.starts_with('~') {
+                                    unless_domains.push(dom[1..].to_string());
+                                } else {
+                                    if_domains.push(dom.to_string());
+                                }
+                            }
+                            if !if_domains.is_empty() {
+                                trigger["if-domain"] = serde_json::json!(if_domains);
+                            }
+                            if !unless_domains.is_empty() {
+                                trigger["unless-domain"] = serde_json::json!(unless_domains);
+                            }
+                        }
+
+                        rules_arr.push(serde_json::json!({
+                            "trigger": trigger,
+                            "action": {
+                                "type": "css-display-none",
+                                "selector": selector
+                            }
+                        }));
+                        continue;
+                    }
+
+                    // Exception rules starting with "@@"
+                    let is_exception = line.starts_with("@@");
+                    let rest = if is_exception { &line[2..] } else { line };
+
+                    // Parse options at the end (e.g. $third-party)
+                    let (rule_part, options_part) = if let Some(idx) = rest.find('$') {
+                        let (r, o) = rest.split_at(idx);
+                        (r, Some(&o[1..]))
+                    } else {
+                        (rest, None)
+                    };
+
+                    if rule_part.is_empty() {
+                        continue;
+                    }
+
+                    let mut is_domain_anchor = false;
+                    let mut r = rule_part;
+
+                    if r.starts_with("||") {
+                        is_domain_anchor = true;
+                        r = &r[2..];
+                    }
+
+                    let mut has_wildcard_end = false;
+                    if r.ends_with('^') {
+                        has_wildcard_end = true;
+                        r = &r[..r.len() - 1];
+                    }
+
+                    let escaped_r = regex::escape(r);
+
+                    let url_filter = if is_domain_anchor {
+                        if has_wildcard_end {
+                            format!("^https?://([^/]+\\.)?{}(/|$)", escaped_r)
+                        } else {
+                            format!("^https?://([^/]+\\.)?{}", escaped_r)
+                        }
+                    } else {
+                        escaped_r.replace("\\*", ".*")
+                    };
+
+                    let mut trigger = serde_json::json!({
+                        "url-filter": url_filter
+                    });
+
+                    if let Some(opts) = options_part {
+                        let mut load_types = Vec::new();
+                        let mut resource_types = Vec::new();
+                        for opt in opts.split(',') {
+                            let opt = opt.trim();
+                            match opt {
+                                "third-party" => load_types.push("third-party"),
+                                "first-party" => load_types.push("first-party"),
+                                "script" => resource_types.push("script"),
+                                "stylesheet" | "css" => resource_types.push("style-sheet"),
+                                "image" => resource_types.push("image"),
+                                "subdocument" => resource_types.push("document"),
+                                "xmlhttprequest" => resource_types.push("raw"),
+                                _ => {}
+                            }
+                        }
+                        if !load_types.is_empty() {
+                            trigger["load-type"] = serde_json::json!(load_types);
+                        }
+                        if !resource_types.is_empty() {
+                            trigger["resource-type"] = serde_json::json!(resource_types);
+                        }
+                    }
+
+                    let action_type = if is_exception {
+                        "ignore-previous-rules"
+                    } else {
+                        "block"
+                    };
+
+                    rules_arr.push(serde_json::json!({
+                        "trigger": trigger,
+                        "action": {
+                            "type": action_type
+                        }
+                    }));
+                }
+            }
+        }
+
+        // Limit rule count to prevent WKWebView compile performance issues/crash
+        if rules_arr.len() > 20000 {
+            rules_arr.truncate(20000);
+        }
+
+        serde_json::to_string(&rules).unwrap_or_else(|_| "[]".to_string())
+    }
 }
 
 pub fn default_filter_lists() -> Vec<(String, String, String)> {

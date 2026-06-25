@@ -1038,6 +1038,10 @@ impl MahoCore {
         self.storage.as_ref()
     }
 
+    pub fn sqlite_db_path(&self) -> Option<&str> {
+        self.storage.as_ref().map(|s| s.path())
+    }
+
     pub fn with_storage(mut self, path: &str) -> Self {
         match maho_storage::sqlite::SqliteStorage::open(path) {
             Ok(storage) => {
@@ -4566,6 +4570,10 @@ impl MahoCore {
 
     pub fn rebuild_content_rules(&mut self) {
         self.content_blocker.rebuild_engine();
+    }
+
+    pub fn get_content_rules(&self) -> String {
+        self.content_blocker.get_content_rules()
     }
 
     pub fn get_filter_lists_json(&self) -> String {

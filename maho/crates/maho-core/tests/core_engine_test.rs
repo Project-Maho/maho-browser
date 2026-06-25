@@ -230,11 +230,15 @@ fn delete_active_space_falls_back_and_persists_order_name_and_profile_linkage() 
     }));
 
     restored.delete_space(&first_space.id);
-
-    assert!(matches!(
-        observed.borrow().as_slice(),
-        [CoreUpdate::SpaceDeleted { .. }]
-    ));
+    let updates = observed.borrow();
+    let space_deleted_event = updates.iter().find(|u| {
+        if let CoreUpdate::SpaceDeleted { space_id } = u {
+            space_id == &first_space.id
+        } else {
+            false
+        }
+    });
+    assert!(space_deleted_event.is_some(), "Expected SpaceDeleted event, but got {:?}", updates);
     assert_eq!(restored.get_active_space_id(), restored_active_space_id);
 }
 

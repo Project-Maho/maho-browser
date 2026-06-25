@@ -36,7 +36,7 @@ fn bench_close_tab(c: &mut Criterion) {
             },
             |(mut core, tab_id)| {
                 if let Some(id) = tab_id {
-                    core.handle_event(ShellEvent::CloseTab { tab_id: id });
+                    core.handle_event(ShellEvent::CloseTab { tab_id: id, expected_space_id: None });
                 }
             },
         );
