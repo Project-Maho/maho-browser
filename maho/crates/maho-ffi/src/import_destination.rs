@@ -289,17 +289,47 @@ impl ImportDestination for MahoCoreDestination {
     }
 
     fn add_favicon(&self, url: &str, png_bytes: &[u8]) -> bool {
-        let Some(cb) = self.favicon_cb else { return false; };
-        let Some(url_c) = CString::new(url).ok() else { return false; };
-        unsafe {
-            cb(
-                url_c.as_ptr(),
-                png_bytes.as_ptr(),
-                png_bytes.len(),
-                self.user_data,
-            );
+        let mut delivered = false;
+
+        let matching: Vec<TabId> = self
+            .core_ref()
+            .tab_manager()
+            .get_all_tabs()
+            .iter()
+            .filter(|t| t.url.0 == url)
+            .map(|t| t.id.clone())
+            .collect();
+        if !matching.is_empty() {
+            let image = maho_types::common::ImageData {
+                data: png_bytes.to_vec(),
+                width: 16,
+                height: 16,
+                format: maho_types::common::ImageFormat::Png,
+            };
+            for tab_id in matching {
+                self.core_mut().handle_event(ShellEvent::TabFaviconUpdated {
+                    tab_id,
+                    favicon: Some(image.clone()),
+                });
+            }
+            delivered = true;
         }
-        true
+
+        if let Some(cb) = self.favicon_cb {
+            if let Ok(url_c) = CString::new(url) {
+                unsafe {
+                    cb(
+                        url_c.as_ptr(),
+                        png_bytes.as_ptr(),
+                        png_bytes.len(),
+                        self.user_data,
+                    );
+                }
+                delivered = true;
+            }
+        }
+
+        delivered
     }
 }
 
