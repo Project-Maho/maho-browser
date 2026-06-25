@@ -113,7 +113,8 @@ export function call<T>(method: string, params?: Record<string, unknown> | unkno
       sendNative(json);
     } catch (err) {
       _pending.delete(id);
-      reject(err);
+      const msg = err instanceof Error ? err.message : String(err);
+      reject(new Error(`${msg} (method: ${method})`));
     }
   });
 }

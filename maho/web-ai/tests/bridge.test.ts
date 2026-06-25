@@ -26,12 +26,12 @@ function bridgeWindow(): WindowWithBridge {
   return window as unknown as WindowWithBridge;
 }
 
-function respondTo(id: number, result: unknown) {
+function respondTo(id: string, result: unknown) {
   bridgeWindow().__mahoBridgeResponse(JSON.stringify({ id, result }));
 }
 
-function respondError(id: number, message: string) {
-  bridgeWindow().__mahoBridgeResponse(JSON.stringify({ id, error: { message } }));
+function respondError(id: string, kind: string) {
+  bridgeWindow().__mahoBridgeResponse(JSON.stringify({ id, error: { kind } }));
 }
 
 describe('callBridge', () => {
@@ -43,11 +43,11 @@ describe('callBridge', () => {
     const promise = callBridge<string[]>('byokGetProviders');
 
     expect(rpcSpy).toHaveBeenCalledOnce();
-    const sent = JSON.parse(rpcSpy.mock.calls[0]![0]) as { jsonrpc: string; method: string; params: unknown[]; id: number };
+    const sent = JSON.parse(rpcSpy.mock.calls[0]![0]) as { jsonrpc: string; method: string; params: unknown[]; id: string };
     expect(sent.jsonrpc).toBe('2.0');
     expect(sent.method).toBe('byokGetProviders');
     expect(Array.isArray(sent.params)).toBe(true);
-    expect(typeof sent.id).toBe('number');
+    expect(typeof sent.id).toBe('string');
 
     respondTo(sent.id, ['openai', 'anthropic']);
     await expect(promise).resolves.toEqual(['openai', 'anthropic']);
@@ -57,8 +57,8 @@ describe('callBridge', () => {
     const p1 = callBridge<boolean>('byokSetKey', ['openai', 'sk-test']);
     const p2 = callBridge<boolean>('byokValidateKey', ['anthropic', 'sk-ant-test']);
 
-    const id1 = (JSON.parse(rpcSpy.mock.calls[0]![0]) as { id: number }).id;
-    const id2 = (JSON.parse(rpcSpy.mock.calls[1]![0]) as { id: number }).id;
+    const id1 = (JSON.parse(rpcSpy.mock.calls[0]![0]) as { id: string }).id;
+    const id2 = (JSON.parse(rpcSpy.mock.calls[1]![0]) as { id: string }).id;
 
     // Respond out of order
     respondTo(id2, false);
@@ -70,7 +70,7 @@ describe('callBridge', () => {
 
   it('rejects when native returns an error object', async () => {
     const promise = callBridge<string | null>('byokGetKey', ['openai']);
-    const id = (JSON.parse(rpcSpy.mock.calls[0]![0]) as { id: number }).id;
+    const id = (JSON.parse(rpcSpy.mock.calls[0]![0]) as { id: string }).id;
 
     respondError(id, 'Core not initialised');
     await expect(promise).rejects.toThrow('Core not initialised');
@@ -78,7 +78,7 @@ describe('callBridge', () => {
 
   it('passes params correctly', async () => {
     const promise = callBridge<boolean>('byokSetKey', ['openai', 'sk-abc123']);
-    const sent = JSON.parse(rpcSpy.mock.calls[0]![0]) as { params: unknown[]; id: number };
+    const sent = JSON.parse(rpcSpy.mock.calls[0]![0]) as { params: unknown[]; id: string };
     expect(sent.params).toEqual(['openai', 'sk-abc123']);
 
     respondTo(sent.id, true);
@@ -90,7 +90,7 @@ describe('callBridge', () => {
     const original = (window as unknown as WindowWithBridge).MahoBridgeAndroid;
     delete (window as unknown as { MahoBridgeAndroid?: unknown }).MahoBridgeAndroid;
 
-    await expect(callBridge('byokGetProviders')).rejects.toThrow('no transport available');
+    await expect(callBridge('byokGetProviders')).rejects.toThrow('no native transport available');
 
     (window as unknown as WindowWithBridge).MahoBridgeAndroid = original;
   });

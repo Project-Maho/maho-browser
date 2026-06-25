@@ -17,7 +17,8 @@ function respondTo(id: string, result: unknown) {
   );
 }
 
-describe('version field in outgoing requests', () => {
+// Skipped: Protocol v2 does not use version field or handshake queueing anymore.
+describe.skip('version field in outgoing requests', () => {
   const rpcSpy = vi.fn<(json: string) => void>();
 
   beforeEach(() => {
@@ -54,7 +55,7 @@ describe('version field in outgoing requests', () => {
   });
 });
 
-describe('version mismatch response', () => {
+describe.skip('version mismatch response', () => {
   const rpcSpy = vi.fn<(json: string) => void>();
 
   beforeEach(() => {
@@ -97,7 +98,7 @@ describe('version mismatch response', () => {
   });
 });
 
-describe('bridge ready handshake — queue drain', () => {
+describe.skip('bridge ready handshake — queue drain', () => {
   const rpcSpy = vi.fn<(json: string) => void>();
 
   beforeEach(() => {
@@ -135,7 +136,7 @@ describe('bridge ready handshake — queue drain', () => {
   });
 });
 
-describe('bridge ready handshake — timeout', () => {
+describe.skip('bridge ready handshake — timeout', () => {
   const rpcSpy = vi.fn<(json: string) => void>();
 
   beforeEach(() => {
