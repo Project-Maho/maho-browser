@@ -1324,11 +1324,14 @@ function historyToMessages(history: BridgeChatMessage[]): MessageItem[] {
     });
 
     for (const toolCall of message.toolCalls ?? []) {
+      const rawArgsStr = typeof toolCall.args === 'string'
+        ? toolCall.args
+        : JSON.stringify(toolCall.args ?? {});
       messages.push({
-        argsText: formatToolArguments(toolCall.args),
+        argsText: formatToolArguments(rawArgsStr, typeof toolCall.args !== 'string' ? toolCall.args : undefined),
         id: `${message.id}:${toolCall.id}`,
         kind: 'tool-request',
-        rawArguments: toolCall.args,
+        rawArguments: rawArgsStr,
         status: toolCall.result ? 'approved' : 'pending',
         toolCallId: toolCall.id,
         toolName: toolCall.tool,

@@ -126,7 +126,7 @@ function applyPinchEvent(state: State, event: PinchSummaryEvent): State {
         extractiveSentences:
           state.extractiveSentences.length > 0 ? state.extractiveSentences : event.sentences,
         llmSentences: [],
-        errorMessage: event.reason,
+        errorMessage: event.reason ?? null,
       };
     default:
       return state;

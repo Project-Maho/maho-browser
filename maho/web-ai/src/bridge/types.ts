@@ -10,17 +10,26 @@ export interface ConversationSession {
   updatedAt: string;
 }
 
+export interface ConversationMeta {
+  id: string;
+  title: string | null;
+  spaceId?: string | null;
+  model?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ConversationTurn {
   id: string;
   sessionId: string;
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   urlContext: string | null;
   createdAt: string;
 }
 
 export interface SpaceAIConfig {
-  spaceId: string;
+  spaceId?: string;
   model: string | null;
   systemInstruction: string | null;
   enabled: boolean;
@@ -40,12 +49,91 @@ export interface PhotoCapture {
 
 export type HapticStyle = 'light' | 'medium' | 'heavy';
 
+export type SessionHandle = string;
+export type Provider = string;
+export type Platform = 'ios' | 'android' | 'unknown';
+
+export type BridgeError =
+  | { kind: 'session_invalid'; id: string }
+  | { kind: 'method_unknown'; method: string }
+  | { kind: 'params_invalid'; method: string; reason: string }
+  | { kind: 'native_error'; method: string; reason: string };
+
+export type ChatEvent =
+  | { kind: 'token'; token: string }
+  | { kind: 'tool_call'; toolCallId: string; name: string; args: Record<string, unknown> }
+  | { kind: 'complete'; content: string }
+  | { kind: 'error'; message: string };
+
+export type ChatContent =
+  | { kind: 'text'; text: string }
+  | { kind: 'image'; mime: string; base64: string; text?: string };
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string;
+  toolCalls?: ToolCallRecord[];
+}
+
+export interface ToolCallRecord {
+  id: string;
+  tool: string;
+  args: unknown;
+  result?: string;
+}
+
+export interface ChatSessionOpts {
+  apiKey?: string;
+  endpoint?: string;
+  model?: string;
+  systemInstruction?: string;
+}
+
+export interface CostEstimate {
+  inputTokens: number;
+  outputTokens: number;
+  estimatedCostUsd: number;
+  model: string;
+}
+
+export interface KeyValidationResult {
+  valid: boolean;
+  error?: string;
+}
+
+export interface PinchSummaryEvent {
+  kind: 'extractive_default' | 'llm_pending' | 'llm_streaming' | 'llm_success' | 'llm_failed';
+  tabId: string;
+  sentences: string[];
+  reason?: string;
+}
+
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  parameters?: Record<string, unknown>;
+}
+
+export type ToolResult = Record<string, unknown>;
+
+export interface RpcRequest {
+  jsonrpc: '2.0';
+  id: string;
+  method: string;
+  params?: Record<string, unknown> | unknown[];
+}
+
+export interface RpcResponse {
+  jsonrpc: '2.0';
+  id: string;
+  result?: unknown;
+  error?: BridgeError;
+}
+
 /**
  * Typed bridge surface. Every method returns a Promise — the RPC
- * dispatcher maps each call to the appropriate platform mechanism:
- *   iOS   → window.webkit.messageHandlers.mahoBridge
- *   Android → window.MahoBridgeAndroid.rpc(json)
- *   Desktop → existing Mojo page handler (unchanged)
+ * dispatcher maps each call to the appropriate platform mechanism.
  */
 export interface MahoBridge {
   // --- BYOK ---
@@ -56,52 +144,33 @@ export interface MahoBridge {
   byokValidateKey(provider: string, key: string): Promise<boolean>;
 
   // --- Chat Session ---
-  chatSessionNew(
-    apiKey: string,
-    endpoint: string,
-    model: string,
-    systemInstruction: string,
-  ): Promise<number>;
-  chatSendUserTurn(sessionPtr: number, message: string): Promise<boolean>;
-  chatSendImage(sessionPtr: number, mime: string, data: Uint8Array): Promise<boolean>;
-  chatSendTextWithImage(
-    sessionPtr: number,
-    text: string,
-    mime: string,
-    data: Uint8Array,
-  ): Promise<boolean>;
-  chatCancel(sessionPtr: number): Promise<void>;
-  chatSessionFree(sessionPtr: number): Promise<void>;
-  chatSessionPollEvent(sessionPtr: number): Promise<string | null>;
+  chatSessionStart(opts: ChatSessionOpts): Promise<SessionHandle>;
+  chatSessionResume(handle: SessionHandle): Promise<void>;
+  chatSessionFree(handle: SessionHandle): Promise<void>;
+  chatSendMessage(handle: SessionHandle, content: ChatContent): Promise<void>;
+  chatCancelTurn(handle: SessionHandle): Promise<void>;
+  chatPollEvents(handle: SessionHandle): Promise<ChatEvent[]>;
+  chatRegisterTool(handle: SessionHandle, tool: ToolDefinition): Promise<void>;
+  chatSendToolResult(handle: SessionHandle, toolCallId: string, result: ToolResult): Promise<void>;
+  chatAppendAssistantMessage(handle: SessionHandle, content: string): Promise<void>;
+  chatGetHistory(handle: SessionHandle): Promise<ChatMessage[]>;
 
   // --- Conversations ---
-  createConversation(
-    id: string,
-    title: string | null,
-    spaceId: string | null,
-    model: string | null,
-  ): Promise<boolean>;
-  listConversations(limit?: number): Promise<ConversationSession[]>;
-  getConversationMessages(sessionId: string): Promise<ConversationTurn[]>;
-  saveConversationMessage(
-    sessionId: string,
-    role: string,
-    content: string,
-    urlContext: string | null,
-  ): Promise<boolean>;
-  deleteConversation(sessionId: string): Promise<boolean>;
-  renameConversation(sessionId: string, title: string): Promise<boolean>;
+  conversationCreate(meta: ConversationMeta): Promise<string>;
+  conversationList(): Promise<ConversationMeta[]>;
+  conversationGet(sessionId: string): Promise<ConversationMeta | null>;
+  conversationDelete(sessionId: string): Promise<boolean>;
+  conversationRename(sessionId: string, title: string): Promise<boolean>;
+  conversationGetMessages(sessionId: string): Promise<ChatMessage[]>;
 
   // --- Space AI Config ---
   getSpaceAIConfig(spaceId: string): Promise<SpaceAIConfig | null>;
-  setSpaceAIConfig(spaceId: string, config: SpaceAIConfig): Promise<boolean>;
+  setSpaceAIConfig(spaceId: string, config: SpaceAIConfig): Promise<void>;
 
-  // --- Offline Model ---
-  offlineModelInfo(): Promise<OfflineModelInfo | null>;
-  offlineModelIsDownloaded(): Promise<boolean>;
-  offlineModelDelete(): Promise<boolean>;
+  // --- Pinch ---
+  pinchEstimateCost(pageContent: string, requestedModel?: string): Promise<CostEstimate>;
 
-  // --- Native-only actions (platform provides; Rust not involved) ---
+  // --- Native-only actions ---
   capturePhoto(): Promise<PhotoCapture | null>;
   captureScreenshot(): Promise<Uint8Array | null>;
   openSettings(): Promise<void>;

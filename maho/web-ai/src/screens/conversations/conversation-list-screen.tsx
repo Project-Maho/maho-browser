@@ -506,7 +506,7 @@ export function ConversationListScreen({
 }
 
 function displayTitle(conversation: ConversationMeta): string {
-  const title = conversation.title.trim();
+  const title = conversation.title?.trim() ?? '';
   return title.length > 0 ? title : 'Untitled chat';
 }
 
