@@ -1,0 +1,1230 @@
+/* Welcome screen wizard layout */
+
+:root {
+  /* Branding (Zen-equivalent — derived from zen-onboarding-reference dossier) */
+  --maho-branding-dark: #101010;
+  --maho-branding-paper: #e2e2e2;
+  --maho-branding-bg: light-dark(#e2e2e2, #101010);
+  --maho-branding-bg-reverse: light-dark(#101010, #e2e2e2);
+  --maho-branding-serif: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --maho-welcome-splash-title-size: clamp(3.5rem, 5vw + 1rem, 8rem);
+  --maho-welcome-splash-title-max-width: 50%;
+  --maho-welcome-splash-cta-offset: 10%;
+  --maho-welcome-splash-cta-padding: 1em;
+  --maho-welcome-splash-cta-min-width: 100px;
+
+  /* Primary accent (defaults to system blue, theme-able later) */
+  --maho-primary-color: light-dark(#5b4fcf, #7c6fef);
+
+  /* Color derivations via color-mix (Zen formula) */
+  --maho-colors-primary: light-dark(
+    color-mix(in srgb, var(--maho-primary-color) 50%, black),
+    color-mix(in srgb, var(--maho-primary-color) 20%, #101010)
+  );
+  --maho-colors-secondary: light-dark(
+    color-mix(in srgb, var(--maho-colors-primary) 20%, white),
+    color-mix(in srgb, var(--maho-primary-color) 30%, #101010)
+  );
+  --maho-colors-tertiary: light-dark(
+    color-mix(in srgb, var(--maho-primary-color) 2%, white),
+    color-mix(in srgb, var(--maho-primary-color) 1%, #101010)
+  );
+  --maho-colors-border: light-dark(
+    color-mix(in srgb, var(--maho-colors-secondary) 50%, transparent),
+    color-mix(in srgb, var(--maho-colors-secondary) 20%, rgb(79,79,79))
+  );
+
+  /* Backgrounds */
+  --maho-dialog-background: light-dark(#fafbff, #1c1c1c);
+  --maho-urlbar-background: light-dark(
+    color-mix(in srgb, var(--maho-primary-color) 3%, #f4f4f4),
+    color-mix(in srgb, var(--maho-primary-color) 4%, rgb(24,24,24))
+  );
+  --maho-main-browser-background: light-dark(rgb(235,235,235), #1b1b1b);
+  --maho-toolbar-element-bg: light-dark(rgba(255,255,255,0.7), rgba(0,0,0,0.4));
+  --maho-essential-tab-icon: light-dark(#5b4fcf, #a89bff);
+  --maho-essentials-browser-background: light-dark(rgba(255,255,255,0.5), rgba(0,0,0,0.2));
+  --maho-essentials-sidebar-background: light-dark(rgba(255,255,255,0.7), rgba(0,0,0,0.4));
+
+  /* Shadows (Zen's exact value) */
+  --maho-big-shadow: rgba(0, 0, 0, 0.24) 0px 3px 8px;
+
+  --maho-shell-radius: 1em;
+  --maho-shell-sidebar-padding: clamp(3.8rem, 4vw, 7rem);
+  --maho-shell-content-gap: 1.6rem;
+  --maho-shell-content-bg: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1));
+
+  /* Border-radius scale */
+  --maho-border-radius: 7px;
+  --maho-border-radius-medium: 1rem;
+  --maho-border-radius-large: 1.2em;
+  --maho-button-border-radius: 8px;
+
+  /* Tab tile dimensions for essentials mock */
+  --maho-tab-min-height: 6rem;
+  --maho-tab-min-width: 5rem;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--maho-branding-bg);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'kern', 'liga';
+}
+
+#app {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+.welcome-shell,
+.welcome-wizard {
+  display: flex;
+  width: 60vw;
+  height: 60vh;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: var(--maho-shell-radius);
+  overflow: hidden;
+  box-shadow: var(--maho-big-shadow);
+  background: var(--maho-branding-bg);
+}
+
+.welcome-shell__sidebar,
+.welcome-sidebar {
+  width: 40%;
+  display: flex;
+  flex-direction: column;
+  padding: var(--maho-shell-sidebar-padding);
+  box-sizing: border-box;
+}
+
+.welcome-shell__sidebar-content,
+.welcome-sidebar__content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.welcome-shell__sidebar-content h1,
+.welcome-sidebar__content h1 {
+  font-family: var(--maho-branding-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
+  font-size: 1.75rem;
+  font-weight: 500;
+  margin: 0 0 1rem 0;
+  line-height: 1.2;
+}
+
+.welcome-shell__sidebar-content p,
+.welcome-sidebar__content p {
+  margin: 0 0 1rem 0;
+  opacity: 0.6;
+  line-height: 1.5;
+}
+
+.welcome-shell__sidebar-nav,
+.welcome-sidebar__nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+  align-items: flex-start;
+}
+
+.welcome-shell__sidebar-nav .welcome-steps,
+.welcome-sidebar__nav .welcome-steps {
+  margin-bottom: 1rem;
+  align-self: flex-start;
+}
+
+.welcome-shell__content,
+.welcome-content {
+  width: 60%;
+  background: var(--maho-shell-content-bg);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.welcome-shell__content-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--maho-shell-content-gap);
+  width: 100%;
+  padding: var(--maho-shell-sidebar-padding);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.welcome-shell__content-actions,
+.welcome-content__actions {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 0 var(--maho-shell-sidebar-padding) var(--maho-shell-sidebar-padding);
+  gap: 0.75rem;
+  box-sizing: border-box;
+}
+
+.welcome-shell__content-actions .welcome-button--primary,
+.welcome-content__actions .welcome-button--primary {
+  min-width: 140px;
+  padding: 0.6rem 1.5rem;
+}
+
+.welcome-select {
+  appearance: none;
+  border: 1px solid var(--maho-colors-border);
+  border-radius: var(--maho-button-border-radius, 8px);
+  padding: 0.6rem 2.5rem 0.6rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  background-color: var(--maho-toolbar-element-bg);
+  color: inherit;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'></polyline></svg>");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  background-size: 1rem;
+  transition: border-color 150ms, background-color 150ms, box-shadow 150ms;
+  outline: none;
+}
+
+.welcome-select:hover {
+  border-color: color-mix(in srgb, var(--maho-colors-border) 50%, var(--maho-colors-primary, #5b4fcf));
+  background-color: color-mix(in srgb, var(--maho-toolbar-element-bg) 92%, var(--maho-colors-primary, #5b4fcf));
+}
+
+.welcome-select:focus-visible {
+  border-color: var(--maho-colors-primary, #5b4fcf);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--maho-colors-primary, #5b4fcf) 20%, transparent);
+}
+
+@media (max-width: 1400px) {
+  .welcome-shell,
+  .welcome-wizard {
+    width: 80%;
+    height: 80%;
+  }
+}
+
+@media (max-width: 1200px) {
+  .welcome-shell,
+  .welcome-wizard {
+    width: 90%;
+    height: 90%;
+  }
+}
+
+@media (max-width: 1000px) {
+  .welcome-shell,
+  .welcome-wizard {
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+  }
+}
+
+/* Page transition animations */
+.page-enter {
+  opacity: 0;
+  transform: translateX(30px);
+}
+
+.page-enter-active {
+  opacity: 1;
+  transform: translateX(0);
+  transition: opacity 300ms ease-out, transform 300ms ease-out;
+}
+
+.page-exit-active {
+  opacity: 0;
+  transform: translateX(-30px);
+  transition: opacity 200ms ease-in, transform 200ms ease-in;
+}
+
+/* Splash screen */
+.welcome-splash {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  text-align: center;
+}
+
+.welcome-splash__title {
+  margin: 0;
+  font-family: var(--maho-branding-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
+  font-size: var(--maho-welcome-splash-title-size);
+  font-weight: 500;
+  line-height: 1.1;
+  max-width: var(--maho-welcome-splash-title-max-width);
+  font-feature-settings: 'kern', 'liga';
+  text-align: center;
+}
+
+.welcome-splash__title > span {
+  display: block;
+  opacity: 0;
+}
+
+@keyframes fadeUp {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Step indicator */
+.welcome-steps {
+  display: flex;
+  gap: 6px;
+  margin-top: 1rem;
+}
+
+.welcome-steps__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-sys-on-surface, currentColor);
+  opacity: 0.2;
+  transition: opacity 200ms;
+}
+
+.welcome-steps__dot.is-active {
+  opacity: 0.8;
+}
+
+.welcome-steps__dot.is-completed {
+  opacity: 0.4;
+}
+
+/* Button styles */
+.welcome-button {
+  appearance: none;
+  border: 1px solid var(--color-sys-outline, rgba(0, 0, 0, 0.15));
+  border-radius: 8px;
+  padding: 10px 20px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  background: transparent;
+  color: inherit;
+  transition: background 150ms, border-color 150ms;
+}
+
+.welcome-button:hover {
+  background: var(--color-sys-state-hover, rgba(0, 0, 0, 0.04));
+}
+
+.welcome-button--primary {
+  background: var(--maho-primary-color);
+  color: #fff;
+  border-color: transparent;
+}
+
+.welcome-button--primary:hover {
+  background: color-mix(in srgb, var(--maho-primary-color) 85%, #000);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--maho-primary-color) 40%, transparent);
+}
+
+.welcome-button--skip {
+  opacity: 0.7;
+}
+
+.welcome-button--skip:hover {
+  opacity: 1;
+}
+
+.welcome-splash__subtitle {
+  margin: 1rem 0 0;
+  opacity: 0.6;
+  font-size: 1rem;
+}
+
+.welcome-splash__cta {
+  position: absolute;
+  left: 50%;
+  bottom: var(--maho-welcome-splash-cta-offset);
+  transform: translateX(-50%);
+  width: var(--maho-welcome-splash-cta-min-width);
+  height: var(--maho-welcome-splash-cta-min-width);
+  border-radius: 50%;
+  border: 2px solid var(--color-sys-on-surface, currentColor);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: background 150ms;
+}
+
+.welcome-splash__cta:hover {
+  background: var(--color-sys-state-hover, rgba(0, 0, 0, 0.04));
+}
+
+.welcome-shell__content > *,
+.welcome-content > * {
+  width: 100%;
+}
+
+/* Hint text */
+.welcome-hint {
+  font-size: 0.8125rem;
+  opacity: 0.45;
+  font-style: italic;
+}
+
+/* Import page */
+.welcome-import {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  text-align: left;
+  padding: 2rem;
+  gap: 1rem;
+  box-sizing: border-box;
+}
+
+.welcome-import__icon {
+  opacity: 0.6;
+}
+
+.welcome-import__title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.welcome-import__description {
+  max-width: 280px;
+  opacity: 0.6;
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* Stage A import graphic (circles + arrow) */
+.welcome-import-stage-a {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.welcome-import-graphic {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
+.welcome-import-graphic__icon-group {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.welcome-import-graphic__circle {
+  width: clamp(80px, 10vw, 160px);
+  height: clamp(80px, 10vw, 160px);
+  border-radius: 50%;
+  background: var(--maho-toolbar-element-bg);
+  border: 2px solid var(--maho-colors-border);
+  box-shadow: var(--maho-big-shadow);
+}
+
+.welcome-import-graphic__circle--source {
+  background: light-dark(rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0.1));
+}
+
+.welcome-import-graphic__circle--maho {
+  background: var(--maho-primary-color);
+  opacity: 0.85;
+}
+
+.welcome-import-graphic__arrow {
+  font-size: clamp(2rem, 4vw, 4rem);
+  opacity: 0.5;
+  color: var(--maho-colors-primary);
+}
+
+/* Default browser page */
+.welcome-default-browser {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+}
+
+.welcome-default-browser__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 200px;
+  height: 200px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--maho-primary-color, #5b4fcf) 12%, transparent);
+  color: var(--maho-primary-color, #5b4fcf);
+}
+
+.welcome-default-browser__icon img {
+  width: 120px;
+  height: 120px;
+  display: block;
+}
+
+.welcome-button--ghost {
+  background: transparent;
+  border: none;
+  opacity: 0.7;
+  padding: 10px 16px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  color: inherit;
+  font-family: inherit;
+  border-radius: 8px;
+  transition: opacity 150ms, background 150ms;
+}
+
+.welcome-button--ghost:hover {
+  opacity: 1;
+  background: var(--color-sys-state-hover, rgba(0, 0, 0, 0.04));
+}
+
+/* Search engine grid */
+.welcome-engines {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 1.5rem;
+  padding: 2.5rem 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.welcome-engines__empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  opacity: 0.5;
+}
+
+.welcome-engine-card {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-around;
+  gap: 0.75rem;
+  aspect-ratio: 1 / 0.8;
+  width: 100%;
+  padding: 1.25rem;
+  border-radius: var(--maho-border-radius-medium, 1rem);
+  border: 2px solid var(--maho-colors-border);
+  background: var(--maho-toolbar-element-bg);
+  cursor: pointer;
+  transition: transform 150ms, box-shadow 150ms, border-color 150ms, background 150ms;
+  color: inherit;
+  font-family: inherit;
+  grid-column: span 2;
+  position: relative;
+}
+
+.welcome-engine-card:not(.is-selected):hover {
+  transform: translateY(-2px);
+  box-shadow: var(--maho-big-shadow);
+  border-color: color-mix(in srgb, var(--maho-colors-border) 40%, var(--maho-colors-primary, #5b4fcf));
+}
+
+.welcome-engine-card.is-selected {
+  transform: scale(1.06);
+  border-color: var(--maho-colors-primary, #5b4fcf);
+  border-width: 3px;
+  background: color-mix(
+    in srgb,
+    var(--maho-toolbar-element-bg, rgba(255, 255, 255, 0.7)) 78%,
+    var(--maho-colors-primary, #5b4fcf)
+  );
+  box-shadow: var(--maho-big-shadow);
+}
+
+.welcome-engine-card.is-selected::after {
+  content: '';
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--maho-colors-primary, #5b4fcf);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'/></svg>");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 14px 14px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.welcome-engine-card:nth-child(4) {
+  grid-column: 2 / span 2;
+}
+
+.welcome-engine-card:nth-child(5) {
+  grid-column: 4 / span 2;
+}
+
+.welcome-engine-card__icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--maho-border-radius);
+  object-fit: contain;
+}
+
+.welcome-engine-card__icon--placeholder {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--maho-colors-tertiary);
+  font-size: 1.125rem;
+  font-weight: 600;
+  border-radius: var(--maho-border-radius);
+}
+
+.welcome-engine-card__name {
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+/* Theme grid */
+.welcome-themes {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  padding: 2rem 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.welcome-theme-card {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border-radius: 12px;
+  border: 2px solid var(--color-sys-outline, rgba(0, 0, 0, 0.1));
+  background: transparent;
+  cursor: pointer;
+  transition: border-color 150ms, box-shadow 150ms, transform 100ms;
+  overflow: hidden;
+  color: inherit;
+  font-family: inherit;
+}
+
+.welcome-theme-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.welcome-theme-card.is-selected {
+  border-color: var(--color-sys-primary, #1a73e8);
+  box-shadow: 0 0 0 1px var(--color-sys-primary, #1a73e8);
+  transform: scale(1.02);
+}
+
+.welcome-theme-card__swatch {
+  width: 100%;
+  aspect-ratio: 1.4;
+}
+
+.welcome-theme-card__name {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  padding: 6px 0 10px;
+}
+
+/* Completion page */
+.welcome-completion {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 2rem;
+  gap: 1rem;
+  width: 100%;
+  height: 100%;
+}
+
+.welcome-completion__check {
+  display: none;
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.welcome-completion__title {
+  font-family: var(--maho-branding-serif);
+  font-size: 1.5rem;
+  font-weight: 500;
+  margin: 0 0 0.5rem;
+}
+
+.welcome-completion__description {
+  max-width: 280px;
+  opacity: 0.6;
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* Page transition wrapper */
+.welcome-page-transition {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: pageSlideIn 350ms ease-out both;
+}
+
+.welcome-page-transition--forward {
+  animation-name: pageSlideInForward;
+}
+
+.welcome-page-transition--backward {
+  animation-name: pageSlideInBackward;
+}
+
+@keyframes pageSlideInForward {
+  from {
+    opacity: 0;
+    transform: translateX(40px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes pageSlideInBackward {
+  from {
+    opacity: 0;
+    transform: translateX(-40px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Essentials grid */
+.welcome-essentials {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  padding: 2rem 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.welcome-essentials__empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  opacity: 0.5;
+}
+
+.welcome-essential-card {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 1.25rem 1rem;
+  border-radius: 12px;
+  border: 2px solid var(--color-sys-outline, rgba(0, 0, 0, 0.1));
+  background: var(--color-sys-base-container, rgba(255, 255, 255, 0.7));
+  cursor: pointer;
+  transition: border-color 150ms, box-shadow 150ms, transform 100ms;
+  color: inherit;
+  font-family: inherit;
+  position: relative;
+}
+
+.welcome-essential-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.welcome-essential-card.is-selected {
+  border-color: var(--color-sys-primary, #1a73e8);
+  box-shadow: 0 0 0 1px var(--color-sys-primary, #1a73e8);
+  transform: scale(1.02);
+}
+
+.welcome-essential-card__icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--color-sys-surface, rgba(0, 0, 0, 0.06));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.welcome-essential-card__name {
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.welcome-essential-card__check {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--color-sys-primary, #1a73e8);
+  color: var(--color-sys-on-primary, #fff);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transform: scale(0.5);
+  transition: opacity 150ms, transform 150ms;
+}
+
+.welcome-essential-card.is-selected .welcome-essential-card__check {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* Heart animation (Zen-style completion) */
+.welcome-completion-stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.welcome-heart {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--maho-primary-color, var(--color-sys-primary, #e8425d));
+  opacity: 0.12;
+}
+
+.welcome-heart::before {
+  content: '';
+  width: 30%;
+  aspect-ratio: 1 / 1;
+  background-color: currentColor;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z'/></svg>") center/contain no-repeat;
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z'/></svg>") center/contain no-repeat;
+}
+
+.welcome-completion-pane {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 2rem;
+  z-index: 1;
+}
+
+
+
+.welcome-completion__tagline {
+  font-size: 1rem;
+  opacity: 0.6;
+  margin: 0;
+}
+
+@keyframes heartPulse {
+  0% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+
+  30% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+
+  50% {
+    transform: scale(0.95);
+  }
+
+  70% {
+    transform: scale(1.05);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes pageSlideOutRight {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+
+  to {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+}
+
+.welcome-completion--sliding-out {
+  animation: pageSlideOutRight 400ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+/* Import card list */
+.welcome-import__list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  max-width: 480px;
+  padding: 1.5rem;
+  box-sizing: border-box;
+  text-align: left;
+}
+
+.welcome-import__empty {
+  text-align: center;
+  opacity: 0.6;
+  padding: 2rem;
+}
+
+.welcome-import-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 1.25rem;
+  border-radius: 12px;
+  border: 1px solid var(--color-sys-outline, rgba(0, 0, 0, 0.12));
+  background: var(--color-sys-base-container, rgba(255, 255, 255, 0.85));
+}
+
+.welcome-import-card__name {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.welcome-import-card__items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.welcome-import-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.welcome-import-checkbox.is-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.welcome-import-checkbox input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  cursor: inherit;
+  accent-color: var(--color-sys-primary, #1a73e8);
+}
+
+.welcome-import-card__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 36px;
+}
+
+.welcome-import-card__status {
+  font-size: 0.875rem;
+  opacity: 0.7;
+  font-weight: 500;
+}
+
+.welcome-import-card__status--success {
+  color: var(--color-sys-primary, #1a73e8);
+  opacity: 1;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+.welcome-essentials-mock {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.welcome-essentials-mock__container {
+  width: 70%;
+  height: 80%;
+  min-width: 70%;
+  min-height: 80%;
+  margin-left: auto;
+  margin-top: auto;
+  padding-right: 20%;
+  box-sizing: border-box;
+  background: var(--maho-essentials-browser-background);
+  border: 1px solid var(--maho-colors-border, rgba(0, 0, 0, 0.12));
+  border-top-left-radius: var(--maho-border-radius-large, 1.2em);
+  border-bottom-width: 0;
+  border-right-width: 0;
+  box-shadow: var(--maho-big-shadow);
+  display: flex;
+  overflow: hidden;
+}
+
+.welcome-essentials-mock__sidebar {
+  flex: 1 1 auto;
+  height: 100%;
+  padding: 1.4rem;
+  box-sizing: border-box;
+  background: var(--maho-essentials-sidebar-background);
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+  border-top-left-radius: inherit;
+}
+
+.welcome-essentials-mock__win-buttons {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.welcome-essentials-mock__win-buttons > div {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.welcome-essentials-mock__win-buttons > div:nth-child(1) {
+  background: #FF5F56;
+}
+
+.welcome-essentials-mock__win-buttons > div:nth-child(2) {
+  background: #FFBD2E;
+}
+
+.welcome-essentials-mock__win-buttons > div:nth-child(3) {
+  background: #27C93F;
+}
+
+.welcome-essentials-mock__grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+
+.welcome-essentials-tile {
+  appearance: none;
+  border: 2px solid transparent;
+  min-height: var(--maho-tab-min-height, 6rem);
+  min-width: var(--maho-tab-min-width, 5rem);
+  border-radius: var(--maho-border-radius-medium, 1rem);
+  background: var(--maho-toolbar-element-bg, rgba(0, 0, 0, 0.06));
+  padding: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+  cursor: pointer;
+  transition: transform 0.1s, box-shadow 150ms, background 150ms, border-color 150ms;
+  position: relative;
+}
+
+.welcome-essentials-tile::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 1.8rem;
+  height: 1.8rem;
+  transform: translate(-50%, -50%);
+  border-radius: 4px;
+  background: var(--maho-essential-tab-icon);
+  opacity: 0.18;
+  transition: opacity 150ms;
+}
+
+.welcome-essentials-tile:not(.is-selected):hover {
+  transform: translateY(-2px);
+  box-shadow: var(--maho-big-shadow);
+  border-color: color-mix(in srgb, var(--maho-colors-border, rgba(0,0,0,0.15)) 40%, var(--maho-colors-primary, #5b4fcf));
+}
+
+.welcome-essentials-tile.is-selected {
+  transform: scale(1.06);
+  border-color: var(--maho-colors-primary, #5b4fcf);
+  background: color-mix(
+    in srgb,
+    var(--maho-toolbar-element-bg, rgba(255, 255, 255, 0.7)) 72%,
+    var(--maho-colors-primary, #5b4fcf)
+  );
+  box-shadow: var(--maho-big-shadow);
+}
+
+.welcome-essentials-tile.is-selected::before {
+  content: '';
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background-color: var(--maho-colors-primary, #5b4fcf);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'/></svg>");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 12px 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  z-index: 2;
+}
+
+.welcome-essentials-tile.is-selected::after {
+  opacity: 0.28;
+}
+
+.welcome-essentials-tile__icon,
+.welcome-essentials-tile__letter {
+  position: relative;
+  z-index: 1;
+}
+
+.welcome-essentials-tile__icon {
+  width: 2rem;
+  height: 2rem;
+  display: block;
+  object-fit: contain;
+}
+
+.welcome-essentials-tile__letter {
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.welcome-essentials-mock__extra {
+  display: none;
+}
+
+.welcome-completion-empty {
+  width: 100%;
+  height: 100%;
+}
+
+.welcome-engines--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.welcome-theme-picker-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2rem;
+  padding: 2rem;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.welcome-theme-preview {
+  width: 200px;
+  height: 200px;
+  border-radius: 16px;
+  box-shadow: var(--maho-big-shadow);
+}
+
+.welcome-theme-preview--empty {
+  background: var(--maho-toolbar-element-bg);
+  border: 2px dashed var(--maho-colors-border);
+}
+
+.welcome-theme-picker-button {
+  padding: 0.75rem 1.5rem;
+  background: transparent;
+  color: var(--maho-primary-color);
+  border: 2px solid var(--maho-primary-color);
+  border-radius: var(--maho-button-border-radius);
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 1rem;
+  transition: background 150ms, color 150ms;
+}
+
+.welcome-theme-picker-button:hover {
+  background: var(--maho-primary-color);
+  color: white;
+}

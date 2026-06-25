@@ -1,0 +1,43 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "lib": [
+      "DOM",
+      "DOM.Iterable",
+      "ES2022"
+    ],
+    "typeRoots": [
+      "../../../../../website/node_modules/@types"
+    ],
+    "paths": {
+      "react": [
+        "../../../../../website/node_modules/@types/react/index.d.ts"
+      ],
+      "react/jsx-runtime": [
+        "../../../../../website/node_modules/@types/react/jsx-runtime.d.ts"
+      ],
+      "react-dom/client": [
+        "../../../../../website/node_modules/@types/react-dom/client.d.ts"
+      ],
+      "motion": [
+        "../../../../../website/node_modules/motion/dist/index.d.ts"
+      ],
+      "//resources/maho_common/*": [
+        "../../maho_common/*"
+      ]
+    }
+  },
+  "include": [
+    "./**/*.ts",
+    "./**/*.tsx",
+    "../../maho_common/chrome_resources.d.ts"
+  ]
+}
