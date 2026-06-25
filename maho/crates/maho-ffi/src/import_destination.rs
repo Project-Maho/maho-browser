@@ -291,43 +291,45 @@ impl ImportDestination for MahoCoreDestination {
     fn add_favicon(&self, url: &str, png_bytes: &[u8]) -> bool {
         let mut delivered = false;
 
-        // Match by exact URL first, then fall back to host-prefix match.
-        // Arc/Chrome favicons are often keyed on a representative page URL
-        // (e.g. https://app.mural.co/) while imported tabs point at deep
-        // paths (https://app.mural.co/t/X/board/Y). Without the fallback
-        // only the rare exact match wins and the sidebar shows globes.
-        let url_host = url_host_lower(url);
-        let matching: Vec<TabId> = self
-            .core_ref()
-            .tab_manager()
-            .get_all_tabs()
-            .iter()
-            .filter(|t| {
-                if t.url.0 == url {
-                    return true;
+        if !self.core.0.is_null() {
+            // Match by exact URL first, then fall back to host-prefix match.
+            // Arc/Chrome favicons are often keyed on a representative page URL
+            // (e.g. https://app.mural.co/) while imported tabs point at deep
+            // paths (https://app.mural.co/t/X/board/Y). Without the fallback
+            // only the rare exact match wins and the sidebar shows globes.
+            let url_host = url_host_lower(url);
+            let matching: Vec<TabId> = self
+                .core_ref()
+                .tab_manager()
+                .get_all_tabs()
+                .iter()
+                .filter(|t| {
+                    if t.url.0 == url {
+                        return true;
+                    }
+                    if let Some(host) = url_host.as_deref() {
+                        url_host_lower(&t.url.0).as_deref() == Some(host)
+                    } else {
+                        false
+                    }
+                })
+                .map(|t| t.id.clone())
+                .collect();
+            if !matching.is_empty() {
+                let image = maho_types::common::ImageData {
+                    data: png_bytes.to_vec(),
+                    width: 16,
+                    height: 16,
+                    format: maho_types::common::ImageFormat::Png,
+                };
+                for tab_id in matching {
+                    self.core_mut().handle_event(ShellEvent::TabFaviconUpdated {
+                        tab_id,
+                        favicon: Some(image.clone()),
+                    });
                 }
-                if let Some(host) = url_host.as_deref() {
-                    url_host_lower(&t.url.0).as_deref() == Some(host)
-                } else {
-                    false
-                }
-            })
-            .map(|t| t.id.clone())
-            .collect();
-        if !matching.is_empty() {
-            let image = maho_types::common::ImageData {
-                data: png_bytes.to_vec(),
-                width: 16,
-                height: 16,
-                format: maho_types::common::ImageFormat::Png,
-            };
-            for tab_id in matching {
-                self.core_mut().handle_event(ShellEvent::TabFaviconUpdated {
-                    tab_id,
-                    favicon: Some(image.clone()),
-                });
+                delivered = true;
             }
-            delivered = true;
         }
 
         if let Some(cb) = self.favicon_cb {
