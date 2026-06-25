@@ -2,7 +2,7 @@ import type {DomainDefinition, DomainId} from '../models.js';
 
 export const DOMAIN_DEFINITIONS: DomainDefinition[] = [
   {id: 'browsing', label: 'Browsing', order: 0},
-  {id: 'look-and-feel', label: 'Look & Feel', order: 1},
+  {id: 'look-and-feel', label: 'Look & feel', order: 1},
   {id: 'identity', label: 'Identity', order: 2},
   {id: 'productivity', label: 'Productivity', order: 3},
   {id: 'protection', label: 'Protection', order: 4},

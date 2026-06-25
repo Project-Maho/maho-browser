@@ -40,35 +40,6 @@ export interface SettingDefinition {
   metadata: SettingMetadata;
 }
 
-export type PasswordProviderKind = 'maho_native'|'bitwarden'|'onepassword';
-
-export interface PasswordProviderCapabilities {
-  canListSavedPasswords: boolean;
-  canSearchSavedPasswords: boolean;
-  canAddSavedPasswords: boolean;
-  canDeleteSavedPasswords: boolean;
-  canEditSavedPasswords: boolean;
-  canRevealPasswords: boolean;
-}
-
-export interface PasswordProviderStatus {
-  provider: PasswordProviderKind;
-  displayName: string;
-  description: string;
-  isAvailable: boolean;
-  isEnabled: boolean;
-  capabilities: PasswordProviderCapabilities;
-}
-
-export interface SavedPassword {
-  id: string;
-  domain: string;
-  username: string;
-  createdAt: string;
-  lastUsed?: string | null;
-  password?: string | null;
-}
-
 export interface PaneDefinition {
   key: string;
   symbol: string;

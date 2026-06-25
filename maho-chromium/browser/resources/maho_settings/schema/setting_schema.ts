@@ -2,7 +2,7 @@ import type {AccentColor, SettingDefinition, SettingMetadata} from '../models.js
 
 export const RESTORE_ON_STARTUP_OPTIONS = [
   {value: '1', label: 'Continue where you left off', displayLabel: 'Resume'},
-  {value: '4', label: 'Open a specific set of pages', displayLabel: 'Specific Pages'},
+  {value: '4', label: 'Open a specific set of pages', displayLabel: 'Specific pages'},
 ];
 
 export const THEME_OPTIONS = [
@@ -90,8 +90,8 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
   {
     key: 'appearance.show_home_button',
     metadata: {
-      label: 'Show Home button',
-      description: 'Display a Home button in the toolbar so you can open your chosen home page with one click.',
+      label: 'Show home button',
+      description: 'Display a home button in the toolbar so you can open your chosen home page with one click.',
       control: 'toggle',
     },
   },
@@ -174,7 +174,7 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
   {
     key: 'privacy.safe_browsing',
     metadata: {
-      label: 'Safe Browsing',
+      label: 'Safe browsing',
       description: 'Warn about known dangerous sites and downloads before they become a problem.',
       control: 'toggle',
     },

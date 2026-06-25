@@ -85,6 +85,7 @@ body {
 body {
   color: var(--maho-settings-text-primary);
   font-family: var(--maho-settings-font-body);
+  font-size: 13px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   font-feature-settings: 'kern', 'liga';
@@ -138,6 +139,41 @@ maho-settings-app {
   display: grid;
   grid-template-columns: var(--maho-settings-sidebar-width) minmax(0, 1fr);
   min-height: 100vh;
+}
+
+.preferences-shell--embed .preferences-workspace {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.preferences-shell--embed .preferences-sidebar {
+  display: none;
+}
+
+.preferences-section__header--embed {
+  align-items: center;
+  display: flex;
+  gap: var(--maho-settings-space-3);
+}
+
+.preferences-back-button {
+  align-items: center;
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--maho-settings-border);
+  border-radius: 10px;
+  color: var(--maho-settings-text-primary);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-weight: 500;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  transition: background var(--maho-settings-transition);
+}
+
+.preferences-back-button:hover {
+  background: var(--maho-settings-input);
 }
 
 .preferences-sidebar {
@@ -311,6 +347,11 @@ maho-settings-app {
   margin-top: var(--maho-settings-space-2);
 }
 
+.passwords-capabilities {
+  color: var(--maho-settings-text-muted);
+  font-size: 12px;
+}
+
 .content-card {
   background: var(--maho-settings-bg-elevated);
   border: 1px solid var(--maho-settings-border);
@@ -328,6 +369,11 @@ maho-settings-app {
   display: flex;
   gap: 10px;
   justify-content: space-between;
+}
+
+.content-card__header--stacked {
+  align-items: stretch;
+  flex-direction: column;
 }
 
 .content-card__header--spaced {
@@ -388,6 +434,10 @@ maho-settings-app {
   padding: 12px 0;
 }
 
+.setting-row:has(.setting-row__control--stacked) {
+  align-items: start;
+}
+
 .setting-row--first {
   border-top: none;
   padding-top: 0;
@@ -414,11 +464,28 @@ maho-settings-app {
   max-width: 58ch;
 }
 
+.setting-empty-description {
+  border-bottom: 1px solid var(--maho-settings-border);
+  margin-bottom: 12px;
+  padding: 12px 0;
+}
+
 .setting-row__control {
   align-items: center;
   display: flex;
   justify-content: stretch;
   width: 100%;
+}
+
+.setting-row__control > .setting-input-shell {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.setting-row__control > button.setting-switch:not(:only-child) {
+  flex-shrink: 0;
+  min-width: max-content;
+  width: auto;
 }
 
 .setting-row__control--stacked {
@@ -460,6 +527,32 @@ maho-settings-app {
   justify-content: flex-end;
   padding: 0;
   width: 100%;
+}
+
+.setting-switch--action {
+  background: var(--maho-settings-bg);
+  border: 1px solid var(--maho-settings-text-muted);
+  border-radius: 10px;
+  color: var(--maho-settings-text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  height: 36px;
+  justify-content: center;
+  padding: 0 16px;
+  transition:
+      background var(--maho-settings-transition),
+      border-color var(--maho-settings-transition);
+  width: auto;
+}
+
+.setting-switch--action:hover:not(:disabled) {
+  background: var(--maho-settings-input-focus);
+  border-color: var(--maho-settings-accent);
+}
+
+.setting-switch--action:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .setting-switch:focus-visible {
@@ -562,8 +655,8 @@ maho-settings-app {
 }
 
 .setting-segmented {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--maho-settings-input);
+  border: 1px solid var(--maho-settings-border);
   border-radius: 12px;
   display: inline-flex;
   min-height: 44px;
@@ -580,9 +673,19 @@ maho-settings-app {
   cursor: pointer;
   flex: 1 1 auto;
   font: inherit;
+  font-weight: 500;
   min-height: 34px;
   padding: 0 10px;
   transition: background var(--maho-settings-transition), color var(--maho-settings-transition), box-shadow var(--maho-settings-transition);
+}
+
+.setting-segment:not(.is-active) {
+  border: 1px solid transparent;
+}
+
+.setting-segment:hover:not(.is-active) {
+  background: var(--maho-settings-input);
+  color: var(--maho-settings-text-primary);
 }
 
 .setting-segment.is-active {
@@ -628,8 +731,15 @@ maho-settings-app {
 }
 
 .setting-input-shell__suffix--icon {
-  font-size: 11px;
   pointer-events: none;
+}
+
+.setting-icon {
+  color: currentColor;
+  flex-shrink: 0;
+  height: 16px;
+  vertical-align: middle;
+  width: 16px;
 }
 
 .preferences-footer {

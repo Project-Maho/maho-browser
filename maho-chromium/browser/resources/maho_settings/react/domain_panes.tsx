@@ -93,8 +93,19 @@ function createTransientId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+const SHORTCUT_ACRONYMS = new Set(['URL', 'JS', 'HC', 'AI', 'API', 'OS', 'CSS', 'HTML', 'JSON', 'RSS', 'ID', 'UI', 'UX', 'IP', 'DNS', 'TLS', 'SSL', 'VPN', 'CPU', 'GPU', 'RAM']);
+
 function formatShortcutAction(action: string): string {
-  return action.replace(/_/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase());
+  return action.split('_').map((word, index) => {
+    const upper = word.toUpperCase();
+    if (SHORTCUT_ACRONYMS.has(upper)) {
+      return upper;
+    }
+    if (index === 0 && word.length > 0) {
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    }
+    return word;
+  }).join(' ');
 }
 
 function getPasswordsEnabled(settings: SettingValue[]): boolean {
@@ -190,7 +201,7 @@ function PaneRetry(
 }
 
 function EmptyDescription({message}: {message: string}) {
-  return <p className="setting-row__description">{message}</p>;
+  return <p className="setting-row__description setting-empty-description">{message}</p>;
 }
 
 function SectionHeader(
@@ -212,7 +223,7 @@ function ActionButton(
       ariaLabel?: string;
       className?: string;
       disabled?: boolean;
-      label: string;
+      label: React.ReactNode;
       onClick: () => void | Promise<void>;
       style?: React.CSSProperties;
     }) {
@@ -222,7 +233,7 @@ function ActionButton(
   return (
     <Button
       aria-label={ariaLabel}
-      className={joinClassNames('setting-switch', className)}
+      className={joinClassNames('setting-switch setting-switch--action', className)}
       disabled={disabled || isBusy}
       style={style}
       type="button"
@@ -243,7 +254,7 @@ function ActionButton(
   );
 }
 
-function AsyncToggleButton(
+export function Toggle(
     {enabled, label, onToggle}: {
       enabled: boolean;
       label: string;
@@ -287,7 +298,7 @@ function ManagedSettingRow(
     {children, controlClassName, description, isFirstRow = false, title}: {
       children?: React.ReactNode;
       controlClassName?: string;
-      description: string;
+      description: React.ReactNode;
       isFirstRow?: boolean;
       title: string;
     }) {
@@ -311,7 +322,7 @@ function TextFieldShell(
       value: string;
     }) {
   return (
-    <label className="setting-input-shell">
+    <div className="setting-input-shell">
       <TextInput
         aria-label={ariaLabel}
         className="setting-input"
@@ -320,7 +331,7 @@ function TextFieldShell(
         value={value}
         onChange={event => onChange(event.currentTarget.value)}
       />
-    </label>
+    </div>
   );
 }
 
@@ -342,7 +353,14 @@ function SelectShell<T extends string>(
           <option key={option.value} value={option.value}>{option.label}</option>
         ))}
       </select>
-      <span aria-hidden="true" className="setting-input-shell__suffix setting-input-shell__suffix--icon">▾</span>
+      <span aria-hidden="true" className="setting-input-shell__suffix setting-input-shell__suffix--icon">
+        <img
+          alt=""
+          aria-hidden="true"
+          className="setting-icon"
+          src="chrome://maho-settings/icons/chevron-down.svg"
+        />
+      </span>
     </div>
   );
 }
@@ -368,7 +386,7 @@ function ProfilesPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
 
   return (
     <DomainPaneSection pane={pane}>
-      <SectionHeader title="Browser Profiles" />
+      <SectionHeader title="Browser profiles" />
       {state.status === 'loading' ? <PaneLoading message="Loading profiles…" /> : null}
       {state.status === 'error' ? (
         <PaneRetry message={state.message} title="Profiles unavailable" onRetry={() => void loadProfiles()} />
@@ -445,7 +463,7 @@ function ProfileRow(
       {!profile.isDefault && !profile.isActive ? (
         <ActionButton
           ariaLabel="Delete profile"
-          label="×"
+          label={<img alt="" aria-hidden="true" className="setting-icon" src="chrome://maho-settings/icons/x.svg" />}
           onClick={async () => {
             await handler.deleteProfile(profile.id);
             await onReload();
@@ -478,7 +496,7 @@ function ATCPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}
 
   return (
     <DomainPaneSection pane={pane}>
-      <SectionHeader title="URL Routing Rules" />
+      <SectionHeader title="URL routing rules" />
       {rulesState.status === 'loading' ? <PaneLoading message="Loading rules…" /> : null}
       {rulesState.status === 'error' ? (
         <PaneRetry message={rulesState.message} title="Rules unavailable" onRetry={() => void loadRules()} />
@@ -551,10 +569,10 @@ function ATCRuleRow(
   return (
     <ManagedSettingRow
       controlClassName="setting-actions"
-      description={`→ ${rule.targetSpaceId}`}
+      description={<><img alt="" aria-hidden="true" className="setting-icon" src="chrome://maho-settings/icons/arrow-right.svg" /> {rule.targetSpaceId}</>}
       title={rule.urlPattern}>
-      <AsyncToggleButton enabled={rule.enabled} label={rule.urlPattern} onToggle={onToggle} />
-      <ActionButton ariaLabel="Remove rule" label="×" onClick={onRemove} />
+      <Toggle enabled={rule.enabled} label={rule.urlPattern} onToggle={onToggle} />
+      <ActionButton ariaLabel="Remove rule" label={<img alt="" aria-hidden="true" className="setting-icon" src="chrome://maho-settings/icons/x.svg" />} onClick={onRemove} />
     </ManagedSettingRow>
   );
 }
@@ -571,7 +589,7 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
       const {settings} = await handler.getAISettings();
       setState(createLoadedState(settings));
     } catch {
-      setState(createErrorState('Failed to load AI settings.'));
+      setState(createErrorState('Failed to load Maho AI settings.'));
     }
   }, [handler]);
 
@@ -591,11 +609,11 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
 
   return (
     <DomainPaneSection pane={pane}>
-      <SectionHeader title="AI Configuration" />
+      <SectionHeader title="Maho AI configuration" />
       {actionError ? <p className="setting-row__description">{actionError}</p> : null}
-      {state.status === 'loading' ? <PaneLoading message="Loading AI settings…" /> : null}
+      {state.status === 'loading' ? <PaneLoading message="Loading Maho AI settings…" /> : null}
       {state.status === 'error' ? (
-        <PaneRetry message={state.message} title="AI settings unavailable" onRetry={() => void loadSettings()} />
+        <PaneRetry message={state.message} title="Maho AI settings unavailable" onRetry={() => void loadSettings()} />
       ) : null}
       {state.status === 'loaded' ? (
         <div className="preferences-card__rows">
@@ -619,10 +637,30 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
           />
           <AiFieldRow
             initialValue={state.data.hasApiKey ? '••••••••' : ''}
-            label="API Key"
+            label="API key"
             placeholder="Paste your API key"
             type="password"
             onCommit={value => commit(async () => handler.setAIApiKey(value))}
+          />
+          <AiFieldRow
+            initialValue={state.data.hasByokOpenai ? '••••••••' : ''}
+            label="OpenAI BYOK Key"
+            placeholder="Enter OpenAI API key (encrypted at rest)"
+            type="password"
+            onCommit={value => commit(async () => {
+              const {success} = await handler.setBYOKKey('openai', value);
+              if (!success) throw new Error('Failed to save OpenAI BYOK key');
+            })}
+          />
+          <AiFieldRow
+            initialValue={state.data.hasByokAnthropic ? '••••••••' : ''}
+            label="Anthropic BYOK Key"
+            placeholder="Enter Anthropic API key (encrypted at rest)"
+            type="password"
+            onCommit={value => commit(async () => {
+              const {success} = await handler.setBYOKKey('anthropic', value);
+              if (!success) throw new Error('Failed to save Anthropic BYOK key');
+            })}
           />
           <AiFieldRow
             initialValue={state.data.model}
@@ -632,15 +670,15 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
           />
           <AiFieldRow
             initialValue={state.data.approvalPolicy}
-            label="Approval Policy"
+            label="Approval policy"
             onCommit={value => commit(async () => handler.setAIApprovalPolicy(value))}
           />
           <ManagedSettingRow
             description="Enable or disable AI session persistence."
-            title="Session Persistence">
-            <AsyncToggleButton
+            title="Session persistence">
+            <Toggle
               enabled={state.data.sessionPersistenceEnabled}
-              label="Session Persistence"
+              label="Session persistence"
               onToggle={enabled => commit(async () => handler.setAISessionPersistence(enabled))}
             />
           </ManagedSettingRow>
@@ -687,18 +725,15 @@ function AiSelectRow(
 
   return (
     <ManagedSettingRow description="" title={label}>
-      <select
-        aria-label={label}
-        className="text-field-shell"
+      <SelectShell
+        ariaLabel={label}
+        options={options}
         value={draft}
-        onChange={e => {
-          setDraft(e.target.value);
-          void onCommit(e.target.value);
-        }}>
-        {options.map(o => (
-          <option key={o.value} value={o.value}>{o.label}</option>
-        ))}
-      </select>
+        onChange={value => {
+          setDraft(value);
+          void onCommit(value);
+        }}
+      />
     </ManagedSettingRow>
   );
 }
@@ -723,13 +758,12 @@ function ShortcutsPane({pane, store}: {pane: PaneDefinition; store: MahoSettings
 
   return (
     <DomainPaneSection pane={pane}>
-      <SectionHeader
-        action={<ActionButton label="Reset All" onClick={async () => {
+      <div className="setting-actions">
+        <ActionButton label="Reset all" onClick={async () => {
           await handler.resetAllShortcuts();
           await loadShortcuts();
-        }} />}
-        title="Keyboard Shortcuts"
-      />
+        }} />
+      </div>
       {state.status === 'loading' ? <PaneLoading message="Loading shortcuts…" /> : null}
       {state.status === 'error' ? (
         <PaneRetry message={state.message} title="Shortcuts unavailable" onRetry={() => void loadShortcuts()} />
@@ -761,9 +795,9 @@ function ShortcutRow(
   return (
     <ManagedSettingRow
       controlClassName="setting-actions"
-      description={!binding.isDefault ? 'Custom binding' : 'Default'}
+          description={!binding.isDefault ? 'Custom binding.' : 'Default.'}
       title={formatShortcutAction(binding.action)}>
-      <AsyncToggleButton
+      <Toggle
         enabled={binding.enabled}
         label={`Enable ${binding.action}`}
         onToggle={async nextEnabled => {
@@ -833,7 +867,7 @@ function SyncPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore
 
   return (
     <DomainPaneSection pane={pane}>
-      <SectionHeader title="Account & Sync" />
+      <SectionHeader title="Account & sync" />
       {state.status === 'loading' ? <PaneLoading message="Loading sync status…" /> : null}
       {state.status === 'error' ? (
         <PaneRetry message={state.message} title="Sync unavailable" onRetry={() => void loadStatus()} />
@@ -853,7 +887,7 @@ function SyncPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore
           {state.data.status.isSyncing ? (
             <>
               {state.data.devices.length > 0 ? (
-                <ManagedSettingRow description="" title="Connected Devices" />
+                <ManagedSettingRow description="" title="Connected devices" />
               ) : null}
               {state.data.devices.map(device => (
                 <ManagedSettingRow
@@ -877,8 +911,8 @@ function SyncPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore
               <ManagedSettingRow
                 controlClassName="setting-actions"
                 description="Generate a recovery phrase for a new sync session."
-                title="Start New Sync">
-                <ActionButton label={pendingKeyInfo ? 'Generate New Phrase' : 'Generate Recovery Phrase'} onClick={async () => {
+                title="Start new sync">
+                <ActionButton label={pendingKeyInfo ? 'Generate new phrase' : 'Generate recovery phrase'} onClick={async () => {
                   const {keyInfo} = await handler.generateSyncKey();
                   setPendingKeyInfo(keyInfo);
                 }} />
@@ -889,7 +923,7 @@ function SyncPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore
                   await loadStatus();
                 }} />
               ) : null}
-              <ManagedSettingRow controlClassName="setting-actions" description="Join an existing sync session with a recovery phrase." title="Join Existing Sync">
+              <ManagedSettingRow controlClassName="setting-actions" description="Join an existing sync session with a recovery phrase." title="Join existing sync">
                 <TextFieldShell
                   ariaLabel="Recovery phrase"
                   placeholder="Recovery phrase"
@@ -984,7 +1018,7 @@ function ThemeStorePane({pane, store}: {pane: PaneDefinition; store: MahoSetting
       {state.status === 'loaded' && state.data.themes.length === 0 && !state.data.success ? (
         <PaneRetry
           message="We could not load the theme catalog right now. Check your connection and try again."
-          title="Theme Store unavailable"
+          title="Theme store unavailable"
           onRetry={() => void loadThemeStore()}
         />
       ) : null}
@@ -992,7 +1026,7 @@ function ThemeStorePane({pane, store}: {pane: PaneDefinition; store: MahoSetting
         <>
           <SectionHeader
             action={<ActionButton label="Refresh" onClick={() => loadThemeStore()} />}
-            title="Community Themes"
+            title="Community themes"
           />
           {state.data.themes.length === 0 ? <EmptyDescription message="No themes available." /> : null}
           {state.data.success ? null : (
@@ -1105,7 +1139,7 @@ function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
       ) : null}
       {state.status === 'loaded' ? (
         <>
-          <SectionHeader title="Saved Addresses" />
+          <SectionHeader title="Saved addresses" />
           <div className="preferences-card__rows">
             {state.data.addresses.length === 0 ? <EmptyDescription message="No saved addresses." /> : null}
             {state.data.addresses.map((address, index) => {
@@ -1159,7 +1193,7 @@ function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
                 <TextFieldShell ariaLabel="Address email" placeholder="Email" value={addressForm.email} onChange={value => setAddressForm(current => ({...current, email: value}))} />
               </div>
               <div className="setting-actions">
-                <ActionButton label="Add Address" onClick={async () => {
+                <ActionButton label="Add address" onClick={async () => {
                   const values = {
                     addressLine1: addressForm.addressLine1.trim(),
                     addressLine2: addressForm.addressLine2.trim(),
@@ -1185,7 +1219,7 @@ function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
               </div>
             </ManagedSettingRow>
           </div>
-          <SectionHeader spaced title="Payment Methods" />
+          <SectionHeader spaced title="Payment methods" />
           <div className="preferences-card__rows">
             {state.data.payments.length === 0 ? <EmptyDescription message="No saved payment methods." /> : null}
             {state.data.payments.map((payment, index) => {
@@ -1220,7 +1254,7 @@ function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
                 <TextFieldShell ariaLabel="Payment cardholder name" placeholder="Cardholder name" value={paymentForm.cardholderName} onChange={value => setPaymentForm(current => ({...current, cardholderName: value}))} />
               </div>
               <div className="setting-actions">
-                <ActionButton label="Add Payment" onClick={async () => {
+                <ActionButton label="Add payment" onClick={async () => {
                   const values = {
                     cardNetwork: paymentForm.cardNetwork.trim(),
                     cardholderName: paymentForm.cardholderName.trim(),
@@ -1318,9 +1352,9 @@ function PasswordsPane(
       ) : null}
       {loadState.status === 'loaded' ? (
         <>
-          <div className="content-card__header">
+          <div className="content-card__header content-card__header--stacked">
             <div className="content-card__title-group">
-              <h3 className="content-card__title">Saved Passwords</h3>
+                <h3 className="content-card__title">Saved passwords</h3>
               <p className="content-card__copy">{`Passwords provider: ${loadState.data.providerStatus.displayName}.`}</p>
             </div>
             <div className="content-card__copy passwords-provider-card">
@@ -1328,7 +1362,7 @@ function PasswordsPane(
                 description="Enable password management to show saved passwords."
                 isFirstRow
                 title="Passwords">
-                <AsyncToggleButton
+                <Toggle
                   enabled={passwordsEnabled}
                   label="Passwords"
                   onToggle={async nextEnabled => {
@@ -1351,7 +1385,7 @@ function PasswordsPane(
                       '1Password'}
                 </span>
               </ManagedSettingRow>
-              <p className="content-card__copy">
+              <p className="content-card__copy passwords-capabilities">
                 {`Capabilities: ${loadState.data.providerStatus.capabilities.canListSavedPasswords ? 'list' : 'no list'}, ${loadState.data.providerStatus.capabilities.canSearchSavedPasswords ? 'search' : 'no search'}, ${loadState.data.providerStatus.capabilities.canAddSavedPasswords ? 'add' : 'no add'}, ${loadState.data.providerStatus.capabilities.canEditSavedPasswords ? 'edit' : 'no edit'}, ${loadState.data.providerStatus.capabilities.canRevealPasswords ? 'reveal' : 'no reveal'}, ${loadState.data.providerStatus.capabilities.canDeleteSavedPasswords ? 'delete' : 'no delete'}.`}
               </p>
             </div>
@@ -1373,20 +1407,16 @@ function PasswordsPane(
             ) : !passwordsEnabled ? (
               <p className="setting-row__description">Passwords is turned off. Turn it on to show saved passwords.</p>
             ) : (
-              <div className="cards-grid">
-                <div>
-                  <NativePasswordsContent
-                    data={loadState.data}
-                    loadPasswords={loadPasswords}
-                    revealedIds={revealedIds}
-                    searchInputValue={searchInputValue}
-                    searchQuery={searchQuery}
-                    setRevealedIds={setRevealedIds}
-                    setSearchInputValue={setSearchInputValue}
-                    store={store}
-                  />
-                </div>
-              </div>
+              <NativePasswordsContent
+                data={loadState.data}
+                loadPasswords={loadPasswords}
+                revealedIds={revealedIds}
+                searchInputValue={searchInputValue}
+                searchQuery={searchQuery}
+                setRevealedIds={setRevealedIds}
+                setSearchInputValue={setSearchInputValue}
+                store={store}
+              />
             )}
           </div>
         </>
@@ -1464,7 +1494,7 @@ function AddPasswordRow(
         <TextFieldShell ariaLabel="Password value" placeholder="Password" type="password" value={password} onChange={setPassword} />
       </div>
       <div className="setting-actions">
-        <ActionButton label="Add Password" onClick={async () => {
+        <ActionButton label="Add password" onClick={async () => {
           const trimmedDomain = domain.trim();
           const trimmedUsername = username.trim();
           if (!trimmedDomain) {
@@ -1592,18 +1622,18 @@ function ContentBlockerPane({pane, store}: {pane: PaneDefinition; store: MahoSet
       ) : null}
       {state.status === 'loaded' ? (
         <>
-          <SectionHeader title="Content Blocker" />
+          <SectionHeader title="Content blocker" />
           <ManagedSettingRow
             controlClassName="setting-actions"
             description={`${state.data.stats.totalRuleCount.toLocaleString()} rules active · ${state.data.stats.filterListCount} filter list(s)`}
             isFirstRow
-            title="Engine Status">
+            title="Engine status">
             <ActionButton label="Rebuild" onClick={async () => {
               await handler.rebuildContentRules();
               await loadContentBlocker();
             }} />
           </ManagedSettingRow>
-          <SectionHeader spaced title="Filter Lists" />
+          <SectionHeader spaced title="Filter lists" />
           <div className="preferences-card__rows">
             {state.data.lists.length === 0 ? <EmptyDescription message="No filter lists configured." /> : null}
             {state.data.lists.map((filterList, index) => (
@@ -1613,7 +1643,7 @@ function ContentBlockerPane({pane, store}: {pane: PaneDefinition; store: MahoSet
                 description={[filterList.url, `${filterList.ruleCount.toLocaleString()} rules`, filterList.enabled ? 'Enabled' : 'Disabled'].filter(Boolean).join(' · ')}
                 isFirstRow={index === 0}
                 title={filterList.name || filterList.id}>
-                <AsyncToggleButton
+                <Toggle
                   enabled={filterList.enabled}
                   label={`Enable ${filterList.name || filterList.id}`}
                   onToggle={async nextEnabled => {
@@ -1641,7 +1671,7 @@ function ContentBlockerPane({pane, store}: {pane: PaneDefinition; store: MahoSet
                 <TextFieldShell ariaLabel="Filter list URL" placeholder="https://example.com/filters.txt" value={form.url} onChange={value => setForm(current => ({...current, url: value}))} />
               </div>
               <div className="setting-actions">
-                <ActionButton label="Add Filter List" onClick={async () => {
+                <ActionButton label="Add filter list" onClick={async () => {
                   const name = form.name.trim();
                   const url = form.url.trim();
                   if (!name || !url) {
@@ -1691,7 +1721,7 @@ function ExtensionsPane({pane, store}: {pane: PaneDefinition; store: MahoSetting
 
   return (
     <DomainPaneSection pane={pane}>
-      <SectionHeader title="Installed Extensions" />
+      <SectionHeader title="Installed extensions" />
       {state.status === 'loading' ? <PaneLoading message="Loading extensions…" /> : null}
       {state.status === 'error' ? (
         <PaneRetry message={state.message} title="Extensions unavailable" onRetry={() => void loadExtensions()} />
@@ -1713,7 +1743,7 @@ function ExtensionsPane({pane, store}: {pane: PaneDefinition; store: MahoSetting
                 description={descriptionParts.join(' · ')}
                 isFirstRow={index === 0}
                 title={extension.name || extension.id}>
-                <AsyncToggleButton
+                <Toggle
                   enabled={extension.enabled}
                   label={`Enable ${extension.name || extension.id}`}
                   onToggle={async () => {

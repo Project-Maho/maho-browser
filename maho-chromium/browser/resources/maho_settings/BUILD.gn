@@ -8,7 +8,6 @@ action("bundle_react") {
   inputs = [
     "//third_party/node/node.py",
     "maho_settings.mojom-webui.js.d.ts",
-    "app.ts",
     "mojo.ts",
     "models.ts",
     "schema/domains.ts",
@@ -52,10 +51,12 @@ build_webui("build") {
   static_files = [
     "settings.html",
     "settings.css",
+    "icons/arrow-right.svg",
+    "icons/chevron-down.svg",
+    "icons/x.svg",
   ]
 
   ts_files = [
-    "app.ts",
     "mojo.ts",
     "models.ts",
     "schema/domains.ts",

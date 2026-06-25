@@ -50,6 +50,7 @@ export const LIVE_PANE_SECTION_MANIFEST: Record<string, LivePaneSectionDefinitio
       title: 'Notification prompts',
       description: '',
       settingKeys: ['notifications.quiet_permission_ui'],
+      wide: true,
     }},
   ],
   tabs: [
@@ -123,8 +124,8 @@ const LOOK_AND_FEEL_PANES: PaneDefinition[] = [
   {
     key: 'theme-store',
     symbol: 'TS',
-    navTitle: 'Theme Store',
-    title: 'Theme Store',
+    navTitle: 'Theme store',
+    title: 'Theme store',
     kind: 'live',
     domain: 'look-and-feel',
     contentKind: 'theme-store',
@@ -144,8 +145,8 @@ const IDENTITY_PANES: PaneDefinition[] = [
   {
     key: 'account-sync',
     symbol: 'AS',
-    navTitle: 'Account & Sync',
-    title: 'Account & Sync',
+    navTitle: 'Account & sync',
+    title: 'Account & sync',
     kind: 'live',
     domain: 'identity',
     contentKind: 'sync',
@@ -175,7 +176,7 @@ const PRODUCTIVITY_PANES: PaneDefinition[] = [
     key: 'shortcuts',
     symbol: '\u2318',
     navTitle: 'Shortcuts',
-    title: 'Shortcuts',
+    title: 'Keyboard shortcuts',
     kind: 'live',
     domain: 'productivity',
     contentKind: 'shortcuts',
@@ -204,8 +205,8 @@ const PROTECTION_PANES: PaneDefinition[] = [
   {
     key: 'content-blocker',
     symbol: 'C',
-    navTitle: 'Content Blocker',
-    title: 'Content Blocker',
+    navTitle: 'Content blocker',
+    title: 'Content blocker',
     kind: 'live',
     domain: 'protection',
     contentKind: 'content-blocker',
@@ -213,11 +214,20 @@ const PROTECTION_PANES: PaneDefinition[] = [
   {
     key: 'atc',
     symbol: 'AT',
-    navTitle: 'Air Traffic Control',
-    title: 'Air Traffic Control',
+    navTitle: 'Air traffic control',
+    title: 'Air traffic control',
     kind: 'live',
     domain: 'protection',
     contentKind: 'atc',
+  },
+  {
+    key: 'chromium-settings',
+    symbol: 'CR',
+    navTitle: 'Chromium settings',
+    title: 'Chromium settings',
+    kind: 'embed',
+    domain: 'protection',
+    embedUrl: 'chrome://settings',
   },
 ];
 

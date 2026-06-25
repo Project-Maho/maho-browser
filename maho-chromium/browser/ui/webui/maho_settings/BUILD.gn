@@ -25,7 +25,11 @@ source_set("maho_settings") {
     "//chrome/browser/extensions",
     "//chrome/browser/profiles:profile",
     "//components/content_settings/core/browser",
+    "//components/os_crypt/async/browser",
+    "//components/os_crypt/async/common",
     "//components/prefs",
+
+
     "//components/safe_browsing/core/common",
     "//extensions/browser",
     "//maho/browser:maho_core_holder",

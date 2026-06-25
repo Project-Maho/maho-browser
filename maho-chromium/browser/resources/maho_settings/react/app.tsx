@@ -21,7 +21,7 @@ import {
   SETTING_METADATA,
 } from '../schema/setting_schema.js';
 import {Button, TextArea, TextInput, joinClassNames} from '../../maho_common/react/primitives/index.js';
-import {DomainPaneContent} from './domain_panes.js';
+import {DomainPaneContent, Toggle} from './domain_panes.js';
 import {MahoSettingsStore} from './store.js';
 
 const LIVE_SETTINGS_PANE_KEYS = new Set(['notifications','tabs','advanced','privacy','general','appearance']);
@@ -122,7 +122,7 @@ function SettingsApp({store}: {store: MahoSettingsStore}) {
   }, []);
 
   return (
-    <div className="preferences-shell">
+    <div className={joinClassNames('preferences-shell', currentPane.kind === 'embed' ? 'preferences-shell--embed' : undefined)}>
       <div className="preferences-window">
         <div className="preferences-workspace">
           <aside className="preferences-sidebar">
@@ -157,7 +157,7 @@ function SettingsApp({store}: {store: MahoSettingsStore}) {
           <main className="preferences-content">
             <div className="preferences-content__scroll">
               {currentPane.kind === 'embed' ? (
-                <EmbedPane pane={currentPane} />
+                <EmbedPane pane={currentPane} onExit={() => store.selectPane('general')} />
               ) : isMigratedLivePane(currentPane) ? (
                 <LivePaneSection
                   bootstrapError={state.bootstrapError}
@@ -177,13 +177,17 @@ function SettingsApp({store}: {store: MahoSettingsStore}) {
   );
 }
 
-function EmbedPane({pane}: {pane: PaneDefinition}) {
+function EmbedPane({pane, onExit}: {pane: PaneDefinition; onExit: () => void}) {
   const embedUrl = pane.embedUrl || 'chrome://settings/';
 
   return (
     <section className="preferences-section" data-pane={pane.key} id={`section-${pane.key}`}>
       <div className="preferences-card preferences-card--pane-shell preferences-card--browser">
-        <header className="preferences-section__header">
+        <header className="preferences-section__header preferences-section__header--embed">
+          <Button className="preferences-back-button" type="button" onClick={onExit}>
+            <img alt="" aria-hidden="true" className="setting-icon" src="chrome://maho-settings/icons/arrow-right.svg" style={{transform: 'rotate(180deg)'}} />
+            Back to Maho settings
+          </Button>
           <h2 className="preferences-section__title">{pane.title}</h2>
         </header>
         <div className="cards-grid">
@@ -192,6 +196,7 @@ function EmbedPane({pane}: {pane: PaneDefinition}) {
               className="browser-settings-webview"
               role="document"
               src={embedUrl}
+              title={pane.title}
             />
           </div>
         </div>
@@ -369,8 +374,18 @@ function SettingControl(
       store: MahoSettingsStore;
     }) {
   switch (meta.control) {
-    case 'toggle':
-      return <ToggleControl item={item} meta={meta} store={store} />;
+    case 'toggle': {
+      const enabled = item.value === 'true';
+      return (
+        <Toggle
+          enabled={enabled}
+          label={meta.label}
+          onToggle={async (next) => {
+            await store.commitSettingValue(item.key, next ? 'true' : 'false');
+          }}
+        />
+      );
+    }
     case 'select':
       return <SelectControl item={item} meta={meta} store={store} />;
     case 'color-swatch':
@@ -384,34 +399,6 @@ function SettingControl(
     default:
       return <InputControl item={item} meta={meta} store={store} />;
   }
-}
-
-function ToggleControl(
-    {item, meta, store}: {
-      item: SettingValue;
-      meta: SettingMetadata;
-      store: MahoSettingsStore;
-    }) {
-  const enabled = item.value === 'true';
-  const isSaving = store.isSaving(item.key);
-
-  return (
-    <Button
-      aria-checked={enabled}
-      aria-label={meta.label}
-      className={joinClassNames('setting-switch', enabled ? 'is-on' : undefined)}
-      disabled={isSaving}
-      role="switch"
-      type="button"
-      onClick={() => {
-        void store.commitSettingValue(item.key, enabled ? 'false' : 'true');
-      }}>
-      <span className="setting-switch__track">
-        <span className="setting-switch__thumb" />
-      </span>
-      <span className="setting-switch__status">{enabled ? 'On' : 'Off'}</span>
-    </Button>
-  );
 }
 
 function InputControl(
@@ -434,7 +421,7 @@ function InputControl(
   }, [draftValue, item.key, item.value, meta, store]);
 
   return (
-    <label className="setting-input-shell">
+    <div className="setting-input-shell">
       <TextInput
         aria-label={meta.label}
         className="setting-input"
@@ -459,7 +446,7 @@ function InputControl(
       {meta.control === 'number' ? (
         <span className="setting-input-shell__suffix">px</span>
       ) : null}
-    </label>
+    </div>
   );
 }
 
@@ -497,7 +484,12 @@ function SelectControl(
           <option key={option.value} value={option.value}>{option.label}</option>
         ))}
       </select>
-      <span aria-hidden="true" className="setting-input-shell__suffix setting-input-shell__suffix--icon">▾</span>
+      <img
+        alt=""
+        aria-hidden="true"
+        className="setting-icon setting-input-shell__suffix setting-input-shell__suffix--icon"
+        src="chrome://maho-settings/icons/chevron-down.svg"
+      />
     </div>
   );
 }
