@@ -94,6 +94,28 @@ typedef void (*MahoImportProgressCallback)(uint32_t kind,
                                            const char *message,
                                            void *user_data);
 
+typedef void (*MahoImportCookieCallback)(const char *host,
+                                         const char *name,
+                                         const char *value,
+                                         const char *path,
+                                         int64_t expires,
+                                         bool is_secure,
+                                         bool is_httponly,
+                                         int32_t same_site,
+                                         void *user_data);
+
+typedef void (*MahoImportAutofillCallback)(const char *field_name,
+                                           const char *value,
+                                           int32_t times_used,
+                                           int64_t first_used,
+                                           int64_t last_used,
+                                           void *user_data);
+
+typedef void (*MahoImportFaviconCallback)(const char *url,
+                                          const uint8_t *png_bytes,
+                                          uintptr_t png_len,
+                                          void *user_data);
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -2088,6 +2110,9 @@ struct MahoImportSession *maho_import_orchestrator_start(struct MahoCore *core_p
                                                          uint32_t items_bitmask,
                                                          const char *essentials_json,
                                                          MahoImportProgressCallback callback,
+                                                         MahoImportCookieCallback cookie_cb,
+                                                         MahoImportAutofillCallback autofill_cb,
+                                                         MahoImportFaviconCallback favicon_cb,
                                                          void *user_data);
 
 /**
