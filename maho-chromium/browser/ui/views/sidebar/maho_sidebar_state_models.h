@@ -223,6 +223,12 @@ struct SidebarTreeNode {
   std::u16string title;
   std::u16string host;
 
+  // PNG bytes from maho-core Tab.favicon (populated during import + page
+  // load). Empty if not yet fetched. tab_list_view uses this when the
+  // live Chromium TabStripModel has no entry for this tab (common after
+  // import — no live WebContents exists for imported tab URLs).
+  std::vector<uint8_t> favicon_png_data;
+
   // --- Tab indicator fields (valid when kind == kTab) ---
   bool is_loading = false;
   bool is_audible = false;

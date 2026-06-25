@@ -291,12 +291,27 @@ impl ImportDestination for MahoCoreDestination {
     fn add_favicon(&self, url: &str, png_bytes: &[u8]) -> bool {
         let mut delivered = false;
 
+        // Match by exact URL first, then fall back to host-prefix match.
+        // Arc/Chrome favicons are often keyed on a representative page URL
+        // (e.g. https://app.mural.co/) while imported tabs point at deep
+        // paths (https://app.mural.co/t/X/board/Y). Without the fallback
+        // only the rare exact match wins and the sidebar shows globes.
+        let url_host = url_host_lower(url);
         let matching: Vec<TabId> = self
             .core_ref()
             .tab_manager()
             .get_all_tabs()
             .iter()
-            .filter(|t| t.url.0 == url)
+            .filter(|t| {
+                if t.url.0 == url {
+                    return true;
+                }
+                if let Some(host) = url_host.as_deref() {
+                    url_host_lower(&t.url.0).as_deref() == Some(host)
+                } else {
+                    false
+                }
+            })
             .map(|t| t.id.clone())
             .collect();
         if !matching.is_empty() {
@@ -363,6 +378,16 @@ fn default_space_color() -> SpaceColor {
         brightness: 0.9,
         grain: 0.0,
     }
+}
+
+fn url_host_lower(url: &str) -> Option<String> {
+    let after_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
+    let host_with_port = after_scheme.split('/').next()?;
+    let host = host_with_port.split(':').next()?;
+    if host.is_empty() {
+        return None;
+    }
+    Some(host.to_ascii_lowercase())
 }
 
 /// Convert RGB (0–255 each) to HSB (hue 0–360, saturation 0–1, brightness 0–1).

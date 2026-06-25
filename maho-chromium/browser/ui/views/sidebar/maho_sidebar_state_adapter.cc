@@ -335,6 +335,21 @@ std::optional<SidebarTreeNode> ParseTreeNode(
     std::optional<bool> favorite = dict->FindBool("isFavorite");
     node.is_favorite = favorite.value_or(false);
 
+    if (const auto* favicon_dict = dict->FindDict("favicon")) {
+      if (const auto* data_list = favicon_dict->FindList("data")) {
+        std::vector<uint8_t> bytes;
+        bytes.reserve(data_list->size());
+        for (const auto& v : *data_list) {
+          if (auto byte = v.GetIfInt()) {
+            bytes.push_back(static_cast<uint8_t>(*byte & 0xFF));
+          }
+        }
+        if (!bytes.empty()) {
+          node.favicon_png_data = std::move(bytes);
+        }
+      }
+    }
+
     // Match by stable tab ID via MahoTabIdHelper.
     if (!node.tab_id.empty()) {
       auto stable_it = stable_id_map.find(node.tab_id);

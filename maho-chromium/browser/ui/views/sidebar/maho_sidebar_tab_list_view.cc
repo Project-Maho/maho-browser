@@ -2927,6 +2927,12 @@ void MahoSidebarTabListView::RebuildTreeNodes(
       TabUIHelper* tab_ui =
           tab_iface ? TabUIHelper::From(tab_iface) : nullptr;
       ui::ImageModel fav = tab_ui ? tab_ui->GetFavicon() : ui::ImageModel();
+      if (fav.IsEmpty() && !node.favicon_png_data.empty()) {
+        gfx::Image png = gfx::Image::CreateFrom1xPNGBytes(node.favicon_png_data);
+        if (!png.IsEmpty()) {
+          fav = ui::ImageModel::FromImage(png);
+        }
+      }
       if (fav.IsEmpty()) {
         fav = ui::ImageModel::FromVectorIcon(vector_icons::kGlobeIcon,
                                              ui::kColorSysOnSurfaceSubtle,
