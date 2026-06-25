@@ -7,7 +7,7 @@ sys_includes = ["cstdint", "cstddef", "cstdbool"]
 style = "both"
 
 [export]
-include = []
+include = ["MahoAgentSecureKey", "MahoAgentPermissionDecision"]
 exclude = []
 prefix = ""
 

@@ -3,9 +3,9 @@
 #ifndef MAHO_FFI_H
 #define MAHO_FFI_H
 
-#include <cstdint>
-#include <cstddef>
-#include <cstdbool>
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
 
 /**
  * Success.
@@ -42,6 +42,11 @@
  */
 #define MAHO_ACP_ERR_INTERNAL 6
 
+typedef enum MahoAgentPermissionDecision {
+  Allow = 0,
+  Deny = 1,
+} MahoAgentPermissionDecision;
+
 typedef struct ChatSession ChatSession;
 
 /**
@@ -55,13 +60,22 @@ typedef struct MahoAgentSession MahoAgentSession;
 typedef struct MahoCore MahoCore;
 
 /**
- * Opaque handle for an in-flight import session.
- *
- * Created by `maho_import_orchestrator_start`, freed by
- * `maho_import_orchestrator_free`. The caller MUST call `free` after receiving
- * the terminal callback (`AllComplete` or `Error`).
+ * Opaque handle for an in-flight import session. Created by
+ * `maho_import_orchestrator_start`, freed by `maho_import_orchestrator_free`.
+ * The caller MUST call `free` after receiving the terminal callback
+ * (`AllComplete` or `Error`).
  */
 typedef struct MahoImportSession MahoImportSession;
+
+typedef struct Option_MahoAgentPermissionCallback Option_MahoAgentPermissionCallback;
+
+typedef struct Option_MahoAgentSecureStorageCallback Option_MahoAgentSecureStorageCallback;
+
+typedef struct Option_MahoImportAutofillCallback Option_MahoImportAutofillCallback;
+
+typedef struct Option_MahoImportCookieCallback Option_MahoImportCookieCallback;
+
+typedef struct Option_MahoImportFaviconCallback Option_MahoImportFaviconCallback;
 
 typedef struct MahoChatConfig {
   const char *api_key;
@@ -83,10 +97,9 @@ typedef void (*EventCallback)(void*, const uint8_t*, uintptr_t);
  *  - `message`: null-terminated status message or NULL
  *  - `user_data`: opaque pointer passed back unchanged
  *
- * SAFETY: The callback must be safe to invoke from a non-main thread.
- * The `message` pointer is only valid for the duration of the callback call.
- * The caller is responsible for ensuring `user_data` remains valid until the
- * terminal event fires.
+ * SAFETY: callback must be safe to invoke from a non-main thread. `message`
+ * pointer is only valid for the duration of the callback call. The caller is
+ * responsible for keeping `user_data` valid until the terminal event fires.
  */
 typedef void (*MahoImportProgressCallback)(uint32_t kind,
                                            uint32_t import_type,
@@ -94,27 +107,11 @@ typedef void (*MahoImportProgressCallback)(uint32_t kind,
                                            const char *message,
                                            void *user_data);
 
-typedef void (*MahoImportCookieCallback)(const char *host,
-                                         const char *name,
-                                         const char *value,
-                                         const char *path,
-                                         int64_t expires,
-                                         bool is_secure,
-                                         bool is_httponly,
-                                         int32_t same_site,
-                                         void *user_data);
-
-typedef void (*MahoImportAutofillCallback)(const char *field_name,
-                                           const char *value,
-                                           int32_t times_used,
-                                           int64_t first_used,
-                                           int64_t last_used,
-                                           void *user_data);
-
-typedef void (*MahoImportFaviconCallback)(const char *url,
-                                          const uint8_t *png_bytes,
-                                          uintptr_t png_len,
-                                          void *user_data);
+typedef struct MahoAgentSecureKey {
+  char *ptr;
+  uintptr_t len;
+  void (*free_fn)(char*, uintptr_t);
+} MahoAgentSecureKey;
 
 #ifdef __cplusplus
 extern "C" {
@@ -605,6 +602,13 @@ void maho_core_remove_site_exception(struct MahoCore *ptr, const char *origin);
  * Caller must free the returned string with `maho_string_free`.
  */
 char *maho_core_get_site_exceptions(struct MahoCore *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_get_content_rules(struct MahoCore *ptr);
 
 /**
  * Returns cosmetic filter resources for a URL as JSON.
@@ -1767,53 +1771,19 @@ bool maho_chat_send_text_with_image(struct MahoCore *core,
                                     const uint8_t *data,
                                     uintptr_t data_len);
 
-typedef enum MahoAgentPermissionDecision {
-  MahoAgentPermissionDecision_Allow = 0,
-  MahoAgentPermissionDecision_Deny = 1,
-} MahoAgentPermissionDecision;
-
-typedef MahoAgentPermissionDecision (*MahoAgentPermissionCallback)(
-    void *user_data,
-    const char *tool_name,
-    const char *arguments);
-
-typedef struct MahoAgentSecureKey {
-  char *ptr;
-  uintptr_t len;
-  void (*free_fn)(char *ptr, uintptr_t len);
-} MahoAgentSecureKey;
-
-/**
- * Contract for MahoAgentSecureKey returned by MahoAgentSecureStorageCallback:
- *  - If `ptr` is NULL, the caller (Rust runtime) MUST NOT invoke `free_fn`
- *    and treats the result as "no key available" (fail-closed when
- *    allow_insecure_key_storage=false).
- *  - If `ptr` is non-NULL and `free_fn` is non-NULL, Rust will call
- *    `free_fn(ptr, len)` after consuming the key. The C++/Swift caller is
- *    responsible for securely zeroing the buffer inside `free_fn` (e.g.,
- *    via memset_s) before releasing it.
- *  - If `ptr` is non-NULL and `free_fn` is NULL, Rust treats the buffer as
- *    caller-owned and unmanaged; the caller is responsible for any cleanup.
- *    This combination is discouraged for sensitive material.
- */
-typedef struct MahoAgentSecureKey (*MahoAgentSecureStorageCallback)(
-    void *user_data,
-    const char *provider);
-
 /**
  * # Safety
  * `core` must be a valid pointer to a `MahoCore`.
  * `session_id` must be a null-terminated C string.
  */
-struct MahoAgentSession *maho_agent_create_session(
-    struct MahoCore *core,
-    const char *session_id,
-    const char *workspace_root,
-    bool allow_insecure_key_storage,
-    MahoAgentPermissionCallback permission_cb,
-    void *permission_user_data,
-    MahoAgentSecureStorageCallback secure_storage_cb,
-    void *secure_storage_user_data);
+struct MahoAgentSession *maho_agent_create_session(struct MahoCore *core,
+                                                   const char *session_id,
+                                                   const char *workspace_root,
+                                                   bool allow_insecure_key_storage,
+                                                   struct Option_MahoAgentPermissionCallback permission_cb,
+                                                   void *permission_user_data,
+                                                   struct Option_MahoAgentSecureStorageCallback secure_storage_cb,
+                                                   void *secure_storage_user_data);
 
 /**
  * # Safety
@@ -1846,6 +1816,23 @@ bool maho_agent_cancel(struct MahoAgentSession *session);
  * `session` must be a valid pointer to a `MahoAgentSession`.
  */
 char *maho_agent_list_tools(struct MahoAgentSession *session);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer to a `MahoCore`.
+ * `space_id` must be a null-terminated C string.
+ */
+char *maho_core_get_space_ai_config(struct MahoCore *ptr, const char *space_id);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer to a `MahoCore`.
+ * `space_id` must be a null-terminated C string.
+ * `config_json` must be a null-terminated C string containing valid JSON.
+ */
+bool maho_core_set_space_ai_config(struct MahoCore *ptr,
+                                   const char *space_id,
+                                   const char *config_json);
 
 /**
  * Allocate a new ACP handle. Returns null on failure (should not happen).
@@ -1955,133 +1942,13 @@ int32_t maho_acp_reply_permission(struct MahoAcpHandle *handle,
                                   const char *option_id);
 
 /**
- * Parse Arc sidebar at `<arc_user_data_dir>/StorableSidebar.json`.
- * Returns a JSON string `{"workspaces":[...]}` on success, NULL on error.
- * Caller MUST free the returned string with `maho_import_string_free`.
- */
-char *maho_import_parse_arc(const char *arc_user_data_dir);
-
-/**
- * Parse Chromium history from a profile directory.
- * Returns JSON array of `[{"url","title","visit_time","visit_count"},...]`.
- * Caller MUST free with `maho_import_string_free`.
- */
-char *maho_import_parse_chromium_history(const char *profile_dir);
-
-/**
- * Parse Chromium bookmarks from a profile directory.
- * Returns JSON array of bookmark tree nodes.
- * Caller MUST free with `maho_import_string_free`.
- */
-char *maho_import_parse_chromium_bookmarks(const char *profile_dir);
-
-/**
- * Parse Chromium autofill data from a profile directory.
- * Returns JSON array of `[{"field_name","value","times_used","first_used","last_used"},...]`.
- * Caller MUST free with `maho_import_string_free`.
- */
-char *maho_import_parse_chromium_autofill(const char *profile_dir);
-
-/**
- * Parse Chromium cookies from a profile directory.
- * Returns JSON array of ChromiumCookieEntry objects.
- * Caller MUST free with `maho_import_string_free`.
- */
-char *maho_import_parse_chromium_cookies(const char *profile_dir);
-
-/**
- * Parse Chromium favicons from a profile directory.
- * Returns JSON array of `[{"favicon_url","page_urls","image_data"},...]`.
- * Note: `image_data` is a JSON array of bytes.
- * Caller MUST free with `maho_import_string_free`.
- */
-char *maho_import_parse_chromium_favicons(const char *profile_dir);
-
-/**
- * Parse Firefox bookmarks from a profile directory (reads places.sqlite).
- * Returns JSON array of bookmark tree nodes.
- * Caller MUST free with `maho_import_string_free`.
- */
-char *maho_import_parse_firefox_bookmarks(const char *profile_dir);
-
-/**
- * Parse Firefox history from a profile directory (reads places.sqlite).
- * Returns JSON array of `[{"url","title","visit_time","visit_count"},...]`.
- * Caller MUST free with `maho_import_string_free`.
- */
-char *maho_import_parse_firefox_history(const char *profile_dir);
-
-/**
- * Parse Firefox cookies from a profile directory (reads cookies.sqlite).
- * Returns JSON array of `[{"host","name","value","path","expires","is_secure","is_httponly","same_site"},...]`.
- * Caller MUST free with `maho_import_string_free`.
- */
-char *maho_import_parse_firefox_cookies(const char *profile_dir);
-
-/**
- * Parse Firefox autofill from a profile directory (reads formhistory.sqlite).
- * Returns JSON array of `[{"field_name","value","times_used","first_used","last_used"},...]`.
- * Caller MUST free with `maho_import_string_free`.
- */
-char *maho_import_parse_firefox_autofill(const char *profile_dir);
-
-/**
- * Parse Safari bookmarks from the Safari data directory.
- * Returns JSON array of bookmark tree nodes.
- * Caller MUST free with `maho_import_string_free`.
- */
-char *maho_import_parse_safari_bookmarks(const char *safari_dir);
-
-/**
- * Parse Safari history from the Safari data directory.
- * Returns JSON array of `[{"url","title","visit_time","visit_count"},...]`.
- * Caller MUST free with `maho_import_string_free`.
- */
-char *maho_import_parse_safari_history(const char *safari_dir);
-
-/**
- * Parse Zen workspaces from a Zen profile directory.
- * Returns JSON `{"active_workspace_uuid":"...","workspaces":[...]}`.
- * Caller MUST free with `maho_import_string_free`.
- */
-char *maho_import_parse_zen_workspaces(const char *profile_dir);
-
-/**
- * Detect installed browsers on the system.
- * Returns JSON array of `[{"browser_type","display_name","profile_path","services_supported","requires_full_disk_access"},...]`.
- * Caller MUST free with `maho_import_string_free`.
+ * Detect installed browsers on the system. Returns a JSON array; caller MUST
+ * free the returned string via `maho_import_string_free`.
  */
 char *maho_import_detect_browsers(void);
 
 /**
- * Parse Chromium passwords from a profile directory.
- *
- * `profile_dir` must contain `Login Data` SQLite database.
- * `keychain_service` is the macOS Keychain service name (e.g. "Chrome Safe Storage").
- * `keychain_account` is the macOS Keychain account name (e.g. "Chrome").
- *
- * Returns JSON `[{origin_url, action_url, username, password}, ...]` on success,
- * NULL on failure (e.g. Keychain access denied, database not found).
- * Caller MUST free the returned string with `maho_import_string_free`.
- */
-char *maho_import_parse_chromium_passwords(const char *profile_dir,
-                                           const char *keychain_service,
-                                           const char *keychain_account);
-
-/**
- * Parse Firefox passwords from a profile directory.
- *
- * `profile_dir` must contain `key4.db` and `logins.json`.
- * `master_password` is the user's master password (empty string if none set).
- *
- * Returns JSON `[{origin_url, action_url, username, password}, ...]` on success,
- * NULL on failure (wrong master password, missing files, etc.).
- * Caller MUST free the returned string with `maho_import_string_free`.
- */
-char *maho_import_parse_firefox_passwords(const char *profile_dir, const char *master_password);
-
-/**
- * Free a string returned by `maho_import_parse_*` or `maho_import_detect_*`.
+ * Free a string returned by `maho_import_detect_browsers`.
  */
 void maho_import_string_free(char *s);
 
@@ -2089,17 +1956,16 @@ void maho_import_string_free(char *s);
  * Start an import orchestrator session on a background thread.
  *
  * # Parameters
- * - `core_ptr`: valid `MahoCore*` (from `maho_core_new_with_storage`).
- *   Must remain valid and unaccessed by other threads until the terminal
- *   callback fires.
+ * - `core_ptr`: valid `MahoCore*` (from `maho_core_new_with_storage`). Must
+ *   remain valid and unaccessed by other threads until the terminal callback.
  * - `browser_json`: JSON-serialized `DetectedBrowser` entry.
- * - `items_bitmask`: which import types to run (OR of ImportServices bits).
+ * - `items_bitmask`: which import types to run (OR of `ImportServices` bits).
  * - `essentials_json`: JSON array of URL strings for essential import, or NULL.
  * - `callback`: progress callback invoked from the background thread.
+ * - `cookie_cb`: callback invoked when a cookie is imported.
+ * - `autofill_cb`: callback invoked when an autofill entry is imported.
+ * - `favicon_cb`: callback invoked when a favicon is imported.
  * - `user_data`: opaque pointer forwarded to callback.
- *
- * # Returns
- * Opaque `MahoImportSession*` on success, NULL on immediate failure.
  *
  * # Safety
  * All pointer parameters (except `user_data`) must be valid for the duration
@@ -2110,15 +1976,14 @@ struct MahoImportSession *maho_import_orchestrator_start(struct MahoCore *core_p
                                                          uint32_t items_bitmask,
                                                          const char *essentials_json,
                                                          MahoImportProgressCallback callback,
-                                                         MahoImportCookieCallback cookie_cb,
-                                                         MahoImportAutofillCallback autofill_cb,
-                                                         MahoImportFaviconCallback favicon_cb,
+                                                         struct Option_MahoImportCookieCallback cookie_cb,
+                                                         struct Option_MahoImportAutofillCallback autofill_cb,
+                                                         struct Option_MahoImportFaviconCallback favicon_cb,
                                                          void *user_data);
 
 /**
- * Cancel an in-flight import. Safe to call from any thread.
- * The cancellation is cooperative — the orchestrator checks the flag between
- * import types.
+ * Cancel an in-flight import. Safe to call from any thread. The cancellation
+ * is cooperative — the orchestrator checks the flag between import types.
  *
  * # Safety
  * `handle` must be a valid pointer returned by `maho_import_orchestrator_start`,

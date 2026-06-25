@@ -40,11 +40,6 @@ private typealias MahoAgentPermissionCallback = @convention(c) (
     UnsafePointer<CChar>?
 ) -> Int32
 
-private struct MahoAgentSecureKey {
-    var ptr: UnsafeMutablePointer<CChar>?
-    var len: UInt
-    var free_fn: (@convention(c) (UnsafeMutablePointer<CChar>?, UInt) -> Void)?
-}
 
 private typealias MahoAgentSecureStorageCallback = @convention(c) (
     UnsafeMutableRawPointer?,
@@ -269,8 +264,8 @@ private func onAgentError(
 
 extension MahoBridge {
     func agentCreateSession(sessionId: String) -> OpaquePointer? {
-        return withCore { corePtr in
-            FFIString.withCString(sessionId) { sessionIdPointer in
+        return withCore { corePtr -> OpaquePointer? in
+            FFIString.withCString(sessionId) { sessionIdPointer -> OpaquePointer? in
                 let fileManager = FileManager.default
                 let workspacePath = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first?
                     .appendingPathComponent("maho-agent-workspace").path ?? ""
@@ -278,7 +273,7 @@ extension MahoBridge {
                     try? fileManager.createDirectory(atPath: workspacePath, withIntermediateDirectories: true, attributes: nil)
                 }
                 
-                return FFIString.withCString(workspacePath) { workspacePathPointer in
+                return FFIString.withCString(workspacePath) { workspacePathPointer -> OpaquePointer? in
                     let context = AgentSessionContext()
                     let contextPointer = Unmanaged.passRetained(context).toOpaque()
                     
@@ -303,7 +298,7 @@ extension MahoBridge {
                     return sessionPtr
                 }
             }
-        }
+        } ?? nil
     }
     
     func agentFreeSession(_ ptr: OpaquePointer) {

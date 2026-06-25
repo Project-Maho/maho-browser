@@ -155,15 +155,15 @@ private func enqueueChatError(_ userData: UnsafeMutableRawPointer?, _ error: Uns
 
 extension MahoBridge {
     func createChatSession(apiKey: String, endpoint: String, model: String, systemInstruction: String) -> OpaquePointer? {
-        FFIString.withCString(apiKey) { apiKeyPointer in
-            FFIString.withCString(endpoint) { endpointPointer in
-                FFIString.withCString(model) { modelPointer in
-                    FFIString.withCString(systemInstruction) { instructionPointer in
+        return FFIString.withCString(apiKey) { apiKeyPointer -> OpaquePointer? in
+            return FFIString.withCString(endpoint) { endpointPointer -> OpaquePointer? in
+                return FFIString.withCString(model) { modelPointer -> OpaquePointer? in
+                    return FFIString.withCString(systemInstruction) { instructionPointer -> OpaquePointer? in
                         var config = MahoChatConfig(
-                            apiKey: apiKeyPointer,
+                            api_key: apiKeyPointer,
                             endpoint: endpointPointer,
                             model: modelPointer,
-                            systemInstruction: instructionPointer
+                            system_instruction: instructionPointer
                         )
 
                         guard let sessionPointer = maho_core_chat_session_new(&config) else {
