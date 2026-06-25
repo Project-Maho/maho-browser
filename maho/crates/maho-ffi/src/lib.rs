@@ -6477,9 +6477,16 @@ pub unsafe extern "C" fn maho_agent_create_session(
     session_id: *const c_char,
     workspace_root: *const c_char,
     allow_insecure_key_storage: bool,
-    permission_cb: Option<MahoAgentPermissionCallback>,
+    permission_cb: Option<unsafe extern "C" fn(
+        user_data: *mut std::ffi::c_void,
+        tool_name: *const c_char,
+        arguments_json: *const c_char,
+    ) -> MahoAgentPermissionDecision>,
     permission_user_data: *mut std::ffi::c_void,
-    secure_storage_cb: Option<MahoAgentSecureStorageCallback>,
+    secure_storage_cb: Option<unsafe extern "C" fn(
+        user_data: *mut std::ffi::c_void,
+        provider: *const c_char,
+    ) -> MahoAgentSecureKey>,
     secure_storage_user_data: *mut std::ffi::c_void,
 ) -> *mut MahoAgentSession {
     ffi_safe!({

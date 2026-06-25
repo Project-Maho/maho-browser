@@ -43,8 +43,8 @@
 #define MAHO_ACP_ERR_INTERNAL 6
 
 typedef enum MahoAgentPermissionDecision {
-  Allow = 0,
-  Deny = 1,
+  MahoAgentPermissionDecision_Allow = 0,
+  MahoAgentPermissionDecision_Deny = 1,
 } MahoAgentPermissionDecision;
 
 typedef struct ChatSession ChatSession;
@@ -67,22 +67,18 @@ typedef struct MahoCore MahoCore;
  */
 typedef struct MahoImportSession MahoImportSession;
 
-typedef struct Option_MahoAgentPermissionCallback Option_MahoAgentPermissionCallback;
-
-typedef struct Option_MahoAgentSecureStorageCallback Option_MahoAgentSecureStorageCallback;
-
-typedef struct Option_MahoImportAutofillCallback Option_MahoImportAutofillCallback;
-
-typedef struct Option_MahoImportCookieCallback Option_MahoImportCookieCallback;
-
-typedef struct Option_MahoImportFaviconCallback Option_MahoImportFaviconCallback;
-
 typedef struct MahoChatConfig {
   const char *api_key;
   const char *endpoint;
   const char *model;
   const char *system_instruction;
 } MahoChatConfig;
+
+typedef struct MahoAgentSecureKey {
+  char *ptr;
+  uintptr_t len;
+  void (*free_fn)(char*, uintptr_t);
+} MahoAgentSecureKey;
 
 typedef void (*EventCallback)(void*, const uint8_t*, uintptr_t);
 
@@ -106,12 +102,6 @@ typedef void (*MahoImportProgressCallback)(uint32_t kind,
                                            int32_t count,
                                            const char *message,
                                            void *user_data);
-
-typedef struct MahoAgentSecureKey {
-  char *ptr;
-  uintptr_t len;
-  void (*free_fn)(char*, uintptr_t);
-} MahoAgentSecureKey;
 
 #ifdef __cplusplus
 extern "C" {
@@ -1780,9 +1770,12 @@ struct MahoAgentSession *maho_agent_create_session(struct MahoCore *core,
                                                    const char *session_id,
                                                    const char *workspace_root,
                                                    bool allow_insecure_key_storage,
-                                                   struct Option_MahoAgentPermissionCallback permission_cb,
+                                                   enum MahoAgentPermissionDecision (*permission_cb)(void *user_data,
+                                                                                                     const char *tool_name,
+                                                                                                     const char *arguments_json),
                                                    void *permission_user_data,
-                                                   struct Option_MahoAgentSecureStorageCallback secure_storage_cb,
+                                                   struct MahoAgentSecureKey (*secure_storage_cb)(void *user_data,
+                                                                                                  const char *provider),
                                                    void *secure_storage_user_data);
 
 /**
@@ -1976,9 +1969,25 @@ struct MahoImportSession *maho_import_orchestrator_start(struct MahoCore *core_p
                                                          uint32_t items_bitmask,
                                                          const char *essentials_json,
                                                          MahoImportProgressCallback callback,
-                                                         struct Option_MahoImportCookieCallback cookie_cb,
-                                                         struct Option_MahoImportAutofillCallback autofill_cb,
-                                                         struct Option_MahoImportFaviconCallback favicon_cb,
+                                                         void (*cookie_cb)(const char *host,
+                                                                           const char *name,
+                                                                           const char *value,
+                                                                           const char *path,
+                                                                           int64_t expires,
+                                                                           bool is_secure,
+                                                                           bool is_httponly,
+                                                                           int32_t same_site,
+                                                                           void *user_data),
+                                                         void (*autofill_cb)(const char *field_name,
+                                                                             const char *value,
+                                                                             int32_t times_used,
+                                                                             int64_t first_used,
+                                                                             int64_t last_used,
+                                                                             void *user_data),
+                                                         void (*favicon_cb)(const char *url,
+                                                                            const uint8_t *png_bytes,
+                                                                            uintptr_t png_len,
+                                                                            void *user_data),
                                                          void *user_data);
 
 /**
