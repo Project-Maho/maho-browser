@@ -124,7 +124,6 @@ const DataTypeInfo kDataTypeInfos[] = {
     {mojom::kImportAutofill, IDS_MAHO_MIGRATION_CHECKBOX_AUTOFILL},
     {mojom::kImportFavicons, IDS_MAHO_MIGRATION_CHECKBOX_FAVICONS},
     {mojom::kImportWorkspaces, IDS_MAHO_MIGRATION_CHECKBOX_WORKSPACES},
-    {mojom::kImportSidebar, IDS_MAHO_MIGRATION_CHECKBOX_SIDEBAR},
 };
 
 }  // namespace

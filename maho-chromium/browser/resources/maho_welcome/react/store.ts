@@ -38,7 +38,7 @@ interface MutableWelcomeState {
 
 const DEFAULT_IMPORT_ITEMS =
     IMPORT_HISTORY | IMPORT_BOOKMARKS | IMPORT_PASSWORDS |
-    IMPORT_COOKIES | IMPORT_AUTOFILL | IMPORT_WORKSPACES;
+    IMPORT_COOKIES | IMPORT_AUTOFILL | IMPORT_WORKSPACES | IMPORT_FAVICONS;
 
 export class MahoWelcomeStore {
   private readonly callbackRouter = new PageCallbackRouter();

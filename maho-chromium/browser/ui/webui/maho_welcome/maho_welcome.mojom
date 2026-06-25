@@ -1,0 +1,90 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+
+module maho_welcome.mojom;
+
+// Bit-mask values MUST match Rust `ImportServices` constants in
+// maho/crates/maho-import/src/lib.rs — both sides treat the
+// `items` parameter of `StartImport` as a raw u32 with no translation,
+// so misalignment silently makes browser_detector → JS → orchestrator
+// produce wrong subsets of work.
+const uint32 kImportHistory    = 0x01;
+const uint32 kImportBookmarks  = 0x02;
+const uint32 kImportPasswords  = 0x04;
+const uint32 kImportAutofill   = 0x08;
+const uint32 kImportCookies    = 0x10;
+const uint32 kImportWorkspaces = 0x20;
+const uint32 kImportFavicons   = 0x40;
+const uint32 kImportEssential  = 0x80;
+
+
+struct SearchEngineInfo {
+  string keyword;
+  string name;
+  string icon_url;
+  bool is_default;
+};
+
+struct EssentialSite {
+  string url;
+  string name;
+  string icon_path;
+};
+
+struct BrowserProfile {
+  // Index into ImporterList for use with StartImport.
+  int32 index;
+  // Display name (e.g., "Google Chrome", "Safari").
+  string name;
+  // Bitmask of available items (HISTORY=1, FAVORITES=2, PASSWORDS=4, etc.)
+  uint32 services_supported;
+};
+
+struct MigrationDialogResult {
+  // True if user cancelled (clicked Cancel/X) before or during import.
+  bool was_cancelled;
+  // Bitmask of kImport* flags that were successfully imported (0 if cancelled).
+  uint32 imported_items_bitmask;
+};
+
+interface PageHandlerFactory {
+  CreatePageHandler(pending_remote<Page> page,
+                    pending_receiver<PageHandler> handler);
+};
+
+interface PageHandler {
+  // Import (REAL inline import — does NOT open any new windows)
+  GetAvailableBrowsers() => (array<BrowserProfile> browsers);
+  StartImport(int32 browser_index, uint32 items);
+  OpenMigrationDialog() => (MigrationDialogResult result);
+
+  // Localization
+  GetLocalizedStrings() => (map<string, string> strings);
+
+  // Default browser
+  IsDefaultBrowser() => (bool is_default);
+  SetAsDefaultBrowser();
+
+  // Search engine
+  GetSearchEngines() => (array<SearchEngineInfo> engines);
+  SetDefaultSearchEngine(string keyword);
+
+  // Essentials
+  GetEssentialSites() => (array<EssentialSite> sites);
+  FavoriteEssentialSites(array<string> urls);
+
+  // Theme
+  PreviewTheme(string theme_json);
+  ApplyTheme(string theme_json);
+  ClearThemePreview();
+  OpenThemePickerDialog(string current_theme_json) => (string picked_theme_json);
+
+  // Completion / FDA
+  FinishOnboarding();
+  OpenFDASettings();
+};
+
+interface Page {
+  // Import progress updates
+  OnImportProgress(uint32 type, int32 items_imported, string error, bool complete);
+};
+
