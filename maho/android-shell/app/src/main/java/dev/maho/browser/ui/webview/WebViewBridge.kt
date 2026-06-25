@@ -9,6 +9,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlinx.serialization.encodeToString
 
 /**
  * WebViewBridge — @JavascriptInterface glue between the web-ai bundle and MahoBridge.

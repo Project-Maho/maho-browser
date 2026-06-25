@@ -32,4 +32,14 @@ object BridgeFolders {
 
     fun reorderFolder(id: FolderId, spaceId: SpaceId, from: Int, to: Int): List<CoreUpdate> =
         MahoBridge.sendEvent(ShellEvent.ReorderFolder(spaceId = spaceId, folderId = id, from = from, to = to))
+
+    fun createFolderAndReturnModel(name: String, spaceId: SpaceId): FolderViewModel? {
+        val updates = createFolder(name, spaceId)
+        for (update in updates) {
+            if (update is CoreUpdate.FolderCreated) {
+                return update.folder
+            }
+        }
+        return null
+    }
 }

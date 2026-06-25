@@ -83,6 +83,13 @@ dependencies {
     implementation("com.google.android.play:app-update:2.1.0")
     implementation("com.google.android.play:app-update-ktx:2.1.0")
 
+    // CameraX
+    val cameraVersion = "1.3.4"
+    implementation("androidx.camera:camera-core:$cameraVersion")
+    implementation("androidx.camera:camera-camera2:$cameraVersion")
+    implementation("androidx.camera:camera-lifecycle:$cameraVersion")
+    implementation("androidx.camera:camera-view:$cameraVersion")
+
     // Glance widget
     implementation("androidx.glance:glance-appwidget:1.1.1")
 

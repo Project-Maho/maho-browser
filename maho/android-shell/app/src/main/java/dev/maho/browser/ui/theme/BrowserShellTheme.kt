@@ -49,6 +49,7 @@ data class BrowserShellMetrics(
     val floatingShadow: Dp,
     val sectionSpacing: Dp,
     val compactSpacing: Dp,
+    val suggestionPreviewHeight: Dp,
 )
 
 private val LocalBrowserShellColors = staticCompositionLocalOf<BrowserShellColors> {
@@ -151,6 +152,7 @@ fun ProvideBrowserShellTheme(content: @Composable () -> Unit) {
             floatingShadow = 8.dp,
             sectionSpacing = 20.dp,
             compactSpacing = 12.dp,
+            suggestionPreviewHeight = 120.dp,
         )
     }
 

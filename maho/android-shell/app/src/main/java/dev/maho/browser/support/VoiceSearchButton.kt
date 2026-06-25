@@ -34,6 +34,7 @@ fun VoiceSearchButton(
     manager: VoiceSearchManager,
     onResult: (String) -> Unit,
     modifier: Modifier = Modifier,
+    startListeningOnLaunch: Boolean = false,
 ) {
     val context = LocalContext.current
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -43,6 +44,17 @@ fun VoiceSearchButton(
             manager.startListening()
         } else {
             manager.reset()
+        }
+    }
+
+    LaunchedEffect(startListeningOnLaunch) {
+        if (startListeningOnLaunch && manager.state == VoiceSearchState.Idle) {
+            val permission = Manifest.permission.RECORD_AUDIO
+            if (ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) {
+                manager.startListening()
+            } else {
+                permissionLauncher.launch(permission)
+            }
         }
     }
 
