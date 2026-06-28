@@ -591,6 +591,10 @@ pub unsafe extern "C" fn maho_core_get_css_mods(ptr: *mut MahoCore) -> *mut c_ch
 
 /// Returns the combined CSS string of all enabled mods.
 /// Caller must free with `maho_string_free`.
+///
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. Returns null on null
+/// input, empty CSS, or if an import is in progress.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_get_combined_css(ptr: *mut MahoCore) -> *mut c_char {
     ffi_safe!({
@@ -2821,6 +2825,9 @@ pub unsafe extern "C" fn maho_core_update_download_progress(
     }, ())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `download_id` must be a
+/// valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_complete_download(
     ptr: *mut MahoCore,
@@ -2844,6 +2851,9 @@ pub unsafe extern "C" fn maho_core_complete_download(
     }, ptr::null_mut())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `download_id` must be a
+/// valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_restore_download_name(
     ptr: *mut MahoCore,
@@ -2870,6 +2880,9 @@ pub unsafe extern "C" fn maho_core_restore_download_name(
     }, ptr::null_mut())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. Caller must free
+/// the returned string with `maho_string_free`. Returns null on null input or import active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_get_filter_lists(ptr: *mut MahoCore) -> *mut c_char {
     ffi_safe!({
@@ -2889,6 +2902,9 @@ pub unsafe extern "C" fn maho_core_get_filter_lists(ptr: *mut MahoCore) -> *mut 
     }, ptr::null_mut())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `id`, `name`, and `url`
+/// must be valid NUL-terminated C strings. No-op on null input or if import is active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_add_filter_list(
     ptr: *mut MahoCore,
@@ -2921,6 +2937,9 @@ pub unsafe extern "C" fn maho_core_add_filter_list(
     }, ())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `id` must be a valid
+/// NUL-terminated C string. No-op on null input or if import is active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_toggle_filter_list(
     ptr: *mut MahoCore,
@@ -2944,6 +2963,9 @@ pub unsafe extern "C" fn maho_core_toggle_filter_list(
     }, ())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `id` must be a valid
+/// NUL-terminated C string. No-op on null input or if import is active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_remove_filter_list(ptr: *mut MahoCore, id: *const c_char) {
     ffi_safe!({
@@ -2963,6 +2985,9 @@ pub unsafe extern "C" fn maho_core_remove_filter_list(ptr: *mut MahoCore, id: *c
     }, ())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `id` and `content` must
+/// be valid NUL-terminated C strings. No-op on null input or if import is active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_update_filter_list_content(
     ptr: *mut MahoCore,
@@ -2990,6 +3015,9 @@ pub unsafe extern "C" fn maho_core_update_filter_list_content(
     }, ())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. No-op on null input
+/// or if import is active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_rebuild_content_rules(ptr: *mut MahoCore) {
     ffi_safe!({
@@ -3005,6 +3033,9 @@ pub unsafe extern "C" fn maho_core_rebuild_content_rules(ptr: *mut MahoCore) {
     }, ())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. Returns `0` on null
+/// input or if import is active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_get_content_rule_count(ptr: *mut MahoCore) -> usize {
     ffi_safe!({
@@ -3020,6 +3051,9 @@ pub unsafe extern "C" fn maho_core_get_content_rule_count(ptr: *mut MahoCore) ->
     }, 0)
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `extension_id` must be a
+/// valid NUL-terminated C string. Returns `false` on null input or if import is active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_toggle_extension(
     ptr: *mut MahoCore,
@@ -3042,6 +3076,9 @@ pub unsafe extern "C" fn maho_core_toggle_extension(
     }, false)
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `extension_id` must be a
+/// valid NUL-terminated C string. Returns `false` on null input or if import is active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_remove_extension(
     ptr: *mut MahoCore,
@@ -3691,6 +3728,9 @@ pub unsafe extern "C" fn maho_core_get_reader_settings(ptr: *mut MahoCore) -> *m
     }, ptr::null_mut())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `config_json` must be a
+/// valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_create_backup(
     ptr: *mut MahoCore,
@@ -3721,6 +3761,10 @@ pub unsafe extern "C" fn maho_core_create_backup(
     }, ptr::null_mut())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `backup_b64` must be a
+/// valid NUL-terminated C string. `password` may be null (treated as no password). Caller must
+/// free the returned string with `maho_string_free`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_restore_backup(
     ptr: *mut MahoCore,
@@ -3758,6 +3802,9 @@ pub unsafe extern "C" fn maho_core_restore_backup(
     }, ptr::null_mut())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. Caller must free
+/// the returned string with `maho_string_free`. Returns null on null input or import active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_get_backup_history(ptr: *mut MahoCore) -> *mut c_char {
     ffi_safe!({
@@ -3776,6 +3823,9 @@ pub unsafe extern "C" fn maho_core_get_backup_history(ptr: *mut MahoCore) -> *mu
     }, ptr::null_mut())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `url` and `title` must
+/// be valid NUL-terminated C strings. Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_add_to_reading_list(
     ptr: *mut MahoCore,
@@ -3806,6 +3856,9 @@ pub unsafe extern "C" fn maho_core_add_to_reading_list(
     }, ptr::null_mut())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `item_id` must be a
+/// valid NUL-terminated C string. Returns `false` on null input or if import is active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_remove_from_reading_list(
     ptr: *mut MahoCore,
@@ -3828,6 +3881,9 @@ pub unsafe extern "C" fn maho_core_remove_from_reading_list(
     }, false)
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `item_id` must be a
+/// valid NUL-terminated C string. Returns `-1` on null input or if import is active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_toggle_reading_list_read(
     ptr: *mut MahoCore,
@@ -3854,6 +3910,9 @@ pub unsafe extern "C" fn maho_core_toggle_reading_list_read(
     }, 0)
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. Caller must free
+/// the returned string with `maho_string_free`. Returns null on null input or import active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_get_reading_list(ptr: *mut MahoCore) -> *mut c_char {
     ffi_safe!({
@@ -3872,6 +3931,9 @@ pub unsafe extern "C" fn maho_core_get_reading_list(ptr: *mut MahoCore) -> *mut 
     }, ptr::null_mut())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. Returns `0` on null
+/// input or if import is active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_get_unread_count(ptr: *mut MahoCore) -> usize {
     ffi_safe!({
@@ -3887,6 +3949,9 @@ pub unsafe extern "C" fn maho_core_get_unread_count(ptr: *mut MahoCore) -> usize
     }, 0)
 }
 
+/// # Safety
+/// No pointer arguments. Internally safe; uses only platform APIs. Caller must free the returned
+/// string with `maho_string_free`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_detect_browser_profiles() -> *mut c_char {
     ffi_safe!({
@@ -3899,6 +3964,9 @@ pub unsafe extern "C" fn maho_core_detect_browser_profiles() -> *mut c_char {
     }, ptr::null_mut())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `profile_path` must be a
+/// valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_import_chrome_bookmarks(
     ptr: *mut MahoCore,
@@ -3926,6 +3994,9 @@ pub unsafe extern "C" fn maho_core_import_chrome_bookmarks(
     }, ptr::null_mut())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `profile_path` must be a
+/// valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_import_firefox_bookmarks(
     ptr: *mut MahoCore,
@@ -4011,6 +4082,9 @@ fn base64_decode(input: &str) -> Option<Vec<u8>> {
     Some(result)
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. Caller must free
+/// the returned string with `maho_string_free`. Returns null on null input or import active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_get_shortcuts(ptr: *mut MahoCore) -> *mut c_char {
     ffi_safe!({
@@ -4029,6 +4103,10 @@ pub unsafe extern "C" fn maho_core_get_shortcuts(ptr: *mut MahoCore) -> *mut c_c
     }, ptr::null_mut())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `action` and
+/// `key_combo_json` must be valid NUL-terminated C strings. Caller must free the returned string
+/// with `maho_string_free`. Returns null on null input, invalid UTF-8, or import active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_set_shortcut(
     ptr: *mut MahoCore,
@@ -4070,6 +4148,9 @@ pub unsafe extern "C" fn maho_core_set_shortcut(
     }, ptr::null_mut())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `action` must be a
+/// valid NUL-terminated C string. No-op on null input or if import is active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_reset_shortcut(ptr: *mut MahoCore, action: *const c_char) {
     ffi_safe!({
@@ -4087,6 +4168,9 @@ pub unsafe extern "C" fn maho_core_reset_shortcut(ptr: *mut MahoCore, action: *c
     }, ())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. No-op on null input
+/// or if import is active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_reset_all_shortcuts(ptr: *mut MahoCore) {
     ffi_safe!({
@@ -4102,6 +4186,9 @@ pub unsafe extern "C" fn maho_core_reset_all_shortcuts(ptr: *mut MahoCore) {
     }, ())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `action` must be a
+/// valid NUL-terminated C string. No-op on null input or if import is active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_toggle_shortcut(
     ptr: *mut MahoCore,
@@ -4123,6 +4210,9 @@ pub unsafe extern "C" fn maho_core_toggle_shortcut(
     }, ())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `key_combo_json` must be
+/// a valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_resolve_shortcut(
     ptr: *mut MahoCore,
@@ -4150,6 +4240,9 @@ pub unsafe extern "C" fn maho_core_resolve_shortcut(
     }, ptr::null_mut())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `density` must be a
+/// valid NUL-terminated C string. No-op on null input or if import is active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_set_density(ptr: *mut MahoCore, density: *const c_char) {
     ffi_safe!({
@@ -4167,6 +4260,9 @@ pub unsafe extern "C" fn maho_core_set_density(ptr: *mut MahoCore, density: *con
     }, ())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `color_json` must be a
+/// valid NUL-terminated C string. No-op on null input or if import is active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_set_accent_color(ptr: *mut MahoCore, color_json: *const c_char) {
     ffi_safe!({
@@ -4184,6 +4280,9 @@ pub unsafe extern "C" fn maho_core_set_accent_color(ptr: *mut MahoCore, color_js
     }, ())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `css` may be null
+/// (treated as clearing the CSS) or a valid NUL-terminated C string. No-op if import is active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_set_custom_chrome_css(ptr: *mut MahoCore, css: *const c_char) {
     ffi_safe!({
@@ -4204,6 +4303,9 @@ pub unsafe extern "C" fn maho_core_set_custom_chrome_css(ptr: *mut MahoCore, css
     }, ())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. No-op on null input
+/// or if import is active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_set_window_transparency(ptr: *mut MahoCore, enabled: bool) {
     ffi_safe!({
@@ -4219,6 +4321,9 @@ pub unsafe extern "C" fn maho_core_set_window_transparency(ptr: *mut MahoCore, e
     }, ())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. Caller must free
+/// the returned string with `maho_string_free`. Returns null on null input or import active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_get_toolbar_items(ptr: *mut MahoCore) -> *mut c_char {
     ffi_safe!({
@@ -4237,6 +4342,9 @@ pub unsafe extern "C" fn maho_core_get_toolbar_items(ptr: *mut MahoCore) -> *mut
     }, ptr::null_mut())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `items_json` must be a
+/// valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_set_toolbar_items(
     ptr: *mut MahoCore,
@@ -4266,6 +4374,10 @@ pub unsafe extern "C" fn maho_core_set_toolbar_items(
     }, ptr::null_mut())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `path` may be null
+/// (clears icon) or a valid NUL-terminated C string. Caller must free returned string with
+/// `maho_string_free`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_set_app_icon(
     ptr: *mut MahoCore,
@@ -4300,6 +4412,9 @@ pub unsafe extern "C" fn maho_core_set_app_icon(
     }, ptr::null_mut())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. Caller must free
+/// the returned string with `maho_string_free`. Returns null on null input or import active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_get_default_toolbar_items(ptr: *mut MahoCore) -> *mut c_char {
     ffi_safe!({
@@ -5590,6 +5705,9 @@ pub unsafe extern "C" fn maho_core_get_autofill_addresses(ptr: *mut MahoCore) ->
     }, ptr::null_mut())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `address_json` must be
+/// a valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_add_autofill_address_persisted(
     ptr: *mut MahoCore,
@@ -5616,6 +5734,9 @@ pub unsafe extern "C" fn maho_core_add_autofill_address_persisted(
     }, ptr::null_mut())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `id` must be a valid
+/// NUL-terminated C string. Returns `false` on null input or if import is active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_delete_autofill_address_persisted(
     ptr: *mut MahoCore,
@@ -5656,6 +5777,9 @@ pub unsafe extern "C" fn maho_core_get_autofill_payments(ptr: *mut MahoCore) -> 
     }, ptr::null_mut())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `payment_json` must be
+/// a valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_add_autofill_payment_persisted(
     ptr: *mut MahoCore,
@@ -5682,6 +5806,9 @@ pub unsafe extern "C" fn maho_core_add_autofill_payment_persisted(
     }, ptr::null_mut())
 }
 
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `id` must be a valid
+/// NUL-terminated C string. Returns `false` on null input or if import is active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_delete_autofill_payment_persisted(
     ptr: *mut MahoCore,
@@ -5704,6 +5831,7 @@ pub unsafe extern "C" fn maho_core_delete_autofill_payment_persisted(
     }, false)
 }
 
+/// # Safety
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
 /// String parameters must be valid null-terminated UTF-8.
 #[no_mangle]
@@ -6443,6 +6571,10 @@ macro_rules! ffi_safe {
 
 /// Create a new conversation. Returns true on success.
 /// All pointer args except `core` may be null (treated as None/empty).
+///
+/// # Safety
+/// `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `id` must be a valid
+/// NUL-terminated C string; other string args may be null.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_create_conversation(
     core: *mut MahoCore,
@@ -6489,6 +6621,10 @@ pub unsafe extern "C" fn maho_core_create_conversation(
 
 /// List conversations. Returns JSON array string (caller must free via maho_string_free).
 /// Returns "[]" on null core or missing storage.
+///
+/// # Safety
+/// `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`, or null (returns "[]").
+/// Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_list_conversations(
     core: *mut MahoCore,
@@ -6517,6 +6653,10 @@ pub unsafe extern "C" fn maho_core_list_conversations(
 }
 
 /// Get messages for a conversation session. Returns JSON array string.
+///
+/// # Safety
+/// `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `session_id` must be a
+/// valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_get_conversation_messages(
     core: *mut MahoCore,
@@ -6549,6 +6689,10 @@ pub unsafe extern "C" fn maho_core_get_conversation_messages(
 }
 
 /// Save a message to a conversation. Returns true on success.
+///
+/// # Safety
+/// `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `session_id`, `role`,
+/// and `content` must be valid NUL-terminated C strings; `url_context` may be null.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_save_conversation_message(
     core: *mut MahoCore,
@@ -6593,6 +6737,10 @@ pub unsafe extern "C" fn maho_core_save_conversation_message(
 }
 
 /// Delete a conversation by id. Returns true if deleted.
+///
+/// # Safety
+/// `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `id` must be a valid
+/// NUL-terminated C string. Returns `false` on null input or if import is active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_delete_conversation(
     core: *mut MahoCore,
@@ -6620,6 +6768,10 @@ pub unsafe extern "C" fn maho_core_delete_conversation(
 }
 
 /// Rename a conversation. Returns true on success.
+///
+/// # Safety
+/// `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `id` and `new_title`
+/// must be valid NUL-terminated C strings. Returns `false` on null input or import active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_rename_conversation(
     core: *mut MahoCore,
@@ -6657,6 +6809,10 @@ pub unsafe extern "C" fn maho_core_rename_conversation(
 // ============================================================
 
 /// Set a BYOK API key for the given provider.
+///
+/// # Safety
+/// `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `provider` and `api_key`
+/// must be valid NUL-terminated C strings. Returns `false` on null input or import active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_byok_set_key(
     core: *mut MahoCore,
@@ -6690,6 +6846,10 @@ pub unsafe extern "C" fn maho_core_byok_set_key(
 }
 
 /// Get the stored BYOK API key for the given provider. Returns null if not set.
+///
+/// # Safety
+/// `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `provider` must be a
+/// valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_byok_get_key(
     core: *mut MahoCore,
@@ -6724,6 +6884,10 @@ pub unsafe extern "C" fn maho_core_byok_get_key(
 }
 
 /// Delete the BYOK API key for the given provider. Returns true on success.
+///
+/// # Safety
+/// `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `provider` must be a
+/// valid NUL-terminated C string. Returns `false` on null input or import active.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_byok_delete_key(
     core: *mut MahoCore,
@@ -6753,6 +6917,9 @@ pub unsafe extern "C" fn maho_core_byok_delete_key(
 }
 
 /// Get JSON array of supported provider names. Returns caller-owned string.
+///
+/// # Safety
+/// `_core` may be null (ignored). Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_byok_get_providers(
     _core: *mut MahoCore,
@@ -6768,6 +6935,10 @@ pub unsafe extern "C" fn maho_core_byok_get_providers(
 
 /// Validate a BYOK API key for the given provider. Returns true if valid.
 /// Note: makes a live network request; call from a background thread.
+///
+/// # Safety
+/// `provider` and `api_key` must be valid NUL-terminated C strings (not null). `_core` is
+/// unused and may be null. This call performs a live network request.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_byok_validate_key(
     _core: *mut MahoCore,
@@ -6802,6 +6973,10 @@ pub unsafe extern "C" fn maho_core_byok_validate_key(
 /// Send an image-only chat message. Fires a ShellEvent::ChatMessage with image content.
 /// `mime` must be non-null (e.g. "image/png"). `data` is raw bytes, `data_len` is byte count.
 /// Returns true on success.
+///
+/// # Safety
+/// `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `mime` must be a valid
+/// NUL-terminated C string; `data` must point to at least `data_len` bytes if non-null.
 #[no_mangle]
 pub unsafe extern "C" fn maho_chat_send_image(
     core: *mut MahoCore,
@@ -6844,6 +7019,10 @@ pub unsafe extern "C" fn maho_chat_send_image(
 
 /// Send a text+image chat message. `text` is the user's text (may be null/empty).
 /// Returns true on success.
+///
+/// # Safety
+/// `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `text` and `mime` may
+/// be null; `data` must point to at least `data_len` bytes if non-null.
 #[no_mangle]
 pub unsafe extern "C" fn maho_chat_send_text_with_image(
     core: *mut MahoCore,

@@ -23,6 +23,10 @@ fn to_json_cstring<T: serde::Serialize>(val: &T) -> *mut c_char {
 
 /// Detect installed browsers on the system. Returns a JSON array; caller MUST
 /// free the returned string via `maho_import_string_free`.
+///
+/// # Safety
+/// No pointer arguments. Returns a heap-allocated JSON string; caller must free it via
+/// `maho_import_string_free`. Returns null on allocation failure.
 #[no_mangle]
 pub unsafe extern "C" fn maho_import_detect_browsers() -> *mut c_char {
     crate::ffi_safe!({
@@ -34,6 +38,10 @@ pub unsafe extern "C" fn maho_import_detect_browsers() -> *mut c_char {
 }
 
 /// Free a string returned by `maho_import_detect_browsers`.
+///
+/// # Safety
+/// `s` must be a pointer returned by `maho_import_detect_browsers`, or null (no-op). Must not
+/// be called more than once per pointer.
 #[no_mangle]
 pub unsafe extern "C" fn maho_import_string_free(s: *mut c_char) {
     crate::ffi_safe!({
