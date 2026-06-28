@@ -28,6 +28,7 @@
 
 class Browser;
 class MahoFavoritesContextMenu;
+class PrefService;
 
 namespace ui {
 class SimpleMenuModel;
@@ -102,6 +103,12 @@ class MahoSidebarFavoritesGridView : public views::View {
     return index < kTileCount ? tile_views_[index].get() : nullptr;
   }
 
+  views::View* empty_state_view_for_testing() { return empty_state_view_; }
+
+  void DismissHintForTesting() { OnFavoritesHintDismissed(); }
+
+  void SetPrefsForTesting(PrefService* prefs) { prefs_ = prefs; }
+
   void ShowTileContextMenu(size_t index,
                            const gfx::Point& point,
                            ui::mojom::MenuSourceType source_type);
@@ -122,6 +129,7 @@ class MahoSidebarFavoritesGridView : public views::View {
 
   void OnTilePressed(size_t index);
   void OnTileDragDone(const std::string& tab_id);
+  void OnFavoritesHintDismissed();
   int ResolveDropIndex(const gfx::Point& point,
                        const std::string& source_tab_id,
                        bool source_is_favorite) const;
@@ -139,6 +147,7 @@ class MahoSidebarFavoritesGridView : public views::View {
                        const favicon_base::FaviconImageResult& result);
 
   raw_ptr<Browser> browser_ = nullptr;
+  raw_ptr<PrefService> prefs_ = nullptr;
   raw_ptr<views::View> content_view_ = nullptr;
   raw_ptr<views::View> empty_state_view_ = nullptr;
   raw_ptr<views::View> empty_state_card_ = nullptr;
@@ -178,6 +187,7 @@ class MahoSidebarFavoritesGridView : public views::View {
 
   base::CancelableTaskTracker cancelable_task_tracker_;
   base::WeakPtrFactory<MahoSidebarFavoritesGridView> weak_factory_{this};
+
 };
 
 }  // namespace maho

@@ -14,6 +14,9 @@ const char kSidebarVisible[] = "maho.sidebar.visible";
 const char kSidebarLayoutEnabled[] = "maho.sidebar.layout_enabled";
 const char kSidebarPanelExpanded[] = "maho.sidebar.panel_expanded";
 const char kSidebarWidth[] = "maho.sidebar.width";
+const char kFavoritesDragHintDismissed[] =
+    "maho.sidebar.favorites_drag_hint_dismissed";
+const char kLiveFolders[] = "maho.live_folders";
 
 int ClampSidebarWidthForLayout(int width) {
   if (width <= sidebar_layout::kLegacyRailWidthResetThresholdDp) {
@@ -52,6 +55,8 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(kSidebarPanelExpanded, true);
   registry->RegisterIntegerPref(kSidebarWidth,
                                 sidebar_layout::kDefaultRailWidthDp);
+  registry->RegisterBooleanPref(kFavoritesDragHintDismissed, false);
+  registry->RegisterListPref(kLiveFolders);
 }
 
 void MigrateFromLegacyVisiblePref(PrefService* prefs) {

@@ -18,6 +18,10 @@ extern const char kSidebarLayoutEnabled[];
 extern const char kSidebarPanelExpanded[];
 // Persisted expanded width.
 extern const char kSidebarWidth[];
+// Whether the user has dismissed the "Drag to add Favorites" hint card shown
+// in the empty favorites slot. Persistent across sessions per profile.
+extern const char kFavoritesDragHintDismissed[];
+extern const char kLiveFolders[];
 
 int ClampSidebarWidthForLayout(int width);
 int GetSidebarWidthForLayout(int pref_width);
