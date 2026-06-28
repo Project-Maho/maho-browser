@@ -38,6 +38,19 @@
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/third_party/maho/maho_bridge.h"
+#include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/ai/maho_ai_llm_client.h"
+#include "maho/browser/ai/maho_extract_prompt_messages.h"
+#include "maho/third_party/maho/maho_ffi.h"
+#include "content/public/browser/storage_partition.h"
+#include "net/base/net_errors.h"
+#include "net/http/http_response_headers.h"
+#include "net/traffic_annotation/network_traffic_annotation.h"
+#include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/mojom/fetch_api.mojom-shared.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -61,6 +74,26 @@ std::string GenerateSessionId() {
                             1000)) +
       "_" + base::NumberToString(base::RandUint64() % 100000);
 }
+
+const net::NetworkTrafficAnnotationTag kCreditBalanceTrafficAnnotation =
+    net::DefineNetworkTrafficAnnotation("maho_ai_credit_balance", R"(
+      semantics {
+        sender: "Maho AI Credit Balance"
+        description:
+          "Fetches PAYG credit balance for the active user from the Maho relay."
+        trigger:
+          "The user opens the Maho AI UI and the product requests the current credit balance."
+        data:
+          "Bearer access token in the Authorization header."
+        destination: WEBSITE
+      }
+      policy {
+        cookies_allowed: NO
+        setting:
+          "This request is enabled when the user is signed in and opens the Maho AI surface."
+        policy_exception_justification: "Not implemented."
+      }
+    )");
 
 // UTF-8 continuation bytes match 10xxxxxx (0x80–0xBF); walking back past them
 // lands on the lead byte of the interrupted sequence, giving a safe cut point.
@@ -311,6 +344,7 @@ MahoAIPageHandler::MahoAIPageHandler(
       page_(std::move(page)),
       browser_(browser),
       prefs_(prefs),
+      url_loader_factory_(url_loader_factory),
       runtime_router_(prefs, url_loader_factory),
       page_context_extractor_(browser) {
   DCHECK(prefs_);
@@ -1720,4 +1754,413 @@ void MahoAIPageHandler::UpdateSessionTitle(const std::string& text) {
   if (session_title_.empty() && !text.empty()) {
     session_title_ = DeriveTitle(text);
   }
+}
+
+// ==========================================================================
+// Tab Tidy implementation — default-ON, no pref gate.
+// ==========================================================================
+
+void MahoAIPageHandler::RequestTabTidy(
+    std::vector<maho_ai::mojom::TabInfoPtr> tabs,
+    RequestTabTidyCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  // Return empty result immediately if no tabs or core unavailable.
+  if (tabs.empty()) {
+    std::move(callback).Run({});
+    return;
+  }
+
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run({});
+    return;
+  }
+
+  // Determine the active space ID from the browser context.
+  std::string space_id;
+  if (browser_) {
+    auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+    if (bridge) {
+      space_id = bridge->GetActiveSpaceId(browser_);
+    }
+  }
+  if (space_id.empty()) {
+    std::move(callback).Run({});
+    return;
+  }
+
+  // Dispatch request_tidy_tabs shell event to Rust core.
+  base::DictValue event_dict;
+  event_dict.Set("kind", "request_tidy_tabs");
+  event_dict.Set("space_id", space_id);
+  std::string event_json;
+  base::JSONWriter::Write(event_dict, &event_json);
+
+  std::string updates = maho::core::HandleEvent(core, event_json.c_str());
+
+  // Parse the request_llm_completion update from the core.
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(updates, base::JSON_PARSE_RFC);
+  if (!parsed) {
+    std::move(callback).Run({});
+    return;
+  }
+
+  const base::DictValue* llm_request = nullptr;
+  if (parsed->is_list()) {
+    for (const auto& item : parsed->GetList()) {
+      const auto* d = item.GetIfDict();
+      if (d) {
+        const std::string* kind = d->FindString("kind");
+        if (kind && *kind == "request_llm_completion") {
+          llm_request = d;
+          break;
+        }
+      }
+    }
+  } else if (parsed->is_dict()) {
+    const std::string* kind = parsed->GetDict().FindString("kind");
+    if (kind && *kind == "request_llm_completion") {
+      llm_request = &parsed->GetDict();
+    }
+  }
+
+  if (!llm_request) {
+    std::move(callback).Run({});
+    return;
+  }
+
+  const std::string* request_id_ptr = llm_request->FindString("request_id");
+  if (!request_id_ptr) {
+    std::move(callback).Run({});
+    return;
+  }
+  std::string request_id = *request_id_ptr;
+
+  auto prompt_messages = maho::ai::ExtractPromptMessages(*llm_request);
+  if (!prompt_messages) {
+    std::move(callback).Run({});
+    return;
+  }
+
+  // Build and fire the LLM completion request.
+  auto* url_loader_factory =
+      browser_->profile()
+          ->GetDefaultStoragePartition()
+          ->GetURLLoaderFactoryForBrowserProcess()
+          .get();
+  auto llm_client = std::make_unique<MahoAiLlmClient>(
+      browser_->profile()->GetPrefs(),
+      url_loader_factory,
+      /*provider_adapter_v2_enabled=*/false);
+
+  MahoAiLlmClient::CompletionRequest request;
+  request.prompt_messages = base::ListValue(std::move(*prompt_messages));
+
+  auto* raw_client = llm_client.get();
+  raw_client->StartCompletion(
+      std::move(request),
+      /*on_token=*/base::BindRepeating([](const std::string&) {}),
+      /*on_complete=*/base::BindOnce(
+          [](base::WeakPtr<MahoAIPageHandler> handler,
+             std::unique_ptr<MahoAiLlmClient> /*client*/,
+             std::string space_id_arg,
+             std::string request_id_arg,
+             RequestTabTidyCallback cb,
+             MahoAiLlmClient::CompletionResult result) {
+            if (!handler) {
+              std::move(cb).Run({});
+              return;
+            }
+
+            MahoCore* core2 = maho::GetCore();
+            if (!core2) {
+              std::move(cb).Run({});
+              return;
+            }
+
+            // Send LLM result back to Rust to get tidy_tabs_ready.
+            base::DictValue llm_result_dict;
+            llm_result_dict.Set("kind", "llm_result");
+            llm_result_dict.Set("request_id", request_id_arg);
+            llm_result_dict.Set("result", result.full_text);
+            std::string llm_result_json;
+            base::JSONWriter::Write(llm_result_dict, &llm_result_json);
+
+            std::string updates2 =
+                maho::core::HandleEvent(core2, llm_result_json.c_str());
+
+            // Parse tidy_tabs_ready from the updates.
+            std::optional<base::Value> parsed2 =
+                base::JSONReader::Read(updates2, base::JSON_PARSE_RFC);
+            if (!parsed2) {
+              std::move(cb).Run({});
+              return;
+            }
+
+            const base::DictValue* tidy_ready = nullptr;
+            if (parsed2->is_list()) {
+              for (const auto& item : parsed2->GetList()) {
+                const auto* d = item.GetIfDict();
+                if (d) {
+                  const std::string* kind = d->FindString("kind");
+                  if (kind && *kind == "tidy_tabs_ready") {
+                    tidy_ready = d;
+                    break;
+                  }
+                }
+              }
+            } else if (parsed2->is_dict()) {
+              const std::string* kind =
+                  parsed2->GetDict().FindString("kind");
+              if (kind && *kind == "tidy_tabs_ready") {
+                tidy_ready = &parsed2->GetDict();
+              }
+            }
+
+            if (!tidy_ready) {
+              std::move(cb).Run({});
+              return;
+            }
+
+            const base::ListValue* raw_folders =
+                tidy_ready->FindList("folders");
+            if (!raw_folders) {
+              std::move(cb).Run({});
+              return;
+            }
+
+            // Convert to Mojo TidyFolder array.
+            std::vector<maho_ai::mojom::TidyFolderPtr> mojo_folders;
+            for (const auto& folder_val : *raw_folders) {
+              const auto* folder_dict = folder_val.GetIfDict();
+              if (!folder_dict) continue;
+              const std::string* name = folder_dict->FindString("name");
+              const base::ListValue* tab_ids =
+                  folder_dict->FindList("tab_ids");
+              if (!name || !tab_ids) continue;
+              auto mojo_folder = maho_ai::mojom::TidyFolder::New();
+              mojo_folder->name = *name;
+              for (const auto& id_val : *tab_ids) {
+                const std::string* tid = id_val.GetIfString();
+                if (tid) mojo_folder->tab_ids.push_back(*tid);
+              }
+              mojo_folders.push_back(std::move(mojo_folder));
+            }
+
+            if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+                bridge) {
+              bridge->NotifyChanged();
+            }
+
+            std::move(cb).Run(std::move(mojo_folders));
+          },
+          weak_factory_.GetWeakPtr(), std::move(llm_client), space_id,
+          request_id, std::move(callback)),
+      /*on_error=*/base::BindOnce(
+          [](base::WeakPtr<MahoAIPageHandler> handler,
+             std::unique_ptr<MahoAiLlmClient> /*client*/,
+             RequestTabTidyCallback cb,
+             const std::string& error) {
+            LOG(ERROR) << "MahoAIPageHandler::RequestTabTidy LLM error: "
+                       << error;
+            std::move(cb).Run({});
+          },
+          weak_factory_.GetWeakPtr(), std::move(llm_client),
+          std::move(callback)));
+}
+
+void MahoAIPageHandler::ApplyTabTidyFolders(
+    std::vector<maho_ai::mojom::TidyFolderPtr> folders) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (folders.empty()) return;
+
+  std::string space_id;
+  if (browser_) {
+    auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+    if (bridge) {
+      space_id = bridge->GetActiveSpaceId(browser_);
+    }
+  }
+  if (space_id.empty()) return;
+
+  // Dispatch apply_tidy_tabs shell event — Rust core creates folders and
+  // moves tabs using the pending tidy state set by request_tidy_tabs.
+  base::DictValue event_dict;
+  event_dict.Set("kind", "apply_tidy_tabs");
+  event_dict.Set("space_id", space_id);
+  std::string event_json;
+  base::JSONWriter::Write(event_dict, &event_json);
+
+  MahoCore* core = maho::GetCore();
+  if (!core) return;
+
+  maho::core::HandleEvent(core, event_json.c_str());
+
+  if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
+    bridge->NotifyChanged();
+  }
+}
+
+// ==========================================================================
+// PAYG credit balance implementation
+// ==========================================================================
+
+void MahoAIPageHandler::GetCreditBalance(GetCreditBalanceCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  // Resolve relay base URL: MAHO_RELAY_URL env or fallback.
+  std::string relay_url;
+  const char* env_relay = std::getenv("MAHO_RELAY_URL");
+  if (env_relay && *env_relay) {
+    relay_url = env_relay;
+  } else {
+    relay_url = "https://relay.maho.co";
+  }
+
+  std::string access_token;
+
+  // Return zero balance immediately if there is no token — anonymous user.
+  if (access_token.empty()) {
+    auto info = maho_ai::mojom::CreditBalanceInfo::New();
+    info->balance_usd = 0.0f;
+    info->last_purchase_at = 0;
+    info->last_consumption_at = 0;
+    std::move(callback).Run(std::move(info));
+    return;
+  }
+
+  // Build the request URL.
+  GURL request_url(relay_url + "/billing/credit_balance");
+  if (!request_url.is_valid()) {
+    auto info = maho_ai::mojom::CreditBalanceInfo::New();
+    info->balance_usd = 0.0f;
+    info->last_purchase_at = 0;
+    info->last_consumption_at = 0;
+    std::move(callback).Run(std::move(info));
+    return;
+  }
+
+  auto resource_request = std::make_unique<network::ResourceRequest>();
+  resource_request->url = request_url;
+  resource_request->method = "GET";
+  resource_request->headers.SetHeader(
+      "Authorization", "Bearer " + access_token);
+  resource_request->headers.SetHeader("Accept", "application/json");
+  resource_request->credentials_mode =
+      network::mojom::CredentialsMode::kOmit;
+
+  scoped_refptr<network::SharedURLLoaderFactory> factory = url_loader_factory_;
+  if (!factory && browser_) {
+    factory = browser_->profile()
+                  ->GetDefaultStoragePartition()
+                  ->GetURLLoaderFactoryForBrowserProcess();
+  }
+  if (!factory) {
+    auto info = maho_ai::mojom::CreditBalanceInfo::New();
+    info->balance_usd = 0.0f;
+    info->last_purchase_at = 0;
+    info->last_consumption_at = 0;
+    std::move(callback).Run(std::move(info));
+    return;
+  }
+
+  auto url_loader = network::SimpleURLLoader::Create(
+      std::move(resource_request), kCreditBalanceTrafficAnnotation);
+  url_loader->SetRetryOptions(
+      /*max_retries=*/1,
+      network::SimpleURLLoader::RETRY_ON_NETWORK_CHANGE);
+
+  // Transfer ownership of loader into the callback so it stays alive during
+  // the async download. The callback is bound to a WeakPtr; if the handler
+  // is destroyed the loader is simply dropped.
+  auto* raw_loader = url_loader.get();
+  raw_loader->DownloadToString(
+      factory.get(),
+      base::BindOnce(
+          [](base::WeakPtr<MahoAIPageHandler> handler,
+             std::unique_ptr<network::SimpleURLLoader> loader,
+             GetCreditBalanceCallback cb,
+             std::optional<std::string> response_body) {
+            auto info = maho_ai::mojom::CreditBalanceInfo::New();
+            info->balance_usd = 0.0f;
+            info->last_purchase_at = 0;
+            info->last_consumption_at = 0;
+
+            if (!handler) {
+              std::move(cb).Run(std::move(info));
+              return;
+            }
+
+            int net_error = loader->NetError();
+            const network::mojom::URLResponseHead* response_info =
+                loader->ResponseInfo();
+            int http_status =
+                response_info ? response_info->headers->response_code() : 0;
+
+            if (net_error != net::OK || http_status != 200 ||
+                !response_body.has_value()) {
+              DVLOG(1)
+                  << "MahoAIPageHandler::GetCreditBalance: request failed "
+                  << "(net=" << net_error << " http=" << http_status << ")";
+              std::move(cb).Run(std::move(info));
+              return;
+            }
+
+            auto parsed =
+                base::JSONReader::Read(*response_body, base::JSON_PARSE_RFC);
+            if (!parsed || !parsed->is_dict()) {
+              std::move(cb).Run(std::move(info));
+              return;
+            }
+
+            const base::DictValue& dict = parsed->GetDict();
+            std::optional<double> balance = dict.FindDouble("balance_usd");
+            if (balance.has_value()) {
+              info->balance_usd = static_cast<float>(*balance);
+            }
+            std::optional<double> last_purchase =
+                dict.FindDouble("last_purchase_at");
+            if (last_purchase.has_value()) {
+              info->last_purchase_at =
+                  static_cast<int64_t>(*last_purchase);
+            }
+            std::optional<double> last_consumption =
+                dict.FindDouble("last_consumption_at");
+            if (last_consumption.has_value()) {
+              info->last_consumption_at =
+                  static_cast<int64_t>(*last_consumption);
+            }
+
+            std::move(cb).Run(std::move(info));
+          },
+          weak_factory_.GetWeakPtr(), std::move(url_loader),
+          std::move(callback)),
+      /*max_body_size=*/4096);
+}
+
+void MahoAIPageHandler::GetBuyCreditsUrl(
+    int32_t pack_size_usd,
+    GetBuyCreditsUrlCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  std::string checkout_url;
+  switch (pack_size_usd) {
+    case 10:
+      checkout_url = "https://maho.lemonsqueezy.com/buy/credit-pack-10";
+      break;
+    case 50:
+      checkout_url = "https://maho.lemonsqueezy.com/buy/credit-pack-50";
+      break;
+    case 100:
+      checkout_url = "https://maho.lemonsqueezy.com/buy/credit-pack-100";
+      break;
+    default:
+      checkout_url = "";
+      break;
+  }
+
+  std::move(callback).Run(checkout_url);
 }

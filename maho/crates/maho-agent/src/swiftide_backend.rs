@@ -598,6 +598,19 @@ impl SwiftideBackend {
 
         let llm: Box<dyn swiftide_core::chat_completion::ChatCompletion> = if let Some(llm) = llm_override_opt {
             llm
+        } else if let Some(access_token) = self.storage.get_setting("auth:access_token").await? {
+            let api_base = std::env::var("MAHO_PROXY_URL")
+                .unwrap_or_else(|_| "https://proxy.maho.co/v1".to_string());
+            let config = MahoOpenAIConfig {
+                api_key: Arc::new(access_token.secret().clone()),
+                api_base,
+            };
+            let client = swiftide_integrations::openai::GenericOpenAIBuilder::<MahoOpenAIConfig>::default()
+                .default_prompt_model("google/gemini-2.5-flash")
+                .client(async_openai::Client::with_config(config))
+                .build()
+                .map_err(|e| AgentError::ExecutionError(format!("Failed to build MahoManaged OpenAI client: {e}")))?;
+            Box::new(client)
         } else {
             let (provider, api_key) = if let Some(res) = secure_cb_opt {
                 res

@@ -1,0 +1,366 @@
+---
+// biome-ignore-all assist/source/organizeImports: Astro component imports stay grouped for readability.
+// biome-ignore-all lint/correctness/noUnusedImports: Astro frontmatter imports are referenced in the template.
+// biome-ignore-all lint/correctness/noUnusedVariables: Astro frontmatter data is referenced in the template.
+// **Last updated**: 2026-06-28 (v2)
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Footer from '../components/Footer.astro';
+import JSONLD from '../components/JSONLD.astro';
+import Nav from '../components/Nav.astro';
+
+const subscriptionTiers = [
+  {
+    name: 'Free',
+    price: '$0',
+    badge: null,
+    summary: 'Try out Maho AI with free community models. $0.50/mo quota.',
+    features: [
+      'Free models only',
+      'Basic chat',
+      'BYOK supported alongside',
+      '200 max tokens per call',
+    ],
+    ctaLabel: 'Start free',
+    ctaHref: '/waitlist',
+    featured: false,
+  },
+  {
+    name: 'Pro',
+    price: '$5',
+    badge: 'Popular',
+    summary: 'Daily AI for browsing - cheap-fast models, $2.10/mo budget.',
+    features: [
+      'Gemini Flash / Claude Haiku / Llama family',
+      '2000 max tokens per call',
+      '$0.20 per-request cost cap',
+      'Fast enough for daily browsing work',
+    ],
+    ctaLabel: 'Choose Pro',
+    ctaHref: '/waitlist',
+    featured: true,
+  },
+  {
+    name: 'Max',
+    price: '$20',
+    badge: null,
+    summary: 'Heavy use - mid-tier models for daily-driver tasks, $13.30/mo budget.',
+    features: [
+      '+ Gemini Pro / Claude Sonnet / GPT-5 mini',
+      '8000 max tokens per call',
+      '$0.50 per-request cost cap',
+      'Built for heavier daily usage',
+    ],
+    ctaLabel: 'Choose Max',
+    ctaHref: '/waitlist',
+    featured: false,
+  },
+];
+
+// Replace these placeholder URLs with LemonSqueezy checkout links before launch.
+const creditPacks = [
+  {
+    label: '$10',
+    detail: 'Light fallback pack',
+    href: 'https://maho.lemonsqueezy.com/buy/payg-10-placeholder',
+    featured: false,
+  },
+  {
+    label: '$50',
+    detail: 'Best value for regular top-ups',
+    href: 'https://maho.lemonsqueezy.com/buy/payg-50-placeholder',
+    featured: true,
+  },
+  {
+    label: '$100',
+    detail: 'Deep reserve for heavy weeks',
+    href: 'https://maho.lemonsqueezy.com/buy/payg-100-placeholder',
+    featured: false,
+  },
+];
+
+const faqs = [
+  {
+    question: 'Can I switch tiers?',
+    answer:
+      'Yes. Upgrades and downgrades are prorated, and the new limits usually apply within minutes.',
+  },
+  {
+    question: 'What happens when I hit my monthly budget?',
+    answer:
+      'Maho prompts you to buy credits for an immediate fallback, or you can wait for your next billing period reset.',
+  },
+  {
+    question: 'Do credits really never expire?',
+    answer:
+      'Yes. Credit balance stays on your account indefinitely. Refunds are available within 14 days and capped at the unconsumed balance.',
+  },
+  {
+    question: 'Is BYOK better than Max?',
+    answer:
+      'It depends. BYOK needs your own provider account and API key. Max is plug-and-play and keeps billing inside Maho.',
+  },
+  {
+    question: 'Can I cancel anytime?',
+    answer:
+      'Yes. Cancel whenever you want, and paid access continues until the end of the current billing period.',
+  },
+];
+
+const ld = {
+  '@context': 'https://schema.org',
+  '@type': 'Product',
+  name: 'Maho',
+  description:
+    'Managed AI subscriptions for browsing with Free, Pro, and Max tiers, optional PAYG credits, and free BYOK for frontier access.',
+  url: 'https://maho.app/pricing',
+  offers: [
+    {
+      '@type': 'Offer',
+      name: 'Free Tier ($0)',
+      price: '0',
+      priceCurrency: 'USD',
+    },
+    {
+      '@type': 'Offer',
+      name: 'Pro Tier ($5)',
+      price: '5.00',
+      priceCurrency: 'USD',
+    },
+    {
+      '@type': 'Offer',
+      name: 'Max Tier ($20)',
+      price: '20.00',
+      priceCurrency: 'USD',
+    },
+  ],
+};
+---
+
+<BaseLayout
+  title="Pricing - Maho"
+  description="Free $0, Pro $5, Max $20, optional PAYG credits, and free BYOK for frontier models on your own provider account."
+>
+  <JSONLD data={ld} />
+  <div class="min-h-screen bg-background text-foreground">
+    <Nav />
+    <main class="max-w-6xl mx-auto px-6 pt-32 pb-24">
+      <header class="mb-16 text-center">
+        <p class="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground mb-4">
+          Last updated: 2026-06-28
+        </p>
+        <h1 class="heading-serif text-4xl sm:text-5xl lg:text-6xl leading-[1.1] mb-5">
+          Simple pricing for managed AI, credits, and BYOK
+        </h1>
+        <p class="text-lg text-muted-foreground leading-relaxed max-w-3xl mx-auto">
+          Start free. Move to Pro or Max for more managed usage. Add PAYG credits for spikes. Use
+          BYOK when you want your own billing lane or frontier models.
+        </p>
+      </header>
+
+      <section aria-labelledby="subscriptions-heading" class="mb-20">
+        <div class="mb-8 max-w-2xl">
+            <span class="inline-block border border-border text-muted-foreground text-xs px-3 py-1 rounded-full mb-4">
+              Subscription tiers
+            </span>
+            <h2 id="subscriptions-heading" class="heading-serif text-3xl sm:text-4xl mb-3">
+              Three plans, honest model ceilings
+            </h2>
+            <p class="text-muted-foreground leading-relaxed">
+              Maho-managed plans stay cheap by matching each tier to a clear model class and budget.
+            </p>
+        </div>
+
+        <div class="grid gap-6 md:grid-cols-3">
+          {subscriptionTiers.map((tier) => (
+            <article
+              class:list={[
+                'rounded-lg bg-card p-6 border flex flex-col justify-between gap-8',
+                tier.featured ? 'border-2 border-foreground' : 'border-border',
+              ]}
+            >
+              <div>
+                <div class="flex items-start justify-between gap-4 mb-4">
+                  <div>
+                    <h3 class="text-2xl font-medium text-foreground">{tier.name}</h3>
+                    <p class="text-sm text-muted-foreground mt-1">{tier.summary}</p>
+                  </div>
+                  {tier.badge && (
+                    <span class="rounded-full bg-foreground px-3 py-1 text-xs font-medium uppercase tracking-[0.18em] text-background">
+                      {tier.badge}
+                    </span>
+                  )}
+                </div>
+
+                <p class="text-4xl font-medium text-foreground mb-6">
+                  {tier.price}
+                  <span class="text-sm font-normal text-muted-foreground">/mo</span>
+                </p>
+
+                <ul class="space-y-3">
+                  {tier.features.map((feature) => (
+                    <li class="flex items-start gap-3 text-sm text-muted-foreground leading-relaxed">
+                      <span class="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-foreground"></span>
+                      <span>{feature}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <a
+                href={tier.ctaHref}
+                class:list={[
+                  'inline-flex items-center justify-center rounded-md px-4 py-3 text-sm font-medium transition-colors',
+                  tier.featured
+                    ? 'bg-foreground text-background hover:opacity-90 transition-opacity'
+                    : 'border border-border text-foreground hover:border-foreground',
+                ]}
+              >
+                {tier.ctaLabel}
+              </a>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section aria-labelledby="payg-heading" class="mb-12 rounded-lg border border-border bg-card p-8">
+        <div class="max-w-3xl mb-8">
+          <span class="inline-block border border-border text-muted-foreground text-xs px-3 py-1 rounded-full mb-4">
+            PAYG fallback
+          </span>
+          <h2 id="payg-heading" class="heading-serif text-3xl sm:text-4xl mb-3">
+            Pay-as-you-go credits
+          </h2>
+          <p class="text-muted-foreground leading-relaxed">
+            No monthly commit. Buy credits, use them anytime - they never expire.
+          </p>
+          <p class="text-sm text-muted-foreground leading-relaxed mt-3">
+            Choose $10/$50/$100 packs and keep them as a fallback for heavier weeks.
+          </p>
+        </div>
+
+        <div class="grid gap-6 md:grid-cols-3">
+          {creditPacks.map((pack) => (
+            <article
+              class:list={[
+                'rounded-lg border bg-background p-6 flex flex-col gap-6',
+                pack.featured ? 'border-2 border-foreground' : 'border-border',
+              ]}
+            >
+              <div>
+                <div class="flex items-center justify-between gap-4 mb-4">
+                  <h3 class="text-2xl font-medium text-foreground">{pack.label}</h3>
+                  {pack.featured && (
+                    <span class="rounded-full bg-foreground px-3 py-1 text-xs font-medium uppercase tracking-[0.18em] text-background">
+                      Best Value
+                    </span>
+                  )}
+                </div>
+                <p class="text-sm text-muted-foreground mb-4">{pack.detail}</p>
+                <ul class="space-y-3 text-sm text-muted-foreground">
+                  <li class="flex items-start gap-3">
+                    <span class="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-foreground"></span>
+                    <span>Same model access as Max tier</span>
+                  </li>
+                  <li class="flex items-start gap-3">
+                    <span class="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-foreground"></span>
+                    <span>Stacks with subscription fallback when your monthly ceiling hits</span>
+                  </li>
+                  <li class="flex items-start gap-3">
+                    <span class="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-foreground"></span>
+                    <span>Balance never expires</span>
+                  </li>
+                </ul>
+              </div>
+
+              <a
+                href={pack.href}
+                class="inline-flex items-center justify-center rounded-md bg-foreground px-4 py-3 text-sm font-medium text-background hover:opacity-90 transition-opacity"
+              >
+                Buy {pack.label} credits
+              </a>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section aria-labelledby="byok-heading" class="mb-12 rounded-lg border border-border p-8">
+        <div class="grid gap-8 md:grid-cols-2 md:items-start">
+          <div>
+            <span class="inline-block border border-border text-muted-foreground text-xs px-3 py-1 rounded-full mb-4">
+              BYOK
+            </span>
+            <h2 id="byok-heading" class="heading-serif text-3xl sm:text-4xl mb-3">
+              Bring your own API key - full privacy lane
+            </h2>
+            <p class="text-muted-foreground leading-relaxed mb-6">
+              Use Maho's interface with your own OpenAI / Anthropic / Google / OpenRouter key. Maho
+              proxies but never stores keys or content.
+            </p>
+            <a
+              href="/browser/ai/#byok-bring-your-own-key"
+              class="inline-flex items-center gap-2 rounded-md border border-border px-4 py-3 text-sm font-medium text-foreground hover:border-foreground transition-colors"
+            >
+              Add your API key in Settings
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
+                <path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path>
+              </svg>
+            </a>
+          </div>
+
+          <ul class="space-y-4 rounded-lg border border-border bg-card p-6">
+            <li class="flex items-start gap-3 text-sm text-muted-foreground leading-relaxed">
+              <span class="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-foreground"></span>
+              <span>Access frontier models (Claude Opus, GPT-5, o3) that aren't in Maho-managed.</span>
+            </li>
+            <li class="flex items-start gap-3 text-sm text-muted-foreground leading-relaxed">
+              <span class="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-foreground"></span>
+              <span>Zero retention - Maho proxy passes through to your provider.</span>
+            </li>
+            <li class="flex items-start gap-3 text-sm text-muted-foreground leading-relaxed">
+              <span class="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-foreground"></span>
+              <span>Free forever, no usage cap.</span>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section aria-labelledby="frontier-heading" class="mb-20 rounded-lg border border-border bg-card p-6">
+        <h2 id="frontier-heading" class="text-lg font-medium text-foreground mb-3">
+          Why no Opus / GPT-5 base in Maho-managed?
+        </h2>
+        <p class="text-sm text-muted-foreground leading-relaxed">
+          Frontier models cost 5-10x more per token. To keep prices honest at $5/$20, we exclude
+          them from Maho-managed tiers. That includes Claude Opus, GPT-5 base, o3/o4,
+          gemini-3-ultra, and reasoning-premium. Use BYOK to access frontier models at provider
+          cost.
+        </p>
+      </section>
+
+      <section aria-labelledby="faq-heading">
+        <div class="max-w-3xl">
+          <span class="inline-block border border-border text-muted-foreground text-xs px-3 py-1 rounded-full mb-4">
+            FAQ
+          </span>
+          <h2 id="faq-heading" class="heading-serif text-3xl sm:text-4xl mb-8">
+            Questions before you pick a plan
+          </h2>
+        </div>
+
+        <div class="space-y-4">
+          {faqs.map((faq) => (
+            <details class="group rounded-lg border border-border bg-card">
+              <summary class="flex cursor-pointer items-center justify-between gap-4 px-6 py-4 text-left text-foreground font-medium">
+                <span>{faq.question}</span>
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4 shrink-0 transition-transform group-open:rotate-180">
+                  <path d="m6 9 6 6 6-6"></path>
+                </svg>
+              </summary>
+              <div class="px-6 pb-4 text-sm text-muted-foreground leading-relaxed">{faq.answer}</div>
+            </details>
+          ))}
+        </div>
+      </section>
+    </main>
+    <Footer />
+  </div>
+</BaseLayout>

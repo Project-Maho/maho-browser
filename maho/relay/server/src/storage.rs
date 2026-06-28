@@ -3,7 +3,7 @@ use sea_orm::{
     QueryFilter, QueryOrder, QueryResult, Set, TransactionTrait,
 };
 
-use maho_relay_entity::{devices, message, room_meta, sessions, users};
+use maho_relay_entity::{consumed_bypass_tokens, credits, devices, message, room_meta, sessions, users};
 
 #[derive(Clone, Debug)]
 pub struct AuthContext {
@@ -188,6 +188,14 @@ where
         locked_until: Set(None),
         failed_login_attempts: Set(0),
         last_failed_login_at: Set(None),
+        tier: Set("free".to_string()),
+        subscription_status: Set("none".to_string()),
+        email_verified: Set(false),
+        subscription_expires_at: Set(None),
+        period_start_at: Set(None),
+        anniversary_reset_day: Set(None),
+        verification_token: Set(None),
+        verification_token_expires_at: Set(None),
     }
     .insert(db)
     .await
@@ -410,6 +418,320 @@ pub async fn delete_device_and_sessions(
     delete_sessions_for_device(&txn, device_id).await?;
     devices::Entity::delete_by_id(device_id).exec(&txn).await?;
     txn.commit().await?;
+    Ok(())
+}
+
+pub async fn has_processed_event<T>(db: &T, event_id: &str) -> Result<bool, DbErr>
+where
+    T: ConnectionTrait,
+{
+    let opt = maho_relay_entity::processed_events::Entity::find()
+        .filter(maho_relay_entity::processed_events::Column::EventId.eq(event_id))
+        .one(db)
+        .await?;
+    Ok(opt.is_some())
+}
+
+pub async fn mark_event_processed<T>(db: &T, event_id: &str, processed_at: i64) -> Result<(), DbErr>
+where
+    T: ConnectionTrait,
+{
+    let active_model = maho_relay_entity::processed_events::ActiveModel {
+        event_id: Set(event_id.to_string()),
+        processed_at: Set(processed_at),
+    };
+    maho_relay_entity::processed_events::Entity::insert(active_model).exec(db).await?;
+    Ok(())
+}
+
+pub async fn update_user_subscription<T>(
+    db: &T,
+    user_id: i32,
+    tier: &str,
+    status: &str,
+    expires_at: Option<i64>,
+    period_start_at: Option<i64>,
+    anniversary_reset_day: Option<i32>,
+) -> Result<(), DbErr>
+where
+    T: ConnectionTrait,
+{
+    if let Some(user) = users::Entity::find_by_id(user_id).one(db).await? {
+        if let (Some(new_start), Some(old_start)) = (period_start_at, user.period_start_at) {
+            if new_start < old_start {
+                tracing::warn!("Rejecting out-of-order webhook update for user {}: old start = {}, new = {}", user_id, old_start, new_start);
+                return Ok(());
+            }
+        }
+        let mut active: users::ActiveModel = user.into();
+        active.tier = Set(tier.to_string());
+        active.subscription_status = Set(status.to_string());
+        active.subscription_expires_at = Set(expires_at);
+        active.period_start_at = Set(period_start_at);
+        active.anniversary_reset_day = Set(anniversary_reset_day);
+        active.update(db).await?;
+    }
+    Ok(())
+}
+
+pub async fn set_email_verification_token<T>(
+    db: &T,
+    user_id: i32,
+    token: &str,
+    expires_at: i64,
+) -> Result<(), DbErr>
+where
+    T: ConnectionTrait,
+{
+    use sha2::{Digest, Sha256};
+    let hashed = format!("{:x}", Sha256::digest(token.as_bytes()));
+    if let Some(user) = users::Entity::find_by_id(user_id).one(db).await? {
+        let mut active: users::ActiveModel = user.into();
+        active.verification_token = Set(Some(hashed));
+        active.verification_token_expires_at = Set(Some(expires_at));
+        active.update(db).await?;
+    }
+    Ok(())
+}
+
+pub async fn verify_email_token<T>(
+    db: &T,
+    token: &str,
+    now: i64,
+) -> Result<Option<users::Model>, DbErr>
+where
+    T: ConnectionTrait,
+{
+    use sha2::{Digest, Sha256};
+    let hashed = format!("{:x}", Sha256::digest(token.as_bytes()));
+    if let Some(user) = users::Entity::find()
+        .filter(users::Column::VerificationToken.eq(hashed))
+        .filter(users::Column::VerificationTokenExpiresAt.gt(now))
+        .one(db)
+        .await?
+    {
+        let mut active: users::ActiveModel = user.clone().into();
+        active.email_verified = Set(true);
+        active.verification_token = Set(None);
+        active.verification_token_expires_at = Set(None);
+        let updated = active.update(db).await?;
+        Ok(Some(updated))
+    } else {
+        Ok(None)
+    }
+}
+/// Force-set `email_verified = true` for `user_id`.
+///
+/// Returns `true` if the user was found and updated, `false` if the user does not exist.
+pub async fn admin_force_email_verified<T>(db: &T, user_id: i32) -> Result<bool, DbErr>
+where
+    T: ConnectionTrait,
+{
+    if let Some(user) = users::Entity::find_by_id(user_id).one(db).await? {
+        let mut active: users::ActiveModel = user.into();
+        active.email_verified = Set(true);
+        active.update(db).await?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+pub async fn find_session_hashes_by_user_id<T>(
+    db: &T,
+    user_id: i32,
+) -> Result<Vec<Vec<u8>>, DbErr>
+where
+    T: ConnectionTrait,
+{
+    let list = sessions::Entity::find()
+        .filter(sessions::Column::UserId.eq(user_id))
+        .all(db)
+        .await?;
+    Ok(list.into_iter().map(|s| s.token_hash).collect())
+}
+
+/// Atomically consume a bypass token identified by its SHA-256 hash.
+///
+/// Returns `true` on the first successful insert (token not previously consumed).
+/// Returns `false` if the token was already consumed (PRIMARY KEY conflict).
+pub async fn try_consume_bypass_token<T>(
+    db: &T,
+    token_hash: &[u8],
+    user_id: i32,
+    consumed_at: i64,
+) -> Result<bool, DbErr>
+where
+    T: ConnectionTrait,
+{
+    let active_model = consumed_bypass_tokens::ActiveModel {
+        token_hash: Set(token_hash.to_vec()),
+        user_id: Set(user_id),
+        consumed_at: Set(consumed_at),
+    };
+    match consumed_bypass_tokens::Entity::insert(active_model).exec(db).await {
+        Ok(_) => Ok(true),
+        Err(DbErr::RecordNotInserted) => Ok(false),
+        Err(DbErr::Exec(ref msg)) if msg.to_string().contains("UNIQUE constraint failed") => {
+            Ok(false)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Get the current PAYG credit balance for a user. Returns 0.0 if no credits row exists.
+pub async fn get_credit_balance<T: ConnectionTrait>(db: &T, user_id: i32) -> Result<f64, DbErr> {
+    let row = credits::Entity::find_by_id(user_id).one(db).await?;
+    Ok(row.map(|r| r.balance_usd).unwrap_or(0.0))
+}
+
+/// Add credit balance for a user. Creates the credits row if missing. Returns new balance.
+pub async fn add_credit_balance<T: ConnectionTrait>(
+    db: &T,
+    user_id: i32,
+    amount_usd: f64,
+    now: i64,
+) -> Result<f64, DbErr> {
+    if amount_usd <= 0.0 {
+        tracing::warn!(
+            user_id = user_id,
+            amount_usd = amount_usd,
+            "add_credit_balance called with zero or negative amount"
+        );
+        return get_credit_balance(db, user_id).await;
+    }
+
+    let existing = credits::Entity::find_by_id(user_id).one(db).await?;
+    match existing {
+        Some(row) => {
+            let new_balance = row.balance_usd + amount_usd;
+            let new_lifetime = row.lifetime_purchased_usd + amount_usd;
+            let mut active: credits::ActiveModel = row.into();
+            active.balance_usd = Set(new_balance);
+            active.lifetime_purchased_usd = Set(new_lifetime);
+            active.last_purchase_at = Set(Some(now));
+            active.updated_at = Set(now);
+            active.update(db).await?;
+            Ok(new_balance)
+        }
+        None => {
+            credits::ActiveModel {
+                user_id: Set(user_id),
+                balance_usd: Set(amount_usd),
+                lifetime_purchased_usd: Set(amount_usd),
+                last_purchase_at: Set(Some(now)),
+                last_consumption_at: Set(None),
+                created_at: Set(now),
+                updated_at: Set(now),
+            }
+            .insert(db)
+            .await?;
+            Ok(amount_usd)
+        }
+    }
+}
+
+/// Consume credits from a user's balance. Returns new balance after deduction.
+/// Returns Err if balance is insufficient.
+#[allow(dead_code)]
+pub async fn consume_credit<T: ConnectionTrait>(
+    db: &T,
+    user_id: i32,
+    amount_usd: f64,
+    now: i64,
+) -> Result<f64, DbErr> {
+    if amount_usd <= 0.0 {
+        tracing::warn!(
+            user_id = user_id,
+            amount_usd = amount_usd,
+            "consume_credit called with zero or negative amount"
+        );
+        return get_credit_balance(db, user_id).await;
+    }
+
+    let row = credits::Entity::find_by_id(user_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| DbErr::Custom("insufficient credit balance".to_string()))?;
+
+    if row.balance_usd < amount_usd {
+        return Err(DbErr::Custom(format!(
+            "insufficient credit balance: have {}, need {}",
+            row.balance_usd, amount_usd
+        )));
+    }
+
+    let new_balance = row.balance_usd - amount_usd;
+    let mut active: credits::ActiveModel = row.into();
+    active.balance_usd = Set(new_balance);
+    active.last_consumption_at = Set(Some(now));
+    active.updated_at = Set(now);
+    active.update(db).await?;
+    Ok(new_balance)
+}
+
+/// Process a refund chargeback: deduct refund_amount from user's balance, capped at current balance.
+/// Per ADR 0010 §refund-policy. Returns new balance (always >= 0).
+#[allow(dead_code)]
+pub async fn chargeback_credit<T: ConnectionTrait>(
+    db: &T,
+    user_id: i32,
+    refund_amount: f64,
+    now: i64,
+) -> Result<f64, DbErr> {
+    if refund_amount <= 0.0 {
+        tracing::warn!(
+            user_id = user_id,
+            refund_amount = refund_amount,
+            "chargeback_credit called with zero or negative amount"
+        );
+        return get_credit_balance(db, user_id).await;
+    }
+
+    let existing = credits::Entity::find_by_id(user_id).one(db).await?;
+    match existing {
+        Some(row) => {
+            let capped_deduction = refund_amount.min(row.balance_usd);
+            let new_balance = row.balance_usd - capped_deduction;
+            let mut active: credits::ActiveModel = row.into();
+            active.balance_usd = Set(new_balance);
+            active.updated_at = Set(now);
+            active.update(db).await?;
+            Ok(new_balance)
+        }
+        None => Ok(0.0),
+    }
+}
+
+/// Admin force-set a user's credit balance. For support tooling.
+pub async fn admin_set_credit_balance<T: ConnectionTrait>(
+    db: &T,
+    user_id: i32,
+    new_balance: f64,
+    now: i64,
+) -> Result<(), DbErr> {
+    let existing = credits::Entity::find_by_id(user_id).one(db).await?;
+    match existing {
+        Some(row) => {
+            let mut active: credits::ActiveModel = row.into();
+            active.balance_usd = Set(new_balance);
+            active.updated_at = Set(now);
+            active.update(db).await?;
+        }
+        None => {
+            credits::ActiveModel {
+                user_id: Set(user_id),
+                balance_usd: Set(new_balance),
+                lifetime_purchased_usd: Set(0.0),
+                last_purchase_at: Set(None),
+                last_consumption_at: Set(None),
+                created_at: Set(now),
+                updated_at: Set(now),
+            }
+            .insert(db)
+            .await?;
+        }
+    }
     Ok(())
 }
 

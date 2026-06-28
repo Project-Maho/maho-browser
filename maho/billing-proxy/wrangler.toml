@@ -1,0 +1,38 @@
+name = "maho-billing-proxy"
+main = "src/lib.rs"
+compatibility_date = "2026-06-27"
+compatibility_flags = [ "nodejs_compat" ]
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+[[kv_namespaces]]
+binding = "MAHO_AUTH_CACHE"
+id = "prod_auth_cache_id"
+
+[[kv_namespaces]]
+binding = "MAHO_MODEL_ALLOWLIST"
+id = "prod_model_allowlist_id"
+
+[[durable_objects.bindings]]
+name = "MAHO_USER_USAGE"
+class_name = "UserUsage"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["UserUsage"]
+
+[env.staging]
+name = "maho-billing-proxy-staging"
+
+[[env.staging.kv_namespaces]]
+binding = "MAHO_AUTH_CACHE"
+id = "staging_auth_cache_id"
+
+[[env.staging.kv_namespaces]]
+binding = "MAHO_MODEL_ALLOWLIST"
+id = "staging_model_allowlist_id"
+
+[[env.staging.durable_objects.bindings]]
+name = "MAHO_USER_USAGE"
+class_name = "UserUsage"

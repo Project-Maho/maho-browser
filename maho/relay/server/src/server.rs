@@ -112,6 +112,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/health", get(health))
         .nest("/auth", auth::routes::router())
         .nest("/sync", sync::routes::router())
+        .nest("/billing", crate::billing::router())
         .route("/ws", get(ws_upgrade))
         .with_state(state)
 }

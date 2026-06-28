@@ -18,28 +18,37 @@ import Footer from '../components/Footer.astro';
 
       <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Information We Don't Collect</h2>
       <p class="text-muted-foreground leading-relaxed mb-4">
-        Maho Browser and Maho Mail do not collect browsing history, email content, contacts, search queries, or any personal data. Your data stays on your device and is never transmitted to our servers.
+        Maho Browser and Maho Mail do not collect your browsing history, email content, contacts, search queries, or prompt/response content. By default, your data stays locally on your device.
       </p>
 
-      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Website Analytics</h2>
+      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Zero-Retention LLM Proxy Policy</h2>
       <p class="text-muted-foreground leading-relaxed mb-4">
-        The maho.app website may use privacy-respecting analytics to understand traffic patterns. No personal information is collected, and no data is shared with third parties for advertising or tracking purposes.
+        For users opting for Maho-managed AI (rather than BYOK), your inference traffic routes through our zero-retention proxy. We do **not** store or log your prompts or responses. We log only metadata required for billing and abuse prevention: the model used, token count, timestamp, and user ID.
       </p>
 
-      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Cookies</h2>
+      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Third-Party Services & Sub-processors</h2>
       <p class="text-muted-foreground leading-relaxed mb-4">
-        The website uses only essential cookies necessary for functionality, such as theme preference storage. We do not use tracking cookies or third-party advertising cookies.
+        When you use Maho-managed AI, we utilize **OpenRouter** as an underlying sub-processor to route requests to AI model providers. Your usage of these models is governed by OpenRouter's privacy policy. Prompts sent to OpenRouter via Maho's proxy are not used for training.
+      </p>
+      <p class="text-muted-foreground leading-relaxed mb-4">
+        For BYOK (Bring Your Own Key) users, your traffic flows directly to your configured provider (e.g., OpenAI, Anthropic) without intermediate routing by Maho.
       </p>
 
-      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Third-Party Services</h2>
+      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">GDPR Right to Erasure</h2>
       <p class="text-muted-foreground leading-relaxed mb-4">
-        When you configure email accounts or AI providers in Maho Mail, your data flows directly between your device and those services. Maho does not intermediate, store, or have access to this data. Your use of third-party services is subject to their respective privacy policies.
+        We fully support GDPR data rights, including the right to erasure. Upon deletion of your Maho account, all your records—including user registration data, active subscriptions, and cached usage logs—will be permanently and immediately deleted from our database.
       </p>
 
-      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Open Source Transparency</h2>
+      <h2 class="text-lg font-medium text-foreground mt-10 mb-3">How to Verify Our Claims</h2>
       <p class="text-muted-foreground leading-relaxed mb-4">
-        All Maho source code is publicly auditable at github.com/aspect-apps. You can verify our privacy claims by reviewing the code yourself.
+        Maho is proprietary software. We do not ask you to take our privacy claims on faith. They are verifiable through multiple independent channels:
       </p>
+      <ul class="text-muted-foreground leading-relaxed mb-4 list-disc list-inside space-y-2">
+        <li><strong>Network behavior</strong> — Open Activity Monitor on macOS, sort by network activity, and confirm Maho does not transmit data in normal browsing.</li>
+        <li><strong>Architecture documentation</strong> — Our sync, encryption, and AI privacy designs are published as engineering blog posts at /blog/sync-architecture-end-to-end.</li>
+        <li><strong>Vulnerability disclosure</strong> — Security researchers can report findings to hello@maho.app with subject prefix [security]; acknowledgment within 48h.</li>
+        <li><strong>Developer transparency</strong> — Maho is built by an individual developer; reach out directly at hello@maho.app for any clarification.</li>
+      </ul>
 
       <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Data Storage</h2>
       <p class="text-muted-foreground leading-relaxed mb-4">

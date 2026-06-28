@@ -7,6 +7,9 @@ import {
   DropdownMenuTrigger,
 } from '../../ui/dropdown-menu.js';
 import {AppState, ViewMode} from '../../../types.js';
+import type {CreditBalanceInfo} from '../../../types.js';
+import type {MahoAiStore} from '../../../store.js';
+import {CreditBalanceBadge} from './credit-balance-badge.js';
 
 export function CompactTopbar(
     {
@@ -15,12 +18,20 @@ export function CompactTopbar(
       onSetViewMode,
       onGetViewMode,
       onStartSession,
+      onTidyTabs,
+      onOpenBuyCredits,
+      store,
+      creditBalance,
     }: {
       onClosePanel: () => void;
       onOpenSettings: () => void;
       onSetViewMode: (mode: ViewMode) => void;
       onGetViewMode: () => Promise<ViewMode>;
       onStartSession: () => void;
+      onTidyTabs?: () => void;
+      onOpenBuyCredits: () => void;
+      store: MahoAiStore;
+      creditBalance: CreditBalanceInfo|null;
       state: AppState;
     }) {
   const [currentMode, setCurrentMode] = useState<ViewMode>(ViewMode.kSidebar);
@@ -52,6 +63,19 @@ export function CompactTopbar(
       <div className="compact-panel__topbar-center" />
 
       <div className="compact-panel__topbar-right">
+        <CreditBalanceBadge
+          store={store}
+          creditBalance={creditBalance}
+          onOpenBuyCredits={onOpenBuyCredits}
+        />
+        {onTidyTabs && (
+          <IconButton
+            ariaLabel="Tidy tabs"
+            symbol="tidyWand"
+            variant="compact-icon-ghost"
+            onClick={onTidyTabs}
+          />
+        )}
         <IconButton
           ariaLabel="Open settings"
           symbol="settingsGear"
@@ -71,12 +95,12 @@ export function CompactTopbar(
             <DropdownMenuItem
               disabled={currentMode === ViewMode.kSidebar}
               onSelect={() => handleModeSelect(ViewMode.kSidebar)}>
-              Sidebar Mode {currentMode === ViewMode.kSidebar && '✓'}
+              Sidebar Mode {currentMode === ViewMode.kSidebar && '\u2713'}
             </DropdownMenuItem>
             <DropdownMenuItem
               disabled={currentMode === ViewMode.kFloating}
               onSelect={() => handleModeSelect(ViewMode.kFloating)}>
-              Floating {currentMode === ViewMode.kFloating && '✓'}
+              Floating {currentMode === ViewMode.kFloating && '\u2713'}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

@@ -6,6 +6,7 @@ import {
   BrowserContextStatus,
   ContextAttachment as ContextAttachmentRecord,
   ContextSourceKind,
+  CreditBalanceInfo,
   HistoryItem,
   RuntimeConnectionState,
   RuntimeEvent,
@@ -20,6 +21,7 @@ import {
 
 export type ConnectionState = RuntimeConnectionState;
 export {RuntimeEventKind, ViewMode};
+export type {CreditBalanceInfo};
 export type SessionRecord = SessionInfo;
 export type RuntimeEventRecord = RuntimeEvent;
 export type SessionStatusValue = SessionStatus;
@@ -481,6 +483,8 @@ export interface AppState {
   aiSettings: AISettingsState;
   turnPendingBySessionId: Record<string, boolean>;
   contextsBySessionId: Record<string, BrowserContextPayload[]>;
+  creditBalance: CreditBalanceInfo|null;
+  chatBlockedReason: 'quota-exhausted'|null;
 }
 
 export const DEFAULT_COMPOSER_STATE: ComposerState = {
@@ -520,6 +524,8 @@ export function createInitialState(): AppState {
     },
     turnPendingBySessionId: {},
     contextsBySessionId: {},
+    creditBalance: null,
+    chatBlockedReason: null,
   };
 }
 

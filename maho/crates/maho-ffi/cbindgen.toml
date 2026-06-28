@@ -16,8 +16,7 @@ remove_underscores = false
 
 [parse]
 parse_deps = true
-include = ["maho-core", "maho-types", "maho-acp"]
+include = ["maho-core", "maho-types"]
 
 [enum]
 prefix_with_name = true
-

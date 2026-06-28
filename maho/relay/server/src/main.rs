@@ -5,6 +5,7 @@ mod room;
 mod server;
 mod storage;
 mod sync;
+mod billing;
 
 use config::RelayConfig;
 use sea_orm::{ConnectionTrait, Database};
@@ -15,6 +16,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
     let config = RelayConfig::from_env();
+
+    if config.service_token.trim().is_empty() {
+        eprintln!(
+            "FATAL: MAHO_RELAY_SERVICE_TOKEN env var must be set to a non-empty value before startup. \
+             This token authorizes the billing-proxy ↔ relay private RPCs and must be a cryptographically random secret."
+        );
+        std::process::exit(2);
+    }
 
     let db_url = format!("sqlite:{}?mode=rwc", config.db_path);
     let db = Database::connect(&db_url).await?;

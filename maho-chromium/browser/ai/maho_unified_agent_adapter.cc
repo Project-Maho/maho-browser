@@ -18,26 +18,41 @@
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/uuid.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "components/os_crypt/async/browser/os_crypt_async.h"
 #include "third_party/crashpad/crashpad/client/annotation.h"
 #include "components/prefs/pref_service.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
-#include "maho/browser/ai/maho_acp_event_decoder.h"
 #include "maho/browser/ui/webui/maho_ai/maho_ai.mojom.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "maho/browser/maho_core_holder.h"
 
-MahoUnifiedAgentAdapter::FfiUserData::FfiUserData() = default;
-MahoUnifiedAgentAdapter::FfiUserData::~FfiUserData() = default;
+namespace {
+
+std::string GenerateTaskId() {
+  return base::Uuid::GenerateRandomV4().AsLowercaseString();
+}
+
+}  // namespace
+
+MahoUnifiedAgentAdapter::ByokSnapshot::ByokSnapshot() = default;
+
+MahoUnifiedAgentAdapter::ByokSnapshot::~ByokSnapshot() = default;
 
 MahoUnifiedAgentAdapter::MahoUnifiedAgentAdapter(
     PrefService* prefs,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
-    : prefs_(prefs), url_loader_factory_(std::move(url_loader_factory)) {
+    : prefs_(prefs),
+      url_loader_factory_(std::move(url_loader_factory)),
+      conversation_task_(std::make_unique<maho::ConversationTask>(GenerateTaskId())) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
+  callback_handle_ =
+      std::make_unique<maho::FfiCallbackHandle<MahoUnifiedAgentAdapter>>(
+          base::SequencedTaskRunner::GetCurrentDefault(),
+          weak_factory_.GetWeakPtr());
   if (g_browser_process && g_browser_process->os_crypt_async()) {
     g_browser_process->os_crypt_async()->GetInstance(
         base::BindOnce(&MahoUnifiedAgentAdapter::OnOsCryptReady,
@@ -54,13 +69,15 @@ MahoUnifiedAgentAdapter::~MahoUnifiedAgentAdapter() {
     maho_agent_session_free(agent_session_);
     agent_session_ = nullptr;
   }
-  // Reset our strong ref. Pending PostTask lambdas (if any) still hold their
-  // own shared_ptr copies and will keep FfiUserData alive until they run.
-  ffi_user_data_.reset();
-  // Intentionally leak user_data_handle_: pending Rust-side callbacks may
-  // still dereference it. The leak is bounded to one weak_ptr<> per adapter
-  // lifetime (~16 bytes) and is acceptable until a Rust-side free_fn FFI
-  // is added.
+
+  // Cancel the callback handle — marks all pending Rust callbacks as no-ops
+  // and properly frees the heap bridge (no leak, closing C5).
+  callback_handle_->Cancel();
+
+  // Clean up BYOK bridge (deterministic, no leak).
+  delete byok_bridge_;
+  byok_bridge_ = nullptr;
+  byok_snapshot_.reset();
 }
 
 std::string MahoUnifiedAgentAdapter::GetAdapterName() const {
@@ -80,7 +97,7 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   current_on_event_ = on_event;
-  accumulated_text_.clear();
+  conversation_task_->StartStreaming();
 
   if (!agent_session_) {
     EmitConnectionState("connecting");
@@ -95,31 +112,28 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
       session_id_ = "unified_agent_session";
     }
 
-    ffi_user_data_ = std::make_shared<FfiUserData>();
-    ffi_user_data_->weak_adapter = weak_factory_.GetWeakPtr();
-    ffi_user_data_->task_runner = base::SequencedTaskRunner::GetCurrentDefault();
-    // Snapshot encrypted BYOK blobs from prefs on this (UI) sequence. The
-    // callback will decrypt on demand from arbitrary Rust threads — encrypted
-    // bytes are non-sensitive so no lock needed (see header comment).
+    // Snapshot BYOK data for secure-storage callback (immutable, thread-safe).
+    byok_snapshot_ = std::make_shared<ByokSnapshot>();
     if (prefs_) {
-      ffi_user_data_->encrypted_byok_openai_b64 =
+      byok_snapshot_->encrypted_byok_openai_b64 =
           prefs_->GetString(maho::ai_prefs::kByokOpenAIEncryptedB64);
-      ffi_user_data_->encrypted_byok_anthropic_b64 =
+      byok_snapshot_->encrypted_byok_anthropic_b64 =
           prefs_->GetString(maho::ai_prefs::kByokAnthropicEncryptedB64);
     }
     if (encryptor_) {
-      ffi_user_data_->encryptor = encryptor_;
+      byok_snapshot_->encryptor = encryptor_;
     }
-    user_data_handle_ = new std::weak_ptr<FfiUserData>(ffi_user_data_);
-
+    // Heap bridge for secure_storage_user_data (properly owned, deleted in
+    // Reset/destructor).
+    byok_bridge_ = new std::shared_ptr<ByokSnapshot>(byok_snapshot_);
 
     // Wire permission + secure-storage callbacks. allow_insecure_key_storage
     // is FALSE: when no encrypted key is available the agent will fail-closed
     // rather than fall through to plaintext SQLite settings.
     agent_session_ = maho_agent_create_session(
         core, session_id_.c_str(), nullptr, /*allow_insecure_key_storage=*/false,
-        &MahoUnifiedAgentAdapter::OnAgentPermission, user_data_handle_,
-        &MahoUnifiedAgentAdapter::OnAgentSecureStorage, user_data_handle_);
+        &MahoUnifiedAgentAdapter::OnAgentPermission, nullptr,
+        &MahoUnifiedAgentAdapter::OnAgentSecureStorage, byok_bridge_);
     if (!agent_session_) {
       TransitionToError("Failed to create agent session.");
       return;
@@ -128,12 +142,15 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
     EmitConnectionState("connected");
   }
 
+  // Get the user_data pointer from FfiCallbackHandle (owns the heap bridge).
+  void* user_data = callback_handle_->user_data();
+
   bool success = maho_agent_send_message(
       agent_session_, message.c_str(),
       &MahoUnifiedAgentAdapter::OnAgentToken,
       &MahoUnifiedAgentAdapter::OnAgentComplete,
       &MahoUnifiedAgentAdapter::OnAgentError,
-      user_data_handle_);
+      user_data);
 
   if (!success) {
     TransitionToError("Failed to send message to agent.");
@@ -146,6 +163,7 @@ void MahoUnifiedAgentAdapter::CancelCurrentTurn() {
   if (agent_session_) {
     maho_agent_cancel(agent_session_);
   }
+  conversation_task_->Cancel();
 }
 
 void MahoUnifiedAgentAdapter::RespondToApproval(const std::string& approval_id,
@@ -164,12 +182,28 @@ void MahoUnifiedAgentAdapter::Reset() {
     maho_agent_session_free(agent_session_);
     agent_session_ = nullptr;
   }
-  ffi_user_data_.reset();
-  // user_data_handle_ intentionally leaked (see destructor comment).
-  user_data_handle_ = nullptr;
+
+  // Cancel the current callback handle and create a fresh one for the next
+  // session. No leak: Cancel() deletes the heap bridge deterministically.
+  callback_handle_->Cancel();
+  callback_handle_ = std::make_unique<maho::FfiCallbackHandle<MahoUnifiedAgentAdapter>>(
+      base::SequencedTaskRunner::GetCurrentDefault(),
+      weak_factory_.GetWeakPtr());
+
+  // Fresh conversation task for the next turn.
+  conversation_task_ = std::make_unique<maho::ConversationTask>(GenerateTaskId());
+
+  // Cancel any in-flight tool execution.
+  if (tool_graph_) {
+    tool_graph_->CancelInflight();
+  }
+
+  // Clean up BYOK bridge.
+  delete byok_bridge_;
+  byok_bridge_ = nullptr;
+  byok_snapshot_.reset();
 
   session_id_.clear();
-  accumulated_text_.clear();
   pending_message_.clear();
   current_on_event_.Reset();
 }
@@ -227,22 +261,23 @@ MahoAgentSecureKey MahoUnifiedAgentAdapter::OnAgentSecureStorage(
   if (!user_data || !provider) {
     return MahoAgentSecureKey{nullptr, 0, nullptr};
   }
-  auto* weak = static_cast<std::weak_ptr<FfiUserData>*>(user_data);
-  std::shared_ptr<FfiUserData> shared = weak->lock();
-  if (!shared) {
+  // user_data is a std::shared_ptr<ByokSnapshot>* bridge (heap-allocated).
+  auto* bridge = static_cast<std::shared_ptr<ByokSnapshot>*>(user_data);
+  std::shared_ptr<ByokSnapshot> snapshot = *bridge;
+  if (!snapshot) {
     return MahoAgentSecureKey{nullptr, 0, nullptr};
   }
 
-  if (!shared->encryptor) {
+  if (!snapshot->encryptor) {
     return MahoAgentSecureKey{nullptr, 0, nullptr};
   }
 
   const std::string provider_str(provider);
   const std::string* encrypted_b64 = nullptr;
   if (provider_str == "openai") {
-    encrypted_b64 = &shared->encrypted_byok_openai_b64;
+    encrypted_b64 = &snapshot->encrypted_byok_openai_b64;
   } else if (provider_str == "anthropic") {
-    encrypted_b64 = &shared->encrypted_byok_anthropic_b64;
+    encrypted_b64 = &snapshot->encrypted_byok_anthropic_b64;
   } else {
     DLOG(WARNING) << "OnAgentSecureStorage: unknown provider '" << provider_str
                   << "'; returning null key triple";
@@ -260,7 +295,7 @@ MahoAgentSecureKey MahoUnifiedAgentAdapter::OnAgentSecureStorage(
     return MahoAgentSecureKey{nullptr, 0, nullptr};
   }
   std::string plaintext;
-  const bool decrypted = shared->encryptor->DecryptString(encrypted_bytes, &plaintext);
+  const bool decrypted = snapshot->encryptor->DecryptString(encrypted_bytes, &plaintext);
 
   if (!decrypted || plaintext.empty()) {
     // Scrub any partial output before returning.
@@ -283,45 +318,50 @@ MahoAgentSecureKey MahoUnifiedAgentAdapter::OnAgentSecureStorage(
 // static
 void MahoUnifiedAgentAdapter::OnAgentToken(void* user_data, const char* token) {
   if (!user_data || !token) return;
-  auto* weak = static_cast<std::weak_ptr<FfiUserData>*>(user_data);
-  std::shared_ptr<FfiUserData> shared = weak->lock();
-  if (!shared) return;
-  // LIFETIME: local `shared` keeps FfiUserData alive only across this stack frame.
-  // PostTask binds `shared->weak_adapter` (base::WeakPtr, copyable); the queued
-  // task does NOT depend on FfiUserData's lifetime — only on the adapter's.
-  shared->task_runner->PostTask(
+  auto pointee =
+      maho::FfiCallbackHandle<MahoUnifiedAgentAdapter>::FromUserData(user_data);
+  if (pointee->cancelled.load(std::memory_order_acquire)) return;
+  std::string token_copy(token);
+  pointee->task_runner->PostTask(
       FROM_HERE,
       base::BindOnce(&MahoUnifiedAgentAdapter::OnTokenOnSequence,
-                     shared->weak_adapter, std::string(token)));
+                     pointee->owner, std::move(token_copy)));
 }
 
 // static
 void MahoUnifiedAgentAdapter::OnAgentComplete(void* user_data, const char* full_text, const char* tool_calls_json) {
   if (!user_data || !full_text) return;
-  auto* weak = static_cast<std::weak_ptr<FfiUserData>*>(user_data);
-  std::shared_ptr<FfiUserData> shared = weak->lock();
-  if (!shared) return;
-  shared->task_runner->PostTask(
+  auto pointee =
+      maho::FfiCallbackHandle<MahoUnifiedAgentAdapter>::FromUserData(user_data);
+  if (pointee->cancelled.load(std::memory_order_acquire)) return;
+  std::string text_copy(full_text);
+  pointee->task_runner->PostTask(
       FROM_HERE,
       base::BindOnce(&MahoUnifiedAgentAdapter::OnCompleteOnSequence,
-                     shared->weak_adapter, std::string(full_text)));
+                     pointee->owner, std::move(text_copy)));
 }
 
 // static
 void MahoUnifiedAgentAdapter::OnAgentError(void* user_data, const char* error) {
   if (!user_data || !error) return;
-  auto* weak = static_cast<std::weak_ptr<FfiUserData>*>(user_data);
-  std::shared_ptr<FfiUserData> shared = weak->lock();
-  if (!shared) return;
-  shared->task_runner->PostTask(
+  auto pointee =
+      maho::FfiCallbackHandle<MahoUnifiedAgentAdapter>::FromUserData(user_data);
+  if (pointee->cancelled.load(std::memory_order_acquire)) return;
+  std::string error_copy(error);
+  pointee->task_runner->PostTask(
       FROM_HERE,
       base::BindOnce(&MahoUnifiedAgentAdapter::OnErrorOnSequence,
-                     shared->weak_adapter, std::string(error)));
+                     pointee->owner, std::move(error_copy)));
 }
 
 void MahoUnifiedAgentAdapter::OnTokenOnSequence(std::string token) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  accumulated_text_ += token;
+  if (!conversation_task_->OnToken(token)) {
+    // 2 MB cap reached — terminate with error (H13).
+    conversation_task_->Error("response exceeded 2 MB cap");
+    TransitionToError("response exceeded 2 MB cap");
+    return;
+  }
   MahoAiRuntimeEvent event;
   event.type = MahoAiRuntimeEventType::kAssistantToken;
   event.text = token;
@@ -330,15 +370,16 @@ void MahoUnifiedAgentAdapter::OnTokenOnSequence(std::string token) {
 
 void MahoUnifiedAgentAdapter::OnCompleteOnSequence(std::string full_text) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  conversation_task_->Complete();
   MahoAiRuntimeEvent event;
   event.type = MahoAiRuntimeEventType::kTurnComplete;
   event.text = full_text;
-  accumulated_text_.clear();
   EmitEvent(std::move(event));
 }
 
 void MahoUnifiedAgentAdapter::OnErrorOnSequence(std::string error) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  conversation_task_->Error(error);
   MahoAiRuntimeEvent event;
   event.type = MahoAiRuntimeEventType::kError;
   event.text = error;
@@ -369,4 +410,3 @@ void MahoUnifiedAgentAdapter::TransitionToError(const std::string& message) {
 void MahoUnifiedAgentAdapter::OnOsCryptReady(os_crypt_async::Encryptor encryptor) {
   encryptor_ = std::make_shared<os_crypt_async::Encryptor>(std::move(encryptor));
 }
-

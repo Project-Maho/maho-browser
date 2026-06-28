@@ -68,6 +68,7 @@ impl std::fmt::Display for ZeroizedString {
 #[async_trait]
 pub trait AgentStorage: Send + Sync {
     async fn get_byok_key(&self, provider: &str) -> Result<Option<ZeroizedString>, AgentError>;
+    async fn get_setting(&self, key: &str) -> Result<Option<ZeroizedString>, AgentError>;
     async fn save_message(&self, session_id: &str, role: &str, content: &str) -> Result<(), AgentError>;
     async fn get_history(&self, session_id: &str) -> Result<Vec<ChatMessage>, AgentError>;
 }
@@ -93,6 +94,19 @@ impl AgentStorage for MutexAgentStorage {
         .await
         .map_err(|e| AgentError::ExecutionError(e.to_string()))??;
         Ok(key_opt.map(ZeroizedString::new))
+    }
+
+    async fn get_setting(&self, key: &str) -> Result<Option<ZeroizedString>, AgentError> {
+        let storage = std::sync::Arc::clone(&self.0);
+        let key = key.to_string();
+        let val_opt = tokio::task::spawn_blocking(move || {
+            let lock = storage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            lock.get_setting(&key)
+                .map_err(|e| AgentError::ExecutionError(e.to_string()))
+        })
+        .await
+        .map_err(|e| AgentError::ExecutionError(e.to_string()))??;
+        Ok(val_opt.map(ZeroizedString::new))
     }
 
     async fn save_message(&self, session_id: &str, role: &str, content: &str) -> Result<(), AgentError> {

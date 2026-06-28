@@ -36,6 +36,23 @@ export interface TabItem {
   index: number;
 }
 
+export interface TabInfo {
+  tabId: number;
+  url: string;
+  title: string;
+}
+
+export interface TidyFolder {
+  name: string;
+  tabIds: number[];
+}
+
+export interface CreditBalanceInfo {
+  balanceUsd: number;
+  lastPurchaseAt: number;
+  lastConsumptionAt: number;
+}
+
 export interface ContextAttachment {
   kind: ContextSourceKind;
   tabId: number;
@@ -222,6 +239,10 @@ export class PageHandlerRemote {
   openSettings(): Promise<void>;
   getViewMode(): Promise<{mode: ViewMode}>;
   setViewMode(mode: ViewMode): Promise<void>;
+  requestTabTidy(tabs: TabInfo[]): Promise<{folders: TidyFolder[]}>;
+  applyTabTidyFolders(folders: TidyFolder[]): Promise<void>;
+  getCreditBalance(): Promise<{info: CreditBalanceInfo}>;
+  getBuyCreditsUrl(packSizeUsd: number): Promise<{checkoutUrl: string}>;
 }
 
 export class PageHandlerFactory {

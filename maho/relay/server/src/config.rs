@@ -18,6 +18,7 @@ pub struct RelayConfig {
     pub signup_rate_limit_per_ip_per_minute: u32,
     pub login_rate_limit_per_ip_per_minute: u32,
     pub min_password_length: usize,
+    pub service_token: String,
 }
 
 impl RelayConfig {
@@ -89,6 +90,9 @@ impl RelayConfig {
         if let Some(v) = parse_env::<usize>("MAHO_RELAY_MIN_PASSWORD_LENGTH") {
             config.min_password_length = v;
         }
+        if let Some(v) = parse_env::<String>("MAHO_RELAY_SERVICE_TOKEN") {
+            config.service_token = v;
+        }
         if let Some(v) = parse_bool_env("MAHO_RELAY_REQUIRE_AUTH") {
             config.require_auth = v;
         }
@@ -118,6 +122,7 @@ impl Default for RelayConfig {
             signup_rate_limit_per_ip_per_minute: 3,
             login_rate_limit_per_ip_per_minute: 10,
             min_password_length: 12,
+            service_token: String::new(),
         }
     }
 }

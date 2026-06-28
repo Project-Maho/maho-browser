@@ -1,7 +1,7 @@
 export type IconSymbol =
     'arrowUpRight'|'composerSpark'|'copy'|'edit'|'ellipsis'|'globe'|
     'panelSpark'|'plus'|'retry'|'send'|'settingsGear'|'stop'|'thumbDown'|
-    'thumbUp'|'trash'|'viewModeToggle'|'xmark';
+    'thumbUp'|'tidyWand'|'trash'|'viewModeToggle'|'xmark';
 
 const ICON_MAP: Record<IconSymbol, string> = {
   arrowUpRight: 'arrow-up-right',
@@ -18,6 +18,7 @@ const ICON_MAP: Record<IconSymbol, string> = {
   stop: 'circle-stop',
   thumbDown: 'thumbs-down',
   thumbUp: 'thumbs-up',
+  tidyWand: 'wand-2',
   trash: 'trash-2',
   viewModeToggle: 'panel-right',
   xmark: 'x',

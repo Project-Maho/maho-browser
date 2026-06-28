@@ -52,6 +52,9 @@ inline constexpr char kMahoSpaceConfigURL[] = "chrome://maho-space-config/";
 inline constexpr char kMahoSpaceCreateHost[] = "maho-space-create";
 inline constexpr char kMahoSpaceCreateURL[] = "chrome://maho-space-create/";
 
+inline constexpr char kMahoRoutinesHost[] = "maho-routines";
+inline constexpr char kMahoRoutinesURL[] = "chrome://maho-routines/";
+
 }  // namespace maho
 
 #endif  // MAHO_CHROMIUM_COMPONENTS_CONSTANTS_WEBUI_URL_CONSTANTS_H_

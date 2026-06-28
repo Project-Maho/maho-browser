@@ -179,3 +179,70 @@ pub fn normalize_device_type(device_type: Option<&str>) -> String {
         candidate.to_string()
     }
 }
+
+#[derive(Debug, Deserialize)]
+pub struct IntrospectRequest {
+    pub token: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct IntrospectResponse {
+    pub user_id: i32,
+    pub tier: String,
+    pub subscription_status: String,
+    pub email_verified: bool,
+    pub expires_at: i64,
+    pub period_start_at: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ConsumeBypassRequest {
+    pub token: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ConsumeBypassResponse {
+    pub user_id: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VerifyRequest {
+    pub token: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct VerifyResponse {
+    pub status: String,
+    pub verify_bypass_token: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RequestVerifyResponse {
+    pub status: String,
+    pub dev_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdminForceVerifyEmailRequest {
+    pub user_id: i32,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminForceVerifyEmailResponse {
+    pub user_id: i32,
+    pub email_verified: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdminSetCreditBalanceRequest {
+    pub user_id: i32,
+    pub new_balance_usd: f64,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminSetCreditBalanceResponse {
+    pub user_id: i32,
+    pub new_balance_usd: f64,
+}

@@ -2,6 +2,7 @@
 name = "maho-relay"
 version = "0.1.0"
 edition = "2021"
+autobins = false
 
 [[bin]]
 name = "maho-relay"
@@ -27,8 +28,11 @@ argon2 = { workspace = true }
 sha2 = { workspace = true }
 rand = { workspace = true }
 async-trait = "0.1"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+hmac = "0.12"
+subtle = "2.5"
 
 [dev-dependencies]
 tempfile = "3"
 tokio-tungstenite = "0.26"
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+serial_test = "3"

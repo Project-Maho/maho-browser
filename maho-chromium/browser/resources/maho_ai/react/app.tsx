@@ -1,4 +1,4 @@
-import React, {Component, useEffect, useMemo, useRef} from 'react';
+import React, {Component, useEffect, useMemo, useRef, useState} from 'react';
 import type {ErrorInfo, ReactNode} from 'react';
 import {createRoot} from 'react-dom/client';
 
@@ -10,6 +10,9 @@ import {bootstrapStore, createMahoAiStore} from './store.js';
 import {runWithBootGuard} from './boot-guard.js';
 import {CompactShell} from './features/compact/compact-shell.js';
 import {Toast} from './features/compact/toast.js';
+import {TabTidyModal} from './features/compact/tab-tidy-modal.js';
+import type {TidyFolderSuggestion} from './features/compact/tab-tidy-modal.js';
+import {BuyCreditsModal} from './features/compact/buy-credits-modal.js';
 import {
   Composer,
   type ComposerHandlers,
@@ -110,6 +113,9 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
   const state = useAppState(store);
   const bootstrappedRef = useRef(false);
   const [handlerTimedOut, setHandlerTimedOut] = React.useState(false);
+  const [tidySuggestions, setTidySuggestions] = useState<TidyFolderSuggestion[] | null>(null);
+  const [tidyLoading, setTidyLoading] = useState(false);
+  const [buyCreditsModalOpen, setBuyCreditsModalOpen] = useState(false);
 
   useEffect(() => {
     (window as unknown as Record<string, unknown>)['__mahoAiMounted'] = true;
@@ -247,6 +253,26 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
     },
   }), [store]);
 
+  const handleTidyTabs = () => {
+    if (tidyLoading) return;
+    setTidyLoading(true);
+    const openTabsItems = state.openTabs.items;
+    const tabs = openTabsItems.map(t => ({tabId: String(t.tabId), title: t.title, url: t.url}));
+    void store.requestTabTidy(tabs).then(folders => {
+      setTidyLoading(false);
+      if (folders.length > 0) {
+        setTidySuggestions(folders.map(f => ({name: f.name, tabIds: f.tabIds})));
+      }
+    }).catch(() => {
+      setTidyLoading(false);
+    });
+  };
+
+  const handleTidyApply = (selected: TidyFolderSuggestion[]) => {
+    setTidySuggestions(null);
+    void store.applyTabTidyFolders(selected.map(f => ({name: f.name, tabIds: f.tabIds})));
+  };
+
   const sessionEvents = state.currentSessionId ?
       (state.eventsBySessionId[state.currentSessionId] || []) :
       [];
@@ -291,11 +317,13 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
                   onGetViewMode={modeHandlers.onGetViewMode}
                   onOpenSettings={modeHandlers.onOpenSettings}
                   onRespondToApproval={modeHandlers.onRespondToApproval}
-                  onResumeSession={modeHandlers.onResumeSession}
                   onSetViewMode={modeHandlers.onSetViewMode}
                   onStartSession={modeHandlers.onNewSession}
+                  onTidyTabs={handleTidyTabs}
+                  onOpenBuyCredits={() => setBuyCreditsModalOpen(true)}
                   readOnly={readOnly}
                   state={state}
+                  store={store}
                   thinkingLabel={thinkingLabel}
                 />
               )}
@@ -308,6 +336,18 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
           </>
         )}
       </section>
+      {tidySuggestions && (
+        <TabTidyModal
+          folders={tidySuggestions}
+          onApply={handleTidyApply}
+          onDismiss={() => setTidySuggestions(null)}
+        />
+      )}
+      <BuyCreditsModal
+        isOpen={buyCreditsModalOpen}
+        store={store}
+        onClose={() => setBuyCreditsModalOpen(false)}
+      />
     </div>
   );
 }

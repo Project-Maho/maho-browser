@@ -3,44 +3,9 @@
 #ifndef MAHO_FFI_H
 #define MAHO_FFI_H
 
-#include <stdint.h>
-#include <stddef.h>
-#include <stdbool.h>
-
-/**
- * Success.
- */
-#define MAHO_ACP_OK 0
-
-/**
- * Null handle passed.
- */
-#define MAHO_ACP_ERR_NULL_HANDLE 1
-
-/**
- * Invalid argument (null string pointer, bad UTF-8, etc.).
- */
-#define MAHO_ACP_ERR_INVALID_ARG 2
-
-/**
- * Operation requires a started client but it has not been started.
- */
-#define MAHO_ACP_ERR_NOT_STARTED 3
-
-/**
- * Client is already started.
- */
-#define MAHO_ACP_ERR_ALREADY_STARTED 4
-
-/**
- * Spawn or I/O error.
- */
-#define MAHO_ACP_ERR_SPAWN 5
-
-/**
- * Internal / unexpected error.
- */
-#define MAHO_ACP_ERR_INTERNAL 6
+#include <cstdint>
+#include <cstddef>
+#include <cstdbool>
 
 typedef enum MahoAgentPermissionDecision {
   MahoAgentPermissionDecision_Allow = 0,
@@ -48,12 +13,6 @@ typedef enum MahoAgentPermissionDecision {
 } MahoAgentPermissionDecision;
 
 typedef struct ChatSession ChatSession;
-
-/**
- * Opaque handle exposed to C. Created by [`maho_acp_create`], freed by
- * [`maho_acp_destroy`].
- */
-typedef struct MahoAcpHandle MahoAcpHandle;
 
 typedef struct MahoAgentSession MahoAgentSession;
 
@@ -79,8 +38,6 @@ typedef struct MahoAgentSecureKey {
   uintptr_t len;
   void (*free_fn)(char*, uintptr_t);
 } MahoAgentSecureKey;
-
-typedef void (*EventCallback)(void*, const uint8_t*, uintptr_t);
 
 /**
  * Progress callback type invoked from the import background thread.
@@ -143,6 +100,8 @@ char *maho_core_get_space_view_models(struct MahoCore *ptr);
  * `space_id_json` must be a valid null-terminated C string containing a SpaceId JSON.
  * Caller must free the returned string with `maho_string_free`.
  */
+// TODO: Will be removed after 2026-07-15. Use maho_core_get_sidebar_state_v2 instead.
+// Kept compiling for backward compat during transition (Phase 4.2.3 soak period).
 char *maho_core_get_sidebar_root_order(struct MahoCore *ptr,
                                        const char *space_id_json,
                                        const int64_t *window_id_ptr);
@@ -153,7 +112,22 @@ char *maho_core_get_sidebar_root_order(struct MahoCore *ptr,
  * `space_id_json` must be a valid null-terminated C string containing a SpaceId JSON.
  * Caller must free the returned string with `maho_string_free`.
  */
+// TODO: Will be removed after 2026-07-15. Use maho_core_get_sidebar_state_v2 instead.
+// Kept compiling for backward compat during transition (Phase 4.2.3 soak period).
 char *maho_core_get_sidebar_tree(struct MahoCore *ptr, const char *space_id_json);
+
+/**
+ * Combined sidebar tree + base64-encoded favicons in one call (audit C3 fix).
+ * Returns {"tree": [...], "favicons": {"tab_id": "base64_png", ...}}.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `space_id_json` must be a valid null-terminated C string containing a SpaceId JSON.
+ * Caller must free the returned string with `maho_string_free`.
+ * Returns NULL on error or if import is active.
+ */
+// TODO: regenerate via cbindgen
+char *maho_core_get_sidebar_state_v2(struct MahoCore *ptr, const char *space_id_json);
 
 /**
  * # Safety
@@ -1408,6 +1382,17 @@ char *maho_core_check_pinned_navigation(struct MahoCore *ptr,
                                         const char *url);
 
 /**
+ * Returns true if the tab with the given tab_id is currently pinned.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `tab_id` must be a valid null-terminated C string.
+ *
+ * TODO: regenerate via cbindgen
+ */
+bool maho_core_is_tab_pinned(struct MahoCore *ptr, const char *tab_id);
+
+/**
  * Apply incoming entity batch from server.
  * `entities_json` is a JSON array of SyncEntity objects.
  * Returns JSON array of actually-applied entities.
@@ -1736,12 +1721,6 @@ char *maho_core_byok_get_providers(struct MahoCore *_core);
 bool maho_core_byok_validate_key(struct MahoCore *_core, const char *provider, const char *api_key);
 
 /**
- * Cluster tabs by semantic similarity. Returns JSON array of clusters.
- * `threshold` should be 0.0–1.0; recommended 0.75.
- */
-char *maho_core_cluster_tabs(struct MahoCore *core, double threshold);
-
-/**
  * Send an image-only chat message. Fires a ShellEvent::ChatMessage with image content.
  * `mime` must be non-null (e.g. "image/png"). `data` is raw bytes, `data_len` is byte count.
  * Returns true on success.
@@ -1828,113 +1807,6 @@ bool maho_core_set_space_ai_config(struct MahoCore *ptr,
                                    const char *config_json);
 
 /**
- * Allocate a new ACP handle. Returns null on failure (should not happen).
- */
-struct MahoAcpHandle *maho_acp_create(void);
-
-/**
- * Destroy an ACP handle. Calls shutdown if still running. Safe to call
- * with null (no-op).
- *
- * # Safety
- * `handle` must be a valid pointer returned by [`maho_acp_create`], or null.
- */
-void maho_acp_destroy(struct MahoAcpHandle *handle);
-
-/**
- * Register the event callback. Only one callback per handle; subsequent
- * calls replace the previous one.
- *
- * # Safety
- * `handle` must be valid. `fn_ptr` must be a valid function pointer that
- * remains valid for the lifetime of the handle.
- */
-int32_t maho_acp_set_event_callback(struct MahoAcpHandle *handle,
-                                    EventCallback fn_ptr,
-                                    void *user_data);
-
-/**
- * Spawn the `opencode acp` child process. If `command_path` is null or
- * empty, falls back to `"opencode"`.
- *
- * # Safety
- * `handle` must be valid. `command_path` must be a valid C string or null.
- */
-int32_t maho_acp_start(struct MahoAcpHandle *handle, const char *command_path);
-
-/**
- * # Safety
- * `handle` must be valid. `json_str` must be a valid C string or null.
- */
-int32_t maho_acp_set_auth_config(struct MahoAcpHandle *handle, const char *json_str);
-
-/**
- * Graceful shutdown: close stdin, SIGTERM, SIGKILL.
- *
- * # Safety
- * `handle` must be valid.
- */
-int32_t maho_acp_shutdown(struct MahoAcpHandle *handle);
-
-/**
- * Send `initialize` to the agent. Result delivered as `InitializeOk` or
- * `InitializeErr` via the event callback.
- *
- * # Safety
- * `handle` must be valid.
- */
-int32_t maho_acp_initialize(struct MahoAcpHandle *handle);
-
-/**
- * Create a new session with `cwd = current dir, mcpServers = []`.
- *
- * # Safety
- * `handle` must be valid.
- */
-int32_t maho_acp_create_session(struct MahoAcpHandle *handle);
-
-/**
- * Close a session.
- *
- * # Safety
- * `handle` and `session_id` must be valid.
- */
-int32_t maho_acp_close_session(struct MahoAcpHandle *handle, const char *session_id);
-
-/**
- * Submit a prompt. Streaming updates and the final result are delivered
- * via the event callback.
- *
- * # Safety
- * `handle`, `session_id`, and `text` must be valid C strings.
- */
-int32_t maho_acp_submit_prompt(struct MahoAcpHandle *handle,
-                               const char *session_id,
-                               const char *text);
-
-/**
- * Cancel the current turn for a session.
- *
- * # Safety
- * `handle` and `session_id` must be valid.
- */
-int32_t maho_acp_cancel_turn(struct MahoAcpHandle *handle, const char *session_id);
-
-/**
- * Reply to a permission request.
- *
- * `outcome_kind`: 0 = Cancelled, 1 = Selected.
- * When Selected, `option_id` must be non-null.
- *
- * # Safety
- * `handle` must be valid. `option_id` must be valid when `outcome_kind == 1`.
- */
-int32_t maho_acp_reply_permission(struct MahoAcpHandle *handle,
-                                  int64_t json_rpc_id,
-                                  uint32_t outcome_kind,
-                                  const char *option_id);
-
-/**
  * Detect installed browsers on the system. Returns a JSON array; caller MUST
  * free the returned string via `maho_import_string_free`.
  */
@@ -2010,6 +1882,35 @@ void maho_import_orchestrator_cancel(struct MahoImportSession *handle);
  * or NULL (no-op). Must not be called more than once per handle.
  */
 void maho_import_orchestrator_free(struct MahoImportSession *handle);
+
+/**
+ * Returns the user's subscription tier: 0=Free, 1=Pro, 2=Max, -1=unauthenticated.
+ *
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ */
+int32_t maho_account_get_tier(struct MahoCore *core);
+
+/**
+ * Returns a JSON array of all hardcoded routines via out-param.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+void maho_routines_list(char **out_json);
+
+/**
+ * Run a routine by ID. Async — invokes `on_complete` or `on_error` callback
+ * on completion. Returns 0 on success (queued), -1 on error.
+ *
+ * # Safety
+ * `routine_id` must be a valid null-terminated C string.
+ * `on_complete` and `on_error` must be valid function pointers.
+ * `user_data` is forwarded to callbacks unchanged.
+ */
+int32_t maho_routines_run(const char *routine_id,
+                       int32_t user_tier,
+                       void (*on_complete)(void *user_data, const char *result_json),
+                       void (*on_error)(void *user_data, const char *error),
+                       void *user_data);
 
 #ifdef __cplusplus
 }  // extern "C"

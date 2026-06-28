@@ -1,4 +1,4 @@
-use maho_types::account::{AccountInfo, AuthState, SyncState};
+use maho_types::account::{AccountInfo, AuthState, SyncState, UserTier};
 
 #[derive(Debug)]
 pub struct AccountManager {
@@ -35,6 +35,7 @@ impl AccountManager {
             device_id,
             sync_enabled: false,
             auth_state: AuthState::Authenticating,
+            tier: UserTier::Free,
         };
         self.account = Some(account.clone());
         self.sync_state = SyncState::Idle;
@@ -101,6 +102,10 @@ impl AccountManager {
 
     pub fn get_sync_state(&self) -> &SyncState {
         &self.sync_state
+    }
+
+    pub fn get_tier(&self) -> Option<UserTier> {
+        self.account.as_ref().map(|a| a.tier)
     }
 }
 

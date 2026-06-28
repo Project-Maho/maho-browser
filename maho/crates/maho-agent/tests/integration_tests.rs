@@ -17,6 +17,10 @@ impl AgentStorage for MockAgentStorage {
         Ok(Some(maho_agent::ZeroizedString::new("mock-key".to_string())))
     }
 
+    async fn get_setting(&self, _key: &str) -> Result<Option<maho_agent::ZeroizedString>, maho_agent::AgentError> {
+        Ok(None)
+    }
+
     async fn save_message(&self, session_id: &str, role: &str, content: &str) -> Result<(), maho_agent::AgentError> {
         self.messages.lock().unwrap().push((session_id.to_string(), role.to_string(), content.to_string()));
         Ok(())

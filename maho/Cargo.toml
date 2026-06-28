@@ -6,9 +6,10 @@ members = [
     "crates/maho-ffi",
     "crates/maho-storage",
     "crates/maho-bench",
-    "crates/maho-acp",
     "crates/maho-import", "crates/maho-agent", "crates/maho-jni",
+    "crates/maho-cli",
 ]
+exclude = ["billing-proxy"]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

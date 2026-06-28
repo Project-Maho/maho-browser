@@ -58,6 +58,29 @@ struct TabItem {
   int32 index;
 };
 
+// ==========================================================================
+// Tab Tidy types — LLM-driven tab grouping into named folders.
+// Default-ON; no pref or A/B gate.
+// ==========================================================================
+
+// A single tab descriptor sent to the LLM for tidy analysis.
+struct TabInfo {
+  // Maho-internal tab ID string (matches the core's persisted tab IDs).
+  string tab_id;
+  // Page title at the time of the request.
+  string title;
+  // Committed URL.
+  string url;
+};
+
+// A suggested folder returned by the LLM tidy pass.
+struct TidyFolder {
+  // Human-readable folder name suggested by the LLM.
+  string name;
+  // Ordered list of tab IDs to place in this folder.
+  array<string> tab_ids;
+};
+
 // A structured context attachment chosen by the user in the picker.
 // Sent with SubmitPrompt in the optional |attachments| array.  When the
 // array is null (absent), the legacy bool-based current-page path applies.
@@ -310,6 +333,20 @@ struct SessionInfo {
 };
 
 // ==========================================================================
+// PAYG credit balance types
+// ==========================================================================
+
+// Current PAYG credit balance for the active user.
+struct CreditBalanceInfo {
+  // Credit balance in USD. 0.0 if anonymous or relay unreachable.
+  float balance_usd;
+  // Unix timestamp (seconds) of last credit purchase. 0 if never purchased.
+  int64 last_purchase_at;
+  // Unix timestamp (seconds) of last credit consumption. 0 if never consumed.
+  int64 last_consumption_at;
+};
+
+// ==========================================================================
 // Interfaces
 // ==========================================================================
 
@@ -402,6 +439,33 @@ interface PageHandler {
 
   // Set the view mode
   SetViewMode(ViewMode mode);
+
+  // ==========================================================================
+  // Tab Tidy methods — default-ON, no pref gate, no A/B flag.
+  // ==========================================================================
+
+  // Request an LLM-driven tidy pass for the tabs in the active space.
+  // |tabs| is the current list of non-pinned tabs. Returns suggested folder
+  // groupings; an empty array means no groupings were produced (too few tabs
+  // or LLM returned nothing usable).
+  RequestTabTidy(array<TabInfo> tabs) => (array<TidyFolder> folders);
+
+  // Apply a confirmed set of folder suggestions to the active space.
+  // Creates one folder per entry in |folders| and moves the specified tabs
+  // into each folder via the core shell event dispatcher.
+  ApplyTabTidyFolders(array<TidyFolder> folders);
+
+  // ==========================================================================
+  // PAYG credit balance methods
+  // ==========================================================================
+
+  // Returns current PAYG credit balance for the active user.
+  // Returns 0 balance if user is anonymous or relay unreachable.
+  GetCreditBalance() => (CreditBalanceInfo info);
+
+  // Returns the LemonSqueezy checkout URL for buying a credit pack.
+  // pack_size_usd MUST be one of 10, 50, 100 - otherwise empty URL returned.
+  GetBuyCreditsUrl(int32 pack_size_usd) => (string checkout_url);
 };
 
 // WebUI-side interface for browser-to-page push updates.

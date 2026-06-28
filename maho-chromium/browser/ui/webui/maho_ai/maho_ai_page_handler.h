@@ -81,6 +81,18 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   void GetViewMode(GetViewModeCallback callback) override;
   void SetViewMode(maho_ai::mojom::ViewMode mode) override;
 
+  // Tab Tidy — default-ON, no pref gate.
+  void RequestTabTidy(
+      std::vector<maho_ai::mojom::TabInfoPtr> tabs,
+      RequestTabTidyCallback callback) override;
+  void ApplyTabTidyFolders(
+      std::vector<maho_ai::mojom::TidyFolderPtr> folders) override;
+
+  // PAYG credit balance methods.
+  void GetCreditBalance(GetCreditBalanceCallback callback) override;
+  void GetBuyCreditsUrl(int32_t pack_size_usd,
+                        GetBuyCreditsUrlCallback callback) override;
+
  private:
   // Translates internal runtime events into Mojo and pushes them to the Page
   // remote. Also maintains chat history for the simple chat UI.
@@ -166,6 +178,7 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   mojo::Remote<maho_ai::mojom::Page> page_;
   raw_ptr<Browser> browser_;
   raw_ptr<PrefService> prefs_;
+  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
   MahoAiRuntimeRouter runtime_router_;
   MahoAiPageContextExtractor page_context_extractor_;
 

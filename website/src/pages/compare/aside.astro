@@ -1,0 +1,334 @@
+---
+// biome-ignore-all assist/source/organizeImports: Astro component imports stay grouped for readability.
+// biome-ignore-all lint/correctness/noUnusedImports: Astro frontmatter imports are referenced in the template.
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Footer from '../../components/Footer.astro';
+import Nav from '../../components/Nav.astro';
+---
+
+<BaseLayout title="Maho vs Aside Browser - Comparison" description="Two takes on the AI browser. Maho pairs steered AI with cross-device Spaces and BYOK pricing. Aside leads on autonomous agent benchmarks. An honest comparison.">
+  <div class="min-h-screen bg-background text-foreground">
+    <Nav />
+    <main class="max-w-4xl mx-auto px-6 pt-32 pb-24">
+
+      <!-- §1 Hero -->
+      <header class="mb-16 text-center">
+        <h1 class="heading-serif text-4xl sm:text-5xl mb-4">Maho vs Aside Browser</h1>
+        <p class="text-muted-foreground leading-relaxed max-w-2xl mx-auto">
+          Two takes on the AI browser. Different beliefs, different products.
+        </p>
+        <p class="text-xs text-muted-foreground mt-4">Last updated: 2026-06-28 (v3)</p>
+      </header>
+
+      <!-- §2 Intro paragraph -->
+      <section class="mb-16">
+        <p class="text-muted-foreground leading-relaxed max-w-3xl mx-auto">
+          Both browsers are Chromium forks. Both target AI-assisted workflows. They disagree on almost everything else: how AI should be priced, how many devices it should run on, and how much autonomy an agent should have. This is an honest comparison.
+        </p>
+      </section>
+
+      <!-- §3 The 30-second answer -->
+      <section aria-labelledby="tldr-heading" class="mb-20">
+        <h2 id="tldr-heading" class="text-2xl font-medium mb-6">The 30-second answer</h2>
+        <div class="overflow-x-auto border border-border rounded-lg bg-card">
+          <table class="w-full text-left border-collapse text-sm">
+            <thead>
+              <tr class="border-b border-border bg-background">
+                <th class="p-4 font-semibold text-foreground"></th>
+                <th class="p-4 font-semibold text-foreground">Aside</th>
+                <th class="p-4 font-semibold text-foreground">Maho</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-border">
+              <tr>
+                <td class="p-4 font-medium text-foreground">Best at</td>
+                <td class="p-4 text-muted-foreground">Autonomous agent tasks across logged-in websites</td>
+                <td class="p-4 text-muted-foreground">Organized browsing across every device you own</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">Platforms</td>
+                <td class="p-4 text-muted-foreground">macOS only</td>
+                <td class="p-4 text-muted-foreground">macOS today; iPhone, Android in development</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">Free plan</td>
+                <td class="p-4 text-muted-foreground">$0, 500 credits/month</td>
+                <td class="p-4 text-muted-foreground">$0, unlimited BYOK</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">Paid plan</td>
+                <td class="p-4 text-muted-foreground">$20–$200/month (managed AI)</td>
+                <td class="p-4 text-muted-foreground">$5–$20/month (managed AI) + PAYG credits</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">AI model</td>
+                <td class="p-4 text-muted-foreground">Autonomous agent (acts on your behalf)</td>
+                <td class="p-4 text-muted-foreground">Assistant (acts when you ask)</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">Source</td>
+                <td class="p-4 text-muted-foreground">Proprietary</td>
+                <td class="p-4 text-muted-foreground">Proprietary</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">Sync</td>
+                <td class="p-4 text-muted-foreground">Cloud sync database</td>
+                <td class="p-4 text-muted-foreground">E2E encrypted relay, cross-device</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- §4 Where Aside leads — reframe section -->
+      <section aria-labelledby="aside-leads-heading" class="mb-20">
+        <h2 id="aside-leads-heading" class="text-2xl font-medium mb-6">Where Aside leads — and why benchmarks are the wrong measure</h2>
+        <div class="space-y-4 text-muted-foreground leading-relaxed">
+          <p>
+            Aside ranks #1 on three browser agent benchmarks. We're not going to pretend otherwise. If your mental model is "AI does work for me while I'm not looking," Aside leads.
+          </p>
+          <p class="font-medium text-foreground">
+            We think that's the wrong mental model.
+          </p>
+          <p>
+            Autonomous agent products in 2025–26 share a documented failure surface — not specific to Aside, but inherent to the paradigm Aside leads. The category has produced agents that bought the wrong flight, replied to a boss with hallucinated context, and leaked credentials to a phishing page that looked official. Benchmarks measure task completion under sanitized conditions. They don't measure what happens when something goes wrong in your actual life.
+          </p>
+          <p>
+            Maho's answer isn't a worse agent. It's a different question: what would AI look like if it ran when you asked, on data you saw, with consent every step? That's a different product. The rest of this page is about that product.
+          </p>
+        </div>
+      </section>
+
+      <!-- §5 Where Maho wins -->
+      <section aria-labelledby="maho-wins-heading" class="mb-20 space-y-12">
+        <h2 id="maho-wins-heading" class="text-2xl font-medium mb-6">Where Maho wins</h2>
+
+        <div>
+          <h3 class="text-lg font-medium mb-2">Cross-platform from day one</h3>
+          <p class="text-muted-foreground text-sm leading-relaxed">
+            Aside is macOS only. Maho ships macOS today, with iPhone and Android in development. Spaces, bookmarks, and history sync end-to-end encrypted across every device you own. If you work across phone and laptop, Aside makes you choose. Maho doesn't.
+          </p>
+        </div>
+
+        <div>
+          <h3 class="text-lg font-medium mb-2">Free forever, no credit meter</h3>
+          <p class="text-muted-foreground text-sm leading-relaxed">
+            Aside's free tier gives you 500 credits per month. Heavy users hit the wall. Maho's free tier gives you unlimited BYOK — you bring your own API key (OpenAI, Anthropic, or local Ollama) and pay your provider directly. No middleman markup, no credit anxiety. If you'd rather not manage keys, Maho Pro is $5/mo and Max is $20/mo — flat fees with clear model ceilings, not metered.
+          </p>
+        </div>
+
+        <div>
+          <h3 class="text-lg font-medium mb-2">Steered AI, not autonomous AI</h3>
+          <p class="text-muted-foreground text-sm leading-relaxed">
+            Think of it like driving. Aside is full-self-driving: the agent picks the route, navigates the websites, taps the buttons. Maho is hand-on-wheel: you steer, the AI accelerates. Summarize this page. Clean up these tab titles. Organize my downloads. Draft a reply, but let me send it. The AI is powerful — it just doesn't act in your accounts when you're not watching. For most real work, that's not a limitation. It's the point.
+          </p>
+        </div>
+
+        <div>
+          <h3 class="text-lg font-medium mb-2">Spaces, not tabs</h3>
+          <p class="text-muted-foreground text-sm leading-relaxed">
+            Aside organizes your browser around AI tasks. Maho organizes around projects. Each Space is a persistent workspace with its own tabs, AI thread, notes, and split view state. Switch contexts in one click. Pick up tomorrow exactly where you left off.
+          </p>
+        </div>
+
+        <div>
+          <h3 class="text-lg font-medium mb-2">Sync that's actually private</h3>
+          <p class="text-muted-foreground text-sm leading-relaxed">
+            Both browsers claim local-first. Maho's sync architecture is documented publicly: X25519 handshake, six-digit verification code, AES-GCM per-message authentication. The full design lives in our engineering blog at <a href="/blog/sync-architecture-end-to-end" class="underline hover:text-foreground">/blog/sync-architecture-end-to-end</a>. Aside doesn't publish their sync design.
+          </p>
+        </div>
+      </section>
+
+      <!-- §6 Detailed comparison table -->
+      <section aria-labelledby="detailed-comparison-heading" class="mb-20">
+        <h2 id="detailed-comparison-heading" class="text-2xl font-medium mb-6">Detailed comparison</h2>
+        <div class="overflow-x-auto border border-border rounded-lg bg-card">
+          <table class="w-full text-left border-collapse text-sm">
+            <thead>
+              <tr class="border-b border-border bg-background">
+                <th class="p-4 font-semibold text-foreground">Feature</th>
+                <th class="p-4 font-semibold text-foreground">Aside Browser</th>
+                <th class="p-4 font-semibold text-foreground">Maho Browser</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-border">
+              <tr>
+                <td class="p-4 font-medium text-foreground">Source</td>
+                <td class="p-4 text-muted-foreground">Proprietary</td>
+                <td class="p-4 text-muted-foreground">Proprietary</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">Free tier</td>
+                <td class="p-4 text-muted-foreground">$0 / 500 credits / month</td>
+                <td class="p-4 text-muted-foreground">$0 / unlimited / BYOK</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">Mid tier</td>
+                <td class="p-4 text-muted-foreground">$20/mo (3× credits)</td>
+                <td class="p-4 text-muted-foreground">$5/mo (managed AI, Pro)</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">High tier</td>
+                <td class="p-4 text-muted-foreground">$200/mo</td>
+                <td class="p-4 text-muted-foreground">$20/mo (managed AI, Max)</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">Pay-as-you-go credits</td>
+                <td class="p-4 text-muted-foreground">✗ subscription only</td>
+                <td class="p-4 text-muted-foreground">✓ $10/$50/$100 packs, never expire</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">Free trial of paid</td>
+                <td class="p-4 text-muted-foreground">14 days</td>
+                <td class="p-4 text-muted-foreground">Not needed — free works forever</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">BYOK</td>
+                <td class="p-4 text-muted-foreground">Partial (Pro+ feature)</td>
+                <td class="p-4 text-muted-foreground">Yes, free tier, unlimited</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">Cross-device sync</td>
+                <td class="p-4 text-muted-foreground">(not advertised)</td>
+                <td class="p-4 text-muted-foreground">Yes, E2E encrypted</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">macOS</td>
+                <td class="p-4 text-muted-foreground">Yes</td>
+                <td class="p-4 text-muted-foreground">Yes</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">iOS</td>
+                <td class="p-4 text-muted-foreground">No</td>
+                <td class="p-4 text-muted-foreground">In development</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">Android</td>
+                <td class="p-4 text-muted-foreground">No</td>
+                <td class="p-4 text-muted-foreground">In development</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">Windows</td>
+                <td class="p-4 text-muted-foreground">In development</td>
+                <td class="p-4 text-muted-foreground">In development</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">Linux</td>
+                <td class="p-4 text-muted-foreground">No</td>
+                <td class="p-4 text-muted-foreground">In development</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">AI model</td>
+                <td class="p-4 text-muted-foreground">Autonomous agent</td>
+                <td class="p-4 text-muted-foreground">Assistant on demand</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">AI benchmark leadership</td>
+                <td class="p-4 text-muted-foreground">#1 on 3 benchmarks</td>
+                <td class="p-4 text-muted-foreground">Not pursued</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">Workspace model</td>
+                <td class="p-4 text-muted-foreground">Tab list + agent panel</td>
+                <td class="p-4 text-muted-foreground">Spaces (persistent workspaces)</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">Split view</td>
+                <td class="p-4 text-muted-foreground">No</td>
+                <td class="p-4 text-muted-foreground">Yes</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">Per-site customization</td>
+                <td class="p-4 text-muted-foreground">No</td>
+                <td class="p-4 text-muted-foreground">Yes (Boosts)</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">Manifest V3 extensions</td>
+                <td class="p-4 text-muted-foreground">(unclear)</td>
+                <td class="p-4 text-muted-foreground">Yes</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">External audit</td>
+                <td class="p-4 text-muted-foreground">Not published</td>
+                <td class="p-4 text-muted-foreground">Not contracted yet</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">Sync architecture</td>
+                <td class="p-4 text-muted-foreground">Not published</td>
+                <td class="p-4 text-muted-foreground">Published spec</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">Telemetry default</td>
+                <td class="p-4 text-muted-foreground">(per privacy policy)</td>
+                <td class="p-4 text-muted-foreground">Off by default</td>
+              </tr>
+              <tr>
+                <td class="p-4 font-medium text-foreground">Founded</td>
+                <td class="p-4 text-muted-foreground">2024 (YC F25)</td>
+                <td class="p-4 text-muted-foreground">2025 (individual developer)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- §7 Use-case picker -->
+      <section aria-labelledby="pick-heading" class="mb-20">
+        <h2 id="pick-heading" class="text-2xl font-medium mb-6">Which one is right for you?</h2>
+        <div class="grid gap-8 md:grid-cols-2">
+          <div class="border border-border rounded-lg p-6 bg-card">
+            <h3 class="text-lg font-medium mb-3">Pick Aside if</h3>
+            <p class="text-muted-foreground text-sm leading-relaxed">
+              You primarily work in a few logged-in tools, your work is repetitive enough that an agent can finish multi-step tasks, you're macOS-only, and you're comfortable letting AI take actions in your accounts.
+            </p>
+          </div>
+          <div class="border border-border rounded-lg p-6 bg-card">
+            <h3 class="text-lg font-medium mb-3">Pick Maho if</h3>
+            <p class="text-muted-foreground text-sm leading-relaxed">
+              You work across multiple devices (or plan to), you organize work by project rather than by task, you prefer AI that runs only when you ask, and you'd rather pay $5–$20/mo with PAYG credits than $20–$200/mo for managed agentic AI.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- §8 FAQ -->
+      <section aria-labelledby="faq-heading" class="mb-20">
+        <h2 id="faq-heading" class="text-2xl font-medium mb-6">Frequently asked questions</h2>
+        <dl class="space-y-6">
+          <div>
+            <dt class="font-medium text-foreground mb-1">Is Maho a fork of Aside?</dt>
+            <dd class="text-muted-foreground text-sm leading-relaxed">No. Both are independent Chromium forks.</dd>
+          </div>
+          <div>
+            <dt class="font-medium text-foreground mb-1">Why doesn't Maho compete on agent benchmarks?</dt>
+            <dd class="text-muted-foreground text-sm leading-relaxed">Different product philosophy. We chose Spaces + on-demand AI over autonomous agents. See our reasoning on the <a href="/why" class="underline hover:text-foreground">/why</a> page.</dd>
+          </div>
+          <div>
+            <dt class="font-medium text-foreground mb-1">Can I migrate from Aside to Maho?</dt>
+            <dd class="text-muted-foreground text-sm leading-relaxed">Yes. Maho imports bookmarks, history, and passwords from Aside and most Chromium-based browsers on first launch.</dd>
+          </div>
+          <div>
+            <dt class="font-medium text-foreground mb-1">Is Maho open source like Brave or Firefox?</dt>
+            <dd class="text-muted-foreground text-sm leading-relaxed">No. Maho is proprietary, the same as Aside. We focus instead on external verification methods, public architecture documentation, and direct contact with the developer.</dd>
+          </div>
+          <div>
+            <dt class="font-medium text-foreground mb-1">How does Maho make money?</dt>
+            <dd class="text-muted-foreground text-sm leading-relaxed">Maho Pro ($5/mo) and Maho Max ($20/mo) — managed AI subscriptions for users who want premium models without managing API keys. We don't sell ads, we don't sell your data, and we don't take a cut of your API spend. The free tier is sustained by the paid tiers.</dd>
+          </div>
+        </dl>
+      </section>
+
+      <!-- §9 Final CTA -->
+      <section class="text-center border border-border rounded-lg p-8 bg-card">
+        <h2 class="text-2xl font-medium mb-4">Try Maho. It's free.</h2>
+        <p class="text-muted-foreground text-sm leading-relaxed max-w-lg mx-auto mb-6">
+          Start at $0 with BYOK, move to Pro for $5 or Max for $20 when you want managed AI.
+        </p>
+        <a href="/download" class="inline-flex items-center justify-center rounded-md bg-foreground text-background px-6 py-3 text-sm font-medium hover:opacity-90 transition">
+          Download Maho
+        </a>
+      </section>
+    </main>
+    <Footer />
+  </div>
+</BaseLayout>

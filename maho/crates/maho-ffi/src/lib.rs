@@ -1,8 +1,8 @@
 #![allow(clippy::missing_safety_doc)]
 
-pub mod acp;
 pub mod import;
 pub mod import_destination;
+pub(crate) mod import_gate;
 
 use std::ffi::{c_char, CStr, CString};
 use std::path::Path;
@@ -95,6 +95,8 @@ pub unsafe extern "C" fn maho_core_handle_event(
     if ptr.is_null() || event_json.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let json_str = match CStr::from_ptr(event_json).to_str() {
         Ok(s) => s,
@@ -120,10 +122,36 @@ pub unsafe extern "C" fn maho_core_get_tab_view_models(ptr: *mut MahoCore) -> *m
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     to_json_cstring(&core.get_tab_view_models())
 
     }, ptr::null_mut())
+}
+
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `tab_id` must be a
+/// valid NUL-terminated C string. Returns `false` on null pointer, invalid UTF-8, or
+/// when an import is in progress (per `import_gate`).
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_is_tab_pinned(
+    ptr: *mut MahoCore,
+    tab_id: *const c_char,
+) -> bool {
+    ffi_safe!({
+
+    if ptr.is_null() || tab_id.is_null() { return false; }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
+    let tab_id_str = match CStr::from_ptr(tab_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let core = &*ptr;
+    core.is_tab_pinned(tab_id_str)
+
+    }, false)
 }
 
 /// # Safety
@@ -136,6 +164,8 @@ pub unsafe extern "C" fn maho_core_get_space_view_models(ptr: *mut MahoCore) -> 
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     to_json_cstring(&core.get_space_view_models())
 
@@ -146,6 +176,9 @@ pub unsafe extern "C" fn maho_core_get_space_view_models(ptr: *mut MahoCore) -> 
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
 /// `space_id_json` must be a valid null-terminated C string containing a SpaceId JSON.
 /// Caller must free the returned string with `maho_string_free`.
+#[deprecated(
+    note = "Use maho_core_get_sidebar_state_v2 instead. Will be removed after 2026-07-15."
+)]
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_get_sidebar_root_order(
     ptr: *mut MahoCore,
@@ -157,6 +190,8 @@ pub unsafe extern "C" fn maho_core_get_sidebar_root_order(
     if ptr.is_null() || space_id_json.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let json_str = match CStr::from_ptr(space_id_json).to_str() {
         Ok(s) => s,
@@ -195,6 +230,9 @@ pub unsafe extern "C" fn maho_core_get_sidebar_root_order(
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
 /// `space_id_json` must be a valid null-terminated C string containing a SpaceId JSON.
 /// Caller must free the returned string with `maho_string_free`.
+#[deprecated(
+    note = "Use maho_core_get_sidebar_state_v2 instead. Will be removed after 2026-07-15."
+)]
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_get_sidebar_tree(
     ptr: *mut MahoCore,
@@ -205,6 +243,8 @@ pub unsafe extern "C" fn maho_core_get_sidebar_tree(
     if ptr.is_null() || space_id_json.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let json_str = match CStr::from_ptr(space_id_json).to_str() {
         Ok(s) => s,
@@ -221,6 +261,47 @@ pub unsafe extern "C" fn maho_core_get_sidebar_tree(
     }, ptr::null_mut())
 }
 
+/// Combined sidebar tree + base64-encoded favicons in one call (audit C3 fix).
+/// Returns `{"tree": [...], "favicons": {"tab_id": "base64_png", ...}}`.
+///
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore`; `space_id_json` must be valid NUL-terminated UTF-8
+/// containing a JSON-serialized SpaceId. Caller must free the returned string via
+/// `maho_string_free`. Returns null on error or if import is active.
+// TODO: regenerate via cbindgen
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_sidebar_state_v2(
+    ptr: *mut MahoCore,
+    space_id_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!({
+
+    if ptr.is_null() || space_id_json.is_null() {
+        return ptr::null_mut();
+    }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
+    let core = &*ptr;
+    let json_str = match CStr::from_ptr(space_id_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return ptr::null_mut(),
+    };
+    let space_id: maho_types::identifiers::SpaceId = match serde_json::from_str(json_str) {
+        Ok(id) => id,
+        Err(_) => return ptr::null_mut(),
+    };
+
+    match core.get_sidebar_state_v2(&space_id) {
+        Some(json) => match CString::new(json) {
+            Ok(cs) => cs.into_raw(),
+            Err(_) => ptr::null_mut(),
+        },
+        None => ptr::null_mut(),
+    }
+
+    }, ptr::null_mut())
+}
+
 /// # Safety
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
 /// Caller must free the returned string with `maho_string_free`.
@@ -231,6 +312,8 @@ pub unsafe extern "C" fn maho_core_get_active_space_id(ptr: *mut MahoCore) -> *m
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     to_json_cstring(&core.get_active_space_id())
 
@@ -247,6 +330,8 @@ pub unsafe extern "C" fn maho_core_get_account_state(ptr: *mut MahoCore) -> *mut
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     to_json_cstring(&core.get_account_state_json())
 
@@ -263,6 +348,8 @@ pub unsafe extern "C" fn maho_core_get_auth_state(ptr: *mut MahoCore) -> *mut c_
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     to_json_cstring(&core.get_auth_state_json())
 
@@ -282,6 +369,8 @@ pub unsafe extern "C" fn maho_core_sign_in(
     if ptr.is_null() || event_json.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let json_str = match CStr::from_ptr(event_json).to_str() {
         Ok(s) => s,
@@ -307,6 +396,8 @@ pub unsafe extern "C" fn maho_core_tick(ptr: *mut MahoCore) -> *mut c_char {
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let updates = core.tick();
     to_json_cstring(&updates)
@@ -328,6 +419,8 @@ pub unsafe extern "C" fn maho_core_get_pinned_tabs(
     if ptr.is_null() || space_id_json.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let json_str = match CStr::from_ptr(space_id_json).to_str() {
         Ok(s) => s,
@@ -357,6 +450,8 @@ pub unsafe extern "C" fn maho_core_get_space_tabs(
     if ptr.is_null() || space_id_json.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let json_str = match CStr::from_ptr(space_id_json).to_str() {
         Ok(s) => s,
@@ -390,6 +485,8 @@ pub unsafe extern "C" fn maho_core_release_window_tabs(
     if ptr.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     core.release_window_tabs(window_id);
 
@@ -410,6 +507,8 @@ pub unsafe extern "C" fn maho_core_get_favorite_tabs(
     if ptr.is_null() || space_id_json.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let json_str = match CStr::from_ptr(space_id_json).to_str() {
         Ok(s) => s,
@@ -438,6 +537,8 @@ pub unsafe extern "C" fn maho_core_get_today_tabs(
     if ptr.is_null() || space_id_json.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let json_str = match CStr::from_ptr(space_id_json).to_str() {
         Ok(s) => s,
@@ -462,6 +563,8 @@ pub unsafe extern "C" fn maho_core_get_boost_view_models(ptr: *mut MahoCore) -> 
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     to_json_cstring(&core.get_boost_view_models())
 
@@ -478,6 +581,8 @@ pub unsafe extern "C" fn maho_core_get_css_mods(ptr: *mut MahoCore) -> *mut c_ch
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     to_json_cstring(&core.css_mod_manager().get_all_mods())
 
@@ -493,6 +598,8 @@ pub unsafe extern "C" fn maho_core_get_combined_css(ptr: *mut MahoCore) -> *mut 
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let css = core.css_mod_manager().generate_combined_css();
     if css.is_empty() {
@@ -516,6 +623,8 @@ pub unsafe extern "C" fn maho_core_get_installed_extensions(ptr: *mut MahoCore) 
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     to_json_cstring(&core.get_installed_extensions())
 
@@ -531,6 +640,8 @@ pub unsafe extern "C" fn maho_core_clear_installed_extensions(ptr: *mut MahoCore
     if ptr.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     core.clear_installed_extensions();
 
@@ -550,6 +661,8 @@ pub unsafe extern "C" fn maho_core_set_installed_extensions(
     if ptr.is_null() || extensions_json.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let json_str = match CStr::from_ptr(extensions_json).to_str() {
         Ok(s) => s,
@@ -574,6 +687,8 @@ pub unsafe extern "C" fn maho_core_is_native_password_provider_active(ptr: *mut 
     if ptr.is_null() {
         return true;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &*ptr;
     core.get_settings().autofill.password_provider == maho_types::passwords::PasswordProviderKind::MahoNative
 
@@ -589,6 +704,8 @@ pub unsafe extern "C" fn maho_core_is_bitwarden_extension_available(ptr: *mut Ma
     if ptr.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &*ptr;
     core.get_installed_extensions().iter().any(|ext| {
         ext.enabled && ext.name.to_lowercase().contains("bitwarden")
@@ -606,6 +723,8 @@ pub unsafe extern "C" fn maho_core_is_onepassword_extension_available(ptr: *mut 
     if ptr.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &*ptr;
     core.get_installed_extensions().iter().any(|ext| {
         ext.enabled && (ext.name.to_lowercase().contains("1password") || ext.name.to_lowercase().contains("onepassword"))
@@ -627,6 +746,8 @@ pub unsafe extern "C" fn maho_core_is_password_provider_available(
     if ptr.is_null() || mode.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &*ptr;
     let mode_str = match CStr::from_ptr(mode).to_str() {
         Ok(s) => s,
@@ -664,6 +785,8 @@ pub unsafe extern "C" fn maho_core_search_passwords(
     if ptr.is_null() || query.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let query_str = match CStr::from_ptr(query).to_str() {
         Ok(s) => s.trim(),
@@ -692,6 +815,8 @@ pub unsafe extern "C" fn maho_core_delete_password(
     if ptr.is_null() || password_id.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &mut *ptr;
     let password_id = match CStr::from_ptr(password_id).to_str() {
         Ok(s) => s,
@@ -718,6 +843,8 @@ pub unsafe extern "C" fn maho_core_add_password(
     if ptr.is_null() || domain.is_null() || username.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &mut *ptr;
     let domain = match CStr::from_ptr(domain).to_str() {
         Ok(s) => s,
@@ -756,6 +883,8 @@ pub unsafe extern "C" fn maho_core_update_password_username(
     if ptr.is_null() || password_id.is_null() || username.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &mut *ptr;
     let password_id = match CStr::from_ptr(password_id).to_str() {
         Ok(s) => s,
@@ -784,6 +913,8 @@ pub unsafe extern "C" fn maho_core_get_boosts_for_url(
     if ptr.is_null() || url.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let url_str = match CStr::from_ptr(url).to_str() {
         Ok(s) => s,
@@ -809,6 +940,8 @@ pub unsafe extern "C" fn maho_core_boost_list_for_domain(
     if ptr.is_null() || domain.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let domain_str = match CStr::from_ptr(domain).to_str() {
         Ok(s) => s,
@@ -834,6 +967,8 @@ pub unsafe extern "C" fn maho_core_boost_get(
     if ptr.is_null() || boost_id.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let id_str = match CStr::from_ptr(boost_id).to_str() {
         Ok(s) => s,
@@ -864,6 +999,8 @@ pub unsafe extern "C" fn maho_core_boost_create(
     if ptr.is_null() || domain.is_null() || name.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let domain_str = match CStr::from_ptr(domain).to_str() {
         Ok(s) => s,
@@ -896,6 +1033,8 @@ pub unsafe extern "C" fn maho_core_boost_update(
     if ptr.is_null() || boost_id.is_null() || changes_json.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(boost_id).to_str() {
         Ok(s) => s,
@@ -935,6 +1074,8 @@ pub unsafe extern "C" fn maho_core_boost_delete(
     if ptr.is_null() || boost_id.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(boost_id).to_str() {
         Ok(s) => s,
@@ -962,6 +1103,8 @@ pub unsafe extern "C" fn maho_core_boost_set_active(
     if ptr.is_null() || domain.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let domain_str = match CStr::from_ptr(domain).to_str() {
         Ok(s) => s,
@@ -995,6 +1138,8 @@ pub unsafe extern "C" fn maho_core_boost_get_active(
     if ptr.is_null() || domain.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let domain_str = match CStr::from_ptr(domain).to_str() {
         Ok(s) => s,
@@ -1023,6 +1168,8 @@ pub unsafe extern "C" fn maho_core_boost_compose_css(
     if ptr.is_null() || boost_id.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let id_str = match CStr::from_ptr(boost_id).to_str() {
         Ok(s) => s,
@@ -1057,6 +1204,8 @@ pub unsafe extern "C" fn maho_core_boost_create_temp(
     if ptr.is_null() || domain.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let domain_str = match CStr::from_ptr(domain).to_str() {
         Ok(s) => s,
@@ -1083,6 +1232,8 @@ pub unsafe extern "C" fn maho_core_boost_commit(
     if ptr.is_null() || boost_id.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(boost_id).to_str() {
         Ok(s) => s,
@@ -1112,6 +1263,8 @@ pub unsafe extern "C" fn maho_core_boost_discard(
     if ptr.is_null() || boost_id.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(boost_id).to_str() {
         Ok(s) => s,
@@ -1147,6 +1300,8 @@ pub unsafe extern "C" fn maho_core_boost_shuffle(
     if ptr.is_null() || boost_id.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(boost_id).to_str() {
         Ok(s) => s,
@@ -1176,6 +1331,8 @@ pub unsafe extern "C" fn maho_core_boost_reset(
     if ptr.is_null() || boost_id.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(boost_id).to_str() {
         Ok(s) => s,
@@ -1206,6 +1363,8 @@ pub unsafe extern "C" fn maho_core_boost_export(
     if ptr.is_null() || boost_id.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let id_str = match CStr::from_ptr(boost_id).to_str() {
         Ok(s) => s,
@@ -1242,6 +1401,8 @@ pub unsafe extern "C" fn maho_core_boost_import(
     if ptr.is_null() || domain.is_null() || json.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let domain_str = match CStr::from_ptr(domain).to_str() {
         Ok(s) => s,
@@ -1275,6 +1436,8 @@ pub unsafe extern "C" fn maho_core_boost_append_zap(
     if ptr.is_null() || boost_id.is_null() || selector.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(boost_id).to_str() {
         Ok(s) => s,
@@ -1309,6 +1472,8 @@ pub unsafe extern "C" fn maho_core_boost_remove_zap(
     if ptr.is_null() || boost_id.is_null() || selector.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(boost_id).to_str() {
         Ok(s) => s,
@@ -1337,6 +1502,8 @@ pub unsafe extern "C" fn maho_core_get_note_view_models(ptr: *mut MahoCore) -> *
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     to_json_cstring(&core.get_note_view_models())
 
@@ -1353,6 +1520,8 @@ pub unsafe extern "C" fn maho_core_get_download_view_models(ptr: *mut MahoCore) 
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     to_json_cstring(&core.get_download_view_models())
 
@@ -1369,6 +1538,8 @@ pub unsafe extern "C" fn maho_core_get_settings(ptr: *mut MahoCore) -> *mut c_ch
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     to_json_cstring(core.get_settings())
 
@@ -1385,6 +1556,8 @@ pub unsafe extern "C" fn maho_core_get_settings_view_model(ptr: *mut MahoCore) -
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     to_json_cstring(&core.get_settings_view_model())
 
@@ -1401,6 +1574,8 @@ pub unsafe extern "C" fn maho_core_get_find_bar_state(ptr: *mut MahoCore) -> *mu
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     to_json_cstring(&core.get_find_bar_state())
 
@@ -1421,6 +1596,8 @@ pub unsafe extern "C" fn maho_core_get_archived_tabs(
     if ptr.is_null() || space_id_json.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let json_str = match CStr::from_ptr(space_id_json).to_str() {
         Ok(s) => s,
@@ -1449,6 +1626,8 @@ pub unsafe extern "C" fn maho_core_get_folder_view_models(
     if ptr.is_null() || space_id_json.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let json_str = match CStr::from_ptr(space_id_json).to_str() {
         Ok(s) => s,
@@ -1477,6 +1656,8 @@ pub unsafe extern "C" fn maho_core_should_block_request(
     if ptr.is_null() || url.is_null() || source_url.is_null() || request_type.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &*ptr;
     let url_str = match CStr::from_ptr(url).to_str() {
         Ok(s) => s,
@@ -1513,6 +1694,8 @@ pub unsafe extern "C" fn maho_core_check_request(
     if ptr.is_null() || url.is_null() || source_url.is_null() || request_type.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let url_str = match CStr::from_ptr(url).to_str() {
         Ok(s) => s,
@@ -1545,6 +1728,8 @@ pub unsafe extern "C" fn maho_core_add_site_exception(
     if ptr.is_null() || origin.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let origin_str = match CStr::from_ptr(origin).to_str() {
         Ok(s) => s,
@@ -1568,6 +1753,8 @@ pub unsafe extern "C" fn maho_core_remove_site_exception(
     if ptr.is_null() || origin.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let origin_str = match CStr::from_ptr(origin).to_str() {
         Ok(s) => s,
@@ -1588,6 +1775,8 @@ pub unsafe extern "C" fn maho_core_get_site_exceptions(ptr: *mut MahoCore) -> *m
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let exceptions = core.get_content_blocker_site_exceptions();
     to_json_cstring(&exceptions)
@@ -1605,6 +1794,8 @@ pub unsafe extern "C" fn maho_core_get_content_rules(ptr: *mut MahoCore) -> *mut
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let rules = core.get_content_rules();
     match CString::new(rules) {
@@ -1631,6 +1822,8 @@ pub unsafe extern "C" fn maho_core_get_cosmetic_resources(
     if ptr.is_null() || url.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let url_str = match CStr::from_ptr(url).to_str() {
         Ok(s) => s,
@@ -1654,6 +1847,8 @@ pub unsafe extern "C" fn maho_core_save_content_engine_cache(
     if ptr.is_null() || path.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &*ptr;
     let path_str = match CStr::from_ptr(path).to_str() {
         Ok(s) => s,
@@ -1676,6 +1871,8 @@ pub unsafe extern "C" fn maho_core_load_content_engine_cache(
     if ptr.is_null() || path.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &mut *ptr;
     let path_str = match CStr::from_ptr(path).to_str() {
         Ok(s) => s,
@@ -1713,6 +1910,8 @@ pub unsafe extern "C" fn maho_core_add_history_entry(
     if ptr.is_null() || url.is_null() || title.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let url_str = match CStr::from_ptr(url).to_str() {
         Ok(s) => s,
@@ -1742,6 +1941,8 @@ pub unsafe extern "C" fn maho_core_search_history(
     if ptr.is_null() || query.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let query_str = match CStr::from_ptr(query).to_str() {
         Ok(s) => s,
@@ -1772,6 +1973,8 @@ pub unsafe extern "C" fn maho_core_command_bar_search(
     if ptr.is_null() || query.is_null() || tabs_json.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let query_str = match CStr::from_ptr(query).to_str() {
         Ok(s) => s,
@@ -1844,6 +2047,8 @@ pub unsafe extern "C" fn maho_core_clear_history(ptr: *mut MahoCore) {
     if ptr.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     core.clear_history();
 
@@ -1898,6 +2103,8 @@ pub unsafe extern "C" fn maho_core_save_state(ptr: *mut MahoCore) -> i32 {
     if ptr.is_null() {
         return 0;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return 0; }
     let core = &*ptr;
     match core.save_state() {
         Ok(_) => 1,
@@ -1917,6 +2124,8 @@ pub unsafe extern "C" fn maho_core_load_state(ptr: *mut MahoCore) -> i32 {
     if ptr.is_null() {
         return 0;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return 0; }
     let core = &mut *ptr;
     match core.load_state() {
         Ok(_) => 1,
@@ -1942,6 +2151,8 @@ pub unsafe extern "C" fn maho_core_set_tab_parent(
     if ptr.is_null() || tab_id_ptr.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let tab_id_str = std::ffi::CStr::from_ptr(tab_id_ptr).to_string_lossy();
     let tab_id = maho_types::identifiers::TabId::new(tab_id_str.as_ref());
@@ -1977,6 +2188,8 @@ pub unsafe extern "C" fn maho_core_set_tab_custom_title(
     if ptr.is_null() || tab_id_ptr.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let tab_id_str = std::ffi::CStr::from_ptr(tab_id_ptr).to_string_lossy();
     let tab_id = maho_types::identifiers::TabId::new(tab_id_str.as_ref());
@@ -2014,6 +2227,8 @@ pub unsafe extern "C" fn maho_core_add_bookmark(
     if ptr.is_null() || url.is_null() || title.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let url_str = match CStr::from_ptr(url).to_str() {
         Ok(s) => s,
@@ -2043,6 +2258,8 @@ pub unsafe extern "C" fn maho_core_remove_bookmark(ptr: *mut MahoCore, bookmark_
     if ptr.is_null() || bookmark_id.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let bookmark_id_str = match CStr::from_ptr(bookmark_id).to_str() {
         Ok(s) => s,
@@ -2067,6 +2284,8 @@ pub unsafe extern "C" fn maho_core_search_bookmarks(
     if ptr.is_null() || query.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let query_str = match CStr::from_ptr(query).to_str() {
         Ok(s) => s,
@@ -2092,6 +2311,8 @@ pub unsafe extern "C" fn maho_core_move_bookmark(
     if ptr.is_null() || bookmark_id.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let bookmark_id_str = match CStr::from_ptr(bookmark_id).to_str() {
         Ok(s) => s,
@@ -2121,6 +2342,8 @@ pub unsafe extern "C" fn maho_core_grant_permission(
     if ptr.is_null() || origin.is_null() || permission.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let origin_str = match CStr::from_ptr(origin).to_str() {
         Ok(s) => s,
@@ -2149,6 +2372,8 @@ pub unsafe extern "C" fn maho_core_revoke_permission(
     if ptr.is_null() || origin.is_null() || permission.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let origin_str = match CStr::from_ptr(origin).to_str() {
         Ok(s) => s,
@@ -2178,6 +2403,8 @@ pub unsafe extern "C" fn maho_core_query_permission(
     if ptr.is_null() || origin.is_null() || permission.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let origin_str = match CStr::from_ptr(origin).to_str() {
         Ok(s) => s,
@@ -2202,6 +2429,8 @@ pub unsafe extern "C" fn maho_core_pause_download(ptr: *mut MahoCore, download_i
     if ptr.is_null() || download_id.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let download_id_str = match CStr::from_ptr(download_id).to_str() {
         Ok(s) => s,
@@ -2222,6 +2451,8 @@ pub unsafe extern "C" fn maho_core_resume_download(ptr: *mut MahoCore, download_
     if ptr.is_null() || download_id.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let download_id_str = match CStr::from_ptr(download_id).to_str() {
         Ok(s) => s,
@@ -2242,6 +2473,8 @@ pub unsafe extern "C" fn maho_core_cancel_download(ptr: *mut MahoCore, download_
     if ptr.is_null() || download_id.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let download_id_str = match CStr::from_ptr(download_id).to_str() {
         Ok(s) => s,
@@ -2262,6 +2495,8 @@ pub unsafe extern "C" fn maho_core_remove_download(ptr: *mut MahoCore, download_
     if ptr.is_null() || download_id.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let download_id_str = match CStr::from_ptr(download_id).to_str() {
         Ok(s) => s,
@@ -2285,6 +2520,8 @@ pub unsafe extern "C" fn maho_core_delete_history_entry(
     if ptr.is_null() || entry_id.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let entry_id_str = match CStr::from_ptr(entry_id).to_str() {
         Ok(s) => s,
@@ -2311,6 +2548,8 @@ pub unsafe extern "C" fn maho_core_update_tab_preview(
     if ptr.is_null() || tab_id.is_null() || data.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let tab_id_str = match CStr::from_ptr(tab_id).to_str() {
         Ok(s) => s,
@@ -2344,6 +2583,8 @@ pub unsafe extern "C" fn maho_core_get_tab_preview(
     if ptr.is_null() || tab_id.is_null() || out_len.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let tab_id_str = match CStr::from_ptr(tab_id).to_str() {
         Ok(s) => s,
@@ -2374,12 +2615,19 @@ pub unsafe extern "C" fn maho_core_get_tab_preview(
 
 /// # Safety
 /// `data` must have been returned by `maho_core_get_tab_preview` with matching `len`.
+/// Specifically, `data` must point to memory allocated as `Box<[u8]>` of length `len`
+/// and ownership must not have been transferred elsewhere.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_free_preview_data(data: *mut u8, len: usize) {
     ffi_safe!({
 
     if !data.is_null() && len > 0 {
-        let _ = Vec::from_raw_parts(data, len, len);
+        // SAFETY: `data` was produced by `Box::into_raw(Box<[u8]>) as *mut u8` with `len`
+        // matching the original slice length, so reconstructing the boxed slice via
+        // `from_raw_parts_mut` + `Box::from_raw` correctly returns ownership to the
+        // allocator using the same layout that `Box<[u8]>` allocated with.
+        let slice = std::slice::from_raw_parts_mut(data, len);
+        drop(Box::from_raw(slice));
     }
 
     }, ())
@@ -2396,6 +2644,8 @@ pub unsafe extern "C" fn maho_core_take_pending_preview_captures(
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let captures = core.take_pending_preview_captures();
     let tab_ids: Vec<String> = captures.into_iter().map(|id| id.to_string()).collect();
@@ -2417,6 +2667,8 @@ pub unsafe extern "C" fn maho_core_schedule_preview_capture(
     if ptr.is_null() || tab_id.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &mut *ptr;
     let tab_id_str = match CStr::from_ptr(tab_id).to_str() {
         Ok(s) => s,
@@ -2438,6 +2690,8 @@ pub unsafe extern "C" fn maho_core_get_all_bookmarks(ptr: *mut MahoCore) -> *mut
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let bookmarks: Vec<_> = core
         .get_all_bookmark_entries()
@@ -2474,6 +2728,8 @@ pub unsafe extern "C" fn maho_core_create_bookmark_folder(
     if ptr.is_null() || name.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let name_str = match CStr::from_ptr(name).to_str() {
         Ok(s) => s,
@@ -2511,6 +2767,8 @@ pub unsafe extern "C" fn maho_core_start_download(
     if ptr.is_null() || json.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let json_str = match CStr::from_ptr(json).to_str() {
         Ok(s) => s,
@@ -2551,6 +2809,8 @@ pub unsafe extern "C" fn maho_core_update_download_progress(
     if ptr.is_null() || download_id.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let download_id_str = match CStr::from_ptr(download_id).to_str() {
         Ok(s) => s,
@@ -2571,6 +2831,8 @@ pub unsafe extern "C" fn maho_core_complete_download(
     if ptr.is_null() || download_id.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let download_id_str = match CStr::from_ptr(download_id).to_str() {
         Ok(s) => s,
@@ -2592,6 +2854,8 @@ pub unsafe extern "C" fn maho_core_restore_download_name(
     if ptr.is_null() || download_id.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let download_id_str = match CStr::from_ptr(download_id).to_str() {
         Ok(s) => s,
@@ -2613,6 +2877,8 @@ pub unsafe extern "C" fn maho_core_get_filter_lists(ptr: *mut MahoCore) -> *mut 
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let json = core.get_filter_lists_json();
     match CString::new(json) {
@@ -2635,6 +2901,8 @@ pub unsafe extern "C" fn maho_core_add_filter_list(
     if ptr.is_null() || id.is_null() || name.is_null() || url.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(id).to_str() {
         Ok(s) => s.to_string(),
@@ -2664,6 +2932,8 @@ pub unsafe extern "C" fn maho_core_toggle_filter_list(
     if ptr.is_null() || id.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(id).to_str() {
         Ok(s) => s,
@@ -2681,6 +2951,8 @@ pub unsafe extern "C" fn maho_core_remove_filter_list(ptr: *mut MahoCore, id: *c
     if ptr.is_null() || id.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(id).to_str() {
         Ok(s) => s,
@@ -2702,6 +2974,8 @@ pub unsafe extern "C" fn maho_core_update_filter_list_content(
     if ptr.is_null() || id.is_null() || content.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(id).to_str() {
         Ok(s) => s,
@@ -2723,6 +2997,8 @@ pub unsafe extern "C" fn maho_core_rebuild_content_rules(ptr: *mut MahoCore) {
     if ptr.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     core.rebuild_content_rules();
 
@@ -2736,6 +3012,8 @@ pub unsafe extern "C" fn maho_core_get_content_rule_count(ptr: *mut MahoCore) ->
     if ptr.is_null() {
         return 0;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return 0; }
     let core = &*ptr;
     core.get_content_rule_count()
 
@@ -2752,6 +3030,8 @@ pub unsafe extern "C" fn maho_core_toggle_extension(
     if ptr.is_null() || extension_id.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(extension_id).to_str() {
         Ok(s) => s,
@@ -2772,6 +3052,8 @@ pub unsafe extern "C" fn maho_core_remove_extension(
     if ptr.is_null() || extension_id.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(extension_id).to_str() {
         Ok(s) => s,
@@ -3063,7 +3345,7 @@ pub unsafe extern "C" fn maho_core_get_zoom(core: *mut MahoCore, site: *const c_
     };
     core.get_zoom_for_site(site_str)
 
-    }, 0.0)
+    }, 1.0)
 }
 
 #[no_mangle]
@@ -3106,6 +3388,8 @@ pub unsafe extern "C" fn maho_core_toggle_reader_mode(
     if ptr.is_null() || tab_id.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &mut *ptr;
     let tab_id_str = match CStr::from_ptr(tab_id).to_str() {
         Ok(s) => s,
@@ -3129,6 +3413,8 @@ pub unsafe extern "C" fn maho_core_is_reader_mode(
     if ptr.is_null() || tab_id.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &mut *ptr;
     let tab_id_str = match CStr::from_ptr(tab_id).to_str() {
         Ok(s) => s,
@@ -3149,6 +3435,8 @@ pub unsafe extern "C" fn maho_core_record_usage(ptr: *mut MahoCore, item_key: *c
     if ptr.is_null() || item_key.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let key = match CStr::from_ptr(item_key).to_str() {
         Ok(s) => s,
@@ -3169,6 +3457,8 @@ pub unsafe extern "C" fn maho_core_get_top_used(ptr: *mut MahoCore, limit: usize
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let results = core.get_top_used_commands(limit);
     to_json_cstring(&results)
@@ -3189,6 +3479,8 @@ pub unsafe extern "C" fn maho_core_link_note_to_tab(
     if ptr.is_null() || note_id.is_null() || tab_id.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let nid = match CStr::from_ptr(note_id).to_str() {
         Ok(s) => s,
@@ -3216,6 +3508,8 @@ pub unsafe extern "C" fn maho_core_link_note_to_url(
     if ptr.is_null() || note_id.is_null() || url.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let nid = match CStr::from_ptr(note_id).to_str() {
         Ok(s) => s,
@@ -3242,6 +3536,8 @@ pub unsafe extern "C" fn maho_core_unlink_note_from_tab(
     if ptr.is_null() || note_id.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let nid = match CStr::from_ptr(note_id).to_str() {
         Ok(s) => s,
@@ -3265,6 +3561,8 @@ pub unsafe extern "C" fn maho_core_get_linked_tab_id(
     if ptr.is_null() || note_id.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let nid = match CStr::from_ptr(note_id).to_str() {
         Ok(s) => s,
@@ -3293,6 +3591,8 @@ pub unsafe extern "C" fn maho_core_export_notes(
     if ptr.is_null() || format.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let fmt = match CStr::from_ptr(format).to_str() {
         Ok(s) => s,
@@ -3320,6 +3620,8 @@ pub unsafe extern "C" fn maho_core_export_single_note(
     if ptr.is_null() || note_id.is_null() || format.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let nid = match CStr::from_ptr(note_id).to_str() {
         Ok(s) => s,
@@ -3352,6 +3654,8 @@ pub unsafe extern "C" fn maho_core_search_notes_fts(
     if ptr.is_null() || query.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let q = match CStr::from_ptr(query).to_str() {
         Ok(s) => s,
@@ -3376,6 +3680,8 @@ pub unsafe extern "C" fn maho_core_get_reader_settings(ptr: *mut MahoCore) -> *m
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let json = core.get_reader_settings_json();
     CString::new(json)
@@ -3395,6 +3701,8 @@ pub unsafe extern "C" fn maho_core_create_backup(
     if ptr.is_null() || config_json.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let cfg = match CStr::from_ptr(config_json).to_str() {
         Ok(s) => s,
@@ -3424,6 +3732,8 @@ pub unsafe extern "C" fn maho_core_restore_backup(
     if ptr.is_null() || backup_b64.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let b64 = match CStr::from_ptr(backup_b64).to_str() {
         Ok(s) => s,
@@ -3455,6 +3765,8 @@ pub unsafe extern "C" fn maho_core_get_backup_history(ptr: *mut MahoCore) -> *mu
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let json = core.get_backup_history_json();
     CString::new(json)
@@ -3475,6 +3787,8 @@ pub unsafe extern "C" fn maho_core_add_to_reading_list(
     if ptr.is_null() || url.is_null() || title.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let u = match CStr::from_ptr(url).to_str() {
         Ok(s) => s,
@@ -3502,6 +3816,8 @@ pub unsafe extern "C" fn maho_core_remove_from_reading_list(
     if ptr.is_null() || item_id.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &mut *ptr;
     let id = match CStr::from_ptr(item_id).to_str() {
         Ok(s) => s,
@@ -3522,6 +3838,8 @@ pub unsafe extern "C" fn maho_core_toggle_reading_list_read(
     if ptr.is_null() || item_id.is_null() {
         return -1;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return -1; }
     let core = &mut *ptr;
     let id = match CStr::from_ptr(item_id).to_str() {
         Ok(s) => s,
@@ -3543,6 +3861,8 @@ pub unsafe extern "C" fn maho_core_get_reading_list(ptr: *mut MahoCore) -> *mut 
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let json = core.get_reading_list_json();
     CString::new(json)
@@ -3559,6 +3879,8 @@ pub unsafe extern "C" fn maho_core_get_unread_count(ptr: *mut MahoCore) -> usize
     if ptr.is_null() {
         return 0;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return 0; }
     let core = &*ptr;
     core.get_unread_count()
 
@@ -3587,6 +3909,8 @@ pub unsafe extern "C" fn maho_core_import_chrome_bookmarks(
     if ptr.is_null() || profile_path.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let path = match CStr::from_ptr(profile_path).to_str() {
         Ok(s) => s,
@@ -3612,6 +3936,8 @@ pub unsafe extern "C" fn maho_core_import_firefox_bookmarks(
     if ptr.is_null() || profile_path.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let path = match CStr::from_ptr(profile_path).to_str() {
         Ok(s) => s,
@@ -3692,6 +4018,8 @@ pub unsafe extern "C" fn maho_core_get_shortcuts(ptr: *mut MahoCore) -> *mut c_c
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let json = core.get_all_shortcuts_json();
     CString::new(json)
@@ -3712,6 +4040,8 @@ pub unsafe extern "C" fn maho_core_set_shortcut(
     if ptr.is_null() || action.is_null() || key_combo_json.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let action_str = match CStr::from_ptr(action).to_str() {
         Ok(s) => s,
@@ -3747,6 +4077,8 @@ pub unsafe extern "C" fn maho_core_reset_shortcut(ptr: *mut MahoCore, action: *c
     if ptr.is_null() || action.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     if let Ok(s) = CStr::from_ptr(action).to_str() {
         core.reset_shortcut_persisted(s);
@@ -3762,6 +4094,8 @@ pub unsafe extern "C" fn maho_core_reset_all_shortcuts(ptr: *mut MahoCore) {
     if ptr.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     core.reset_all_shortcuts_persisted();
 
@@ -3779,6 +4113,8 @@ pub unsafe extern "C" fn maho_core_toggle_shortcut(
     if ptr.is_null() || action.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     if let Ok(s) = CStr::from_ptr(action).to_str() {
         core.toggle_shortcut_persisted(s, enabled);
@@ -3797,6 +4133,8 @@ pub unsafe extern "C" fn maho_core_resolve_shortcut(
     if ptr.is_null() || key_combo_json.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let combo_str = match CStr::from_ptr(key_combo_json).to_str() {
         Ok(s) => s,
@@ -3819,6 +4157,8 @@ pub unsafe extern "C" fn maho_core_set_density(ptr: *mut MahoCore, density: *con
     if ptr.is_null() || density.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     if let Ok(s) = CStr::from_ptr(density).to_str() {
         core.set_density(s);
@@ -3834,6 +4174,8 @@ pub unsafe extern "C" fn maho_core_set_accent_color(ptr: *mut MahoCore, color_js
     if ptr.is_null() || color_json.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     if let Ok(s) = CStr::from_ptr(color_json).to_str() {
         core.set_accent_color(s);
@@ -3849,6 +4191,8 @@ pub unsafe extern "C" fn maho_core_set_custom_chrome_css(ptr: *mut MahoCore, css
     if ptr.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let css_value = if css.is_null() {
         None
@@ -3867,6 +4211,8 @@ pub unsafe extern "C" fn maho_core_set_window_transparency(ptr: *mut MahoCore, e
     if ptr.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     core.set_window_transparency(enabled);
 
@@ -3880,6 +4226,8 @@ pub unsafe extern "C" fn maho_core_get_toolbar_items(ptr: *mut MahoCore) -> *mut
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let json = core.get_toolbar_items_json();
     CString::new(json)
@@ -3899,6 +4247,8 @@ pub unsafe extern "C" fn maho_core_set_toolbar_items(
     if ptr.is_null() || items_json.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let json_str = match CStr::from_ptr(items_json).to_str() {
         Ok(s) => s,
@@ -3926,6 +4276,8 @@ pub unsafe extern "C" fn maho_core_set_app_icon(
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     if path.is_null() {
         core.set_app_icon(None);
@@ -3955,6 +4307,8 @@ pub unsafe extern "C" fn maho_core_get_default_toolbar_items(ptr: *mut MahoCore)
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let json = core.get_default_toolbar_items_json();
     CString::new(json)
@@ -3978,6 +4332,8 @@ pub unsafe extern "C" fn maho_core_handle_url_scheme(
     if ptr.is_null() || url.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let url_str = match CStr::from_ptr(url).to_str() {
         Ok(s) => s,
@@ -4006,6 +4362,8 @@ pub unsafe extern "C" fn maho_core_handle_memory_pressure(
     if ptr.is_null() || level.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let level_str = match CStr::from_ptr(level).to_str() {
         Ok(s) => s,
@@ -4041,8 +4399,14 @@ pub unsafe extern "C" fn maho_core_save_form_data(
         return;
     }
     let core = unsafe { &mut *core };
-    let tab_id = unsafe { CStr::from_ptr(tab_id) }.to_str().unwrap_or("");
-    let form_json = unsafe { CStr::from_ptr(form_json) }.to_str().unwrap_or("");
+    let tab_id = match CStr::from_ptr(tab_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let form_json = match CStr::from_ptr(form_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
     core.save_form_data(tab_id, form_json.to_string());
 
     }, ())
@@ -4072,6 +4436,8 @@ pub unsafe extern "C" fn maho_core_get_searchable_items(core: *mut MahoCore) -> 
     if core.is_null() {
         return std::ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return std::ptr::null_mut(); }
     let core = &*core;
     let result = core.get_searchable_items();
     CString::new(result)
@@ -4097,6 +4463,8 @@ pub unsafe extern "C" fn maho_core_start_find(
     if core.is_null() || tab_id.is_null() || query.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *core;
     let tab_id_str = match CStr::from_ptr(tab_id).to_str() {
         Ok(s) => s,
@@ -4122,6 +4490,8 @@ pub unsafe extern "C" fn maho_core_find_next(core: *mut MahoCore) -> *mut c_char
     if core.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *core;
     let result = core.find_next();
     to_json_cstring(&result)
@@ -4138,6 +4508,8 @@ pub unsafe extern "C" fn maho_core_find_previous(core: *mut MahoCore) -> *mut c_
     if core.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *core;
     let result = core.find_previous();
     to_json_cstring(&result)
@@ -4154,6 +4526,8 @@ pub unsafe extern "C" fn maho_core_dismiss_find(core: *mut MahoCore) {
     if core.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *core;
     core.dismiss_find();
 
@@ -4173,6 +4547,8 @@ pub unsafe extern "C" fn maho_core_update_settings(
     if core.is_null() || settings_json.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *core;
     let json_str = match CStr::from_ptr(settings_json).to_str() {
         Ok(s) => s,
@@ -4196,6 +4572,8 @@ pub unsafe extern "C" fn maho_core_get_atc_rules(core: *mut MahoCore) -> *mut c_
     if core.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*core;
     let rules = core.get_atc_rules();
     to_json_cstring(&rules)
@@ -4216,6 +4594,8 @@ pub unsafe extern "C" fn maho_core_add_atc_rule(
     if core.is_null() || rule_json.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *core;
     let json_str = match CStr::from_ptr(rule_json).to_str() {
         Ok(s) => s,
@@ -4246,6 +4626,8 @@ pub unsafe extern "C" fn maho_core_remove_atc_rule(
     if core.is_null() || rule_id.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *core;
     let rule_id_str = match CStr::from_ptr(rule_id).to_str() {
         Ok(s) => s,
@@ -4271,6 +4653,8 @@ pub unsafe extern "C" fn maho_core_toggle_atc_rule(
     if core.is_null() || rule_id.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *core;
     let rule_id_str = match CStr::from_ptr(rule_id).to_str() {
         Ok(s) => s,
@@ -4296,6 +4680,8 @@ pub unsafe extern "C" fn maho_core_search_history_paginated(
     if core.is_null() || query.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*core;
     let query_str = match CStr::from_ptr(query).to_str() {
         Ok(s) => s,
@@ -4316,6 +4702,8 @@ pub unsafe extern "C" fn maho_core_get_history_grouped_by_date(core: *mut MahoCo
     if core.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*core;
     let results = core.get_history_grouped_by_date();
     to_json_cstring(&results)
@@ -4336,6 +4724,8 @@ pub unsafe extern "C" fn maho_core_delete_bookmark_folder(
     if core.is_null() || folder_id.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *core;
     let folder_id_str = match CStr::from_ptr(folder_id).to_str() {
         Ok(s) => s,
@@ -4365,6 +4755,8 @@ pub unsafe extern "C" fn maho_core_create_space(
     if ptr.is_null() || name.is_null() || color_json.is_null() || profile_id.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let name_str = match CStr::from_ptr(name).to_str() {
         Ok(s) => s,
@@ -4397,6 +4789,8 @@ pub unsafe extern "C" fn maho_core_delete_space(ptr: *mut MahoCore, space_id: *c
     if ptr.is_null() || space_id.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(space_id).to_str() {
         Ok(s) => s,
@@ -4422,6 +4816,8 @@ pub unsafe extern "C" fn maho_core_rename_space(
     if ptr.is_null() || space_id.is_null() || name.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(space_id).to_str() {
         Ok(s) => s,
@@ -4451,6 +4847,8 @@ pub unsafe extern "C" fn maho_core_recolor_space(
     if ptr.is_null() || space_id.is_null() || color_json.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(space_id).to_str() {
         Ok(s) => s,
@@ -4484,6 +4882,8 @@ pub unsafe extern "C" fn maho_core_reorder_space(
     if ptr.is_null() || space_id.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(space_id).to_str() {
         Ok(s) => s,
@@ -4505,6 +4905,8 @@ pub unsafe extern "C" fn maho_core_activate_space(ptr: *mut MahoCore, space_id: 
     if ptr.is_null() || space_id.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(space_id).to_str() {
         Ok(s) => s,
@@ -4532,6 +4934,8 @@ pub unsafe extern "C" fn maho_core_create_profile(
     if ptr.is_null() || name.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let name_str = match CStr::from_ptr(name).to_str() {
         Ok(s) => s.to_string(),
@@ -4556,6 +4960,8 @@ pub unsafe extern "C" fn maho_core_delete_profile(
     if ptr.is_null() || profile_id.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(profile_id).to_str() {
         Ok(s) => s,
@@ -4577,6 +4983,8 @@ pub unsafe extern "C" fn maho_core_list_profiles(ptr: *mut MahoCore) -> *mut c_c
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let profiles = core.list_profiles();
     to_json_cstring(&profiles)
@@ -4597,6 +5005,8 @@ pub unsafe extern "C" fn maho_core_switch_profile(
     if ptr.is_null() || profile_id.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(profile_id).to_str() {
         Ok(s) => s,
@@ -4622,6 +5032,8 @@ pub unsafe extern "C" fn maho_core_get_profile_data_store_id(
     if ptr.is_null() || profile_id.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let id_str = match CStr::from_ptr(profile_id).to_str() {
         Ok(s) => s,
@@ -4646,6 +5058,8 @@ pub unsafe extern "C" fn maho_core_get_active_profile_id(ptr: *mut MahoCore) -> 
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     match core.get_active_profile_id() {
         Some(id) => to_json_cstring(id),
@@ -4671,6 +5085,8 @@ pub unsafe extern "C" fn maho_core_start_sync(
     if ptr.is_null() || server_url.is_null() || sync_key.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let url = match CStr::from_ptr(server_url).to_str() {
         Ok(s) => s,
@@ -4694,6 +5110,8 @@ pub unsafe extern "C" fn maho_core_stop_sync(ptr: *mut MahoCore) {
     if ptr.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     core.stop_sync();
 
@@ -4710,6 +5128,8 @@ pub unsafe extern "C" fn maho_core_get_sync_status(ptr: *mut MahoCore) -> *mut c
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let json = core.get_sync_status();
     CString::new(json)
@@ -4729,6 +5149,8 @@ pub unsafe extern "C" fn maho_core_get_connected_devices(ptr: *mut MahoCore) -> 
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let json = core.get_connected_devices();
     CString::new(json)
@@ -4753,6 +5175,8 @@ pub unsafe extern "C" fn maho_core_send_tab(
     if ptr.is_null() || url.is_null() || title.is_null() || target_device_id.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let url_str = match CStr::from_ptr(url).to_str() {
         Ok(s) => s,
@@ -4781,6 +5205,8 @@ pub unsafe extern "C" fn maho_core_generate_sync_key(ptr: *mut MahoCore) -> *mut
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let json = core.generate_sync_key();
     CString::new(json)
@@ -4804,6 +5230,8 @@ pub unsafe extern "C" fn maho_core_join_sync(
     if ptr.is_null() || recovery_phrase.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let phrase = match CStr::from_ptr(recovery_phrase).to_str() {
         Ok(s) => s,
@@ -4830,6 +5258,8 @@ pub unsafe extern "C" fn maho_core_remove_sync_device(
     if ptr.is_null() || device_id.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(device_id).to_str() {
         Ok(s) => s,
@@ -4855,6 +5285,8 @@ pub unsafe extern "C" fn maho_core_reset_pinned_tab(
     if ptr.is_null() || tab_id.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &mut *ptr;
     let tab_id_str = match CStr::from_ptr(tab_id).to_str() {
         Ok(s) => s,
@@ -4885,6 +5317,8 @@ pub unsafe extern "C" fn maho_core_check_pinned_navigation(
     if ptr.is_null() || tab_id.is_null() || url.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let tab_id_str = match CStr::from_ptr(tab_id).to_str() {
         Ok(s) => s,
@@ -4921,6 +5355,8 @@ pub unsafe extern "C" fn maho_core_apply_remote_entities(
     if ptr.is_null() || entities_json.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let json_str = match CStr::from_ptr(entities_json).to_str() {
         Ok(s) => s,
@@ -4949,6 +5385,8 @@ pub unsafe extern "C" fn maho_core_drain_outgoing(ptr: *mut MahoCore) -> *mut c_
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let messages = core.drain_sync_outgoing();
     to_json_cstring(&messages)
@@ -4974,6 +5412,8 @@ pub unsafe extern "C" fn maho_core_send_tab_to_device(
     if ptr.is_null() || device_id.is_null() || tab_json.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let device_str = match CStr::from_ptr(device_id).to_str() {
         Ok(s) => s,
@@ -5013,6 +5453,8 @@ pub unsafe extern "C" fn maho_core_get_easel_view_models(ptr: *mut MahoCore) -> 
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     to_json_cstring(&core.get_easel_view_models())
 
@@ -5033,6 +5475,8 @@ pub unsafe extern "C" fn maho_core_get_easel(
     if ptr.is_null() || easel_id.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let id_str = match CStr::from_ptr(easel_id).to_str() {
         Ok(s) => s,
@@ -5060,6 +5504,8 @@ pub unsafe extern "C" fn maho_core_create_easel(
     if ptr.is_null() || name.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let name_str = match CStr::from_ptr(name).to_str() {
         Ok(s) => s,
@@ -5084,6 +5530,8 @@ pub unsafe extern "C" fn maho_core_delete_easel(
     if ptr.is_null() || easel_id.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(easel_id).to_str() {
         Ok(s) => s,
@@ -5108,6 +5556,8 @@ pub unsafe extern "C" fn maho_core_update_easel(
     if ptr.is_null() || easel_id.is_null() || json.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(easel_id).to_str() {
         Ok(s) => s,
@@ -5132,6 +5582,8 @@ pub unsafe extern "C" fn maho_core_get_autofill_addresses(ptr: *mut MahoCore) ->
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     to_json_cstring(core.get_autofill_addresses())
 
@@ -5148,6 +5600,8 @@ pub unsafe extern "C" fn maho_core_add_autofill_address_persisted(
     if ptr.is_null() || address_json.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let json_str = match CStr::from_ptr(address_json).to_str() {
         Ok(s) => s,
@@ -5172,6 +5626,8 @@ pub unsafe extern "C" fn maho_core_delete_autofill_address_persisted(
     if ptr.is_null() || id.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(id).to_str() {
         Ok(s) => s,
@@ -5192,6 +5648,8 @@ pub unsafe extern "C" fn maho_core_get_autofill_payments(ptr: *mut MahoCore) -> 
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     to_json_cstring(core.get_autofill_payments())
 
@@ -5208,6 +5666,8 @@ pub unsafe extern "C" fn maho_core_add_autofill_payment_persisted(
     if ptr.is_null() || payment_json.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let json_str = match CStr::from_ptr(payment_json).to_str() {
         Ok(s) => s,
@@ -5232,6 +5692,8 @@ pub unsafe extern "C" fn maho_core_delete_autofill_payment_persisted(
     if ptr.is_null() || id.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(id).to_str() {
         Ok(s) => s,
@@ -5255,6 +5717,8 @@ pub unsafe extern "C" fn maho_core_create_shared_collection(
     if ptr.is_null() || space_id.is_null() || name.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let space_str = match CStr::from_ptr(space_id).to_str() {
         Ok(s) => s,
@@ -5287,6 +5751,8 @@ pub unsafe extern "C" fn maho_core_get_share_link(
     if ptr.is_null() || collection_id.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let id_str = match CStr::from_ptr(collection_id).to_str() {
         Ok(s) => s,
@@ -5316,6 +5782,8 @@ pub unsafe extern "C" fn maho_core_update_share_permissions(
     if ptr.is_null() || collection_id.is_null() || permission.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(collection_id).to_str() {
         Ok(s) => s,
@@ -5340,6 +5808,8 @@ pub unsafe extern "C" fn maho_core_revoke_share(ptr: *mut MahoCore, collection_i
     if ptr.is_null() || collection_id.is_null() {
         return;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return; }
     let core = &mut *ptr;
     let id_str = match CStr::from_ptr(collection_id).to_str() {
         Ok(s) => s,
@@ -5359,6 +5829,8 @@ pub unsafe extern "C" fn maho_core_get_shared_collections(ptr: *mut MahoCore) ->
     if ptr.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     match core.get_shared_collections() {
         Some(json) => CString::new(json)
@@ -5383,6 +5855,8 @@ pub unsafe extern "C" fn maho_core_join_shared_collection(
     if ptr.is_null() || share_link.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &mut *ptr;
     let link_str = match CStr::from_ptr(share_link).to_str() {
         Ok(s) => s,
@@ -5521,6 +5995,8 @@ pub unsafe extern "C" fn maho_core_apply_space_theme_json(
     }
     *out_status = 1; // IoError
 
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &mut *ptr;
     let space_id_str = match CStr::from_ptr(space_id).to_str() {
         Ok(s) => s,
@@ -5584,6 +6060,8 @@ pub unsafe extern "C" fn maho_core_export_space_theme(
     }
     *out_status = 1; // IoError
 
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &*ptr;
     let space_id_str = match CStr::from_ptr(space_id).to_str() {
         Ok(s) => s,
@@ -5672,6 +6150,8 @@ pub unsafe extern "C" fn maho_core_serialize_space_theme(
     }
     *out_status = 1; // Error
 
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     let space_id_str = match CStr::from_ptr(space_id).to_str() {
         Ok(s) => s,
@@ -5976,6 +6456,8 @@ pub unsafe extern "C" fn maho_core_create_conversation(
     if core.is_null() || id.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &mut *core;
     let id_str = match CStr::from_ptr(id).to_str() {
         Ok(s) => s,
@@ -6018,6 +6500,8 @@ pub unsafe extern "C" fn maho_core_list_conversations(
     if core.is_null() {
         return empty;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*core;
     let conversations = if let Some(storage) = core.storage_ref() {
         storage.list_conversations(limit).unwrap_or_default()
@@ -6044,6 +6528,8 @@ pub unsafe extern "C" fn maho_core_get_conversation_messages(
     if core.is_null() || session_id.is_null() {
         return empty;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*core;
     let sid = match CStr::from_ptr(session_id).to_str() {
         Ok(s) => s,
@@ -6076,6 +6562,8 @@ pub unsafe extern "C" fn maho_core_save_conversation_message(
     if core.is_null() || session_id.is_null() || role.is_null() || content.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &*core;
     let sid = match CStr::from_ptr(session_id).to_str() {
         Ok(s) => s,
@@ -6115,6 +6603,8 @@ pub unsafe extern "C" fn maho_core_delete_conversation(
     if core.is_null() || id.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &*core;
     let id_str = match CStr::from_ptr(id).to_str() {
         Ok(s) => s,
@@ -6141,6 +6631,8 @@ pub unsafe extern "C" fn maho_core_rename_conversation(
     if core.is_null() || id.is_null() || new_title.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &*core;
     let id_str = match CStr::from_ptr(id).to_str() {
         Ok(s) => s,
@@ -6176,6 +6668,8 @@ pub unsafe extern "C" fn maho_core_byok_set_key(
     if core.is_null() || provider.is_null() || api_key.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &*core;
     let provider_str = match CStr::from_ptr(provider).to_str() {
         Ok(s) => s,
@@ -6206,6 +6700,8 @@ pub unsafe extern "C" fn maho_core_byok_get_key(
     if core.is_null() || provider.is_null() {
         return ptr::null_mut();
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*core;
     let provider_str = match CStr::from_ptr(provider).to_str() {
         Ok(s) => s,
@@ -6238,6 +6734,8 @@ pub unsafe extern "C" fn maho_core_byok_delete_key(
     if core.is_null() || provider.is_null() {
         return false;
     }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &*core;
     let provider_str = match CStr::from_ptr(provider).to_str() {
         Ok(s) => s,
@@ -6289,47 +6787,13 @@ pub unsafe extern "C" fn maho_core_byok_validate_key(
         Ok(s) => s,
         Err(_) => return false,
     };
-    maho_core::llm_provider::validate_api_key(provider_str, key_str)
+    maho_core::memory_manager::get_runtime()
+        .block_on(maho_core::llm_provider::validate_api_key(provider_str, key_str))
 
     }, false)
 }
 
-// ============================================================
-// Tab clustering FFI
-// ============================================================
 
-/// Cluster tabs by semantic similarity. Returns JSON array of clusters.
-/// `threshold` should be 0.0–1.0; recommended 0.75.
-#[no_mangle]
-pub unsafe extern "C" fn maho_core_cluster_tabs(
-    core: *mut MahoCore,
-    threshold: f64,
-) -> *mut c_char {
-    ffi_safe!({
-
-    let empty = CString::new("[]").unwrap().into_raw();
-    if core.is_null() {
-        return empty;
-    }
-    let core = &*core;
-    let threshold = threshold.clamp(0.0, 1.0) as f32;
-    let tabs: Vec<maho_core::tab_grouping::TabInfo> = core
-        .get_tab_view_models()
-        .into_iter()
-        .map(|t| maho_core::tab_grouping::TabInfo {
-            id: t.id,
-            title: t.title,
-            url: t.url,
-        })
-        .collect();
-    let clusters = maho_core::tab_grouping::cluster_tabs(&tabs, threshold);
-    match serde_json::to_string(&clusters) {
-        Ok(json) => CString::new(json).unwrap_or_else(|_| CString::new("[]").unwrap()).into_raw(),
-        Err(_) => empty,
-    }
-
-    }, ptr::null_mut())
-}
 
 // ============================================================
 // Chat image FFI
@@ -6363,6 +6827,8 @@ pub unsafe extern "C" fn maho_chat_send_image(
     } else {
         std::slice::from_raw_parts(data, data_len).to_vec()
     };
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &mut *core;
     use maho_types::chat::{ChatContent, ChatRequestContext, ChatRequestMode};
     use maho_types::events::shell_event::ShellEvent;
@@ -6402,6 +6868,8 @@ pub unsafe extern "C" fn maho_chat_send_text_with_image(
         CStr::from_ptr(mime).to_str().unwrap_or("application/octet-stream")
     };
     let byte_count = if data.is_null() { 0 } else { data_len };
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return false; }
     let core = &mut *core;
     use maho_types::chat::{ChatRequestContext, ChatRequestMode};
     use maho_types::events::shell_event::ShellEvent;
@@ -6493,6 +6961,8 @@ pub unsafe extern "C" fn maho_agent_create_session(
         if core.is_null() || session_id.is_null() {
             return std::ptr::null_mut();
         }
+        // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+        if import_gate::is_active() { return ptr::null_mut(); }
         let core = &*core;
         let sid = match CStr::from_ptr(session_id).to_str() {
             Ok(s) => s.to_string(),
@@ -6766,6 +7236,8 @@ pub unsafe extern "C" fn maho_core_get_space_ai_config(
         if ptr.is_null() || space_id.is_null() {
             return ptr::null_mut();
         }
+        // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+        if import_gate::is_active() { return ptr::null_mut(); }
         let core = &*ptr;
         let space_id_str = match CStr::from_ptr(space_id).to_str() {
             Ok(s) => s,
@@ -6795,6 +7267,8 @@ pub unsafe extern "C" fn maho_core_set_space_ai_config(
         if ptr.is_null() || space_id.is_null() || config_json.is_null() {
             return false;
         }
+        // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+        if import_gate::is_active() { return false; }
         let core = &*ptr;
         let space_id_str = match CStr::from_ptr(space_id).to_str() {
             Ok(s) => s,
@@ -6817,4 +7291,254 @@ pub unsafe extern "C" fn maho_core_set_space_ai_config(
     }, false)
 }
 
+// ============================================================
+// Account Tier FFI
+// ============================================================
 
+/// Returns the user's subscription tier as an integer:
+/// 0=Free, 1=Pro, 2=Max, -1=unauthenticated/unknown.
+///
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_account_get_tier(core: *mut MahoCore) -> i32 {
+    ffi_safe!({
+
+    if core.is_null() {
+        return -1;
+    }
+    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+    if import_gate::is_active() { return -1; }
+    let core = &*core;
+    match core.get_account_tier() {
+        Some(maho_types::account::UserTier::Free) => 0,
+        Some(maho_types::account::UserTier::Pro) => 1,
+        Some(maho_types::account::UserTier::Max) => 2,
+        None => -1,
+    }
+
+    }, -1)
+}
+
+// ============================================================
+// Routines FFI
+// ============================================================
+
+/// Returns JSON array of all hardcoded routines.
+/// Caller must free with `maho_string_free`.
+///
+/// # Safety
+/// `out_json` must be a valid pointer to a `*mut c_char`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_routines_list(out_json: *mut *mut c_char) {
+    ffi_safe!({
+
+    if out_json.is_null() {
+        return;
+    }
+    let routines = maho_core::routines::list_routines();
+    let json_ptr = to_json_cstring(routines);
+    *out_json = json_ptr;
+
+    }, ())
+}
+
+/// Kicks off an async routine run. Returns 0 on success (queued), -1 on error.
+/// The `user_tier` parameter: 0=Free, 1=Pro, 2=Max.
+/// `on_complete` is called with the result JSON when done.
+/// `on_error` is called with an error string on failure.
+///
+/// # Safety
+/// `id` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_routines_run(
+    id: *const c_char,
+    user_tier: i32,
+    on_complete: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, result_json: *const c_char)>,
+    on_error: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, error: *const c_char)>,
+    user_data: *mut std::ffi::c_void,
+) -> i32 {
+    ffi_safe!({
+
+    if id.is_null() {
+        return -1;
+    }
+    let id_str = match CStr::from_ptr(id).to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => return -1,
+    };
+    let tier = match user_tier {
+        0 => maho_core::routines::UserTier::Free,
+        1 => maho_core::routines::UserTier::Pro,
+        2 => maho_core::routines::UserTier::Max,
+        _ => return -1,
+    };
+
+    let on_complete_cb = SendableCallback(on_complete);
+    let on_error_cb = SendableCallback(on_error);
+    let user_data_val = SendableUserData(user_data as usize);
+
+    tokio::spawn(async move {
+        let result = maho_core::routines::run_routine(
+            &id_str,
+            tier,
+            |_prompt| async { Ok("Routine execution placeholder".to_string()) },
+        )
+        .await;
+
+        match result {
+            Ok(res) => {
+                if let Some(cb) = on_complete_cb.0 {
+                    let json = serde_json::to_string(&res).unwrap_or_default();
+                    let json_c = CString::new(json).unwrap_or_else(|_| CString::new("{}").unwrap());
+                    cb(user_data_val.0 as *mut std::ffi::c_void, json_c.as_ptr());
+                }
+            }
+            Err(e) => {
+                if let Some(cb) = on_error_cb.0 {
+                    let err_c = CString::new(e.to_string()).unwrap_or_else(|_| CString::new("error").unwrap());
+                    cb(user_data_val.0 as *mut std::ffi::c_void, err_c.as_ptr());
+                }
+            }
+        }
+    });
+
+    0
+
+    }, -1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    /// Verifies that the alloc/free pair for preview bytes uses matching allocator layouts.
+    ///
+    /// The alloc side (`maho_core_get_tab_preview`) does:
+    ///   `Box::into_raw(bytes.into_boxed_slice()) as *mut u8`
+    ///
+    /// The free side (`maho_core_free_preview_data`) does:
+    ///   `drop(Box::from_raw(std::slice::from_raw_parts_mut(data, len)))`
+    ///
+    /// This test exercises the same round-trip directly so that ASAN / MIRI catch any
+    /// layout mismatch introduced by a future refactor.
+    #[test]
+    fn preview_bytes_roundtrip() {
+        let bytes: Vec<u8> = (0u8..=255).collect();
+        let len = bytes.len();
+        unsafe {
+            // Alloc — mirrors `maho_core_get_tab_preview`
+            let ptr: *mut u8 = Box::into_raw(bytes.into_boxed_slice()) as *mut u8;
+            assert!(!ptr.is_null());
+            // Free — mirrors the fixed `maho_core_free_preview_data`
+            let slice = std::slice::from_raw_parts_mut(ptr, len);
+            drop(Box::from_raw(slice));
+        }
+    }
+
+    /// M25: When the core pointer is null, `maho_core_get_zoom` must return 1.0 (the neutral
+    /// zoom level), not 0.0 which would collapse the rendered page to 0% width.
+    #[test]
+    fn get_zoom_fallback_is_one_not_zero() {
+        use std::ffi::CString;
+        let site = CString::new("example.com").unwrap();
+        let result = unsafe {
+            maho_core_get_zoom(std::ptr::null_mut(), site.as_ptr())
+        };
+        assert_eq!(result, 1.0, "null-ptr fallback must be 1.0, not 0.0");
+    }
+
+    /// M26: When `tab_id` contains invalid UTF-8, `maho_core_save_form_data` must return
+    /// immediately without panicking and without corrupting storage via an empty-string
+    /// fallback.
+    #[test]
+    fn save_form_data_invalid_utf8_returns_without_writing() {
+        use maho_core::maho_core::MahoCore;
+        // Build an invalid-UTF-8 byte sequence (0xFF is never valid in UTF-8).
+        let bad_tab_id: &[u8] = b"\xFF\xFE\x00";
+        let valid_json = std::ffi::CString::new(r#"{"field":"value"}"#).unwrap();
+
+        let mut core = MahoCore::new();
+        let core_ptr: *mut MahoCore = &mut core;
+
+        // This must not panic and must not write data (the tab does not exist).
+        unsafe {
+            maho_core_save_form_data(
+                core_ptr,
+                bad_tab_id.as_ptr() as *const std::os::raw::c_char,
+                valid_json.as_ptr(),
+            );
+        }
+        // If we reach here the function returned cleanly without a panic.
+    }
+
+    /// H2: `maho_core_is_tab_pinned` returns `true` for a pinned tab and `false` for an
+    /// unpinned one (and for a null pointer).
+    #[test]
+    fn is_tab_pinned_returns_true_for_pinned_tab() {
+        use maho_core::maho_core::MahoCore;
+        use maho_types::events::shell_event::ShellEvent;
+        use std::ffi::CString;
+
+        let mut core = MahoCore::new();
+
+        // Create a tab
+        let space_id = core.get_active_space_id().clone();
+        let before: Vec<_> = core.get_tab_view_models().iter().map(|t| t.id.clone()).collect();
+        core.handle_event(ShellEvent::CreateTab {
+            space_id,
+            url: None,
+            parent_id: None,
+            tab_id: None,
+            window_id: None,
+        });
+        let tab_id = core
+            .get_tab_view_models()
+            .iter()
+            .find(|t| !before.contains(&t.id))
+            .expect("new tab should be visible in view models")
+            .id
+            .clone();
+
+        // Pin the tab
+        core.handle_event(ShellEvent::PinTab { tab_id: tab_id.clone() });
+
+        let core_ptr: *mut MahoCore = &mut core;
+
+        // Pinned tab → true
+        let pinned_id_cstr = CString::new(tab_id.0.as_str()).unwrap();
+        let result = unsafe { maho_core_is_tab_pinned(core_ptr, pinned_id_cstr.as_ptr()) };
+        assert!(result, "is_tab_pinned must return true for a pinned tab");
+
+        // Unknown tab → false
+        let unknown = CString::new("00000000-0000-0000-0000-000000000000").unwrap();
+        let result2 = unsafe { maho_core_is_tab_pinned(core_ptr, unknown.as_ptr()) };
+        assert!(!result2, "is_tab_pinned must return false for an unknown tab");
+
+        // Null pointer → false (no panic)
+        let result3 = unsafe {
+            maho_core_is_tab_pinned(std::ptr::null_mut(), pinned_id_cstr.as_ptr())
+        };
+        assert!(!result3, "is_tab_pinned must return false on null ptr");
+    }
+
+    #[test]
+    fn sidebar_state_v2_null_ptr_returns_null() {
+        use std::ffi::CString;
+        let space_id = CString::new(r#""some-space-id""#).unwrap();
+        let result = unsafe {
+            maho_core_get_sidebar_state_v2(std::ptr::null_mut(), space_id.as_ptr())
+        };
+        assert!(result.is_null(), "null core ptr must return null");
+    }
+
+    #[test]
+    fn sidebar_state_v2_null_space_id_returns_null() {
+        use maho_core::maho_core::MahoCore;
+        let mut core = MahoCore::new();
+        let core_ptr: *mut MahoCore = &mut core;
+        let result = unsafe {
+            maho_core_get_sidebar_state_v2(core_ptr, std::ptr::null())
+        };
+        assert!(result.is_null(), "null space_id must return null");
+    }
+}

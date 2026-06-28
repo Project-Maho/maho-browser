@@ -14,6 +14,14 @@ pub struct Model {
     pub locked_until: Option<i64>,
     pub failed_login_attempts: i32,
     pub last_failed_login_at: Option<i64>,
+    pub tier: String,
+    pub subscription_status: String,
+    pub email_verified: bool,
+    pub subscription_expires_at: Option<i64>,
+    pub period_start_at: Option<i64>,
+    pub anniversary_reset_day: Option<i32>,
+    pub verification_token: Option<String>,
+    pub verification_token_expires_at: Option<i64>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

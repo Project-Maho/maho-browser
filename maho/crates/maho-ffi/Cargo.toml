@@ -9,7 +9,6 @@ crate-type = ["lib", "staticlib", "cdylib"]
 [dependencies]
 maho-core = { path = "../maho-core" }
 maho-types = { path = "../maho-types" }
-maho-acp = { path = "../maho-acp" }
 maho-import = { path = "../maho-import" }
 maho-agent = { path = "../maho-agent" }
 maho-storage = { path = "../maho-storage" }

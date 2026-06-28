@@ -7,11 +7,14 @@ import {
   RuntimeEvent,
   RuntimeEventKind,
   SessionInfo,
+  TabInfo,
+  TidyFolder,
   ViewMode,
 } from './maho_ai.mojom-webui.js';
 import {
    AppState,
    ComposerAttachment,
+   CreditBalanceInfo,
    CURRENT_PAGE_ATTACHMENT,
    DEFAULT_HISTORY_SEARCH_STATE,
    DEFAULT_BOOKMARKS_SEARCH_STATE,
@@ -50,6 +53,8 @@ function cloneState(state: AppState): AppState {
     turnPendingBySessionId: {...state.turnPendingBySessionId},
     contextsBySessionId: Object.fromEntries(
         Object.entries(state.contextsBySessionId).map(([key, value]) => [key, [...value]])),
+    creditBalance: state.creditBalance ? {...state.creditBalance} : null,
+    chatBlockedReason: state.chatBlockedReason,
   };
 }
 
@@ -464,6 +469,7 @@ export class MahoAiStore {
     this.patch(state => {
       state.turnPendingBySessionId[sessionId] = true;
       state.composer.prompt = '';
+      state.chatBlockedReason = null;
     });
 
     await this.pageHandler.submitPrompt(
@@ -510,6 +516,34 @@ export class MahoAiStore {
     await this.pageHandler.setViewMode(mode);
   }
 
+  async requestTabTidy(tabs: TabInfo[]): Promise<TidyFolder[]> {
+    const {folders} = await this.pageHandler.requestTabTidy(tabs);
+    return folders;
+  }
+
+  async applyTabTidyFolders(folders: TidyFolder[]): Promise<void> {
+    await this.pageHandler.applyTabTidyFolders(folders);
+  }
+
+  async fetchCreditBalance(): Promise<CreditBalanceInfo> {
+    const {info} = await this.pageHandler.getCreditBalance();
+    this.patch(state => {
+      state.creditBalance = info;
+    });
+    return info;
+  }
+
+  async getBuyCreditsUrl(packSizeUsd: 10|50|100): Promise<string> {
+    const {checkoutUrl} = await this.pageHandler.getBuyCreditsUrl(packSizeUsd);
+    return checkoutUrl;
+  }
+
+  setChatBlockedReason(reason: AppState['chatBlockedReason']): void {
+    this.patch(state => {
+      state.chatBlockedReason = reason;
+    });
+  }
+
   private bindCallbacks() {
     this.callbackRouter.onRuntimeEvent.addListener((event: RuntimeEvent) => {
       const sessionId = this.state.currentSessionId;
@@ -537,6 +571,14 @@ export class MahoAiStore {
         }
         if (event.kind === RuntimeEventKind.kTurnComplete || event.kind === RuntimeEventKind.kError) {
           state.turnPendingBySessionId[sessionId] = false;
+          if (event.kind === RuntimeEventKind.kError) {
+            const errorText = event.text || '';
+            if (errorText.includes('402') || errorText.toLowerCase().includes('quota') ||
+                errorText.toLowerCase().includes('payment required') ||
+                errorText.toLowerCase().includes('deny-paid')) {
+              state.chatBlockedReason = 'quota-exhausted';
+            }
+          }
         }
         if (event.kind === RuntimeEventKind.kBrowserContextInjected && event.browserContext) {
           const existing = state.contextsBySessionId[sessionId] || [];
