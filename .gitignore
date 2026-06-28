@@ -63,3 +63,7 @@ test-results/
 # Visual QA / debug screenshot folders that get auto-created
 visual-qa-output/
 .tui-check/
+
+# Visual QA scratch artifacts (Playwright screenshots, ad-hoc captures)
+/.playwright-mcp/
+/maho-vqa/

@@ -21,7 +21,7 @@ const faqs = [
   },
   {
     q: "Is Maho Mail free like Apple Mail?",
-    a: "Yes. Both Maho Mail and Apple Mail are free to use. Apple Mail comes pre-installed on macOS, while Maho Mail needs to be downloaded separately. Maho Mail is also open source, which Apple Mail is not."
+    a: "Yes. Both Maho Mail and Apple Mail are free to use. Apple Mail comes pre-installed on macOS, while Maho Mail needs to be downloaded separately. Maho Mail also runs entirely on your device, with no cloud dependency or telemetry, which Apple Mail's iCloud-integrated model does not match."
   },
   {
     q: "Can Apple Mail work with AI tools?",
@@ -64,7 +64,7 @@ const schema = {
 <BaseLayout title={title} description={description}>
   <script is:inline type="application/ld+json" set:html={JSON.stringify(schema)} />
   <Nav />
-  <main class="min-h-screen bg-background text-foreground">
+  <main id="main" class="min-h-screen bg-background text-foreground">
 
     <section class="relative flex flex-col justify-center px-6 pt-32 pb-24">
       <div class="max-w-6xl mx-auto">
@@ -89,7 +89,7 @@ const schema = {
         <div class="max-w-3xl">
           <span class="inline-block border border-border text-muted-foreground text-xs px-3 py-1 rounded-full mb-6">Quick Verdict</span>
           <p class="text-lg text-muted-foreground leading-relaxed">
-            <strong class="text-foreground">Choose Apple Mail</strong> if you want zero-setup email that syncs seamlessly across iPhone, iPad, and Mac with deep iCloud integration. <strong class="text-foreground">Choose Maho Mail</strong> if you want programmatic access to your inbox through a CLI and MCP server, with AI features and open-source transparency.
+            <strong class="text-foreground">Choose Apple Mail</strong> if you want zero-setup email that syncs seamlessly across iPhone, iPad, and Mac with deep iCloud integration. <strong class="text-foreground">Choose Maho Mail</strong> if you want programmatic access to your inbox through a CLI and MCP server, with AI features and an independently auditable privacy architecture.
           </p>
         </div>
       </div>
@@ -141,7 +141,7 @@ const schema = {
               </tr>
               <tr>
                 <td class="py-3 pr-6 text-muted-foreground">Open Source</td>
-                <td class="py-3 px-6 text-foreground">Yes</td>
+                <td class="py-3 px-6 text-foreground">No — proprietary</td>
                 <td class="py-3 pl-6 text-muted-foreground">No — proprietary</td>
               </tr>
               <tr>
@@ -197,7 +197,7 @@ const schema = {
               Apple Mail benefits from Apple's privacy-focused branding, including Mail Privacy Protection that hides your IP from tracking pixels. However, the application itself is closed source, and iCloud email passes through Apple's servers.
             </p>
             <p class="text-muted-foreground leading-relaxed">
-              Maho Mail is open source. Every line of code is auditable. Everything stays on your machine — no cloud sync, no telemetry. If you use Ollama for AI, even your AI inference is local. For users who want verifiable privacy rather than promised privacy, open source is the difference.
+              Maho Mail runs entirely on your machine. No cloud sync, no telemetry. Our privacy claims are verifiable through network traffic inspection and our public architecture documentation. If you use Ollama for AI, even your AI inference is local. For users who want verifiable privacy rather than promised privacy, this is the difference.
             </p>
           </div>
         </div>
@@ -224,7 +224,7 @@ const schema = {
               </li>
               <li class="flex items-start gap-3 text-muted-foreground">
                 <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
-                Value open-source transparency
+                Value verifiable, audited privacy
               </li>
               <li class="flex items-start gap-3 text-muted-foreground">
                 <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>

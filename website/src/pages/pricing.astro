@@ -21,7 +21,7 @@ const subscriptionTiers = [
       '200 max tokens per call',
     ],
     ctaLabel: 'Start free',
-    ctaHref: '/waitlist',
+    ctaHref: '/download',
     featured: false,
   },
   {
@@ -36,7 +36,7 @@ const subscriptionTiers = [
       'Fast enough for daily browsing work',
     ],
     ctaLabel: 'Choose Pro',
-    ctaHref: '/waitlist',
+    ctaHref: '/download',
     featured: true,
   },
   {
@@ -51,7 +51,7 @@ const subscriptionTiers = [
       'Built for heavier daily usage',
     ],
     ctaLabel: 'Choose Max',
-    ctaHref: '/waitlist',
+    ctaHref: '/download',
     featured: false,
   },
 ];
@@ -143,13 +143,13 @@ const ld = {
   <JSONLD data={ld} />
   <div class="min-h-screen bg-background text-foreground">
     <Nav />
-    <main class="max-w-6xl mx-auto px-6 pt-32 pb-24">
+    <main id="main" class="max-w-6xl mx-auto px-6 pt-32 pb-24">
       <header class="mb-16 text-center">
         <p class="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground mb-4">
-          Last updated: 2026-06-28
+          Pricing
         </p>
         <h1 class="heading-serif text-4xl sm:text-5xl lg:text-6xl leading-[1.1] mb-5">
-          Simple pricing for managed AI, credits, and BYOK
+          Free. Forever.
         </h1>
         <p class="text-lg text-muted-foreground leading-relaxed max-w-3xl mx-auto">
           Start free. Move to Pro or Max for more managed usage. Add PAYG credits for spikes. Use
@@ -274,7 +274,12 @@ const ld = {
 
               <a
                 href={pack.href}
-                class="inline-flex items-center justify-center rounded-md bg-foreground px-4 py-3 text-sm font-medium text-background hover:opacity-90 transition-opacity"
+                class:list={[
+                  'inline-flex items-center justify-center rounded-md px-4 py-3 text-sm font-medium transition-colors',
+                  pack.featured
+                    ? 'bg-foreground text-background hover:opacity-90 transition-opacity'
+                    : 'border border-border text-foreground hover:border-foreground',
+                ]}
               >
                 Buy {pack.label} credits
               </a>

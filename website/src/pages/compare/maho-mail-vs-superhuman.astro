@@ -4,7 +4,7 @@ import Nav from '../../components/Nav.astro';
 import Footer from '../../components/Footer.astro';
 
 const title = "Maho Mail vs Superhuman: Which Email Client Is Better in 2026?";
-const description = "Comparing Maho Mail to Superhuman. A free, open-source email client with CLI and MCP vs the premium $30/mo cloud email experience.";
+const description = "Comparing Maho Mail to Superhuman. A free email client with CLI and MCP vs the premium $30/mo cloud email experience.";
 
 const faqs = [
   {
@@ -17,7 +17,7 @@ const faqs = [
   },
   {
     q: "Is Superhuman worth $30/month compared to free Maho Mail?",
-    a: "It depends on what you value. Superhuman offers a highly polished experience with split inbox, read receipts, send scheduling, team features, and dedicated onboarding. If those features save you meaningful time, the cost may be justified. Maho Mail is free and open source but offers a different set of capabilities — CLI, MCP, and AI integration. The two clients are optimized for different users."
+    a: "It depends on what you value. Superhuman offers a highly polished experience with split inbox, read receipts, send scheduling, team features, and dedicated onboarding. If those features save you meaningful time, the cost may be justified. Maho Mail is free but offers a different set of capabilities — CLI, MCP, and AI integration. The two clients are optimized for different users."
   },
   {
     q: "Can Superhuman connect to AI agents?",
@@ -64,7 +64,7 @@ const schema = {
 <BaseLayout title={title} description={description}>
   <script is:inline type="application/ld+json" set:html={JSON.stringify(schema)} />
   <Nav />
-  <main class="min-h-screen bg-background text-foreground">
+  <main id="main" class="min-h-screen bg-background text-foreground">
 
     <section class="relative flex flex-col justify-center px-6 pt-32 pb-24">
       <div class="max-w-6xl mx-auto">
@@ -89,7 +89,7 @@ const schema = {
         <div class="max-w-3xl">
           <span class="inline-block border border-border text-muted-foreground text-xs px-3 py-1 rounded-full mb-6">Quick Verdict</span>
           <p class="text-lg text-muted-foreground leading-relaxed">
-            <strong class="text-foreground">Choose Superhuman</strong> if you want the fastest, most polished email experience and are willing to pay $30/month for it. <strong class="text-foreground">Choose Maho Mail</strong> if you want a free, open-source client with CLI access, AI agent integration, and full local privacy — and you value programmability over polish.
+            <strong class="text-foreground">Choose Superhuman</strong> if you want the fastest, most polished email experience and are willing to pay $30/month for it. <strong class="text-foreground">Choose Maho Mail</strong> if you want a free client with CLI access, AI agent integration, and full local privacy — and you value programmability over polish.
           </p>
         </div>
       </div>
@@ -141,7 +141,7 @@ const schema = {
               </tr>
               <tr>
                 <td class="py-3 pr-6 text-muted-foreground">Open Source</td>
-                <td class="py-3 px-6 text-foreground">Yes</td>
+                <td class="py-3 px-6 text-foreground">No — proprietary</td>
                 <td class="py-3 pl-6 text-muted-foreground">No — proprietary</td>
               </tr>
               <tr>
@@ -197,7 +197,7 @@ const schema = {
               Superhuman is a cloud service at $30 per user per month ($360/year). Your email data flows through their servers. For teams, the cost scales linearly. Superhuman's business model depends on this subscription revenue, and the service requires an active subscription to function.
             </p>
             <p class="text-muted-foreground leading-relaxed">
-              Maho Mail is free and open source. All data stays on your machine. There is no subscription, no cloud dependency, and no telemetry. If cost or data sovereignty matters, this is a significant difference. The tradeoff is that Maho does not have Superhuman's team features, support infrastructure, or design resources.
+              Maho Mail is free, forever. All data stays on your machine. There is no subscription, no cloud dependency, and no telemetry. If cost or data sovereignty matters, this is a significant difference. The tradeoff is that Maho does not have Superhuman's team features, support infrastructure, or design resources.
             </p>
           </div>
 
@@ -227,7 +227,7 @@ const schema = {
               </li>
               <li class="flex items-start gap-3 text-muted-foreground">
                 <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
-                Care about local data and open-source transparency
+                Care about local data and verifiable privacy
               </li>
               <li class="flex items-start gap-3 text-muted-foreground">
                 <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>

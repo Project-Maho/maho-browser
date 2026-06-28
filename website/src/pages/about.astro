@@ -1,0 +1,94 @@
+---
+// biome-ignore-all assist/source/organizeImports: Astro component imports stay grouped for readability.
+// biome-ignore-all lint/correctness/noUnusedImports: Astro frontmatter imports are referenced in the template.
+// biome-ignore-all lint/correctness/noUnusedVariables: Astro frontmatter variables are referenced in the template.
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+import JSONLD from '../components/JSONLD.astro';
+
+const ld = {
+  '@context': 'https://schema.org',
+  '@type': 'AboutPage',
+  name: 'About Maho',
+  url: 'https://maho.app/about',
+  mainEntity: {
+    '@type': 'Organization',
+    name: 'Maho',
+    url: 'https://maho.app',
+    email: 'hello@maho.app',
+    description: 'Maho is a browser and email client built by an individual developer — privacy-first, AI-assisted, cross-device.'
+  }
+};
+---
+
+<BaseLayout
+  title="About Maho — Built by One Developer, Direct Accountability"
+  description="Maho is built and maintained by a single developer — not a startup, not a team. Learn why, how to reach the person behind the code, and how Maho stays funded."
+>
+  <JSONLD data={ld} />
+  <div class="min-h-screen bg-background text-foreground">
+    <Nav />
+    <main id="main" class="max-w-3xl mx-auto px-6 pt-32 pb-24">
+      <header class="mb-16">
+        <p class="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground mb-4">
+          About
+        </p>
+        <h1 class="heading-serif text-4xl sm:text-5xl mb-4">
+          Built by one person.
+        </h1>
+        <p class="text-lg text-muted-foreground leading-relaxed">
+          Maho is developed and maintained by an individual developer &mdash; not a team, not a startup, not a venture-backed company. This page exists so you know who&rsquo;s behind the software you&rsquo;re trusting with your browsing and your email.
+        </p>
+      </header>
+
+      <section class="space-y-6 text-muted-foreground leading-relaxed mb-16">
+        <h2 class="heading-serif text-2xl sm:text-3xl text-foreground mb-3">Why one person</h2>
+        <p>
+          Browsers are usually built by 200-person teams at the largest tech companies. Maho takes a different bet: a tight, opinionated, well-architected browser maintained by a single accountable person can move faster, ship more honestly, and stay closer to its users than a committee can.
+        </p>
+        <p>
+          The tradeoffs are real. There is no support team. There is no enterprise sales function. There is no marketing budget. What there is, is direct line to the person making every architectural decision &mdash; and a product that doesn&rsquo;t answer to a board.
+        </p>
+
+        <h2 class="heading-serif text-2xl sm:text-3xl text-foreground pt-6 mb-3">How to reach me</h2>
+        <p>
+          For any question &mdash; product, pricing, privacy, security disclosure, partnership &mdash; you can email <a href="mailto:hello@maho.app" class="underline text-foreground hover:opacity-80 transition-opacity">hello@maho.app</a>. Real human response, usually within a day or two.
+        </p>
+        <p>
+          For security vulnerabilities specifically, please use the same address with subject prefix <code class="text-foreground text-sm bg-card px-1.5 py-0.5 rounded">[security]</code>. I take disclosures seriously and will acknowledge receipt within 48 hours.
+        </p>
+
+        <h2 class="heading-serif text-2xl sm:text-3xl text-foreground pt-6 mb-3">How Maho stays funded</h2>
+        <p>
+          Maho is free to use with BYOK (bring your own API key) &mdash; that path stays free forever. The development is sustained by <a href="/pricing" class="underline text-foreground hover:opacity-80 transition-opacity">Maho Pro and Maho Max</a>, managed-AI subscriptions for people who want premium models without managing API keys. There are no ads, no data sales, and no cut of your API spend.
+        </p>
+        <p>
+          If subscriptions don&rsquo;t cover costs, Maho doesn&rsquo;t continue. That&rsquo;s honest. It&rsquo;s also why the business model is on every page that matters &mdash; you should know how the lights are kept on for the software you depend on.
+        </p>
+
+        <h2 class="heading-serif text-2xl sm:text-3xl text-foreground pt-6 mb-3">What this means for you</h2>
+        <p>
+          Maho is proprietary software, not open source. That means you can&rsquo;t fork it or audit the source code. To compensate, the architecture is documented in the <a href="/blog" class="underline text-foreground hover:opacity-80 transition-opacity">engineering blog</a>, the network behavior is verifiable on your own device, and the person who wrote the code is reachable at the email above.
+        </p>
+        <p>
+          That&rsquo;s the deal. A browser that respects you, built by someone who answers their own email.
+        </p>
+      </section>
+
+      <section class="border border-border rounded-lg p-8 bg-card text-center">
+        <h2 class="heading-serif text-3xl sm:text-4xl mb-4">Try the browser.</h2>
+        <p class="text-muted-foreground text-sm leading-relaxed max-w-lg mx-auto mb-6">
+          Free forever. macOS today. iPhone and Android in development.
+        </p>
+        <a
+          href="/download"
+          class="inline-flex items-center justify-center rounded-full bg-foreground text-background px-6 py-3 text-sm font-medium hover:opacity-90 transition"
+        >
+          Download for macOS
+        </a>
+      </section>
+    </main>
+    <Footer />
+  </div>
+</BaseLayout>

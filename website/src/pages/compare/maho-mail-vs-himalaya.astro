@@ -24,8 +24,8 @@ const faqs = [
     a: "himalaya outputs structured data that could be piped to AI tools via shell commands, but it has no built-in AI features or MCP server. Maho Mail provides a native MCP server that AI agents can connect to directly, plus built-in AI for summarization, drafting, and classification."
   },
   {
-    q: "Are both projects open source?",
-    a: "Yes. Both Maho Mail and himalaya are open source projects. himalaya is more mature and has been available longer, with a larger contributor base."
+    q: 'Is Maho open source like himalaya?',
+    a: "No. himalaya is open source under MIT; Maho is proprietary but free forever. Both projects share a commitment to local-first email, but they differ on source distribution. himalaya is more mature and has been available longer."
   },
 ];
 
@@ -64,7 +64,7 @@ const schema = {
 <BaseLayout title={title} description={description}>
   <script is:inline type="application/ld+json" set:html={JSON.stringify(schema)} />
   <Nav />
-  <main class="min-h-screen bg-background text-foreground">
+  <main id="main" class="min-h-screen bg-background text-foreground">
 
     <section class="relative flex flex-col justify-center px-6 pt-32 pb-24">
       <div class="max-w-6xl mx-auto">
@@ -141,7 +141,7 @@ const schema = {
               </tr>
               <tr>
                 <td class="py-3 pr-6 text-muted-foreground">Open Source</td>
-                <td class="py-3 px-6 text-foreground">Yes</td>
+                <td class="py-3 px-6 text-foreground">No — proprietary</td>
                 <td class="py-3 pl-6 text-muted-foreground">Yes</td>
               </tr>
               <tr>

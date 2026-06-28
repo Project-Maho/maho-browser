@@ -1,21 +1,24 @@
 ---
 ---
 
-<footer class="py-12 px-6 border-t border-border">
+<footer class="py-12 px-6 border-t border-border" aria-label="Site footer">
   <div class="max-w-6xl mx-auto">
     <span class="text-sm font-medium text-foreground">Maho</span>
 
-    <div class="grid grid-cols-1 gap-10 sm:grid-cols-2 md:grid-cols-4 mt-10">
+    <nav aria-label="Footer" class="grid grid-cols-1 gap-10 sm:grid-cols-2 md:grid-cols-4 mt-10">
       <div class="flex flex-col gap-4">
         <span class="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
           Product
         </span>
-        <div class="flex flex-col gap-3">
-          <a href="https://github.com/nicepkg/maho/releases" target="_blank" rel="noopener noreferrer" class="text-sm text-muted-foreground hover:text-foreground transition-colors">
+        <div class="flex flex-col gap-4 md:gap-3">
+          <a href="/download" class="text-sm text-muted-foreground hover:text-foreground transition-colors">
             Download
           </a>
-          <a href="https://github.com/nicepkg" target="_blank" rel="noopener noreferrer" class="text-sm text-muted-foreground hover:text-foreground transition-colors">
-            GitHub
+          <a href="/pricing" class="text-sm text-muted-foreground hover:text-foreground transition-colors">
+            Pricing
+          </a>
+          <a href="/why" class="text-sm text-muted-foreground hover:text-foreground transition-colors">
+            Why Maho
           </a>
         </div>
       </div>
@@ -24,15 +27,18 @@
         <span class="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
           Resources
         </span>
-        <div class="flex flex-col gap-3">
-          <a href="/cli/" class="text-sm text-muted-foreground hover:text-foreground transition-colors">
+        <div class="flex flex-col gap-4 md:gap-3">
+          <a href="/browser/" class="text-sm text-muted-foreground hover:text-foreground transition-colors">
             Docs
-          </a>
-          <a href="https://github.com/aspect-apps/maho-mail/releases" target="_blank" rel="noopener noreferrer" class="text-sm text-muted-foreground hover:text-foreground transition-colors">
-            Changelog
           </a>
           <a href="/blog" class="text-sm text-muted-foreground hover:text-foreground transition-colors">
             Blog
+          </a>
+          <a href="/roadmap" class="text-sm text-muted-foreground hover:text-foreground transition-colors">
+            Roadmap
+          </a>
+          <a href="/security" class="text-sm text-muted-foreground hover:text-foreground transition-colors">
+            Security
           </a>
         </div>
       </div>
@@ -41,15 +47,15 @@
         <span class="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
           Compare
         </span>
-        <div class="flex flex-col gap-3">
+        <div class="flex flex-col gap-4 md:gap-3">
+          <a href="/compare/aside" class="text-sm text-muted-foreground hover:text-foreground transition-colors">
+            vs Aside Browser
+          </a>
           <a href="/compare/maho-mail-vs-superhuman" class="text-sm text-muted-foreground hover:text-foreground transition-colors">
             vs Superhuman
           </a>
           <a href="/compare/maho-mail-vs-apple-mail" class="text-sm text-muted-foreground hover:text-foreground transition-colors">
             vs Apple Mail
-          </a>
-          <a href="/compare/maho-mail-vs-spark" class="text-sm text-muted-foreground hover:text-foreground transition-colors">
-            vs Spark
           </a>
           <a href="/compare/maho-mail-vs-thunderbird" class="text-sm text-muted-foreground hover:text-foreground transition-colors">
             vs Thunderbird
@@ -61,7 +67,10 @@
         <span class="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
           Company
         </span>
-        <div class="flex flex-col gap-3">
+        <div class="flex flex-col gap-4 md:gap-3">
+          <a href="/about" class="text-sm text-muted-foreground hover:text-foreground transition-colors">
+            About
+          </a>
           <a href="/terms" class="text-sm text-muted-foreground hover:text-foreground transition-colors">
             Terms
           </a>
@@ -73,6 +82,6 @@
           </a>
         </div>
       </div>
-    </div>
+    </nav>
   </div>
 </footer>

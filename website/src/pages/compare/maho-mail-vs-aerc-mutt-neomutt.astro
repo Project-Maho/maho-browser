@@ -17,7 +17,7 @@ const faqs = [
   },
   {
     q: "Is Maho Mail as stable as mutt?",
-    a: "mutt has been in active development since 1995 and is considered one of the most battle-tested email clients available. Maho Mail is a newer project and has not had the same years of hardening. That said, Maho is open source and under active development, and its SQLite-backed architecture avoids many of the concurrency issues that older tools face."
+    a: "mutt has been in active development since 1995 and is considered one of the most battle-tested email clients available. Maho Mail is a newer project and has not had the same years of hardening. That said, Maho is under active development and its SQLite-backed architecture avoids many of the concurrency issues older tools face. Maho is proprietary and free."
   },
   {
     q: "Can AI agents use mutt or aerc?",
@@ -25,7 +25,7 @@ const faqs = [
   },
   {
     q: "Is Maho Mail open source like mutt?",
-    a: "Yes. Maho Mail is open source. Both mutt and Maho share a commitment to transparency and community development, though mutt's codebase has a much longer history."
+    a: "No. mutt is open source with a long history of community development; Maho is proprietary and free. Both share a commitment to local-first email, but they differ on source distribution."
   },
 ];
 
@@ -64,7 +64,7 @@ const schema = {
 <BaseLayout title={title} description={description}>
   <script is:inline type="application/ld+json" set:html={JSON.stringify(schema)} />
   <Nav />
-  <main class="min-h-screen bg-background text-foreground">
+  <main id="main" class="min-h-screen bg-background text-foreground">
 
     <section class="relative flex flex-col justify-center px-6 pt-32 pb-24">
       <div class="max-w-6xl mx-auto">
@@ -136,7 +136,7 @@ const schema = {
               </tr>
               <tr>
                 <td class="py-3 pr-6 text-muted-foreground">Open Source</td>
-                <td class="py-3 px-6 text-foreground">Yes</td>
+                <td class="py-3 px-6 text-foreground">No — proprietary</td>
                 <td class="py-3 pl-6 text-muted-foreground">Yes</td>
               </tr>
               <tr>

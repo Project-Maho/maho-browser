@@ -4,7 +4,7 @@ import Nav from '../../components/Nav.astro';
 import Footer from '../../components/Footer.astro';
 
 const title = "Maho Mail vs Thunderbird: Which Email Client Is Better in 2026?";
-const description = "Comparing Maho Mail to Thunderbird. A modern email client with CLI and AI vs the legacy open-source desktop client.";
+const description = "Comparing Maho Mail to Thunderbird. A modern CLI-and-AI email client vs the legacy open-source desktop incumbent.";
 
 const faqs = [
   {
@@ -64,7 +64,7 @@ const schema = {
 <BaseLayout title={title} description={description}>
   <script is:inline type="application/ld+json" set:html={JSON.stringify(schema)} />
   <Nav />
-  <main class="min-h-screen bg-background text-foreground">
+  <main id="main" class="min-h-screen bg-background text-foreground">
 
     <section class="relative flex flex-col justify-center px-6 pt-32 pb-24">
       <div class="max-w-6xl mx-auto">
@@ -79,7 +79,7 @@ const schema = {
           Maho Mail vs Thunderbird
         </h1>
         <p class="text-lg text-muted-foreground max-w-2xl leading-relaxed">
-          The legacy desktop client vs the modern one. Two open-source email clients with very different philosophies.
+          The legacy desktop client vs the modern one. A modern proprietary email client and a legacy open-source incumbent with very different philosophies.
         </p>
       </div>
     </section>
@@ -141,7 +141,7 @@ const schema = {
               </tr>
               <tr>
                 <td class="py-3 pr-6 text-muted-foreground">Open Source</td>
-                <td class="py-3 px-6 text-foreground">Yes</td>
+                <td class="py-3 px-6 text-foreground">No — proprietary</td>
                 <td class="py-3 pl-6 text-muted-foreground">Yes — Mozilla Public License</td>
               </tr>
               <tr>

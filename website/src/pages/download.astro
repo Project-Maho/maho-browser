@@ -1,0 +1,80 @@
+---
+// biome-ignore-all assist/source/organizeImports: Astro component imports stay grouped for readability.
+// biome-ignore-all lint/correctness/noUnusedImports: Astro frontmatter imports are referenced in the template.
+// biome-ignore-all lint/correctness/noUnusedVariables: Astro frontmatter variables are referenced in the template.
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+import JSONLD from '../components/JSONLD.astro';
+
+// Phase 1: redirect to GitHub Releases until self-hosted CDN is live.
+// Owner decision pending on §5.4 of revision plan.
+const releaseUrl = "https://github.com/nicepkg/maho/releases";
+const mailReleaseUrl = "https://github.com/aspect-apps/maho-mail/releases";
+const productParam = Astro.url.searchParams.get("product");
+const target = productParam === "mail" ? mailReleaseUrl : releaseUrl;
+const productLabel = productParam === "mail" ? "Maho Mail" : "Maho";
+
+const ld = {
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  name: 'Maho',
+  applicationCategory: 'BrowserApplication',
+  operatingSystem: 'macOS 12 or later',
+  downloadUrl: 'https://github.com/nicepkg/maho/releases',
+  offers: {
+    '@type': 'Offer',
+    price: '0',
+    priceCurrency: 'USD'
+  }
+};
+---
+
+<BaseLayout title={`Download ${productLabel} for macOS — Maho`} description={`Download ${productLabel} for macOS 12+. Free forever. iPhone and Android in development.`}>
+  <JSONLD data={ld} />
+  <meta http-equiv="refresh" content={`0; url=${target}`} slot="head" />
+  <script is:inline define:vars={{ target }}>
+    // Belt-and-suspenders: client-side redirect in case meta-refresh fails.
+    setTimeout(function() { window.location.replace(target); }, 100);
+  </script>
+  <div class="min-h-screen bg-background text-foreground">
+    <Nav />
+    <main id="main" class="max-w-2xl mx-auto px-6 pt-32 pb-24 text-center">
+      <h1 class="heading-serif text-4xl sm:text-5xl mb-6">
+        Your download is starting.
+      </h1>
+      <p class="text-muted-foreground leading-relaxed text-lg mb-8">
+        Redirecting you to the latest {productLabel} release. If nothing happens within a few seconds:
+      </p>
+      <a
+        href={target}
+        class="inline-flex items-center justify-center rounded-full bg-foreground text-background px-6 py-3 text-sm font-medium hover:opacity-90 transition mb-12"
+      >
+        Download {productLabel} manually
+      </a>
+
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-6 mt-16 text-left">
+        <div class="rounded-lg border border-border p-6 bg-card">
+          <p class="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground mb-3">Step 1</p>
+          <p class="text-sm text-foreground font-medium mb-2">Open the DMG</p>
+          <p class="text-xs text-muted-foreground leading-relaxed">Double-click the downloaded file in your Downloads folder.</p>
+        </div>
+        <div class="rounded-lg border border-border p-6 bg-card">
+          <p class="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground mb-3">Step 2</p>
+          <p class="text-sm text-foreground font-medium mb-2">Drag to Applications</p>
+          <p class="text-xs text-muted-foreground leading-relaxed">Drag the {productLabel} icon into your Applications folder.</p>
+        </div>
+        <div class="rounded-lg border border-border p-6 bg-card">
+          <p class="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground mb-3">Step 3</p>
+          <p class="text-sm text-foreground font-medium mb-2">Launch</p>
+          <p class="text-xs text-muted-foreground leading-relaxed">Open {productLabel} from Applications or Spotlight. First launch sets up sync.</p>
+        </div>
+      </div>
+
+      <p class="text-xs text-muted-foreground mt-16 leading-relaxed">
+        macOS 12 or later. iPhone and Android are in development — <a href="/waitlist" class="underline hover:text-foreground transition-colors">join the waitlist</a> to be notified.
+      </p>
+    </main>
+    <Footer />
+  </div>
+</BaseLayout>

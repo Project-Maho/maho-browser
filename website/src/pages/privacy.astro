@@ -4,10 +4,10 @@ import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 ---
 
-<BaseLayout title="Privacy Policy — Maho" description="Privacy Policy for Maho applications and website.">
+<BaseLayout title="Privacy Policy — Maho" description="Maho collects nothing by default. Local-first architecture, zero-retention AI proxy, full GDPR compliance. Verify our claims through network behavior.">
   <div class="min-h-screen bg-background text-foreground">
     <Nav />
-    <main class="max-w-3xl mx-auto px-6 pt-32 pb-24">
+    <main id="main" class="max-w-3xl mx-auto px-6 pt-32 pb-24">
       <h1 class="heading-serif text-4xl sm:text-5xl mb-4">Privacy Policy</h1>
       <p class="text-muted-foreground text-sm mb-12">Effective: April 11, 2026</p>
 
@@ -23,12 +23,12 @@ import Footer from '../components/Footer.astro';
 
       <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Zero-Retention LLM Proxy Policy</h2>
       <p class="text-muted-foreground leading-relaxed mb-4">
-        For users opting for Maho-managed AI (rather than BYOK), your inference traffic routes through our zero-retention proxy. We do **not** store or log your prompts or responses. We log only metadata required for billing and abuse prevention: the model used, token count, timestamp, and user ID.
+        For users opting for Maho-managed AI (rather than BYOK), your inference traffic routes through our zero-retention proxy. We do <strong>not</strong> store or log your prompts or responses. We log only metadata required for billing and abuse prevention: the model used, token count, timestamp, and user ID.
       </p>
 
       <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Third-Party Services & Sub-processors</h2>
       <p class="text-muted-foreground leading-relaxed mb-4">
-        When you use Maho-managed AI, we utilize **OpenRouter** as an underlying sub-processor to route requests to AI model providers. Your usage of these models is governed by OpenRouter's privacy policy. Prompts sent to OpenRouter via Maho's proxy are not used for training.
+        When you use Maho-managed AI, we utilize <strong>OpenRouter</strong> as an underlying sub-processor to route requests to AI model providers. Your usage of these models is governed by OpenRouter's privacy policy. Prompts sent to OpenRouter via Maho's proxy are not used for training.
       </p>
       <p class="text-muted-foreground leading-relaxed mb-4">
         For BYOK (Bring Your Own Key) users, your traffic flows directly to your configured provider (e.g., OpenAI, Anthropic) without intermediate routing by Maho.

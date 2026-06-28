@@ -1,0 +1,146 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+
+const title = "Join the waitlist — Maho";
+const description = "Get early access to Maho — the proprietary, privacy-first browser and email client. We'll email you when builds are ready for your platform.";
+---
+
+<BaseLayout title={title} description={description}>
+  <div class="min-h-screen bg-background text-foreground">
+    <Nav />
+    <main id="main" class="max-w-3xl mx-auto px-6 pt-32 pb-24">
+      <header class="mb-16 text-center">
+        <h1 class="heading-serif text-4xl sm:text-5xl mb-4">Get early access.</h1>
+        <p class="text-muted-foreground leading-relaxed max-w-2xl mx-auto">
+          Maho is a browser and email client built for people who want privacy without friction and AI without surveillance. We're shipping macOS first, then the rest. Leave your email and we'll tell you when your platform is ready — nothing more.
+        </p>
+      </header>
+
+      <section aria-labelledby="form-heading" class="mb-20 border border-border rounded-lg p-8 max-w-md mx-auto">
+        <h2 id="form-heading" class="sr-only">Waitlist signup</h2>
+
+        <!-- TODO: wire form action to backend (Buttondown / ConvertKit / Loops / Formspree) -->
+        <form method="POST" action="#TODO-replace-with-real-backend" class="space-y-6">
+          <div>
+            <label for="email" class="block text-sm font-medium mb-1">Email</label>
+            <input
+              type="email"
+              id="email"
+              name="email"
+              required
+              placeholder="you@example.com"
+              autocomplete="email"
+              class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-foreground/20"
+            />
+          </div>
+
+          <fieldset>
+            <legend class="block text-sm font-medium mb-2">Platform</legend>
+            <div class="space-y-2 text-sm">
+              <label class="flex items-center gap-2">
+                <input type="radio" name="platform" value="macos" class="accent-foreground" />
+                macOS
+              </label>
+              <label class="flex items-center gap-2 text-muted-foreground">
+                <input type="radio" name="platform" value="linux" disabled title="Coming after macOS" />
+                Linux
+              </label>
+              <label class="flex items-center gap-2 text-muted-foreground">
+                <input type="radio" name="platform" value="windows" disabled title="Coming after Linux" />
+                Windows
+              </label>
+              <label class="flex items-center gap-2 text-muted-foreground">
+                <input type="radio" name="platform" value="ios" disabled title="Coming after desktop builds" />
+                iOS
+              </label>
+              <label class="flex items-center gap-2 text-muted-foreground">
+                <input type="radio" name="platform" value="android" disabled title="Coming after iOS" />
+                Android
+              </label>
+            </div>
+          </fieldset>
+
+          <div>
+            <label for="referrer" class="block text-sm font-medium mb-1">Where did you hear about Maho? (optional)</label>
+            <input
+              type="text"
+              id="referrer"
+              name="referrer"
+              class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-foreground/20"
+            />
+          </div>
+
+          <button
+            type="submit"
+            class="inline-flex items-center justify-center rounded-md bg-foreground text-background px-6 py-3 text-sm font-medium hover:opacity-90 transition w-full"
+          >
+            Notify me
+          </button>
+        </form>
+      </section>
+
+      <section aria-labelledby="what-you-get" class="mb-16">
+        <h2 id="what-you-get" class="text-2xl font-medium mb-6">What you'll get</h2>
+        <ul class="space-y-3 text-muted-foreground text-sm leading-relaxed">
+          <li>An email when your platform's build is ready.</li>
+          <li>Occasional progress updates — what shipped, what's next.</li>
+          <li>First access to beta builds before any public announcement.</li>
+        </ul>
+      </section>
+
+      <section aria-labelledby="what-you-wont" class="mb-16">
+        <h2 id="what-you-wont" class="text-2xl font-medium mb-6">What you won't get</h2>
+        <ul class="space-y-3 text-muted-foreground text-sm leading-relaxed">
+          <li>Spam. One email per month, maximum.</li>
+          <li>Your email shared with or sold to anyone.</li>
+          <li>Marketing drip sequences, upsell nudges, or "engagement" tricks.</li>
+        </ul>
+      </section>
+
+      <section aria-labelledby="faq-heading">
+        <h2 id="faq-heading" class="text-2xl font-medium mb-6">Questions</h2>
+        <div class="space-y-8">
+          <div>
+            <h3 class="font-medium mb-2">When will macOS builds ship?</h3>
+            <p class="text-muted-foreground text-sm leading-relaxed">
+              We don't have a fixed date yet. When we do, waitlist members hear first. We won't announce a date until we're confident we can hit it.
+            </p>
+          </div>
+
+          <div>
+            <h3 class="font-medium mb-2">Why macOS first?</h3>
+            <p class="text-muted-foreground text-sm leading-relaxed">
+              It's our primary development platform and where we can move fastest. Linux follows once the core is stable, then Windows. Mobile comes after desktop.
+            </p>
+          </div>
+
+          <div>
+            <h3 class="font-medium mb-2">Is Maho free?</h3>
+            <p class="text-muted-foreground text-sm leading-relaxed">
+              Yes. No subscription, no payment processor, no trial timer. AI features use your own API key (BYOK), so the model bill goes to your provider, not to us.
+            </p>
+          </div>
+
+          <div>
+            <h3 class="font-medium mb-2">Can I unsubscribe?</h3>
+            <p class="text-muted-foreground text-sm leading-relaxed">
+              Every email includes an unsubscribe link. One click, immediate removal, no confirmation page.
+            </p>
+          </div>
+        </div>
+      </section>
+
+    </main>
+    <Footer />
+  </div>
+
+  <script type="application/ld+json" set:html={JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    "name": title,
+    "description": description,
+    "url": "https://maho.app/waitlist"
+  })} />
+</BaseLayout>

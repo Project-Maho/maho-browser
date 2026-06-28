@@ -4,8 +4,8 @@ type HeroConfig = {
   headline: string;
   subheadline: string;
   primaryCta: { label: string; href: string };
-  secondaryCta: { label: string; href: string };
   heroImage?: string;
+  microCta?: string;
 };
 
 type WhyConfig = {
@@ -21,10 +21,12 @@ type FeatureItem = {
 
 type PricingTier = {
   name: string;
+  badge?: string;
   price: string;
   suffix?: string;
   description: string;
   features: string[];
+  cta?: { label: string; href: string };
 };
 
 type PricingConfig = {
@@ -32,6 +34,7 @@ type PricingConfig = {
   headline: string;
   body: string;
   tiers: PricingTier[];
+  footerNote?: string;
 };
 
 type FinalCtaConfig = {
@@ -50,20 +53,18 @@ type ProductContent = {
   finalCta: FinalCtaConfig;
 };
 
-const browserReleaseUrl = "https://github.com/nicepkg/maho/releases";
-const browserGithubUrl = "https://github.com/nicepkg/maho";
-const mailReleaseUrl = "https://github.com/aspect-apps/maho-mail/releases";
-const mailGithubUrl = "https://github.com/aspect-apps/maho-mail";
+const browserDownloadUrl = "/download";
+const mailDownloadUrl = "/download?product=mail";
 
 const content: Record<Product, ProductContent> = {
   browser: {
     hero: {
-      headline: "The browser that\nworks like you do.",
+      headline: "Your AI.\nYour data.\nYour browser.",
       subheadline:
-        "Spaces for every project. AI built in. Split view, notes, and boosts — with sync across every device. Available on macOS, iOS, and Android.",
-      primaryCta: { label: "Download for Mac", href: browserReleaseUrl },
-      secondaryCta: { label: "View on GitHub", href: browserGithubUrl },
+        "Spaces, AI assistance, and end-to-end sync — without metered credits or surveillance. macOS today, more soon.",
+      primaryCta: { label: "Download for macOS", href: browserDownloadUrl },
       heroImage: "/assets/images/sidebar-target-prototype-verified.png",
+      microCta: "Free, macOS 12+. iPhone and Android in development.",
     },
     why: {
       badge: "Why Maho",
@@ -90,8 +91,8 @@ const content: Record<Product, ProductContent> = {
         desc: "Customize any website. Change fonts, hide distractions, inject CSS, tweak layouts. Per-site settings that persist.",
       },
       {
-        title: "Cross-Device Sync",
-        desc: "Your spaces, tabs, bookmarks, and notes — everywhere. Seamless sync across macOS, iOS, and Android.",
+        title: "Sync",
+        desc: "Keep your spaces, tabs, bookmarks, and notes on your Mac today. iPhone and Android sync are in development.",
       },
       {
         title: "Extensions",
@@ -101,46 +102,63 @@ const content: Record<Product, ProductContent> = {
     pricing: {
       badge: "Pricing",
       headline: "Free. Forever.",
-      body: "Maho Browser is completely free and open source. Every feature, no limits. For AI features, bring your own API key or subscribe to our managed AI plan.",
+      body: "Maho Browser is free, forever. Every feature, no limits, no credits. For AI features, bring your own API key (OpenAI, Anthropic, Ollama) — or subscribe to managed AI for a single monthly price.",
       tiers: [
         {
           name: "Free",
           price: "$0",
-          description: "Everything included. No limits.",
+          description: "Try Maho AI with free community models. $0.50/mo quota.",
           features: [
-            "All features unlocked",
-            "Unlimited spaces and tabs",
-            "Cross-device sync",
-            "BYOK for AI (OpenAI, Anthropic, Ollama)",
+            "Free models only",
+            "Basic chat",
+            "BYOK supported alongside",
+            "200 max tokens per call",
           ],
+          cta: { label: "Get Maho", href: "/download" },
         },
         {
-          name: "AI Pro",
+          name: "Pro",
+          badge: "Popular",
           price: "$5",
           suffix: "/mo",
-          description: "Managed AI. No API key needed.",
+          description: "Daily AI for browsing — cheap-fast models, $2.10/mo budget.",
           features: [
-            "Everything in Free",
-            "Pre-configured AI models",
-            "No API key setup required",
-            "Supports Maho development",
+            "Gemini Flash / Claude Haiku / Llama family",
+            "2000 max tokens per call",
+            "$0.20 per-request cost cap",
+            "Fast enough for daily browsing work",
           ],
+          cta: { label: "Get Maho", href: "/download" },
+        },
+        {
+          name: "Max",
+          price: "$20",
+          suffix: "/mo",
+          description: "Heavy use — mid-tier models, $13.30/mo budget.",
+          features: [
+            "+ Gemini Pro / Claude Sonnet / GPT-5 mini",
+            "8000 max tokens per call",
+            "$0.50 per-request cost cap",
+            "Built for heavier daily usage",
+          ],
+          cta: { label: "Get Maho", href: "/download" },
         },
       ],
+      footerNote:
+        "Free is sustained by Pro and Max — managed AI for users who don't want to manage API keys. No ads, no data sales, no API-spend cut.",
     },
     finalCta: {
-      headline: "Browse without compromise.",
-      subheadline: "Download Maho. It's free, private, and open source.",
-      cta: { label: "Download for Mac", href: browserReleaseUrl },
+      headline: "No paywalls. No agents acting without you. No data harvest.",
+      subheadline: "Download Maho. Free forever, privacy by default, your data on your device.",
+      cta: { label: "Download for macOS", href: browserDownloadUrl },
     },
   },
   mail: {
     hero: {
       headline: "Email for humans\nand machines.",
       subheadline:
-        "A desktop email client with a CLI and MCP server. AI-powered, privacy-first, completely free and open source.",
-      primaryCta: { label: "Download for Mac", href: mailReleaseUrl },
-      secondaryCta: { label: "View on GitHub", href: mailGithubUrl },
+        "A desktop email client with a CLI and MCP server. AI-powered, privacy-first, free forever.",
+      primaryCta: { label: "Download for macOS", href: mailDownloadUrl },
     },
     why: {
       badge: "Why Maho Mail",
@@ -171,14 +189,14 @@ const content: Record<Product, ProductContent> = {
         desc: "Everything lives on your machine. No cloud sync, no telemetry, no data leaving your device. SQLCipher encrypted at rest.",
       },
       {
-        title: "Free & Open Source",
-        desc: "MIT licensed. No paywalls, no feature gates. Optional AI subscription via OpenRouter for those who want a managed experience.",
+        title: "Free Forever",
+        desc: "Free, forever. No paywalls, no feature gates. Optional AI subscription via OpenRouter for those who want managed inference.",
       },
     ],
     pricing: {
       badge: "Pricing",
       headline: "Free. Forever.",
-      body: "Maho Mail is completely free and open source. Every feature, no limits. For AI features, bring your own API key or subscribe to our managed AI plan through OpenRouter.",
+      body: "Maho Mail is free, forever. Every feature, no limits. For AI features, bring your own API key — or use our managed AI through OpenRouter for a single monthly price.",
       tiers: [
         {
           name: "Free",
@@ -207,8 +225,8 @@ const content: Record<Product, ProductContent> = {
     },
     finalCta: {
       headline: "Make email programmable.",
-      subheadline: "Download Maho Mail. It's free, private, and open source.",
-      cta: { label: "Download for Mac", href: mailReleaseUrl },
+      subheadline: "Download Maho Mail. Free forever, private, programmable.",
+      cta: { label: "Download for macOS", href: mailDownloadUrl },
     },
   },
 };
@@ -221,16 +239,11 @@ function HeroSection({ config }: { config: HeroConfig }) {
   const lines = splitHeadline(config.headline);
 
   return (
-    <section className="relative min-h-screen flex flex-col justify-center px-6 bg-background text-foreground pt-16">
-      <div className={`max-w-6xl mx-auto w-full pt-24 ${config.heroImage ? 'grid lg:grid-cols-2 gap-12 items-center' : ''}`}>
+    <section className="relative flex flex-col justify-center px-6 bg-background text-foreground pt-20 sm:pt-16 pb-16 sm:pb-0 sm:min-h-screen">
+      <div className={`max-w-6xl mx-auto w-full sm:pt-24 ${config.heroImage ? 'grid lg:grid-cols-2 gap-12 items-center' : ''}`}>
         <div>
-          <h1 className="heading-serif text-5xl sm:text-6xl lg:text-7xl xl:text-8xl leading-[1.1] mb-8">
-            {lines.map((line, index) => (
-              <span key={`${line}-${index}`}>
-                {line}
-                {index < lines.length - 1 && <br />}
-              </span>
-            ))}
+          <h1 className="heading-serif text-5xl sm:text-6xl lg:text-7xl xl:text-8xl leading-[1.1] mb-8 whitespace-pre-line">
+            {lines.join("\n")}
           </h1>
           <p className="text-lg sm:text-xl text-muted-foreground max-w-2xl mb-10 leading-relaxed">
             {config.subheadline}
@@ -242,32 +255,14 @@ function HeroSection({ config }: { config: HeroConfig }) {
             >
               {config.primaryCta.label}
             </a>
-            <a
-              href={config.secondaryCta.href}
-              className="inline-flex items-center gap-2 px-6 py-3 border border-border rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:border-muted-foreground transition-colors"
-            >
-              {config.secondaryCta.label}
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="w-4 h-4"
-              >
-                <path d="M5 12h14" />
-                <path d="m12 5 7 7-7 7" />
-              </svg>
-            </a>
           </div>
+          {config.microCta && (
+            <p className="text-muted-foreground text-sm leading-relaxed mt-4">{config.microCta}</p>
+          )}
         </div>
         {config.heroImage && (
           <div className="relative rounded-lg overflow-hidden border border-border shadow-2xl bg-card hidden lg:block">
-            <img src={config.heroImage} alt="Maho Product Screenshot" className="w-full h-auto object-cover" />
+            <img src={config.heroImage} alt="Maho Browser interface showing a sidebar with multiple Spaces for organizing projects, AI conversation thread, and split-view tabs" className="w-full h-auto object-cover" />
           </div>
         )}
       </div>
@@ -285,13 +280,8 @@ function WhySection({ config }: { config: WhyConfig }) {
           <span className="inline-block border border-border text-muted-foreground text-xs px-3 py-1 rounded-full mb-6">
             {config.badge}
           </span>
-          <h2 className="heading-serif text-4xl sm:text-5xl mb-6">
-            {lines.map((line, index) => (
-              <span key={`${line}-${index}`}>
-                {line}
-                {index < lines.length - 1 && <br />}
-              </span>
-            ))}
+          <h2 className="heading-serif text-4xl sm:text-5xl mb-6 whitespace-pre-line">
+            {lines.join("\n")}
           </h2>
           <p className="text-muted-foreground leading-relaxed text-lg">
             {config.body}
@@ -345,25 +335,46 @@ function PricingSection({ config }: { config: PricingConfig }) {
         <p className="text-muted-foreground leading-relaxed text-lg max-w-3xl mb-16">
           {config.body}
         </p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-px bg-border max-w-3xl">
-          {config.tiers.map((tier) => (
-            <div key={tier.name} className="bg-background p-10">
-              <h3 className="text-foreground font-medium text-lg mb-2">{tier.name}</h3>
-              <p className="heading-serif text-4xl text-foreground mb-4">
-                {tier.price}
-                {tier.suffix && <span className="text-lg text-muted-foreground">{tier.suffix}</span>}
-              </p>
-              <p className="text-muted-foreground text-sm leading-relaxed mb-6">
-                {tier.description}
-              </p>
-              <ul className="space-y-2 text-sm text-muted-foreground">
-                {tier.features.map((feature) => (
-                  <li key={feature}>✓ {feature}</li>
-                ))}
-              </ul>
-            </div>
-          ))}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-px bg-border max-w-5xl">
+          {config.tiers.map((tier) => {
+            const isFeatured = tier.badge === "Popular";
+            return (
+              <div key={tier.name} className={`bg-background p-10 ${isFeatured ? "ring-2 ring-foreground ring-inset" : ""}`}>
+                <div className="flex items-center gap-2 mb-2">
+                  <h3 className="text-foreground font-medium text-lg">{tier.name}</h3>
+                  {tier.badge && (
+                    <span className="inline-block rounded-full bg-foreground px-3 py-1 text-xs font-medium uppercase tracking-[0.18em] text-background">
+                      {tier.badge}
+                    </span>
+                  )}
+                </div>
+                <p className="heading-serif text-4xl text-foreground mb-4">
+                  {tier.price}
+                  {tier.suffix && <span className="text-lg text-muted-foreground">{tier.suffix}</span>}
+                </p>
+                <p className="text-muted-foreground text-sm leading-relaxed mb-6">
+                  {tier.description}
+                </p>
+                <ul className="space-y-2 text-sm text-muted-foreground mb-6">
+                  {tier.features.map((feature) => (
+                    <li key={feature}>✓ {feature}</li>
+                  ))}
+                </ul>
+                {tier.cta && (
+                  <a
+                    href={tier.cta.href}
+                    className={`inline-flex items-center gap-2 px-6 py-3 rounded-md text-sm font-medium transition-colors ${isFeatured ? "bg-foreground text-background hover:opacity-90" : "border border-border text-foreground hover:border-foreground"}`}
+                  >
+                    {tier.cta.label}
+                  </a>
+                )}
+              </div>
+            );
+          })}
         </div>
+        {config.footerNote && (
+          <p className="text-muted-foreground text-sm leading-relaxed mt-6 max-w-3xl">{config.footerNote} <a href="/about" className="underline hover:text-foreground transition-colors">How Maho stays funded</a>.</p>
+        )}
       </div>
     </section>
   );
@@ -387,6 +398,7 @@ function FinalCtaSection({ config }: { config: FinalCtaConfig }) {
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
+            aria-hidden="true"
             strokeWidth="2"
             strokeLinecap="round"
             strokeLinejoin="round"

@@ -1,12 +1,32 @@
 ---
+// biome-ignore-all assist/source/organizeImports: Astro component imports stay grouped for readability.
+// biome-ignore-all lint/correctness/noUnusedImports: Astro frontmatter imports are referenced in the template.
+// biome-ignore-all lint/correctness/noUnusedVariables: Astro frontmatter variables are referenced in the template.
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Nav from '../components/Nav.astro';
 import LandingPage from '../components/LandingPage';
 import Footer from '../components/Footer.astro';
+import JSONLD from '../components/JSONLD.astro';
+
+const ld = {
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  name: 'Maho Mail',
+  applicationCategory: 'Communication',
+  operatingSystem: 'macOS',
+  description: 'Desktop app, CLI, and MCP server in one email client. Built for developers and AI agents. Free forever.',
+  url: 'https://maho.app/mail',
+  offers: {
+    '@type': 'Offer',
+    price: '0',
+    priceCurrency: 'USD'
+  }
+};
 ---
 
 <BaseLayout title="Maho Mail — One client. Three interfaces." description="Desktop app, CLI, and MCP server in one email client. Built for developers and AI agents.">
-  <main class="min-h-screen bg-background text-foreground">
+  <JSONLD data={ld} />
+  <main id="main" class="min-h-screen bg-background text-foreground">
     <Nav activeProduct="mail" />
     <LandingPage product="mail" />
     <Footer />

@@ -84,7 +84,7 @@ export default defineConfig({
         }
 
         // Marketing pages
-        if (/\/(pricing|security|privacy|terms|waitlist|compare\/?[a-z]*)\/?$/i.test(url)) {
+        if (/\/(pricing|security|privacy|terms|waitlist|why|about|download|compare\/?[a-z]*)\/?$/i.test(url)) {
           item.priority = 0.8;
           item.changefreq = 'monthly';
           return item;

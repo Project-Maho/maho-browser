@@ -17,7 +17,7 @@ const faqs = [
   },
   {
     q: "Is Spark free?",
-    a: "Spark has a free tier for individuals with basic features. The Premium plan ($7.99/user/month) and Team plan add collaboration features, AI capabilities, and priority support. Maho Mail is completely free and open source."
+    a: "Spark has a free tier for individuals with basic features. The Premium plan ($7.99/user/month) and Team plan add collaboration features, AI capabilities, and priority support. Maho Mail is completely free, with no paywalls or feature gates."
   },
   {
     q: "Is my email private with Spark?",
@@ -64,7 +64,7 @@ const schema = {
 <BaseLayout title={title} description={description}>
   <script is:inline type="application/ld+json" set:html={JSON.stringify(schema)} />
   <Nav />
-  <main class="min-h-screen bg-background text-foreground">
+  <main id="main" class="min-h-screen bg-background text-foreground">
 
     <section class="relative flex flex-col justify-center px-6 pt-32 pb-24">
       <div class="max-w-6xl mx-auto">
@@ -146,7 +146,7 @@ const schema = {
               </tr>
               <tr>
                 <td class="py-3 pr-6 text-muted-foreground">Open Source</td>
-                <td class="py-3 px-6 text-foreground">Yes</td>
+                <td class="py-3 px-6 text-foreground">No — proprietary</td>
                 <td class="py-3 pl-6 text-muted-foreground">No — proprietary</td>
               </tr>
             </tbody>
@@ -231,7 +231,7 @@ const schema = {
               </li>
               <li class="flex items-start gap-3 text-muted-foreground">
                 <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>
-                Care about local data privacy and open source
+                Care about local data and verifiable privacy
               </li>
               <li class="flex items-start gap-3 text-muted-foreground">
                 <span class="text-foreground mt-1.5 block w-1 h-1 rounded-full bg-foreground shrink-0"></span>

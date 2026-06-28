@@ -1,15 +1,71 @@
 ---
 // biome-ignore-all assist/source/organizeImports: Astro component imports stay grouped for readability.
 // biome-ignore-all lint/correctness/noUnusedImports: Astro frontmatter imports are referenced in the template.
+// biome-ignore-all lint/correctness/noUnusedVariables: Astro frontmatter variables are referenced in the template.
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Footer from '../../components/Footer.astro';
 import Nav from '../../components/Nav.astro';
+import JSONLD from '../../components/JSONLD.astro';
+
+const ld = {
+  '@context': 'https://schema.org',
+  '@graph': [
+    {
+      '@type': 'Article',
+      headline: 'Maho vs Aside Browser — Comparison',
+      description: 'Two takes on the AI browser. Maho pairs steered AI with cross-device Spaces and BYOK pricing. Aside leads on autonomous agent benchmarks. An honest comparison.',
+      datePublished: '2026-06-28',
+      dateModified: '2026-06-28',
+      author: { '@type': 'Organization', name: 'Maho', url: 'https://maho.app' },
+      publisher: { '@type': 'Organization', name: 'Maho', url: 'https://maho.app' }
+    },
+    {
+      '@type': 'BreadcrumbList',
+      itemListElement: [
+        { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://maho.app' },
+        { '@type': 'ListItem', position: 2, name: 'Compare', item: 'https://maho.app/compare' },
+        { '@type': 'ListItem', position: 3, name: 'Maho vs Aside Browser' }
+      ]
+    },
+    {
+      '@type': 'FAQPage',
+      mainEntity: [
+        {
+          '@type': 'Question',
+          name: 'Is Maho a fork of Aside?',
+          acceptedAnswer: { '@type': 'Answer', text: 'No. Both are independent Chromium forks.' }
+        },
+        {
+          '@type': 'Question',
+          name: "Why doesn't Maho compete on agent benchmarks?",
+          acceptedAnswer: { '@type': 'Answer', text: 'Different product philosophy. We chose Spaces + on-demand AI over autonomous agents.' }
+        },
+        {
+          '@type': 'Question',
+          name: 'Can I migrate from Aside to Maho?',
+          acceptedAnswer: { '@type': 'Answer', text: 'Yes. Maho imports bookmarks, history, and passwords from Aside and most Chromium-based browsers on first launch.' }
+        },
+        {
+          '@type': 'Question',
+          name: 'Is Maho open source like Brave or Firefox?',
+          acceptedAnswer: { '@type': 'Answer', text: 'No. Maho is proprietary, the same as Aside. We focus instead on external verification methods, public architecture documentation, and direct contact with the developer.' }
+        },
+        {
+          '@type': 'Question',
+          name: 'How does Maho make money?',
+          acceptedAnswer: { '@type': 'Answer', text: 'Maho Pro ($5/mo) and Maho Max ($20/mo) — managed AI subscriptions for users who want premium models without managing API keys. No ads, no data sales.' }
+        }
+      ]
+    }
+  ]
+};
 ---
 
 <BaseLayout title="Maho vs Aside Browser - Comparison" description="Two takes on the AI browser. Maho pairs steered AI with cross-device Spaces and BYOK pricing. Aside leads on autonomous agent benchmarks. An honest comparison.">
+  <JSONLD data={ld} />
   <div class="min-h-screen bg-background text-foreground">
     <Nav />
-    <main class="max-w-4xl mx-auto px-6 pt-32 pb-24">
+    <main id="main" class="max-w-4xl mx-auto px-6 pt-32 pb-24">
 
       <!-- §1 Hero -->
       <header class="mb-16 text-center">
@@ -31,7 +87,7 @@ import Nav from '../../components/Nav.astro';
       <section aria-labelledby="tldr-heading" class="mb-20">
         <h2 id="tldr-heading" class="text-2xl font-medium mb-6">The 30-second answer</h2>
         <div class="overflow-x-auto border border-border rounded-lg bg-card">
-          <table class="w-full text-left border-collapse text-sm">
+          <table class="w-full min-w-[640px] text-left border-collapse text-sm">
             <thead>
               <tr class="border-b border-border bg-background">
                 <th class="p-4 font-semibold text-foreground"></th>
@@ -143,7 +199,7 @@ import Nav from '../../components/Nav.astro';
       <section aria-labelledby="detailed-comparison-heading" class="mb-20">
         <h2 id="detailed-comparison-heading" class="text-2xl font-medium mb-6">Detailed comparison</h2>
         <div class="overflow-x-auto border border-border rounded-lg bg-card">
-          <table class="w-full text-left border-collapse text-sm">
+          <table class="w-full min-w-[640px] text-left border-collapse text-sm">
             <thead>
               <tr class="border-b border-border bg-background">
                 <th class="p-4 font-semibold text-foreground">Feature</th>
@@ -320,7 +376,7 @@ import Nav from '../../components/Nav.astro';
 
       <!-- §9 Final CTA -->
       <section class="text-center border border-border rounded-lg p-8 bg-card">
-        <h2 class="text-2xl font-medium mb-4">Try Maho. It's free.</h2>
+        <h2 class="heading-serif text-3xl sm:text-4xl mb-4">Try Maho. It's free.</h2>
         <p class="text-muted-foreground text-sm leading-relaxed max-w-lg mx-auto mb-6">
           Start at $0 with BYOK, move to Pro for $5 or Max for $20 when you want managed AI.
         </p>

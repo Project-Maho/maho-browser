@@ -8,6 +8,7 @@ interface Props {
 
 const { title, description } = Astro.props;
 const canonicalUrl = new URL(Astro.url.pathname, Astro.site);
+const ogImageUrl = new URL('/og-image.png', Astro.site).href;
 ---
 
 <!DOCTYPE html>
@@ -23,11 +24,11 @@ const canonicalUrl = new URL(Astro.url.pathname, Astro.site);
     <meta property="og:type" content="website" />
     <meta property="og:url" content={canonicalUrl.href} />
     <meta property="og:site_name" content="Maho" />
-    <meta property="og:image" content="/og-image.png" />
+    <meta property="og:image" content={ogImageUrl} />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={title} />
     <meta name="twitter:description" content={description} />
-    <meta name="twitter:image" content="/og-image.png" />
+    <meta name="twitter:image" content={ogImageUrl} />
     <link rel="canonical" href={canonicalUrl.href} />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
@@ -35,8 +36,10 @@ const canonicalUrl = new URL(Astro.url.pathname, Astro.site);
     <script is:inline>
       var t=localStorage.getItem("maho-theme")||localStorage.getItem("starlight-theme");if(t==="light"){document.documentElement.classList.replace("dark","light")}if(t){localStorage.setItem("maho-theme",t);localStorage.setItem("starlight-theme",t)}
     </script>
+    <slot name="head" />
   </head>
   <body>
+    <a href="#main" class="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[100] focus:rounded-md focus:bg-foreground focus:text-background focus:px-4 focus:py-2 focus:text-sm">Skip to content</a>
     <slot />
   </body>
 </html>

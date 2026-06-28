@@ -1,25 +1,82 @@
 ---
+// biome-ignore-all assist/source/organizeImports: Astro component imports stay grouped for readability.
+// biome-ignore-all lint/correctness/noUnusedImports: Astro frontmatter imports are referenced in the template.
+// biome-ignore-all lint/correctness/noUnusedVariables: Astro frontmatter data is referenced in the template.
 import ProductSwitcher from './ProductSwitcher';
 import ThemeToggle from './ThemeToggle';
 
 const { activeProduct = "browser" } = Astro.props;
+const currentPath = Astro.url.pathname;
+function isActive(path: string): boolean {
+  if (path === "/") return currentPath === "/";
+  return currentPath.startsWith(path);
+}
 ---
 
-<nav class="fixed top-0 left-0 right-0 z-50 bg-background/80 backdrop-blur-sm">
-  <div class="max-w-6xl mx-auto px-6 flex h-16 items-center justify-between gap-4">
-    <div class="flex items-center gap-4 min-w-0">
+<nav class="fixed top-0 left-0 right-0 z-50 bg-background/80 backdrop-blur-sm" aria-label="Main navigation">
+  <div class="max-w-6xl mx-auto px-6 flex h-16 items-center justify-between gap-3 sm:gap-4">
+    <div class="flex items-center gap-3 sm:gap-4 min-w-0">
       <a href="/" class="text-sm font-medium text-foreground shrink-0">Maho</a>
       <ProductSwitcher client:load activeProduct={activeProduct} />
     </div>
-    <div class="flex items-center gap-6">
-      <a href={activeProduct === "browser" ? "/browser/" : "/cli/"} data-product-docs-link class="text-sm text-muted-foreground hover:text-foreground transition-colors">Docs</a>
-      <a href="/blog" class="text-sm text-muted-foreground hover:text-foreground transition-colors">Blog</a>
+    <div class="hidden md:flex items-center gap-6">
+      <a href={activeProduct === "browser" ? "/browser/" : "/cli/"} data-product-docs-link aria-current={isActive("/browser") || isActive("/cli") || isActive("/mail/") || isActive("/api") ? "page" : undefined} class="text-sm text-muted-foreground hover:text-foreground transition-colors">Docs</a>
+      <a href="/blog" aria-current={isActive("/blog") ? "page" : undefined} class="text-sm text-muted-foreground hover:text-foreground transition-colors">Blog</a>
+      <a href="/pricing" aria-current={isActive("/pricing") ? "page" : undefined} class="text-sm text-muted-foreground hover:text-foreground transition-colors">Pricing</a>
     </div>
-    <div class="flex items-center gap-4">
-      <ThemeToggle client:load />
-      <a data-product-github-link href={activeProduct === "browser" ? "https://github.com/nicepkg/maho" : "https://github.com/aspect-apps/maho-mail"} target="_blank" rel="noopener noreferrer" class="text-muted-foreground hover:text-foreground transition-colors" aria-label="GitHub">
-        <svg viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+    <div class="flex items-center gap-2 sm:gap-4">
+      <div class="hidden sm:block">
+        <ThemeToggle client:load />
+      </div>
+      <a href="/download" class="inline-flex items-center gap-2 px-3 sm:px-4 py-1.5 rounded-full bg-foreground text-background text-sm font-medium hover:opacity-90 transition-opacity whitespace-nowrap">
+        Download
       </a>
+      <details class="md:hidden relative" data-mobile-menu>
+        <summary class="cursor-pointer list-none p-2 -mr-2 text-muted-foreground hover:text-foreground transition-colors" aria-label="Toggle menu">
+          <svg data-menu-icon-closed xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
+          <svg data-menu-icon-open xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="hidden">
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+            <line x1="6" y1="18" x2="18" y2="6"></line>
+          </svg>
+        </summary>
+        <div class="absolute right-0 top-full mt-2 min-w-[200px] rounded-lg border border-border bg-card p-2 shadow-lg">
+          <a href={activeProduct === "browser" ? "/browser/" : "/cli/"} data-product-docs-link aria-current={isActive("/browser") || isActive("/cli") ? "page" : undefined} class="block px-3 py-3 text-sm text-foreground hover:bg-muted rounded-md transition-colors aria-[current=page]:bg-muted">Docs</a>
+          <a href="/blog" aria-current={isActive("/blog") ? "page" : undefined} class="block px-3 py-3 text-sm text-foreground hover:bg-muted rounded-md transition-colors aria-[current=page]:bg-muted">Blog</a>
+          <a href="/pricing" aria-current={isActive("/pricing") ? "page" : undefined} class="block px-3 py-3 text-sm text-foreground hover:bg-muted rounded-md transition-colors aria-[current=page]:bg-muted">Pricing</a>
+          <a href="/why" aria-current={isActive("/why") ? "page" : undefined} class="block px-3 py-3 text-sm text-foreground hover:bg-muted rounded-md transition-colors aria-[current=page]:bg-muted">Why Maho</a>
+          <a href="/about" aria-current={isActive("/about") ? "page" : undefined} class="block px-3 py-3 text-sm text-foreground hover:bg-muted rounded-md transition-colors aria-[current=page]:bg-muted">About</a>
+          <a href="/roadmap" aria-current={isActive("/roadmap") ? "page" : undefined} class="block px-3 py-3 text-sm text-foreground hover:bg-muted rounded-md transition-colors aria-[current=page]:bg-muted">Roadmap</a>
+          <a href="/compare/aside" aria-current={isActive("/compare") ? "page" : undefined} class="block px-3 py-3 text-sm text-foreground hover:bg-muted rounded-md transition-colors aria-[current=page]:bg-muted">vs Aside</a>
+          <div class="sm:hidden border-t border-border my-2"></div>
+          <div class="sm:hidden px-3 py-2 flex items-center justify-between">
+            <span class="text-sm text-muted-foreground">Theme</span>
+            <ThemeToggle client:load />
+          </div>
+        </div>
+      </details>
     </div>
   </div>
 </nav>
+
+<style>
+  details[data-mobile-menu][open] [data-menu-icon-closed] { display: none; }
+  details[data-mobile-menu][open] [data-menu-icon-open] { display: block; }
+</style>
+
+<script is:inline>
+  document.addEventListener('click', function(e) {
+    var menu = document.querySelector('[data-mobile-menu]');
+    if (!menu) return;
+    if (e.target.closest('[data-mobile-menu] a')) {
+      menu.removeAttribute('open');
+      return;
+    }
+    if (!menu.contains(e.target)) {
+      menu.removeAttribute('open');
+    }
+  });
+</script>

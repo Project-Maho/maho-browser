@@ -1,12 +1,49 @@
 ---
+// biome-ignore-all assist/source/organizeImports: Astro component imports stay grouped for readability.
+// biome-ignore-all lint/correctness/noUnusedImports: Astro frontmatter imports are referenced in the template.
+// biome-ignore-all lint/correctness/noUnusedVariables: Astro frontmatter variables are referenced in the template.
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Nav from '../components/Nav.astro';
 import LandingPage from '../components/LandingPage';
 import Footer from '../components/Footer.astro';
+import JSONLD from '../components/JSONLD.astro';
+
+const ld = {
+  '@context': 'https://schema.org',
+  '@graph': [
+    {
+      '@type': 'Organization',
+      '@id': 'https://maho.app/#organization',
+      name: 'Maho',
+      url: 'https://maho.app',
+      logo: 'https://maho.app/logo.svg'
+    },
+    {
+      '@type': 'WebSite',
+      '@id': 'https://maho.app/#website',
+      name: 'Maho',
+      url: 'https://maho.app',
+      publisher: { '@id': 'https://maho.app/#organization' }
+    },
+    {
+      '@type': 'SoftwareApplication',
+      name: 'Maho Browser',
+      applicationCategory: 'BrowserApplication',
+      operatingSystem: 'macOS',
+      description: 'AI browser with Spaces, BYOK, and end-to-end encrypted sync. Free forever.',
+      offers: {
+        '@type': 'Offer',
+        price: '0',
+        priceCurrency: 'USD'
+      }
+    }
+  ]
+};
 ---
 
-<BaseLayout title="Maho — Browser and Mail for modern work" description="Maho Browser and Maho Mail help you work with more focus, better tools, and private, open-source software.">
-  <main class="min-h-screen bg-background text-foreground">
+<BaseLayout title="Maho — Browser and Mail for modern work" description="Maho Browser and Maho Mail help you work with more focus, better tools, and software that respects your data.">
+  <JSONLD data={ld} />
+  <main id="main" class="min-h-screen bg-background text-foreground">
     <Nav activeProduct="browser" />
     <LandingPage product="browser" />
     <Footer />

@@ -23,7 +23,7 @@ const comparisons = [
     slug: "maho-mail-vs-superhuman",
     name: "Superhuman",
     tagline: "Premium speed vs programmable power",
-    differentiator: "Local, free, open source vs polished cloud UX at $30/mo",
+    differentiator: "Local, free, programmable vs polished cloud UX at $30/mo",
   },
   {
     slug: "maho-mail-vs-spark",
@@ -75,7 +75,7 @@ const schema = {
 <BaseLayout title={title} description={description}>
   <script is:inline type="application/ld+json" set:html={JSON.stringify(schema)} />
   <Nav />
-  <main class="min-h-screen bg-background text-foreground">
+  <main id="main" class="min-h-screen bg-background text-foreground">
     <section class="relative flex flex-col justify-center px-6 pt-32 pb-24 bg-background text-foreground">
       <div class="max-w-6xl mx-auto">
         <nav aria-label="Breadcrumb" class="text-sm text-muted-foreground mb-8">

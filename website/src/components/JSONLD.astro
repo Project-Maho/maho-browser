@@ -1,0 +1,77 @@
+---
+/**
+ * JSONLD — Renders a JSON-LD structured data block.
+ *
+ * @example Organization (use on index)
+ * <JSONLD data={{
+ *   "@context": "https://schema.org",
+ *   "@type": "Organization",
+ *   "name": "Maho",
+ *   "url": "https://maho.app",
+ *   "logo": "https://maho.app/logo.svg"
+ * }} />
+ *
+ * @example SoftwareApplication (use on /mail or /index)
+ * <JSONLD data={{
+ *   "@context": "https://schema.org",
+ *   "@type": "SoftwareApplication",
+ *   "name": "Maho Mail",
+ *   "applicationCategory": "Communication",
+ *   "operatingSystem": "macOS",
+ *   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+ * }} />
+ *
+ * @example WebSite (use on index for SearchAction support)
+ * <JSONLD data={{
+ *   "@context": "https://schema.org",
+ *   "@type": "WebSite",
+ *   "name": "Maho",
+ *   "url": "https://maho.app"
+ * }} />
+ *
+ * @example WebPage (use on waitlist, security, privacy, terms)
+ * <JSONLD data={{
+ *   "@context": "https://schema.org",
+ *   "@type": "WebPage",
+ *   "name": "Join the waitlist — Maho",
+ *   "description": "...",
+ *   "url": "https://maho.app/waitlist"
+ * }} />
+ *
+ * @example Product (use on /pricing)
+ * <JSONLD data={{
+ *   "@context": "https://schema.org",
+ *   "@type": "Product",
+ *   "name": "Maho",
+ *   "offers": [{ "@type": "Offer", "price": "0", "priceCurrency": "USD" }]
+ * }} />
+ *
+ * @example Multiple entities via @graph
+ * <JSONLD data={{
+ *   "@context": "https://schema.org",
+ *   "@graph": [
+ *     { "@type": "Organization", "name": "Maho", "url": "https://maho.app" },
+ *     { "@type": "WebSite", "name": "Maho", "url": "https://maho.app" }
+ *   ]
+ * }} />
+ */
+type JSONLDData = Record<string, unknown>;
+
+interface Props {
+  data: JSONLDData;
+}
+
+const { data } = Astro.props;
+
+if (!data || typeof data !== 'object') {
+  console.warn('[JSONLD] data prop must be an object');
+}
+if (data && !('@context' in data)) {
+  console.warn('[JSONLD] data missing @context property');
+}
+if (data && !('@type' in data) && !('@graph' in data)) {
+  console.warn('[JSONLD] data missing @type or @graph property');
+}
+---
+
+<script type="application/ld+json" set:html={JSON.stringify(data)} />
