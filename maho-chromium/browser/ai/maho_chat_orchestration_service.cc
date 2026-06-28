@@ -11,6 +11,8 @@
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/rand_util.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
@@ -23,13 +25,20 @@
 #include "maho/browser/ai/maho_ai_security_utils.h"
 #include "maho/browser/ai/maho_browser_tool_executor.h"
 #include "maho/browser/ai/maho_browser_tool_registry.h"
+#include "maho/browser/ai/maho_conversation_task.h"
 #include "maho/browser/ai/maho_extract_prompt_messages.h"
+#include "maho/browser/ai/maho_tool_execution_graph.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/ui/webui/maho_ai/maho_ai.mojom.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/third_party/maho/maho_bridge.h"
 
 namespace {
+
+std::string GenerateTaskId() {
+  uint64_t random = base::RandUint64();
+  return "orch-" + base::NumberToString(random);
+}
 
 const char kNoActiveTabMessage[] =
     "There is no active page to analyze right now.";
@@ -191,6 +200,12 @@ void MahoChatOrchestrationService::Reset() {
   if (rust_session_) {
     maho_core_chat_cancel(rust_session_);
   }
+  if (active_round_state_ && active_round_state_->task) {
+    active_round_state_->task->Cancel();
+  }
+  if (active_round_state_ && active_round_state_->tool_graph) {
+    active_round_state_->tool_graph->CancelInflight();
+  }
   active_round_state_.reset();
 #endif
   llm_client_.Reset();
@@ -269,6 +284,9 @@ void MahoChatOrchestrationService::HandleMessage(
   state->on_token = std::move(on_token);
   state->on_complete = std::move(on_complete);
   state->on_error = std::move(on_error);
+  state->task = std::make_unique<maho::ConversationTask>(GenerateTaskId());
+  state->tool_graph = std::make_unique<maho::ToolExecutionGraph>(
+      browser_, browser_tools_v1_enabled_);
 
   active_round_state_ = state;
 
@@ -430,7 +448,7 @@ void MahoChatOrchestrationService::OnRustEventResponse(
     const std::string& rust_response_json) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  LOG(ERROR) << "Maho AI raw engine response: " << rust_response_json;
+  DVLOG(1) << "Maho AI raw engine response: " << rust_response_json;
 
   auto parsed = base::JSONReader::Read(rust_response_json, base::JSON_PARSE_RFC);
   if (!parsed) {
@@ -493,6 +511,9 @@ void MahoChatOrchestrationService::OnRustEventResponse(
   state->on_complete = std::move(on_complete);
   state->on_error = std::move(on_error);
   state->prompt_messages = std::move(*prompt_messages);
+  state->task = std::make_unique<maho::ConversationTask>(GenerateTaskId());
+  state->tool_graph = std::make_unique<maho::ToolExecutionGraph>(
+      browser_, browser_tools_v1_enabled_);
 
   StartConversationRound(std::move(state));
 }
@@ -505,6 +526,7 @@ void MahoChatOrchestrationService::StartConversationRound(
     return;
   }
   if (state->round_index >= kMaxToolRounds) {
+    state->task->Error("max tool rounds exceeded");
     std::move(state->on_error).Run(
         "The browser tool loop reached its limit before producing a final answer.");
     return;
@@ -512,18 +534,20 @@ void MahoChatOrchestrationService::StartConversationRound(
 
   state->round_index++;
   received_llm_content_ = false;
+  state->task->StartStreaming();
 
   MahoAiLlmClient::CompletionRequest request;
   request.prompt_messages = state->prompt_messages.Clone();
   llm_client_.StartCompletion(
       std::move(request),
       base::BindRepeating(&MahoChatOrchestrationService::OnLlmToken,
-                          weak_factory_.GetWeakPtr(), state->on_token),
+                          weak_factory_.GetWeakPtr(), state->on_token, state),
       base::BindOnce(&MahoChatOrchestrationService::OnLlmRoundComplete,
                      weak_factory_.GetWeakPtr(), state),
       base::BindOnce([](std::shared_ptr<ConversationRoundState> state,
                         const std::string& error) {
         if (state) {
+          state->task->Error(error);
           std::move(state->on_error).Run(error);
         }
       }, state));
@@ -544,11 +568,13 @@ void MahoChatOrchestrationService::OnLlmRoundComplete(
     }
     received_llm_content_ = false;
     current_request_id_.clear();
+    state->task->Complete();
     std::move(state->on_complete).Run(result.full_text);
     return;
   }
 
   if (!browser_tools_v1_enabled_) {
+    state->task->Error("browser tools disabled");
     std::move(state->on_error).Run("Browser tools are disabled.");
     return;
   }
@@ -574,6 +600,7 @@ void MahoChatOrchestrationService::ExecuteNextToolInvocation(
     }
     received_llm_content_ = false;
     current_request_id_.clear();
+    state->task->Complete();
     std::move(state->on_complete).Run(state->assistant_text);
     return;
   }
@@ -605,8 +632,10 @@ void MahoChatOrchestrationService::ExecuteToolInvocation(
     }
   }
 
-  MahoBrowserToolExecutor executor(browser_, browser_tools_v1_enabled_);
-  executor.Execute(
+  // C2 fix: dispatch through ToolExecutionGraph (heap-owned in
+  // ConversationRoundState) instead of stack-local executor.
+  state->task->EnterToolCall();
+  state->tool_graph->Execute(
       tool_invocation.name, arguments,
       base::BindOnce(&MahoChatOrchestrationService::OnToolInvocationComplete,
                      weak_factory_.GetWeakPtr(), state, tool_invocation));
@@ -622,6 +651,8 @@ void MahoChatOrchestrationService::OnToolInvocationComplete(
     return;
   }
 
+  state->task->LeaveToolCall();
+
 #if defined(MAHO_RUST_AI)
   std::string result_json = SerializeJsonValue(result);
   bool is_last_tool =
@@ -630,6 +661,7 @@ void MahoChatOrchestrationService::OnToolInvocationComplete(
                                        tool_invocation.id.c_str(),
                                        tool_invocation.name.c_str(),
                                        result_json.c_str(), is_last_tool)) {
+    state->task->Error("failed to send tool result to Rust");
     std::move(state->on_error).Run("Failed to send tool result to Rust.");
     active_round_state_.reset();
     return;
@@ -647,6 +679,7 @@ void MahoChatOrchestrationService::OnToolInvocationComplete(
   }
 
   if (state->round_index >= kMaxToolRounds) {
+    state->task->Error("max tool rounds exceeded");
     std::move(state->on_error).Run(
         "The browser tool loop reached its limit before producing a final answer.");
     return;
@@ -718,10 +751,19 @@ std::string MahoChatOrchestrationService::SerializeJsonValue(
   return output;
 }
 
-void MahoChatOrchestrationService::OnLlmToken(const TokenCallback& on_token,
-                                              const std::string& token) {
+void MahoChatOrchestrationService::OnLlmToken(
+    const TokenCallback& on_token,
+    std::shared_ptr<ConversationRoundState> state,
+    const std::string& token) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   received_llm_content_ = true;
+  if (state && state->task) {
+    if (!state->task->OnToken(token)) {
+      state->task->Error("response too large");
+      std::move(state->on_error).Run("Response exceeded maximum size.");
+      return;
+    }
+  }
   on_token.Run(token);
 }
 
@@ -950,6 +992,14 @@ void MahoChatOrchestrationService::OnRustToken(const std::string& token) {
   if (!active_round_state_) {
     return;
   }
+  if (active_round_state_->task) {
+    if (!active_round_state_->task->OnToken(token)) {
+      active_round_state_->task->Error("response too large");
+      std::move(active_round_state_->on_error).Run("Response exceeded maximum size.");
+      active_round_state_.reset();
+      return;
+    }
+  }
   active_round_state_->on_token.Run(token);
 }
 
@@ -965,6 +1015,7 @@ void MahoChatOrchestrationService::OnRustComplete(
                                            tool_calls_json.c_str());
 
   if (tool_calls_json.empty()) {
+    active_round_state_->task->Complete();
     std::move(active_round_state_->on_complete).Run(full_text);
     active_round_state_.reset();
     return;
@@ -972,6 +1023,7 @@ void MahoChatOrchestrationService::OnRustComplete(
 
   auto parsed = base::JSONReader::Read(tool_calls_json, base::JSON_PARSE_RFC);
   if (!parsed || !parsed->is_list()) {
+    active_round_state_->task->Error("invalid tool_calls JSON from Rust");
     std::move(active_round_state_->on_error).Run(
         "Failed to parse tool calls from Rust.");
     active_round_state_.reset();
@@ -1007,6 +1059,12 @@ void MahoChatOrchestrationService::OnRustError(const std::string& error) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!active_round_state_) {
     return;
+  }
+  if (active_round_state_->task) {
+    active_round_state_->task->Error(error);
+  }
+  if (active_round_state_->tool_graph) {
+    active_round_state_->tool_graph->CancelInflight();
   }
   std::move(active_round_state_->on_error).Run(error);
   active_round_state_.reset();

@@ -7,7 +7,9 @@
 #include <string>
 #include <utility>
 
+#include "base/base64.h"
 #include "base/command_line.h"
+#include "base/containers/flat_map.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/json/string_escape.h"
@@ -27,9 +29,11 @@
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/net/maho_boost_injection_handler.h"
+#include "maho/browser/ui/webui/maho_live_folders/maho_live_folder_item_cache.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
+#include "ui/gfx/image/image.h"
 #include "url/gurl.h"
 
 namespace maho {
@@ -85,9 +89,12 @@ const GURL& GetVisibleOrCommittedUrl(content::WebContents* contents) {
                                               : contents->GetVisibleURL();
 }
 
+// LEGACY: replaced by FetchSidebarStateV2 in BuildViewStateModel. Kept
+// compiling for backward compat during transition; will be deleted after
+// 1-week soak (4.2.3).
 FooterSpaceState GetCoreFooterSpaceState() {
   FooterSpaceState state;
-  MahoCore* core = maho::GetCore();
+  ::MahoCore* core = maho::GetCore();
   if (!core) {
     return state;
   }
@@ -248,9 +255,9 @@ std::string GetRawActiveSpaceIdForBrowser(Browser* browser) {
 }
 
 std::optional<base::Value> CallCoreFfi(
-    char* (*ffi_fn)(MahoCore*, const char*),
+    char* (*ffi_fn)(::MahoCore*, const char*),
     const std::string& space_id_json) {
-  MahoCore* core = maho::GetCore();
+  ::MahoCore* core = maho::GetCore();
   if (!core || space_id_json.empty()) {
     return std::nullopt;
   }
@@ -260,6 +267,9 @@ std::optional<base::Value> CallCoreFfi(
   }
   std::string json(json_str);
   maho_string_free(json_str);
+  if (json.find("Research") != std::string::npos) {
+    LOG(ERROR) << "[folder-state-debug] raw sidebar tree json=" << json;
+  }
   return base::JSONReader::Read(json, base::JSON_PARSE_RFC);
 }
 
@@ -287,7 +297,8 @@ std::optional<SidebarTreeNode> ParseTreeNode(
     TabStripModel* model,
     const std::map<std::string, int>& stable_id_map,
     const std::string& active_stable_id,
-    int depth) {
+    int depth,
+    const base::flat_map<std::string, std::vector<uint8_t>>& favicon_map) {
   const auto* dict = value.GetIfDict();
   if (!dict) {
     return std::nullopt;
@@ -335,7 +346,16 @@ std::optional<SidebarTreeNode> ParseTreeNode(
     std::optional<bool> favorite = dict->FindBool("isFavorite");
     node.is_favorite = favorite.value_or(false);
 
-    if (const auto* favicon_dict = dict->FindDict("favicon")) {
+    // V2 path: look up prebuilt favicon from the flat_map (base64-decoded in
+    // BuildViewStateModel). Falls back to legacy int-array parsing if the map
+    // is empty (v1 callers during transition).
+    if (!node.tab_id.empty() && !favicon_map.empty()) {
+      auto fav_it = favicon_map.find(node.tab_id);
+      if (fav_it != favicon_map.end()) {
+        node.favicon_png_data = fav_it->second;
+      }
+    } else if (const auto* favicon_dict = dict->FindDict("favicon")) {
+      // LEGACY: per-byte integer array parsing (v1). Will be removed in 4.2.3.
       if (const auto* data_list = favicon_dict->FindList("data")) {
         std::vector<uint8_t> bytes;
         bytes.reserve(data_list->size());
@@ -389,28 +409,54 @@ std::optional<SidebarTreeNode> ParseTreeNode(
     if (name) {
       node.folder_name = base::UTF8ToUTF16(*name);
     }
-    std::optional<bool> expanded = dict->FindBool("isExpanded");
-    node.is_expanded = expanded.value_or(true);
+    // Parse snake_case keys (live JSON from Rust core); fall back to camelCase
+    // for backward compatibility with any legacy serialiser.
+    std::optional<bool> expanded = dict->FindBool("is_expanded");
+    if (!expanded.has_value()) {
+      expanded = dict->FindBool("isExpanded");
+    }
+    node.is_expanded = expanded.value_or(false);
+    if (name && *name == "Research") {
+      LOG(ERROR) << "[folder-state-debug] Research folderId="
+                 << node.folder_id << " isExpanded=" << node.is_expanded;
+    }
 
-    std::optional<bool> pinned = dict->FindBool("isPinned");
+    std::optional<bool> pinned = dict->FindBool("is_pinned");
+    if (!pinned.has_value()) {
+      pinned = dict->FindBool("isPinned");
+    }
     node.folder_is_pinned = pinned.value_or(false);
 
-    const std::string* parent = dict->FindString("parentFolderId");
+    const std::string* parent = dict->FindString("parent_folder_id");
+    if (!parent) {
+      parent = dict->FindString("parentFolderId");
+    }
     if (parent) {
       node.parent_of_folder_id = *parent;
     }
 
-    const std::string* provider_type = dict->FindString("providerType");
+    const std::string* provider_type = dict->FindString("provider_type");
+    if (!provider_type) {
+      provider_type = dict->FindString("providerType");
+    }
     if (provider_type) {
       node.provider_type = *provider_type;
       node.is_live = !node.provider_type.empty();
+    }
+
+    const std::string* config_json = dict->FindString("config_json");
+    if (!config_json) {
+      config_json = dict->FindString("configJson");
+    }
+    if (config_json) {
+      node.config_json = *config_json;
     }
 
     const auto* children_list = dict->FindList("children");
     if (children_list) {
       int child_idx = 0;
       for (const auto& child_val : *children_list) {
-        auto parsed_child = ParseTreeNode(child_val, model, stable_id_map, active_stable_id, depth + 1);
+        auto parsed_child = ParseTreeNode(child_val, model, stable_id_map, active_stable_id, depth + 1, favicon_map);
         if (parsed_child.has_value()) {
           SidebarTreeNode child_node = std::move(parsed_child.value());
           if (child_node.kind == SidebarNodeKind::kTab) {
@@ -418,6 +464,26 @@ std::optional<SidebarTreeNode> ParseTreeNode(
             child_node.folder_child_index = child_idx++;
           }
           node.children.push_back(std::move(child_node));
+        }
+      }
+    }
+
+    if (node.is_live && node.children.empty() && !node.config_json.empty()) {
+      const auto* cached_items =
+          maho::LiveFolderItemCache::GetInstance().GetItems(node.config_json);
+      if (cached_items) {
+        int child_idx = 0;
+        for (const auto& item : *cached_items) {
+          SidebarTreeNode child;
+          child.kind = SidebarNodeKind::kTab;
+          child.tab_id = item.id;
+          child.title = base::UTF8ToUTF16(item.title);
+          child.host = base::UTF8ToUTF16(item.subtitle);
+          child.url = item.url;
+          child.tab_strip_index = -1;
+          child.parent_folder_id = node.folder_id;
+          child.folder_child_index = child_idx++;
+          node.children.push_back(std::move(child));
         }
       }
     }
@@ -559,11 +625,14 @@ void DispatchShellEvent(
   if (g_shell_event_observer_for_testing) {
     g_shell_event_observer_for_testing->OnShellEventDispatched(kind, json);
   }
-  MahoCore* core = maho::GetCore();
+  ::MahoCore* core = maho::GetCore();
   if (!core) {
     return;
   }
   std::string updates = maho::core::HandleEvent(core, json.c_str());
+  if (kind == "toggle_folder_expanded") {
+    LOG(ERROR) << "[folder-state-debug] handle_event updates=" << updates;
+  }
   if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
     bridge->NotifyChanged();
   }
@@ -593,7 +662,7 @@ void DispatchShellEventEx(
   if (g_shell_event_observer_for_testing) {
     g_shell_event_observer_for_testing->OnShellEventDispatched(kind, json);
   }
-  MahoCore* core = maho::GetCore();
+  ::MahoCore* core = maho::GetCore();
   if (!core) {
     return;
   }
@@ -612,7 +681,7 @@ void DispatchShellEventDict(const std::string& kind,
   if (g_shell_event_observer_for_testing) {
     g_shell_event_observer_for_testing->OnShellEventDispatched(kind, json);
   }
-  MahoCore* core = maho::GetCore();
+  ::MahoCore* core = maho::GetCore();
   if (!core) {
     return;
   }
@@ -685,6 +754,9 @@ MahoSidebarSearchModel MahoSidebarStateAdapter::BuildSearchModel(
   return model;
 }
 
+// LEGACY: replaced by FetchSidebarStateV2 in BuildViewStateModel. Kept
+// compiling for backward compat during transition; will be deleted after
+// 1-week soak (4.2.3).
 MahoSidebarFavoritesModel
 MahoSidebarStateAdapter::BuildFavoritesModelForSpaceIdJson(
     std::string active_space_id_json) {
@@ -695,7 +767,7 @@ MahoSidebarStateAdapter::BuildFavoritesModelForSpaceIdJson(
     return model;
   }
 
-  MahoCore* core = maho::GetCore();
+  ::MahoCore* core = maho::GetCore();
   if (!core || active_space_id_json.empty()) {
     return model;
   }
@@ -792,6 +864,10 @@ MahoSidebarFavoritesModel MahoSidebarStateAdapter::BuildFavoritesModel(
   return model;
 }
 
+// LEGACY: tree-building logic replaced by v2_tree_ from FetchSidebarStateV2.
+// Kept compiling for backward compat during transition; will be cleaned in
+// 4.2.3 (the direct CallCoreFfi fallback path remains for non-BuildViewState
+// callers during soak period).
 MahoSidebarTabListModel MahoSidebarStateAdapter::BuildTabListModel(
     Browser* browser) const {
   MahoSidebarTabListModel model;
@@ -866,10 +942,12 @@ MahoSidebarTabListModel MahoSidebarStateAdapter::BuildTabListModel(
       }
     }
 
-    auto parsed_tree = CallCoreFfi(maho_core_get_sidebar_tree, space_id_json);
+    auto parsed_tree = v2_tree_.has_value()
+        ? std::move(v2_tree_)
+        : CallCoreFfi(maho_core_get_sidebar_tree, space_id_json);
     if (parsed_tree && parsed_tree->is_list()) {
       for (const auto& root_val : parsed_tree->GetList()) {
-        auto parsed_node = ParseTreeNode(root_val, tab_strip_model, stable_id_map, active_stable_id, 0);
+        auto parsed_node = ParseTreeNode(root_val, tab_strip_model, stable_id_map, active_stable_id, 0, v2_favicon_map_);
         if (parsed_node.has_value()) {
           SidebarTreeNode node = std::move(parsed_node.value());
           if ((node.kind == SidebarNodeKind::kTab && node.is_pinned) ||
@@ -996,18 +1074,75 @@ MahoSidebarFooterModel MahoSidebarStateAdapter::BuildFooterModel(
   return model;
 }
 
+// --- V2 FFI: single-call sidebar state ---
+
+std::string MahoSidebarStateAdapter::FetchSidebarStateV2(
+    ::MahoCore* core, const std::string& space_id_json) const {
+  char* raw = maho_core_get_sidebar_state_v2(core, space_id_json.c_str());
+  if (!raw) {
+    return {};
+  }
+  std::string out(raw);
+  maho_string_free(raw);
+  return out;
+}
+
 MahoSidebarViewStateModel MahoSidebarStateAdapter::BuildViewStateModel(
     Browser* browser) const {
   if (!IsSidebarSafeMode()) {
     cycle_space_cache_ = std::make_unique<CycleSpaceCache>();
     cycle_space_cache_->state = GetCoreFooterSpaceState();
   }
+
+  // --- V2 path: single FFI call for tree + favicons ---
+  std::string space_id_json = GetActiveSpaceIdJsonForBrowser(browser);
+  base::flat_map<std::string, std::vector<uint8_t>> favicon_map;
+
+  ::MahoCore* core = maho::GetCore();
+  if (core && !space_id_json.empty() && !IsSidebarSafeMode()) {
+    std::string v2_json = FetchSidebarStateV2(core, space_id_json);
+    if (!v2_json.empty()) {
+      std::optional<base::Value> v2_parsed =
+          base::JSONReader::Read(v2_json, base::JSON_PARSE_RFC);
+      if (const auto* v2_dict = v2_parsed ? v2_parsed->GetIfDict() : nullptr) {
+        const auto* favicons_dict = v2_dict->FindDict("favicons");
+        if (favicons_dict) {
+          for (const auto [tab_id, favicon_val] : *favicons_dict) {
+            if (!favicon_val.is_string()) {
+              continue;
+            }
+            const std::string& base64_str = favicon_val.GetString();
+            if (base64_str.empty()) {
+              continue;
+            }
+            std::string decoded_bytes;
+            if (!base::Base64Decode(base64_str, &decoded_bytes)) {
+              continue;
+            }
+            std::vector<uint8_t> png_data(decoded_bytes.begin(),
+                                          decoded_bytes.end());
+            favicon_map[std::string(tab_id)] = std::move(png_data);
+          }
+        }
+
+        const base::Value* tree_val = v2_dict->Find("tree");
+        if (tree_val && tree_val->is_list()) {
+          v2_tree_ = tree_val->Clone();
+        }
+      }
+    }
+  }
+
+  v2_favicon_map_ = std::move(favicon_map);
+
   MahoSidebarViewStateModel model;
   model.top_bar = BuildTopBarModel(browser);
   model.search = BuildSearchModel(browser);
   model.favorites = BuildFavoritesModel(browser);
   model.tab_list = BuildTabListModel(browser);
   model.footer = BuildFooterModel(browser);
+  v2_favicon_map_.clear();
+  v2_tree_.reset();
   cycle_space_cache_.reset();
   return model;
 }

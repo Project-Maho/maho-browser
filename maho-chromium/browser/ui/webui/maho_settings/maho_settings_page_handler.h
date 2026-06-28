@@ -10,6 +10,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/extensions/extension_uninstall_dialog.h"
@@ -215,6 +216,8 @@ class MahoSettingsPageHandler
 
   std::optional<os_crypt_async::Encryptor> encryptor_;
   void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
+
+  SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<MahoSettingsPageHandler> weak_factory_{this};
 };

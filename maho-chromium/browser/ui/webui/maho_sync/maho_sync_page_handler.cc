@@ -6,7 +6,6 @@
 
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
-#include "base/task/thread_pool.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
 #include "maho/browser/maho_core_holder.h"
@@ -221,22 +220,20 @@ MahoSyncPageHandler::GenerateSyncKeyOnPool() {
 void MahoSyncPageHandler::StartSync(const std::string& relay_url,
                                      StartSyncCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  base::ThreadPool::PostTaskAndReply(
+  maho::PostCoreTaskAndReply(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
       base::BindOnce(&MahoSyncPageHandler::StartSyncOnPool, relay_url,
-                      std::string()),
+                     std::string()),
       base::BindOnce(&MahoSyncPageHandler::OnStartSyncComplete,
-                      weak_factory_.GetWeakPtr(), std::move(callback)));
+                     weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void MahoSyncPageHandler::JoinSync(const std::string& room_id,
                                     const std::string& passphrase,
                                     JoinSyncCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  maho::PostCoreTask<maho_sync::mojom::SyncStatusPtr>(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
       base::BindOnce(&MahoSyncPageHandler::JoinSyncOnPool, room_id,
                      passphrase),
       base::BindOnce(&MahoSyncPageHandler::OnJoinSyncComplete,
@@ -245,9 +242,8 @@ void MahoSyncPageHandler::JoinSync(const std::string& room_id,
 
 void MahoSyncPageHandler::GetSyncStatus(GetSyncStatusCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  maho::PostCoreTask<maho_sync::mojom::SyncStatusPtr>(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
       base::BindOnce(&MahoSyncPageHandler::BuildSyncStatusOnPool),
       base::BindOnce(&MahoSyncPageHandler::OnSyncStatusResult,
                       weak_factory_.GetWeakPtr(), std::move(callback)));
@@ -255,18 +251,16 @@ void MahoSyncPageHandler::GetSyncStatus(GetSyncStatusCallback callback) {
 
 void MahoSyncPageHandler::StopSync() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  base::ThreadPool::PostTask(
+  maho::PostCoreClosure(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
       base::BindOnce(&MahoSyncPageHandler::StopSyncOnPool));
 }
 
 void MahoSyncPageHandler::GetConnectedDevices(
     GetConnectedDevicesCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  maho::PostCoreTask<std::vector<maho_sync::mojom::DeviceInfoPtr>>(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
       base::BindOnce(&MahoSyncPageHandler::BuildDeviceListOnPool),
       base::BindOnce(&MahoSyncPageHandler::OnDeviceListResult,
                       weak_factory_.GetWeakPtr(), std::move(callback)));
@@ -275,9 +269,8 @@ void MahoSyncPageHandler::GetConnectedDevices(
 void MahoSyncPageHandler::GenerateSyncKey(
     GenerateSyncKeyCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  maho::PostCoreTask<GenerateSyncKeyResult>(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
       base::BindOnce(&MahoSyncPageHandler::GenerateSyncKeyOnPool),
       base::BindOnce(&MahoSyncPageHandler::OnGenerateSyncKeyResult,
                       weak_factory_.GetWeakPtr(), std::move(callback)));
@@ -320,9 +313,8 @@ void MahoSyncPageHandler::OnGenerateSyncKeyResult(
 
 void MahoSyncPageHandler::PollSyncStatus() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  maho::PostCoreTask<maho_sync::mojom::SyncStatusPtr>(
       FROM_HERE,
-      {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
       base::BindOnce(&MahoSyncPageHandler::BuildSyncStatusOnPool),
       base::BindOnce(
           [](base::WeakPtr<MahoSyncPageHandler> handler,

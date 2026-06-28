@@ -3,7 +3,6 @@
 #ifndef MAHO_BROWSER_UI_VIEWS_BOOST_MAHO_BOOST_WINDOW_CONTROLLER_H_
 #define MAHO_BROWSER_UI_VIEWS_BOOST_MAHO_BOOST_WINDOW_CONTROLLER_H_
 
-#include <map>
 #include <memory>
 #include <string>
 
@@ -12,6 +11,7 @@
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "maho/browser/ui/browser_user_data.h"
 #include "maho/browser/ui/webui/maho_boost/maho_boost.mojom.h"
 #include "ui/views/widget/widget_observer.h"
 
@@ -38,8 +38,9 @@ inline constexpr int kCodeModeHeight = 582;
 inline constexpr int kCodeModeRightAlignOffsetPx = 265;
 
 // Owns a non-modal top-level native views::Widget (TYPE_WINDOW) that hosts the
-// Boost WebUI editor for a single browser instance.  One controller per
-// browser, kept alive in the static per-browser map.
+// Boost WebUI editor for a single browser instance.  Owned by BrowserUserData
+// so the controller is automatically destroyed when its Browser is torn down —
+// no leak path (fixes audit finding C4).
 //
 // On macOS the window is frameless (remove_standard_frame); custom drag regions
 // are handled via -webkit-app-region:drag on the WebUI side.  On all platforms
@@ -49,11 +50,12 @@ inline constexpr int kCodeModeRightAlignOffsetPx = 265;
 // Auto-closes on: active-tab change, parent-tab top-level navigation, or when
 // another Boost editor opens for the same Browser (broadcasts OnEditorKilled
 // first).
-class MahoBoostWindowController : public views::WidgetObserver,
-                                   public TabStripModelObserver,
-                                   public content::WebContentsObserver {
+class MahoBoostWindowController
+    : public BrowserUserData<MahoBoostWindowController>,
+      public views::WidgetObserver,
+      public TabStripModelObserver,
+      public content::WebContentsObserver {
  public:
-  MahoBoostWindowController(Browser* browser, Profile* profile);
   MahoBoostWindowController(const MahoBoostWindowController&) = delete;
   MahoBoostWindowController& operator=(const MahoBoostWindowController&) =
       delete;
@@ -106,8 +108,11 @@ class MahoBoostWindowController : public views::WidgetObserver,
       content::NavigationHandle* navigation_handle) override;
 
  private:
+  friend class BrowserUserData<MahoBoostWindowController>;
   friend content::WebContents* GetActiveTabForBoost(
       base::WeakPtr<MahoBoostWindowController> controller);
+
+  explicit MahoBoostWindowController(Browser* browser);
 
   void CreateAndShowWidget(const std::string& domain);
   void DestroyWidget();

@@ -6,12 +6,8 @@
 #include <string>
 #include <map>
 #include <vector>
-#include "base/memory/raw_ptr.h"
-#include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/values.h"
-
-struct MahoCore;
 
 namespace maho {
 
@@ -75,7 +71,6 @@ class MahoSpaceFFIClient {
  private:
   std::string DispatchEvent(const base::DictValue& event);
 
-  raw_ptr<MahoCore> core_ = nullptr;
   std::map<std::string, int> folder_depths_;
 
   base::SequenceChecker sequence_checker_;

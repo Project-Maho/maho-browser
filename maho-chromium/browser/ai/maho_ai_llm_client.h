@@ -90,7 +90,8 @@ class MahoAiLlmClient {
         std::string body,
         std::string* sse_buffer,
         CompletionResult* completion_result,
-        const TokenCallback& on_token) const = 0;
+        const TokenCallback& on_token,
+        bool* overflowed) const = 0;
   };
 
   MahoAiLlmClient(

@@ -8,6 +8,7 @@
 
 #include "base/base64.h"
 #include "base/containers/span.h"
+#include "base/timer/timer.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/values.h"
@@ -41,6 +42,12 @@ void MahoFullPageCaptureClient::TriggerCapture(
     return;
   }
 
+  constexpr base::TimeDelta kCaptureWatchdog = base::Seconds(30);
+  client->watchdog_timer_.Start(
+      FROM_HERE, kCaptureWatchdog,
+      base::BindOnce(&MahoFullPageCaptureClient::OnWatchdogTimeout,
+                     base::Unretained(client)));
+
   base::DictValue params;
   params.Set("format", "png");
   params.Set("captureBeyondViewport", true);
@@ -58,7 +65,9 @@ void MahoFullPageCaptureClient::TriggerCapture(
 
 MahoFullPageCaptureClient::MahoFullPageCaptureClient() = default;
 
-MahoFullPageCaptureClient::~MahoFullPageCaptureClient() = default;
+MahoFullPageCaptureClient::~MahoFullPageCaptureClient() {
+  watchdog_timer_.Stop();
+}
 
 void MahoFullPageCaptureClient::DispatchProtocolMessage(
     content::DevToolsAgentHost* agent_host,
@@ -125,6 +134,7 @@ void MahoFullPageCaptureClient::DispatchProtocolMessage(
 
 void MahoFullPageCaptureClient::AgentHostClosed(
     content::DevToolsAgentHost* agent_host) {
+  watchdog_timer_.Stop();
   agent_host_ = nullptr;
   finished_ = true;
   delete this;
@@ -135,11 +145,16 @@ void MahoFullPageCaptureClient::Finish() {
     return;
   }
   finished_ = true;
+  watchdog_timer_.Stop();
   if (agent_host_) {
     agent_host_->DetachClient(this);
     agent_host_ = nullptr;
   }
   delete this;
+}
+
+void MahoFullPageCaptureClient::OnWatchdogTimeout() {
+  Finish();
 }
 
 }  // namespace maho

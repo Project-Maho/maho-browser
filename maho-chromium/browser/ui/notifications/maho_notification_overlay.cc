@@ -2,13 +2,210 @@
 
 #include "maho/browser/ui/notifications/maho_notification_overlay.h"
 
-#include "base/logging.h"
+#include <algorithm>
+#include <utility>
 
-MahoNotificationOverlay::MahoNotificationOverlay() = default;
-MahoNotificationOverlay::~MahoNotificationOverlay() = default;
+#include "base/task/single_thread_task_runner.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "maho/browser/ui/notifications/maho_toast_view.h"
+#include "ui/compositor/layer.h"
+#include "ui/gfx/animation/tween.h"
+#include "ui/views/widget/widget.h"
 
-void MahoNotificationOverlay::Show(const std::string& title,
-                                   const std::string& body) {
-  LOG(INFO) << "MahoNotificationOverlay::Show title=" << title
-            << " body=" << body;
+MahoNotificationOverlay::MahoNotificationOverlay(Browser* browser)
+    : BrowserUserData<MahoNotificationOverlay>(browser), browser_(browser) {
+  if (browser_) {
+    BrowserView* bv = BrowserView::GetBrowserViewForBrowser(browser_);
+    if (bv && bv->GetWidget()) {
+      parent_widget_observed_ = bv->GetWidget();
+      parent_widget_observed_->AddObserver(this);
+    }
+  }
+  browser_collection_observation_.Observe(GlobalBrowserCollection::GetInstance());
+}
+
+MahoNotificationOverlay::~MahoNotificationOverlay() {
+  if (widget_) {
+    widget_->RemoveObserver(this);
+    widget_.reset();
+  }
+  if (parent_widget_observed_) {
+    parent_widget_observed_->RemoveObserver(this);
+    parent_widget_observed_ = nullptr;
+  }
+}
+
+void MahoNotificationOverlay::Show(const std::u16string& title,
+                                   const std::u16string& body,
+                                   base::TimeDelta duration) {
+  if (browser_) {
+    BrowserView* bv = BrowserView::GetBrowserViewForBrowser(browser_);
+    if (!bv || !bv->GetWidget()) {
+      return;
+    }
+  }
+
+  if (widget_) {
+    slide_animation_.Stop();
+    dismiss_timer_.Stop();
+    widget_->RemoveObserver(this);
+    widget_->CloseNow();
+    widget_.reset();
+    toast_view_ = nullptr;
+    is_hiding_ = false;
+  }
+
+  CreateWidget();
+  toast_view_->SetTitleText(title);
+  toast_view_->SetBodyText(body);
+  toast_view_->SetOnClicked(base::BindRepeating(
+      &MahoNotificationOverlay::Hide, weak_factory_.GetWeakPtr()));
+
+  widget_->ShowInactive();
+  StartShowAnimation();
+  dismiss_timer_.Start(FROM_HERE, duration,
+      base::BindOnce(&MahoNotificationOverlay::OnDismissTimerFired,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void MahoNotificationOverlay::Hide() {
+  if (!widget_ || is_hiding_) return;
+  dismiss_timer_.Stop();
+  StartHideAnimation();
+}
+
+bool MahoNotificationOverlay::IsVisible() const {
+  return widget_ && widget_->IsVisible() && !is_hiding_;
+}
+
+void MahoNotificationOverlay::OnWidgetDestroying(views::Widget* widget) {
+  if (widget == widget_.get()) {
+    weak_factory_.InvalidateWeakPtrs();
+    dismiss_timer_.Stop();
+    slide_animation_.Stop();
+    is_hiding_ = false;
+    toast_view_ = nullptr;
+    widget_.release();
+    PostRemovalIfNeeded();
+    return;
+  }
+  if (widget == parent_widget_observed_) {
+    parent_widget_observed_ = nullptr;
+    PostRemovalIfNeeded();
+  }
+}
+
+void MahoNotificationOverlay::PostRemovalIfNeeded() {
+  if (removal_posted_) {
+    return;
+  }
+  removal_posted_ = true;
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(&MahoNotificationOverlay::RemoveFromBrowser, browser_));
+}
+
+void MahoNotificationOverlay::OnBrowserClosed(BrowserWindowInterface* browser) {
+  if (browser && browser->GetBrowserForMigrationOnly() == browser_) {
+    PostRemovalIfNeeded();
+  }
+}
+
+void MahoNotificationOverlay::AnimationProgressed(
+    const gfx::Animation* animation) {
+  if (!widget_ || animation != &slide_animation_) return;
+  double progress = animation->GetCurrentValue();
+  double effective = is_hiding_ ? (1.0 - progress) : progress;
+
+  gfx::Rect target = ComputeTargetBounds();
+  if (target.IsEmpty()) return;
+
+  gfx::Rect current = target;
+  int slide_distance = target.height() + 24;
+  current.set_y(target.y() - static_cast<int>((1.0 - effective) * slide_distance));
+  widget_->SetBounds(current);
+
+  auto* root_view = widget_->GetRootView();
+  if (root_view && root_view->layer()) {
+    root_view->layer()->SetOpacity(effective);
+  }
+}
+
+void MahoNotificationOverlay::AnimationEnded(const gfx::Animation* animation) {
+  if (animation != &slide_animation_) return;
+  if (is_hiding_ && widget_) {
+    widget_->RemoveObserver(this);
+    widget_->CloseNow();
+    widget_.reset();
+    toast_view_ = nullptr;
+    is_hiding_ = false;
+  }
+}
+
+void MahoNotificationOverlay::CreateWidget() {
+  views::Widget::InitParams params(
+      views::Widget::InitParams::CLIENT_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_POPUP);
+  params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
+  params.activatable = views::Widget::InitParams::Activatable::kNo;
+  params.accept_events = true;
+  params.shadow_type = views::Widget::InitParams::ShadowType::kDrop;
+
+  if (browser_) {
+    BrowserView* bv = BrowserView::GetBrowserViewForBrowser(browser_);
+    params.parent = bv->GetWidget()->GetNativeView();
+  } else {
+    params.context = context_for_testing_;
+  }
+  params.bounds = ComputeTargetBounds();
+
+  widget_ = std::make_unique<views::Widget>();
+  widget_->Init(std::move(params));
+  widget_->AddObserver(this);
+
+  auto toast = std::make_unique<MahoToastView>();
+  toast_view_ = toast.get();
+  widget_->SetContentsView(std::move(toast));
+
+  auto* root_view = widget_->GetRootView();
+  if (root_view) {
+    root_view->SetPaintToLayer();
+    root_view->layer()->SetFillsBoundsOpaquely(false);
+  }
+}
+
+void MahoNotificationOverlay::StartShowAnimation() {
+  is_hiding_ = false;
+  slide_animation_.SetSlideDuration(base::Milliseconds(300));
+  slide_animation_.SetTweenType(gfx::Tween::EASE_OUT);
+  slide_animation_.Show();
+}
+
+void MahoNotificationOverlay::StartHideAnimation() {
+  is_hiding_ = true;
+  slide_animation_.SetSlideDuration(base::Milliseconds(200));
+  slide_animation_.SetTweenType(gfx::Tween::EASE_IN);
+  slide_animation_.Hide();
+}
+
+gfx::Rect MahoNotificationOverlay::ComputeTargetBounds() const {
+  BrowserView* bv = browser_ ? BrowserView::GetBrowserViewForBrowser(browser_) : nullptr;
+  if (!bv || !bv->contents_container()) {
+    gfx::Size toast_size = toast_view_ ? toast_view_->GetPreferredSize() : gfx::Size(320, 80);
+    return gfx::Rect(gfx::Point(100, 100), toast_size);
+  }
+
+  gfx::Size toast_size = toast_view_ ? toast_view_->GetPreferredSize() : gfx::Size(320, 80);
+  gfx::Rect content_bounds = bv->contents_container()->GetBoundsInScreen();
+  constexpr int kMarginPx = 16;
+  int x = content_bounds.right() - toast_size.width() - kMarginPx;
+  int y = content_bounds.y() + kMarginPx;
+  return gfx::Rect(gfx::Point(x, y), toast_size);
+}
+
+void MahoNotificationOverlay::OnDismissTimerFired() {
+  StartHideAnimation();
 }

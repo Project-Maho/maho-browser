@@ -9,13 +9,15 @@
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
-#include "base/memory/raw_ptr_exclusion.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
 #include "maho/browser/ai/maho_ai_runtime_adapter.h"
+#include "maho/browser/ai/maho_conversation_task.h"
+#include "maho/browser/ai/maho_ffi_callback_handle.h"
+#include "maho/browser/ai/maho_tool_execution_graph.h"
 #include "components/os_crypt/async/common/encryptor.h"
 #include "maho/third_party/maho/maho_ffi.h"
 
@@ -30,6 +32,12 @@ class SharedURLLoaderFactory;
 
 // Unified Agent adapter that implements MahoAiRuntimeAdapter by calling into
 // the maho-ffi C-ABI surface.
+//
+// Ownership of cross-thread state is split across three primitives:
+//   - FfiCallbackHandle<T>: owns the void* user_data bridge for Rust callbacks;
+//     guarantees no leak (C5) and cancellation-based lifetime (H6).
+//   - ConversationTask: owns the per-turn accumulator with 2 MB cap (H13).
+//   - ToolExecutionGraph: owns the tool executor instance (C2, lifetime).
 class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
  public:
   MahoUnifiedAgentAdapter(
@@ -57,27 +65,17 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
  private:
   friend class MahoUnifiedAgentAdapterTest;
 
-  // SAFETY: FfiUserData is heap-allocated via shared_ptr. The adapter owns
-  // a strong reference; callbacks dispatched via PostTask capture a copy of
-  // the shared_ptr, keeping FfiUserData alive until the posted task runs.
-  // This closes the UAF window between ~MahoUnifiedAgentAdapter (drops the
-  // adapter's strong ref) and pending in-flight Rust callbacks that
-  // dereference user_data.
-  struct FfiUserData {
-    FfiUserData();
-    ~FfiUserData();
-    base::WeakPtr<MahoUnifiedAgentAdapter> weak_adapter;
-    scoped_refptr<base::SequencedTaskRunner> task_runner;
-    // BYOK encrypted blobs loaded at session creation (UI thread); decrypted
-    // on demand in OnAgentSecureStorage. Encrypted bytes are not sensitive
-    // so cross-thread access without lock is safe. Snapshot semantics:
-    // pref changes during a session are NOT reflected; the new key takes
-    // effect on the next session.
+  // Thread-safe, immutable BYOK data snapshot for OnAgentSecureStorage.
+  // Created once per session in SubmitMessage; immutable thereafter so
+  // safe to read from arbitrary Rust threads without locks.
+  struct ByokSnapshot {
+    ByokSnapshot();
+    ~ByokSnapshot();
+
     std::string encrypted_byok_openai_b64;
     std::string encrypted_byok_anthropic_b64;
     std::shared_ptr<os_crypt_async::Encryptor> encryptor;
   };
-
 
   static MahoAgentPermissionDecision OnAgentPermission(void* user_data,
                                                         const char* tool_name,
@@ -101,20 +99,30 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
   raw_ptr<PrefService> prefs_;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
 
-  RAW_PTR_EXCLUSION struct MahoAgentSession* agent_session_ = nullptr;
-  // Strong ref owned by adapter. Callbacks dispatched via PostTask capture
-  // a shared_ptr copy to keep FfiUserData alive until the task runs, even
-  // if the adapter is destroyed in the meantime.
-  std::shared_ptr<FfiUserData> ffi_user_data_;
-  // Weak handle on heap that we pass to Rust as user_data. Allocated when
-  // ffi_user_data_ is created and intentionally leaked at destruction
-  // (~16 bytes) because pending Rust-side callbacks may still dereference
-  // it. A future enhancement can free this via a Rust-side free_fn.
-  RAW_PTR_EXCLUSION std::weak_ptr<FfiUserData>* user_data_handle_ = nullptr;
+  raw_ptr<struct MahoAgentSession> agent_session_ = nullptr;
 
+  // --- Three primitives (4.1.1/4.1.2/4.1.3) ---
+
+  // Owns the void* user_data bridge passed to maho_agent_send_message
+  // callbacks (OnAgentToken, OnAgentComplete, OnAgentError). Closes C5
+  // (no leak) and H6 (cancellation-based lifetime contract).
+  std::unique_ptr<maho::FfiCallbackHandle<MahoUnifiedAgentAdapter>>
+      callback_handle_;
+
+  // Per-turn conversation state with bounded 2 MB accumulator (H13).
+  std::unique_ptr<maho::ConversationTask> conversation_task_;
+
+  // Tool executor with deterministic lifetime (C2). nullptr until a
+  // Browser* is available (adapter may be constructed before Browser).
+  std::unique_ptr<maho::ToolExecutionGraph> tool_graph_;
+
+  // --- BYOK secure storage bridge ---
+  // Heap bridge for OnAgentSecureStorage callback user_data.
+  // Properly deleted in Reset()/destructor (no leak).
+  std::shared_ptr<ByokSnapshot> byok_snapshot_;
+  raw_ptr<std::shared_ptr<ByokSnapshot>> byok_bridge_ = nullptr;
 
   std::string session_id_;
-  std::string accumulated_text_;
   RuntimeEventCallback current_on_event_;
   std::string pending_message_;
 
@@ -122,6 +130,7 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
   void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
 
   base::WeakPtrFactory<MahoUnifiedAgentAdapter> weak_factory_{this};
+
 };
 
 #endif  // MAHO_BROWSER_AI_MAHO_UNIFIED_AGENT_ADAPTER_H_

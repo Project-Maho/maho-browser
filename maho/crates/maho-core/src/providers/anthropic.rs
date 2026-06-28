@@ -26,8 +26,8 @@ impl LLMProvider for AnthropicProvider {
         messages: Vec<Value>,
         tools: Vec<Value>,
     ) -> Pin<Box<dyn Stream<Item = Result<LLMStreamChunk, String>> + Send>> {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let client = reqwest::Client::new();
+        let (tx, rx) = tokio::sync::mpsc::channel(256);
+        let client = crate::http::shared_http_client();
 
         let endpoint_url = format!("{}/messages", self.endpoint.trim_end_matches('/'));
 
@@ -72,7 +72,7 @@ impl LLMProvider for AnthropicProvider {
             let res = match req.send().await {
                 Ok(r) => r,
                 Err(e) => {
-                    let _ = tx.send(Err(format!("Request failed: {}", e)));
+                    let _ = tx.try_send(Err(format!("Request failed: {}", e)));
                     return;
                 }
             };
@@ -80,7 +80,7 @@ impl LLMProvider for AnthropicProvider {
             if !res.status().is_success() {
                 let status = res.status();
                 let err_text = res.text().await.unwrap_or_default();
-                let _ = tx.send(Err(format!("HTTP error {}: {}", status, err_text)));
+                let _ = tx.try_send(Err(format!("HTTP error {}: {}", status, err_text)));
                 return;
             }
 
@@ -91,7 +91,7 @@ impl LLMProvider for AnthropicProvider {
                 let chunk = match chunk_result {
                     Ok(b) => b,
                     Err(e) => {
-                        let _ = tx.send(Err(format!("Stream error: {}", e)));
+                        let _ = tx.try_send(Err(format!("Stream error: {}", e)));
                         return;
                     }
                 };
@@ -99,7 +99,7 @@ impl LLMProvider for AnthropicProvider {
                 let chunk_str = match std::str::from_utf8(&chunk) {
                     Ok(s) => s,
                     Err(_) => {
-                        let _ = tx.send(Err("Invalid UTF-8 chunk".to_string()));
+                        let _ = tx.try_send(Err("Invalid UTF-8 chunk".to_string()));
                         return;
                     }
                 };
@@ -140,14 +140,14 @@ impl LLMProvider for AnthropicProvider {
                                     Some("text_delta") => {
                                         if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
                                             if !text.is_empty() {
-                                                let _ = tx.send(Ok(LLMStreamChunk::Token(text.to_string())));
+                                                let _ = tx.try_send(Ok(LLMStreamChunk::Token(text.to_string())));
                                             }
                                         }
                                     }
                                     Some("input_json_delta") => {
                                         let index = json.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
                                         let partial_json = delta.get("partial_json").and_then(|p| p.as_str()).unwrap_or_default().to_string();
-                                        let _ = tx.send(Ok(LLMStreamChunk::ToolCallDelta {
+                                        let _ = tx.try_send(Ok(LLMStreamChunk::ToolCallDelta {
                                             index,
                                             id: None,
                                             name: None,
@@ -159,13 +159,12 @@ impl LLMProvider for AnthropicProvider {
                             }
                         }
                         Some("content_block_start") => {
-                            // For tool_use blocks, emit the initial id and name
                             if let Some(content_block) = json.get("content_block") {
                                 if content_block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
                                     let index = json.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
                                     let id = content_block.get("id").and_then(|i| i.as_str()).map(|s| s.to_string());
                                     let name = content_block.get("name").and_then(|n| n.as_str()).map(|s| s.to_string());
-                                    let _ = tx.send(Ok(LLMStreamChunk::ToolCallDelta {
+                                    let _ = tx.try_send(Ok(LLMStreamChunk::ToolCallDelta {
                                         index,
                                         id,
                                         name,
@@ -179,20 +178,19 @@ impl LLMProvider for AnthropicProvider {
                                 .and_then(|e| e.get("message"))
                                 .and_then(|m| m.as_str())
                                 .unwrap_or("Unknown Anthropic error");
-                            let _ = tx.send(Err(err_msg.to_string()));
+                            let _ = tx.try_send(Err(err_msg.to_string()));
                             return;
                         }
                         Some("message_stop") => {
                             return;
                         }
-                        // message_start, message_delta, ping — ignored
                         _ => {}
                     }
                 }
             }
         });
 
-        stream_utils::channel_to_stream(rx)
+        stream_utils::bounded_channel_to_stream(rx)
     }
 
     fn models(&self) -> Vec<ModelInfo> {

@@ -23,14 +23,23 @@
 //           MahoAdBlockTabHelper::FromWebContents(wc);
 //       if (helper) {
 //         on_blocked = base::BindRepeating(
-//             &MahoAdBlockTabHelper::IncrementBlockedCount,
-//             base::Unretained(helper));
+//             [](base::WeakPtr<MahoAdBlockTabHelper> weak) {
+//               if (weak) {
+//                 weak->IncrementBlockedCount();
+//               }
+//             },
+//             helper->GetWeakPtr());
 //       }
 //     }
 //     result.push_back(
 //         std::make_unique<MahoAdBlockThrottle>(std::move(on_blocked)));
 //   }
 //   result.push_back(std::make_unique<MahoWebStoreUAThrottle>());
+//
+// NOTE (audit H1 fix): WillStartRequest runs on the UI thread
+// (DCHECK_CURRENTLY_ON(BrowserThread::UI)), so no PostTask hop is needed.
+// GetWeakPtr() instead of base::Unretained() eliminates the UAF window if
+// the tab closes between throttle construction and the first request.
 //
 // MahoAdBlockThrottle intercepts every network request via
 // WillStartRequest() and calls maho::core::CheckRequest(), which

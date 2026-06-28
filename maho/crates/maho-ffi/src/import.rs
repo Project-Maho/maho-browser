@@ -25,16 +25,24 @@ fn to_json_cstring<T: serde::Serialize>(val: &T) -> *mut c_char {
 /// free the returned string via `maho_import_string_free`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_import_detect_browsers() -> *mut c_char {
+    crate::ffi_safe!({
+
     let browsers = detect_installed_browsers();
     to_json_cstring(&browsers)
+
+    }, ptr::null_mut())
 }
 
 /// Free a string returned by `maho_import_detect_browsers`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_import_string_free(s: *mut c_char) {
+    crate::ffi_safe!({
+
     if !s.is_null() {
         drop(CString::from_raw(s));
     }
+
+    }, ())
 }
 
 use std::ffi::c_void;
@@ -158,17 +166,26 @@ pub unsafe extern "C" fn maho_import_orchestrator_start(
     )>,
     user_data: *mut c_void,
 ) -> *mut MahoImportSession {
+    crate::ffi_safe!({
+
     if core_ptr.is_null() || browser_json.is_null() {
+        return ptr::null_mut();
+    }
+
+    // SAFETY(H15): Acquire the import gate so concurrent FFI calls on MahoCore
+    // are rejected for the duration of this import session.
+    if !crate::import_gate::enter() {
+        // Another import is already active.
         return ptr::null_mut();
     }
 
     let browser_str = match CStr::from_ptr(browser_json).to_str() {
         Ok(s) => s,
-        Err(_) => return ptr::null_mut(),
+        Err(_) => { crate::import_gate::exit(); return ptr::null_mut(); }
     };
     let browser: DetectedBrowser = match serde_json::from_str(browser_str) {
         Ok(b) => b,
-        Err(_) => return ptr::null_mut(),
+        Err(_) => { crate::import_gate::exit(); return ptr::null_mut(); }
     };
 
     let essentials: Vec<String> = if essentials_json.is_null() {
@@ -194,6 +211,7 @@ pub unsafe extern "C" fn maho_import_orchestrator_start(
     let handle = thread::Builder::new()
         .name("maho-import-orchestrator".into())
         .spawn(move || {
+            let _gate = crate::import_gate::GateGuard;
             let mut orchestrator = Orchestrator::new(destination);
             if !essentials.is_empty() {
                 orchestrator.set_selected_essentials(essentials);
@@ -248,8 +266,10 @@ pub unsafe extern "C" fn maho_import_orchestrator_start(
             });
             Box::into_raw(session)
         }
-        None => ptr::null_mut(),
+        None => { crate::import_gate::exit(); ptr::null_mut() }
     }
+
+    }, ptr::null_mut())
 }
 
 /// Cancel an in-flight import. Safe to call from any thread. The cancellation
@@ -260,11 +280,15 @@ pub unsafe extern "C" fn maho_import_orchestrator_start(
 /// or NULL (no-op).
 #[no_mangle]
 pub unsafe extern "C" fn maho_import_orchestrator_cancel(handle: *mut MahoImportSession) {
+    crate::ffi_safe!({
+
     if handle.is_null() {
         return;
     }
     let session = &*handle;
     session.cancel_token.store(true, Ordering::SeqCst);
+
+    }, ())
 }
 
 /// Free the import session handle. MUST be called after the terminal callback
@@ -276,6 +300,8 @@ pub unsafe extern "C" fn maho_import_orchestrator_cancel(handle: *mut MahoImport
 /// or NULL (no-op). Must not be called more than once per handle.
 #[no_mangle]
 pub unsafe extern "C" fn maho_import_orchestrator_free(handle: *mut MahoImportSession) {
+    crate::ffi_safe!({
+
     if handle.is_null() {
         return;
     }
@@ -283,6 +309,8 @@ pub unsafe extern "C" fn maho_import_orchestrator_free(handle: *mut MahoImportSe
     if let Some(thread) = session.thread.take() {
         let _ = thread.join();
     }
+
+    }, ())
 }
 
 struct CallbackContext {

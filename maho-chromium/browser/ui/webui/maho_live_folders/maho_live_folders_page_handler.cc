@@ -13,6 +13,12 @@
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/prefs/pref_service.h"
+#include "maho/browser/maho_core_holder.h"
+#include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
+#include "maho/browser/ui/webui/maho_live_folders/maho_live_folder_item_cache.h"
+#include "maho/third_party/maho/maho_ffi.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -20,8 +26,6 @@
 #include "services/network/public/mojom/url_response_head.mojom.h"
 
 namespace {
-
-constexpr char kPrefLiveFolders[] = "maho.live_folders";
 
 constexpr net::NetworkTrafficAnnotationTag kGitHubTrafficAnnotation =
     net::DefineNetworkTrafficAnnotation("maho_live_folder_github", R"(
@@ -54,6 +58,47 @@ constexpr net::NetworkTrafficAnnotationTag kGoogleCalendarTrafficAnnotation =
 constexpr base::TimeDelta kGitHubRefreshInterval = base::Minutes(5);
 constexpr base::TimeDelta kGCalRefreshInterval = base::Minutes(2);
 constexpr size_t kMaxResponseSize = 1024 * 1024;
+
+}  // namespace
+
+namespace {
+
+// Returns the core folder_id for a folder whose configJson matches
+// |config_json| in |space_id|, or empty string if not found.
+// Uses maho_core_get_folder_view_models FFI to query the Rust model.
+std::string FindCoreFolderIdByConfig(const std::string& space_id,
+                                     const std::string& config_json) {
+  MahoCore* core = maho::GetCore();
+  if (!core || space_id.empty() || config_json.empty()) {
+    return std::string();
+  }
+  std::string space_id_json = "\"" + space_id + "\"";
+  char* json_str =
+      maho_core_get_folder_view_models(core, space_id_json.c_str());
+  if (!json_str) {
+    return std::string();
+  }
+  std::string json(json_str);
+  maho_string_free(json_str);
+
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_list()) {
+    return std::string();
+  }
+  for (const auto& entry : parsed->GetList()) {
+    const auto* dict = entry.GetIfDict();
+    if (!dict) {
+      continue;
+    }
+    const std::string* cfg = dict->FindString("configJson");
+    if (cfg && *cfg == config_json) {
+      const std::string* id = dict->FindString("id");
+      return id ? *id : std::string();
+    }
+  }
+  return std::string();
+}
 
 }  // namespace
 
@@ -145,6 +190,33 @@ void MahoLiveFolderPageHandler::AddFolder(const std::string& provider_type,
     config.name = "Live Folder";
   }
 
+  // Register in Rust core so the folder appears in the sidebar tree and
+  // toggle_folder_expanded can operate on it.
+  auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+  if (bridge) {
+    const std::string& space_id = bridge->GetActiveSpaceId();
+    if (!space_id.empty()) {
+      maho::PostCoreClosure(
+          FROM_HERE,
+          base::BindOnce(
+              [](const std::string& space_id, const std::string& name,
+                 const std::string& provider_type,
+                 const std::string& config_json) {
+                std::string existing_core_id =
+                    FindCoreFolderIdByConfig(space_id, config_json);
+                if (existing_core_id.empty()) {
+                  maho::DispatchShellEventEx("create_folder", {
+                      maho::ShellEventField("space_id", space_id),
+                      maho::ShellEventField("name", name),
+                      maho::ShellEventField("is_pinned", false),
+                      maho::ShellEventField("provider_type", provider_type),
+                      maho::ShellEventField("config_json", config_json)});
+                }
+              },
+              space_id, config.name, provider_type, config_json));
+    }
+  }
+
   folders_[config.id] = config;
   SaveFolders();
   ScheduleRefresh(config.id);
@@ -154,12 +226,50 @@ void MahoLiveFolderPageHandler::AddFolder(const std::string& provider_type,
 
 void MahoLiveFolderPageHandler::RemoveFolder(const std::string& folder_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  // Capture config_json before erasing so we can find the core folder.
+  std::string config_json;
+  auto it = folders_.find(folder_id);
+  if (it != folders_.end()) {
+    config_json = it->second.config_json;
+  }
+
   folders_.erase(folder_id);
   cached_items_.erase(folder_id);
   active_loaders_.erase(folder_id);
   refresh_timers_.erase(folder_id);
   pending_callbacks_.erase(folder_id);
   SaveFolders();
+
+  // Also remove the corresponding Folder from Rust core so it doesn't
+  // linger as an orphan in the sidebar tree.
+  if (!config_json.empty()) {
+    auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+    if (bridge) {
+      const std::string& space_id = bridge->GetActiveSpaceId();
+      if (!space_id.empty()) {
+        maho::PostCoreClosure(
+            FROM_HERE,
+            base::BindOnce(
+                [](const std::string& space_id,
+                   const std::string& config_json) {
+                  std::string core_folder_id =
+                      FindCoreFolderIdByConfig(space_id, config_json);
+                  if (!core_folder_id.empty()) {
+                    maho::DispatchShellEvent("delete_folder", {
+                        {"space_id", space_id},
+                        {"folder_id", core_folder_id}});
+                  }
+                },
+                space_id, config_json));
+      }
+    }
+  }
+
+  // Clear any cached items for this config_json from the item cache.
+  if (!config_json.empty()) {
+    maho::LiveFolderItemCache::GetInstance().Clear(config_json);
+  }
 }
 
 void MahoLiveFolderPageHandler::RefreshFolder(const std::string& folder_id) {
@@ -285,6 +395,26 @@ void MahoLiveFolderPageHandler::OnGitHubResponse(
   }
   cached_items_[folder_id] = std::move(items);
 
+  // Populate the shared item cache for sidebar tree injection.
+  auto folder_it = folders_.find(folder_id);
+  if (folder_it != folders_.end()) {
+    std::vector<maho::LiveFolderCachedItem> cache_items;
+    for (const auto& item : cached_items_[folder_id]) {
+      maho::LiveFolderCachedItem ci;
+      ci.id = item->id;
+      ci.title = item->title;
+      ci.subtitle = item->subtitle;
+      ci.url = item->url;
+      cache_items.push_back(std::move(ci));
+    }
+    maho::LiveFolderItemCache::GetInstance().SetItems(
+        folder_it->second.config_json, std::move(cache_items));
+    // Trigger sidebar rebuild so expanded live folders show updated children.
+    if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
+      bridge->NotifyChanged();
+    }
+  }
+
   auto cb_it = pending_callbacks_.find(folder_id);
   if (cb_it != pending_callbacks_.end()) {
     std::vector<maho_live_folders::mojom::LiveFolderItemPtr> cloned;
@@ -313,6 +443,24 @@ void MahoLiveFolderPageHandler::OnGoogleCalendarResponse(
     items = ParseGoogleCalendarEvents(*body);
   }
   cached_items_[folder_id] = std::move(items);
+
+  auto folder_it = folders_.find(folder_id);
+  if (folder_it != folders_.end()) {
+    std::vector<maho::LiveFolderCachedItem> cache_items;
+    for (const auto& item : cached_items_[folder_id]) {
+      maho::LiveFolderCachedItem ci;
+      ci.id = item->id;
+      ci.title = item->title;
+      ci.subtitle = item->subtitle;
+      ci.url = item->url;
+      cache_items.push_back(std::move(ci));
+    }
+    maho::LiveFolderItemCache::GetInstance().SetItems(
+        folder_it->second.config_json, std::move(cache_items));
+    if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
+      bridge->NotifyChanged();
+    }
+  }
 
   auto cb_it = pending_callbacks_.find(folder_id);
   if (cb_it != pending_callbacks_.end()) {
@@ -437,13 +585,13 @@ void MahoLiveFolderPageHandler::SaveFolders() {
     dict.Set("config_json", config.config_json);
     folder_list.Append(std::move(dict));
   }
-  profile_->GetPrefs()->SetList(kPrefLiveFolders, std::move(folder_list));
+  profile_->GetPrefs()->SetList(maho::sidebar_prefs::kLiveFolders, std::move(folder_list));
 }
 
 void MahoLiveFolderPageHandler::LoadFolders() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   const base::ListValue& folder_list =
-      profile_->GetPrefs()->GetList(kPrefLiveFolders);
+      profile_->GetPrefs()->GetList(maho::sidebar_prefs::kLiveFolders);
   for (const auto& entry : folder_list) {
     const auto* dict = entry.GetIfDict();
     if (!dict) {
@@ -463,6 +611,50 @@ void MahoLiveFolderPageHandler::LoadFolders() {
     config.config_json = config_json ? *config_json : "{}";
     folders_[config.id] = config;
   }
+
+  // Reconcile: ensure every pref-loaded live folder has a corresponding
+  // Folder object in the Rust core model. Existing users who saved live
+  // folders before the core integration will have prefs but no core folder.
+  auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+  if (!bridge) {
+    return;
+  }
+  const std::string& space_id = bridge->GetActiveSpaceId();
+  if (space_id.empty()) {
+    return;
+  }
+
+  // Collect folder metadata for core-sequence reconciliation.
+  struct FolderMeta {
+    std::string name;
+    std::string provider_type;
+    std::string config_json;
+  };
+  std::vector<FolderMeta> metas;
+  metas.reserve(folders_.size());
+  for (const auto& [id, config] : folders_) {
+    metas.push_back({config.name, config.provider_type, config.config_json});
+  }
+
+  maho::PostCoreClosure(
+      FROM_HERE,
+      base::BindOnce(
+          [](const std::string& space_id, std::vector<FolderMeta> metas) {
+            for (const auto& meta : metas) {
+              std::string existing_id =
+                  FindCoreFolderIdByConfig(space_id, meta.config_json);
+              if (!existing_id.empty()) {
+                continue;
+              }
+              maho::DispatchShellEventEx("create_folder", {
+                  maho::ShellEventField("space_id", space_id),
+                  maho::ShellEventField("name", meta.name),
+                  maho::ShellEventField("is_pinned", false),
+                  maho::ShellEventField("provider_type", meta.provider_type),
+                  maho::ShellEventField("config_json", meta.config_json)});
+            }
+          },
+          space_id, std::move(metas)));
 }
 
 void MahoLiveFolderPageHandler::ScheduleRefresh(

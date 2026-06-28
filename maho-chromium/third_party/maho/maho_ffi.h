@@ -1912,6 +1912,16 @@ int32_t maho_routines_run(const char *routine_id,
                        void (*on_error)(void *user_data, const char *error),
                        void *user_data);
 
+/**
+ * Tick the routines scheduler. Should be called once per minute by the Chromium shell.
+ * Internally checks tier, iterates the 4 routines, fires any due to run (async).
+ * Returns 0 on success, -1 on tier-not-max (no-op), -2 on internal error.
+ *
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ */
+int32_t maho_routines_tick(struct MahoCore *core, int64_t now_sec);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus

@@ -39,7 +39,9 @@
 #include "components/bookmarks/browser/bookmark_node.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "chrome/browser/ui/browser.h"  // nogncheck
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/favicon_status.h"
 #include "content/public/browser/navigation_entry.h"
@@ -338,10 +340,27 @@ CommandSuggestion& CommandSuggestion::operator=(CommandSuggestion&&) = default;
 CommandSuggestion::~CommandSuggestion() = default;
 
 MahoCommandModel::MahoCommandModel(Browser* browser) : browser_(browser) {
+  browser_collection_observation_.Observe(
+      GlobalBrowserCollection::GetInstance());
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [this](BrowserWindowInterface* b) {
+        if (b && b->GetTabStripModel()) {
+          b->GetTabStripModel()->AddObserver(this);
+        }
+        return true;
+      });
   HydrateSiteSearchEngines();
 }
 
-MahoCommandModel::~MahoCommandModel() = default;
+MahoCommandModel::~MahoCommandModel() {
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [this](BrowserWindowInterface* b) {
+        if (b && b->GetTabStripModel()) {
+          b->GetTabStripModel()->RemoveObserver(this);
+        }
+        return true;
+      });
+}
 
 // static
 std::vector<CommandSuggestion>
@@ -427,7 +446,7 @@ void MahoCommandModel::FireSearch() {
     actions_only_ = true;
   }
 
-  std::string tabs_json = actions_only_ ? std::string() : BuildTabsJson(browser_);
+  std::string tabs_json = actions_only_ ? std::string() : BuildTabsJson();
   std::vector<CommandSuggestion> chromium_bookmarks =
       BuildChromiumBookmarkSuggestions(browser_, search_query);
   const bool is_incognito = browser_->profile()->IsOffTheRecord();
@@ -457,14 +476,20 @@ base::Value MahoCommandModel::BuildTabEntryDict(
   return dict;
 }
 
-// static
-std::string MahoCommandModel::BuildTabsJson(Browser* browser) {
-  base::Value tabs(base::Value::Type::LIST);
-  if (!browser || !browser->window() || !browser->tab_strip_model()) {
-    return std::string();
+std::string MahoCommandModel::BuildTabsJson() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!tabs_cache_dirty_) {
+    return cached_tabs_json_;
   }
 
-  const Profile* profile = browser->profile();
+  base::Value tabs(base::Value::Type::LIST);
+  if (!browser_ || !browser_->window() || !browser_->tab_strip_model()) {
+    cached_tabs_json_ = std::string();
+    tabs_cache_dirty_ = false;
+    return cached_tabs_json_;
+  }
+
+  const Profile* profile = browser_->profile();
   ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
       [&tabs, profile](BrowserWindowInterface* candidate) {
         if (!IsEligibleBrowserForTabSearch(candidate, profile))
@@ -493,9 +518,9 @@ std::string MahoCommandModel::BuildTabsJson(Browser* browser) {
         return true;
       });
 
-  std::string json;
-  base::JSONWriter::Write(tabs, &json);
-  return json;
+  base::JSONWriter::Write(tabs, &cached_tabs_json_);
+  tabs_cache_dirty_ = false;
+  return cached_tabs_json_;
 }
 
 // static
@@ -1141,6 +1166,37 @@ void MahoCommandModel::OnSearchEngineLargeIconLoaded(
   if (updated && pending_callback_) {
     pending_callback_.Run(results_);
   }
+}
+
+void MahoCommandModel::OnTabStripModelChanged(
+    TabStripModel* tab_strip_model,
+    const TabStripModelChange& change,
+    const TabStripSelectionChange& selection) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  tabs_cache_dirty_ = true;
+}
+
+void MahoCommandModel::OnTabChangedAt(tabs::TabInterface* tab,
+                                       int index,
+                                       TabChangeType change_type) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  tabs_cache_dirty_ = true;
+}
+
+void MahoCommandModel::OnBrowserCreated(BrowserWindowInterface* browser) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (browser && browser->GetTabStripModel()) {
+    browser->GetTabStripModel()->AddObserver(this);
+  }
+  tabs_cache_dirty_ = true;
+}
+
+void MahoCommandModel::OnBrowserClosed(BrowserWindowInterface* browser) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (browser && browser->GetTabStripModel()) {
+    browser->GetTabStripModel()->RemoveObserver(this);
+  }
+  tabs_cache_dirty_ = true;
 }
 
 }  // namespace maho

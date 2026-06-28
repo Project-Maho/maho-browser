@@ -1,0 +1,17 @@
+# .ci-allowlist-unretained
+#
+# Known/accepted base::Unretained() usages near cross-thread PostTask patterns
+# in maho-chromium/browser/.
+#
+# These were present at the time this lint was introduced (2026-06-28).
+# Before adding a new entry:
+#   1. Confirm the object lifetime is guaranteed to outlive the task.
+#   2. Add a brief comment on the same line or the line above explaining why.
+#   3. Get a second reviewer sign-off.
+#
+# Format: file:line  (path relative to repo root, 1-based line number)
+# Lines starting with '#' or blank lines are ignored.
+#
+maho-chromium/browser/updates/maho_update_delegate_win.cc:88
+maho-chromium/browser/updates/maho_update_delegate_win.cc:358
+maho-chromium/browser/updates/maho_update_manager.cc:178

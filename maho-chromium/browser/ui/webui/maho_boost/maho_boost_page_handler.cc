@@ -11,7 +11,7 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
-#include "base/task/thread_pool.h"
+#include "base/sequence_checker.h"
 #include "base/values.h"
 #include "chrome/browser/devtools/devtools_window.h"
 #include "content/public/browser/font_list_async.h"
@@ -271,7 +271,7 @@ std::string SerializeBoostUpdate(
   return out;
 }
 
-std::vector<maho_boost::mojom::BoostInfoPtr> ListBoostsOnPool(
+std::vector<maho_boost::mojom::BoostInfoPtr> ListBoostsOnCoreSequence(
     const std::string& domain) {
   std::vector<maho_boost::mojom::BoostInfoPtr> result;
   MahoCore* core = maho::GetCore();
@@ -303,7 +303,7 @@ std::vector<maho_boost::mojom::BoostInfoPtr> ListBoostsOnPool(
   return result;
 }
 
-maho_boost::mojom::BoostInfoPtr GetBoostOnPool(const std::string& boost_id) {
+maho_boost::mojom::BoostInfoPtr GetBoostOnCoreSequence(const std::string& boost_id) {
   MahoCore* core = maho::GetCore();
   if (!core) {
     return nullptr;
@@ -317,7 +317,7 @@ maho_boost::mojom::BoostInfoPtr GetBoostOnPool(const std::string& boost_id) {
   return ParseSingleBoostJson(json);
 }
 
-maho_boost::mojom::BoostInfoPtr CreateTempBoostOnPool(
+maho_boost::mojom::BoostInfoPtr CreateTempBoostOnCoreSequence(
     const std::string& domain) {
   MahoCore* core = maho::GetCore();
   if (!core) {
@@ -330,7 +330,7 @@ maho_boost::mojom::BoostInfoPtr CreateTempBoostOnPool(
   return ParseSingleBoostJson(json);
 }
 
-maho_boost::mojom::BoostInfoPtr CommitBoostOnPool(
+maho_boost::mojom::BoostInfoPtr CommitBoostOnCoreSequence(
     const std::string& boost_id) {
   MahoCore* core = maho::GetCore();
   if (!core) {
@@ -343,7 +343,7 @@ maho_boost::mojom::BoostInfoPtr CommitBoostOnPool(
   return ParseSingleBoostJson(json);
 }
 
-std::string DiscardBoostOnPool(const std::string& boost_id) {
+std::string DiscardBoostOnCoreSequence(const std::string& boost_id) {
   MahoCore* core = maho::GetCore();
   if (!core) {
     return std::string();
@@ -351,7 +351,7 @@ std::string DiscardBoostOnPool(const std::string& boost_id) {
   return maho::core::DiscardBoost(core, boost_id.c_str());
 }
 
-maho_boost::mojom::BoostInfoPtr ShuffleBoostOnPool(
+maho_boost::mojom::BoostInfoPtr ShuffleBoostOnCoreSequence(
     const std::string& boost_id) {
   MahoCore* core = maho::GetCore();
   if (!core) {
@@ -364,7 +364,7 @@ maho_boost::mojom::BoostInfoPtr ShuffleBoostOnPool(
   return ParseSingleBoostJson(json);
 }
 
-maho_boost::mojom::BoostInfoPtr ResetBoostOnPool(
+maho_boost::mojom::BoostInfoPtr ResetBoostOnCoreSequence(
     const std::string& boost_id) {
   MahoCore* core = maho::GetCore();
   if (!core) {
@@ -377,7 +377,7 @@ maho_boost::mojom::BoostInfoPtr ResetBoostOnPool(
   return ParseSingleBoostJson(json);
 }
 
-std::string ExportBoostOnPool(const std::string& boost_id) {
+std::string ExportBoostOnCoreSequence(const std::string& boost_id) {
   MahoCore* core = maho::GetCore();
   if (!core) {
     return std::string();
@@ -385,7 +385,7 @@ std::string ExportBoostOnPool(const std::string& boost_id) {
   return maho::core::ExportBoost(core, boost_id.c_str());
 }
 
-maho_boost::mojom::BoostInfoPtr ImportBoostOnPool(
+maho_boost::mojom::BoostInfoPtr ImportBoostOnCoreSequence(
     const std::string& domain,
     const std::string& json) {
   MahoCore* core = maho::GetCore();
@@ -399,7 +399,7 @@ maho_boost::mojom::BoostInfoPtr ImportBoostOnPool(
   return ParseSingleBoostJson(result);
 }
 
-maho_boost::mojom::BoostInfoPtr AppendZapSelectorOnPool(
+maho_boost::mojom::BoostInfoPtr AppendZapSelectorOnCoreSequence(
     const std::string& boost_id,
     const std::string& selector) {
   MahoCore* core = maho::GetCore();
@@ -414,7 +414,7 @@ maho_boost::mojom::BoostInfoPtr AppendZapSelectorOnPool(
   return ParseSingleBoostJson(json);
 }
 
-maho_boost::mojom::BoostInfoPtr RemoveZapSelectorOnPool(
+maho_boost::mojom::BoostInfoPtr RemoveZapSelectorOnCoreSequence(
     const std::string& boost_id,
     const std::string& selector) {
   MahoCore* core = maho::GetCore();
@@ -429,31 +429,31 @@ maho_boost::mojom::BoostInfoPtr RemoveZapSelectorOnPool(
   return ParseSingleBoostJson(json);
 }
 
-maho_boost::mojom::BoostInfoPtr UpdateBoostOnPool(
+maho_boost::mojom::BoostInfoPtr UpdateBoostOnCoreSequence(
     const std::string& boost_id,
     const std::string& changes_json) {
   MahoCore* core = maho::GetCore();
   if (!core) {
-    LOG(ERROR) << "[MahoBoost] UpdateBoostOnPool: core is null";
+    LOG(ERROR) << "[MahoBoost] UpdateBoostOnCoreSequence: core is null";
     return nullptr;
   }
-  VLOG(1) << "[MahoBoost] UpdateBoostOnPool: id=" << boost_id
+  VLOG(1) << "[MahoBoost] UpdateBoostOnCoreSequence: id=" << boost_id
           << " json=" << changes_json;
   char* json_str =
       maho_core_boost_update(core, boost_id.c_str(), changes_json.c_str());
   if (!json_str) {
-    LOG(ERROR) << "[MahoBoost] UpdateBoostOnPool: FFI returned null for id="
+    LOG(ERROR) << "[MahoBoost] UpdateBoostOnCoreSequence: FFI returned null for id="
                << boost_id << " json=" << changes_json;
     return nullptr;
   }
   std::string json(json_str);
   maho_string_free(json_str);
-  VLOG(1) << "[MahoBoost] UpdateBoostOnPool: success, result length="
+  VLOG(1) << "[MahoBoost] UpdateBoostOnCoreSequence: success, result length="
           << json.size();
   return ParseSingleBoostJson(json);
 }
 
-bool DeleteBoostOnPool(const std::string& boost_id) {
+bool DeleteBoostOnCoreSequence(const std::string& boost_id) {
   MahoCore* core = maho::GetCore();
   if (!core) {
     return false;
@@ -461,7 +461,7 @@ bool DeleteBoostOnPool(const std::string& boost_id) {
   return maho_core_boost_delete(core, boost_id.c_str());
 }
 
-maho_boost::mojom::BoostInfoPtr GetActiveBoostOnPool(
+maho_boost::mojom::BoostInfoPtr GetActiveBoostOnCoreSequence(
     const std::string& domain) {
   MahoCore* core = maho::GetCore();
   if (!core) {
@@ -476,7 +476,7 @@ maho_boost::mojom::BoostInfoPtr GetActiveBoostOnPool(
   return ParseSingleBoostJson(json);
 }
 
-std::string SetActiveBoostOnPool(const std::string& domain,
+std::string SetActiveBoostOnCoreSequence(const std::string& domain,
                                  const std::optional<std::string>& boost_id) {
   MahoCore* core = maho::GetCore();
   if (!core) {
@@ -495,7 +495,7 @@ std::string SetActiveBoostOnPool(const std::string& domain,
   return maho::core::HandleEvent(core, event_json.c_str());
 }
 
-std::string ComposeCssOnPool(const std::string& boost_id) {
+std::string ComposeCssOnCoreSequence(const std::string& boost_id) {
   MahoCore* core = maho::GetCore();
   if (!core) {
     return std::string();
@@ -507,6 +507,33 @@ std::string ComposeCssOnPool(const std::string& boost_id) {
   std::string css(css_str);
   maho_string_free(css_str);
   return css;
+}
+
+std::vector<std::string> GetZapSelectorsOnCoreSequence(
+    const std::string& boost_id) {
+  std::vector<std::string> zap_selectors;
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return zap_selectors;
+  }
+  char* json_str = maho_core_boost_get(core, boost_id.c_str());
+  if (!json_str) {
+    return zap_selectors;
+  }
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(json_str, base::JSON_PARSE_RFC);
+  maho_string_free(json_str);
+  if (parsed && parsed->is_dict()) {
+    const base::ListValue* zl = parsed->GetDict().FindList("zapSelectors");
+    if (zl) {
+      for (const auto& v : *zl) {
+        if (const std::string* s = v.GetIfString()) {
+          zap_selectors.push_back(*s);
+        }
+      }
+    }
+  }
+  return zap_selectors;
 }
 
 }  // namespace
@@ -528,49 +555,50 @@ void MahoBoostPageHandler::FireEditorKilled() {
 }
 
 void MahoBoostPageHandler::GetDomain(GetDomainCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   std::move(callback).Run(domain_);
 }
 
 void MahoBoostPageHandler::ListBoosts(ListBoostsCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask<std::vector<maho_boost::mojom::BoostInfoPtr>>(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&ListBoostsOnPool, domain_),
+      base::BindOnce(&ListBoostsOnCoreSequence, domain_),
       std::move(callback));
 }
 
 void MahoBoostPageHandler::GetBoost(const std::string& boost_id,
                                     GetBoostCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&GetBoostOnPool, boost_id),
+      base::BindOnce(&GetBoostOnCoreSequence, boost_id),
       std::move(callback));
 }
 
 void MahoBoostPageHandler::GetActiveBoost(GetActiveBoostCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&GetActiveBoostOnPool, domain_),
+      base::BindOnce(&GetActiveBoostOnCoreSequence, domain_),
       std::move(callback));
 }
 
 void MahoBoostPageHandler::CreateTempBoost(CreateTempBoostCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&CreateTempBoostOnPool, domain_),
+      base::BindOnce(&CreateTempBoostOnCoreSequence, domain_),
       base::BindOnce(&MahoBoostPageHandler::OnCreateTempBoostDone,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void MahoBoostPageHandler::CommitBoost(const std::string& boost_id,
                                        CommitBoostCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&CommitBoostOnPool, boost_id),
+      base::BindOnce(&CommitBoostOnCoreSequence, boost_id),
       base::BindOnce(
           [](CommitBoostCallback cb,
              maho_boost::mojom::BoostInfoPtr) { std::move(cb).Run(); },
@@ -579,10 +607,10 @@ void MahoBoostPageHandler::CommitBoost(const std::string& boost_id,
 
 void MahoBoostPageHandler::DiscardBoost(const std::string& boost_id,
                                         DiscardBoostCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask<std::string>(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&DiscardBoostOnPool, boost_id),
+      base::BindOnce(&DiscardBoostOnCoreSequence, boost_id),
       base::BindOnce(&MahoBoostPageHandler::OnDiscardBoostDone,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
@@ -591,21 +619,21 @@ void MahoBoostPageHandler::UpdateBoost(
     const std::string& boost_id,
     maho_boost::mojom::BoostUpdatePtr changes,
     UpdateBoostCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   std::string changes_json = SerializeBoostUpdate(changes);
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&UpdateBoostOnPool, boost_id, std::move(changes_json)),
+      base::BindOnce(&UpdateBoostOnCoreSequence, boost_id, std::move(changes_json)),
       base::BindOnce(&MahoBoostPageHandler::OnUpdateBoostDone,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void MahoBoostPageHandler::DeleteBoost(const std::string& boost_id,
                                        DeleteBoostCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask<bool>(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&DeleteBoostOnPool, boost_id),
+      base::BindOnce(&DeleteBoostOnCoreSequence, boost_id),
       base::BindOnce(&MahoBoostPageHandler::OnDeleteBoostDone,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
@@ -613,10 +641,10 @@ void MahoBoostPageHandler::DeleteBoost(const std::string& boost_id,
 void MahoBoostPageHandler::SetActiveBoost(
     const std::optional<std::string>& boost_id,
     SetActiveBoostCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask<std::string>(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&SetActiveBoostOnPool, domain_, boost_id),
+      base::BindOnce(&SetActiveBoostOnCoreSequence, domain_, boost_id),
       base::BindOnce(&MahoBoostPageHandler::OnSetActiveBoostDone,
                      weak_factory_.GetWeakPtr(), boost_id,
                      std::move(callback)));
@@ -624,53 +652,60 @@ void MahoBoostPageHandler::SetActiveBoost(
 
 void MahoBoostPageHandler::ComposeCss(const std::string& boost_id,
                                       ComposeCssCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&ComposeCssOnPool, boost_id),
-      std::move(callback));
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask<std::string>(
+      FROM_HERE, base::BindOnce(&ComposeCssOnCoreSequence, boost_id),
+      base::BindOnce(
+          [](ComposeCssCallback callback, std::string css) {
+            std::move(callback).Run(std::move(css));
+          },
+          std::move(callback)));
 }
 
 void MahoBoostPageHandler::ShuffleBoost(const std::string& boost_id,
                                         ShuffleBoostCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&ShuffleBoostOnPool, boost_id),
+      base::BindOnce(&ShuffleBoostOnCoreSequence, boost_id),
       base::BindOnce(&MahoBoostPageHandler::OnShuffleBoostDone,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void MahoBoostPageHandler::ResetBoost(const std::string& boost_id,
                                       ResetBoostCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&ResetBoostOnPool, boost_id),
+      base::BindOnce(&ResetBoostOnCoreSequence, boost_id),
       base::BindOnce(&MahoBoostPageHandler::OnResetBoostDone,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void MahoBoostPageHandler::ExportBoost(const std::string& boost_id,
                                        ExportBoostCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&ExportBoostOnPool, boost_id),
-      std::move(callback));
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask<std::string>(
+      FROM_HERE, base::BindOnce(&ExportBoostOnCoreSequence, boost_id),
+      base::BindOnce(
+          [](ExportBoostCallback callback, std::string json) {
+            std::move(callback).Run(std::move(json));
+          },
+          std::move(callback)));
 }
 
 void MahoBoostPageHandler::ImportBoost(const std::string& json,
                                        ImportBoostCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&ImportBoostOnPool, domain_, json),
+      base::BindOnce(&ImportBoostOnCoreSequence, domain_, json),
       base::BindOnce(&MahoBoostPageHandler::OnImportBoostDone,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void MahoBoostPageHandler::CloseDialog(CloseDialogCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   maho::HideActiveBoost();
   std::move(callback).Run();
 }
@@ -678,12 +713,14 @@ void MahoBoostPageHandler::CloseDialog(CloseDialogCallback callback) {
 void MahoBoostPageHandler::RequestModeResize(
     maho_boost::mojom::WindowMode mode,
     RequestModeResizeCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   maho::SetBoostWindowMode(controller_, mode);
   std::move(callback).Run();
 }
 
 void MahoBoostPageHandler::EnterZapMode(const std::string& boost_id,
                                         EnterZapModeCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   content::WebContents* active_wc = GetActiveTab();
   if (!active_wc) {
     std::move(callback).Run();
@@ -699,25 +736,25 @@ void MahoBoostPageHandler::EnterZapMode(const std::string& boost_id,
     return;
   }
 
-  auto zap_selectors = std::vector<std::string>();
-  MahoCore* core = maho::GetCore();
-  if (core) {
-    char* json_str = maho_core_boost_get(core, boost_id.c_str());
-    if (json_str) {
-      std::optional<base::Value> parsed =
-          base::JSONReader::Read(json_str, base::JSON_PARSE_RFC);
-      maho_string_free(json_str);
-      if (parsed && parsed->is_dict()) {
-        const base::ListValue* zl = parsed->GetDict().FindList("zapSelectors");
-        if (zl) {
-          for (const auto& v : *zl) {
-            if (const std::string* s = v.GetIfString()) {
-              zap_selectors.push_back(*s);
-            }
-          }
-        }
-      }
-    }
+  maho::PostCoreTask<std::vector<std::string>>(
+      FROM_HERE,
+      base::BindOnce(&GetZapSelectorsOnCoreSequence, boost_id),
+      base::BindOnce(&MahoBoostPageHandler::OnEnterZapModeDone,
+                     weak_factory_.GetWeakPtr(), std::move(callback)));
+}
+
+void MahoBoostPageHandler::OnEnterZapModeDone(
+    EnterZapModeCallback callback,
+    std::vector<std::string> zap_selectors) {
+  content::WebContents* active_wc = GetActiveTab();
+  if (!active_wc) {
+    std::move(callback).Run();
+    return;
+  }
+  auto* handler = MahoBoostInjectionHandler::FromWebContents(active_wc);
+  if (!handler) {
+    std::move(callback).Run();
+    return;
   }
 
   handler->EnterZapMode(
@@ -730,6 +767,7 @@ void MahoBoostPageHandler::EnterZapMode(const std::string& boost_id,
 }
 
 void MahoBoostPageHandler::ExitZapMode(ExitZapModeCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   content::WebContents* active_wc = GetActiveTab();
   if (active_wc) {
     auto* handler = MahoBoostInjectionHandler::FromWebContents(active_wc);
@@ -744,6 +782,7 @@ void MahoBoostPageHandler::ExitZapMode(ExitZapModeCallback callback) {
 
 void MahoBoostPageHandler::EnterPickerMode(const std::string& boost_id,
                                            EnterPickerModeCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   content::WebContents* active_wc = GetActiveTab();
   if (!active_wc) {
     std::move(callback).Run();
@@ -768,6 +807,7 @@ void MahoBoostPageHandler::EnterPickerMode(const std::string& boost_id,
 }
 
 void MahoBoostPageHandler::ExitPickerMode(ExitPickerModeCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   content::WebContents* active_wc = GetActiveTab();
   if (active_wc) {
     auto* handler = MahoBoostInjectionHandler::FromWebContents(active_wc);
@@ -784,10 +824,10 @@ void MahoBoostPageHandler::AppendZapSelector(
     const std::string& boost_id,
     const std::string& selector,
     AppendZapSelectorCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&AppendZapSelectorOnPool, boost_id, selector),
+      base::BindOnce(&AppendZapSelectorOnCoreSequence, boost_id, selector),
       base::BindOnce(&MahoBoostPageHandler::OnAppendZapDone,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
@@ -796,15 +836,16 @@ void MahoBoostPageHandler::RemoveZapSelector(
     const std::string& boost_id,
     const std::string& selector,
     RemoveZapSelectorCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask<maho_boost::mojom::BoostInfoPtr>(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&RemoveZapSelectorOnPool, boost_id, selector),
+      base::BindOnce(&RemoveZapSelectorOnCoreSequence, boost_id, selector),
       base::BindOnce(&MahoBoostPageHandler::OnRemoveZapDone,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void MahoBoostPageHandler::OpenInspector(OpenInspectorCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   content::WebContents* active_wc = GetActiveTab();
   if (active_wc) {
     DevToolsWindow::OpenDevToolsWindow(
@@ -816,6 +857,7 @@ void MahoBoostPageHandler::OpenInspector(OpenInspectorCallback callback) {
 }
 
 void MahoBoostPageHandler::GetSystemFonts(GetSystemFontsCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   content::GetFontListAsync(
       base::BindOnce(&MahoBoostPageHandler::OnGetFontListDone,
                      weak_factory_.GetWeakPtr(),

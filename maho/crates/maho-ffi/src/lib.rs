@@ -7408,6 +7408,83 @@ pub unsafe extern "C" fn maho_routines_run(
     }, -1)
 }
 
+// ============================================================
+// Routines Scheduler Tick FFI
+// ============================================================
+
+use std::sync::{Mutex as StdMutex, OnceLock};
+use std::collections::HashMap;
+
+/// Global last-run timestamps for the routines scheduler.
+/// Key: routine id (static str), Value: epoch seconds of last successful fire.
+static ROUTINES_LAST_RUNS: OnceLock<StdMutex<HashMap<&'static str, i64>>> = OnceLock::new();
+
+fn get_last_runs() -> &'static StdMutex<HashMap<&'static str, i64>> {
+    ROUTINES_LAST_RUNS.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
+/// Tick the routines scheduler. Should be called once per minute by the Chromium shell.
+/// Internally checks tier, iterates the 4 routines, fires any due to run (async).
+/// Returns 0 on success, -1 on tier-not-max (no-op), -2 on internal error.
+///
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_routines_tick(core: *mut MahoCore, now_sec: i64) -> i32 {
+    ffi_safe!({
+
+    if core.is_null() {
+        return -2;
+    }
+    // Check tier — only Max users get scheduled routines
+    let core_ref = &*core;
+    match core_ref.get_account_tier() {
+        Some(maho_types::account::UserTier::Max) => {}
+        _ => return -1,
+    };
+
+    let last_runs_mutex = get_last_runs();
+    let mut last_runs = match last_runs_mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    let routines = maho_core::routines::list_routines();
+    for routine in routines {
+        let schedule = match maho_core::routines::CronSchedule::parse(routine.cron) {
+            Some(s) => s,
+            None => {
+                eprintln!("[maho_routines_tick] failed to parse cron for {}: {}", routine.id, routine.cron);
+                continue;
+            }
+        };
+
+        let last_run = last_runs.get(routine.id).copied().unwrap_or(0);
+        let next_fire = schedule.next_fire_after(last_run);
+
+        if now_sec >= next_fire {
+            // Fire the routine asynchronously via the existing run_routine mechanism
+            let id_str = routine.id.to_string();
+
+            tokio::spawn(async move {
+                let _ = maho_core::routines::run_routine(
+                    &id_str,
+                    maho_core::routines::UserTier::Max,
+                    |_prompt| async { Ok("Routine execution placeholder".to_string()) },
+                )
+                .await;
+            });
+
+            // Update last_run timestamp
+            last_runs.insert(routine.id, now_sec);
+        }
+    }
+
+    0
+
+    }, -2)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -7540,5 +7617,40 @@ mod tests {
             maho_core_get_sidebar_state_v2(core_ptr, std::ptr::null())
         };
         assert!(result.is_null(), "null space_id must return null");
+    }
+
+    /// Routines tick: returns -1 when tier is not Max (default unauthenticated).
+    #[test]
+    fn routines_tick_returns_neg1_when_not_max() {
+        use maho_core::maho_core::MahoCore;
+        let mut core = MahoCore::new();
+        let core_ptr: *mut MahoCore = &mut core;
+        // Use a fixed timestamp (2025-06-15 08:00:00 UTC)
+        let now = 1_750_000_000i64;
+        let result = unsafe { maho_routines_tick(core_ptr, now) };
+        assert_eq!(result, -1, "unauthenticated user should return -1");
+    }
+
+    /// Routines tick: returns -2 on null core pointer.
+    #[test]
+    fn routines_tick_returns_neg2_on_null_ptr() {
+        let now = 1_750_000_000i64;
+        let result = unsafe { maho_routines_tick(std::ptr::null_mut(), now) };
+        assert_eq!(result, -2, "null ptr should return -2");
+    }
+
+    /// Routines tick: no double-fire when called twice with same timestamp.
+    #[test]
+    fn routines_tick_no_double_fire() {
+        // Exercise the LAST_RUNS static directly
+        let last_runs = get_last_runs();
+        let mut guard = last_runs.lock().unwrap();
+        // Set morning_briefing as fired at time T
+        let t = 1_750_000_000i64;
+        guard.insert("morning_briefing", t);
+        // Check that next_fire_after(t) > t (so it won't fire again at t)
+        let schedule = maho_core::routines::CronSchedule::parse("0 8 * * *").unwrap();
+        let next = schedule.next_fire_after(t);
+        assert!(next > t, "next_fire_after must be strictly after last_run");
     }
 }

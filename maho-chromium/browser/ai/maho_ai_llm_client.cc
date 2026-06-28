@@ -22,6 +22,10 @@
 
 namespace {
 
+// Maximum accumulated size for full_text and arguments_json in a single
+// streaming response.  Mirrors ConversationTask::kMaxAccumulatedBytes (H13).
+constexpr size_t kMaxLlmResponseBytes = 2 * 1024 * 1024;  // 2 MB
+
 const char kMahoAiApiKeyPref[] = "maho.ai.api_key";
 const char kMahoAiEndpointPref[] = "maho.ai.endpoint";
 const char kMahoAiModelPref[] = "maho.ai.model";
@@ -145,11 +149,19 @@ std::string NormalizeSseChunk(std::string body) {
 
 void ProcessSseBuffer(std::string* sse_buffer,
                       MahoAiLlmClient::CompletionResult* completion_result,
-                      const MahoAiLlmClient::TokenCallback& on_token) {
-  size_t pos;
-  while ((pos = sse_buffer->find("\n\n")) != std::string::npos) {
-    std::string event_block = sse_buffer->substr(0, pos);
-    sse_buffer->erase(0, pos + 2);
+                      const MahoAiLlmClient::TokenCallback& on_token,
+                      bool* overflowed) {
+  // Cursor-based SSE parsing: advance cursor through the buffer without
+  // erasing on every iteration.  A single erase(0, cursor) at the end reduces
+  // total memmove cost from O(N²) to O(N) for an N-event stream.
+  size_t cursor = 0;
+  while (true) {
+    size_t pos = sse_buffer->find("\n\n", cursor);
+    if (pos == std::string::npos) {
+      break;
+    }
+    std::string event_block(sse_buffer->substr(cursor, pos - cursor));
+    cursor = pos + 2;
 
     for (const auto& line : base::SplitStringPiece(
              event_block, "\n", base::KEEP_WHITESPACE,
@@ -197,6 +209,11 @@ void ProcessSseBuffer(std::string* sse_buffer,
 
       if (const std::string* content = delta->FindString("content")) {
         if (!content->empty()) {
+          if (completion_result->full_text.size() + content->size() >
+              kMaxLlmResponseBytes) {
+            *overflowed = true;
+            return;
+          }
           completion_result->full_text += *content;
           if (on_token) {
             on_token.Run(*content);
@@ -239,10 +256,18 @@ void ProcessSseBuffer(std::string* sse_buffer,
           parsed_call.name = *function_name;
         }
         if (const std::string* arguments = function->FindString("arguments")) {
+          if (parsed_call.arguments_json.size() + arguments->size() >
+              kMaxLlmResponseBytes) {
+            *overflowed = true;
+            return;
+          }
           parsed_call.arguments_json += *arguments;
         }
       }
     }
+  }
+  if (cursor > 0) {
+    sse_buffer->erase(0, cursor);
   }
 }
 
@@ -340,9 +365,10 @@ class OpenAICompatibleProviderTransport final
       std::string body,
       std::string* sse_buffer,
       MahoAiLlmClient::CompletionResult* completion_result,
-      const MahoAiLlmClient::TokenCallback& on_token) const override {
+      const MahoAiLlmClient::TokenCallback& on_token,
+      bool* overflowed) const override {
     *sse_buffer += NormalizeSseChunk(std::move(body));
-    ProcessSseBuffer(sse_buffer, completion_result, on_token);
+    ProcessSseBuffer(sse_buffer, completion_result, on_token, overflowed);
   }
 };
 
@@ -410,9 +436,10 @@ class ProviderAdapterV2Transport final
       std::string body,
       std::string* sse_buffer,
       MahoAiLlmClient::CompletionResult* completion_result,
-      const MahoAiLlmClient::TokenCallback& on_token) const override {
+      const MahoAiLlmClient::TokenCallback& on_token,
+      bool* overflowed) const override {
     *sse_buffer += NormalizeSseChunk(std::move(body));
-    ProcessSseBuffer(sse_buffer, completion_result, on_token);
+    ProcessSseBuffer(sse_buffer, completion_result, on_token, overflowed);
   }
 };
 
@@ -515,8 +542,13 @@ void MahoAiLlmClient::StartCompletion(CompletionRequest request,
 void MahoAiLlmClient::OnResponseDataReceived(std::string body_chunk) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+  bool overflowed = false;
   provider_transport_->ProcessResponseBody(std::move(body_chunk), &sse_buffer_,
-                                           &completion_result_, on_token_);
+                                           &completion_result_, on_token_,
+                                           &overflowed);
+  if (overflowed) {
+    FinishWithError("LLM response exceeded 2 MB cap");
+  }
 }
 
 void MahoAiLlmClient::OnResponseComplete(bool success) {
@@ -533,9 +565,15 @@ void MahoAiLlmClient::OnResponseComplete(bool success) {
       !base::EndsWith(remaining, "\n\n", base::CompareCase::SENSITIVE)) {
     remaining += "\n\n";
   }
+  bool overflowed = false;
   provider_transport_->ProcessResponseBody(std::move(remaining), &sse_buffer_,
-                                           &completion_result_, on_token_);
+                                           &completion_result_, on_token_,
+                                           &overflowed);
   sse_buffer_.clear();
+  if (overflowed) {
+    FinishWithError("LLM response exceeded 2 MB cap");
+    return;
+  }
   FinishWithSuccess();
 }
 

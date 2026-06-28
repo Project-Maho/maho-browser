@@ -12,14 +12,21 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/sequence_checker.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
 #include "base/containers/flat_map.h"
+#include "base/scoped_observation.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
+#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "ui/gfx/image/image.h"
 
 class Browser;
+class BrowserWindowInterface;
+class GlobalBrowserCollection;
+class TabStripModel;
 
 namespace favicon_base {
 struct LargeIconResult;
@@ -91,7 +98,11 @@ struct CommandSuggestion {
 };
 
 // Owns search state and calls Rust FFI on a thread pool.
-class MahoCommandModel {
+// Observes all open TabStripModels and GlobalBrowserCollection to keep the tab
+// JSON cache fresh. Cache is invalidated on any tab or browser change and
+// rebuilt lazily.
+class MahoCommandModel : public TabStripModelObserver,
+                         public BrowserCollectionObserver {
  public:
   using ResultsCallback =
       base::RepeatingCallback<void(std::vector<CommandSuggestion>)>;
@@ -105,7 +116,7 @@ class MahoCommandModel {
   explicit MahoCommandModel(Browser* browser);
   MahoCommandModel(const MahoCommandModel&) = delete;
   MahoCommandModel& operator=(const MahoCommandModel&) = delete;
-  ~MahoCommandModel();
+  ~MahoCommandModel() override;
 
   void Search(const std::string& query,
              CommandOverlayMode mode,
@@ -142,7 +153,9 @@ class MahoCommandModel {
                                        const std::string& url);
 
  private:
-  static std::string BuildTabsJson(Browser* browser);
+  // Returns cached JSON (rebuilds lazily when tabs_cache_dirty_ is true).
+  // Must be called on the UI sequence.
+  std::string BuildTabsJson();
   static std::vector<CommandSuggestion> BuildChromiumBookmarkSuggestions(
       Browser* browser,
       const std::string& query);
@@ -167,6 +180,19 @@ class MahoCommandModel {
                                      std::string engine_id,
                                      const favicon_base::LargeIconResult& result);
 
+  // TabStripModelObserver:
+  void OnTabStripModelChanged(
+      TabStripModel* tab_strip_model,
+      const TabStripModelChange& change,
+      const TabStripSelectionChange& selection) override;
+  void OnTabChangedAt(tabs::TabInterface* tab,
+                      int index,
+                      TabChangeType change_type) override;
+
+  // BrowserCollectionObserver:
+  void OnBrowserCreated(BrowserWindowInterface* browser) override;
+  void OnBrowserClosed(BrowserWindowInterface* browser) override;
+
   raw_ptr<Browser> browser_;
   std::string query_;
   CommandOverlayMode mode_ = CommandOverlayMode::kSearch;
@@ -181,6 +207,16 @@ class MahoCommandModel {
   base::TimeTicks search_start_ticks_;
 
   base::flat_map<std::string, gfx::Image> engine_favicon_cache_;
+
+  // Tab JSON cache — invalidated whenever any observed TabStripModel or the
+  // browser collection changes. Rebuilt lazily in BuildTabsJson().
+  mutable std::string cached_tabs_json_;
+  bool tabs_cache_dirty_ = true;
+
+  base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
+      browser_collection_observation_{this};
+
+  SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<MahoCommandModel> weak_factory_{this};
 };

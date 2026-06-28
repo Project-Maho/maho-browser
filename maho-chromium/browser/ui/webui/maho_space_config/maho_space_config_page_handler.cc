@@ -7,7 +7,6 @@
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
-#include "base/task/thread_pool.h"
 #include "base/values.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -191,9 +190,8 @@ MahoSpaceConfigPageHandler::~MahoSpaceConfigPageHandler() = default;
 
 void MahoSpaceConfigPageHandler::GetSpaceInfo(GetSpaceInfoCallback callback) {
   auto focus = initial_focus_;
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  maho::PostCoreTask<maho_space_config::mojom::SpaceInfoPtr>(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
       base::BindOnce(&LoadSpaceOnPool, space_id_),
       base::BindOnce(
           [](base::WeakPtr<MahoSpaceConfigPageHandler> weak_self,
@@ -209,9 +207,8 @@ void MahoSpaceConfigPageHandler::GetSpaceInfo(GetSpaceInfoCallback callback) {
 }
 
 void MahoSpaceConfigPageHandler::GetProfiles(GetProfilesCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  maho::PostCoreTask<std::vector<maho_space_config::mojom::ProfileInfoPtr>>(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
       base::BindOnce(&BuildProfilesOnPool),
       std::move(callback));
 }
@@ -219,9 +216,8 @@ void MahoSpaceConfigPageHandler::GetProfiles(GetProfilesCallback callback) {
 void MahoSpaceConfigPageHandler::UpdateName(
     const std::string& name,
     UpdateNameCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  maho::PostCoreTask<bool>(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
       base::BindOnce(&RenameSpaceOnPool, space_id_, name),
       base::BindOnce(
           [](base::WeakPtr<MahoSpaceConfigPageHandler> weak_self,
@@ -237,9 +233,8 @@ void MahoSpaceConfigPageHandler::UpdateName(
 void MahoSpaceConfigPageHandler::UpdateIcon(
     const std::string& icon,
     UpdateIconCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  maho::PostCoreTask<bool>(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
       base::BindOnce(
           [](const std::string& space_id, const std::string& icon) -> bool {
             MahoCore* core = maho::GetCore();
@@ -283,9 +278,8 @@ void MahoSpaceConfigPageHandler::UpdateColor(
     const std::optional<std::string>& theme_json,
     UpdateColorCallback callback) {
   const std::string theme_json_value = theme_json.value_or(std::string());
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  maho::PostCoreTask<bool>(
       FROM_HERE,
-      {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
       base::BindOnce(&RecolorSpaceOnPool, space_id_, color_hex,
                      theme_json_value),
       base::BindOnce(

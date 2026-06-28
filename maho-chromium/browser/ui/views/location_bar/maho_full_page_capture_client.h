@@ -4,6 +4,7 @@
 #define MAHO_BROWSER_UI_VIEWS_LOCATION_BAR_MAHO_FULL_PAGE_CAPTURE_CLIENT_H_
 
 #include "base/memory/scoped_refptr.h"
+#include "base/timer/timer.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/devtools_agent_host_client.h"
 
@@ -35,8 +36,11 @@ class MahoFullPageCaptureClient : public content::DevToolsAgentHostClient {
 
   void Finish();
 
+  void OnWatchdogTimeout();
+
   scoped_refptr<content::DevToolsAgentHost> agent_host_;
   bool finished_ = false;
+  base::OneShotTimer watchdog_timer_;
   static constexpr int kCaptureCommandId = 1;
 };
 

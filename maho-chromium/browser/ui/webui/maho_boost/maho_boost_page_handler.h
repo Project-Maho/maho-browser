@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "base/memory/weak_ptr.h"
+#include "base/sequence_checker.h"
 #include "base/values.h"
 #include "maho/browser/ui/webui/maho_boost/maho_boost.mojom.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -111,6 +112,9 @@ class MahoBoostPageHandler : public maho_boost::mojom::PageHandler {
   void OnGetFontListDone(GetSystemFontsCallback callback,
                           base::ListValue fonts);
 
+  void OnEnterZapModeDone(EnterZapModeCallback callback,
+                           std::vector<std::string> zap_selectors);
+
   void OnContentScriptEvent(const std::string& type,
                              const std::string& selector,
                              const std::string& msg);
@@ -124,6 +128,8 @@ class MahoBoostPageHandler : public maho_boost::mojom::PageHandler {
 
   std::string current_zap_boost_id_;
   std::string current_picker_boost_id_;
+
+  SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<MahoBoostPageHandler> weak_factory_{this};
 };

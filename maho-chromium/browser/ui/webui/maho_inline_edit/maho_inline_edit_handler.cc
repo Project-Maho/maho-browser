@@ -9,7 +9,6 @@
 #include "base/json/json_writer.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/task/thread_pool.h"
 #include "chrome/browser/ui/browser.h"  // nogncheck
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/prefs/pref_service.h"
@@ -115,8 +114,8 @@ void MahoInlineEditHandler::RequestEdit(const std::string& text,
   std::string event_json;
   base::JSONWriter::Write(event, &event_json);
 
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::MayBlock()},
+  maho::PostCoreTask<std::string>(
+      FROM_HERE,
       base::BindOnce(&MahoInlineEditHandler::HandleEventOnBackground,
                      event_json),
       base::BindOnce(&MahoInlineEditHandler::OnRustEventResponse,
@@ -135,7 +134,7 @@ std::string MahoInlineEditHandler::HandleEventOnBackground(
 
 void MahoInlineEditHandler::OnRustEventResponse(
     RequestEditCallback callback,
-    const std::string& rust_response_json) {
+    std::string rust_response_json) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   auto parsed =

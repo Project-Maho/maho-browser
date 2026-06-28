@@ -613,6 +613,58 @@ mod tests {
             "folder in space_a should NOT have parent from space_b"
         );
     }
+
+    #[test]
+    fn sidebar_state_v2_includes_tree() {
+        let mut core = MahoCore::new();
+        let space_id = core.get_active_space_id().clone();
+        create_tab(&mut core);
+
+        let json_str = core.get_sidebar_state_v2(&space_id)
+            .expect("should return Some for space with tabs");
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert!(parsed.get("tree").is_some(), "JSON must have 'tree' key");
+        assert!(parsed.get("favicons").is_some(), "JSON must have 'favicons' key");
+        assert!(parsed["tree"].is_array());
+        assert!(parsed["favicons"].is_object());
+    }
+
+    #[test]
+    fn sidebar_state_v2_favicons_are_base64() {
+        use base64::Engine;
+
+        let mut core = MahoCore::new();
+        let space_id = core.get_active_space_id().clone();
+        let tab_id = create_tab(&mut core);
+
+        let favicon_data = maho_types::common::ImageData {
+            data: vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
+            width: 16,
+            height: 16,
+            format: maho_types::common::ImageFormat::Png,
+        };
+        core.handle_event(ShellEvent::TabFaviconUpdated {
+            tab_id: tab_id.clone(),
+            favicon: Some(favicon_data.clone()),
+        });
+
+        let json_str = core.get_sidebar_state_v2(&space_id)
+            .expect("should return Some");
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        let favicons = parsed["favicons"].as_object().unwrap();
+        let b64_str = favicons[&tab_id.to_string()].as_str()
+            .expect("favicon value must be a string");
+        let decoded = base64::engine::general_purpose::STANDARD.decode(b64_str)
+            .expect("favicon must be valid base64");
+        assert_eq!(decoded, favicon_data.data);
+    }
+
+    #[test]
+    fn sidebar_state_v2_unknown_space_returns_none() {
+        let core = MahoCore::new();
+        let bogus_space = SpaceId::new("nonexistent-space-id");
+        assert!(core.get_sidebar_state_v2(&bogus_space).is_none());
+    }
 }
 
 impl std::fmt::Display for PersistenceError {
@@ -994,6 +1046,13 @@ impl MahoCore {
 
         core
     }
+
+    // INTEGRATION POINT: RoutineScheduler
+    // To wire up the cron scheduler, the Chromium shell should call:
+    //   let scheduler = RoutineScheduler::new(agent_runner, tier_provider, storage_get, storage_set);
+    //   tokio::spawn(scheduler.run_loop());
+    // after MahoCore is initialized and the tokio runtime is available.
+    // The tier_provider should call core.get_account_tier() each tick.
 
     /// Seeds the active space with an initial favorite tab and a pinned tab.
     ///
@@ -4056,6 +4115,65 @@ impl MahoCore {
         })
     }
 
+    /// Returns a combined JSON blob containing the sidebar tree and base64-encoded
+    /// favicons for all tabs in the tree. Replaces the 3-call pattern (audit C3).
+    ///
+    /// Format: `{"tree": [...nodes...], "favicons": {"tab_id": "base64_png", ...}}`
+    pub fn get_sidebar_state_v2(&self, space_id: &SpaceId) -> Option<String> {
+        let tree = self.get_sidebar_tree(space_id);
+        if tree.is_empty() {
+            // Space doesn't exist or has no tabs/folders
+            return None;
+        }
+
+        // Collect favicons for all tabs in the tree as base64
+        let mut favicons = serde_json::Map::new();
+        Self::collect_favicons_from_nodes(&tree, &mut favicons);
+
+        let blob = serde_json::json!({
+            "tree": tree,
+            "favicons": favicons,
+        });
+        Some(blob.to_string())
+    }
+
+    /// Recursively walks sidebar nodes, extracting favicon bytes as base64.
+    fn collect_favicons_from_nodes(
+        nodes: &[maho_types::traits::shell_renderer::SidebarNode],
+        favicons: &mut serde_json::Map<String, serde_json::Value>,
+    ) {
+        use base64::Engine;
+        use maho_types::traits::shell_renderer::SidebarNode;
+
+        for node in nodes {
+            match node {
+                SidebarNode::Tab { tab } => {
+                    if let Some(ref img) = tab.favicon {
+                        let b64 = base64::engine::general_purpose::STANDARD.encode(&img.data);
+                        favicons.insert(
+                            tab.id.to_string(),
+                            serde_json::Value::String(b64),
+                        );
+                    }
+                }
+                SidebarNode::Folder { children, .. } => {
+                    Self::collect_favicons_from_nodes(children, favicons);
+                }
+            }
+        }
+    }
+
+    /// Returns `true` if the tab identified by `tab_id` exists and has its
+    /// `is_pinned` flag set. This is an O(log n) lookup and replaces the
+    /// previous O(n) JSON-parse pattern on the C++ side (H2).
+    pub fn is_tab_pinned(&self, tab_id: &str) -> bool {
+        let tid = maho_types::identifiers::TabId::new(tab_id);
+        self.tab_manager
+            .get_tab(&tid)
+            .map(|tab| tab.is_pinned)
+            .unwrap_or(false)
+    }
+
     pub fn favorite_tab(&mut self, tab_id: &TabId) -> bool {
         let profile_space_ids = self
             .tab_manager
@@ -5724,6 +5842,10 @@ impl MahoCore {
         serde_json::to_string(&self.account_manager.get_auth_state()).unwrap_or_else(|_| "null".to_string())
     }
 
+    pub fn get_account_tier(&self) -> Option<maho_types::account::UserTier> {
+        self.account_manager.get_tier()
+    }
+
     pub fn get_sync_status(&self) -> String {
         match &self.sync_manager {
             Some(sm) => {
@@ -6348,6 +6470,18 @@ impl SpaceManagerInterface for SpaceManager {
         self.create_folder(space_id, name, is_pinned, parent_folder_id)
     }
 
+    fn create_folder_with_provider(
+        &mut self,
+        space_id: &SpaceId,
+        name: &str,
+        is_pinned: bool,
+        parent_folder_id: Option<FolderId>,
+        provider_type: Option<String>,
+        config_json: Option<String>,
+    ) -> Option<maho_types::traits::shell_renderer::FolderViewModel> {
+        self.create_folder_with_provider(space_id, name, is_pinned, parent_folder_id, provider_type, config_json)
+    }
+
     fn rename_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId, name: &str) {
         self.rename_folder(space_id, folder_id, name)
     }
@@ -6374,8 +6508,12 @@ impl SpaceManagerInterface for SpaceManager {
         self.remove_tab_from_folder(space_id, folder_id, tab_id)
     }
 
-    fn toggle_folder_expanded(&mut self, space_id: &SpaceId, folder_id: &FolderId) {
+    fn toggle_folder_expanded(&mut self, space_id: &SpaceId, folder_id: &FolderId) -> bool {
         self.toggle_folder_expanded(space_id, folder_id)
+    }
+
+    fn find_folder_expanded(&self, space_id: &SpaceId, folder_id: &FolderId) -> Option<bool> {
+        self.find_folder_expanded(space_id, folder_id)
     }
 
     fn move_folder(&mut self, folder_id: &FolderId, new_parent: Option<FolderId>) -> Result<(), crate::space_manager::FolderError> {

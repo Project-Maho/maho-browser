@@ -1,0 +1,15 @@
+# Clippy workspace configuration for maho/
+#
+# Deny panicking unwrap() calls across all crates.
+# All existing code in import.rs (and elsewhere) already uses the safe
+# alternatives: unwrap_or(), unwrap_or_default(), unwrap_or_else() — this
+# config ensures that pattern is enforced going forward.
+#
+# Per-crate overrides: add `#[allow(clippy::unwrap_used)]` at the crate root
+# only when truly justified (e.g., test helpers, intentional panics in main).
+
+# Deny Option::unwrap and Result::unwrap — use safe alternatives or ?
+disallowed-methods = [
+    { path = "core::option::Option::unwrap", reason = "panics on None; use unwrap_or / unwrap_or_default / ? — see maho-ffi AGENTS.md" },
+    { path = "core::result::Result::unwrap", reason = "panics on Err; use unwrap_or_else / expect / ? — see maho-ffi AGENTS.md" },
+]

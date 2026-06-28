@@ -2,7 +2,6 @@
 
 #include "maho/browser/ui/views/boost/maho_boost_window_controller.h"
 
-#include <map>
 #include <memory>
 #include <utility>
 
@@ -31,13 +30,6 @@
 namespace maho {
 
 namespace {
-
-std::map<Browser*, std::unique_ptr<MahoBoostWindowController>>&
-GetBrowserControllersMap() {
-  static auto* map =
-      new std::map<Browser*, std::unique_ptr<MahoBoostWindowController>>();
-  return *map;
-}
 
 base::WeakPtr<MahoBoostWindowController>& GetPendingControllerStorage() {
   static base::NoDestructor<base::WeakPtr<MahoBoostWindowController>> storage;
@@ -122,21 +114,14 @@ class MahoBoostWindowView : public views::WidgetDelegate,
 }  // namespace
 
 MahoBoostWindowController& MahoBoostWindowController::GetForBrowser(
-    Browser* browser, Profile* profile) {
-  auto& map = GetBrowserControllersMap();
-  auto it = map.find(browser);
-  if (it != map.end()) {
-    return *it->second;
-  }
-  auto controller =
-      std::make_unique<MahoBoostWindowController>(browser, profile);
-  auto* raw = controller.get();
-  map.insert({browser, std::move(controller)});
-  return *raw;
+    Browser* browser, Profile* /*profile*/) {
+  MahoBoostWindowController* ctrl = GetOrCreateForBrowser(browser);
+  DCHECK(ctrl);
+  return *ctrl;
 }
 
 void MahoBoostWindowController::HideActive() {
-  for (auto& [browser, controller] : GetBrowserControllersMap()) {
+  for (auto& [browser, controller] : GetInstances()) {
     if (controller && controller->IsShowing()) {
       controller->Hide();
     }
@@ -188,9 +173,10 @@ content::WebContents* GetActiveTabForBoost(
   return model->GetActiveWebContents();
 }
 
-MahoBoostWindowController::MahoBoostWindowController(Browser* browser,
-                                                     Profile* profile)
-    : browser_(browser), profile_(profile) {
+MahoBoostWindowController::MahoBoostWindowController(Browser* browser)
+    : BrowserUserData<MahoBoostWindowController>(browser),
+      browser_(browser),
+      profile_(browser ? browser->profile() : nullptr) {
   if (browser_) {
     TabStripModel* tab_strip = browser_->tab_strip_model();
     if (tab_strip) {
@@ -201,6 +187,9 @@ MahoBoostWindowController::MahoBoostWindowController(Browser* browser,
 }
 
 MahoBoostWindowController::~MahoBoostWindowController() {
+  // Owned by BrowserUserData; this destructor runs when the Browser is
+  // destroyed, guaranteeing the controller never outlives its Browser*.
+  // Fixes audit finding C4.
   StopObservingTab();
   if (observed_tab_strip_) {
     observed_tab_strip_->RemoveObserver(this);

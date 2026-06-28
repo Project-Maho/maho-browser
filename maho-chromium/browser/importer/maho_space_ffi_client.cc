@@ -123,7 +123,7 @@ void MahoSpaceFFIClient::SetInstanceForTesting(MahoSpaceFFIClient* instance) {
   g_test_instance = instance;
 }
 
-MahoSpaceFFIClient::MahoSpaceFFIClient() : core_(maho::GetCore()) {}
+MahoSpaceFFIClient::MahoSpaceFFIClient() = default;
 
 MahoSpaceFFIClient::~MahoSpaceFFIClient() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -142,12 +142,13 @@ std::string MahoSpaceFFIClient::CreateSpace(const std::string& name,
                                             const std::string& theme_color_hex,
                                             const std::string& icon) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!core_) return "";
+  MahoCore* core = maho::GetCore();
+  if (!core) return "";
 
   std::string color_json = HexToMahoColorJson(theme_color_hex);
   std::string validated_icon = ValidateIcon(icon);
 
-  char* svm = maho_core_create_space(core_, name.c_str(),
+  char* svm = maho_core_create_space(core, name.c_str(),
                                      color_json.c_str(), validated_icon.c_str());
   if (!svm) return "";
 
@@ -168,7 +169,7 @@ std::string MahoSpaceFFIClient::CreateTab(const std::string& space_id,
                                           const std::string& title,
                                           const std::string& parent_folder_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!core_) return "";
+  if (!maho::GetCore()) return "";
 
   base::DictValue event;
   event.Set("kind", "create_tab");
@@ -189,7 +190,7 @@ std::string MahoSpaceFFIClient::CreateTab(const std::string& space_id,
 
 void MahoSpaceFFIClient::PinTab(const std::string& tab_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!core_) return;
+  if (!maho::GetCore()) return;
   base::DictValue event;
   event.Set("kind", "pin_tab");
   event.Set("tab_id", tab_id);
@@ -198,7 +199,7 @@ void MahoSpaceFFIClient::PinTab(const std::string& tab_id) {
 
 void MahoSpaceFFIClient::FavoriteTab(const std::string& tab_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!core_) return;
+  if (!maho::GetCore()) return;
   base::DictValue event;
   event.Set("kind", "favorite_tab");
   event.Set("tab_id", tab_id);
@@ -209,7 +210,7 @@ std::string MahoSpaceFFIClient::CreateFolder(const std::string& space_id,
                                              const std::string& name,
                                              const std::string& parent_folder_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!core_) return "";
+  if (!maho::GetCore()) return "";
 
   std::string target_parent_id = parent_folder_id;
   if (!target_parent_id.empty()) {
@@ -256,7 +257,7 @@ std::string MahoSpaceFFIClient::CreateFolder(const std::string& space_id,
 void MahoSpaceFFIClient::MoveTabToFolder(const std::string& tab_id,
                                          const std::string& folder_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!core_) return;
+  if (!maho::GetCore()) return;
   base::DictValue event;
   event.Set("kind", "move_tab_to_folder");
   event.Set("tab_id", tab_id);
@@ -267,7 +268,8 @@ void MahoSpaceFFIClient::MoveTabToFolder(const std::string& tab_id,
 void MahoSpaceFFIClient::UpdateSpaceConfig(const std::string& space_id,
                                            const std::string& changes_json) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!core_) return;
+  MahoCore* core = maho::GetCore();
+  if (!core) return;
 
   std::optional<base::Value> changes_value =
       base::JSONReader::Read(changes_json, base::JSON_PARSE_RFC);
@@ -282,20 +284,21 @@ void MahoSpaceFFIClient::UpdateSpaceConfig(const std::string& space_id,
 
   std::string event_json;
   base::JSONWriter::Write(event, &event_json);
-  char* result = maho_core_handle_event(core_, event_json.c_str());
+  char* result = maho_core_handle_event(core, event_json.c_str());
   if (result) maho_string_free(result);
 }
 
 void MahoSpaceFFIClient::ActivateSpace(const std::string& space_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!core_) return;
-  maho_core_activate_space(core_, space_id.c_str());
+  MahoCore* core = maho::GetCore();
+  if (!core) return;
+  maho_core_activate_space(core, space_id.c_str());
 }
 
 void MahoSpaceFFIClient::SetSpaceIcon(const std::string& space_id,
                                       const std::string& icon) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!core_) return;
+  if (!maho::GetCore()) return;
   base::DictValue event;
   event.Set("kind", "set_space_icon");
   event.Set("space_id", space_id);
@@ -307,7 +310,7 @@ void MahoSpaceFFIClient::MoveTabToSpace(const std::string& tab_id,
                                          const std::string& target_space_id,
                                          const std::string& section) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!core_) return;
+  if (!maho::GetCore()) return;
   base::DictValue event;
   event.Set("kind", "move_tab_to_space");
   event.Set("tab_id", tab_id);
@@ -321,7 +324,9 @@ void MahoSpaceFFIClient::MoveTabToSpace(const std::string& tab_id,
 std::string MahoSpaceFFIClient::DispatchEvent(const base::DictValue& event) {
   std::string json;
   base::JSONWriter::Write(event, &json);
-  char* result = maho_core_handle_event(core_, json.c_str());
+  MahoCore* core = maho::GetCore();
+  if (!core) return std::string();
+  char* result = maho_core_handle_event(core, json.c_str());
   if (!result) return std::string();
   std::string out(result);
   maho_string_free(result);

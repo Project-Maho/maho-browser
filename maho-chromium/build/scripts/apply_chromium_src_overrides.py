@@ -1479,6 +1479,67 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             guard="&MahoRewriteNewTabToBlank,",
         ),
+        # ── Ad-block throttle includes ─────────────────────────────────────────
+        Replacement(
+            old=(
+                '#include "chrome/browser/search/search.h"\n'
+                '#include "content/public/browser/browser_url_handler.h"\n'
+            ),
+            new=(
+                '#include "chrome/browser/search/search.h"\n'
+                '#include "content/public/browser/browser_url_handler.h"\n'
+                '#include "maho/browser/maho_core_holder.h"\n'
+                '#include "maho/browser/net/maho_ad_block_tab_helper.h"\n'
+                '#include "maho/browser/net/maho_ad_block_throttle.h"\n'
+                '#include "maho/browser/net/maho_webstore_ua_throttle.h"\n'
+            ),
+            description=(
+                "Insert Maho ad-block throttle and WebStore UA throttle includes "
+                "into chrome_content_browser_client.cc (after browser_url_handler.h)"
+            ),
+            guard='#include "maho/browser/net/maho_ad_block_throttle.h"',
+        ),
+        # ── Ad-block throttle registration in CreateURLLoaderThrottles() ───────
+        Replacement(
+            old="  return result;\n",
+            new=(
+                "  // Maho: register ad-block and WebStore UA throttles.\n"
+                "  // MahoAdBlockThrottle::WillStartRequest runs on the UI thread\n"
+                "  // (DCHECK_CURRENTLY_ON(BrowserThread::UI)); the on_blocked callback\n"
+                "  // therefore also fires on the UI thread. Using GetWeakPtr() rather\n"
+                "  // than base::Unretained() ensures the callback is a no-op if the\n"
+                "  // tab closes between throttle construction and the first network\n"
+                "  // request, closing the UAF window identified in audit finding H1.\n"
+                "  if (maho::GetCore()) {\n"
+                "    base::RepeatingClosure on_blocked;\n"
+                "    content::WebContents* wc = wc_getter ? wc_getter.Run() : nullptr;\n"
+                "    if (wc) {\n"
+                "      MahoAdBlockTabHelper::CreateForWebContents(wc);\n"
+                "      MahoAdBlockTabHelper* helper =\n"
+                "          MahoAdBlockTabHelper::FromWebContents(wc);\n"
+                "      if (helper) {\n"
+                "        on_blocked = base::BindRepeating(\n"
+                "            [](base::WeakPtr<MahoAdBlockTabHelper> weak) {\n"
+                "              if (weak) {\n"
+                "                weak->IncrementBlockedCount();\n"
+                "              }\n"
+                "            },\n"
+                "            helper->GetWeakPtr());\n"
+                "      }\n"
+                "    }\n"
+                "    result.push_back(\n"
+                "        std::make_unique<MahoAdBlockThrottle>(std::move(on_blocked)));\n"
+                "  }\n"
+                "  result.push_back(std::make_unique<MahoWebStoreUAThrottle>());\n"
+                "  return result;\n"
+            ),
+            description=(
+                "Register MahoAdBlockThrottle and MahoWebStoreUAThrottle in "
+                "CreateURLLoaderThrottles(); uses helper->GetWeakPtr() instead of "
+                "base::Unretained(helper) to eliminate UAF window (audit H1 fix)"
+            ),
+            guard="maho::GetCore()",
+        ),
     ],
     "chrome/test/BUILD.gn": [
         Replacement(
@@ -1584,6 +1645,24 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     # ── chrome_web_ui_configs.cc ──────────────────────────────────────────────
     "chrome/browser/ui/webui/chrome_web_ui_configs.cc": [
         Replacement(
+            old='#include "maho/browser/ui/webui/maho_settings/maho_settings_ui.h"\n',
+            new=(
+                '#include "maho/browser/ui/webui/maho_routines/maho_routines_ui.h"\n'
+                '#include "maho/browser/ui/webui/maho_settings/maho_settings_ui.h"\n'
+            ),
+            description="Add maho_routines_ui.h include before maho_settings_ui.h",
+            guard='#include "maho/browser/ui/webui/maho_routines/maho_routines_ui.h"',
+        ),
+        Replacement(
+            old='  map.AddWebUIConfig(std::make_unique<MahoSettingsUIConfig>());\n',
+            new=(
+                '  map.AddWebUIConfig(std::make_unique<MahoRoutinesUIConfig>());\n'
+                '  map.AddWebUIConfig(std::make_unique<MahoSettingsUIConfig>());\n'
+            ),
+            description="Register MahoRoutinesUIConfig before MahoSettingsUIConfig",
+            guard='MahoRoutinesUIConfig',
+        ),
+        Replacement(
             old='#include "maho/browser/ui/webui/maho_test/maho_test_ui.h"\n',
             new=(
                 '#include "build/buildflag.h"\n'
@@ -1604,6 +1683,18 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Conditionally register MahoTestUIConfig using buildflag",
             guard='#if BUILDFLAG(ENABLE_MAHO_TEST_WEBUI)\n  map.AddWebUIConfig',
+        ),
+    ],
+    # ── chrome/browser/ui/webui/BUILD.gn ──────────────────────────────────────
+    "chrome/browser/ui/webui/BUILD.gn": [
+        Replacement(
+            old='    "//maho/browser/ui/webui/maho_settings",\n',
+            new=(
+                '    "//maho/browser/ui/webui/maho_routines",\n'
+                '    "//maho/browser/ui/webui/maho_settings",\n'
+            ),
+            description="Add maho_routines dep before maho_settings in webui BUILD.gn",
+            guard='"//maho/browser/ui/webui/maho_routines"',
         ),
     ],
     "chrome/browser/global_keyboard_shortcuts_mac.mm": [

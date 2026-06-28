@@ -271,9 +271,9 @@ PrefService* GetPrefServiceForKey(Profile* profile,
   return profile->GetPrefs();
 }
 
-// ── Profile domain helpers (thread pool) ──
+// ── Profile domain helpers (MahoCore sequence) ──
 
-std::vector<maho_settings::mojom::ProfileInfoPtr> BuildProfilesOnPool() {
+std::vector<maho_settings::mojom::ProfileInfoPtr> BuildProfilesOnCoreSequence() {
   std::vector<maho_settings::mojom::ProfileInfoPtr> profiles;
   MahoCore* core = maho::GetCore();
   if (!core) return profiles;
@@ -339,7 +339,7 @@ std::vector<maho_settings::mojom::ProfileInfoPtr> BuildProfilesOnPool() {
   return profiles;
 }
 
-maho_settings::mojom::ProfileInfoPtr CreateProfileOnPool(
+maho_settings::mojom::ProfileInfoPtr CreateProfileOnCoreSequence(
     const std::string& name) {
   MahoCore* core = maho::GetCore();
   if (!core) return nullptr;
@@ -365,21 +365,21 @@ maho_settings::mojom::ProfileInfoPtr CreateProfileOnPool(
   return profile;
 }
 
-bool DeleteProfileOnPool(const std::string& profile_id) {
+bool DeleteProfileOnCoreSequence(const std::string& profile_id) {
   MahoCore* core = maho::GetCore();
   if (!core) return false;
   return maho_core_delete_profile(core, profile_id.c_str());
 }
 
-bool SwitchProfileOnPool(const std::string& profile_id) {
+bool SwitchProfileOnCoreSequence(const std::string& profile_id) {
   MahoCore* core = maho::GetCore();
   if (!core) return false;
   return maho_core_switch_profile(core, profile_id.c_str());
 }
 
-// ── ATC domain helpers (thread pool) ──
+// ── ATC domain helpers (MahoCore sequence) ──
 
-std::vector<maho_settings::mojom::ATCRulePtr> BuildATCRulesOnPool() {
+std::vector<maho_settings::mojom::ATCRulePtr> BuildATCRulesOnCoreSequence() {
   std::vector<maho_settings::mojom::ATCRulePtr> rules;
   MahoCore* core = maho::GetCore();
   if (!core) return rules;
@@ -413,7 +413,7 @@ std::vector<maho_settings::mojom::ATCRulePtr> BuildATCRulesOnPool() {
   return rules;
 }
 
-maho_settings::mojom::ATCRulePtr AddATCRuleOnPool(
+maho_settings::mojom::ATCRulePtr AddATCRuleOnCoreSequence(
     const std::string& url_pattern,
     const std::string& target_space_id) {
   MahoCore* core = maho::GetCore();
@@ -446,23 +446,23 @@ maho_settings::mojom::ATCRulePtr AddATCRuleOnPool(
   return rule;
 }
 
-void RemoveATCRuleOnPool(const std::string& rule_id) {
+void RemoveATCRuleOnCoreSequence(const std::string& rule_id) {
   MahoCore* core = maho::GetCore();
   if (!core) return;
   char* result = maho_core_remove_atc_rule(core, rule_id.c_str());
   if (result) maho_string_free(result);
 }
 
-void ToggleATCRuleOnPool(const std::string& rule_id, bool enabled) {
+void ToggleATCRuleOnCoreSequence(const std::string& rule_id, bool enabled) {
   MahoCore* core = maho::GetCore();
   if (!core) return;
   maho_core_toggle_atc_rule(core, rule_id.c_str(), enabled);
 }
 
-// ── Shortcuts domain helpers (thread pool) ──
+// ── Shortcuts domain helpers (MahoCore sequence) ──
 
 std::vector<maho_settings::mojom::ShortcutBindingPtr>
-BuildShortcutsOnPool() {
+BuildShortcutsOnCoreSequence() {
   std::vector<maho_settings::mojom::ShortcutBindingPtr> shortcuts;
   MahoCore* core = maho::GetCore();
   if (!core) return shortcuts;
@@ -498,7 +498,7 @@ BuildShortcutsOnPool() {
   return shortcuts;
 }
 
-bool SetShortcutOnPool(const std::string& action,
+bool SetShortcutOnCoreSequence(const std::string& action,
                        const std::string& key_combo) {
   MahoCore* core = maho::GetCore();
   if (!core) return false;
@@ -509,27 +509,27 @@ bool SetShortcutOnPool(const std::string& action,
   return ok;
 }
 
-void ResetShortcutOnPool(const std::string& action) {
+void ResetShortcutOnCoreSequence(const std::string& action) {
   MahoCore* core = maho::GetCore();
   if (!core) return;
   maho_core_reset_shortcut(core, action.c_str());
 }
 
-void ResetAllShortcutsOnPool() {
+void ResetAllShortcutsOnCoreSequence() {
   MahoCore* core = maho::GetCore();
   if (!core) return;
   maho_core_reset_all_shortcuts(core);
 }
 
-void ToggleShortcutOnPool(const std::string& action, bool enabled) {
+void ToggleShortcutOnCoreSequence(const std::string& action, bool enabled) {
   MahoCore* core = maho::GetCore();
   if (!core) return;
   maho_core_toggle_shortcut(core, action.c_str(), enabled);
 }
 
-// ── Sync domain helpers (thread pool) ──
+// ── Sync domain helpers (MahoCore sequence) ──
 
-maho_settings::mojom::SyncStatusPtr BuildSyncStatusOnPool() {
+maho_settings::mojom::SyncStatusPtr BuildSyncStatusOnCoreSequence() {
   auto status = maho_settings::mojom::SyncStatus::New();
   MahoCore* core = maho::GetCore();
   if (!core) {
@@ -574,7 +574,7 @@ maho_settings::mojom::SyncStatusPtr BuildSyncStatusOnPool() {
 }
 
 std::vector<maho_settings::mojom::SyncDeviceInfoPtr>
-BuildSyncDevicesOnPool() {
+BuildSyncDevicesOnCoreSequence() {
   std::vector<maho_settings::mojom::SyncDeviceInfoPtr> devices;
   MahoCore* core = maho::GetCore();
   if (!core) return devices;
@@ -613,7 +613,7 @@ struct GenerateSyncKeyResult {
   std::string recovery_phrase;
 };
 
-GenerateSyncKeyResult GenerateSyncKeyOnPool() {
+GenerateSyncKeyResult GenerateSyncKeyOnCoreSequence() {
   GenerateSyncKeyResult result;
   MahoCore* core = maho::GetCore();
   if (!core) return result;
@@ -638,14 +638,14 @@ GenerateSyncKeyResult GenerateSyncKeyOnPool() {
   return result;
 }
 
-void StartSyncOnPool(const std::string& sync_key) {
+void StartSyncOnCoreSequence(const std::string& sync_key) {
   MahoCore* core = maho::GetCore();
   if (!core) return;
   maho_core_start_sync(core, kSettingsSyncRelayUrl,
                        sync_key.c_str());
 }
 
-maho_settings::mojom::SyncStatusPtr JoinSyncOnPool(
+maho_settings::mojom::SyncStatusPtr JoinSyncOnCoreSequence(
     const std::string& recovery_phrase) {
   MahoCore* core = maho::GetCore();
   if (!core) {
@@ -656,18 +656,18 @@ maho_settings::mojom::SyncStatusPtr JoinSyncOnPool(
   }
   char* result = maho_core_join_sync(core, recovery_phrase.c_str());
   if (result) maho_string_free(result);
-  return BuildSyncStatusOnPool();
+  return BuildSyncStatusOnCoreSequence();
 }
 
-void StopSyncOnPool() {
+void StopSyncOnCoreSequence() {
   MahoCore* core = maho::GetCore();
   if (!core) return;
   maho_core_stop_sync(core);
 }
 
-// ── Theme / Spaces domain helpers (thread pool) ──
+// ── Theme / Spaces domain helpers (MahoCore sequence) ──
 
-bool ApplyThemeToSpaceOnPool(const std::string& space_id,
+bool ApplyThemeToSpaceOnCoreSequence(const std::string& space_id,
                              const std::string& theme_json) {
   MahoCore* core = maho::GetCore();
   if (!core) return false;
@@ -689,7 +689,7 @@ bool ApplyThemeToSpaceOnPool(const std::string& space_id,
   return true;
 }
 
-std::vector<maho_settings::mojom::SpaceBasicInfoPtr> BuildSpacesOnPool() {
+std::vector<maho_settings::mojom::SpaceBasicInfoPtr> BuildSpacesOnCoreSequence() {
   std::vector<maho_settings::mojom::SpaceBasicInfoPtr> spaces;
   MahoCore* core = maho::GetCore();
   if (!core) return spaces;
@@ -722,7 +722,7 @@ std::vector<maho_settings::mojom::SpaceBasicInfoPtr> BuildSpacesOnPool() {
 // ── Autofill domain (read-only) ──
 
 std::vector<maho_settings::mojom::AutofillAddressPtr>
-BuildAutofillAddressesOnPool() {
+BuildAutofillAddressesOnCoreSequence() {
   std::vector<maho_settings::mojom::AutofillAddressPtr> addresses;
   MahoCore* core = maho::GetCore();
   if (!core) return addresses;
@@ -761,7 +761,7 @@ BuildAutofillAddressesOnPool() {
 }
 
 std::vector<maho_settings::mojom::AutofillPaymentPtr>
-BuildAutofillPaymentsOnPool() {
+BuildAutofillPaymentsOnCoreSequence() {
   std::vector<maho_settings::mojom::AutofillPaymentPtr> payments;
   MahoCore* core = maho::GetCore();
   if (!core) return payments;
@@ -797,7 +797,7 @@ BuildAutofillPaymentsOnPool() {
 // ── Content Blocker domain ──
 
 std::vector<maho_settings::mojom::FilterListInfoPtr>
-BuildFilterListsOnPool() {
+BuildFilterListsOnCoreSequence() {
   std::vector<maho_settings::mojom::FilterListInfoPtr> lists;
   MahoCore* core = maho::GetCore();
   if (!core) return lists;
@@ -831,7 +831,7 @@ BuildFilterListsOnPool() {
   return lists;
 }
 
-maho_settings::mojom::ContentBlockerStatsPtr BuildContentBlockerStatsOnPool() {
+maho_settings::mojom::ContentBlockerStatsPtr BuildContentBlockerStatsOnCoreSequence() {
   auto stats = maho_settings::mojom::ContentBlockerStats::New();
   MahoCore* core = maho::GetCore();
   if (!core) return stats;
@@ -854,15 +854,15 @@ maho_settings::mojom::ContentBlockerStatsPtr BuildContentBlockerStatsOnPool() {
   return stats;
 }
 
-maho_settings::mojom::ContentBlockerStatsPtr RebuildContentRulesOnPool() {
+maho_settings::mojom::ContentBlockerStatsPtr RebuildContentRulesOnCoreSequence() {
   MahoCore* core = maho::GetCore();
   if (core) {
     maho_core_rebuild_content_rules(core);
   }
-  return BuildContentBlockerStatsOnPool();
+  return BuildContentBlockerStatsOnCoreSequence();
 }
 
-bool AddFilterListOnPool(const std::string& id,
+bool AddFilterListOnCoreSequence(const std::string& id,
                           const std::string& name,
                           const std::string& url) {
   MahoCore* core = maho::GetCore();
@@ -871,13 +871,13 @@ bool AddFilterListOnPool(const std::string& id,
   return true;
 }
 
-void ToggleFilterListOnPool(const std::string& id, bool enabled) {
+void ToggleFilterListOnCoreSequence(const std::string& id, bool enabled) {
   MahoCore* core = maho::GetCore();
   if (!core) return;
   maho_core_toggle_filter_list(core, id.c_str(), enabled);
 }
 
-void RemoveFilterListOnPool(const std::string& id) {
+void RemoveFilterListOnCoreSequence(const std::string& id) {
   MahoCore* core = maho::GetCore();
   if (!core) return;
   maho_core_remove_filter_list(core, id.c_str());
@@ -886,7 +886,7 @@ void RemoveFilterListOnPool(const std::string& id) {
 // ── Extensions domain (read-only) ──
 
 std::vector<maho_settings::mojom::InstalledExtensionPtr>
-BuildInstalledExtensionsOnPool() {
+BuildInstalledExtensionsOnCoreSequence() {
   std::vector<maho_settings::mojom::InstalledExtensionPtr> exts;
   MahoCore* core = maho::GetCore();
   if (!core) return exts;
@@ -943,7 +943,7 @@ void WriteCachedThemeStoreToDiskOnPool(base::FilePath cache_path,
 }
 
 std::optional<maho_settings::mojom::AutofillAddressPtr>
-AddAutofillAddressOnPool(const std::string& id,
+AddAutofillAddressOnCoreSequence(const std::string& id,
                          const std::string& name,
                          const std::string& address_line1,
                          const std::string& address_line2,
@@ -993,14 +993,14 @@ AddAutofillAddressOnPool(const std::string& id,
   return out;
 }
 
-bool DeleteAutofillAddressOnPool(const std::string& id) {
+bool DeleteAutofillAddressOnCoreSequence(const std::string& id) {
   MahoCore* core = maho::GetCore();
   if (!core) return false;
   return maho_core_delete_autofill_address_persisted(core, id.c_str());
 }
 
 std::optional<maho_settings::mojom::AutofillPaymentPtr>
-AddAutofillPaymentOnPool(const std::string& id,
+AddAutofillPaymentOnCoreSequence(const std::string& id,
                          const std::string& card_network,
                          const std::string& last_four,
                          const std::string& expiration,
@@ -1036,7 +1036,7 @@ AddAutofillPaymentOnPool(const std::string& id,
   return out;
 }
 
-bool DeleteAutofillPaymentOnPool(const std::string& id) {
+bool DeleteAutofillPaymentOnCoreSequence(const std::string& id) {
   MahoCore* core = maho::GetCore();
   if (!core) return false;
   return maho_core_delete_autofill_payment_persisted(core, id.c_str());
@@ -1321,9 +1321,9 @@ void MahoSettingsPageHandler::ScheduleExtensionNotify() {
 }
 
 void MahoSettingsPageHandler::FlushExtensionNotify() {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&BuildInstalledExtensionsOnPool),
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&BuildInstalledExtensionsOnCoreSequence),
       base::BindOnce(
           [](base::WeakPtr<MahoSettingsPageHandler> self,
              std::vector<maho_settings::mojom::InstalledExtensionPtr> exts) {
@@ -1470,9 +1470,10 @@ void MahoSettingsPageHandler::AppendFfiSettings(
 // ── Profiles domain ──
 
 void MahoSettingsPageHandler::GetProfiles(GetProfilesCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&BuildProfilesOnPool),
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&BuildProfilesOnCoreSequence),
       base::BindOnce(
           [](GetProfilesCallback cb,
              std::vector<maho_settings::mojom::ProfileInfoPtr> profiles) {
@@ -1483,9 +1484,10 @@ void MahoSettingsPageHandler::GetProfiles(GetProfilesCallback callback) {
 
 void MahoSettingsPageHandler::CreateProfile(const std::string& name,
                                              CreateProfileCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&CreateProfileOnPool, name),
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&CreateProfileOnCoreSequence, name),
       base::BindOnce(
           [](CreateProfileCallback cb,
              maho_settings::mojom::ProfileInfoPtr profile) {
@@ -1496,9 +1498,10 @@ void MahoSettingsPageHandler::CreateProfile(const std::string& name,
 
 void MahoSettingsPageHandler::DeleteProfile(const std::string& profile_id,
                                              DeleteProfileCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&DeleteProfileOnPool, profile_id),
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&DeleteProfileOnCoreSequence, profile_id),
       base::BindOnce(
           [](DeleteProfileCallback cb, bool success) {
             std::move(cb).Run(success);
@@ -1508,9 +1511,10 @@ void MahoSettingsPageHandler::DeleteProfile(const std::string& profile_id,
 
 void MahoSettingsPageHandler::SwitchProfile(const std::string& profile_id,
                                              SwitchProfileCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&SwitchProfileOnPool, profile_id),
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&SwitchProfileOnCoreSequence, profile_id),
       base::BindOnce(
           [](SwitchProfileCallback cb, bool success) {
             std::move(cb).Run(success);
@@ -1521,9 +1525,10 @@ void MahoSettingsPageHandler::SwitchProfile(const std::string& profile_id,
 // ── ATC domain ──
 
 void MahoSettingsPageHandler::GetATCRules(GetATCRulesCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&BuildATCRulesOnPool),
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&BuildATCRulesOnCoreSequence),
       base::BindOnce(
           [](GetATCRulesCallback cb,
              std::vector<maho_settings::mojom::ATCRulePtr> rules) {
@@ -1535,9 +1540,10 @@ void MahoSettingsPageHandler::GetATCRules(GetATCRulesCallback callback) {
 void MahoSettingsPageHandler::AddATCRule(const std::string& url_pattern,
                                           const std::string& target_space_id,
                                           AddATCRuleCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&AddATCRuleOnPool, url_pattern, target_space_id),
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&AddATCRuleOnCoreSequence, url_pattern, target_space_id),
       base::BindOnce(
           [](AddATCRuleCallback cb, maho_settings::mojom::ATCRulePtr rule) {
             std::move(cb).Run(std::move(rule));
@@ -1546,16 +1552,18 @@ void MahoSettingsPageHandler::AddATCRule(const std::string& url_pattern,
 }
 
 void MahoSettingsPageHandler::RemoveATCRule(const std::string& rule_id) {
-  base::ThreadPool::PostTask(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&RemoveATCRuleOnPool, rule_id));
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreClosure(
+      FROM_HERE,
+      base::BindOnce(&RemoveATCRuleOnCoreSequence, rule_id));
 }
 
 void MahoSettingsPageHandler::ToggleATCRule(const std::string& rule_id,
                                              bool enabled) {
-  base::ThreadPool::PostTask(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&ToggleATCRuleOnPool, rule_id, enabled));
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreClosure(
+      FROM_HERE,
+      base::BindOnce(&ToggleATCRuleOnCoreSequence, rule_id, enabled));
 }
 
 // ── AI domain ──
@@ -1566,8 +1574,7 @@ void MahoSettingsPageHandler::GetAISettings(GetAISettingsCallback callback) {
   settings->provider = prefs_->GetString(ai::kProvider);
   settings->base_url = prefs_->GetString(ai::kBaseUrl);
   settings->model = prefs_->GetString(ai::kModel);
-  settings->opencode_runtime_enabled =
-      prefs_->GetBoolean(ai::kOpenCodeRuntimeEnabled);
+  settings->opencode_runtime_enabled = false;
   settings->approval_policy = prefs_->GetString(ai::kApprovalPolicy);
   settings->session_persistence_enabled =
       prefs_->GetBoolean(ai::kSessionPersistenceEnabled);
@@ -1605,9 +1612,10 @@ void MahoSettingsPageHandler::SetAISessionPersistence(bool enabled) {
 // ── Shortcuts domain ──
 
 void MahoSettingsPageHandler::GetShortcuts(GetShortcutsCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&BuildShortcutsOnPool),
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&BuildShortcutsOnCoreSequence),
       base::BindOnce(
           [](GetShortcutsCallback cb,
              std::vector<maho_settings::mojom::ShortcutBindingPtr> shortcuts) {
@@ -1619,9 +1627,10 @@ void MahoSettingsPageHandler::GetShortcuts(GetShortcutsCallback callback) {
 void MahoSettingsPageHandler::SetShortcut(const std::string& action,
                                            const std::string& key_combo,
                                            SetShortcutCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&SetShortcutOnPool, action, key_combo),
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&SetShortcutOnCoreSequence, action, key_combo),
       base::BindOnce(
           [](SetShortcutCallback cb, bool success) {
             std::move(cb).Run(success);
@@ -1630,30 +1639,34 @@ void MahoSettingsPageHandler::SetShortcut(const std::string& action,
 }
 
 void MahoSettingsPageHandler::ResetShortcut(const std::string& action) {
-  base::ThreadPool::PostTask(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&ResetShortcutOnPool, action));
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreClosure(
+      FROM_HERE,
+      base::BindOnce(&ResetShortcutOnCoreSequence, action));
 }
 
 void MahoSettingsPageHandler::ResetAllShortcuts() {
-  base::ThreadPool::PostTask(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&ResetAllShortcutsOnPool));
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreClosure(
+      FROM_HERE,
+      base::BindOnce(&ResetAllShortcutsOnCoreSequence));
 }
 
 void MahoSettingsPageHandler::ToggleShortcut(const std::string& action,
                                              bool enabled) {
-  base::ThreadPool::PostTask(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&ToggleShortcutOnPool, action, enabled));
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreClosure(
+      FROM_HERE,
+      base::BindOnce(&ToggleShortcutOnCoreSequence, action, enabled));
 }
 
 // ── Sync domain ──
 
 void MahoSettingsPageHandler::GetSyncStatus(GetSyncStatusCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&BuildSyncStatusOnPool),
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&BuildSyncStatusOnCoreSequence),
       base::BindOnce(
           [](GetSyncStatusCallback cb,
              maho_settings::mojom::SyncStatusPtr status) {
@@ -1664,9 +1677,10 @@ void MahoSettingsPageHandler::GetSyncStatus(GetSyncStatusCallback callback) {
 
 void MahoSettingsPageHandler::GetSyncDevices(
     GetSyncDevicesCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&BuildSyncDevicesOnPool),
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&BuildSyncDevicesOnCoreSequence),
       base::BindOnce(
           [](GetSyncDevicesCallback cb,
              std::vector<maho_settings::mojom::SyncDeviceInfoPtr> devices) {
@@ -1677,9 +1691,10 @@ void MahoSettingsPageHandler::GetSyncDevices(
 
 void MahoSettingsPageHandler::GenerateSyncKey(
     GenerateSyncKeyCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&GenerateSyncKeyOnPool),
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&GenerateSyncKeyOnCoreSequence),
       base::BindOnce(
           [](GenerateSyncKeyCallback cb, GenerateSyncKeyResult result) {
             auto info = maho_settings::mojom::SyncKeyInfo::New();
@@ -1693,9 +1708,10 @@ void MahoSettingsPageHandler::GenerateSyncKey(
 
 void MahoSettingsPageHandler::StartSync(const std::string& sync_key,
                                           StartSyncCallback callback) {
-  base::ThreadPool::PostTaskAndReply(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&StartSyncOnPool, sync_key),
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTaskAndReply(
+      FROM_HERE,
+      base::BindOnce(&StartSyncOnCoreSequence, sync_key),
       base::BindOnce(
           [](base::WeakPtr<MahoSettingsPageHandler> self,
              StartSyncCallback cb) {
@@ -1712,9 +1728,10 @@ void MahoSettingsPageHandler::StartSync(const std::string& sync_key,
 
 void MahoSettingsPageHandler::JoinSync(const std::string& recovery_phrase,
                                         JoinSyncCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&JoinSyncOnPool, recovery_phrase),
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&JoinSyncOnCoreSequence, recovery_phrase),
       base::BindOnce(
           [](JoinSyncCallback cb,
              maho_settings::mojom::SyncStatusPtr status) {
@@ -1724,9 +1741,10 @@ void MahoSettingsPageHandler::JoinSync(const std::string& recovery_phrase,
 }
 
 void MahoSettingsPageHandler::StopSync() {
-  base::ThreadPool::PostTask(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&StopSyncOnPool));
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreClosure(
+      FROM_HERE,
+      base::BindOnce(&StopSyncOnCoreSequence));
 }
 
 void MahoSettingsPageHandler::FetchThemeStore(
@@ -1840,9 +1858,10 @@ void MahoSettingsPageHandler::ApplyThemeToSpace(
     const std::string& space_id,
     const std::string& theme_json,
     ApplyThemeToSpaceCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&ApplyThemeToSpaceOnPool, space_id, theme_json),
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&ApplyThemeToSpaceOnCoreSequence, space_id, theme_json),
       base::BindOnce(
           [](ApplyThemeToSpaceCallback cb, bool success) {
             std::move(cb).Run(success);
@@ -1851,9 +1870,10 @@ void MahoSettingsPageHandler::ApplyThemeToSpace(
 }
 
 void MahoSettingsPageHandler::GetSpaces(GetSpacesCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&BuildSpacesOnPool),
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&BuildSpacesOnCoreSequence),
       base::BindOnce(
           [](GetSpacesCallback cb,
              std::vector<maho_settings::mojom::SpaceBasicInfoPtr> spaces) {
@@ -1972,9 +1992,10 @@ void MahoSettingsPageHandler::DeletePassword(
 
 void MahoSettingsPageHandler::GetAutofillAddresses(
     GetAutofillAddressesCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&BuildAutofillAddressesOnPool),
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&BuildAutofillAddressesOnCoreSequence),
       base::BindOnce(
           [](GetAutofillAddressesCallback cb,
              std::vector<maho_settings::mojom::AutofillAddressPtr> addrs) {
@@ -1995,9 +2016,10 @@ void MahoSettingsPageHandler::AddAutofillAddress(
     const std::string& phone,
     const std::string& email,
     AddAutofillAddressCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&AddAutofillAddressOnPool, id, name, address_line1,
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&AddAutofillAddressOnCoreSequence, id, name, address_line1,
                      address_line2, city, state, postal_code, country, phone,
                      email),
       base::BindOnce(
@@ -2011,9 +2033,10 @@ void MahoSettingsPageHandler::AddAutofillAddress(
 void MahoSettingsPageHandler::DeleteAutofillAddress(
     const std::string& id,
     DeleteAutofillAddressCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&DeleteAutofillAddressOnPool, id),
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&DeleteAutofillAddressOnCoreSequence, id),
       base::BindOnce(
           [](DeleteAutofillAddressCallback cb, bool success) {
             std::move(cb).Run(success);
@@ -2023,9 +2046,10 @@ void MahoSettingsPageHandler::DeleteAutofillAddress(
 
 void MahoSettingsPageHandler::GetAutofillPayments(
     GetAutofillPaymentsCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&BuildAutofillPaymentsOnPool),
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&BuildAutofillPaymentsOnCoreSequence),
       base::BindOnce(
           [](GetAutofillPaymentsCallback cb,
              std::vector<maho_settings::mojom::AutofillPaymentPtr> pays) {
@@ -2035,9 +2059,10 @@ void MahoSettingsPageHandler::GetAutofillPayments(
 }
 
 void MahoSettingsPageHandler::GetFilterLists(GetFilterListsCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&BuildFilterListsOnPool),
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&BuildFilterListsOnCoreSequence),
       base::BindOnce(
           [](GetFilterListsCallback cb,
              std::vector<maho_settings::mojom::FilterListInfoPtr> lists) {
@@ -2053,9 +2078,10 @@ void MahoSettingsPageHandler::AddAutofillPayment(
     const std::string& expiration,
     const std::string& cardholder_name,
     AddAutofillPaymentCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&AddAutofillPaymentOnPool, id, card_network, last_four,
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&AddAutofillPaymentOnCoreSequence, id, card_network, last_four,
                      expiration, cardholder_name),
       base::BindOnce(
           [](AddAutofillPaymentCallback cb,
@@ -2068,9 +2094,10 @@ void MahoSettingsPageHandler::AddAutofillPayment(
 void MahoSettingsPageHandler::DeleteAutofillPayment(
     const std::string& id,
     DeleteAutofillPaymentCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&DeleteAutofillPaymentOnPool, id),
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&DeleteAutofillPaymentOnCoreSequence, id),
       base::BindOnce(
           [](DeleteAutofillPaymentCallback cb, bool success) {
             std::move(cb).Run(success);
@@ -2082,9 +2109,10 @@ void MahoSettingsPageHandler::AddFilterList(const std::string& id,
                                             const std::string& name,
                                             const std::string& url,
                                             AddFilterListCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&AddFilterListOnPool, id, name, url),
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&AddFilterListOnCoreSequence, id, name, url),
       base::BindOnce(
           [](AddFilterListCallback cb, bool success) {
             std::move(cb).Run(success);
@@ -2094,22 +2122,25 @@ void MahoSettingsPageHandler::AddFilterList(const std::string& id,
 
 void MahoSettingsPageHandler::ToggleFilterList(const std::string& id,
                                                bool enabled) {
-  base::ThreadPool::PostTask(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&ToggleFilterListOnPool, id, enabled));
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreClosure(
+      FROM_HERE,
+      base::BindOnce(&ToggleFilterListOnCoreSequence, id, enabled));
 }
 
 void MahoSettingsPageHandler::RemoveFilterList(const std::string& id) {
-  base::ThreadPool::PostTask(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&RemoveFilterListOnPool, id));
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreClosure(
+      FROM_HERE,
+      base::BindOnce(&RemoveFilterListOnCoreSequence, id));
 }
 
 void MahoSettingsPageHandler::RebuildContentRules(
     RebuildContentRulesCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&RebuildContentRulesOnPool),
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&RebuildContentRulesOnCoreSequence),
       base::BindOnce(
           [](RebuildContentRulesCallback cb,
              maho_settings::mojom::ContentBlockerStatsPtr stats) {
@@ -2120,9 +2151,10 @@ void MahoSettingsPageHandler::RebuildContentRules(
 
 void MahoSettingsPageHandler::GetContentBlockerStats(
     GetContentBlockerStatsCallback callback) {
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&BuildContentBlockerStatsOnPool),
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&BuildContentBlockerStatsOnCoreSequence),
       base::BindOnce(
           [](GetContentBlockerStatsCallback cb,
              maho_settings::mojom::ContentBlockerStatsPtr stats) {
@@ -2133,14 +2165,15 @@ void MahoSettingsPageHandler::GetContentBlockerStats(
 
 void MahoSettingsPageHandler::GetInstalledExtensions(
     GetInstalledExtensionsCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!ext_bridge_observation_.IsObserving()) {
     if (auto* bridge = maho::MahoExtensionStateBridge::FromProfile(profile_)) {
       ext_bridge_observation_.Observe(bridge);
     }
   }
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&BuildInstalledExtensionsOnPool),
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&BuildInstalledExtensionsOnCoreSequence),
       base::BindOnce(
           [](GetInstalledExtensionsCallback cb,
              std::vector<maho_settings::mojom::InstalledExtensionPtr> exts) {

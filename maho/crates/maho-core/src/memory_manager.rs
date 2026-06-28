@@ -12,7 +12,7 @@ use crate::embedding;
 use crate::llm_client;
 use maho_storage::sqlite::SqliteStorage;
 
-pub(crate) fn get_runtime() -> &'static Runtime {
+pub fn get_runtime() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();
     RT.get_or_init(|| Runtime::new().expect("maho-core shared tokio runtime"))
 }
@@ -59,8 +59,8 @@ pub struct AuthSnapshot {
 pub struct MemoryManager {
     /// In-memory ANN index (fact_id keyed)
     hnsw: Option<HnswMap<Embedding, String>>,
-    result_rx: mpsc::UnboundedReceiver<MemoryResult>,
-    result_tx: mpsc::UnboundedSender<MemoryResult>,
+    result_rx: mpsc::Receiver<MemoryResult>,
+    result_tx: mpsc::Sender<MemoryResult>,
     active_tasks: Vec<JoinHandle<()>>,
     auth: Option<AuthSnapshot>,
     pub last_summary_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -74,7 +74,7 @@ impl Default for MemoryManager {
 
 impl MemoryManager {
     pub fn new() -> Self {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(64);
         Self {
             hnsw: None,
             result_rx: rx,
@@ -96,7 +96,7 @@ impl MemoryManager {
             ticker.tick().await; // skip immediate first tick at t=0
             loop {
                 ticker.tick().await;
-                let _ = tx.send(MemoryResult::BrowsingSummaryDue);
+                let _ = tx.send(MemoryResult::BrowsingSummaryDue).await;
             }
         });
     }
@@ -147,8 +147,8 @@ impl MemoryManager {
         let tx = self.result_tx.clone();
         let h = get_runtime().spawn(async move {
             match llm_client::extract_facts_json(&auth, &raw_text).await {
-                Ok(facts) => { let _ = tx.send(MemoryResult::FactsExtracted { session_id, facts }); }
-                Err(e)    => { let _ = tx.send(MemoryResult::Failed { reason: format!("extract: {e}") }); }
+                Ok(facts) => { let _ = tx.send(MemoryResult::FactsExtracted { session_id, facts }).await; }
+                Err(e)    => { let _ = tx.send(MemoryResult::Failed { reason: format!("extract: {e}") }).await; }
             }
         });
         self.active_tasks.push(h);
@@ -160,8 +160,8 @@ impl MemoryManager {
         let tx = self.result_tx.clone();
         let h = get_runtime().spawn(async move {
             match llm_client::summarize_browsing(&auth, &raw_text).await {
-                Ok(content) => { let _ = tx.send(MemoryResult::BrowsingSummaryReady { content }); }
-                Err(e)      => { let _ = tx.send(MemoryResult::Failed { reason: format!("summary: {e}") }); }
+                Ok(content) => { let _ = tx.send(MemoryResult::BrowsingSummaryReady { content }).await; }
+                Err(e)      => { let _ = tx.send(MemoryResult::Failed { reason: format!("summary: {e}") }).await; }
             }
         });
         self.active_tasks.push(h);
@@ -176,11 +176,11 @@ impl MemoryManager {
             }).await;
             match result {
                 Ok(Ok(mut vecs)) if !vecs.is_empty() => {
-                    let _ = tx.send(MemoryResult::EmbeddingsReady { fact_id, embedding: vecs.remove(0) });
+                    let _ = tx.send(MemoryResult::EmbeddingsReady { fact_id, embedding: vecs.remove(0) }).await;
                 }
-                Ok(Err(e)) => { let _ = tx.send(MemoryResult::Failed { reason: format!("embed: {e}") }); }
-                Err(e)     => { let _ = tx.send(MemoryResult::Failed { reason: format!("embed join: {e}") }); }
-                _ => { let _ = tx.send(MemoryResult::Failed { reason: "empty embedding".into() }); }
+                Ok(Err(e)) => { let _ = tx.send(MemoryResult::Failed { reason: format!("embed: {e}") }).await; }
+                Err(e)     => { let _ = tx.send(MemoryResult::Failed { reason: format!("embed join: {e}") }).await; }
+                _ => { let _ = tx.send(MemoryResult::Failed { reason: "empty embedding".into() }).await; }
             }
         });
         self.active_tasks.push(h);
@@ -192,5 +192,50 @@ impl MemoryManager {
         while let Ok(r) = self.result_rx.try_recv() { out.push(r); }
         self.active_tasks.retain(|h| !h.is_finished());
         out
+    }
+
+    /// Test-only helper: push an externally-spawned JoinHandle into active_tasks
+    /// so the drop-aborts test can verify the Drop impl without spawning real work.
+    #[cfg(test)]
+    pub(crate) fn push_task_for_test(&mut self, handle: JoinHandle<()>) {
+        self.active_tasks.push(handle);
+    }
+}
+
+impl Drop for MemoryManager {
+    fn drop(&mut self) {
+        // Audit finding H11: abort spawned background tasks so they do not
+        // continue running detached after the manager (and its references)
+        // are destroyed. JoinHandle::abort() is idempotent and safe to call
+        // on already-finished tasks.
+        for handle in self.active_tasks.drain(..) {
+            handle.abort();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn memory_manager_drop_aborts_tasks() {
+        let mut manager = MemoryManager::new();
+
+        let handle = tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        });
+
+        let abort_handle = handle.abort_handle();
+        manager.push_task_for_test(handle);
+
+        drop(manager);
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        assert!(
+            abort_handle.is_finished(),
+            "task should have been aborted when MemoryManager was dropped"
+        );
     }
 }

@@ -7,7 +7,6 @@
 #include <vector>
 
 #include "base/check.h"
-#include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
@@ -54,31 +53,7 @@ bool IsCorePinnedTab(const std::string& tab_id) {
   if (!core) {
     return false;
   }
-  char* json_str = maho_core_get_tab_view_models(core);
-  if (!json_str) {
-    return false;
-  }
-  std::string json(json_str);
-  maho_string_free(json_str);
-
-  std::optional<base::Value> parsed =
-      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_list()) {
-    return false;
-  }
-
-  for (const auto& item : parsed->GetList()) {
-    const auto* dict = item.GetIfDict();
-    if (!dict) {
-      continue;
-    }
-    const std::string* id = dict->FindString("id");
-    if (id && *id == tab_id) {
-      std::optional<bool> is_pinned = dict->FindBool("isPinned");
-      return is_pinned.value_or(false);
-    }
-  }
-  return false;
+  return maho_core_is_tab_pinned(core, tab_id.c_str());
 }
 
 void DispatchShellEventLocal(

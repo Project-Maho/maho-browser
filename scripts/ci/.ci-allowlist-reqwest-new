@@ -1,0 +1,4 @@
+# .ci-allowlist-reqwest-new
+# Pre-existing reqwest::Client::new() calls in maho-core.
+# New usages must use a shared/pooled client instead.
+# To add a new exception, get explicit sign-off and append here.

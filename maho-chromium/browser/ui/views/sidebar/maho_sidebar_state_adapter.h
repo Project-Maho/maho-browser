@@ -4,12 +4,19 @@
 #define MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_STATE_ADAPTER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 
+#include "base/containers/flat_map.h"
 #include "base/values.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
+#include "ui/gfx/image/image.h"
 
 class Browser;
+
+// Forward declaration of the opaque FFI type (defined in maho_ffi.h).
+struct MahoCore;
 
 namespace maho {
 
@@ -74,6 +81,18 @@ class MahoSidebarStateAdapter {
   mutable std::unique_ptr<CycleSpaceCache> cycle_space_cache_;
   MahoSidebarFavoritesModel favorites_model_;
   std::u16string GetActiveHostText(Browser* browser) const;
+
+  // V2 FFI: single call replacing 3 separate v1 FFI hops.
+  std::string FetchSidebarStateV2(
+      ::MahoCore* core, const std::string& space_id_json) const;
+
+  // Prebuilt favicon map from v2 FFI (base64 decoded PNG bytes keyed by tab ID).
+  // Set during BuildViewStateModel, consumed by ParseTreeNode, cleared after.
+  mutable base::flat_map<std::string, std::vector<uint8_t>> v2_favicon_map_;
+
+  // Parsed tree from v2 FFI. When non-null, BuildTabListModel uses this
+  // instead of calling maho_core_get_sidebar_tree (v1).
+  mutable std::optional<base::Value> v2_tree_;
 };
 
 }  // namespace maho

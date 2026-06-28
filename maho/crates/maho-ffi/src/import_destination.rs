@@ -32,8 +32,9 @@ use crate::import::{MahoImportCookieCallback, MahoImportAutofillCallback, MahoIm
 /// lifetime of this wrapper. See module-level safety docs.
 struct CorePtr(*mut MahoCore);
 
-// SAFETY: We guarantee single-threaded access via the orchestrator design —
-// the import worker thread is the only accessor during an active import.
+// SAFETY: `crate::import_gate` enforces exclusive access — all other
+// `maho_core_*` FFI entry points short-circuit while IMPORT_ACTIVE is set,
+// so the import worker thread is the sole accessor of MahoCore during import.
 unsafe impl Send for CorePtr {}
 unsafe impl Sync for CorePtr {}
 
@@ -166,6 +167,8 @@ impl ImportDestination for MahoCoreDestination {
             name: name.to_string(),
             is_pinned: false,
             parent_folder_id,
+            provider_type: None,
+            config_json: None,
         };
         let updates = self.core_mut().handle_event(event);
 

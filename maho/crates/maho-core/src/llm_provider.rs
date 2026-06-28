@@ -21,18 +21,13 @@ pub trait LLMProvider: Send + Sync {
 }
 
 /// # Threading
-/// Blocks on the shared tokio runtime — must NOT be called from the main/UI thread.
-pub fn validate_api_key(provider: &str, api_key: &str) -> bool {
+/// Async — callers at FFI boundaries must use their own `block_on` bridge.
+pub async fn validate_api_key(provider: &str, api_key: &str) -> bool {
     if api_key.trim().is_empty() || api_key.contains("PLACEHOLDER") || api_key.len() < 8 {
         return false;
     }
 
-    let rt = crate::memory_manager::get_runtime();
-    rt.block_on(validate_api_key_async(provider, api_key))
-}
-
-async fn validate_api_key_async(provider: &str, api_key: &str) -> bool {
-    let client = reqwest::Client::new();
+    let client = crate::http::shared_http_client();
 
     let req = if provider == "anthropic" {
         client.post("https://api.anthropic.com/v1/messages")
@@ -75,8 +70,8 @@ impl LLMProvider for OpenAICompatibleProvider {
         messages: Vec<Value>,
         tools: Vec<Value>,
     ) -> Pin<Box<dyn Stream<Item = Result<LLMStreamChunk, String>> + Send>> {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let client = reqwest::Client::new();
+        let (tx, rx) = tokio::sync::mpsc::channel(256);
+        let client = crate::http::shared_http_client();
         
         let endpoint_url = if self.endpoint.ends_with("/chat/completions") {
             self.endpoint.clone()
@@ -105,7 +100,7 @@ impl LLMProvider for OpenAICompatibleProvider {
             let res = match req.json(&body).send().await {
                 Ok(r) => r,
                 Err(e) => {
-                    let _ = tx.send(Err(format!("Request failed: {}", e)));
+                    let _ = tx.try_send(Err(format!("Request failed: {}", e)));
                     return;
                 }
             };
@@ -113,7 +108,7 @@ impl LLMProvider for OpenAICompatibleProvider {
             if !res.status().is_success() {
                 let status = res.status();
                 let err_text = res.text().await.unwrap_or_default();
-                let _ = tx.send(Err(format!("HTTP error {}: {}", status, err_text)));
+                let _ = tx.try_send(Err(format!("HTTP error {}: {}", status, err_text)));
                 return;
             }
 
@@ -124,7 +119,7 @@ impl LLMProvider for OpenAICompatibleProvider {
                 let chunk = match chunk_result {
                     Ok(b) => b,
                     Err(e) => {
-                        let _ = tx.send(Err(format!("Stream error: {}", e)));
+                        let _ = tx.try_send(Err(format!("Stream error: {}", e)));
                         return;
                     }
                 };
@@ -132,7 +127,7 @@ impl LLMProvider for OpenAICompatibleProvider {
                 let chunk_str = match std::str::from_utf8(&chunk) {
                     Ok(s) => s,
                     Err(_) => {
-                        let _ = tx.send(Err("Invalid UTF-8 chunk".to_string()));
+                        let _ = tx.try_send(Err("Invalid UTF-8 chunk".to_string()));
                         return;
                     }
                 };
@@ -162,7 +157,7 @@ impl LLMProvider for OpenAICompatibleProvider {
                                 if let Some(delta) = choice.get("delta") {
                                     if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
                                         if !content.is_empty() {
-                                            let _ = tx.send(Ok(LLMStreamChunk::Token(content.to_string())));
+                                            let _ = tx.try_send(Ok(LLMStreamChunk::Token(content.to_string())));
                                         }
                                     }
 
@@ -172,7 +167,7 @@ impl LLMProvider for OpenAICompatibleProvider {
                                             let id = tc.get("id").and_then(|id| id.as_str()).map(|s| s.to_string());
                                             let name = tc.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()).map(|s| s.to_string());
                                             let arguments_delta = tc.get("function").and_then(|f| f.get("arguments")).and_then(|a| a.as_str()).unwrap_or_default().to_string();
-                                            let _ = tx.send(Ok(LLMStreamChunk::ToolCallDelta { index, id, name, arguments_delta }));
+                                            let _ = tx.try_send(Ok(LLMStreamChunk::ToolCallDelta { index, id, name, arguments_delta }));
                                         }
                                     }
                                 }
@@ -183,7 +178,7 @@ impl LLMProvider for OpenAICompatibleProvider {
             }
         });
 
-        stream_utils::channel_to_stream(rx)
+        stream_utils::bounded_channel_to_stream(rx)
     }
 
     fn models(&self) -> Vec<ModelInfo> {

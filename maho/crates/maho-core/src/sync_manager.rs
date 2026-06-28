@@ -20,7 +20,11 @@ pub struct SyncManager {
     outgoing_messages: Vec<SyncMessage>,
     encryption_key: Option<crate::sync_crypto::EncryptionKey>,
     pending_pushes: Vec<SyncEntity>,
-    entity_versions: HashMap<String, u64>,
+    // Audit finding H12: bounded LRU cap prevents unbounded growth over
+    // long-running sync sessions. Capacity chosen as 10k — large enough that
+    // even high-churn workspaces won't see eviction pressure under normal
+    // operation; small enough to bound memory.
+    entity_versions: lru::LruCache<String, u64>,
     last_pulled_version: u64,
 }
 
@@ -35,7 +39,7 @@ impl SyncManager {
             outgoing_messages: Vec::new(),
             encryption_key: None,
             pending_pushes: Vec::new(),
-            entity_versions: HashMap::new(),
+            entity_versions: lru::LruCache::new(std::num::NonZeroUsize::new(10_000).unwrap()),
             last_pulled_version: 0,
         }
     }
@@ -135,12 +139,12 @@ impl SyncManager {
     pub fn apply_remote_entity(&mut self, entity: &SyncEntity) -> bool {
         let local_version = self
             .entity_versions
-            .get(&entity.entity_id)
+            .peek(&entity.entity_id)
             .copied()
             .unwrap_or(0);
         if entity.version > local_version {
             self.entity_versions
-                .insert(entity.entity_id.clone(), entity.version);
+                .put(entity.entity_id.clone(), entity.version);
             if entity.entity_type == SyncEntityType::Tab {
                 self.last_pulled_version = self.last_pulled_version.max(entity.version);
             }
@@ -203,7 +207,7 @@ impl SyncManager {
                 self.apply_remote_batch(entities);
             }
             SyncMessage::Ack { entity_id, version } => {
-                self.entity_versions.insert(entity_id, version);
+                self.entity_versions.put(entity_id, version);
             }
             SyncMessage::EntityPull { .. } => {
                 // EntityPull is handled by the server/peer — we don't process it here
@@ -429,7 +433,7 @@ mod tests {
         let entity = make_entity("tab-5", 10);
         assert!(mgr.apply_remote_entity(&entity));
         // Version should be stored
-        assert_eq!(mgr.entity_versions.get("tab-5"), Some(&10));
+        assert_eq!(mgr.entity_versions.peek(&"tab-5".to_string()), Some(&10));
     }
 
     // CM-06
@@ -443,7 +447,7 @@ mod tests {
         let older = make_entity("tab-6", 5);
         assert!(!mgr.apply_remote_entity(&older));
         // Version should remain 10
-        assert_eq!(mgr.entity_versions.get("tab-6"), Some(&10));
+        assert_eq!(mgr.entity_versions.peek(&"tab-6".to_string()), Some(&10));
     }
 
     // CM-07
@@ -451,8 +455,8 @@ mod tests {
     fn test_apply_remote_batch() {
         let mut mgr = SyncManager::new(default_config());
         // Pre-populate some versions
-        mgr.entity_versions.insert("e-1".to_string(), 5);
-        mgr.entity_versions.insert("e-2".to_string(), 5);
+        mgr.entity_versions.put("e-1".to_string(), 5);
+        mgr.entity_versions.put("e-2".to_string(), 5);
 
         let batch = vec![
             make_entity("e-1", 10), // newer → apply
@@ -473,7 +477,7 @@ mod tests {
             entity: make_entity("tab-8", 5),
         };
         mgr.handle_incoming_message(msg);
-        assert_eq!(mgr.entity_versions.get("tab-8"), Some(&5));
+        assert_eq!(mgr.entity_versions.peek(&"tab-8".to_string()), Some(&5));
     }
 
     // CM-09
@@ -493,7 +497,7 @@ mod tests {
         mgr.handle_incoming_message(SyncMessage::Encrypted {
             data: encrypted_data,
         });
-        assert_eq!(mgr.entity_versions.get("tab-9"), Some(&3));
+        assert_eq!(mgr.entity_versions.peek(&"tab-9".to_string()), Some(&3));
         assert_ne!(mgr.status(), &SyncStatus::Error);
     }
 
@@ -624,6 +628,18 @@ mod tests {
         assert_eq!(tabs.len(), 2);
         // After drain, received_tabs should be empty
         assert!(mgr.drain_received_tabs().is_empty());
+    }
+
+    // H12: LRU eviction at cap
+    #[test]
+    fn entity_versions_lru_evicts_at_cap() {
+        let mut sm = SyncManager::new(default_config());
+        for i in 0u64..10_001 {
+            let entity = make_entity(&format!("entity_{}", i), i + 1);
+            sm.apply_remote_entity(&entity);
+        }
+        assert!(sm.entity_versions.peek(&"entity_0".to_string()).is_none());
+        assert!(sm.entity_versions.peek(&"entity_10000".to_string()).is_some());
     }
 }
 

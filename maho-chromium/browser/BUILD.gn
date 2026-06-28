@@ -1,9 +1,23 @@
 # Copyright 2026 Maho Browser. All rights reserved.
 
+import("//testing/test.gni")
+
 source_set("maho_core_holder") {
   sources = [
     "maho_core_holder.cc",
     "maho_core_holder.h",
+  ]
+}
+
+source_set("maho_routines_scheduler") {
+  sources = [
+    "maho_routines_scheduler.cc",
+    "maho_routines_scheduler.h",
+  ]
+  deps = [
+    "//base",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//maho/third_party/maho:maho_core_prebuilt",
   ]
 }
 
@@ -33,6 +47,30 @@ source_set("maho_ai_client") {
     "//net",
     "//services/network/public/cpp",
     "//url",
+  ]
+}
+
+source_set("maho_ffi_callback_handle") {
+  sources = [
+    "ai/maho_ffi_callback_handle.cc",
+    "ai/maho_ffi_callback_handle.h",
+    "ai/maho_ffi_callback_handle_inl.h",
+  ]
+  public_deps = [
+    "//base",
+  ]
+}
+
+source_set("maho_ffi_callback_handle_unittests") {
+  testonly = true
+  sources = [
+    "ai/maho_ffi_callback_handle_unittest.cc",
+  ]
+  deps = [
+    ":maho_ffi_callback_handle",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
   ]
 }
 
@@ -98,6 +136,33 @@ source_set("maho_browser_ai_tools") {
     "//chrome/browser/ui/tabs:tab_strip",
     "//content/public/browser",
     "//url",
+  ]
+}
+
+source_set("maho_tool_execution_graph") {
+  sources = [
+    "ai/maho_tool_execution_graph.cc",
+    "ai/maho_tool_execution_graph.h",
+  ]
+  public_deps = [
+    "//base",
+  ]
+  deps = [
+    ":maho_browser_ai_tools",
+  ]
+}
+
+source_set("maho_tool_execution_graph_unittests") {
+  testonly = true
+  sources = [
+    "ai/maho_tool_execution_graph_unittest.cc",
+  ]
+  deps = [
+    ":maho_browser_ai_tools",
+    ":maho_tool_execution_graph",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
   ]
 }
 
@@ -309,6 +374,8 @@ source_set("maho_theme_support") {
     "ui/permissions/maho_permission_theme.h",
     "ui/notifications/maho_notification_overlay.cc",
     "ui/notifications/maho_notification_overlay.h",
+    "ui/notifications/maho_toast_view.cc",
+    "ui/notifications/maho_toast_view.h",
     "ui/tab_preview/maho_tab_preview_controller.cc",
     "ui/tab_preview/maho_tab_preview_controller.h",
   ]
@@ -406,6 +473,7 @@ source_set("maho_browser_main_extra_parts") {
   deps = [
     ":maho_core_holder",
     ":maho_extension_state_bridge",
+    ":maho_routines_scheduler",
     ":maho_tab_registry",
     ":maho_theme_support",
     "//base",
@@ -510,10 +578,31 @@ source_set("maho_os_crypt_key_provider") {
   ]
 }
 
+source_set("maho_conversation_task") {
+  sources = [
+    "ai/maho_conversation_task.cc",
+    "ai/maho_conversation_task.h",
+  ]
+  public_deps = [
+    "//base",
+  ]
+}
+
+source_set("maho_conversation_task_unittests") {
+  testonly = true
+  sources = [
+    "ai/maho_conversation_task_unittest.cc",
+  ]
+  deps = [
+    ":maho_conversation_task",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
 source_set("maho_unified_agent_adapter") {
   sources = [
-    "ai/maho_acp_event_decoder.cc",
-    "ai/maho_acp_event_decoder.h",
     "ai/maho_unified_agent_adapter.cc",
     "ai/maho_unified_agent_adapter.h",
   ]
@@ -522,7 +611,12 @@ source_set("maho_unified_agent_adapter") {
   ]
   deps = [
     ":maho_ai_runtime_adapter_interface",
+    ":maho_conversation_task",
+    ":maho_core_holder",
+    ":maho_ffi_callback_handle",
+    ":maho_tool_execution_graph",
     "//maho/browser/ui/webui/maho_ai:mojo_bindings",
+    "//maho/third_party/maho:maho_core_prebuilt",
     "//maho/third_party/maho:maho_ffi_headers",
     "//services/network/public/cpp",
     "//third_party/crashpad/crashpad/client",
@@ -532,7 +626,6 @@ source_set("maho_unified_agent_adapter") {
 source_set("maho_unified_agent_adapter_unittests") {
   testonly = true
   sources = [
-    "ai/maho_acp_event_decoder_unittest.cc",
     "ai/maho_unified_agent_adapter_unittest.cc",
   ]
   deps = [
@@ -581,11 +674,25 @@ source_set("maho_theme_io_unittests") {
   testonly = true
   sources = [
     "ui/theme/maho_space_theme_io_unittest.cc",
+    "ui/notifications/maho_notification_overlay_unittest.cc",
   ]
   deps = [
     ":maho_theme_support",
     "//base",
     "//base/test:test_support",
     "//testing/gtest",
+    "//ui/views:test_support",
+  ]
+}
+
+test("maho_theme_io_test") {
+  sources = [ "run_all_maho_unittests_main.cc" ]
+  deps = [
+    ":maho_theme_io_unittests",
+    "//base",
+    "//base/test:test_support",
+    "//mojo/core/embedder",
+    "//testing/gtest",
+    "//ui/views:test_support",
   ]
 }

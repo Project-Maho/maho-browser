@@ -27,13 +27,13 @@ struct FakeAgentState {
   std::string last_session_id;
   std::string last_message;
 
-  void* token_cb_user_data = nullptr;
+  raw_ptr<void> token_cb_user_data = nullptr;
   void (*token_cb)(void*, const char*) = nullptr;
 
-  void* complete_cb_user_data = nullptr;
+  raw_ptr<void> complete_cb_user_data = nullptr;
   void (*complete_cb)(void*, const char*, const char*) = nullptr;
 
-  void* error_cb_user_data = nullptr;
+  raw_ptr<void> error_cb_user_data = nullptr;
   void (*error_cb)(void*, const char*) = nullptr;
 
   void DeliverToken(const std::string& token) {
@@ -66,9 +66,12 @@ MahoAgentSession* maho_agent_create_session(
     const char* session_id,
     const char* workspace_root,
     bool allow_insecure_key_storage,
-    void* permission_cb,
+    MahoAgentPermissionDecision (*permission_cb)(void *user_data,
+                                                 const char *tool_name,
+                                                 const char *arguments_json),
     void* permission_user_data,
-    void* secure_storage_cb,
+    MahoAgentSecureKey (*secure_storage_cb)(void *user_data,
+                                            const char *provider),
     void* secure_storage_user_data
 ) {
   if (g_fake_agent) {

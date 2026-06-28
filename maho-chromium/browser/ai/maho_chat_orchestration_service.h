@@ -13,6 +13,8 @@
 #include "base/values.h"
 #include "maho/browser/ai/maho_ai_llm_client.h"
 #include "maho/browser/ai/maho_ai_page_context_extractor.h"
+#include "maho/browser/ai/maho_conversation_task.h"
+#include "maho/browser/ai/maho_tool_execution_graph.h"
 #include "maho/browser/ui/webui/maho_ai/maho_ai.mojom.h"
 
 class Browser;
@@ -99,6 +101,14 @@ class MahoChatOrchestrationService {
     std::string assistant_text;
     size_t round_index = 0;
     size_t pending_tool_index = 0;
+
+    // --- Phase 4.1.5: structured state machine + tool execution ---
+
+    // Per-turn conversation lifecycle with bounded 2 MB accumulator (H13).
+    std::unique_ptr<maho::ConversationTask> task;
+
+    // Tool executor with deterministic member lifetime (C2 closed).
+    std::unique_ptr<maho::ToolExecutionGraph> tool_graph;
   };
 
   struct ToolInvocation {
@@ -155,7 +165,9 @@ class MahoChatOrchestrationService {
       const MahoAiLlmClient::CompletionResult& result);
   static std::string SerializeJsonValue(const base::DictValue& value);
 
-  void OnLlmToken(const TokenCallback& on_token, const std::string& token);
+  void OnLlmToken(const TokenCallback& on_token,
+                  std::shared_ptr<ConversationRoundState> state,
+                  const std::string& token);
   void FinalizeResponse(CompleteCallback on_complete,
                         const std::string& full_text);
   void SendLlmResultToRust(const std::string& request_id,

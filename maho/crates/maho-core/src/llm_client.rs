@@ -61,7 +61,7 @@ pub async fn extract_facts_json(auth: &AuthSnapshot, text: &str) -> Result<Vec<R
         })
     };
 
-    let client = reqwest::Client::new();
+    let client = crate::http::shared_http_client();
 
     let content = if auth.provider == "anthropic" {
         let url = format!("{}/messages", auth.base_url.trim_end_matches('/'));
@@ -129,7 +129,7 @@ pub async fn summarize_browsing(auth: &AuthSnapshot, text: &str) -> Result<Strin
         "temperature": 0.2,
         "max_tokens": 256
     });
-    let client = reqwest::Client::new();
+    let client = crate::http::shared_http_client();
 
     if auth.provider == "anthropic" {
         let url = format!("{}/messages", auth.base_url.trim_end_matches('/'));

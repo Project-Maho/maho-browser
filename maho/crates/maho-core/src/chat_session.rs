@@ -158,7 +158,6 @@ impl ChatSession {
     fn abort_and_join(&mut self) {
         if let Some(task) = self.active_task.take() {
             task.abort();
-            let _ = get_runtime().block_on(task);
         }
     }
 
@@ -214,7 +213,7 @@ async fn run_completion(
     tools: Vec<serde_json::Value>,
     sink: MahoChatEventSink,
 ) {
-    let client = reqwest::Client::new();
+    let client = crate::http::shared_http_client();
     let mut req = client.post(&config.endpoint)
         .header("Content-Type", "application/json");
 
