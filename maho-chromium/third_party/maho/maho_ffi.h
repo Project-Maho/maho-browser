@@ -89,6 +89,14 @@ char *maho_core_get_tab_view_models(struct MahoCore *ptr);
 
 /**
  * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `tab_id` must be a
+ * valid NUL-terminated C string. Returns `false` on null pointer, invalid UTF-8, or
+ * when an import is in progress (per `import_gate`).
+ */
+bool maho_core_is_tab_pinned(struct MahoCore *ptr, const char *tab_id);
+
+/**
+ * # Safety
  * `ptr` must be a valid pointer returned by `maho_core_new`.
  * Caller must free the returned string with `maho_string_free`.
  */
@@ -100,8 +108,6 @@ char *maho_core_get_space_view_models(struct MahoCore *ptr);
  * `space_id_json` must be a valid null-terminated C string containing a SpaceId JSON.
  * Caller must free the returned string with `maho_string_free`.
  */
-// TODO: Will be removed after 2026-07-15. Use maho_core_get_sidebar_state_v2 instead.
-// Kept compiling for backward compat during transition (Phase 4.2.3 soak period).
 char *maho_core_get_sidebar_root_order(struct MahoCore *ptr,
                                        const char *space_id_json,
                                        const int64_t *window_id_ptr);
@@ -112,21 +118,17 @@ char *maho_core_get_sidebar_root_order(struct MahoCore *ptr,
  * `space_id_json` must be a valid null-terminated C string containing a SpaceId JSON.
  * Caller must free the returned string with `maho_string_free`.
  */
-// TODO: Will be removed after 2026-07-15. Use maho_core_get_sidebar_state_v2 instead.
-// Kept compiling for backward compat during transition (Phase 4.2.3 soak period).
 char *maho_core_get_sidebar_tree(struct MahoCore *ptr, const char *space_id_json);
 
 /**
  * Combined sidebar tree + base64-encoded favicons in one call (audit C3 fix).
- * Returns {"tree": [...], "favicons": {"tab_id": "base64_png", ...}}.
+ * Returns `{"tree": [...], "favicons": {"tab_id": "base64_png", ...}}`.
  *
  * # Safety
- * `ptr` must be a valid pointer returned by `maho_core_new`.
- * `space_id_json` must be a valid null-terminated C string containing a SpaceId JSON.
- * Caller must free the returned string with `maho_string_free`.
- * Returns NULL on error or if import is active.
+ * `ptr` must be a valid `*mut MahoCore`; `space_id_json` must be valid NUL-terminated UTF-8
+ * containing a JSON-serialized SpaceId. Caller must free the returned string via
+ * `maho_string_free`. Returns null on error or if import is active.
  */
-// TODO: regenerate via cbindgen
 char *maho_core_get_sidebar_state_v2(struct MahoCore *ptr, const char *space_id_json);
 
 /**
@@ -794,6 +796,8 @@ uint8_t *maho_core_get_tab_preview(struct MahoCore *ptr, const char *tab_id, uin
 /**
  * # Safety
  * `data` must have been returned by `maho_core_get_tab_preview` with matching `len`.
+ * Specifically, `data` must point to memory allocated as `Box<[u8]>` of length `len`
+ * and ownership must not have been transferred elsewhere.
  */
 void maho_core_free_preview_data(uint8_t *data, uintptr_t len);
 
@@ -1382,17 +1386,6 @@ char *maho_core_check_pinned_navigation(struct MahoCore *ptr,
                                         const char *url);
 
 /**
- * Returns true if the tab with the given tab_id is currently pinned.
- *
- * # Safety
- * `ptr` must be a valid pointer returned by `maho_core_new`.
- * `tab_id` must be a valid null-terminated C string.
- *
- * TODO: regenerate via cbindgen
- */
-bool maho_core_is_tab_pinned(struct MahoCore *ptr, const char *tab_id);
-
-/**
  * Apply incoming entity batch from server.
  * `entities_json` is a JSON array of SyncEntity objects.
  * Returns JSON array of actually-applied entities.
@@ -1807,6 +1800,49 @@ bool maho_core_set_space_ai_config(struct MahoCore *ptr,
                                    const char *config_json);
 
 /**
+ * Returns the user's subscription tier as an integer:
+ * 0=Free, 1=Pro, 2=Max, -1=unauthenticated/unknown.
+ *
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ */
+int32_t maho_account_get_tier(struct MahoCore *core);
+
+/**
+ * Returns JSON array of all hardcoded routines.
+ * Caller must free with `maho_string_free`.
+ *
+ * # Safety
+ * `out_json` must be a valid pointer to a `*mut c_char`.
+ */
+void maho_routines_list(char **out_json);
+
+/**
+ * Kicks off an async routine run. Returns 0 on success (queued), -1 on error.
+ * The `user_tier` parameter: 0=Free, 1=Pro, 2=Max.
+ * `on_complete` is called with the result JSON when done.
+ * `on_error` is called with an error string on failure.
+ *
+ * # Safety
+ * `id` must be a valid null-terminated C string.
+ */
+int32_t maho_routines_run(const char *id,
+                          int32_t user_tier,
+                          void (*on_complete)(void *user_data, const char *result_json),
+                          void (*on_error)(void *user_data, const char *error),
+                          void *user_data);
+
+/**
+ * Tick the routines scheduler. Should be called once per minute by the Chromium shell.
+ * Internally checks tier, iterates the 4 routines, fires any due to run (async).
+ * Returns 0 on success, -1 on tier-not-max (no-op), -2 on internal error.
+ *
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ */
+int32_t maho_routines_tick(struct MahoCore *core, int64_t now_sec);
+
+/**
  * Detect installed browsers on the system. Returns a JSON array; caller MUST
  * free the returned string via `maho_import_string_free`.
  */
@@ -1882,45 +1918,6 @@ void maho_import_orchestrator_cancel(struct MahoImportSession *handle);
  * or NULL (no-op). Must not be called more than once per handle.
  */
 void maho_import_orchestrator_free(struct MahoImportSession *handle);
-
-/**
- * Returns the user's subscription tier: 0=Free, 1=Pro, 2=Max, -1=unauthenticated.
- *
- * # Safety
- * `core` must be a valid pointer returned by `maho_core_new`.
- */
-int32_t maho_account_get_tier(struct MahoCore *core);
-
-/**
- * Returns a JSON array of all hardcoded routines via out-param.
- * Caller must free the returned string with `maho_string_free`.
- */
-void maho_routines_list(char **out_json);
-
-/**
- * Run a routine by ID. Async — invokes `on_complete` or `on_error` callback
- * on completion. Returns 0 on success (queued), -1 on error.
- *
- * # Safety
- * `routine_id` must be a valid null-terminated C string.
- * `on_complete` and `on_error` must be valid function pointers.
- * `user_data` is forwarded to callbacks unchanged.
- */
-int32_t maho_routines_run(const char *routine_id,
-                       int32_t user_tier,
-                       void (*on_complete)(void *user_data, const char *result_json),
-                       void (*on_error)(void *user_data, const char *error),
-                       void *user_data);
-
-/**
- * Tick the routines scheduler. Should be called once per minute by the Chromium shell.
- * Internally checks tier, iterates the 4 routines, fires any due to run (async).
- * Returns 0 on success, -1 on tier-not-max (no-op), -2 on internal error.
- *
- * # Safety
- * `core` must be a valid pointer returned by `maho_core_new`.
- */
-int32_t maho_routines_tick(struct MahoCore *core, int64_t now_sec);
 
 #ifdef __cplusplus
 }  // extern "C"

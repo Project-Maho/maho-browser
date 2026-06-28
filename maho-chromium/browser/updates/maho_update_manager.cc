@@ -171,7 +171,13 @@ void MahoUpdateManager::Initialize(Profile* profile) {
       LOG(WARNING) << "Maho: Auto-update disabled due to crash loop.";
     }
 
-    // Schedule stable runtime sentinel clearing
+    // Schedule stable runtime sentinel clearing.
+    // SAFETY: This task is posted to the current sequence (UI thread) via
+    // GetCurrentDefault(), and Initialize() is guarded by
+    // DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_) above. |local_state|
+    // is g_browser_process->local_state(), a BrowserProcess-lifetime singleton
+    // that is guaranteed to outlive any 60-second delayed task posted here at
+    // browser startup. No cross-thread hazard; same-sequence access only.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
         FROM_HERE,
         base::BindOnce(&updates::CrashLoopSentinel::MarkStable,

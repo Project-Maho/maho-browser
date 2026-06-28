@@ -21,6 +21,7 @@
 #include "content/public/browser/browser_thread.h"
 #include "maho/browser/extensions/maho_extension_state_bridge.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/maho_routines_scheduler.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_registry.h"
 #include "maho/browser/updates/maho_update_manager.h"
@@ -36,6 +37,7 @@ MahoBrowserMainExtraParts::MahoBrowserMainExtraParts() = default;
 
 MahoBrowserMainExtraParts::~MahoBrowserMainExtraParts() {
   if (core_) {
+    routines_scheduler_.reset();
     maho::core::SaveState(core_);
     maho::SetCore(nullptr);
     maho::core::Destroy(core_);
@@ -188,6 +190,9 @@ void MahoBrowserMainExtraParts::PostEarlyInitialization() {
     LOG(INFO) << "Maho core initialized, version: " << maho::core::Version();
     PopulateBridgeFromCore(core_);
     maho::MahoTabRegistry::Get();
+
+    routines_scheduler_ = std::make_unique<maho::MahoRoutinesScheduler>(core_);
+    routines_scheduler_->Start();
   } else {
     LOG(ERROR) << "Maho core initialization failed";
   }
@@ -244,6 +249,7 @@ void MahoBrowserMainExtraParts::PostMainMessageLoopRun() {
 
   if (core_) {
     MahoSpaceThemeState::Clear();
+    routines_scheduler_.reset();
     maho::core::SaveState(core_);
     maho::SetCore(nullptr);
     maho::core::Destroy(core_);

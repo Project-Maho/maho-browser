@@ -230,21 +230,21 @@ fn build_prompt(routine: &Routine) -> String {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq)]
-struct CronField {
-    value: Option<u32>, // None = wildcard (*)
+pub struct CronField {
+    pub value: Option<u32>, // None = wildcard (*)
 }
 
 #[derive(Debug, Clone)]
-struct CronSchedule {
-    minute: CronField,
-    hour: CronField,
-    day_of_month: CronField,
-    month: CronField,
-    day_of_week: CronField,
+pub struct CronSchedule {
+    pub minute: CronField,
+    pub hour: CronField,
+    pub day_of_month: CronField,
+    pub month: CronField,
+    pub day_of_week: CronField,
 }
 
 impl CronSchedule {
-    fn parse(cron_str: &str) -> Option<Self> {
+    pub fn parse(cron_str: &str) -> Option<Self> {
         let parts: Vec<&str> = cron_str.split_whitespace().collect();
         if parts.len() != 5 {
             return None;
@@ -266,7 +266,7 @@ impl CronSchedule {
         }
     }
 
-    fn matches_timestamp(&self, ts: i64) -> bool {
+    pub fn matches_timestamp(&self, ts: i64) -> bool {
         let dt = match chrono::DateTime::from_timestamp(ts, 0) {
             Some(d) => d,
             None => return false,
@@ -284,7 +284,7 @@ impl CronSchedule {
         minute_ok && hour_ok && dom_ok && month_ok && dow_ok
     }
 
-    fn next_fire_after(&self, after_ts: i64) -> i64 {
+    pub fn next_fire_after(&self, after_ts: i64) -> i64 {
         // Walk forward minute-by-minute from (after_ts + 60), capped at 8 days ahead
         let start = after_ts - (after_ts % 60) + 60;
         let cap = start + 8 * 24 * 3600;

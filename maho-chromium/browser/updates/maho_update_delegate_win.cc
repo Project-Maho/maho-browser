@@ -11,6 +11,7 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
+#include "base/memory/weak_ptr.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/path_service.h"
@@ -82,10 +83,13 @@ class PlatformUpdaterDelegateWin : public PlatformUpdaterDelegate {
 
   void Check(bool manual_check) override {
     if (is_msix_) {
+      // SAFETY: winrt_thread_ is a dedicated cross-thread task runner owned by
+      // this object. Use WeakPtr so the callback silently no-ops if |this| is
+      // destroyed before CheckMsixUpdate runs (e.g. rapid shutdown).
       winrt_thread_->task_runner()->PostTask(
           FROM_HERE,
           base::BindOnce(&PlatformUpdaterDelegateWin::CheckMsixUpdate,
-                         base::Unretained(this)));
+                         weak_factory_.GetWeakPtr()));
     } else {
       CheckCustomDownloaderUpdate(manual_check);
     }
@@ -354,8 +358,11 @@ class PlatformUpdaterDelegateWin : public PlatformUpdaterDelegate {
               return UpdateError::kNone;
             },
             path, installer_sha256_, installer_signer_cn_),
+        // SAFETY: The reply runs back on the originating sequence (same sequence
+        // as the delegate), but use WeakPtr so the callback silently no-ops if
+        // |this| is destroyed between posting and the reply being dispatched.
         base::BindOnce(&PlatformUpdaterDelegateWin::OnVerificationComplete,
-                       base::Unretained(this), path));
+                       weak_factory_.GetWeakPtr(), path));
   }
 
   void OnVerificationComplete(base::FilePath path, UpdateError error) {
@@ -384,6 +391,10 @@ class PlatformUpdaterDelegateWin : public PlatformUpdaterDelegate {
   std::string installer_sha256_;
   std::string installer_signer_cn_;
   base::FilePath verified_installer_path_;
+
+  // Must be last: invalidates WeakPtrs on destruction so cross-thread tasks
+  // posted with GetWeakPtr() silently no-op if |this| is destroyed first.
+  base::WeakPtrFactory<PlatformUpdaterDelegateWin> weak_factory_{this};
 };
 
 std::unique_ptr<PlatformUpdaterDelegate> CreatePlatformUpdaterDelegate() {
