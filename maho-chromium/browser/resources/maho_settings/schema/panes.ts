@@ -199,6 +199,15 @@ const PRODUCTIVITY_PANES: PaneDefinition[] = [
     domain: 'productivity',
     contentKind: 'ai',
   },
+  {
+    key: 'billing',
+    symbol: '$',
+    navTitle: 'Billing',
+    title: 'Billing',
+    kind: 'live',
+    domain: 'productivity',
+    contentKind: 'billing',
+  },
 ];
 
 const PROTECTION_PANES: PaneDefinition[] = [

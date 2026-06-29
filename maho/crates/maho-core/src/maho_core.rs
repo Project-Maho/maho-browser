@@ -4134,6 +4134,10 @@ impl MahoCore {
             .unwrap_or(false)
     }
 
+    pub fn close_tabs_older_than(&mut self, cutoff_ts: i64) -> usize {
+        self.tab_manager.close_tabs_older_than(cutoff_ts)
+    }
+
     pub fn favorite_tab(&mut self, tab_id: &TabId) -> bool {
         let profile_space_ids = self
             .tab_manager

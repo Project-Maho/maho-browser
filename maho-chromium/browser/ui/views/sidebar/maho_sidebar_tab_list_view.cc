@@ -22,6 +22,11 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/side_panel/side_panel_enums.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
@@ -82,6 +87,8 @@
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/box_layout_view.h"
+#include "ui/views/layout/layout_manager_base.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_visibility_manager.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/view_utils.h"
@@ -111,7 +118,6 @@ constexpr int kCloseButtonSizeDp = 24;
 constexpr int kCloseIconSizeDp = 14;
 constexpr int kRowIconTextSpacingDp = 10;
 constexpr int kRowTrailingSpacingDp = 0;
-constexpr int kSectionSpacingDp = 4;
 constexpr int kFolderIndentDp = 15;
 constexpr int kFolderRowHeightDp = 33;
 constexpr int kSectionSeparatorHeightDp = 6;
@@ -125,6 +131,9 @@ constexpr int kFolderRowLeadingInsetDp = 8;
 constexpr int kDragStartThresholdDp = 5;
 constexpr int kDropIndicatorThicknessDp = 2;
 constexpr int kDropIndicatorOutlineThicknessDp = 1;
+constexpr int kInlineActionButtonSizeDp = 28;
+constexpr int kInlineActionIconSizeDp = 16;
+constexpr int kInlineActionsSpacingDp = 4;
 
 const gfx::Insets kRootInsets = gfx::Insets::TLBR(0, 0, 0, 0);
 const gfx::Insets kInlineRowInsets = gfx::Insets::TLBR(0, 10, 0, 8);
@@ -154,6 +163,71 @@ void NotifySidebarDragEnded(views::View* start_view) {
     v = v->parent();
   }
 }
+
+// Virtual layout manager for tab_rows_ that culls off-screen children based
+// on scroll position, reducing the active view working set.
+class SidebarVirtualLayoutDelegate : public views::LayoutManagerBase {
+ public:
+  SidebarVirtualLayoutDelegate(SidebarVisibilityManager* mgr, int row_height)
+      : visibility_mgr_(mgr), row_height_(row_height) {}
+
+  views::ProposedLayout CalculateProposedLayout(
+      const views::SizeBounds& size_bounds) const override {
+    views::ProposedLayout layout;
+    const views::View* host = host_view();
+    const auto& children = host->children();
+    const int total = static_cast<int>(children.size());
+    const int width = size_bounds.width().value_or(0);
+
+    gfx::Rect visible_rect;
+    if (auto* scroll = views::ScrollView::GetScrollViewForContents(
+            const_cast<views::View*>(host->parent()))) {
+      visible_rect = scroll->GetVisibleRect();
+    }
+
+    // Compute actual child heights from preferred sizes for correct content
+    // height reporting (children may be sections with variable height).
+    int total_height = 0;
+    std::vector<int> child_heights;
+    child_heights.reserve(total);
+    for (int i = 0; i < total; ++i) {
+      const int h = children[i]->GetPreferredSize(
+          views::SizeBounds(width, views::SizeBound())).height();
+      child_heights.push_back(h);
+      total_height += h;
+    }
+
+    layout.host_size = gfx::Size(width, total_height);
+
+    // Expand visible rect by overscan buffer.
+    const int buffer_dp = visibility_mgr_->is_drag_active()
+        ? visibility_mgr_->config().drag_overscan_rows * row_height_
+        : visibility_mgr_->config().buffer_rows_above * row_height_;
+    gfx::Rect expanded_rect = visible_rect;
+    if (!visible_rect.IsEmpty()) {
+      expanded_rect.Inset(gfx::Insets::TLBR(-buffer_dp, 0, -buffer_dp, 0));
+    }
+
+    int y = 0;
+    layout.child_layouts.reserve(total);
+    for (int i = 0; i < total; ++i) {
+      views::ChildLayout child_layout;
+      child_layout.child_view = children[i];
+      child_layout.bounds = gfx::Rect(0, y, width, child_heights[i]);
+      child_layout.visible =
+          visible_rect.IsEmpty() ||
+          expanded_rect.Intersects(gfx::Rect(0, y, width, child_heights[i]));
+      layout.child_layouts.push_back(child_layout);
+      y += child_heights[i];
+    }
+
+    return layout;
+  }
+
+ private:
+  raw_ptr<SidebarVisibilityManager> visibility_mgr_;
+  int row_height_;
+};
 
 class SidebarDropForwardingLabelButton : public views::LabelButton {
  public:
@@ -1294,6 +1368,11 @@ void SidebarTabRowView::RenameTab(int /*tab_index*/) {
 void SidebarTabRowView::OnThemeChanged() {
   views::View::OnThemeChanged();
   UpdateAppearance();
+}
+
+void SidebarTabRowView::OnFocus() {
+  views::View::OnFocus();
+  ScrollViewToVisible();
 }
 
 bool SidebarTabRowView::OnMousePressed(const ui::MouseEvent& event) {
@@ -2565,6 +2644,12 @@ void MahoSidebarTabListView::OnAutoScrollDragEnded() {
   }
 }
 
+void MahoSidebarTabListView::OnScrollChanged() {
+  if (tab_rows_) {
+    tab_rows_->InvalidateLayout();
+  }
+}
+
 // --- MahoSidebarTabListView ---
 
 MahoSidebarTabListView::MahoSidebarTabListView(Browser* browser)
@@ -2579,10 +2664,14 @@ MahoSidebarTabListView::MahoSidebarTabListView(Browser* browser)
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
   auto rows = std::make_unique<views::View>();
-  auto* rows_layout = rows->SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::Orientation::kVertical, gfx::Insets(), kSectionSpacingDp));
-  rows_layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kStretch);
+  visibility_manager_ = std::make_unique<SidebarVisibilityManager>(
+      SidebarVisibilityManager::Config{
+          .row_height_dp = kRowHeightDp,
+          .buffer_rows_above = 30,
+          .buffer_rows_below = 30,
+          .drag_overscan_rows = 50});
+  rows->SetLayoutManager(std::make_unique<SidebarVirtualLayoutDelegate>(
+      visibility_manager_.get(), kRowHeightDp));
 
   tab_rows_ = rows.get();
   tab_rows_->set_context_menu_controller(this);
@@ -2773,6 +2862,12 @@ bool MahoSidebarTabListView::CanDrop(const ui::OSExchangeData& data) {
 }
 
 int MahoSidebarTabListView::OnDragUpdated(const ui::DropTargetEvent& event) {
+  if (visibility_manager_ && !visibility_manager_->is_drag_active()) {
+    visibility_manager_->SetDragActive(true);
+    if (tab_rows_) {
+      tab_rows_->InvalidateLayout();
+    }
+  }
   ForwardDragToAutoScroller(this, event);
   SidebarDragPayload payload;
   if (ReadMahoDragData(event.data(), payload)) {
@@ -2841,6 +2936,12 @@ views::View::DropCallback MahoSidebarTabListView::GetDropCallback(
 }
 
 void MahoSidebarTabListView::OnDragExited() {
+  if (visibility_manager_) {
+    visibility_manager_->SetDragActive(false);
+    if (tab_rows_) {
+      tab_rows_->InvalidateLayout();
+    }
+  }
   ForwardDragEnded(this);
   HideEmptyPinnedDropLane();
 }
@@ -2900,11 +3001,7 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
                         !model.normal_tree.empty();
   // True zero-context: no browser/tab-strip AND no model content.
   if (!HasTabStripContext(browser) && !has_tree) {
-    new_tab_button_ = AddInlineRow(
-        tab_rows_, u"+ New Tab",
-        base::BindRepeating(&MahoSidebarTabListView::OpenNewTab,
-                            weak_factory_.GetWeakPtr()),
-        /*active=*/false, /*subtle=*/true);
+    AddTabActionsRow();
     return;
   }
 
@@ -3438,6 +3535,162 @@ void MahoSidebarTabListView::OpenNewTab(const ui::Event& event) {
       return;
     }
   }
+}
+
+namespace {
+enum ClearCommandId : int {
+  kClearLastHour = 100,
+  kClearToday = 101,
+  kClearThisWeek = 102,
+  kClearThisMonth = 103,
+  kClearOlderThan30Days = 104,
+};
+
+int64_t ComputeClearCutoffSeconds(int command_id) {
+  const base::Time now = base::Time::Now();
+  switch (command_id) {
+    case kClearLastHour:
+      return (now - base::Hours(1)).InSecondsFSinceUnixEpoch();
+    case kClearToday:
+      return now.LocalMidnight().InSecondsFSinceUnixEpoch();
+    case kClearThisWeek: {
+      base::Time::Exploded exploded;
+      now.LocalExplode(&exploded);
+      // day_of_week: Sunday=0..Saturday=6. Treat Monday as week start.
+      int days_since_monday = (exploded.day_of_week + 6) % 7;
+      return (now.LocalMidnight() - base::Days(days_since_monday))
+          .InSecondsFSinceUnixEpoch();
+    }
+    case kClearThisMonth: {
+      base::Time::Exploded exploded;
+      now.LocalExplode(&exploded);
+      exploded.day_of_month = 1;
+      exploded.hour = 0;
+      exploded.minute = 0;
+      exploded.second = 0;
+      exploded.millisecond = 0;
+      base::Time start_of_month;
+      if (base::Time::FromLocalExploded(exploded, &start_of_month)) {
+        return start_of_month.InSecondsFSinceUnixEpoch();
+      }
+      return now.LocalMidnight().InSecondsFSinceUnixEpoch();
+    }
+    case kClearOlderThan30Days:
+      return (now - base::Days(30)).InSecondsFSinceUnixEpoch();
+  }
+  return 0;
+}
+}  // namespace
+
+void MahoSidebarTabListView::AddTabActionsRow() {
+  auto row_view = std::make_unique<views::BoxLayoutView>();
+  row_view->SetOrientation(views::BoxLayout::Orientation::kHorizontal);
+  row_view->SetCrossAxisAlignment(
+      views::BoxLayout::CrossAxisAlignment::kCenter);
+  row_view->SetBetweenChildSpacing(kInlineActionsSpacingDp);
+  row_view->SetProperty(views::kMarginsKey, kNewTabRowMargins);
+  auto* row_ptr = tab_rows_->AddChildView(std::move(row_view));
+
+  auto new_tab = std::make_unique<SidebarInlineRow>(
+      base::BindRepeating(&MahoSidebarTabListView::OpenNewTab,
+                          weak_factory_.GetWeakPtr()),
+      u"+ New Tab",
+      /*active=*/false,
+      /*subtle=*/true);
+  auto* new_tab_ptr = static_cast<views::LabelButton*>(
+      row_ptr->AddChildView(std::move(new_tab)));
+  row_ptr->SetFlexForView(new_tab_ptr, 1);
+  new_tab_button_ = new_tab_ptr;
+
+  auto tidy = std::make_unique<views::ImageButton>(base::BindRepeating(
+      &MahoSidebarTabListView::OnTidyPressed, weak_factory_.GetWeakPtr()));
+  tidy->SetImageModel(
+      views::Button::STATE_NORMAL,
+      ui::ImageModel::FromVectorIcon(maho_lucide_icons::kWandSparklesIcon,
+                                     ui::kColorSysOnSurfaceSubtle,
+                                     kInlineActionIconSizeDp));
+  tidy->SetTooltipText(u"Tidy tabs");
+  tidy->GetViewAccessibility().SetName(u"Tidy tabs with AI");
+  tidy->SetPreferredSize(
+      gfx::Size(kInlineActionButtonSizeDp, kInlineActionButtonSizeDp));
+  tidy->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
+  tidy->SetImageVerticalAlignment(views::ImageButton::ALIGN_MIDDLE);
+  tidy->SetInstallFocusRingOnFocus(false);
+  views::InstallCircleHighlightPathGenerator(tidy.get());
+  tidy_button_ = row_ptr->AddChildView(std::move(tidy));
+
+  auto clear = std::make_unique<views::ImageButton>(base::BindRepeating(
+      &MahoSidebarTabListView::OnClearPressed, weak_factory_.GetWeakPtr()));
+  clear->SetImageModel(
+      views::Button::STATE_NORMAL,
+      ui::ImageModel::FromVectorIcon(maho_lucide_icons::kArrowDownToLineIcon,
+                                     ui::kColorSysOnSurfaceSubtle,
+                                     kInlineActionIconSizeDp));
+  clear->SetTooltipText(u"Close old tabs");
+  clear->GetViewAccessibility().SetName(u"Clear old tabs");
+  clear->SetPreferredSize(
+      gfx::Size(kInlineActionButtonSizeDp, kInlineActionButtonSizeDp));
+  clear->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
+  clear->SetImageVerticalAlignment(views::ImageButton::ALIGN_MIDDLE);
+  clear->SetInstallFocusRingOnFocus(false);
+  views::InstallCircleHighlightPathGenerator(clear.get());
+  clear_button_ = row_ptr->AddChildView(std::move(clear));
+}
+
+void MahoSidebarTabListView::OnTidyPressed(const ui::Event& event) {
+  if (!browser_) {
+    return;
+  }
+  auto* side_panel_ui = browser_->GetFeatures().side_panel_ui();
+  if (!side_panel_ui) {
+    return;
+  }
+  if (side_panel_ui->GetCurrentEntryId(SidePanelType::kContent) ==
+      SidePanelEntryId::kMahoAiPanel) {
+    return;
+  }
+  side_panel_ui->Show(SidePanelEntryKey(SidePanelEntryId::kMahoAiPanel),
+                      SidePanelOpenTrigger::kToolbarButton);
+}
+
+void MahoSidebarTabListView::OnClearPressed(const ui::Event& event) {
+  if (!clear_button_) {
+    return;
+  }
+  clear_menu_model_ = std::make_unique<ui::SimpleMenuModel>(this);
+  clear_menu_model_->AddItem(kClearLastHour, u"Last hour");
+  clear_menu_model_->AddItem(kClearToday, u"Today");
+  clear_menu_model_->AddItem(kClearThisWeek, u"This week");
+  clear_menu_model_->AddItem(kClearThisMonth, u"This month");
+  clear_menu_model_->AddItem(kClearOlderThan30Days, u"Older than 30 days");
+
+  clear_menu_runner_ = std::make_unique<views::MenuRunner>(
+      clear_menu_model_.get(), views::MenuRunner::HAS_MNEMONICS);
+
+  views::Widget* widget = clear_button_->GetWidget();
+  if (!widget) {
+    return;
+  }
+  clear_menu_runner_->RunMenuAt(widget,
+                                /*menu_button_controller=*/nullptr,
+                                clear_button_->GetBoundsInScreen(),
+                                views::MenuAnchorPosition::kBubbleBottomRight,
+                                ui::mojom::MenuSourceType::kMouse);
+}
+
+void MahoSidebarTabListView::ExecuteCommand(int command_id, int event_flags) {
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return;
+  }
+  const int64_t cutoff_ts = ComputeClearCutoffSeconds(command_id);
+  if (cutoff_ts <= 0) {
+    return;
+  }
+  const int32_t closed =
+      maho_core_close_tabs_older_than(core, cutoff_ts);
+  DVLOG(1) << "[maho-sidebar] Clear menu closed " << closed
+           << " tabs older than cutoff_ts=" << cutoff_ts;
 }
 
 void MahoSidebarTabListView::ToggleFolderExpanded(

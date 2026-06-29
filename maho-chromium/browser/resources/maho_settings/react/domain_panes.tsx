@@ -146,6 +146,8 @@ export function DomainPaneContent(
       return <ShortcutsPane pane={pane} store={store} />;
     case 'ai':
       return <AiPane pane={pane} store={store} />;
+    case 'billing':
+      return <BillingPane pane={pane} store={store} />;
     case 'content-blocker':
       return <ContentBlockerPane pane={pane} store={store} />;
     case 'extensions':
@@ -684,6 +686,74 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
           </ManagedSettingRow>
         </div>
       ) : null}
+    </DomainPaneSection>
+  );
+}
+
+function BillingPane({pane}: {pane: PaneDefinition; store: MahoSettingsStore}) {
+  const PLACEHOLDER = {
+    planName: 'Free',
+    renewDate: 'Jul 1, 2026',
+    hasPaymentMethod: false,
+    creditsRemainingPct: 98,
+    creditsRenewTotal: 500,
+    hasInvoices: false,
+  };
+
+  const openManagePaymentMethod = () => {
+    window.open('https://billing.stripe.com/', '_blank', 'noopener');
+  };
+  const openAdjustPlan = () => {
+  };
+
+  return (
+    <DomainPaneSection pane={pane}>
+      <SectionHeader title="Overview" />
+      <div className="preferences-card__rows">
+        <ManagedSettingRow
+          controlClassName="setting-actions"
+          description={`Auto-renews on ${PLACEHOLDER.renewDate}`}
+          isFirstRow
+          title={PLACEHOLDER.planName}>
+          <ActionButton label="Adjust plan" onClick={openAdjustPlan} />
+        </ManagedSettingRow>
+        <ManagedSettingRow
+          controlClassName="setting-actions"
+          description={PLACEHOLDER.hasPaymentMethod ? 'Manage your payment method in Stripe.' : 'Add a payment method in Stripe'}
+          title={PLACEHOLDER.hasPaymentMethod ? 'Payment method on file' : 'No payment method'}>
+          <ActionButton
+            label={<>Manage <img alt="" aria-hidden="true" className="setting-icon" src="chrome://maho-settings/icons/arrow-up-right.svg" /></>}
+            onClick={openManagePaymentMethod}
+          />
+        </ManagedSettingRow>
+      </div>
+
+      <SectionHeader spaced title="Credits" />
+      <div className="preferences-card__rows">
+        <section className="billing-credits-card">
+          <div className="setting-row__copy">
+            <h4 className="setting-row__title">{PLACEHOLDER.creditsRemainingPct}% remaining</h4>
+            <p className="setting-row__description">Renews to {PLACEHOLDER.creditsRenewTotal} credits on {PLACEHOLDER.renewDate}.</p>
+          </div>
+          <div
+            aria-valuemax={100}
+            aria-valuemin={0}
+            aria-valuenow={PLACEHOLDER.creditsRemainingPct}
+            className="billing-credits-bar"
+            role="progressbar">
+            <div className="billing-credits-bar__fill" style={{width: `${PLACEHOLDER.creditsRemainingPct}%`}} />
+          </div>
+        </section>
+      </div>
+
+      <SectionHeader spaced title="Invoices" />
+      <div className="preferences-card__rows">
+        <ManagedSettingRow
+          description={PLACEHOLDER.hasInvoices ? '' : 'Invoices will appear after your first payment.'}
+          isFirstRow
+          title={PLACEHOLDER.hasInvoices ? 'Recent invoices' : 'No invoices yet'}
+        />
+      </div>
     </DomainPaneSection>
   );
 }

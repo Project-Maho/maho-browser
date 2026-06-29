@@ -173,6 +173,15 @@ char *maho_core_get_space_tabs(struct MahoCore *ptr,
 void maho_core_release_window_tabs(struct MahoCore *ptr, int64_t window_id);
 
 /**
+ * Close non-pinned tabs whose `last_active_at` is strictly older than `cutoff_ts` (epoch seconds).
+ * Returns the number of tabs closed, or -1 on null pointer or internal error.
+ *
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ */
+int32_t maho_core_close_tabs_older_than(struct MahoCore *core, int64_t cutoff_ts);
+
+/**
  * # Safety
  * `ptr` must be a valid pointer returned by `maho_core_new`.
  * `space_id_json` must be a valid null-terminated C string containing a SpaceId JSON.

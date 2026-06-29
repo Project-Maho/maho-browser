@@ -1186,6 +1186,64 @@ impl TabLifecycleManager {
         closed
     }
 
+    /// Close every non-pinned tab whose `last_active_at` is strictly less than `cutoff_ts`
+    /// (epoch seconds). Iterates all spaces in a stable order (sorted by space_id, then tab_id).
+    ///
+    /// Tabs with an unparseable or empty `last_active_at` are treated as epoch 0 (very old)
+    /// and will be closed if the cutoff is > 0. This is intentional: a tab with no valid
+    /// timestamp has never been meaningfully accessed.
+    ///
+    /// Returns the number of tabs actually closed.
+    pub fn close_tabs_older_than(&mut self, cutoff_ts: i64) -> usize {
+        let to_close: Vec<TabId> = {
+            let mut candidates: Vec<(&TabId, &Tab)> = self
+                .tabs
+                .iter()
+                .filter(|(_, tab)| {
+                    if tab.is_pinned {
+                        return false;
+                    }
+                    if matches!(tab.state, TabLifecycleState::Archived { .. }) {
+                        return false;
+                    }
+                    let tab_epoch = chrono::DateTime::parse_from_rfc3339(&tab.last_active_at.0)
+                        .map(|dt| dt.timestamp())
+                        .unwrap_or(0);
+                    tab_epoch < cutoff_ts
+                })
+                .collect();
+            candidates.sort_by(|(id_a, tab_a), (id_b, tab_b)| {
+                tab_a
+                    .space_id
+                    .as_ref()
+                    .cmp(tab_b.space_id.as_ref())
+                    .then_with(|| id_a.as_ref().cmp(id_b.as_ref()))
+            });
+            candidates.into_iter().map(|(id, _)| id.clone()).collect()
+        };
+
+        let mut closed_count = 0;
+        for tab_id in to_close {
+            if let Some(tab) = self.tabs.remove(&tab_id) {
+                self.state_timestamps.remove(&tab_id);
+                self.creation_timestamps.remove(&tab_id);
+                self.loading_states.remove(&tab_id);
+                self.security_states.remove(&tab_id);
+                self.reader_mode_tabs.remove(&tab_id);
+                self.closed_stack.push_back(tab);
+                if self.closed_stack.len() > MAX_CLOSED_STACK {
+                    self.closed_stack.pop_front();
+                }
+                (self.on_update)(CoreUpdate::TabClosed {
+                    tab_id,
+                    animated: true,
+                });
+                closed_count += 1;
+            }
+        }
+        closed_count
+    }
+
     pub fn toggle_freeze(&mut self, tab_id: &TabId) {
         if let Some(tab) = self.tabs.get(tab_id) {
             match tab.state {
@@ -1447,5 +1505,69 @@ mod tests {
 
         let children = manager.collect_child_ids(&tab1_id);
         assert!(children.len() <= 2);
+    }
+
+    #[test]
+    fn close_tabs_older_than_skips_pinned() {
+        let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
+        let space_id = SpaceId::new("space-1");
+        let tab = manager.create_tab(space_id, Some(Url::new("https://example.com")), None, None);
+        let tab_id = tab.id.clone();
+
+        manager.pin_tab(&tab_id);
+        if let Some(t) = manager.tabs.get_mut(&tab_id) {
+            t.last_active_at = DateTime::from_iso("2020-01-01T00:00:00.000Z");
+        }
+
+        let closed = manager.close_tabs_older_than(1_700_000_000);
+        assert_eq!(closed, 0);
+        assert!(manager.get_tab(&tab_id).is_some());
+    }
+
+    #[test]
+    fn close_tabs_older_than_respects_cutoff() {
+        let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
+        let space_id = SpaceId::new("space-1");
+
+        let old_tab = manager.create_tab(space_id.clone(), Some(Url::new("https://old.com")), None, None);
+        let old_id = old_tab.id.clone();
+        if let Some(t) = manager.tabs.get_mut(&old_id) {
+            t.last_active_at = DateTime::from_iso("2023-01-01T00:00:00.000Z");
+        }
+
+        let recent_tab = manager.create_tab(space_id, Some(Url::new("https://recent.com")), None, None);
+        let recent_id = recent_tab.id.clone();
+        if let Some(t) = manager.tabs.get_mut(&recent_id) {
+            t.last_active_at = DateTime::from_iso("2024-06-01T00:00:00.000Z");
+        }
+
+        let closed = manager.close_tabs_older_than(1_700_000_000);
+        assert_eq!(closed, 1);
+        assert!(manager.get_tab(&old_id).is_none());
+        assert!(manager.get_tab(&recent_id).is_some());
+    }
+
+    #[test]
+    fn close_tabs_older_than_returns_count() {
+        let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
+        let space_id = SpaceId::new("space-1");
+
+        for i in 0..5 {
+            let tab = manager.create_tab(space_id.clone(), Some(Url::new(&format!("https://{i}.com"))), None, None);
+            if let Some(t) = manager.tabs.get_mut(&tab.id) {
+                t.last_active_at = DateTime::from_iso("2020-06-01T00:00:00.000Z");
+            }
+        }
+
+        let cutoff = 1_700_000_000;
+        let closed = manager.close_tabs_older_than(cutoff);
+        assert_eq!(closed, 5);
+    }
+
+    #[test]
+    fn close_tabs_older_than_empty_returns_zero() {
+        let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
+        let closed = manager.close_tabs_older_than(1_700_000_000);
+        assert_eq!(closed, 0);
     }
 }

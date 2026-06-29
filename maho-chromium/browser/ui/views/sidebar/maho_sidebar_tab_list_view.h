@@ -62,6 +62,7 @@ namespace maho {
 
 class SidebarTabRowView;
 class SidebarFolderRowView;
+class SidebarVisibilityManager;
 class MahoTabPreviewController;
 class MahoSidebarFolderHoverController;
 
@@ -81,7 +82,8 @@ void UpdateSidebarSpaceHeaderRow(views::View* row,
                                  const std::u16string& name);
 
 class MahoSidebarTabListView : public views::View,
-                               public views::ContextMenuController {
+                               public views::ContextMenuController,
+                               public ui::SimpleMenuModel::Delegate {
   METADATA_HEADER(MahoSidebarTabListView, views::View)
 
  public:
@@ -112,6 +114,10 @@ class MahoSidebarTabListView : public views::View,
 
   void OnAutoScrollDragOver(const gfx::Point& screen_point);
   void OnAutoScrollDragEnded();
+
+  // Called by MahoSidebarView when the scroll position changes.
+  // Invalidates tab_rows_ layout to recalculate visible set.
+  void OnScrollChanged();
 
   views::View* FindSectionDropTargetForTesting(MahoSidebarTabSection section);
   SidebarTabRowView* FindTabRowByIdForTesting(const std::string& tab_id);
@@ -175,6 +181,13 @@ class MahoSidebarTabListView : public views::View,
   void CloseTabById(const std::string& tab_id);
   int ResolveTabStripIndexForTabId(const std::string& tab_id) const;
   void OpenNewTab(const ui::Event& event);
+  // Opens Maho AI side panel. Auto-firing Tab Tidy on open deferred (ADR-0010 §future).
+  void OnTidyPressed(const ui::Event& event);
+  void OnClearPressed(const ui::Event& event);
+  void AddTabActionsRow();
+
+  // ui::SimpleMenuModel::Delegate (Clear menu only).
+  void ExecuteCommand(int command_id, int event_flags) override;
   void ToggleFolderExpanded(const std::string& folder_id);
   void IncrementalToggleFolder(const std::string& folder_id, bool expand);
   void CommitTabTitleChange(const std::string& tab_id,
@@ -191,6 +204,10 @@ class MahoSidebarTabListView : public views::View,
 
   raw_ptr<Browser> browser_ = nullptr;
   raw_ptr<views::LabelButton> new_tab_button_ = nullptr;
+  raw_ptr<views::ImageButton> tidy_button_ = nullptr;
+  raw_ptr<views::ImageButton> clear_button_ = nullptr;
+  std::unique_ptr<ui::SimpleMenuModel> clear_menu_model_;
+  std::unique_ptr<views::MenuRunner> clear_menu_runner_;
   raw_ptr<views::View> tab_rows_ = nullptr;
   raw_ptr<views::View> pinned_section_target_ = nullptr;
   raw_ptr<views::View> normal_section_target_ = nullptr;
@@ -211,6 +228,8 @@ class MahoSidebarTabListView : public views::View,
 
   class SidebarAutoScroller;
   std::unique_ptr<SidebarAutoScroller> auto_scroller_;
+
+  std::unique_ptr<SidebarVisibilityManager> visibility_manager_;
 
   base::CancelableTaskTracker favicon_task_tracker_;
 
@@ -259,6 +278,7 @@ class SidebarTabRowView : public views::View,
   ~SidebarTabRowView() override;
 
   void OnThemeChanged() override;
+  void OnFocus() override;
   gfx::Size CalculatePreferredSize(
       const views::SizeBounds& available_size) const override;
   bool OnMousePressed(const ui::MouseEvent& event) override;

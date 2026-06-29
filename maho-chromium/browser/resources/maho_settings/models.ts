@@ -49,7 +49,7 @@ export interface PaneDefinition {
   domain: DomainId;
   groupKeys?: string[];
   embedUrl?: string;
-  contentKind?: 'settings'|'profiles'|'atc'|'ai'|'shortcuts'|'sync'|'theme-store'|'autofill'|'passwords'|'content-blocker'|'extensions';
+  contentKind?: 'settings'|'profiles'|'atc'|'ai'|'billing'|'shortcuts'|'sync'|'theme-store'|'autofill'|'passwords'|'content-blocker'|'extensions';
 }
 
 export interface LiveCardDefinition {

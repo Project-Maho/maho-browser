@@ -927,3 +927,25 @@ maho-settings-app {
     min-height: 560px;
   }
 }
+
+.billing-credits-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--maho-settings-space-3);
+  padding: 12px 0;
+}
+
+.billing-credits-bar {
+  background: var(--maho-settings-border);
+  border-radius: 999px;
+  height: 6px;
+  overflow: hidden;
+  width: 100%;
+}
+
+.billing-credits-bar__fill {
+  background: #10b981;
+  border-radius: 999px;
+  height: 100%;
+  transition: width 200ms ease-out;
+}

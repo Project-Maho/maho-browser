@@ -398,6 +398,29 @@ pub unsafe extern "C" fn maho_core_release_window_tabs(
     }, ())
 }
 
+/// Close non-pinned tabs whose `last_active_at` is strictly older than `cutoff_ts` (epoch seconds).
+/// Returns the number of tabs closed, or -1 on null pointer or internal error.
+///
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_close_tabs_older_than(
+    core: *mut MahoCore,
+    cutoff_ts: i64,
+) -> i32 {
+    ffi_safe!({
+
+    if core.is_null() {
+        return -1;
+    }
+    if import_gate::is_active() { return -1; }
+    let core_ref = &mut *core;
+    let closed = core_ref.close_tabs_older_than(cutoff_ts);
+    closed.min(i32::MAX as usize) as i32
+
+    }, -1)
+}
+
 /// # Safety
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
 /// `space_id_json` must be a valid null-terminated C string containing a SpaceId JSON.
@@ -7736,5 +7759,11 @@ mod tests {
         let schedule = maho_core::routines::CronSchedule::parse("0 8 * * *").unwrap();
         let next = schedule.next_fire_after(t);
         assert!(next > t, "next_fire_after must be strictly after last_run");
+    }
+
+    #[test]
+    fn ffi_close_tabs_older_than_null_returns_neg1() {
+        let result = unsafe { maho_core_close_tabs_older_than(std::ptr::null_mut(), 1_700_000_000) };
+        assert_eq!(result, -1);
     }
 }
