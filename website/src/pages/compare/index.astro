@@ -2,7 +2,9 @@
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Nav from '../../components/Nav.astro';
 import Footer from '../../components/Footer.astro';
+import { getSiteUrl } from '../../lib/site';
 
+const { siteUrl, absoluteUrl } = getSiteUrl(Astro);
 const title = "Compare Maho Mail — See How It Stacks Up";
 const description = "Side-by-side comparisons of Maho Mail versus Thunderbird, Apple Mail, Superhuman, Spark, Shortwave, himalaya, aerc, mutt, and more.";
 
@@ -58,13 +60,13 @@ const schema = {
       "@type": "CollectionPage",
       "name": title,
       "description": description,
-      "url": "https://maho.app/compare",
-      "publisher": { "@type": "Organization", "name": "Maho", "url": "https://maho.app" },
+      "url": absoluteUrl('/compare'),
+      "publisher": { "@type": "Organization", "name": "Maho", "url": siteUrl },
     },
     {
       "@type": "BreadcrumbList",
       "itemListElement": [
-        { "@type": "ListItem", "position": 1, "name": "Home", "item": "https://maho.app" },
+        { "@type": "ListItem", "position": 1, "name": "Home", "item": siteUrl },
         { "@type": "ListItem", "position": 2, "name": "Compare" },
       ],
     },

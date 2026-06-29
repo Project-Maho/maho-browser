@@ -6,6 +6,9 @@
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Footer from '../components/Footer.astro';
 import JSONLD from '../components/JSONLD.astro';
+import { getSiteUrl } from '../lib/site';
+
+const { siteUrl, absoluteUrl } = getSiteUrl(Astro);
 import Nav from '../components/Nav.astro';
 
 const subscriptionTiers = [
@@ -112,7 +115,7 @@ const ld = {
   name: 'Maho',
   description:
     'Managed AI subscriptions for browsing with Free, Pro, and Max tiers, optional PAYG credits, and free BYOK for frontier access.',
-  url: 'https://maho.app/pricing',
+  url: absoluteUrl('/pricing'),
   offers: [
     {
       '@type': 'Offer',

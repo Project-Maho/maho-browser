@@ -2,7 +2,9 @@
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
+import { getSiteUrl } from '../lib/site';
 
+const { absoluteUrl } = getSiteUrl(Astro);
 const title = "Join the waitlist — Maho";
 const description = "Get early access to Maho — the proprietary, privacy-first browser and email client. We'll email you when builds are ready for your platform.";
 ---
@@ -141,6 +143,6 @@ const description = "Get early access to Maho — the proprietary, privacy-first
     "@type": "WebPage",
     "name": title,
     "description": description,
-    "url": "https://maho.app/waitlist"
+    "url": absoluteUrl('/waitlist')
   })} />
 </BaseLayout>

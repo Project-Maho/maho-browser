@@ -7,23 +7,26 @@ import Nav from '../components/Nav.astro';
 import LandingPage from '../components/LandingPage';
 import Footer from '../components/Footer.astro';
 import JSONLD from '../components/JSONLD.astro';
+import { getSiteUrl } from '../lib/site';
+
+const { siteUrl, absoluteUrl } = getSiteUrl(Astro);
 
 const ld = {
   '@context': 'https://schema.org',
   '@graph': [
     {
       '@type': 'Organization',
-      '@id': 'https://maho.app/#organization',
+      '@id': `${siteUrl}/#organization`,
       name: 'Maho',
-      url: 'https://maho.app',
-      logo: 'https://maho.app/logo.svg'
+      url: siteUrl,
+      logo: absoluteUrl('/logo.svg')
     },
     {
       '@type': 'WebSite',
-      '@id': 'https://maho.app/#website',
+      '@id': `${siteUrl}/#website`,
       name: 'Maho',
-      url: 'https://maho.app',
-      publisher: { '@id': 'https://maho.app/#organization' }
+      url: siteUrl,
+      publisher: { '@id': `${siteUrl}/#organization` }
     },
     {
       '@type': 'SoftwareApplication',

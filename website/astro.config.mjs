@@ -4,8 +4,12 @@ import starlightBlog from 'starlight-blog';
 import react from '@astrojs/react';
 import sitemap from '@astrojs/sitemap';
 
+// Canonical site URL. Override at build time with SITE_URL env var.
+// Used by Astro for canonical URLs, sitemap, OG tags, and JSON-LD via Astro.site.
+const SITE_URL = process.env.SITE_URL || 'https://maho.app';
+
 export default defineConfig({
-  site: 'https://maho.app',
+  site: SITE_URL,
   integrations: [
     starlight({
       title: 'Maho',
@@ -84,7 +88,7 @@ export default defineConfig({
         }
 
         // Marketing pages
-        if (/\/(pricing|security|privacy|terms|waitlist|why|about|download|compare\/?[a-z]*)\/?$/i.test(url)) {
+        if (/\/(pricing|security|privacy|terms|waitlist|why|about|download|roadmap|compare\/?[a-z]*)\/?$/i.test(url)) {
           item.priority = 0.8;
           item.changefreq = 'monthly';
           return item;

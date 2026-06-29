@@ -36,15 +36,24 @@ website/
 - Docs live under `src/content/docs/` — Starlight autogenerates sidebar for `browser/`, `cli/`, `api/`
 - Blog posts use Starlight Blog plugin: prefix `blog`, RSS enabled
 - React used for marketing pages only (`pages/`); Starlight handles all `/docs/*` routing
-- `site: 'https://maho.app'` in `astro.config.mjs` — canonical origin
+- **Canonical site URL**: `astro.config.mjs` reads `SITE_URL` env var (default `https://maho.app`). All JSON-LD blocks must use the `getSiteUrl(Astro)` helper from `src/lib/site.ts` instead of hardcoding `https://maho.app`. Hardcoded domain in runtime code is a defect.
 
 ## COMMANDS
 ```bash
-bun run dev     # Astro dev server (port 5555)
-bun run build   # Build static site → dist/
-bun run preview # Preview built site locally
+bun run dev                                  # Astro dev server (port 5555)
+bun run build                                # Build static site → dist/
+SITE_URL=https://staging.maho.app bun run build   # Override domain for staging/preview
+bun run preview                              # Preview built site locally
+```
+
+## DEPLOY
+```bash
+wrangler pages deploy dist --project-name=maho-website --branch=main --commit-dirty=true
+# Production URL: https://maho-website.pages.dev
+# Cloudflare project: maho-website (b1c1bfc4...)
 ```
 
 ## NOTES
-- `maho-website/` subdirectory appears to be a legacy/nested copy — work in `src/` directly
+- `maho-website/` subdirectory was a legacy/nested copy — deleted 2026-06-28
 - `dist/` is generated; do not commit
+- Hardcoded `https://maho.app` only allowed in `src/lib/site.ts` JSDoc + `src/components/JSONLD.astro` JSDoc (examples only, not runtime)

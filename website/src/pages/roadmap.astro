@@ -6,6 +6,9 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import JSONLD from '../components/JSONLD.astro';
+import { getSiteUrl } from '../lib/site';
+
+const { siteUrl, absoluteUrl } = getSiteUrl(Astro);
 
 const lastUpdated = '2026-06-28';
 
@@ -40,7 +43,7 @@ const ld = {
   '@type': 'WebPage',
   name: 'Maho Roadmap',
   description: 'What Maho has shipped, what is being built, and what is under consideration.',
-  url: 'https://maho.app/roadmap',
+  url: absoluteUrl('/roadmap'),
 };
 ---
 

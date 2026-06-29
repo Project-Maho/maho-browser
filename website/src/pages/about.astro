@@ -6,16 +6,19 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import JSONLD from '../components/JSONLD.astro';
+import { getSiteUrl } from '../lib/site';
+
+const { siteUrl, absoluteUrl } = getSiteUrl(Astro);
 
 const ld = {
   '@context': 'https://schema.org',
   '@type': 'AboutPage',
   name: 'About Maho',
-  url: 'https://maho.app/about',
+  url: absoluteUrl('/about'),
   mainEntity: {
     '@type': 'Organization',
     name: 'Maho',
-    url: 'https://maho.app',
+    url: siteUrl,
     email: 'hello@maho.app',
     description: 'Maho is a browser and email client built by an individual developer — privacy-first, AI-assisted, cross-device.'
   }

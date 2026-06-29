@@ -6,13 +6,16 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import JSONLD from '../components/JSONLD.astro';
+import { getSiteUrl } from '../lib/site';
+
+const { absoluteUrl } = getSiteUrl(Astro);
 
 const ld = {
   '@context': 'https://schema.org',
   '@type': 'WebPage',
   name: 'Why Maho — A Browser That Belongs to Its User',
   description: 'Maho is built on three commitments: your data stays local, AI assists only when asked, and your work syncs across every device you own.',
-  url: 'https://maho.app/why'
+  url: absoluteUrl('/why')
 };
 ---
 

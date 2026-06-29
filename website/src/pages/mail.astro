@@ -7,6 +7,9 @@ import Nav from '../components/Nav.astro';
 import LandingPage from '../components/LandingPage';
 import Footer from '../components/Footer.astro';
 import JSONLD from '../components/JSONLD.astro';
+import { getSiteUrl } from '../lib/site';
+
+const { siteUrl, absoluteUrl } = getSiteUrl(Astro);
 
 const ld = {
   '@context': 'https://schema.org',
@@ -15,7 +18,7 @@ const ld = {
   applicationCategory: 'Communication',
   operatingSystem: 'macOS',
   description: 'Desktop app, CLI, and MCP server in one email client. Built for developers and AI agents. Free forever.',
-  url: 'https://maho.app/mail',
+  url: absoluteUrl('/mail'),
   offers: {
     '@type': 'Offer',
     price: '0',

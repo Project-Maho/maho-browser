@@ -2,7 +2,9 @@
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Nav from '../../components/Nav.astro';
 import Footer from '../../components/Footer.astro';
+import { getSiteUrl } from '../../lib/site';
 
+const { siteUrl, absoluteUrl } = getSiteUrl(Astro);
 const title = "Maho Mail vs Shortwave: Which Email Client Is Better in 2026?";
 const description = "Comparing Maho Mail to Shortwave. A local-first email client with CLI and MCP vs an AI-powered Gmail frontend.";
 
@@ -38,14 +40,14 @@ const schema = {
       "description": description,
       "datePublished": "2026-04-12",
       "dateModified": "2026-04-12",
-      "author": { "@type": "Organization", "name": "Maho", "url": "https://maho.app" },
-      "publisher": { "@type": "Organization", "name": "Maho", "url": "https://maho.app" },
+      "author": { "@type": "Organization", "name": "Maho", "url": siteUrl },
+      "publisher": { "@type": "Organization", "name": "Maho", "url": siteUrl },
     },
     {
       "@type": "BreadcrumbList",
       "itemListElement": [
-        { "@type": "ListItem", "position": 1, "name": "Home", "item": "https://maho.app" },
-        { "@type": "ListItem", "position": 2, "name": "Compare", "item": "https://maho.app/compare" },
+        { "@type": "ListItem", "position": 1, "name": "Home", "item": siteUrl },
+        { "@type": "ListItem", "position": 2, "name": "Compare", "item": absoluteUrl('/compare') },
         { "@type": "ListItem", "position": 3, "name": "Maho Mail vs Shortwave" },
       ],
     },
