@@ -5,6 +5,7 @@
 @import url('./styles/overflow-menu.css');
 @import url('./styles/composer.css');
 @import url('./styles/thread.css');
+@import url('./styles/modal.css');
 
 :where(
   .mode-toggle__button,

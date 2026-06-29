@@ -523,6 +523,30 @@
   white-space: pre-wrap;
 }
 
+.credit-balance-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: auto;
+  min-width: max-content;
+  padding: 0 var(--maho-ai-space-3);
+  border-radius: var(--maho-ai-radius-pill);
+  background: var(--maho-ai-bg-chip-quiet);
+  color: var(--maho-ai-text-primary);
+  box-shadow: var(--maho-ai-shadow-soft);
+}
+
+.credit-balance-badge__label {
+  color: inherit;
+  font-size: var(--maho-ai-text-sm);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: var(--maho-ai-leading-tight);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .compact-panel__halo {
     animation: none;

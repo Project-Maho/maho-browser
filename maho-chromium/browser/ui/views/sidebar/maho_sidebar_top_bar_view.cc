@@ -71,123 +71,6 @@ constexpr int kTopBarClusterVerticalInsetDp = 0;
 // traffic-light spacer edge for optical alignment with macOS window controls.
 constexpr int kSidebarToggleLeftMarginDp = 6;
 
-class MahoTidySuggestionDialogView : public views::DialogDelegate {
- public:
-  MahoTidySuggestionDialogView(std::string space_id, base::Value folders)
-      : space_id_(std::move(space_id)), folders_(std::move(folders)) {
-    SetButtons(static_cast<int>(ui::mojom::DialogButton::kOk) |
-               static_cast<int>(ui::mojom::DialogButton::kCancel));
-    SetModalType(ui::mojom::ModalType::kWindow);
-    SetDefaultButton(static_cast<int>(ui::mojom::DialogButton::kOk));
-    SetButtonLabel(ui::mojom::DialogButton::kOk, u"Apply");
-    SetButtonLabel(ui::mojom::DialogButton::kCancel, u"Cancel");
-
-    auto contents = std::make_unique<views::View>();
-    contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
-        views::BoxLayout::Orientation::kVertical, gfx::Insets(16), 12));
-
-    auto* desc_label = contents->AddChildView(std::make_unique<views::Label>(
-        u"Tidy suggestions for your space:"));
-    desc_label->SetFontList(views::Label::GetDefaultFontList().Derive(
-        1, gfx::Font::NORMAL, gfx::Font::Weight::BOLD));
-    desc_label->SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_LEFT);
-
-    // Build tab map
-    std::map<std::string, std::string> tab_titles;
-    MahoCore* core = maho::GetCore();
-    if (core) {
-      char* tabs_json_c = maho_core_get_space_tabs(core, space_id_.c_str(), nullptr);
-      if (tabs_json_c) {
-        std::string json(tabs_json_c);
-        maho_string_free(tabs_json_c);
-        std::optional<base::Value> parsed_tabs =
-            base::JSONReader::Read(json, base::JSON_PARSE_RFC);
-        if (parsed_tabs && parsed_tabs->is_list()) {
-          for (const auto& tab_val : parsed_tabs->GetList()) {
-            const auto* tab_dict = tab_val.GetIfDict();
-            if (tab_dict) {
-              const std::string* id = tab_dict->FindString("id");
-              const std::string* title = tab_dict->FindString("title");
-              if (id && title) {
-                tab_titles[*id] = *title;
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // Add list of folders & tabs
-    for (const auto& folder_val : folders_.GetList()) {
-      const auto* folder_dict = folder_val.GetIfDict();
-      if (!folder_dict) continue;
-
-      const std::string* name = folder_dict->FindString("name");
-      const auto* tab_ids = folder_dict->FindList("tab_ids");
-      if (!name || !tab_ids) continue;
-
-      auto* folder_label = contents->AddChildView(std::make_unique<views::Label>(
-          base::UTF8ToUTF16("📁 " + *name)));
-      folder_label->SetFontList(views::Label::GetDefaultFontList().Derive(
-          0, gfx::Font::NORMAL, gfx::Font::Weight::BOLD));
-      folder_label->SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_LEFT);
-
-      for (const auto& tab_id_val : *tab_ids) {
-        const std::string* tab_id = tab_id_val.GetIfString();
-        if (!tab_id) continue;
-
-        std::string title = tab_titles.count(*tab_id) ? tab_titles[*tab_id] : *tab_id;
-        if (title.length() > 60) {
-          title = title.substr(0, 57) + "...";
-        }
-        auto* tab_label = contents->AddChildView(std::make_unique<views::Label>(
-            base::UTF8ToUTF16("  • " + title)));
-        tab_label->SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_LEFT);
-      }
-    }
-
-    SetContentsView(std::move(contents));
-  }
-
-  std::u16string GetWindowTitle() const override {
-    return u"Tab Tidy Suggestions";
-  }
-
-  bool Accept() override {
-    base::DictValue event_dict;
-    event_dict.Set("kind", "apply_tidy_tabs");
-    event_dict.Set("space_id", space_id_);
-    std::string event_json;
-    base::JSONWriter::Write(event_dict, &event_json);
-
-    MahoCore* core = maho::GetCore();
-    if (core) {
-      ::maho::core::HandleEvent(core, event_json.c_str());
-      if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
-        bridge->NotifyChanged();
-      }
-    }
-    return true;
-  }
-
- private:
-  std::string space_id_;
-  base::Value folders_;
-};
-
-void ShowMahoTidySuggestionDialog(Browser* browser,
-                                  const std::string& space_id,
-                                  base::Value folders) {
-  auto dialog = std::make_unique<MahoTidySuggestionDialogView>(
-      space_id, std::move(folders));
-  views::Widget* widget = views::DialogDelegate::CreateDialogWidget(
-      std::move(dialog), browser->window()->GetNativeWindow(),
-      gfx::NativeView());
-  if (widget) {
-    widget->Show();
-  }
-}
-
 ui::ImageModel CreateTopBarButtonImage(
     const gfx::VectorIcon& icon,
     int icon_size,
@@ -329,11 +212,6 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
       base::BindRepeating(&MahoSidebarTopBarView::OnAiPressed,
                           weak_factory_.GetWeakPtr()),
       maho_lucide_icons::kMessageSquareIcon, u"AI Panel");
-  tidy_button_ = AddControlButton(
-      nav_cluster_,
-      base::BindRepeating(&MahoSidebarTopBarView::OnTidyPressed,
-                          weak_factory_.GetWeakPtr()),
-      maho_lucide_icons::kWandSparklesIcon, u"Tidy Tabs");
 
   StyleClusterView(leading_cluster_);
   StyleClusterView(nav_cluster_);
@@ -360,7 +238,7 @@ bool MahoSidebarTopBarView::IsPositionInWindowCaption(
     const gfx::Point& point) const {
   for (const views::ImageButton* button :
        {sidebar_toggle_button_.get(), back_button_.get(),
-        forward_button_.get(), reload_button_.get(), ai_button_.get(), tidy_button_.get()}) {
+        forward_button_.get(), reload_button_.get(), ai_button_.get()}) {
     if (button && button->GetVisible()) {
       gfx::Point point_in_button = point;
       views::View::ConvertPointToTarget(this, button, &point_in_button);
@@ -419,8 +297,6 @@ void MahoSidebarTopBarView::UpdateButtonImages() {
                     model_.is_loading ? u"Stop" : u"Reload");
   UpdateButtonState(ai_button_, true,
                     maho_lucide_icons::kMessageSquareIcon, u"AI Panel");
-  UpdateButtonState(tidy_button_, true,
-                    maho_lucide_icons::kWandSparklesIcon, u"Tidy Tabs");
 }
 
 void MahoSidebarTopBarView::UpdateButtonState(
@@ -482,137 +358,6 @@ void MahoSidebarTopBarView::OnToggleSidebarPressed(const ui::Event& event) {
   if (browser_) {
     sidebar_prefs::ToggleSidebarPanelExpanded(browser_->profile()->GetPrefs());
   }
-}
-
-void MahoSidebarTopBarView::OnTidyPressed(const ui::Event& event) {
-  if (!browser_) return;
-  auto* bridge = MahoSpaceProfileBridge::GetInstance();
-  if (!bridge) return;
-  std::string active_space_id = bridge->GetActiveSpaceId(browser_);
-  if (active_space_id.empty()) return;
-
-  // 1. Dispatch request_tidy_tabs
-  base::DictValue event_dict;
-  event_dict.Set("kind", "request_tidy_tabs");
-  event_dict.Set("space_id", active_space_id);
-  std::string event_json;
-  base::JSONWriter::Write(event_dict, &event_json);
-
-  MahoCore* core = maho::GetCore();
-  if (!core) return;
-
-  std::string updates = ::maho::core::HandleEvent(core, event_json.c_str());
-  
-  // 2. Parse RequestLlmCompletion from updates
-  std::optional<base::Value> parsed = base::JSONReader::Read(updates, base::JSON_PARSE_RFC);
-  if (!parsed) return;
-
-  const base::DictValue* llm_request = nullptr;
-  if (parsed->is_list()) {
-    for (const auto& item : parsed->GetList()) {
-      const auto* d = item.GetIfDict();
-      if (d) {
-        const std::string* kind = d->FindString("kind");
-        if (kind && *kind == "request_llm_completion") {
-          llm_request = d;
-          break;
-        }
-      }
-    }
-  } else if (parsed->is_dict()) {
-    const std::string* kind = parsed->GetDict().FindString("kind");
-    if (kind && *kind == "request_llm_completion") {
-      llm_request = &parsed->GetDict();
-    }
-  }
-
-  if (!llm_request) return;
-
-  const std::string* request_id_ptr = llm_request->FindString("request_id");
-  if (!request_id_ptr) return;
-  std::string request_id = *request_id_ptr;
-
-  auto prompt_messages = maho::ai::ExtractPromptMessages(*llm_request);
-  if (!prompt_messages) return;
-
-  // Disable button while tidying
-  tidy_button_->SetEnabled(false);
-
-  // Initialize and call LLM Client
-  auto* url_loader_factory = browser_->profile()->GetDefaultStoragePartition()->GetURLLoaderFactoryForBrowserProcess().get();
-  auto llm_client = std::make_unique<MahoAiLlmClient>(
-      browser_->profile()->GetPrefs(),
-      url_loader_factory,
-      /*provider_adapter_v2_enabled=*/false);
-
-  MahoAiLlmClient::CompletionRequest request;
-  request.prompt_messages = base::ListValue(std::move(*prompt_messages));
-
-  auto* raw_client = llm_client.get();
-  raw_client->StartCompletion(
-      std::move(request),
-      base::BindRepeating([](const std::string&) {}),
-      base::BindOnce(
-          [](base::WeakPtr<MahoSidebarTopBarView> view, std::unique_ptr<MahoAiLlmClient> client,
-             std::string space_id, std::string request_id, MahoAiLlmClient::CompletionResult result) {
-            if (view) {
-              view->tidy_button_->SetEnabled(true);
-              
-              // Send LLM result back to Rust
-              base::DictValue event_dict;
-              event_dict.Set("kind", "llm_result");
-              event_dict.Set("request_id", request_id);
-              event_dict.Set("result", result.full_text);
-              std::string event_json;
-              base::JSONWriter::Write(event_dict, &event_json);
-
-              MahoCore* core = maho::GetCore();
-              if (core) {
-                std::string updates = ::maho::core::HandleEvent(core, event_json.c_str());
-                
-                // Parse TidyTabsReady from updates
-                std::optional<base::Value> parsed = base::JSONReader::Read(updates, base::JSON_PARSE_RFC);
-                if (parsed) {
-                  const base::DictValue* tidy_ready = nullptr;
-                  if (parsed->is_list()) {
-                    for (const auto& item : parsed->GetList()) {
-                      const auto* d = item.GetIfDict();
-                      if (d) {
-                        const std::string* kind = d->FindString("kind");
-                        if (kind && *kind == "tidy_tabs_ready") {
-                          tidy_ready = d;
-                          break;
-                        }
-                      }
-                    }
-                  } else if (parsed->is_dict()) {
-                    const std::string* kind = parsed->GetDict().FindString("kind");
-                    if (kind && *kind == "tidy_tabs_ready") {
-                      tidy_ready = &parsed->GetDict();
-                    }
-                  }
-
-                  if (tidy_ready) {
-                    const auto* folders = tidy_ready->FindList("folders");
-                    if (folders) {
-                      ShowMahoTidySuggestionDialog(view->browser_, space_id, base::Value(folders->Clone()));
-                    }
-                  }
-                }
-              }
-            }
-          },
-          weak_factory_.GetWeakPtr(), std::move(llm_client), active_space_id, request_id),
-      base::BindOnce(
-          [](base::WeakPtr<MahoSidebarTopBarView> view, std::unique_ptr<MahoAiLlmClient> client,
-             const std::string& error) {
-            if (view) {
-              view->tidy_button_->SetEnabled(true);
-              LOG(ERROR) << "Tidy LLM completion failed: " << error;
-            }
-          },
-          weak_factory_.GetWeakPtr(), std::move(llm_client))
-  );
 }
 
 }  // namespace maho
