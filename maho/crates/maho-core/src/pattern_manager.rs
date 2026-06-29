@@ -223,7 +223,7 @@ impl PatternManager {
             Err(_) => return Vec::new(),
         };
 
-        // greedy clustering (same approach as tab_grouping.rs)
+        // greedy clustering
         let similarity_threshold = 0.7;
         let mut clusters: Vec<Vec<usize>> = Vec::new();
         for i in 0..entries.len() {

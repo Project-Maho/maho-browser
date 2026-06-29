@@ -48,7 +48,6 @@ class MahoSidebarTopBarView : public views::View {
   views::ImageButton* forward_button_for_testing() { return forward_button_; }
   views::ImageButton* reload_button_for_testing() { return reload_button_; }
   views::ImageButton* ai_button_for_testing() { return ai_button_; }
-  views::ImageButton* tidy_button_for_testing() { return tidy_button_; }
 
   // Returns true if `point` (in this view's coordinates) is not over any
   // interactive control and should be treated as window-draggable caption area.
@@ -65,7 +64,6 @@ class MahoSidebarTopBarView : public views::View {
   void OnForwardPressed(const ui::Event& event);
   void OnReloadPressed(const ui::Event& event);
   void OnAiPressed(const ui::Event& event);
-  void OnTidyPressed(const ui::Event& event);
   void OnToggleSidebarPressed(const ui::Event& event);
 
   raw_ptr<Browser> browser_;
@@ -78,7 +76,6 @@ class MahoSidebarTopBarView : public views::View {
   raw_ptr<views::ImageButton> forward_button_ = nullptr;
   raw_ptr<views::ImageButton> reload_button_ = nullptr;
   raw_ptr<views::ImageButton> ai_button_ = nullptr;
-  raw_ptr<views::ImageButton> tidy_button_ = nullptr;
   MahoSidebarTopBarModel model_;
   base::WeakPtrFactory<MahoSidebarTopBarView> weak_factory_{this};
 };

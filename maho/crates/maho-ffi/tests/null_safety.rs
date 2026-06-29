@@ -147,32 +147,4 @@ fn chat_send_text_with_image_full_null() {
     }
 }
 
-#[test]
-fn cluster_tabs_with_null_ptr() {
-    unsafe {
-        let result = maho_ffi::maho_core_cluster_tabs(ptr::null_mut(), 0.75);
-        if !result.is_null() {
-            maho_ffi::maho_string_free(result);
-        }
-    }
-}
 
-#[test]
-fn cluster_tabs_with_negative_threshold() {
-    unsafe {
-        let result = maho_ffi::maho_core_cluster_tabs(ptr::null_mut(), -1.0);
-        if !result.is_null() {
-            maho_ffi::maho_string_free(result);
-        }
-    }
-}
-
-#[test]
-fn cluster_tabs_with_nan_threshold() {
-    unsafe {
-        let result = maho_ffi::maho_core_cluster_tabs(ptr::null_mut(), f64::NAN);
-        if !result.is_null() {
-            maho_ffi::maho_string_free(result);
-        }
-    }
-}

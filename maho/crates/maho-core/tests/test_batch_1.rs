@@ -873,6 +873,8 @@ fn space_create_folder_no_panic() {
         name: "Research".to_string(),
         is_pinned: false,
         parent_folder_id: None,
+        provider_type: None,
+        config_json: None,
     });
 }
 
@@ -886,6 +888,8 @@ fn create_folder_emits_folder_created_update() {
         name: "Emit Folder".to_string(),
         is_pinned: false,
         parent_folder_id: None,
+        provider_type: None,
+        config_json: None,
     });
 
     assert!(matches!(
@@ -903,6 +907,8 @@ fn space_folder_view_models() {
         name: "Folder1".to_string(),
         is_pinned: false,
         parent_folder_id: None,
+        provider_type: None,
+        config_json: None,
     });
     assert!(!core.get_folder_view_models(&space_id).is_empty());
 }
@@ -917,6 +923,8 @@ fn create_folder_can_start_pinned() {
         name: "Pinned Folder".to_string(),
         is_pinned: true,
         parent_folder_id: None,
+        provider_type: None,
+        config_json: None,
     });
 
     assert!(matches!(
@@ -2276,6 +2284,8 @@ fn create_folder(core: &mut MahoCore, space_id: SpaceId, name: &str) -> FolderId
         name: name.to_string(),
         is_pinned: false,
         parent_folder_id: None,
+        provider_type: None,
+        config_json: None,
     });
     let after = core.get_folder_view_models(&space_id);
     after
@@ -2414,6 +2424,8 @@ fn create_folder_helper(core: &mut MahoCore, name: &str) -> FolderId {
         name: name.to_string(),
         is_pinned: false,
         parent_folder_id: None,
+        provider_type: None,
+        config_json: None,
     });
     match updates.as_slice() {
         [CoreUpdate::FolderCreated { folder }] => folder.id.clone(),
@@ -2579,6 +2591,8 @@ fn reorder_pinned_folder_does_not_cross_into_regular() {
         name: "Pinned".to_string(),
         is_pinned: true,
         parent_folder_id: None,
+        provider_type: None,
+        config_json: None,
     });
     let pinned = match updates.as_slice() {
         [CoreUpdate::FolderCreated { folder }] => folder.id.clone(),
@@ -2615,6 +2629,8 @@ fn move_nested_folder_to_root_among_regular_folders() {
         name: "Pinned".to_string(),
         is_pinned: true,
         parent_folder_id: None,
+        provider_type: None,
+        config_json: None,
     });
     let _pinned = match updates.as_slice() {
         [CoreUpdate::FolderCreated { folder }] => folder.id.clone(),

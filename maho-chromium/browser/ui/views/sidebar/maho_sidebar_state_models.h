@@ -242,11 +242,12 @@ struct SidebarTreeNode {
   // --- Folder fields (valid when kind == kFolder) ---
   std::string folder_id;  // Stable FolderId from maho-core.
   std::u16string folder_name;
-  bool is_expanded = true;
+  bool is_expanded = false;
   bool folder_is_pinned = false;
   std::string parent_of_folder_id;
   bool is_live = false;
   std::string provider_type;
+  std::string config_json;
 
   // --- Children (folders and split groups) ---
   std::vector<SidebarTreeNode> children;

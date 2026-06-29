@@ -1,5 +1,14 @@
 use serde::{Deserialize, Serialize};
 
+/// Subscription tier for gating feature access.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UserTier {
+    Free,
+    Pro,
+    Max,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AuthState {
@@ -20,6 +29,13 @@ pub struct AccountInfo {
     pub device_id: Option<String>,
     pub sync_enabled: bool,
     pub auth_state: AuthState,
+    /// Subscription tier. Defaults to Free if not set by the relay.
+    #[serde(default = "default_tier")]
+    pub tier: UserTier,
+}
+
+fn default_tier() -> UserTier {
+    UserTier::Free
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -46,6 +62,7 @@ mod tests {
             device_id: Some("device_abc".to_string()),
             sync_enabled: true,
             auth_state: AuthState::Authenticated,
+            tier: UserTier::Max,
         };
 
         let json = serde_json::to_value(&account).expect("account should serialize");

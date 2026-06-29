@@ -20,7 +20,10 @@
 #include "ui/compositor/layer_tree_owner.h"
 #include "ui/gfx/geometry/transform.h"
 #include "ui/views/controls/button/image_button.h"
+#include "ui/views/controls/button/label_button.h"
+#include "ui/views/test/button_test_api.h"
 #include "ui/views/test/views_test_base.h"
+#include "ui/views/widget/widget.h"
 
 namespace maho {
 namespace {
@@ -561,7 +564,7 @@ TEST_F(SidebarDnDDispatchTest, FolderRowDropIndicatorResetsOnDragExit) {
 
   SidebarFolderRowView folder_row(
       folder_node, MahoSidebarTabSection::kNormal, "space-1",
-      /*browser=*/nullptr, NoOpPressedCallback(), base::DoNothing());
+      /*browser=*/nullptr, base::DoNothing(), base::DoNothing());
 
   ui::OSExchangeData data;
   WriteDropData(MakeTabPayload("source-tab", SidebarDragOrigin::kNormalSection),
@@ -574,6 +577,105 @@ TEST_F(SidebarDnDDispatchTest, FolderRowDropIndicatorResetsOnDragExit) {
   EXPECT_TRUE(folder_row.is_drop_indicator_visible_for_testing());
   folder_row.OnDragExited();
   EXPECT_FALSE(folder_row.is_drop_indicator_visible_for_testing());
+}
+
+TEST_F(SidebarDnDDispatchTest, FolderRowBodyClickInvokesToggleCallback) {
+  int toggle_count = 0;
+  auto folder_row = std::make_unique<SidebarFolderRowView>(
+      MakeFolderNode("folder-1"), MahoSidebarTabSection::kNormal, "space-1",
+      nullptr,
+      base::BindRepeating([](int* count) { ++(*count); }, &toggle_count),
+      base::DoNothing());
+  views::Widget::InitParams params = CreateParams(
+      views::Widget::InitParams::Ownership::CLIENT_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_POPUP);
+  auto widget = std::make_unique<views::Widget>();
+  widget->Init(std::move(params));
+  auto* folder_row_ptr = widget->SetContentsView(std::move(folder_row));
+  widget->SetBounds(gfx::Rect(0, 0, 220, 40));
+  widget->LayoutRootViewIfNecessary();
+
+  views::LabelButton* label = folder_row_ptr->label_button_for_testing();
+  ASSERT_TRUE(label);
+  const gfx::Rect label_bounds = label->bounds();
+  ASSERT_GT(label_bounds.x(), 0);
+
+  const gfx::Point body_point(label_bounds.x() - 1,
+                              folder_row_ptr->bounds().CenterPoint().y());
+  EXPECT_FALSE(label_bounds.Contains(body_point));
+
+  ui::MouseEvent press(ui::EventType::kMousePressed, body_point, body_point,
+                       base::TimeTicks::Now(), ui::EF_LEFT_MOUSE_BUTTON,
+                       ui::EF_LEFT_MOUSE_BUTTON);
+  ui::MouseEvent release(ui::EventType::kMouseReleased, body_point, body_point,
+                         base::TimeTicks::Now(), ui::EF_LEFT_MOUSE_BUTTON,
+                         ui::EF_LEFT_MOUSE_BUTTON);
+
+  EXPECT_TRUE(folder_row_ptr->OnMousePressed(press));
+  folder_row_ptr->OnMouseReleased(release);
+
+  EXPECT_EQ(toggle_count, 1);
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       FolderRowLabelRegionReleaseInvokesSingleToggleCallback) {
+  int toggle_count = 0;
+  auto folder_row = std::make_unique<SidebarFolderRowView>(
+      MakeFolderNode("folder-1"), MahoSidebarTabSection::kNormal, "space-1",
+      nullptr,
+      base::BindRepeating([](int* count) { ++(*count); }, &toggle_count),
+      base::DoNothing());
+  views::Widget::InitParams params = CreateParams(
+      views::Widget::InitParams::Ownership::CLIENT_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_POPUP);
+  auto widget = std::make_unique<views::Widget>();
+  widget->Init(std::move(params));
+  auto* folder_row_ptr = widget->SetContentsView(std::move(folder_row));
+  widget->SetBounds(gfx::Rect(0, 0, 220, 40));
+  widget->LayoutRootViewIfNecessary();
+
+  views::LabelButton* label = folder_row_ptr->label_button_for_testing();
+  ASSERT_TRUE(label);
+  const gfx::Point label_point = label->bounds().CenterPoint();
+
+  ui::MouseEvent press(ui::EventType::kMousePressed, label_point, label_point,
+                       base::TimeTicks::Now(), ui::EF_LEFT_MOUSE_BUTTON,
+                       ui::EF_LEFT_MOUSE_BUTTON);
+  ui::MouseEvent release(ui::EventType::kMouseReleased, label_point,
+                         label_point, base::TimeTicks::Now(),
+                         ui::EF_LEFT_MOUSE_BUTTON,
+                         ui::EF_LEFT_MOUSE_BUTTON);
+
+  EXPECT_TRUE(folder_row_ptr->OnMousePressed(press));
+  folder_row_ptr->OnMouseReleased(release);
+
+  EXPECT_EQ(toggle_count, 1);
+}
+
+TEST_F(SidebarDnDDispatchTest, FolderRowLabelButtonClickInvokesToggleOnce) {
+  int toggle_count = 0;
+  auto folder_row = std::make_unique<SidebarFolderRowView>(
+      MakeFolderNode("folder-1"), MahoSidebarTabSection::kNormal, "space-1",
+      nullptr,
+      base::BindRepeating([](int* count) { ++(*count); }, &toggle_count),
+      base::DoNothing());
+  views::Widget::InitParams params = CreateParams(
+      views::Widget::InitParams::Ownership::CLIENT_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_POPUP);
+  auto widget = std::make_unique<views::Widget>();
+  widget->Init(std::move(params));
+  auto* folder_row_ptr = widget->SetContentsView(std::move(folder_row));
+  widget->SetBounds(gfx::Rect(0, 0, 220, 40));
+  widget->LayoutRootViewIfNecessary();
+
+  views::LabelButton* label = folder_row_ptr->label_button_for_testing();
+  ASSERT_TRUE(label);
+
+  views::test::ButtonTestApi(label).NotifyClick(ui::MouseEvent(
+      ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
+      base::TimeTicks::Now(), 0, 0));
+
+  EXPECT_EQ(toggle_count, 1);
 }
 
 TEST_F(SidebarDnDDispatchTest,
@@ -645,7 +747,7 @@ TEST_F(SidebarDnDDispatchTest,
        RootFolderDropMiddleZoneDispatchesMoveFolderIntoFolder) {
   SidebarFolderRowView folder_row(MakeFolderNode("target-folder"),
                                   MahoSidebarTabSection::kNormal, "space-1",
-                                  nullptr, NoOpPressedCallback(),
+                                  nullptr, base::DoNothing(),
                                   base::DoNothing(), "next-folder");
   folder_row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
@@ -674,7 +776,7 @@ TEST_F(SidebarDnDDispatchTest,
 TEST_F(SidebarDnDDispatchTest, RootFolderDropTopZoneDispatchesReorderBefore) {
   SidebarFolderRowView folder_row(MakeFolderNode("target-folder"),
                                   MahoSidebarTabSection::kNormal, "space-1",
-                                  nullptr, NoOpPressedCallback(),
+                                  nullptr, base::DoNothing(),
                                   base::DoNothing(), "next-folder");
   folder_row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
@@ -704,7 +806,7 @@ TEST_F(SidebarDnDDispatchTest,
        RootFolderDropBottomZoneDispatchesReorderBeforeNextSibling) {
   SidebarFolderRowView folder_row(MakeFolderNode("target-folder"),
                                   MahoSidebarTabSection::kNormal, "space-1",
-                                  nullptr, NoOpPressedCallback(),
+                                  nullptr, base::DoNothing(),
                                   base::DoNothing(), "next-folder");
   folder_row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
@@ -734,7 +836,7 @@ TEST_F(SidebarDnDDispatchTest,
        RootFolderDropBottomZoneWithoutNextSiblingDispatchesAppendReorder) {
   SidebarFolderRowView folder_row(MakeFolderNode("target-folder"),
                                   MahoSidebarTabSection::kNormal, "space-1",
-                                  nullptr, NoOpPressedCallback(),
+                                  nullptr, base::DoNothing(),
                                   base::DoNothing());
   folder_row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
@@ -759,7 +861,7 @@ TEST_F(SidebarDnDDispatchTest,
 TEST_F(SidebarDnDDispatchTest, FolderDropOntoSelfReturnsNoOp) {
   SidebarFolderRowView folder_row(MakeFolderNode("same-folder"),
                                   MahoSidebarTabSection::kNormal, "space-1",
-                                  nullptr, NoOpPressedCallback(),
+                                  nullptr, base::DoNothing(),
                                   base::DoNothing(), "next-folder");
   folder_row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
@@ -860,7 +962,7 @@ TEST_F(SidebarDnDDispatchTest,
        CrossParentNestedFolderTopZoneDispatchesReorderIntoTargetParent) {
   SidebarFolderRowView folder_row(
       MakeNestedFolderNode("target-folder", "target-parent"),
-      MahoSidebarTabSection::kNormal, "space-1", nullptr, NoOpPressedCallback(),
+      MahoSidebarTabSection::kNormal, "space-1", nullptr, base::DoNothing(),
       base::DoNothing(), "next-folder", "target-parent");
   folder_row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
@@ -887,7 +989,7 @@ TEST_F(SidebarDnDDispatchTest,
        CrossParentNestedFolderBottomZoneDispatchesReorderBeforeNextSibling) {
   SidebarFolderRowView folder_row(
       MakeNestedFolderNode("target-folder", "target-parent"),
-      MahoSidebarTabSection::kNormal, "space-1", nullptr, NoOpPressedCallback(),
+      MahoSidebarTabSection::kNormal, "space-1", nullptr, base::DoNothing(),
       base::DoNothing(), "next-folder", "target-parent");
   folder_row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
@@ -914,7 +1016,7 @@ TEST_F(SidebarDnDDispatchTest,
        TabDropOnFolderMiddleZoneDispatchesMoveTabToFolder) {
   SidebarFolderRowView folder_row(MakeFolderNode("target-folder"),
                                   MahoSidebarTabSection::kNormal, "space-1",
-                                  nullptr, NoOpPressedCallback(),
+                                  nullptr, base::DoNothing(),
                                   base::DoNothing());
   folder_row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
@@ -945,7 +1047,7 @@ TEST_F(SidebarDnDDispatchTest,
        TabDropOnFolderTopZoneDispatchesReorderBeforeFolder) {
   SidebarFolderRowView folder_row(MakeFolderNode("target-folder"),
                                   MahoSidebarTabSection::kNormal, "space-1",
-                                  nullptr, NoOpPressedCallback(),
+                                  nullptr, base::DoNothing(),
                                   base::DoNothing(), "next-folder");
   folder_row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
@@ -980,7 +1082,7 @@ TEST_F(SidebarDnDDispatchTest,
        TabDropOnFolderBottomZoneWithoutNextSiblingDispatchesAppendReorder) {
   SidebarFolderRowView folder_row(MakeFolderNode("target-folder"),
                                   MahoSidebarTabSection::kNormal, "space-1",
-                                  nullptr, NoOpPressedCallback(),
+                                  nullptr, base::DoNothing(),
                                   base::DoNothing());
   folder_row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
@@ -1009,7 +1111,7 @@ TEST_F(SidebarDnDDispatchTest,
        FolderDropOnBottomZoneWhenDraggedFolderIsNextSiblingReturnsNoOp) {
   SidebarFolderRowView folder_row(MakeFolderNode("target-folder"),
                                   MahoSidebarTabSection::kNormal, "space-1",
-                                  nullptr, NoOpPressedCallback(),
+                                  nullptr, base::DoNothing(),
                                   base::DoNothing(), "next-folder");
   folder_row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
@@ -1034,7 +1136,7 @@ TEST_F(SidebarDnDDispatchTest,
        FolderChildTabDropOnFolderMiddleZoneDispatchesMoveTabToFolder) {
   SidebarFolderRowView folder_row(MakeFolderNode("target-folder"),
                                   MahoSidebarTabSection::kNormal, "space-1",
-                                  nullptr, NoOpPressedCallback(),
+                                  nullptr, base::DoNothing(),
                                   base::DoNothing());
   folder_row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
@@ -1068,7 +1170,7 @@ TEST_F(SidebarDnDDispatchTest,
   SidebarTreeNode nested_folder = MakeNestedFolderNode("child-f", "parent-f");
   SidebarFolderRowView folder_row(
       nested_folder, MahoSidebarTabSection::kNormal, "space-1",
-      nullptr, NoOpPressedCallback(), base::DoNothing(), "", "parent-f");
+      nullptr, base::DoNothing(), base::DoNothing(), "", "parent-f");
 
   ui::OSExchangeData data;
   folder_row.WriteDragDataForView(&folder_row, gfx::Point(5, 5), &data);
@@ -1646,7 +1748,7 @@ TEST_F(SidebarDnDDispatchTest, TabOnFolderLaneDispatchesReorderNotMoveInto) {
 TEST_F(SidebarDnDDispatchTest, TabOnFolderBodyDispatchesMoveIntoFolder) {
   SidebarFolderRowView folder_row(MakeFolderNode("target-folder"),
                                   MahoSidebarTabSection::kNormal, "space-1",
-                                  nullptr, NoOpPressedCallback(),
+                                  nullptr, base::DoNothing(),
                                   base::DoNothing());
   folder_row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
@@ -1803,7 +1905,7 @@ TEST_F(SidebarDnDDispatchTest,
        FavoriteTabDropOnFolderRowInvokesAcceptedCallback) {
   SidebarFolderRowView folder_row(MakeFolderNode("target-folder"),
                                   MahoSidebarTabSection::kNormal, "space-1",
-                                  nullptr, NoOpPressedCallback(),
+                                  nullptr, base::DoNothing(),
                                   base::DoNothing());
   folder_row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
@@ -1843,7 +1945,7 @@ TEST_F(SidebarDnDDispatchTest,
        NonFavoriteTabDropOnFolderRowDoesNotInvokeAcceptedCallback) {
   SidebarFolderRowView folder_row(MakeFolderNode("target-folder"),
                                   MahoSidebarTabSection::kNormal, "space-1",
-                                  nullptr, NoOpPressedCallback(),
+                                  nullptr, base::DoNothing(),
                                   base::DoNothing());
   folder_row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
@@ -2196,7 +2298,7 @@ TEST_F(SidebarDnDDispatchTest,
        PinnedTabDropOnNormalFolderRowDispatchesUnpinThenMoveIntoFolder) {
   SidebarFolderRowView folder_row(MakeFolderNode("target-folder"),
                                   MahoSidebarTabSection::kNormal, "space-1",
-                                  nullptr, NoOpPressedCallback(),
+                                  nullptr, base::DoNothing(),
                                   base::DoNothing());
   folder_row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 
@@ -2263,7 +2365,7 @@ TEST_F(SidebarDnDDispatchTest,
        FavoriteTabOnFolderRowDispatchesUnfavoriteThenMoveToFolder) {
   SidebarFolderRowView folder_row(MakeFolderNode("target-folder"),
                                   MahoSidebarTabSection::kNormal, "space-1",
-                                  nullptr, NoOpPressedCallback(),
+                                  nullptr, base::DoNothing(),
                                   base::DoNothing());
   folder_row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
 

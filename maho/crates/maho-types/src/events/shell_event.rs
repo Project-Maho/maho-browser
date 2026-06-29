@@ -224,6 +224,10 @@ pub enum ShellEvent {
         is_pinned: bool,
         #[serde(default)]
         parent_folder_id: Option<FolderId>,
+        #[serde(default)]
+        provider_type: Option<String>,
+        #[serde(default)]
+        config_json: Option<String>,
     },
     RenameFolder {
         space_id: SpaceId,

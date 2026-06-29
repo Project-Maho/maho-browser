@@ -164,6 +164,7 @@ source_set("unit_tests") {
   testonly = true
   sources = [
     "maho_sidebar_dnd_dispatch_unittest.cc",
+    "maho_sidebar_favorites_pref_unittest.cc",
     "maho_sidebar_space_dot_view_unittest.cc",
     "maho_sidebar_update_notification_controller_unittest.cc",
     "maho_sidebar_update_notification_view_unittest.cc",

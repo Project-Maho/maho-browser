@@ -279,6 +279,38 @@ mod tests {
     }
 
     #[test]
+    fn toggle_folder_expanded_is_strict_to_supplied_space_id() {
+        let mut manager = SpaceManager::new();
+        let active_space_id = manager.get_active_space_id().clone();
+        let other_space = manager.create_space(
+            "Other",
+            SpaceColor { hue: 10.0, saturation: 0.5, brightness: 0.5, grain: 0.0 },
+            ProfileId::new(""),
+        );
+
+        let folder = manager
+            .create_folder(&active_space_id, "Research", false, None)
+            .unwrap();
+        assert!(folder.is_expanded);
+
+        let toggled = manager.toggle_folder_expanded(&other_space.id, &folder.id);
+        assert!(!toggled);
+        assert_eq!(manager.find_folder_expanded(&other_space.id, &folder.id), None);
+        assert_eq!(manager.find_folder_expanded(&active_space_id, &folder.id), Some(true));
+
+        let tree = manager.get_sidebar_tree(&active_space_id, |_| None);
+        let research = tree
+            .into_iter()
+            .find_map(|node| match node {
+                SidebarNode::Folder { id, is_expanded, .. } if id == folder.id => {
+                    Some(is_expanded)
+                }
+                _ => None,
+            });
+        assert_eq!(research, Some(true));
+    }
+
+    #[test]
     fn add_tab_to_folder_adds_tab() {
         let mut manager = SpaceManager::new();
         let space_id = manager.get_active_space_id().clone();
@@ -1426,6 +1458,18 @@ impl SpaceManager {
         is_pinned: bool,
         parent_folder_id: Option<FolderId>,
     ) -> Option<FolderViewModel> {
+        self.create_folder_with_provider(space_id, name, is_pinned, parent_folder_id, None, None)
+    }
+
+    pub fn create_folder_with_provider(
+        &mut self,
+        space_id: &SpaceId,
+        name: &str,
+        is_pinned: bool,
+        parent_folder_id: Option<FolderId>,
+        provider_type: Option<String>,
+        config_json: Option<String>,
+    ) -> Option<FolderViewModel> {
         if let Some(ref parent_id) = parent_folder_id {
             let parent_depth = self.get_max_depth_under_parent(space_id, Some(parent_id));
             if parent_depth + 1 > MAX_FOLDER_DEPTH {
@@ -1445,8 +1489,8 @@ impl SpaceManager {
             is_expanded: true,
             is_pinned,
             parent_folder_id: parent_folder_id.clone(),
-            provider_type: None,
-            config_json: None,
+            provider_type: provider_type.clone(),
+            config_json: config_json.clone(),
         };
         let vm = FolderViewModel {
             id: folder.id.clone(),
@@ -1456,8 +1500,8 @@ impl SpaceManager {
             is_pinned: folder.is_pinned,
             tab_ids: folder.tab_ids.clone(),
             parent_folder_id: folder.parent_folder_id.clone(),
-            provider_type: None,
-            config_json: None,
+            provider_type: provider_type,
+            config_json: config_json,
         };
         if parent_folder_id.is_none() {
             if !space.root_order.iter().any(|item| item == &RootItem::Folder(folder.id.clone())) {
@@ -1531,12 +1575,39 @@ impl SpaceManager {
         }
     }
 
-    pub fn toggle_folder_expanded(&mut self, space_id: &SpaceId, folder_id: &FolderId) {
+    pub fn toggle_folder_expanded(&mut self, space_id: &SpaceId, folder_id: &FolderId) -> bool {
         if let Some(space) = self.spaces.get_mut(space_id) {
+            let matching_count = space
+                .folders
+                .iter()
+                .filter(|f| f.id == *folder_id)
+                .count();
             if let Some(folder) = space.folders.iter_mut().find(|f| f.id == *folder_id) {
                 folder.is_expanded = !folder.is_expanded;
+                if folder.name == "Research" {
+                    eprintln!(
+                        "[folder-rust-debug] toggle space={} folder={} name=Research matching_count={} new_expanded={}",
+                        space_id,
+                        folder_id,
+                        matching_count,
+                        folder.is_expanded
+                    );
+                }
+                return true;
             }
         }
+        false
+    }
+
+    /// Find a folder by ID across all spaces. Returns its current `is_expanded`
+    /// value, or None if not found anywhere.
+    pub fn find_folder_expanded(&self, space_id: &SpaceId, folder_id: &FolderId) -> Option<bool> {
+        if let Some(space) = self.spaces.get(space_id) {
+            if let Some(folder) = space.folders.iter().find(|f| f.id == *folder_id) {
+                return Some(folder.is_expanded);
+            }
+        }
+        None
     }
 
 
@@ -1803,7 +1874,21 @@ impl SpaceManager {
             }
             RootItem::Folder(folder_id) => {
                 let space = self.get_space(space_id)?;
+                let matching_count = space
+                    .folders
+                    .iter()
+                    .filter(|f| f.id == *folder_id)
+                    .count();
                 let folder = space.folders.iter().find(|f| f.id == *folder_id)?;
+                if folder.name == "Research" {
+                    eprintln!(
+                        "[folder-rust-debug] tree space={} folder={} name=Research matching_count={} expanded={}",
+                        space_id,
+                        folder_id,
+                        matching_count,
+                        folder.is_expanded
+                    );
+                }
 
                 let mut children = Vec::new();
                 for child_tab_id in &folder.tab_ids {

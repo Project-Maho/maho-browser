@@ -94,7 +94,7 @@ constexpr int kSearchPillUtilitySlotSpacingDp = 2;
 constexpr int kSearchPillPrimarySecondarySpacingDp = 0;
 
 // Vertical breathing room inside the pill, above and below content.
-constexpr int kSearchPillInnerVerticalInsetDp = 5;
+constexpr int kSearchPillInnerVerticalInsetDp = 4;
 
 // Negative top-margin on the secondary label to pull its baseline closer
 // to the primary label, achieving tighter optical alignment.

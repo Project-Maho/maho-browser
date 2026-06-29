@@ -621,4 +621,162 @@ mod tests {
             panic!("Expected RequestLlmCompletion");
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Tab Tidy integration tests (T3.1)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_tidy_tabs_12_tabs_prompt_and_result() {
+        let mut manager = LLMManager::new();
+        let space_id = SpaceId::new("space-test");
+
+        // 12 tabs: github, news, docs, social mix
+        let tabs: Vec<(TabId, String, String)> = vec![
+            (TabId::new("t1"), "rust-lang/rust PR #1234".into(), "https://github.com/rust-lang/rust/pull/1234".into()),
+            (TabId::new("t2"), "tokio issues".into(), "https://github.com/tokio-rs/tokio/issues".into()),
+            (TabId::new("t3"), "serde docs".into(), "https://docs.rs/serde/latest".into()),
+            (TabId::new("t4"), "Hacker News".into(), "https://news.ycombinator.com".into()),
+            (TabId::new("t5"), "TechCrunch AI".into(), "https://techcrunch.com/ai".into()),
+            (TabId::new("t6"), "Rust Book".into(), "https://doc.rust-lang.org/book".into()),
+            (TabId::new("t7"), "Twitter".into(), "https://twitter.com/home".into()),
+            (TabId::new("t8"), "Reddit r/rust".into(), "https://reddit.com/r/rust".into()),
+            (TabId::new("t9"), "MDN Web Docs".into(), "https://developer.mozilla.org".into()),
+            (TabId::new("t10"), "AWS Console".into(), "https://console.aws.amazon.com".into()),
+            (TabId::new("t11"), "Figma Project".into(), "https://figma.com/file/xyz".into()),
+            (TabId::new("t12"), "YouTube".into(), "https://youtube.com".into()),
+        ];
+
+        let update = manager.request_tidy_tabs(&space_id, tabs);
+
+        // Verify the prompt contains all 12 tab titles and URLs
+        let (request_id, prompt) = match &update {
+            CoreUpdate::RequestLlmCompletion {
+                request_id, prompt, request_type, ..
+            } => {
+                assert!(matches!(request_type, LLMRequestType::TidyTabs));
+                (request_id.clone(), prompt.clone())
+            }
+            _ => panic!("Expected RequestLlmCompletion"),
+        };
+
+        // Check all tabs are in the prompt
+        let prompt_json: serde_json::Value = serde_json::from_str(&prompt).unwrap();
+        let tabs_arr = prompt_json["tabs"].as_array().unwrap();
+        assert_eq!(tabs_arr.len(), 12, "All 12 tabs must be in the prompt");
+        assert_eq!(tabs_arr[0]["title"], "rust-lang/rust PR #1234");
+        assert_eq!(tabs_arr[11]["url"], "https://youtube.com");
+        assert!(prompt_json["instruction"].as_str().unwrap().contains("Group these browser tabs"));
+
+        // Simulate LLM returning a folder grouping
+        let mock_result = serde_json::json!({
+            "folders": [
+                {"name": "Development", "tab_ids": ["t1", "t2", "t3", "t6"]},
+                {"name": "News & Social", "tab_ids": ["t4", "t5", "t7", "t8", "t12"]},
+                {"name": "Work Tools", "tab_ids": ["t9", "t10", "t11"]}
+            ]
+        });
+
+        let updates = manager.handle_result(&request_id, &mock_result.to_string());
+        assert_eq!(updates.len(), 1);
+
+        match &updates[0] {
+            CoreUpdate::TidyTabsReady { space_id: sid, folders } => {
+                assert_eq!(sid, &space_id);
+                assert_eq!(folders.len(), 3);
+                let dev = folders.iter().find(|f| f.name == "Development").unwrap();
+                assert_eq!(dev.tab_ids.len(), 4);
+                assert!(dev.tab_ids.contains(&TabId::new("t1")));
+                assert!(dev.tab_ids.contains(&TabId::new("t6")));
+            }
+            _ => panic!("Expected TidyTabsReady"),
+        }
+
+        // Verify pending_tidy_tabs is set
+        let pending = manager.take_pending_tidy_tabs();
+        assert!(pending.is_some());
+        let (ps, pf) = pending.unwrap();
+        assert_eq!(ps, space_id);
+        assert_eq!(pf.len(), 3);
+    }
+
+    #[test]
+    fn test_tidy_tabs_empty_list_returns_empty() {
+        let mut manager = LLMManager::new();
+        let space_id = SpaceId::new("space-empty");
+
+        // Empty tab list
+        let tabs: Vec<(TabId, String, String)> = vec![];
+        let update = manager.request_tidy_tabs(&space_id, tabs);
+
+        let (request_id, prompt) = match &update {
+            CoreUpdate::RequestLlmCompletion { request_id, prompt, .. } => {
+                (request_id.clone(), prompt.clone())
+            }
+            _ => panic!("Expected RequestLlmCompletion"),
+        };
+
+        // Prompt should have empty tabs array
+        let prompt_json: serde_json::Value = serde_json::from_str(&prompt).unwrap();
+        let tabs_arr = prompt_json["tabs"].as_array().unwrap();
+        assert_eq!(tabs_arr.len(), 0);
+
+        // Simulate LLM returning empty folders (realistic for empty input)
+        let empty_result = r#"{"folders": []}"#;
+        let updates = manager.handle_result(&request_id, empty_result);
+        // parse_tidy_tabs_result returns None for empty folders → no updates
+        assert!(updates.is_empty(), "Empty folder list should produce no updates");
+        assert!(manager.take_pending_tidy_tabs().is_none());
+    }
+
+    #[test]
+    fn test_tidy_tabs_malformed_json_no_panic() {
+        let mut manager = LLMManager::new();
+        let space_id = SpaceId::new("space-bad");
+        let tabs = vec![
+            (TabId::new("t1"), "Tab One".into(), "https://example.com".into()),
+        ];
+
+        let update = manager.request_tidy_tabs(&space_id, tabs);
+        let request_id = match &update {
+            CoreUpdate::RequestLlmCompletion { request_id, .. } => request_id.clone(),
+            _ => panic!("Expected RequestLlmCompletion"),
+        };
+
+        // Test various malformed responses
+        let malformed_cases = [
+            "not json at all",
+            "{\"folders\": \"not an array\"}",
+            "{\"wrong_key\": []}",
+            "",
+            "null",
+            "{\"folders\": [{\"name\": 123, \"tab_ids\": []}]}",  // name not string
+        ];
+
+        for (i, bad_json) in malformed_cases.iter().enumerate() {
+            if i > 0 {
+                // Re-issue a request for subsequent iterations since the first one was consumed
+                let tabs2 = vec![
+                    (TabId::new("t1"), "Tab One".into(), "https://example.com".into()),
+                ];
+                let u = manager.request_tidy_tabs(&space_id, tabs2);
+                let rid = match &u {
+                    CoreUpdate::RequestLlmCompletion { request_id, .. } => request_id.clone(),
+                    _ => panic!("Expected RequestLlmCompletion"),
+                };
+                let updates = manager.handle_result(&rid, bad_json);
+                assert!(
+                    updates.is_empty(),
+                    "Malformed JSON case {i} ({bad_json:?}) should return empty updates"
+                );
+            } else {
+                let updates = manager.handle_result(&request_id, bad_json);
+                assert!(
+                    updates.is_empty(),
+                    "Malformed JSON case {i} ({bad_json:?}) should return empty updates"
+                );
+            }
+            assert!(manager.take_pending_tidy_tabs().is_none());
+        }
+    }
 }

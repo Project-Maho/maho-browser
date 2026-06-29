@@ -366,7 +366,7 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
   } else if (action_id == "little_arc") {
     MahoLittleArcWindow::Open(browser, GURL());
   } else if (action_id == "next_space" || action_id == "prev_space") {
-    MahoCore* core = maho::GetCore();
+    auto* core = maho::GetCore();
     auto* bridge = MahoSpaceProfileBridge::GetInstance();
     if (core && bridge) {
       char* spaces_json = maho_core_get_space_view_models(core);
@@ -408,7 +408,7 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
       space_num = action_id[13] - '0';
     }
     if (space_num >= 1 && space_num <= 9) {
-      MahoCore* core = maho::GetCore();
+      auto* core = maho::GetCore();
       auto* bridge = MahoSpaceProfileBridge::GetInstance();
       if (core && bridge) {
         char* spaces_json = maho_core_get_space_view_models(core);
@@ -501,7 +501,7 @@ void OpenCommandSuggestion(Browser* browser,
     if (suggestion.title.empty())
       return;
 
-    MahoCore* core = maho::GetCore();
+    auto* core = maho::GetCore();
     if (!core)
       return;
 

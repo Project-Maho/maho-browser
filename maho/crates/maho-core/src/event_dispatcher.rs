@@ -93,6 +93,15 @@ pub trait SpaceManagerInterface {
         is_pinned: bool,
         parent_folder_id: Option<FolderId>,
     ) -> Option<maho_types::traits::shell_renderer::FolderViewModel>;
+    fn create_folder_with_provider(
+        &mut self,
+        space_id: &SpaceId,
+        name: &str,
+        is_pinned: bool,
+        parent_folder_id: Option<FolderId>,
+        provider_type: Option<String>,
+        config_json: Option<String>,
+    ) -> Option<maho_types::traits::shell_renderer::FolderViewModel>;
     fn rename_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId, name: &str);
     fn delete_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId);
     fn add_tab_to_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId, tab_id: TabId);
@@ -104,7 +113,8 @@ pub trait SpaceManagerInterface {
         to: usize,
     );
     fn remove_tab_from_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId, tab_id: &TabId);
-    fn toggle_folder_expanded(&mut self, space_id: &SpaceId, folder_id: &FolderId);
+    fn toggle_folder_expanded(&mut self, space_id: &SpaceId, folder_id: &FolderId) -> bool;
+    fn find_folder_expanded(&self, space_id: &SpaceId, folder_id: &FolderId) -> Option<bool>;
     fn move_folder(&mut self, folder_id: &FolderId, new_parent: Option<FolderId>) -> Result<(), FolderError>;
     fn move_folder_in_space(
         &mut self,
@@ -702,8 +712,12 @@ impl EventDispatcher {
                 name,
                 is_pinned,
                 parent_folder_id,
+                provider_type,
+                config_json,
             } => {
-                if let Some(folder) = space_mgr.create_folder(&space_id, &name, is_pinned, parent_folder_id) {
+                if let Some(folder) = space_mgr.create_folder_with_provider(
+                    &space_id, &name, is_pinned, parent_folder_id, provider_type, config_json,
+                ) {
                     vec![CoreUpdate::FolderCreated { folder }]
                 } else {
                     vec![]
@@ -790,12 +804,13 @@ impl EventDispatcher {
                 space_id,
                 folder_id,
             } => {
-                space_mgr.toggle_folder_expanded(&space_id, &folder_id);
+                let toggled = space_mgr.toggle_folder_expanded(&space_id, &folder_id);
+                let after = space_mgr.find_folder_expanded(&space_id, &folder_id);
                 vec![CoreUpdate::FolderUpdated {
                     folder_id,
                     changes: FolderUpdate {
                         name: None,
-                        is_expanded: None,
+                        is_expanded: if toggled { after } else { None },
                         is_pinned: None,
                     },
                 }]

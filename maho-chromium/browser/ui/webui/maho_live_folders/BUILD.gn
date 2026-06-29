@@ -9,6 +9,10 @@ mojom("mojo_bindings") {
 
 source_set("maho_live_folders") {
   sources = [
+    "maho_live_folder_cache_warmer.cc",
+    "maho_live_folder_cache_warmer.h",
+    "maho_live_folder_item_cache.cc",
+    "maho_live_folder_item_cache.h",
     "maho_live_folders_page_handler.cc",
     "maho_live_folders_page_handler.h",
     "maho_live_folders_ui.cc",

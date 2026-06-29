@@ -58,6 +58,7 @@
 #include "net/base/url_util.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/compositor/layer_tree_owner.h"
+#include "maho/browser/ui/webui/maho_live_folders/maho_live_folder_cache_warmer.h"
 #include "maho/components/constants/webui_url_constants.h"
 
 namespace maho {
@@ -99,6 +100,10 @@ MahoSidebarView::MahoSidebarView(Browser* browser)
   }
   RefreshTranslateObservation();
   ScheduleRefreshAll();
+
+  // Warm the live folder item cache so expanded live folders show children
+  // inline immediately, without requiring the user to open the WebUI first.
+  LiveFolderCacheWarmer::WarmCache(browser_->profile());
 }
 
 MahoSidebarView::~MahoSidebarView() {
@@ -779,6 +784,13 @@ void MahoSidebarView::OnTabStripModelChanged(
 void MahoSidebarView::OnTabChangedAt(tabs::TabInterface* tab,
                                      int index,
                                      TabChangeType change_type) {
+  // P3: Skip ScheduleRefreshAll for non-active tab changes; only the active
+  // tab's title/favicon update needs immediate sidebar reflection. With 870+
+  // tabs, background loads fire OnTabChangedAt hundreds of times per second.
+  TabStripModel* strip = browser_ ? browser_->tab_strip_model() : nullptr;
+  if (strip && index != strip->active_index()) {
+    return;
+  }
   ScheduleRefreshAll();
 }
 

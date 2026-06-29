@@ -7,6 +7,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "base/functional/callback.h"
@@ -150,6 +151,9 @@ class MahoSidebarTabListView : public views::View,
 
  private:
   void RebuildRows(const MahoSidebarTabListModel& model, Browser* browser);
+  static std::string ComputeModelFingerprint(
+      const MahoSidebarTabListModel& model);
+  void FlushDeferredRebuild();
   void RevealEmptyPinnedDropLane();
   void HideEmptyPinnedDropLane();
   void UpdatePinnedDropLaneVisibility(bool visible);
@@ -172,6 +176,7 @@ class MahoSidebarTabListView : public views::View,
   int ResolveTabStripIndexForTabId(const std::string& tab_id) const;
   void OpenNewTab(const ui::Event& event);
   void ToggleFolderExpanded(const std::string& folder_id);
+  void IncrementalToggleFolder(const std::string& folder_id, bool expand);
   void CommitTabTitleChange(const std::string& tab_id,
                             const std::u16string& new_title);
   void CommitFolderNameChange(const std::string& folder_id,
@@ -209,6 +214,20 @@ class MahoSidebarTabListView : public views::View,
 
   base::CancelableTaskTracker favicon_task_tracker_;
 
+  bool rebuild_deferred_ = false;
+  MahoSidebarTabListModel deferred_model_;
+  raw_ptr<Browser> deferred_browser_ = nullptr;
+
+  bool suppress_state_push_rebuild_ = false;
+
+  std::string last_model_fingerprint_;
+
+  std::map<std::string, raw_ptr<SidebarFolderRowView>> folder_rows_by_id_;
+
+  // P3: O(1) tab_id→strip index lookup eliminates O(870) linear scan per
+  // hover event (~870 calls/hover cycle). Rebuilt on Update() success.
+  std::unordered_map<std::string, int> tab_id_to_index_;
+
   base::WeakPtrFactory<MahoSidebarTabListView> weak_factory_{this};
 };
 
@@ -240,6 +259,8 @@ class SidebarTabRowView : public views::View,
   ~SidebarTabRowView() override;
 
   void OnThemeChanged() override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   bool OnMousePressed(const ui::MouseEvent& event) override;
   void OnMouseReleased(const ui::MouseEvent& event) override;
   void OnMouseEntered(const ui::MouseEvent& event) override;
@@ -315,6 +336,7 @@ class SidebarTabRowView : public views::View,
 
   void SetFavicon(ui::ImageModel image);
   const std::string& tab_id() const { return tab_id_; }
+  const std::string& containing_folder_id() const { return source_parent_folder_id_; }
 
  private:
   void ActivateTabFromEvent(const ui::Event& event);
@@ -357,6 +379,18 @@ class SidebarTabRowView : public views::View,
   bool activate_pending_ = false;
   bool activation_handled_for_current_press_ = false;
   bool is_suspended_ = false;
+
+  // P3: Skip redundant SetBackground/SetBorder when visual state is unchanged.
+  // UpdateAppearance() called ~870×/hover cycle; early-exit saves allocation.
+  enum class AppearanceVisualState {
+    kIdle, kHovered, kActive, kDropTarget
+  };
+  AppearanceVisualState last_visual_state_ = AppearanceVisualState::kIdle;
+
+  // P3: Skip redundant close-button icon swap (VectorIcon re-render) when the
+  // minus/X state hasn't toggled. Called ~870×/hover cycle.
+  bool last_close_button_show_minus_ = false;
+  ui::ColorId last_title_color_id_ = ui::ColorId{};
 };
 
 class SidebarFolderRowView : public views::View,
@@ -370,7 +404,7 @@ class SidebarFolderRowView : public views::View,
                        MahoSidebarTabSection section,
                        std::string active_space_id,
                        Browser* browser,
-                       views::Button::PressedCallback toggle_callback,
+                       base::RepeatingClosure toggle_callback,
                        base::RepeatingCallback<void(const std::string&,
                                                     const std::u16string&)>
                            rename_callback,
@@ -383,6 +417,8 @@ class SidebarFolderRowView : public views::View,
   void OnThemeChanged() override;
   void OnMouseEntered(const ui::MouseEvent& event) override;
   void OnMouseExited(const ui::MouseEvent& event) override;
+  bool OnMousePressed(const ui::MouseEvent& event) override;
+  void OnMouseReleased(const ui::MouseEvent& event) override;
 
   void ShowContextMenuForViewImpl(
       views::View* source,
@@ -438,6 +474,7 @@ class SidebarFolderRowView : public views::View,
 
   bool is_editing_for_testing() const { return is_editing_name_; }
   views::Textfield* name_field_for_testing() { return name_field_; }
+  views::LabelButton* label_button_for_testing() { return label_button_; }
 
   enum class SidebarFolderDropZone {
     kNone,
@@ -451,11 +488,17 @@ class SidebarFolderRowView : public views::View,
   }
 
   const std::string& folder_id_for_testing() const { return folder_id_; }
+  const std::string& folder_id() const { return folder_id_; }
+  const std::string& parent_folder_id() const { return parent_folder_id_; }
+  MahoSidebarTabSection section() const { return section_; }
+  void SetExpanded(bool expanded);
 
  private:
   SidebarFolderDropZone ResolveDropZone(const ui::DropTargetEvent& event,
                                          const SidebarDragPayload& payload) const;
   void EndFolderEditing(bool commit);
+  void ToggleFromLabelButton(const ui::Event& event);
+  void RunToggleDeferred();
   void UpdateAppearance();
 
   const std::string folder_id_;
@@ -463,7 +506,8 @@ class SidebarFolderRowView : public views::View,
   const bool folder_is_pinned_;
   const std::string next_sibling_folder_id_;
   const std::string parent_folder_id_;
-  const bool is_expanded_;
+  bool is_expanded_;
+  MahoSidebarTabSection section_;
   raw_ptr<Browser> browser_ = nullptr;
   base::RepeatingCallback<void(const std::string&, const std::u16string&)>
       rename_callback_;
@@ -474,9 +518,12 @@ class SidebarFolderRowView : public views::View,
   base::RepeatingClosure hide_popup_callback_;
   base::RepeatingClosure spring_expand_callback_;
   base::OneShotTimer spring_load_timer_;
+  base::RepeatingClosure toggle_callback_;
+  bool toggle_pending_ = false;
+  bool toggle_handled_for_current_press_ = false;
   std::u16string committed_name_;
   bool is_editing_name_ = false;
-  raw_ptr<views::ImageView> chevron_ = nullptr;
+  raw_ptr<views::View> folder_glyph_container_ = nullptr;
   raw_ptr<views::ImageView> folder_icon_ = nullptr;
   raw_ptr<views::LabelButton> label_button_ = nullptr;
   raw_ptr<views::Textfield> name_field_ = nullptr;

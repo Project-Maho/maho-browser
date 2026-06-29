@@ -55,7 +55,7 @@ class MahoInlineEditHandler
 
   static std::string HandleEventOnBackground(const std::string& event_json);
   void OnRustEventResponse(RequestEditCallback callback,
-                           const std::string& rust_response_json);
+                           std::string rust_response_json);
   void StartLlmRequest(base::ListValue prompt_messages,
                        RequestEditCallback callback);
   void FinalizeStreaming(MahoAiLlmClient::CompletionResult result);

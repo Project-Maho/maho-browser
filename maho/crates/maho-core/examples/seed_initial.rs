@@ -100,6 +100,8 @@ fn main() {
             name: name.to_string(),
             is_pinned: true,
             parent_folder_id: None,
+            provider_type: None,
+            config_json: None,
         });
     }
     println!("Pinned folders created: 3");
@@ -110,6 +112,8 @@ fn main() {
             name: name.to_string(),
             is_pinned: false,
             parent_folder_id: None,
+            provider_type: None,
+            config_json: None,
         });
     }
     println!("Normal folders created: 3");

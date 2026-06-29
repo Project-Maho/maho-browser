@@ -59,6 +59,7 @@
 #include "ui/base/models/image_model.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_tree_owner.h"
+#include "ui/display/screen.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/base/dragdrop/drop_target_event.h"
 #include "ui/gfx/geometry/point.h"
@@ -103,15 +104,15 @@ namespace {
 using namespace maho;  // NOLINT(build/namespaces)
 
 constexpr int kRowSpacingDp = 0;
-constexpr int kRowHeightDp = 32;
+constexpr int kRowHeightDp = 33;
 constexpr int kRowCornerRadiusDp = 6;
 constexpr int kRowIconSizeDp = 16;
 constexpr int kCloseButtonSizeDp = 24;
 constexpr int kCloseIconSizeDp = 14;
-constexpr int kRowIconTextSpacingDp = 6;
+constexpr int kRowIconTextSpacingDp = 10;
 constexpr int kRowTrailingSpacingDp = 0;
 constexpr int kSectionSpacingDp = 4;
-constexpr int kFolderIndentDp = 13;
+constexpr int kFolderIndentDp = 15;
 constexpr int kFolderRowHeightDp = 33;
 constexpr int kSectionSeparatorHeightDp = 6;
 constexpr int kSectionSeparatorLineHeightDp = 1;
@@ -119,8 +120,8 @@ constexpr int kFolderGlyphSizeDp = 13;
 constexpr int kAutoScrollEdgeDp = 24;
 constexpr int kAutoScrollStepDp = 4;
 constexpr int kAutoScrollHz = 30;
-constexpr int kFolderGlyphContainerSizeDp = 16;
-constexpr int kChevronSizeDp = 12;
+constexpr int kFolderGlyphContainerSizeDp = 18;
+constexpr int kFolderRowLeadingInsetDp = 8;
 constexpr int kDragStartThresholdDp = 5;
 constexpr int kDropIndicatorThicknessDp = 2;
 constexpr int kDropIndicatorOutlineThicknessDp = 1;
@@ -552,6 +553,7 @@ class SidebarInsertionLaneView : public views::View {
   const std::string& target_id_for_testing() const { return target_id_; }
   SidebarNodeKind target_kind_for_testing() const { return target_kind_; }
   bool append_for_testing() const { return append_; }
+  const std::string& target_parent_folder_id() const { return target_parent_folder_id_; }
 
   bool GetDropFormats(int* formats,
                       std::set<ui::ClipboardFormatType>* format_types) override {
@@ -758,7 +760,7 @@ class SidebarInlineRow : public views::LabelButton {
     label()->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   label()->SetMultiLine(false);
   label()->SetElideBehavior(gfx::ELIDE_TAIL);
-  label()->SetTextStyle(views::style::STYLE_BODY_4);
+  label()->SetTextStyle(views::style::STYLE_BODY_3);
   label()->SetAutoColorReadabilityEnabled(false);
   SetTextSubpixelRenderingEnabled(false);
   UpdateAppearance();
@@ -791,7 +793,7 @@ class SidebarInlineRow : public views::LabelButton {
               1, kRowCornerRadiusDp, ui::kColorSysSurfaceVariant),
           kInlineRowInsets));
       SetEnabledTextColors(ui::kColorSysOnSurface);
-      label()->SetTextStyle(views::style::STYLE_BODY_4_MEDIUM);
+      label()->SetTextStyle(views::style::STYLE_BODY_3_MEDIUM);
       return;
     }
 
@@ -801,8 +803,8 @@ class SidebarInlineRow : public views::LabelButton {
     SetBorder(views::CreateEmptyBorder(kInlineRowInsets));
     SetEnabledTextColors(subtle_ ? ui::kColorSysOnSurfaceSubtle
                                  : ui::kColorSysOnSurface);
-    label()->SetTextStyle(subtle_ ? views::style::STYLE_BODY_4
-                                  : views::style::STYLE_BODY_4_MEDIUM);
+    label()->SetTextStyle(subtle_ ? views::style::STYLE_BODY_3
+                                  : views::style::STYLE_BODY_3_MEDIUM);
   }
 
   const bool active_;
@@ -1150,7 +1152,6 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
       preview_show_callback_(std::move(preview_show_callback)),
       preview_hide_callback_(std::move(preview_hide_callback)),
       activate_callback_(std::move(activate_callback)) {
-  SetNotifyEnterExitOnChild(true);
   const int indent = node.depth * kFolderIndentDp;
   auto row_insets = gfx::Insets::TLBR(0, 9 + indent, 0, 7);
 
@@ -1189,6 +1190,7 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
   title_button_->SetTextColor(views::Button::STATE_DISABLED,
                               ui::kColorSysOnSurfaceSubtle);
   title_button_->SetTextSubpixelRenderingEnabled(false);
+  title_button_->SetLabelStyle(views::style::STYLE_BODY_3);
   layout->SetFlexForView(title_button_, 1);
 
   auto title_field = std::make_unique<views::Textfield>();
@@ -1234,6 +1236,13 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
   close_button_->SetVisible(false);
   views::InstallCircleHighlightPathGenerator(close_button_);
 
+  close_button_->SetPaintToLayer();
+  close_button_->layer()->SetFillsBoundsOpaquely(false);
+  if (audio_indicator_view_) {
+    audio_indicator_view_->SetPaintToLayer();
+    audio_indicator_view_->layer()->SetFillsBoundsOpaquely(false);
+  }
+
   title_button_->set_context_menu_controller(this);
   title_button_->set_drag_controller(this);
 
@@ -1244,6 +1253,13 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
 }
 
 SidebarTabRowView::~SidebarTabRowView() = default;
+
+// P3: Constant preferred size avoids BoxLayout re-measuring 870+ rows during
+// layout invalidation triggered by hover state changes.
+gfx::Size SidebarTabRowView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  return gfx::Size(0, kRowHeightDp);
+}
 
 void SidebarTabRowView::SetFavicon(ui::ImageModel image) {
   if (!favicon_view_) {
@@ -1671,66 +1687,90 @@ bool SidebarTabRowView::CanStartDragForView(views::View* sender,
 void SidebarTabRowView::UpdateAppearance() {
   const bool hovered = IsMouseHovered();
   const bool show_close_button = hovered && !is_editing_title_;
+
+  // FIX 3: Determine intended visual state and skip SetBackground/SetBorder
+  // when unchanged. P3: Eliminates redundant background/border allocations;
+  // UpdateAppearance() invoked per-row on every hover enter/exit (~870×).
+  AppearanceVisualState current_state;
   if (drag_over_drop_target_) {
-    SetBackground(views::CreateRoundedRectBackground(ui::kColorSysSurface4,
-                                                     kRowCornerRadiusDp));
-    SetBorder(views::CreateRoundedRectBorder(
-        kDropIndicatorOutlineThicknessDp, kRowCornerRadiusDp,
-        ui::kColorSysPrimary));
+    current_state = AppearanceVisualState::kDropTarget;
   } else if (active_) {
-    SetBackground(views::CreateRoundedRectBackground(
-        hovered ? ui::kColorSysSurface3 : ui::kColorSysSurface1,
-        kRowCornerRadiusDp));
-    SetBorder(views::CreateRoundedRectBorder(
-        1, kRowCornerRadiusDp, ui::kColorSysSurfaceVariant));
+    current_state = AppearanceVisualState::kActive;
   } else if (hovered) {
-    SetBackground(views::CreateRoundedRectBackground(ui::kColorSysSurface2,
-                                                     kRowCornerRadiusDp));
-    SetBorder(nullptr);
+    current_state = AppearanceVisualState::kHovered;
   } else {
-    SetBackground(nullptr);
-    SetBorder(nullptr);
+    current_state = AppearanceVisualState::kIdle;
   }
 
-  title_button_->SetTextColor(views::Button::STATE_NORMAL,
-                              ui::kColorSysOnSurface);
-  title_button_->SetTextColor(views::Button::STATE_HOVERED,
-                              ui::kColorSysOnSurface);
-  title_button_->SetTextColor(views::Button::STATE_PRESSED,
-                              ui::kColorSysOnSurface);
+  if (current_state != last_visual_state_) {
+    last_visual_state_ = current_state;
+    switch (current_state) {
+      case AppearanceVisualState::kDropTarget:
+        SetBackground(views::CreateRoundedRectBackground(ui::kColorSysSurface4,
+                                                         kRowCornerRadiusDp));
+        SetBorder(views::CreateRoundedRectBorder(
+            kDropIndicatorOutlineThicknessDp, kRowCornerRadiusDp,
+            ui::kColorSysPrimary));
+        break;
+      case AppearanceVisualState::kActive:
+        SetBackground(views::CreateRoundedRectBackground(
+            hovered ? ui::kColorSysSurface3 : ui::kColorSysSurface1,
+            kRowCornerRadiusDp));
+        SetBorder(views::CreateRoundedRectBorder(
+            1, kRowCornerRadiusDp, ui::kColorSysSurfaceVariant));
+        break;
+      case AppearanceVisualState::kHovered:
+        SetBackground(views::CreateRoundedRectBackground(ui::kColorSysSurface2,
+                                                         kRowCornerRadiusDp));
+        SetBorder(nullptr);
+        break;
+      case AppearanceVisualState::kIdle:
+        SetBackground(nullptr);
+        SetBorder(nullptr);
+        break;
+    }
+  }
+
+  const ui::ColorId desired_title_color = ui::kColorSysOnSurface;
+  if (desired_title_color != last_title_color_id_) {
+    last_title_color_id_ = desired_title_color;
+    title_button_->SetTextColor(views::Button::STATE_NORMAL, desired_title_color);
+    title_button_->SetTextColor(views::Button::STATE_HOVERED, desired_title_color);
+    title_button_->SetTextColor(views::Button::STATE_PRESSED, desired_title_color);
+  }
   if (favicon_view_ && favicon_view_->layer()) {
     favicon_view_->DestroyLayer();
   }
-  // Pinned + active (loaded WebContents) shows minus = unload affordance.
-  // Pinned + suspended OR normal tab shows X = full close affordance.
   const bool show_minus =
       (section_ == MahoSidebarTabSection::kPinned) && !is_suspended_;
-  const gfx::VectorIcon& close_icon =
-      show_minus ? maho_lucide_icons::kMinusIcon
-                 : maho_lucide_icons::kXIcon;
-  views::SetImageFromVectorIconWithColor(
-      close_button_, close_icon, kCloseIconSizeDp,
-      views::IconColors(ui::kColorSysOnSurfaceSubtle, ui::kColorSysOnSurface,
-                        ui::kColorSysOnSurface));
-  const std::u16string close_tooltip =
-      show_minus ? u"Unload tab" : u"Close tab";
-  close_button_->SetTooltipText(close_tooltip);
-  close_button_->SetAccessibleName(close_tooltip);
+  // FIX 2: Skip vector icon re-render when close button icon state unchanged.
+  if (show_minus != last_close_button_show_minus_) {
+    last_close_button_show_minus_ = show_minus;
+    const gfx::VectorIcon& close_icon =
+        show_minus ? maho_lucide_icons::kMinusIcon
+                   : maho_lucide_icons::kXIcon;
+    views::SetImageFromVectorIconWithColor(
+        close_button_, close_icon, kCloseIconSizeDp,
+        views::IconColors(ui::kColorSysOnSurfaceSubtle, ui::kColorSysOnSurface,
+                          ui::kColorSysOnSurface));
+    const std::u16string close_tooltip =
+        show_minus ? u"Unload tab" : u"Close tab";
+    close_button_->SetTooltipText(close_tooltip);
+    close_button_->SetAccessibleName(close_tooltip);
+  }
   if (title_field_) {
     title_field_->SetVisible(is_editing_title_);
   }
   title_button_->SetVisible(!is_editing_title_);
-  const bool close_was_visible = close_button_->GetVisible();
-  close_button_->SetVisible(show_close_button);
+  // P3: Use opacity instead of SetVisible to avoid propagating
+  // InvalidateLayout up to BrowserView, which would trigger a full BoxLayout
+  // re-measure pass across all ~1740 sidebar children on every hover enter/exit.
+  const float close_opacity = show_close_button ? 1.0f : 0.0f;
+  close_button_->layer()->SetOpacity(close_opacity);
+  close_button_->SetCanProcessEventsWithinSubtree(show_close_button);
   if (audio_indicator_view_) {
-    audio_indicator_view_->SetVisible(!show_close_button);
-  }
-  // If the close button's visibility just changed, the BoxLayout bounds for
-  // it (and the audio indicator) are stale until the next layout pass.
-  // Force an immediate relayout so hit-testing on the revealed close button
-  // works correctly on the very first click after hover reveals it.
-  if (close_was_visible != show_close_button) {
-    DeprecatedLayoutImmediately();
+    audio_indicator_view_->layer()->SetOpacity(1.0f - close_opacity);
+    audio_indicator_view_->SetCanProcessEventsWithinSubtree(!show_close_button);
   }
 }
 
@@ -1761,10 +1801,7 @@ SidebarTabRowView::SidebarTabDropZone SidebarTabRowView::ResolveDropZone(
   }
 
   if (payload.node_kind == SidebarNodeKind::kTab) {
-    if (y >= third && y < row_height - third &&
-        (resolve_tab_index_ ? resolve_tab_index_.Run(tab_id_) : tab_index_) >= 0) {
-      return SidebarTabDropZone::kSplit;
-    }
+    return SidebarTabDropZone::kSplit;
   }
 
   return SidebarTabDropZone::kNone;
@@ -1774,10 +1811,10 @@ SidebarTabRowView::SidebarTabDropZone SidebarTabRowView::ResolveDropZone(
 
 SidebarFolderRowView::SidebarFolderRowView(
     const SidebarTreeNode& node,
-    MahoSidebarTabSection /*section*/,
+    MahoSidebarTabSection section,
     std::string active_space_id,
     Browser* browser,
-    views::Button::PressedCallback toggle_callback,
+    base::RepeatingClosure toggle_callback,
     base::RepeatingCallback<void(const std::string&, const std::u16string&)>
         rename_callback,
     std::string next_sibling_folder_id,
@@ -1788,12 +1825,14 @@ SidebarFolderRowView::SidebarFolderRowView(
       next_sibling_folder_id_(std::move(next_sibling_folder_id)),
       parent_folder_id_(std::move(parent_folder_id)),
       is_expanded_(node.is_expanded),
+      section_(section),
       browser_(browser),
       rename_callback_(std::move(rename_callback)),
       committed_name_(node.folder_name.empty() ? u"Folder" : node.folder_name) {
-  SetNotifyEnterExitOnChild(true);
+  toggle_callback_ = toggle_callback;
   const int indent = node.depth * kFolderIndentDp;
-  auto row_insets = gfx::Insets::TLBR(0, 9 + indent, 0, 7);
+  auto row_insets = gfx::Insets::TLBR(0, kFolderRowLeadingInsetDp + indent,
+                                      0, 7);
 
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kHorizontal, row_insets,
@@ -1801,27 +1840,26 @@ SidebarFolderRowView::SidebarFolderRowView(
   layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
 
-  chevron_ = AddChildView(std::make_unique<views::ImageView>());
-  chevron_->SetImageSize(gfx::Size(kChevronSizeDp, kChevronSizeDp));
-
-  auto* folder_glyph_container = AddChildView(std::make_unique<views::View>());
-  folder_glyph_container->SetPreferredSize(
+  folder_glyph_container_ = AddChildView(std::make_unique<views::View>());
+  folder_glyph_container_->SetPreferredSize(
       gfx::Size(kFolderGlyphContainerSizeDp, kFolderGlyphContainerSizeDp));
-  auto* folder_glyph_layout = folder_glyph_container->SetLayoutManager(
+  auto* folder_glyph_layout = folder_glyph_container_->SetLayoutManager(
       std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal,
                                          gfx::Insets(), 0));
   folder_glyph_layout->set_main_axis_alignment(
       views::BoxLayout::MainAxisAlignment::kCenter);
   folder_glyph_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
-  folder_icon_ = folder_glyph_container->AddChildView(
+  folder_icon_ = folder_glyph_container_->AddChildView(
       std::make_unique<views::ImageView>());
   folder_icon_->SetImageSize(gfx::Size(kFolderGlyphSizeDp, kFolderGlyphSizeDp));
 
   label_button_ = static_cast<views::LabelButton*>(AddChildView(
       std::unique_ptr<views::View>(
           std::make_unique<SidebarDropForwardingLabelButton>(
-              std::move(toggle_callback), committed_name_, this)
+              base::BindRepeating(&SidebarFolderRowView::ToggleFromLabelButton,
+                                  base::Unretained(this)),
+              committed_name_, this)
               .release())));
   label_button_->SetBorder(nullptr);
   label_button_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
@@ -1837,6 +1875,7 @@ SidebarFolderRowView::SidebarFolderRowView(
   label_button_->SetTextColor(views::Button::STATE_PRESSED,
                               ui::kColorSysOnSurface);
   label_button_->SetTextSubpixelRenderingEnabled(false);
+  label_button_->SetLabelStyle(views::style::STYLE_BODY_3_MEDIUM);
   layout->SetFlexForView(label_button_, 1);
 
   auto name_field = std::make_unique<views::Textfield>();
@@ -1948,9 +1987,6 @@ void SidebarFolderRowView::OnThemeChanged() {
 void SidebarFolderRowView::OnMouseEntered(const ui::MouseEvent& event) {
   views::View::OnMouseEntered(event);
   UpdateAppearance();
-  if (show_popup_callback_ && !children_snapshot_.empty()) {
-    show_popup_callback_.Run();
-  }
 }
 
 void SidebarFolderRowView::OnMouseExited(const ui::MouseEvent& event) {
@@ -1959,6 +1995,59 @@ void SidebarFolderRowView::OnMouseExited(const ui::MouseEvent& event) {
   if (hide_popup_callback_) {
     hide_popup_callback_.Run();
   }
+}
+
+bool SidebarFolderRowView::OnMousePressed(const ui::MouseEvent& event) {
+  toggle_pending_ = event.IsOnlyLeftMouseButton() && !is_editing_name_;
+  toggle_handled_for_current_press_ = false;
+  return views::View::OnMousePressed(event);
+}
+
+void SidebarFolderRowView::OnMouseReleased(const ui::MouseEvent& event) {
+  const bool should_toggle = toggle_pending_;
+  toggle_pending_ = false;
+  views::View::OnMouseReleased(event);
+  if (!should_toggle || toggle_handled_for_current_press_) {
+    return;
+  }
+  if (!(event.changed_button_flags() & ui::EF_LEFT_MOUSE_BUTTON)) {
+    return;
+  }
+  if (!HitTestPoint(event.location())) {
+    return;
+  }
+  RunToggleDeferred();
+}
+
+void SidebarFolderRowView::ToggleFromLabelButton(const ui::Event& event) {
+  if (is_editing_name_ || toggle_handled_for_current_press_) {
+    return;
+  }
+  toggle_handled_for_current_press_ = true;
+  RunToggleDeferred();
+}
+
+void SidebarFolderRowView::RunToggleDeferred() {
+  // The toggle callback rebuilds the sidebar (RebuildRows), which destroys
+  // this view and its child label button. Running it synchronously inside
+  // a mouse event handler leaves the views::Widget mouse-capture state
+  // referencing a freed view, which manifests as a UI freeze on subsequent
+  // clicks. Defer the toggle to the next message-loop iteration so the
+  // current event finishes unwinding and the widget releases capture before
+  // we tear the row down.
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](base::WeakPtr<SidebarFolderRowView> weak_self) {
+            if (!weak_self) {
+              return;
+            }
+            weak_self->toggle_handled_for_current_press_ = false;
+            if (weak_self->toggle_callback_) {
+              weak_self->toggle_callback_.Run();
+            }
+          },
+          weak_factory_.GetWeakPtr()));
 }
 
 bool SidebarFolderRowView::GetDropFormats(
@@ -2185,19 +2274,23 @@ bool SidebarFolderRowView::CanStartDragForView(views::View* sender,
   return (press_pt - current_pt).Length() >= kDragStartThresholdDp;
 }
 
+void SidebarFolderRowView::SetExpanded(bool expanded) {
+  is_expanded_ = expanded;
+  UpdateAppearance();
+}
+
 void SidebarFolderRowView::UpdateAppearance() {
-  const bool hovered = IsMouseHovered();
   const bool show_drop_target = drag_over_drop_target_;
-  if (chevron_) {
-    chevron_->SetImage(ui::ImageModel::FromVectorIcon(
-        is_expanded_ ? vector_icons::kExpandMoreIcon
-                     : vector_icons::kSubmenuArrowChromeRefreshIcon,
-        show_drop_target ? ui::kColorSysPrimary : ui::kColorSysOnSurfaceSubtle,
-        kChevronSizeDp));
+  const bool expanded = is_expanded_;
+  if (folder_glyph_container_) {
+    folder_glyph_container_->SetBackground(nullptr);
+    folder_glyph_container_->SetBorder(nullptr);
   }
   if (folder_icon_) {
     folder_icon_->SetImage(ui::ImageModel::FromVectorIcon(
-        vector_icons::kFolderChromeRefreshIcon, ui::kColorSysPrimary,
+        expanded ? maho_lucide_icons::kFolderOpenIcon
+                 : maho_lucide_icons::kFolderIcon,
+        show_drop_target ? ui::kColorSysPrimary : ui::kColorSysOnSurface,
         kFolderGlyphSizeDp));
   }
   if (label_button_) {
@@ -2221,12 +2314,10 @@ void SidebarFolderRowView::UpdateAppearance() {
     SetBorder(views::CreateRoundedRectBorder(
         kDropIndicatorOutlineThicknessDp, kRowCornerRadiusDp,
         ui::kColorSysPrimary));
-    return;
+  } else {
+    SetBackground(nullptr);
+    SetBorder(nullptr);
   }
-  SetBackground(hovered ? views::CreateRoundedRectBackground(
-                              ui::kColorSysSurface2, kRowCornerRadiusDp)
-                        : nullptr);
-  SetBorder(nullptr);
 }
 
 SidebarFolderRowView::SidebarFolderDropZone SidebarFolderRowView::ResolveDropZone(
@@ -2571,7 +2662,97 @@ void MahoSidebarTabListView::Update(const MahoSidebarTabListModel& model,
     has_last_model_ = true;
   }
 
+  if (GetWidget() && GetWidget()->HasCapture()) {
+    rebuild_deferred_ = true;
+    deferred_model_ = model;
+    deferred_browser_ = browser;
+    return;
+  }
+
+  // Single-source-of-truth for folder toggle: when we are about to do our
+  // own optimistic local rebuild in ToggleFolderExpanded(), we suppress the
+  // first state-push rebuild that fires asynchronously from
+  // DispatchShellEvent → NotifyChanged → ScheduleRefreshAll → ThreadPool
+  // → RefreshAll → Update(). The flag is consumed (one-shot) here so that
+  // unrelated future updates (e.g. tab created elsewhere) still rebuild.
+  // Otherwise every folder click pays for two full RebuildRows() passes on
+  // the entire sidebar (the user has 870+ tabs — that is the freeze).
+  if (suppress_state_push_rebuild_) {
+    suppress_state_push_rebuild_ = false;
+    last_model_ = model;
+    has_last_model_ = true;
+    last_model_fingerprint_ = ComputeModelFingerprint(model);
+    return;
+  }
+
+  // Fingerprint-based dedupe of background state pushes. Without this, every
+  // tab strip or space-profile observer notification (which fires many times
+  // per second under normal use — tab loads, hover, focus changes, etc.)
+  // re-enters Update() with a structurally identical model and forces a full
+  // ~2s RebuildRows() pass on the 870+ row sidebar. The fingerprint covers
+  // every field that affects rendered row output (kind, ids, expansion,
+  // titles, loading state). If the fingerprint matches the last rendered
+  // pass, the view tree is already correct and the rebuild is wasted work.
+  std::string fingerprint = ComputeModelFingerprint(model);
+  if (!last_model_fingerprint_.empty() && fingerprint == last_model_fingerprint_) {
+    return;
+  }
+  last_model_fingerprint_ = std::move(fingerprint);
+
   RebuildRows(model, browser);
+
+  // Rebuild tab_id→strip_index cache after successful update.
+  tab_id_to_index_.clear();
+  TabStripModel* id_strip = browser_ ? browser_->tab_strip_model() : nullptr;
+  if (id_strip) {
+    tab_id_to_index_.reserve(id_strip->count());
+    for (int i = 0; i < id_strip->count(); ++i) {
+      auto* contents = id_strip->GetWebContentsAt(i);
+      if (!contents) continue;
+      auto* helper = MahoTabIdHelper::FromWebContents(contents);
+      if (helper && !helper->stable_tab_id().empty()) {
+        tab_id_to_index_[helper->stable_tab_id()] = i;
+      }
+    }
+  }
+}
+
+std::string MahoSidebarTabListView::ComputeModelFingerprint(
+    const MahoSidebarTabListModel& model) {
+  std::string out;
+  out.reserve(8192);
+  out.append(model.active_space_id);
+  out.push_back('|');
+  out.append(model.active_tab.tab_id);
+  out.push_back('|');
+  std::function<void(const std::vector<SidebarTreeNode>&)> walk;
+  walk = [&](const std::vector<SidebarTreeNode>& nodes) {
+    for (const auto& n : nodes) {
+      out.push_back(static_cast<char>('A' + static_cast<int>(n.kind)));
+      out.push_back(':');
+      out.append(n.kind == SidebarNodeKind::kFolder ? n.folder_id : n.tab_id);
+      out.push_back(':');
+      if (n.kind == SidebarNodeKind::kFolder) {
+        out.push_back(n.is_expanded ? 'E' : 'C');
+        out.push_back(':');
+        out.append(base::UTF16ToUTF8(n.folder_name));
+      } else {
+        out.append(base::UTF16ToUTF8(n.title));
+        out.push_back(':');
+        out.push_back(n.is_loading ? 'L' : '-');
+      }
+      out.push_back(';');
+      if (!n.children.empty()) {
+        out.push_back('[');
+        walk(n.children);
+        out.push_back(']');
+      }
+    }
+  };
+  walk(model.pinned_tree);
+  out.push_back('|');
+  walk(model.normal_tree);
+  return out;
 }
 
 bool MahoSidebarTabListView::GetDropFormats(
@@ -2701,8 +2882,9 @@ void MahoSidebarTabListView::UpdatePinnedDropLaneVisibility(bool visible) {
 }
 
 void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
-                                            Browser* browser) {
+                                             Browser* browser) {
   HandleTabRowHoverEnd();
+  folder_rows_by_id_.clear();
   // Tear down active context-menu state before destroying row views.
   // The menu runner, menu model, and delegate chain may still reference row
   // views, so preserve this order before RemoveAllChildViews() clears them.
@@ -2770,11 +2952,18 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
       current->DeprecatedLayoutImmediately();
     }
     if (GetWidget()->HasCapture()) {
-      // Active mouse-press in progress; synthesizing a mouse move would reset
-      // the pressed button's STATE_PRESSED and kill NotifyClick.
       return;
     }
-    GetWidget()->SynthesizeMouseMoveEvent();
+    // P3: Skip synthesizing a mouse move when the cursor is already inside the
+    // sidebar — doing so would re-trigger the hover cascade on every visible
+    // row that was just rebuilt, undoing the cost we avoided with the opacity fix.
+    const gfx::Point cursor_screen =
+        display::Screen::Get()->GetCursorScreenPoint();
+    const gfx::Rect widget_bounds_screen =
+        GetWidget()->GetWindowBoundsInScreen();
+    if (!widget_bounds_screen.Contains(cursor_screen)) {
+      GetWidget()->SynthesizeMouseMoveEvent();
+    }
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(
@@ -2782,13 +2971,29 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
               if (!weak_self) {
                 return;
               }
+              weak_self->FlushDeferredRebuild();
               views::Widget* widget = weak_self->GetWidget();
               if (widget && widget->IsVisible() && !widget->HasCapture()) {
-                widget->SynthesizeMouseMoveEvent();
+                const gfx::Point cursor =
+                    display::Screen::Get()->GetCursorScreenPoint();
+                const gfx::Rect bounds = widget->GetWindowBoundsInScreen();
+                if (!bounds.Contains(cursor)) {
+                  widget->SynthesizeMouseMoveEvent();
+                }
               }
             },
-            weak_factory_.GetWeakPtr()));
+             weak_factory_.GetWeakPtr()));
   }
+}
+
+void MahoSidebarTabListView::FlushDeferredRebuild() {
+  if (!rebuild_deferred_) {
+    return;
+  }
+  rebuild_deferred_ = false;
+  RebuildRows(deferred_model_, deferred_browser_);
+  deferred_model_ = {};
+  deferred_browser_ = nullptr;
 }
 
 void MahoSidebarTabListView::RebuildTreeSection(
@@ -2881,6 +3086,7 @@ void MahoSidebarTabListView::RebuildTreeNodes(
                               base::Unretained(this)));
 
       folder_row->children_snapshot_ = node.children;
+      folder_rows_by_id_[node.folder_id] = folder_row;
 
       folder_row->SetHoverPopupCallbacks(
           base::BindRepeating(&MahoSidebarFolderHoverController::ScheduleShow,
@@ -3058,7 +3264,7 @@ struct PersistedTabInfo {
 };
 
 std::optional<PersistedTabInfo> QueryTabFromCore(const std::string& tab_id) {
-  MahoCore* core = maho::GetCore();
+  auto* core = maho::GetCore();
   if (!core) {
     return std::nullopt;
   }
@@ -3188,12 +3394,18 @@ int MahoSidebarTabListView::ResolveTabStripIndexForTabId(
   if (tab_id.empty()) {
     return -1;
   }
+  // P3: O(1) cached lookup eliminates O(N) strip scan per hover event;
+  // N=870+ tabs, called multiple times per mouse enter/exit cycle.
+  auto it = tab_id_to_index_.find(tab_id);
+  if (it != tab_id_to_index_.end()) {
+    return it->second;
+  }
+  // Fallback: linear scan for stale-cache cases (tab inserted after last
+  // Update but before next rebuild).
   TabStripModel* strip = browser_ ? browser_->tab_strip_model() : nullptr;
   if (!strip) {
     return -1;
   }
-  // Single authoritative path: MahoTabIdHelper::stable_tab_id() is the sole
-  // identity source for mapping core tab IDs to live WebContents.
   for (int i = 0; i < strip->count(); ++i) {
     auto* contents = strip->GetWebContentsAt(i);
     if (!contents) {
@@ -3230,18 +3442,169 @@ void MahoSidebarTabListView::OpenNewTab(const ui::Event& event) {
 
 void MahoSidebarTabListView::ToggleFolderExpanded(
     const std::string& folder_id) {
+  if (folder_hover_controller_) {
+    folder_hover_controller_->HideImmediately();
+  }
+  // DispatchShellEvent triggers MahoSpaceProfileBridge::NotifyChanged,
+  // which schedules an asynchronous ThreadPool round-trip ending in our
+  // own Update() → RebuildRows(). For 870+ tabs that second pass takes
+  // ~1s and is wasted work because we are about to do an optimistic
+  // local rebuild below with the same effective state. Suppress that
+  // single upcoming state-push pass.
   if (!active_space_id_.empty() && !folder_id.empty()) {
+    suppress_state_push_rebuild_ = true;
     DispatchShellEvent("toggle_folder_expanded", {
         {"space_id", active_space_id_},
         {"folder_id", folder_id}});
   }
+
+  if (has_last_model_ && !folder_id.empty()) {
+    bool new_expanded_state = false;
+    auto toggle_in_tree = [&folder_id, &new_expanded_state](
+        const auto& self,
+        std::vector<SidebarTreeNode>& nodes) -> bool {
+      for (auto& node : nodes) {
+        if (node.kind == SidebarNodeKind::kFolder &&
+            node.folder_id == folder_id) {
+          node.is_expanded = !node.is_expanded;
+          new_expanded_state = node.is_expanded;
+          return true;
+        }
+        if (!node.children.empty() && self(self, node.children)) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    const bool found =
+        toggle_in_tree(toggle_in_tree, last_model_.pinned_tree) ||
+        toggle_in_tree(toggle_in_tree, last_model_.normal_tree);
+
+    if (found) {
+      rebuild_deferred_ = false;
+      deferred_model_ = {};
+      deferred_browser_ = nullptr;
+      IncrementalToggleFolder(folder_id, new_expanded_state);
+      return;
+    }
+  }
+
+  FlushDeferredRebuild();
+}
+
+void MahoSidebarTabListView::IncrementalToggleFolder(
+    const std::string& folder_id,
+    bool expand) {
+  auto it = folder_rows_by_id_.find(folder_id);
+  if (it == folder_rows_by_id_.end() || !it->second) {
+    RebuildRows(last_model_, browser_);
+    return;
+  }
+  auto* folder_row = it->second.get();
+  auto* parent_view = folder_row->parent();
+  if (!parent_view) {
+    RebuildRows(last_model_, browser_);
+    return;
+  }
+
+  auto folder_index_opt = parent_view->GetIndexOf(folder_row);
+  if (!folder_index_opt.has_value()) {
+    RebuildRows(last_model_, browser_);
+    return;
+  }
+  const size_t folder_index = *folder_index_opt;
+
+  folder_row->SetExpanded(expand);
+
+  if (!expand) {
+    std::set<std::string> descendant_ids;
+    descendant_ids.insert(folder_id);
+
+    std::vector<views::View*> to_remove;
+    const auto& children = parent_view->children();
+    for (size_t i = folder_index + 1; i < children.size(); ++i) {
+      views::View* child = children[i];
+      bool is_descendant = false;
+
+      if (auto* tab_row = views::AsViewClass<SidebarTabRowView>(child)) {
+        is_descendant = descendant_ids.count(tab_row->containing_folder_id());
+      } else if (auto* sub_folder =
+                     views::AsViewClass<SidebarFolderRowView>(child)) {
+        if (descendant_ids.count(sub_folder->parent_folder_id())) {
+          is_descendant = true;
+          descendant_ids.insert(sub_folder->folder_id());
+        }
+      } else if (auto* lane =
+                     views::AsViewClass<SidebarInsertionLaneView>(child)) {
+        is_descendant = descendant_ids.count(lane->target_parent_folder_id());
+      } else {
+        is_descendant = true;
+      }
+
+      if (!is_descendant) {
+        break;
+      }
+      to_remove.push_back(child);
+    }
+
+    for (auto* child : to_remove) {
+      if (auto* sub_folder = views::AsViewClass<SidebarFolderRowView>(child)) {
+        folder_rows_by_id_.erase(sub_folder->folder_id());
+      }
+      std::unique_ptr<views::View> owned =
+          parent_view->RemoveChildViewT(child);
+    }
+  } else {
+    const SidebarTreeNode* folder_node = nullptr;
+    auto find_node = [&folder_id](const auto& self,
+                                  const std::vector<SidebarTreeNode>& nodes)
+        -> const SidebarTreeNode* {
+      for (const auto& n : nodes) {
+        if (n.kind == SidebarNodeKind::kFolder && n.folder_id == folder_id) {
+          return &n;
+        }
+        if (!n.children.empty()) {
+          const auto* found = self(self, n.children);
+          if (found) {
+            return found;
+          }
+        }
+      }
+      return nullptr;
+    };
+    folder_node = find_node(find_node, last_model_.pinned_tree);
+    if (!folder_node) {
+      folder_node = find_node(find_node, last_model_.normal_tree);
+    }
+
+    if (!folder_node || folder_node->children.empty()) {
+      return;
+    }
+
+    auto temp = std::make_unique<views::View>();
+    temp->SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kVertical));
+    RebuildTreeNodes(temp.get(), folder_node->children, folder_row->section(),
+                     browser_, folder_id);
+
+    size_t insert_pos = folder_index + 1;
+    while (!temp->children().empty()) {
+      views::View* first = temp->children().front();
+      std::unique_ptr<views::View> owned = temp->RemoveChildViewT(first);
+      parent_view->AddChildViewAt(std::move(owned), insert_pos);
+      ++insert_pos;
+    }
+  }
+
+  InvalidateLayout();
 }
 
 void MahoSidebarTabListView::CommitTabTitleChange(
     const std::string& tab_id,
     const std::u16string& new_title) {
   local_custom_titles_[tab_id] = new_title;
-  MahoCore* core = maho::GetCore();
+  auto* core = maho::GetCore();
   if (!core || tab_id.empty()) {
     return;
   }

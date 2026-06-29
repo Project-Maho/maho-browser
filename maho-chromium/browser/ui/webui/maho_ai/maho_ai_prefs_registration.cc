@@ -24,12 +24,10 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(ai_prefs::kProviderAdapterV2Enabled, false);
   registry->RegisterBooleanPref(ai_prefs::kUiThinModeEnabled, false);
   registry->RegisterStringPref(ai_prefs::kPendingInitialQuery, std::string());
-  registry->RegisterBooleanPref(ai_prefs::kOpenCodeRuntimeEnabled, true);
   registry->RegisterStringPref(ai_prefs::kSessionListJson, std::string());
   registry->RegisterStringPref(ai_prefs::kApprovalPolicy, "prompt");
   registry->RegisterBooleanPref(ai_prefs::kSessionPersistenceEnabled, true);
   registry->RegisterDictionaryPref(ai_prefs::kSessionEventLogs);
-  registry->RegisterStringPref(ai_prefs::kRuntimeCommand, std::string());
   registry->RegisterStringPref(ai_prefs::kAiViewMode, "sidebar");
 }
 

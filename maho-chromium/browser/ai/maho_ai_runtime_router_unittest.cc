@@ -11,11 +11,6 @@
 
 class MahoAiRuntimeRouterTest : public testing::Test {
  protected:
-  void SetUp() override {
-    prefs_.registry()->RegisterStringPref(
-        maho::ai_prefs::kRuntimeCommand, std::string());
-  }
-
   TestingPrefServiceSimple prefs_;
 };
 
