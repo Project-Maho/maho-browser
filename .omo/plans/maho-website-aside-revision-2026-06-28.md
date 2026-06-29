@@ -1014,4 +1014,75 @@ After Oracle review, the actual blocking chain is:
    §13 remainder
 ```
 
+---
+
+## §20 — Implementation Log (2026-06-28)
+
+This section records actual execution against the plan.
+
+### Status by section
+
+| § | Item | Status | Evidence |
+|---|---|---|---|
+| §1.1 | Waitlist backend wire | DEFERRED — owner chose to hide /waitlist from nav | `Footer.astro`, `Nav.astro` 미연결 |
+| §1.2 | Pricing canonicalization | ✅ DONE — owner-locked at $0/$5/$20 + PAYG (matched existing /pricing v2 state); homepage tier CTAs route to /download | `LandingPage.tsx`, `/pricing.astro` |
+| §1.3 | Terms ToS rewrite | ✅ DONE — 개인 developer voice; OSS exception clause preserved | `terms.astro` |
+| §1.4 | FAQ duplication | ✅ DONE — `website/maho-website/` deleted, live FAQ now says "No. Maho is not open source." | git history |
+| §1.5 | Nav Download CTA | ✅ DONE — Phase 1 fallback used `/download` redirect to GitHub Releases | `Nav.astro` |
+| §1.6 | Cure53 contractual gate | ✅ DONE — owner C (not contracted) → §9.3 Fallback Track activated everywhere | `/security`, `/privacy` |
+| §2-3 | Hero rewrites | ✅ DONE — Candidate Y "Your AI. Your data. Your browser." | `LandingPage.tsx` |
+| §4 | LandingPage.tsx full edit | ✅ DONE — H1, microcopy, 3-tier pricing, business-model link, Final CTA all updated | `LandingPage.tsx` |
+| §5 | /download page | ✅ DONE — Phase 1 redirect (meta-refresh + JS fallback) | `download.astro` |
+| §6 | /compare/aside v3 rewrite | ✅ DONE — reframe + Steered AI + business-model FAQ + 23-row table | `compare/aside.astro` |
+| §7 | Compare 7× OSS patch | ✅ DONE — Maho cells now "No — proprietary"; competitor OSS preserved | `compare/maho-mail-vs-*.astro` |
+| §8 | Security / Privacy rewrites | ✅ DONE — 4-layer fallback substance; no Cure53 mention; no "source you can read" | `security.astro`, `privacy.astro` |
+| §9 | Cure53 marketing asset | N/A — fallback track active (owner: not contracted) | `/blog/verify-maho-locally.mdx` covers Layer 1 |
+| §10 | Nav / Footer cleanup | ✅ DONE — GitHub links removed, restructured footer with /why /about /roadmap /security /compare/aside | `Nav.astro`, `Footer.astro` |
+| §16 | Positive Thesis page | ✅ DONE — `/why` with negation-free thesis | `why.astro` |
+| §17 | Business Model Transparency | ✅ DONE — "Free is sustained by Pro and Max..." sentence + "How Maho stays funded" link to /about | `LandingPage.tsx`, `/about` |
+| §18.3 | In-scope additions | ✅ DONE — `/about`, `/why`, `/roadmap`, `/download` shipped | 4 new pages |
+| §11 Q1 (Cure53) | OWNER: C — not contracted | ✅ Fallback Track active | — |
+| §11 Q3 (iOS/Android) | OWNER: c — pre-launch | ✅ Hero copy honest "iPhone and Android in development" | — |
+| §17.3 (Pro/Max delta) | OWNER: A — keep + Max TBD | ⚠️ Max card uses placeholder copy; specific features TBD | `/pricing` |
+| §11 Q5 (maho-website/ dup) | OWNER: 모름 → 점검 후 삭제 | ✅ Deleted (confirmed only stale faq.mdx) | git history |
+| §11 Q7 (waitlist backend) | OWNER: 모르겠다 → 숨김 | ✅ `/waitlist` not linked from Nav/Footer | — |
+| §11 Q8 (legal entity) | OWNER: 개인 개발자 | ✅ Terms rewritten in individual-developer voice | `terms.astro` |
+
+### Reviewer gate closures (binding)
+
+| Review | Verdict | Date |
+|---|---|---|
+| Momus (plan critic) | [OKAY] | 2026-06-28 |
+| Oracle 1st (strategic) | MIXED — 6 conditions | 2026-06-28 |
+| Oracle 2nd (after revision) | STRONG with 6 minor conditions | 2026-06-28 |
+| Oracle 3rd (after final fixes) | **STRONG — Unconditional Approval** | 2026-06-28 |
+| Frontend Code Review | BLOCK → fixes applied → PASS | 2026-06-28 |
+| SEO + Content Review | SHIP-WITH-NITS → fixes applied | 2026-06-28 |
+| Visual QA Round 1 (Pass A + B) | REVISE — 7 BLOCKING + 6 medium | 2026-06-28 |
+| Visual QA Round 2 (Pass A + B) | **PASS — HIGH confidence** | 2026-06-28 |
+
+### Final delivery
+
+- **Production URL**: https://maho-website.pages.dev (Cloudflare Pages project `maho-website`)
+- **Domain (maho.app)**: NOT pointed at this deployment — `maho.app` currently serves Mastodon (separate decision required from owner)
+- **Commits on origin/main**:
+  - `c01ec345` — feat(website): aside revision — OSS removal, new pages, mobile polish (33 files)
+  - `d03fd8eb` — feat(website): canonicalize SITE_URL via env var (21 files)
+  - + (this commit) — feat(website): verify-maho-locally blog + auto-deploy workflow + dynamic robots.txt
+- **Auto-deploy**: `.github/workflows/deploy-website.yml` deploys to Cloudflare on push to `main` (requires `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` secrets on GitHub repo)
+
+### Open items requiring owner action
+
+These cannot be completed without owner input or external action:
+
+| Item | Blocker | Recommended next step |
+|---|---|---|
+| **maho.app domain** | Currently Mastodon. Owner must decide: relocate Mastodon, use subdomain, or accept different domain for marketing site. | Decide; then add CNAME to `maho-website.pages.dev` |
+| **Cure53 audit** | Not contracted. | If pursued, contract → swap fallback copy on /security per §9.2 state machine |
+| **Waitlist backend** | Provider not chosen. | Pick Resend/Formspree/ConvertKit, wire form, re-add /waitlist link to nav/footer |
+| **Max tier feature delta** | Owner: TBD. | Decide SSO/audit-log/SLA scope; update /pricing tier 3 card |
+| **GitHub repo secrets for auto-deploy** | Workflow added; secrets not set. | In GitHub repo Settings → Secrets and variables → Actions, add `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` |
+| **Google Search Console** | Domain not finalized. | After domain decision, verify via DNS TXT or HTML file |
+| **Per-page OG images** | Currently shared `/og-image.png` for all pages. | If pursued, add `@vercel/og` or `satori` to generate per-route images |
+
 **End of plan.**

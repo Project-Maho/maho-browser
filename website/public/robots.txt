@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://maho.app/sitemap-index.xml

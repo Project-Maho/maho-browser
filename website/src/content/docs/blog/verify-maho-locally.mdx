@@ -1,0 +1,113 @@
+---
+title: "Verify Maho privacy locally: the receipts"
+description: "Maho is closed source. Here is how you verify our privacy claims anyway. Step-by-step instructions using Activity Monitor, Little Snitch, Wireshark, and Console.app — no source-reading required."
+date: 2026-06-28
+tags:
+  - browser
+  - privacy
+  - how-to
+excerpt: "We removed every false 'open source' claim from this site. That left a question. If you cannot read the source, how do you trust the claims? This is the procedure."
+authors:
+  - name: Maho Team
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Maho is proprietary software. We say so in [the FAQ](/browser/faq/#is-maho-open-source), in the [Terms of Service](/terms/), and on the [About page](/about/). The honest version of "trust us" is *do not* trust us &mdash; observe the binary yourself. This post is the procedure.
+
+We claim five privacy properties. Each one has a way to confirm or falsify it without reading any source code.
+
+1. Maho does not send your browsing history to our servers.
+2. Maho does not send your bookmarks, tabs, or Spaces to our servers.
+3. Maho does not send your AI prompts to our servers when you use BYOK.
+4. Maho-managed AI requests do not retain your prompts beyond billing metadata.
+5. Maho ships zero analytics or telemetry endpoints in the binary.
+
+Below is how to verify each one, ordered from easiest to most rigorous.
+
+## Tier 1: Activity Monitor (60 seconds, every macOS user)
+
+Open Activity Monitor &rarr; Network tab &rarr; sort by **Sent Bytes** descending.
+
+Launch Maho. Browse for two minutes. Visit a couple of news sites, search for something, type a query into the AI panel. Then look at the Maho row.
+
+You will see two kinds of bytes leaving the process.
+
+**Inbound to the website you visited.** This is what the browser is supposed to do. HTTP requests to `news.ycombinator.com` or wherever. These bytes go to the destination, not to us. The fact that Maho is the user agent doing the fetch does not mean Maho is reading the bytes.
+
+**Inbound to your AI provider.** If you have BYOK configured for Claude, you will see traffic to `api.anthropic.com`. With OpenAI BYOK, `api.openai.com`. With Ollama, traffic to `localhost`. None of this routes through Maho. The browser holds the key on disk, makes the API call directly, and reads the response.
+
+What you should *not* see &mdash; ever, in any session &mdash; is traffic to `maho.app`, `*.maho.app`, or any other Maho-controlled origin, except in three specific cases:
+
+- **Update check** &mdash; once at launch, against the update endpoint. This is a HEAD request that returns the latest version string. Cancelable in settings.
+- **Sync relay** &mdash; if you have sync enabled, encrypted blobs go to the relay. The relay sees ciphertext, not plaintext (see [the sync architecture post](/blog/sync-architecture-end-to-end/) for the cryptography).
+- **Maho-managed AI proxy** &mdash; if you are on Pro or Max, requests flow through `proxy.maho.app` to OpenRouter. See Tier 3 for what that proxy does and does not log.
+
+If you see any other Maho-bound traffic, that is a bug. File it at hello@maho.app with the timestamps and we will explain or fix.
+
+## Tier 2: Little Snitch or LuLu (5 minutes, more confidence)
+
+Install [Little Snitch](https://obdev.at/products/littlesnitch/) (paid) or [LuLu](https://objective-see.org/products/lulu.html) (free). Set the default to *prompt for every new connection*.
+
+Launch Maho. The prompts will fire for every distinct destination Maho tries to reach. Now you have a complete inventory.
+
+Click "Deny" on everything Maho-related, then try to use the browser normally. The only Maho-bound deny that breaks something should be the update check. Everything else &mdash; pages load, search works, BYOK AI works, history saves locally, bookmarks save locally &mdash; should function with our endpoints blocked.
+
+If something fundamental stops working when Maho-controlled servers are blocked, that is evidence we are silently dependent on something we should not be. Tell us.
+
+## Tier 3: tcpdump or Wireshark (advanced, definitive on plaintext)
+
+The previous two tiers tell you *whether* traffic leaves. This tier tells you *what is in it*.
+
+```bash
+sudo tcpdump -i any -w maho.pcap host maho.app
+```
+
+Run Maho for a session, then stop tcpdump. Open `maho.pcap` in Wireshark.
+
+For TLS-encrypted traffic (which is everything to `maho.app` and `proxy.maho.app`) the bodies will be opaque without the session key. Use Wireshark's `(Pre)-Master-Secret log filename` setting, point it at a file, and run Maho with `SSLKEYLOGFILE=/tmp/maho-keys.log` set in the environment. Wireshark will then decrypt the TLS streams.
+
+What you should find:
+
+**Update check**: a single GET to `updates.maho.app/manifest.json` with no body. Response is a small JSON with the latest version and minimum supported version. No identifiers, no user data, no telemetry beacons.
+
+**Sync**: WebSocket frames to `sync.maho.app`. The frame bodies are AES-GCM ciphertext. You will not be able to read them even with the SSL keys, because the encryption key is derived from your sync passphrase on-device, not from the TLS session. This is by design and described in [the sync architecture post](/blog/sync-architecture-end-to-end/).
+
+**Maho-managed AI proxy**: POST to `proxy.maho.app/v1/chat/completions` with your prompt body in plaintext (TLS-decrypted). The response comes back streamed. Our proxy forwards to OpenRouter, charges your account, and returns the result. We do not store the prompt or the response. We do log: model, token counts, timestamp, user ID. That is the minimum for billing and abuse prevention.
+
+If you see anything in the prompt body that should not be there &mdash; cookies, history, your other tabs' content &mdash; that is a bug. We have not shipped one of these, but we want to know if it happens.
+
+## Tier 4: Console.app (the easy crash-report check)
+
+Open Console.app &rarr; Crash Reports. Use Maho, force-quit it, reopen. Look for `Maho` crash reports.
+
+We do not auto-submit crash reports. macOS will store them locally, and if you want to send one to us you have to attach the `.crash` file to an email. There is no "send to Maho" toggle.
+
+Verify this by opening Maho's Settings &rarr; Privacy. There is no "send crash reports automatically" option. If there ever is, we have changed our policy and this post is wrong.
+
+## Tier 5: The architecture documents
+
+We publish the design of the parts that matter:
+
+- [Sync architecture, end to end](/blog/sync-architecture-end-to-end/) &mdash; how cross-device sync stays end-to-end encrypted with no account.
+- [BYOK architecture explained](/blog/byok-architecture-explained/) &mdash; how your API key is stored, used, and never leaves your machine.
+- [Browser history encryption explained](/blog/browser-history-encryption-explained/) &mdash; the on-device encryption of your local history database.
+- [Zero telemetry by default](/blog/zero-telemetry-by-default/) &mdash; the exact endpoints (or lack thereof) and the rationale.
+
+These are not source code. They are the design and the threat model. If the binary's network behavior contradicts these documents, the documents are wrong &mdash; or the binary is wrong &mdash; and you should tell us.
+
+## What this gets you
+
+You get to verify all five privacy claims at the top of this post using tools that come with macOS plus one inexpensive license. You do not need to read C++ or Rust. You do not need to trust us. The thing producing the bytes is the binary; the thing observing the bytes is your operating system. Both are physical realities. The marketing copy is not.
+
+That is the deal with closed-source privacy software: prove it on the wire, not in the README.
+
+## Where to send findings
+
+If any step above produces output that contradicts our claims, email hello@maho.app with subject prefix `[verification]`. Include:
+
+- The tool you used.
+- The exact endpoint or behavior you observed.
+- A timestamp and your Maho version.
+
+If we are wrong about the binary, we want to fix it. If the binary is right and the docs are wrong, we want to fix the docs. Either way, we will reply within 48 hours.
