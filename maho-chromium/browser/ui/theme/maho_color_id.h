@@ -122,7 +122,12 @@
   E_CPONLY(kMahoColorReaderSepiaText) \
   E_CPONLY(kMahoColorReaderDarkBackground) \
   E_CPONLY(kMahoColorReaderDarkText) \
-  E_CPONLY(kMahoColorDropIndicator)
+  E_CPONLY(kMahoColorDropIndicator) \
+  /* Toast Notification */ \
+  E_CPONLY(kMahoColorToastBackground) \
+  E_CPONLY(kMahoColorToastForeground) \
+  E_CPONLY(kMahoColorToastBodyForeground) \
+  E_CPONLY(kMahoColorToastBorder)
 // clang-format on
 
 #include "ui/color/color_id_macros.inc"

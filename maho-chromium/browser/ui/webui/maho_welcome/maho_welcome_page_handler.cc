@@ -450,43 +450,43 @@ void MahoWelcomePageHandler::OpenThemePickerDialog(
 }
 
 void MahoWelcomePageHandler::FinishOnboarding() {
-  LOG(WARNING) << "[MahoFinish] ENTER is_finishing=" << is_finishing_;
+  DVLOG(1) << "[MahoFinish] ENTER is_finishing=" << is_finishing_;
   if (is_finishing_) {
     return;
   }
   is_finishing_ = true;
 
-  LOG(WARNING) << "[MahoFinish] step1 SetPref kWelcomeCompleted";
+  DVLOG(1) << "[MahoFinish] step1 SetPref kWelcomeCompleted";
   profile_->GetPrefs()->SetBoolean(maho::welcome::kWelcomeCompleted, true);
 
-  LOG(WARNING) << "[MahoFinish] step2 theme cleanup; HasPreview=" << MahoSpaceThemeState::HasPreviewOverride();
+  DVLOG(1) << "[MahoFinish] step2 theme cleanup; HasPreview=" << MahoSpaceThemeState::HasPreviewOverride();
   if (MahoSpaceThemeState::HasPreviewOverride()) {
     MahoSpaceThemeState::ClearPreviewOverride();
     MahoSpaceThemeState::UpdateFromCore();
     RepaintBrowserAfterThemeChange(browser_);
   }
 
-  LOG(WARNING) << "[MahoFinish] step3 Browser::Create; browser_=" << browser_ << " profile_=" << profile_;
+  DVLOG(1) << "[MahoFinish] step3 Browser::Create; browser_=" << browser_ << " profile_=" << profile_;
   if (profile_) {
     Browser::CreateParams params(profile_, true);
     params.creation_source = Browser::CreationSource::kStartupCreator;
     Browser* main_browser = Browser::Create(params);
-    LOG(WARNING) << "[MahoFinish] step3b main_browser=" << main_browser;
+    DVLOG(1) << "[MahoFinish] step3b main_browser=" << main_browser;
     chrome::AddTabAt(main_browser, GURL(), -1, /*foreground=*/true);
-    LOG(WARNING) << "[MahoFinish] step3c NTP added";
+    DVLOG(1) << "[MahoFinish] step3c NTP added";
     main_browser->window()->Show();
-    LOG(WARNING) << "[MahoFinish] step4 window shown";
+    DVLOG(1) << "[MahoFinish] step4 window shown";
 
     BrowserView* bv = BrowserView::GetBrowserViewForBrowser(main_browser);
-    LOG(WARNING) << "[MahoFinish] step4b bv=" << bv;
-    // TODO(maho): Restore overlay toast once
-    // MahoNotificationOverlay::GetForBrowserView is implemented.
-    (void)bv;
+    DVLOG(1) << "[MahoFinish] step4b bv=" << bv;
+    auto* overlay =
+        MahoNotificationOverlay::GetOrCreateForBrowser(main_browser);
+    overlay->Show(u"Welcome to Maho", u"Import complete. Start exploring.");
   }
 
-  LOG(WARNING) << "[MahoFinish] step5 CloseWelcomeTab";
+  DVLOG(1) << "[MahoFinish] step5 CloseWelcomeTab";
   CloseWelcomeTab();
-  LOG(WARNING) << "[MahoFinish] EXIT";
+  DVLOG(1) << "[MahoFinish] EXIT";
 }
 
 void MahoWelcomePageHandler::OpenFDASettings() {

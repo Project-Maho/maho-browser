@@ -250,6 +250,21 @@ void AddTextColors(ui::ColorMixer& mixer, bool dark_mode) {
       : SkColorSetARGB(255, 128, 136, 166)};
 }
 
+void AddToastColors(ui::ColorMixer& mixer, bool dark_mode) {
+  mixer[kMahoColorToastBackground] = {dark_mode
+      ? SkColorSetARGB(255, 42, 39, 61)
+      : SkColorSetARGB(255, 255, 255, 255)};
+  mixer[kMahoColorToastForeground] = {dark_mode
+      ? SkColorSetARGB(255, 243, 243, 247)
+      : SkColorSetARGB(255, 45, 51, 74)};
+  mixer[kMahoColorToastBodyForeground] = {dark_mode
+      ? SkColorSetARGB(255, 188, 188, 202)
+      : SkColorSetARGB(255, 89, 97, 128)};
+  mixer[kMahoColorToastBorder] = {dark_mode
+      ? SkColorSetARGB(30, 255, 255, 255)
+      : SkColorSetARGB(20, 0, 0, 0)};
+}
+
 void AddLegacyAliasColors(ui::ColorMixer& mixer, bool dark_mode) {
   mixer[kMahoColorDivider] = {dark_mode
       ? SkColorSetARGB(4, 255, 255, 255)
@@ -439,6 +454,7 @@ void AddMahoColorMixers(ui::ColorProvider* provider,
   AddLibraryRailColors(mixer, dark_mode);
   AddLibraryContentColors(mixer, dark_mode);
   AddTextColors(mixer, dark_mode);
+  AddToastColors(mixer, dark_mode);
   AddLegacyAliasColors(mixer, dark_mode);
   AddCommandBarColors(mixer, dark_mode);
   AddAccentAndSemanticColors(mixer, accent_color);

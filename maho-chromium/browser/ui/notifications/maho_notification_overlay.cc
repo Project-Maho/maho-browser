@@ -23,8 +23,10 @@ MahoNotificationOverlay::MahoNotificationOverlay(Browser* browser)
       parent_widget_observed_ = bv->GetWidget();
       parent_widget_observed_->AddObserver(this);
     }
+    if (auto* collection = GlobalBrowserCollection::GetInstance()) {
+      browser_collection_observation_.Observe(collection);
+    }
   }
-  browser_collection_observation_.Observe(GlobalBrowserCollection::GetInstance());
 }
 
 MahoNotificationOverlay::~MahoNotificationOverlay() {
@@ -88,7 +90,9 @@ void MahoNotificationOverlay::OnWidgetDestroying(views::Widget* widget) {
     slide_animation_.Stop();
     is_hiding_ = false;
     toast_view_ = nullptr;
-    widget_.release();
+    views::Widget* released = widget_.release();
+    base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE,
+                                                                   released);
     PostRemovalIfNeeded();
     return;
   }
