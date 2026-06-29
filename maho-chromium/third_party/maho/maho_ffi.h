@@ -103,24 +103,6 @@ bool maho_core_is_tab_pinned(struct MahoCore *ptr, const char *tab_id);
 char *maho_core_get_space_view_models(struct MahoCore *ptr);
 
 /**
- * # Safety
- * `ptr` must be a valid pointer returned by `maho_core_new`.
- * `space_id_json` must be a valid null-terminated C string containing a SpaceId JSON.
- * Caller must free the returned string with `maho_string_free`.
- */
-char *maho_core_get_sidebar_root_order(struct MahoCore *ptr,
-                                       const char *space_id_json,
-                                       const int64_t *window_id_ptr);
-
-/**
- * # Safety
- * `ptr` must be a valid pointer returned by `maho_core_new`.
- * `space_id_json` must be a valid null-terminated C string containing a SpaceId JSON.
- * Caller must free the returned string with `maho_string_free`.
- */
-char *maho_core_get_sidebar_tree(struct MahoCore *ptr, const char *space_id_json);
-
-/**
  * Combined sidebar tree + base64-encoded favicons in one call (audit C3 fix).
  * Returns `{"tree": [...], "favicons": {"tab_id": "base64_png", ...}}`.
  *
@@ -223,6 +205,10 @@ char *maho_core_get_css_mods(struct MahoCore *ptr);
 /**
  * Returns the combined CSS string of all enabled mods.
  * Caller must free with `maho_string_free`.
+ *
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. Returns null on null
+ * input, empty CSS, or if an import is in progress.
  */
 char *maho_core_get_combined_css(struct MahoCore *ptr);
 
@@ -850,31 +836,86 @@ void maho_core_update_download_progress(struct MahoCore *ptr,
                                         const char *download_id,
                                         uint64_t received_bytes);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `download_id` must be a
+ * valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
+ */
 char *maho_core_complete_download(struct MahoCore *ptr, const char *download_id);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `download_id` must be a
+ * valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
+ */
 char *maho_core_restore_download_name(struct MahoCore *ptr, const char *download_id);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. Caller must free
+ * the returned string with `maho_string_free`. Returns null on null input or import active.
+ */
 char *maho_core_get_filter_lists(struct MahoCore *ptr);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `id`, `name`, and `url`
+ * must be valid NUL-terminated C strings. No-op on null input or if import is active.
+ */
 void maho_core_add_filter_list(struct MahoCore *ptr,
                                const char *id,
                                const char *name,
                                const char *url);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `id` must be a valid
+ * NUL-terminated C string. No-op on null input or if import is active.
+ */
 void maho_core_toggle_filter_list(struct MahoCore *ptr, const char *id, bool enabled);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `id` must be a valid
+ * NUL-terminated C string. No-op on null input or if import is active.
+ */
 void maho_core_remove_filter_list(struct MahoCore *ptr, const char *id);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `id` and `content` must
+ * be valid NUL-terminated C strings. No-op on null input or if import is active.
+ */
 void maho_core_update_filter_list_content(struct MahoCore *ptr,
                                           const char *id,
                                           const char *content);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. No-op on null input
+ * or if import is active.
+ */
 void maho_core_rebuild_content_rules(struct MahoCore *ptr);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. Returns `0` on null
+ * input or if import is active.
+ */
 uintptr_t maho_core_get_content_rule_count(struct MahoCore *ptr);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `extension_id` must be a
+ * valid NUL-terminated C string. Returns `false` on null input or if import is active.
+ */
 bool maho_core_toggle_extension(struct MahoCore *ptr, const char *extension_id);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `extension_id` must be a
+ * valid NUL-terminated C string. Returns `false` on null input or if import is active.
+ */
 bool maho_core_remove_extension(struct MahoCore *ptr, const char *extension_id);
 
 /**
@@ -1038,54 +1079,182 @@ char *maho_core_search_notes_fts(struct MahoCore *ptr, const char *query);
  */
 char *maho_core_get_reader_settings(struct MahoCore *ptr);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `config_json` must be a
+ * valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
+ */
 char *maho_core_create_backup(struct MahoCore *ptr, const char *config_json);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `backup_b64` must be a
+ * valid NUL-terminated C string. `password` may be null (treated as no password). Caller must
+ * free the returned string with `maho_string_free`.
+ */
 char *maho_core_restore_backup(struct MahoCore *ptr, const char *backup_b64, const char *password);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. Caller must free
+ * the returned string with `maho_string_free`. Returns null on null input or import active.
+ */
 char *maho_core_get_backup_history(struct MahoCore *ptr);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `url` and `title` must
+ * be valid NUL-terminated C strings. Caller must free the returned string with `maho_string_free`.
+ */
 char *maho_core_add_to_reading_list(struct MahoCore *ptr, const char *url, const char *title);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `item_id` must be a
+ * valid NUL-terminated C string. Returns `false` on null input or if import is active.
+ */
 bool maho_core_remove_from_reading_list(struct MahoCore *ptr, const char *item_id);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `item_id` must be a
+ * valid NUL-terminated C string. Returns `-1` on null input or if import is active.
+ */
 int8_t maho_core_toggle_reading_list_read(struct MahoCore *ptr, const char *item_id);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. Caller must free
+ * the returned string with `maho_string_free`. Returns null on null input or import active.
+ */
 char *maho_core_get_reading_list(struct MahoCore *ptr);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. Returns `0` on null
+ * input or if import is active.
+ */
 uintptr_t maho_core_get_unread_count(struct MahoCore *ptr);
 
+/**
+ * # Safety
+ * No pointer arguments. Internally safe; uses only platform APIs. Caller must free the returned
+ * string with `maho_string_free`.
+ */
 char *maho_core_detect_browser_profiles(void);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `profile_path` must be a
+ * valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
+ */
 char *maho_core_import_chrome_bookmarks(struct MahoCore *ptr, const char *profile_path);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `profile_path` must be a
+ * valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
+ */
 char *maho_core_import_firefox_bookmarks(struct MahoCore *ptr, const char *profile_path);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. Caller must free
+ * the returned string with `maho_string_free`. Returns null on null input or import active.
+ */
 char *maho_core_get_shortcuts(struct MahoCore *ptr);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `action` and
+ * `key_combo_json` must be valid NUL-terminated C strings. Caller must free the returned string
+ * with `maho_string_free`. Returns null on null input, invalid UTF-8, or import active.
+ */
 char *maho_core_set_shortcut(struct MahoCore *ptr, const char *action, const char *key_combo_json);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `action` must be a
+ * valid NUL-terminated C string. No-op on null input or if import is active.
+ */
 void maho_core_reset_shortcut(struct MahoCore *ptr, const char *action);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. No-op on null input
+ * or if import is active.
+ */
 void maho_core_reset_all_shortcuts(struct MahoCore *ptr);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `action` must be a
+ * valid NUL-terminated C string. No-op on null input or if import is active.
+ */
 void maho_core_toggle_shortcut(struct MahoCore *ptr, const char *action, bool enabled);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `key_combo_json` must be
+ * a valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
+ */
 char *maho_core_resolve_shortcut(struct MahoCore *ptr, const char *key_combo_json);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `density` must be a
+ * valid NUL-terminated C string. No-op on null input or if import is active.
+ */
 void maho_core_set_density(struct MahoCore *ptr, const char *density);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `color_json` must be a
+ * valid NUL-terminated C string. No-op on null input or if import is active.
+ */
 void maho_core_set_accent_color(struct MahoCore *ptr, const char *color_json);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `css` may be null
+ * (treated as clearing the CSS) or a valid NUL-terminated C string. No-op if import is active.
+ */
 void maho_core_set_custom_chrome_css(struct MahoCore *ptr, const char *css);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. No-op on null input
+ * or if import is active.
+ */
 void maho_core_set_window_transparency(struct MahoCore *ptr, bool enabled);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. Caller must free
+ * the returned string with `maho_string_free`. Returns null on null input or import active.
+ */
 char *maho_core_get_toolbar_items(struct MahoCore *ptr);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `items_json` must be a
+ * valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
+ */
 char *maho_core_set_toolbar_items(struct MahoCore *ptr, const char *items_json);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `path` may be null
+ * (clears icon) or a valid NUL-terminated C string. Caller must free returned string with
+ * `maho_string_free`.
+ */
 char *maho_core_set_app_icon(struct MahoCore *ptr, const char *path);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. Caller must free
+ * the returned string with `maho_string_free`. Returns null on null input or import active.
+ */
 char *maho_core_get_default_toolbar_items(struct MahoCore *ptr);
 
 /**
@@ -1463,8 +1632,18 @@ bool maho_core_update_easel(struct MahoCore *ptr, const char *easel_id, const ch
  */
 char *maho_core_get_autofill_addresses(struct MahoCore *ptr);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `address_json` must be
+ * a valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
+ */
 char *maho_core_add_autofill_address_persisted(struct MahoCore *ptr, const char *address_json);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `id` must be a valid
+ * NUL-terminated C string. Returns `false` on null input or if import is active.
+ */
 bool maho_core_delete_autofill_address_persisted(struct MahoCore *ptr, const char *id);
 
 /**
@@ -1474,11 +1653,22 @@ bool maho_core_delete_autofill_address_persisted(struct MahoCore *ptr, const cha
  */
 char *maho_core_get_autofill_payments(struct MahoCore *ptr);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `payment_json` must be
+ * a valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
+ */
 char *maho_core_add_autofill_payment_persisted(struct MahoCore *ptr, const char *payment_json);
 
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `id` must be a valid
+ * NUL-terminated C string. Returns `false` on null input or if import is active.
+ */
 bool maho_core_delete_autofill_payment_persisted(struct MahoCore *ptr, const char *id);
 
 /**
+ * # Safety
  * `ptr` must be a valid pointer returned by `maho_core_new`.
  * String parameters must be valid null-terminated UTF-8.
  */
@@ -1650,6 +1840,10 @@ void maho_core_chat_append_assistant_message(struct ChatSession *ptr,
 /**
  * Create a new conversation. Returns true on success.
  * All pointer args except `core` may be null (treated as None/empty).
+ *
+ * # Safety
+ * `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `id` must be a valid
+ * NUL-terminated C string; other string args may be null.
  */
 bool maho_core_create_conversation(struct MahoCore *core,
                                    const char *id,
@@ -1660,16 +1854,28 @@ bool maho_core_create_conversation(struct MahoCore *core,
 /**
  * List conversations. Returns JSON array string (caller must free via maho_string_free).
  * Returns "[]" on null core or missing storage.
+ *
+ * # Safety
+ * `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`, or null (returns "[]").
+ * Caller must free the returned string with `maho_string_free`.
  */
 char *maho_core_list_conversations(struct MahoCore *core, uintptr_t limit);
 
 /**
  * Get messages for a conversation session. Returns JSON array string.
+ *
+ * # Safety
+ * `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `session_id` must be a
+ * valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
  */
 char *maho_core_get_conversation_messages(struct MahoCore *core, const char *session_id);
 
 /**
  * Save a message to a conversation. Returns true on success.
+ *
+ * # Safety
+ * `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `session_id`, `role`,
+ * and `content` must be valid NUL-terminated C strings; `url_context` may be null.
  */
 bool maho_core_save_conversation_message(struct MahoCore *core,
                                          const char *session_id,
@@ -1679,37 +1885,64 @@ bool maho_core_save_conversation_message(struct MahoCore *core,
 
 /**
  * Delete a conversation by id. Returns true if deleted.
+ *
+ * # Safety
+ * `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `id` must be a valid
+ * NUL-terminated C string. Returns `false` on null input or if import is active.
  */
 bool maho_core_delete_conversation(struct MahoCore *core, const char *id);
 
 /**
  * Rename a conversation. Returns true on success.
+ *
+ * # Safety
+ * `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `id` and `new_title`
+ * must be valid NUL-terminated C strings. Returns `false` on null input or import active.
  */
 bool maho_core_rename_conversation(struct MahoCore *core, const char *id, const char *new_title);
 
 /**
  * Set a BYOK API key for the given provider.
+ *
+ * # Safety
+ * `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `provider` and `api_key`
+ * must be valid NUL-terminated C strings. Returns `false` on null input or import active.
  */
 bool maho_core_byok_set_key(struct MahoCore *core, const char *provider, const char *api_key);
 
 /**
  * Get the stored BYOK API key for the given provider. Returns null if not set.
+ *
+ * # Safety
+ * `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `provider` must be a
+ * valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
  */
 char *maho_core_byok_get_key(struct MahoCore *core, const char *provider);
 
 /**
  * Delete the BYOK API key for the given provider. Returns true on success.
+ *
+ * # Safety
+ * `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `provider` must be a
+ * valid NUL-terminated C string. Returns `false` on null input or import active.
  */
 bool maho_core_byok_delete_key(struct MahoCore *core, const char *provider);
 
 /**
  * Get JSON array of supported provider names. Returns caller-owned string.
+ *
+ * # Safety
+ * `_core` may be null (ignored). Caller must free the returned string with `maho_string_free`.
  */
 char *maho_core_byok_get_providers(struct MahoCore *_core);
 
 /**
  * Validate a BYOK API key for the given provider. Returns true if valid.
  * Note: makes a live network request; call from a background thread.
+ *
+ * # Safety
+ * `provider` and `api_key` must be valid NUL-terminated C strings (not null). `_core` is
+ * unused and may be null. This call performs a live network request.
  */
 bool maho_core_byok_validate_key(struct MahoCore *_core, const char *provider, const char *api_key);
 
@@ -1717,6 +1950,10 @@ bool maho_core_byok_validate_key(struct MahoCore *_core, const char *provider, c
  * Send an image-only chat message. Fires a ShellEvent::ChatMessage with image content.
  * `mime` must be non-null (e.g. "image/png"). `data` is raw bytes, `data_len` is byte count.
  * Returns true on success.
+ *
+ * # Safety
+ * `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `mime` must be a valid
+ * NUL-terminated C string; `data` must point to at least `data_len` bytes if non-null.
  */
 bool maho_chat_send_image(struct MahoCore *core,
                           const char *mime,
@@ -1726,6 +1963,10 @@ bool maho_chat_send_image(struct MahoCore *core,
 /**
  * Send a text+image chat message. `text` is the user's text (may be null/empty).
  * Returns true on success.
+ *
+ * # Safety
+ * `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `text` and `mime` may
+ * be null; `data` must point to at least `data_len` bytes if non-null.
  */
 bool maho_chat_send_text_with_image(struct MahoCore *core,
                                     const char *text,
@@ -1845,11 +2086,19 @@ int32_t maho_routines_tick(struct MahoCore *core, int64_t now_sec);
 /**
  * Detect installed browsers on the system. Returns a JSON array; caller MUST
  * free the returned string via `maho_import_string_free`.
+ *
+ * # Safety
+ * No pointer arguments. Returns a heap-allocated JSON string; caller must free it via
+ * `maho_import_string_free`. Returns null on allocation failure.
  */
 char *maho_import_detect_browsers(void);
 
 /**
  * Free a string returned by `maho_import_detect_browsers`.
+ *
+ * # Safety
+ * `s` must be a pointer returned by `maho_import_detect_browsers`, or null (no-op). Must not
+ * be called more than once per pointer.
  */
 void maho_import_string_free(char *s);
 

@@ -4065,46 +4065,6 @@ impl MahoCore {
             .collect()
     }
 
-    pub fn get_sidebar_root_order(&self, space_id: &SpaceId) -> Vec<RootItem> {
-        self.space_manager
-            .get_root_order(space_id)
-            .into_iter()
-            .filter(|item| match item {
-                RootItem::Tab(tid) => self
-                    .tab_manager
-                    .get_tab(tid)
-                    .map(|t| !matches!(t.state, TabLifecycleState::Archived { .. }))
-                    .unwrap_or(false),
-                RootItem::Folder(_) => true,
-            })
-            .collect()
-    }
-
-    /// Get root items for a space, filtered by window ownership.
-    /// Folders are shared across windows so they are always included.
-    /// Unpinned tabs are filtered to only include those belonging to the given `window_id`.
-    pub fn get_sidebar_root_order_for_window(
-        &self,
-        space_id: &SpaceId,
-        window_id: i64,
-    ) -> Vec<RootItem> {
-        self.space_manager
-            .get_root_order(space_id)
-            .into_iter()
-            .filter(|item| match item {
-                RootItem::Tab(tid) => self
-                    .tab_manager
-                    .get_tab(tid)
-                    .map(|t| {
-                        !matches!(t.state, TabLifecycleState::Archived { .. })
-                            && t.window_id == Some(window_id)
-                    })
-                    .unwrap_or(false),
-                RootItem::Folder(_) => true,
-            })
-            .collect()
-    }
-
     pub fn get_sidebar_tree(&self, space_id: &SpaceId) -> Vec<maho_types::traits::shell_renderer::SidebarNode> {
         self.space_manager.get_sidebar_tree(space_id, |tab_id| {
             let tab = self.tab_manager.get_tab(tab_id)?;

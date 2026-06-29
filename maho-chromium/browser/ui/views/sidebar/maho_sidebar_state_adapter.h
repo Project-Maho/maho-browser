@@ -20,6 +20,42 @@ struct MahoCore;
 
 namespace maho {
 
+// Holds the result of Phase 0 (footer space state FFI) so it can be returned
+// from a background task without touching UI objects.
+struct FooterSpaceState {
+  FooterSpaceState();
+  FooterSpaceState(const FooterSpaceState&);
+  FooterSpaceState& operator=(const FooterSpaceState&);
+  FooterSpaceState(FooterSpaceState&&);
+  FooterSpaceState& operator=(FooterSpaceState&&);
+  ~FooterSpaceState();
+
+  size_t space_count = 0;
+  int active_space_index = -1;
+  std::string active_space_color;
+  MahoSpaceDisplayThemeModel active_space_theme;
+  std::vector<std::string> space_icons;
+  std::vector<std::string> space_names;
+  std::vector<std::string> space_colors;
+  std::vector<MahoSpaceDisplayThemeModel> space_themes;
+  std::vector<std::string> space_ids;
+  bool has_core_state = false;
+};
+
+// Result of background Phase 0 + Phase 2 work (FFI + JSON parse + base64
+// decode). Returned by value from ThreadPool, consumed on UI thread.
+struct SidebarStateBackgroundResult {
+  SidebarStateBackgroundResult();
+  SidebarStateBackgroundResult(SidebarStateBackgroundResult&&);
+  SidebarStateBackgroundResult& operator=(SidebarStateBackgroundResult&&);
+  ~SidebarStateBackgroundResult();
+
+  FooterSpaceState footer_state;
+  std::optional<base::Value> parsed_tree;
+  base::flat_map<std::string, std::vector<uint8_t>> favicon_map;
+  MahoSidebarFavoritesModel favorites_model;
+};
+
 class ShellEventObserver {
  public:
   virtual ~ShellEventObserver() = default;
@@ -76,10 +112,21 @@ class MahoSidebarStateAdapter {
   MahoSidebarFooterModel BuildFooterModel(Browser* browser) const;
   MahoSidebarViewStateModel BuildViewStateModel(Browser* browser) const;
 
+  // Thread-safe: no mutable member access, no Browser* dependency.
+  static SidebarStateBackgroundResult BuildStateOnBackground(
+      std::string space_id_json,
+      bool safe_mode);
+
+  // UI-thread only: installs background result into mutable caches,
+  // then builds UI-dependent models.
+  MahoSidebarViewStateModel BuildViewStateModelFromResult(
+      Browser* browser,
+      SidebarStateBackgroundResult result) const;
+
  private:
   struct CycleSpaceCache;
   mutable std::unique_ptr<CycleSpaceCache> cycle_space_cache_;
-  MahoSidebarFavoritesModel favorites_model_;
+  mutable MahoSidebarFavoritesModel favorites_model_;
   std::u16string GetActiveHostText(Browser* browser) const;
 
   // V2 FFI: single call replacing 3 separate v1 FFI hops.
@@ -90,8 +137,7 @@ class MahoSidebarStateAdapter {
   // Set during BuildViewStateModel, consumed by ParseTreeNode, cleared after.
   mutable base::flat_map<std::string, std::vector<uint8_t>> v2_favicon_map_;
 
-  // Parsed tree from v2 FFI. When non-null, BuildTabListModel uses this
-  // instead of calling maho_core_get_sidebar_tree (v1).
+  // Parsed tree from v2 FFI. When non-null, BuildTabListModel uses this.
   mutable std::optional<base::Value> v2_tree_;
 };
 

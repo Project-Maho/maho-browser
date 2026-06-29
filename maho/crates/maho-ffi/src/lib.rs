@@ -9,7 +9,6 @@ use std::path::Path;
 use std::ptr;
 
 use maho_core::maho_core::MahoCore;
-use maho_types::space::RootItem;
 use maho_types::keyboard::KeyCombo;
 use maho_types::passwords::SavedPassword;
 
@@ -26,12 +25,7 @@ struct PasswordEntryView {
     password: Option<String>,
 }
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SidebarRootItemView {
-    kind: String,
-    id: String,
-}
+
 
 
 
@@ -168,95 +162,6 @@ pub unsafe extern "C" fn maho_core_get_space_view_models(ptr: *mut MahoCore) -> 
     if import_gate::is_active() { return ptr::null_mut(); }
     let core = &*ptr;
     to_json_cstring(&core.get_space_view_models())
-
-    }, ptr::null_mut())
-}
-
-/// # Safety
-/// `ptr` must be a valid pointer returned by `maho_core_new`.
-/// `space_id_json` must be a valid null-terminated C string containing a SpaceId JSON.
-/// Caller must free the returned string with `maho_string_free`.
-#[deprecated(
-    note = "Use maho_core_get_sidebar_state_v2 instead. Will be removed after 2026-07-15."
-)]
-#[no_mangle]
-pub unsafe extern "C" fn maho_core_get_sidebar_root_order(
-    ptr: *mut MahoCore,
-    space_id_json: *const c_char,
-    window_id_ptr: *const i64,
-) -> *mut c_char {
-    ffi_safe!({
-
-    if ptr.is_null() || space_id_json.is_null() {
-        return ptr::null_mut();
-    }
-    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
-    if import_gate::is_active() { return ptr::null_mut(); }
-    let core = &*ptr;
-    let json_str = match CStr::from_ptr(space_id_json).to_str() {
-        Ok(s) => s,
-        Err(_) => return ptr::null_mut(),
-    };
-    let space_id = match serde_json::from_str(json_str) {
-        Ok(id) => id,
-        Err(_) => return ptr::null_mut(),
-    };
-    
-    let root_order = if !window_id_ptr.is_null() {
-        core.get_sidebar_root_order_for_window(&space_id, *window_id_ptr)
-    } else {
-        core.get_sidebar_root_order(&space_id)
-    };
-
-    let root_items = root_order
-        .into_iter()
-        .map(|item| match item {
-            RootItem::Tab(tab_id) => SidebarRootItemView {
-                kind: "tab".to_string(),
-                id: tab_id.to_string(),
-            },
-            RootItem::Folder(folder_id) => SidebarRootItemView {
-                kind: "folder".to_string(),
-                id: folder_id.to_string(),
-            },
-        })
-        .collect::<Vec<_>>();
-    to_json_cstring(&root_items)
-
-    }, ptr::null_mut())
-}
-
-/// # Safety
-/// `ptr` must be a valid pointer returned by `maho_core_new`.
-/// `space_id_json` must be a valid null-terminated C string containing a SpaceId JSON.
-/// Caller must free the returned string with `maho_string_free`.
-#[deprecated(
-    note = "Use maho_core_get_sidebar_state_v2 instead. Will be removed after 2026-07-15."
-)]
-#[no_mangle]
-pub unsafe extern "C" fn maho_core_get_sidebar_tree(
-    ptr: *mut MahoCore,
-    space_id_json: *const c_char,
-) -> *mut c_char {
-    ffi_safe!({
-
-    if ptr.is_null() || space_id_json.is_null() {
-        return ptr::null_mut();
-    }
-    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
-    if import_gate::is_active() { return ptr::null_mut(); }
-    let core = &*ptr;
-    let json_str = match CStr::from_ptr(space_id_json).to_str() {
-        Ok(s) => s,
-        Err(_) => return ptr::null_mut(),
-    };
-    let space_id = match serde_json::from_str(json_str) {
-        Ok(id) => id,
-        Err(_) => return ptr::null_mut(),
-    };
-
-    let tree = core.get_sidebar_tree(&space_id);
-    to_json_cstring(&tree)
 
     }, ptr::null_mut())
 }
