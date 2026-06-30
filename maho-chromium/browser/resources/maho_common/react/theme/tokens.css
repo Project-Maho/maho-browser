@@ -1,0 +1,106 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@source "../ui/**/*.tsx";
+@source "../../../maho_ai/react/**/*.tsx";
+@source "../../../maho_settings/react/**/*.tsx";
+
+@custom-variant dark (&:is([data-theme="dark"] *));
+
+@theme inline {
+  --color-background:        var(--background);
+  --color-foreground:        var(--foreground);
+  --color-card:              var(--card);
+  --color-card-foreground:   var(--card-foreground);
+  --color-popover:           var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary:           var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary:         var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted:             var(--muted);
+  --color-muted-foreground:  var(--muted-foreground);
+  --color-accent:            var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive:       var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success:           var(--success);
+  --color-warning:           var(--warning);
+  --color-border:            var(--border);
+  --color-input:             var(--input);
+  --color-ring:              var(--ring);
+  --color-ring-offset:       var(--background);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-pill: 9999px;
+}
+
+/* Dark theme (default for WebUI) — derived from existing --maho-ai/--maho-settings tokens */
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --radius: 0.75rem;  /* 12px — matches existing --maho-settings-radius-sm */
+
+  --background:          #171a23;
+  --foreground:          #f5f7fb;
+  --card:                #10121b;
+  --card-foreground:     #f5f7fb;
+  --popover:             #10121b;
+  --popover-foreground:  #f5f7fb;
+  --primary:             #9bb2ff;
+  --primary-foreground:  #0b1027;
+  --secondary:           #1f2333;
+  --secondary-foreground: #d0d6e8;
+  --muted:               #1f2333;
+  --muted-foreground:    #98a1ba;
+  --accent:              #9bb2ff;
+  --accent-foreground:   #0b1027;
+  --destructive:         #ef4444;
+  --destructive-foreground: #ffffff;
+  --success:             #95d8bb;
+  --warning:             #f5b96a;
+  --border:              rgba(255,255,255,0.08);
+  --input:               rgba(9,11,17,0.38);
+  --ring:                rgba(155,178,255,0.5);
+}
+
+/* Light theme */
+[data-theme="light"] {
+  color-scheme: light;
+  --background:          #f4f5f7;
+  --foreground:          #1a1d27;
+  --card:                #ffffff;
+  --card-foreground:     #1a1d27;
+  --popover:             #ffffff;
+  --popover-foreground:  #1a1d27;
+  --primary:             #4a6aff;
+  --primary-foreground:  #ffffff;
+  --secondary:           #f7f8fa;
+  --secondary-foreground: #4a5068;
+  --muted:               #f7f8fa;
+  --muted-foreground:    #7a8299;
+  --accent:              #4a6aff;
+  --accent-foreground:   #ffffff;
+  --destructive:         #dc2626;
+  --destructive-foreground: #ffffff;
+  --success:             #2e9e6a;
+  --warning:             #d97706;
+  --border:              rgba(0,0,0,0.08);
+  --input:               rgba(0,0,0,0.03);
+  --ring:                rgba(74,106,255,0.5);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+}

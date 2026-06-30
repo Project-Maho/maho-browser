@@ -32,6 +32,9 @@ MahoSettingsUI::MahoSettingsUI(content::WebUI* web_ui)
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::ChildSrc,
       "child-src 'self' chrome://settings chrome://settings/passwords;");
+  source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::TrustedTypes,
+      "trusted-types default static-types;");
 }
 
 MahoSettingsUI::~MahoSettingsUI() = default;

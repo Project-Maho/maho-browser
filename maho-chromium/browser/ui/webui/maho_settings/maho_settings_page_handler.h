@@ -152,6 +152,13 @@ class MahoSettingsPageHandler
   void ClearBYOKKey(const std::string& provider,
                     ClearBYOKKeyCallback callback) override;
 
+  void Login(const std::string& email,
+             const std::string& password,
+             LoginCallback callback) override;
+  void Logout(LogoutCallback callback) override;
+  void GetAccountStatus(GetAccountStatusCallback callback) override;
+  void GetBillingInfo(GetBillingInfoCallback callback) override;
+
   // maho::MahoExtensionStateBridge::Observer:
   void OnInstalledExtensionsChanged() override;
 
@@ -189,6 +196,15 @@ class MahoSettingsPageHandler
   void LoadCachedThemeStoreFromDisk();
   void PersistCachedThemeStoreToDisk() const;
   base::FilePath GetThemeStoreCachePath() const;
+
+  void OnLoginResponse(LoginCallback callback,
+                       std::unique_ptr<network::SimpleURLLoader> loader,
+                       std::optional<std::string> response_body);
+  void OnSubscriptionResponse(GetBillingInfoCallback callback,
+                              bool refreshed_once,
+                              std::unique_ptr<network::SimpleURLLoader> loader,
+                              std::optional<std::string> response_body);
+  void BroadcastAccountStatus();
 
   mojo::Receiver<maho_settings::mojom::PageHandler> receiver_;
   mojo::Remote<maho_settings::mojom::Page> page_;

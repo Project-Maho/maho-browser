@@ -346,6 +346,16 @@ struct CreditBalanceInfo {
   int64 last_consumption_at;
 };
 
+// Snapshot of AI settings as stored in profile prefs. Used by the AI panel
+// to display the active provider + model in the composer.
+struct AISettingsInfo {
+  // Provider id selected in chrome://maho-settings?pane=maho-ai
+  // (e.g., "openai", "anthropic", "openai-compat"). Empty if not configured.
+  string active_provider_id;
+  // Active model id (e.g., "gpt-4o-mini"). Empty if not configured.
+  string active_model_id;
+};
+
 // ==========================================================================
 // Interfaces
 // ==========================================================================
@@ -434,6 +444,11 @@ interface PageHandler {
   // Open the settings page chrome://maho-settings/
   OpenSettings();
 
+  // Get the current AI settings (provider + model) from prefs.
+  // Called on mount and on visibility change to reflect changes saved in
+  // chrome://maho-settings?pane=maho-ai.
+  GetAISettings() => (AISettingsInfo info);
+
   // Get the current view mode (sidebar or floating)
   GetViewMode() => (ViewMode mode);
 
@@ -480,4 +495,8 @@ interface Page {
 
   // A session's metadata was updated (title, status, etc.).
   OnSessionUpdated(SessionInfo session);
+
+  // The AI provider/model selection changed in profile prefs (e.g., user
+  // saved a new provider in chrome://maho-settings?pane=maho-ai).
+  OnAISettingsChanged(AISettingsInfo info);
 };

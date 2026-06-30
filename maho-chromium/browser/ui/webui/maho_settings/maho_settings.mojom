@@ -163,6 +163,28 @@ struct InstalledExtension {
   bool enabled;
 };
 
+struct AccountStatus {
+  bool signed_in;
+  string email;
+  string display_name;
+  string user_id;
+  string tier;
+  string subscription_status;
+  int64 subscription_expires_at;
+};
+
+struct BillingInfo {
+  string tier;
+  string subscription_status;
+  int64 subscription_expires_at;
+  int64 period_start_at;
+  int32 anniversary_reset_day;
+  float tier_ceiling_usd;
+  float credit_balance_usd;
+  float lifetime_purchased_usd;
+  bool has_payment_method;
+};
+
 interface PageHandlerFactory {
   CreatePageHandler(pending_remote<Page> page,
                     pending_receiver<PageHandler> handler);
@@ -247,9 +269,31 @@ interface PageHandler {
 
   SetBYOKKey(string provider, string key) => (bool success);
   ClearBYOKKey(string provider) => (bool success);
+
+  // Auth — Identity domain (Account pane)
+  // Login attempts to sign in with email/password against the Maho relay.
+  // On success: stores encrypted tokens via OSCrypt and fires AccountStatusChanged.
+  // On failure: returns success=false with a human-readable error_message.
+  Login(string email, string password) => (bool success, string error_message);
+
+  // Logout clears local tokens and best-effort POSTs /auth/logout.
+  Logout() => ();
+
+  // GetAccountStatus reads tokens from prefs. Does NOT make a network call.
+  // For network-backed status, use GetBillingInfo (which calls /auth/subscription).
+  GetAccountStatus() => (AccountStatus status);
+
+  // GetBillingInfo calls /auth/subscription on the relay using the stored access token.
+  // On 401: attempts a single refresh via /auth/refresh, then retries once.
+  // Returns an empty BillingInfo (tier="", all zeros, has_payment_method=false) when signed out.
+  GetBillingInfo() => (BillingInfo info);
 };
 
 interface Page {
   SettingsChanged(array<SettingValue> settings);
   InstalledExtensionsChanged(array<InstalledExtension> extensions);
+
+  // Pushed when account state changes (e.g., post-login, post-logout).
+  // Page can re-render Account and Billing surfaces without polling.
+  AccountStatusChanged(AccountStatus status);
 };

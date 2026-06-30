@@ -48,6 +48,9 @@
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "chrome/browser/browser_process.h"
+#include "components/os_crypt/async/browser/os_crypt_async.h"
+#include "maho/browser/ui/webui/maho_auth_utils.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "url/gurl.h"
@@ -353,6 +356,23 @@ MahoAIPageHandler::MahoAIPageHandler(
     prefs_->SetString(maho::ai_prefs::kAiViewMode, "sidebar");
   }
   LoadPersistedSessions();
+
+  if (g_browser_process && g_browser_process->os_crypt_async()) {
+    g_browser_process->os_crypt_async()->GetInstance(
+        base::BindOnce(&MahoAIPageHandler::OnOsCryptReady,
+                       weak_factory_.GetWeakPtr()),
+        os_crypt_async::Encryptor::Option::kEncryptSyncCompat);
+  }
+
+  pref_change_registrar_.Init(prefs_);
+  pref_change_registrar_.Add(
+      maho::ai_prefs::kProvider,
+      base::BindRepeating(&MahoAIPageHandler::OnAISettingsPrefsChanged,
+                          base::Unretained(this)));
+  pref_change_registrar_.Add(
+      maho::ai_prefs::kModel,
+      base::BindRepeating(&MahoAIPageHandler::OnAISettingsPrefsChanged,
+                          base::Unretained(this)));
 }
 
 MahoAIPageHandler::~MahoAIPageHandler() {
@@ -1302,12 +1322,32 @@ void MahoAIPageHandler::OpenSettings() {
     return;
   }
   content::OpenURLParams params(
-      GURL("chrome://maho-settings/"),
+      GURL("chrome://maho-settings/?pane=maho-ai"),
       content::Referrer(),
       WindowOpenDisposition::SINGLETON_TAB,
       ui::PAGE_TRANSITION_AUTO_TOPLEVEL,
       /*is_renderer_initiated=*/false);
   browser_->OpenURL(params, /*navigation_handle_callback=*/{});
+}
+
+maho_ai::mojom::AISettingsInfoPtr
+MahoAIPageHandler::BuildAISettingsInfo() const {
+  auto info = maho_ai::mojom::AISettingsInfo::New();
+  info->active_provider_id = prefs_->GetString(maho::ai_prefs::kProvider);
+  info->active_model_id = prefs_->GetString(maho::ai_prefs::kModel);
+  return info;
+}
+
+void MahoAIPageHandler::GetAISettings(GetAISettingsCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  std::move(callback).Run(BuildAISettingsInfo());
+}
+
+void MahoAIPageHandler::OnAISettingsPrefsChanged() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (page_.is_bound()) {
+    page_->OnAISettingsChanged(BuildAISettingsInfo());
+  }
 }
 
 void MahoAIPageHandler::GetViewMode(GetViewModeCallback callback) {
@@ -2021,6 +2061,9 @@ void MahoAIPageHandler::GetCreditBalance(GetCreditBalanceCallback callback) {
   }
 
   std::string access_token;
+  if (encryptor_.has_value()) {
+    access_token = maho::auth::GetRelayAccessToken(prefs_, *encryptor_);
+  }
 
   // Return zero balance immediately if there is no token — anonymous user.
   if (access_token.empty()) {
@@ -2163,4 +2206,8 @@ void MahoAIPageHandler::GetBuyCreditsUrl(
   }
 
   std::move(callback).Run(checkout_url);
+}
+
+void MahoAIPageHandler::OnOsCryptReady(os_crypt_async::Encryptor encryptor) {
+  encryptor_ = std::move(encryptor);
 }

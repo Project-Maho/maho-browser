@@ -1,146 +1,152 @@
+import React from 'react';
 import type {RuntimeEventRecord} from '../../../types.js';
 import {getEventText, getRuntimeStateLabel, RuntimeEventKind} from '../../../types.js';
 import {formatTimestamp} from '../../lib/format-timestamp.js';
-import {Markdown} from '../../ui/markdown.js';
-import {Pill} from '../../ui/pill.js';
+import {Markdown} from '../../components/markdown.js';
+import {Badge} from '@ui/badge';
+
+function EventShell(
+    {
+      badge,
+      body,
+      meta,
+      title,
+    }: {
+      badge?: React.ReactNode;
+      body: React.ReactNode;
+      meta: string;
+      title: string;
+    }) {
+  return (
+    <article className="grid gap-3 rounded-2xl border border-border/80 bg-secondary/35 p-4 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+          {title}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {badge}
+          <div className="text-[11px] text-muted-foreground">{meta}</div>
+        </div>
+      </div>
+      {body}
+    </article>
+  );
+}
+
+const markdownBodyClassName =
+    'text-sm leading-6 text-muted-foreground [&_p]:m-0 [&_p:not(:last-child)]:mb-3 [&_h2]:m-0 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:m-0 [&_h3]:text-sm [&_h3]:font-semibold [&_ul]:m-0 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:m-0 [&_ol]:list-decimal [&_ol]:pl-5 [&_li+li]:mt-2 [&_a]:text-primary [&_a]:underline [&_a]:underline-offset-4 [&_blockquote]:m-0 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_pre]:m-0 [&_pre]:overflow-x-auto [&_pre]:rounded-xl [&_pre]:bg-background/70 [&_pre]:p-3 [&_pre]:text-xs';
 
 export function EventCard({event}: {event: RuntimeEventRecord}) {
   const meta = formatTimestamp(event.timestamp);
 
   if (event.kind === RuntimeEventKind.kUserPrompt) {
     return (
-      <article className="timeline-card" data-kind="user">
-        <div className="timeline-card__header">
-          <h3 className="timeline-card__title">User prompt</h3>
-          <div className="timeline-card__meta">{meta}</div>
-        </div>
-        <Markdown className="timeline-card__body" text={getEventText(event)} />
-      </article>
+      <EventShell
+        body={<Markdown className={markdownBodyClassName} text={getEventText(event)} />}
+        meta={meta}
+        title="User prompt"
+      />
     );
   }
 
   if (event.kind === RuntimeEventKind.kSessionStatus) {
     return (
-      <article className="timeline-card" data-kind="session">
-        <div className="timeline-card__header">
-          <h3 className="timeline-card__title">Session status</h3>
-          <div className="timeline-card__meta">{meta}</div>
-        </div>
-        <div className="timeline-card__body">{getRuntimeStateLabel(getEventText(event))}</div>
-      </article>
+      <EventShell
+        body={<div className="text-sm leading-6 text-muted-foreground">{getRuntimeStateLabel(getEventText(event))}</div>}
+        meta={meta}
+        title="Session status"
+      />
     );
   }
 
   if (event.kind === RuntimeEventKind.kAssistantToken) {
     return (
-      <article className="timeline-card" data-kind="assistant">
-        <div className="timeline-card__header">
-          <h3 className="timeline-card__title">Assistant streaming</h3>
-          <div className="timeline-card__meta">{meta}</div>
-        </div>
-        <Markdown className="timeline-card__body" text={getEventText(event)} />
-      </article>
+      <EventShell
+        body={<Markdown className={markdownBodyClassName} text={getEventText(event)} />}
+        meta={meta}
+        title="Assistant streaming"
+      />
     );
   }
 
   if (event.kind === RuntimeEventKind.kTurnComplete) {
     return (
-      <article className="timeline-card" data-kind="assistant-final">
-        <div className="timeline-card__header">
-          <h3 className="timeline-card__title">Assistant response</h3>
-          <div className="timeline-card__meta">{meta}</div>
-        </div>
-        <Markdown className="timeline-card__body" text={getEventText(event)} />
-      </article>
+      <EventShell
+        body={<Markdown className={markdownBodyClassName} text={getEventText(event)} />}
+        meta={meta}
+        title="Assistant response"
+      />
     );
   }
 
   if (event.kind === RuntimeEventKind.kToolRequest) {
     return (
-      <article className="timeline-card" data-kind="tool">
-        <div className="timeline-card__header">
-          <h3 className="timeline-card__title">{event.toolCall?.toolName || 'Tool request'}</h3>
-          <Pill text={event.toolCall?.status !== undefined ?
-            ['Pending', 'Running', 'Completed', 'Failed', 'Cancelled'][event.toolCall.status] || 'Pending' :
-            'Pending'} tone="accent" />
-          <div className="timeline-card__meta">{meta}</div>
-        </div>
-        <div className="timeline-card__body">
-          {event.toolCall?.argumentsJson || 'Waiting for tool arguments'}
-        </div>
-      </article>
+      <EventShell
+        badge={(
+          <Badge variant="secondary">
+            {event.toolCall?.status !== undefined ?
+              ['Pending', 'Running', 'Completed', 'Failed', 'Cancelled'][event.toolCall.status] || 'Pending' :
+              'Pending'}
+          </Badge>
+        )}
+        body={<div className="text-sm leading-6 text-muted-foreground break-words">{event.toolCall?.argumentsJson || 'Waiting for tool arguments'}</div>}
+        meta={meta}
+        title={event.toolCall?.toolName || 'Tool request'}
+      />
     );
   }
 
   if (event.kind === RuntimeEventKind.kToolResult) {
     const success = !!event.toolResult?.success;
     return (
-      <article className="timeline-card" data-kind="tool-result">
-        <div className="timeline-card__header">
-          <h3 className="timeline-card__title">Tool result</h3>
-          <Pill text={success ? 'Success' : 'Error'} tone={success ? 'success' : 'danger'} />
-          <div className="timeline-card__meta">{meta}</div>
-        </div>
-        <div className="timeline-card__body">
-          {event.toolResult?.errorMessage || event.toolResult?.output || 'No tool output'}
-        </div>
-      </article>
+      <EventShell
+        badge={<Badge variant={success ? 'success' : 'destructive'}>{success ? 'Success' : 'Error'}</Badge>}
+        body={<div className="text-sm leading-6 text-muted-foreground break-words">{event.toolResult?.errorMessage || event.toolResult?.output || 'No tool output'}</div>}
+        meta={meta}
+        title="Tool result"
+      />
     );
   }
 
   if (event.kind === RuntimeEventKind.kApprovalRequest) {
     return (
-      <article className="timeline-card" data-kind="approval">
-        <div className="timeline-card__header">
-          <h3 className="timeline-card__title">Approval required</h3>
-          <Pill text="Pending" tone="warning" />
-          <div className="timeline-card__meta">{meta}</div>
-        </div>
-        <div className="timeline-card__body">
-          {event.approvalRequest?.description || 'The runtime is waiting for approval.'}
-        </div>
-      </article>
+      <EventShell
+        badge={<Badge variant="warning">Pending</Badge>}
+        body={<div className="text-sm leading-6 text-muted-foreground break-words">{event.approvalRequest?.description || 'The runtime is waiting for approval.'}</div>}
+        meta={meta}
+        title="Approval required"
+      />
     );
   }
 
   if (event.kind === RuntimeEventKind.kApprovalResult) {
     const approved = !!event.approvalResult?.approved;
     return (
-      <article className="timeline-card" data-kind="approval-result">
-        <div className="timeline-card__header">
-          <h3 className="timeline-card__title">Approval decision</h3>
-          <Pill text={approved ? 'Approved' : 'Denied'} tone={approved ? 'success' : 'danger'} />
-          <div className="timeline-card__meta">{meta}</div>
-        </div>
-        <div className="timeline-card__body">
-          {event.approvalResult?.reason || 'Approval response recorded'}
-        </div>
-      </article>
+      <EventShell
+        badge={<Badge variant={approved ? 'success' : 'destructive'}>{approved ? 'Approved' : 'Denied'}</Badge>}
+        body={<div className="text-sm leading-6 text-muted-foreground break-words">{event.approvalResult?.reason || 'Approval response recorded'}</div>}
+        meta={meta}
+        title="Approval decision"
+      />
     );
   }
 
   if (event.kind === RuntimeEventKind.kError) {
     return (
-      <article className="timeline-card" data-kind="error">
-        <div className="timeline-card__header">
-          <h3 className="timeline-card__title">Runtime error</h3>
-          <Pill text="Error" tone="danger" />
-          <div className="timeline-card__meta">{meta}</div>
-        </div>
-        <div className="timeline-card__body">
-          {getEventText(event) || 'The runtime reported an error.'}
-        </div>
-      </article>
+      <EventShell
+        badge={<Badge variant="destructive">Error</Badge>}
+        body={<div className="text-sm leading-6 text-muted-foreground break-words">{getEventText(event) || 'The runtime reported an error.'}</div>}
+        meta={meta}
+        title="Runtime error"
+      />
     );
   }
 
   return (
-    <article className="timeline-card" data-kind="connection">
-      <div className="timeline-card__header">
-        <h3 className="timeline-card__title">Connection state</h3>
-        <div className="timeline-card__meta">{meta}</div>
-      </div>
-      <div className="timeline-card__body">{getRuntimeStateLabel(event.text)}</div>
-    </article>
+    <EventShell
+      body={<div className="text-sm leading-6 text-muted-foreground">{getRuntimeStateLabel(event.text)}</div>}
+      meta={meta}
+      title="Connection state"
+    />
   );
 }

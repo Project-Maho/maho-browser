@@ -1,0 +1,37 @@
+@import "../../../maho_common/react/theme/tokens.css";
+
+/* maho_ai-specific token overrides if needed (e.g., panel padding) */
+:root {
+  --color-accent-glow: rgba(155,178,255,0.18);
+}
+
+@layer utilities {
+  @keyframes halo-drift {
+    0%,
+    100% {
+      transform: translate3d(0, 0, 0) rotate(0deg);
+    }
+
+    25% {
+      transform: translate3d(3px, -2px, 0) rotate(1deg);
+    }
+
+    50% {
+      transform: translate3d(4px, 3px, 0) rotate(2deg);
+    }
+
+    75% {
+      transform: translate3d(-3px, 2px, 0) rotate(-1deg);
+    }
+  }
+
+  .animate-halo-drift {
+    animation: halo-drift 24s linear infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-halo-drift {
+    animation: none;
+  }
+}

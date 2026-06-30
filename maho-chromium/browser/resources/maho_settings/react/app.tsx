@@ -9,7 +9,7 @@ import React, {
 import {createRoot} from 'react-dom/client';
 
 import type {SettingValue} from '../mojo.js';
-import type {AccentColor, PaneDefinition, SettingMetadata} from '../models.js';
+import type {PaneDefinition, SettingMetadata} from '../models.js';
 import {DOMAIN_DEFINITIONS} from '../schema/domains.js';
 import {
   LIVE_PANE_SECTION_MANIFEST,
@@ -17,10 +17,29 @@ import {
   PANE_DEFINITIONS,
 } from '../schema/panes.js';
 import {
-  ACCENT_COLORS,
   SETTING_METADATA,
 } from '../schema/setting_schema.js';
-import {Button, TextArea, TextInput, joinClassNames} from '../../maho_common/react/primitives/index.js';
+import {Button} from '@ui/button';
+import {Input} from '@ui/input';
+import {Textarea} from '@ui/textarea';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@ui/card';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@ui/select';
+import {ToggleGroup, ToggleGroupItem} from '@ui/toggle-group';
+import {Toaster} from '@ui/sonner';
+import {cn} from '@lib/utils';
+import {applyTheme, watchAutoTheme} from '@theme/apply_theme';
 import {DomainPaneContent, Toggle} from './domain_panes.js';
 import {MahoSettingsStore} from './store.js';
 
@@ -83,17 +102,45 @@ function normalizeInputValue(
   return String(Math.min(max, Math.max(min, parsed)));
 }
 
-function parseAccentColor(value: string): {r: number; g: number; b: number} | null {
-  try {
-    if (!value) {
-      return null;
-    }
-    const parsed = JSON.parse(value) as AccentColor;
-    return {r: parsed.r, g: parsed.g, b: parsed.b};
-  } catch {
-    return null;
-  }
-}
+const SETTINGS_SHELL_CLASS = 'min-h-screen w-full bg-background text-foreground';
+const SETTINGS_WINDOW_CLASS = 'h-screen w-full';
+const SETTINGS_WORKSPACE_CLASS = 'grid h-full min-h-0 min-w-0';
+const SETTINGS_WORKSPACE_COLUMNS_CLASS = 'grid-cols-[240px_minmax(0,1fr)]';
+const SETTINGS_SIDEBAR_CLASS = 'border-r border-border bg-card';
+const SETTINGS_SIDEBAR_SCROLL_CLASS = 'flex h-full flex-col overflow-y-auto p-4';
+const SETTINGS_BRAND_CLASS = 'mb-4 grid gap-1 px-2 pt-2';
+const SETTINGS_SIDEBAR_TITLE_CLASS = 'text-2xl font-semibold tracking-tight';
+const SETTINGS_NAV_CLASS = 'flex flex-col gap-1 pb-3';
+const SETTINGS_DOMAIN_LABEL_CLASS =
+    'mt-4 mb-1 px-2 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground first:mt-0';
+const SETTINGS_CONTENT_CLASS = 'h-full min-w-0 overflow-hidden bg-background';
+const SETTINGS_CONTENT_SCROLL_CLASS = 'h-full overflow-y-auto p-6 lg:p-7';
+const SETTINGS_SECTION_CLASS = 'mb-8 scroll-mt-8';
+const SETTINGS_SECTION_CARD_CLASS = 'overflow-hidden rounded-xl border border-border bg-card shadow-sm';
+const SETTINGS_SECTION_HEADER_CLASS = 'flex flex-col gap-2 border-b border-border p-4 md:p-5';
+const SETTINGS_SECTION_HEADER_EMBED_CLASS = 'border-b-0 pb-0 sm:flex-row sm:items-center sm:justify-between';
+const SETTINGS_SECTION_TITLE_CLASS = 'text-2xl font-semibold tracking-tight';
+const SETTINGS_SECTION_DESCRIPTION_CLASS = 'text-sm leading-6 text-muted-foreground';
+const SETTINGS_CARDS_GRID_CLASS = 'grid gap-4 p-4 md:grid-cols-2 md:p-5';
+const SIDEBAR_BUTTON_CLASS =
+    'h-auto w-full justify-start border border-transparent px-3 py-2.5 text-left text-sm font-medium text-foreground shadow-none [&:not([aria-current=page])]:hover:border-border/60 [&:not([aria-current=page])]:hover:bg-background/80 aria-[current=page]:translate-x-px aria-[current=page]:border-border aria-[current=page]:bg-accent aria-[current=page]:text-accent-foreground aria-[current=page]:shadow-sm';
+const SIDEBAR_BUTTON_TEXT_CLASS = 'flex min-w-0 flex-1';
+const SIDEBAR_BUTTON_LABEL_CLASS = 'truncate';
+const BROWSER_SHELL_CLASS = 'min-w-0 overflow-hidden rounded-xl border border-border bg-background/50 shadow-inner';
+const BROWSER_FRAME_CLASS = 'block h-[78vh] min-h-[720px] w-full border-0 bg-background';
+const SETTING_ROW_CLASS =
+    'grid gap-4 border-b border-border py-4 sm:grid-cols-[minmax(0,1fr)_minmax(270px,344px)] sm:items-center';
+const SETTING_ROW_FIRST_CLASS = 'pt-0';
+const SETTING_COPY_CLASS = 'min-w-0 flex-1';
+const SETTING_ROW_TITLE_CLASS = 'text-sm font-medium text-foreground';
+const SETTING_ROW_DESCRIPTION_CLASS = 'mt-1 text-xs leading-5 text-muted-foreground';
+const SETTING_CONTROL_CLASS = 'flex w-full items-center justify-start sm:justify-end';
+const SETTING_ICON_CLASS = 'inline-block size-4 shrink-0 align-middle';
+const SLIDER_SHELL_CLASS = 'flex w-full min-w-0 items-center gap-3';
+const SLIDER_CLASS =
+    'h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-muted accent-primary [&::-webkit-slider-thumb]:size-5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-0 [&::-webkit-slider-thumb]:bg-primary [&::-webkit-slider-thumb]:shadow-[0_4px_12px_rgba(2,6,14,0.4)]';
+const SLIDER_VALUE_CLASS = 'min-w-12 text-right text-sm font-medium text-muted-foreground';
+const TEXTAREA_SHELL_CLASS = 'w-full min-w-[300px]';
 
 function SettingsApp({store}: {store: MahoSettingsStore}) {
   const state = useSyncExternalStore(
@@ -101,6 +148,8 @@ function SettingsApp({store}: {store: MahoSettingsStore}) {
 
   useEffect(() => {
     void store.bootstrap();
+    applyTheme("auto");
+    return watchAutoTheme((resolved) => applyTheme(resolved));
   }, [store]);
 
   const currentPane = useMemo(() => {
@@ -122,40 +171,44 @@ function SettingsApp({store}: {store: MahoSettingsStore}) {
   }, []);
 
   return (
-    <div className={joinClassNames('preferences-shell', currentPane.kind === 'embed' ? 'preferences-shell--embed' : undefined)}>
-      <div className="preferences-window">
-        <div className="preferences-workspace">
-          <aside className="preferences-sidebar">
-            <div className="preferences-sidebar__scroll">
-              <section className="sidebar-brand-card">
-                <h1 className="sidebar-title">Settings</h1>
-              </section>
-              <nav className="sidebar-navigation" aria-label="Settings panes">
-                {DOMAIN_DEFINITIONS.map(domain => {
-                  const domainPanes = panesByDomain.get(domain.id);
-                  if (!domainPanes || domainPanes.length === 0) {
-                    return null;
-                  }
+    <div className={SETTINGS_SHELL_CLASS}>
+      <div className={SETTINGS_WINDOW_CLASS}>
+        <div className={cn(
+            SETTINGS_WORKSPACE_CLASS,
+            currentPane.kind === 'embed' ? 'grid-cols-1' : SETTINGS_WORKSPACE_COLUMNS_CLASS)}>
+          {currentPane.kind === 'embed' ? null : (
+            <aside className={SETTINGS_SIDEBAR_CLASS}>
+              <div className={SETTINGS_SIDEBAR_SCROLL_CLASS}>
+                <section className={SETTINGS_BRAND_CLASS}>
+                  <h1 className={SETTINGS_SIDEBAR_TITLE_CLASS}>Settings</h1>
+                </section>
+                <nav className={SETTINGS_NAV_CLASS} aria-label="Settings panes">
+                  {DOMAIN_DEFINITIONS.map(domain => {
+                    const domainPanes = panesByDomain.get(domain.id);
+                    if (!domainPanes || domainPanes.length === 0) {
+                      return null;
+                    }
 
-                  return (
-                    <React.Fragment key={domain.id}>
-                      <div className="sidebar-domain-label">{domain.label}</div>
-                      {domainPanes.map(pane => (
-                        <PaneButton
-                          key={pane.key}
-                          isActive={pane.key === currentPane.key}
-                          pane={pane}
-                          onSelect={() => store.selectPane(pane.key)}
-                        />
-                      ))}
-                    </React.Fragment>
-                  );
-                })}
-              </nav>
-            </div>
-          </aside>
-          <main className="preferences-content">
-            <div className="preferences-content__scroll">
+                    return (
+                      <React.Fragment key={domain.id}>
+                        <div className={SETTINGS_DOMAIN_LABEL_CLASS}>{domain.label}</div>
+                        {domainPanes.map(pane => (
+                          <PaneButton
+                            key={pane.key}
+                            isActive={pane.key === currentPane.key}
+                            pane={pane}
+                            onSelect={() => store.selectPane(pane.key)}
+                          />
+                        ))}
+                      </React.Fragment>
+                    );
+                  })}
+                </nav>
+              </div>
+            </aside>
+          )}
+          <main className={SETTINGS_CONTENT_CLASS}>
+            <div className={SETTINGS_CONTENT_SCROLL_CLASS}>
               {currentPane.kind === 'embed' ? (
                 <EmbedPane pane={currentPane} onExit={() => store.selectPane('general')} />
               ) : isMigratedLivePane(currentPane) ? (
@@ -173,6 +226,7 @@ function SettingsApp({store}: {store: MahoSettingsStore}) {
           </main>
         </div>
       </div>
+      <Toaster position="bottom-right" />
     </div>
   );
 }
@@ -181,19 +235,23 @@ function EmbedPane({pane, onExit}: {pane: PaneDefinition; onExit: () => void}) {
   const embedUrl = pane.embedUrl || 'chrome://settings/';
 
   return (
-    <section className="preferences-section" data-pane={pane.key} id={`section-${pane.key}`}>
-      <div className="preferences-card preferences-card--pane-shell preferences-card--browser">
-        <header className="preferences-section__header preferences-section__header--embed">
-          <Button className="preferences-back-button" type="button" onClick={onExit}>
-            <img alt="" aria-hidden="true" className="setting-icon" src="chrome://maho-settings/icons/arrow-right.svg" style={{transform: 'rotate(180deg)'}} />
+    <section className={SETTINGS_SECTION_CLASS} data-pane={pane.key} id={`section-${pane.key}`}>
+      <div className={SETTINGS_SECTION_CARD_CLASS}>
+        <header className={cn(SETTINGS_SECTION_HEADER_CLASS, SETTINGS_SECTION_HEADER_EMBED_CLASS)}>
+          <Button
+            className="w-fit justify-start rounded-lg border border-border bg-background/70 px-3 text-sm font-medium text-foreground hover:bg-accent hover:text-accent-foreground"
+            type="button"
+            variant="ghost"
+            onClick={onExit}>
+            <img alt="" aria-hidden="true" className={SETTING_ICON_CLASS} src="chrome://maho-settings/icons/arrow-right.svg" style={{transform: 'rotate(180deg)'}} />
             Back to Maho settings
           </Button>
-          <h2 className="preferences-section__title">{pane.title}</h2>
+          <h2 className={SETTINGS_SECTION_TITLE_CLASS}>{pane.title}</h2>
         </header>
-        <div className="cards-grid">
-          <div className="browser-settings-shell browser-settings-shell--wide">
+        <div className={cn(SETTINGS_CARDS_GRID_CLASS, 'grid-cols-1 pt-4 md:grid-cols-1')}>
+          <div className={BROWSER_SHELL_CLASS}>
             <iframe
-              className="browser-settings-webview"
+              className={BROWSER_FRAME_CLASS}
               role="document"
               src={embedUrl}
               title={pane.title}
@@ -212,16 +270,17 @@ function PaneButton(
       onSelect: () => void;
     }) {
   return (
-    <button
+    <Button
+      variant="ghost"
       aria-current={isActive ? 'page' : undefined}
-      className={joinClassNames('sidebar-nav-button', isActive ? 'is-active' : undefined)}
+      className={SIDEBAR_BUTTON_CLASS}
       data-pane={pane.key}
       type="button"
       onClick={onSelect}>
-      <span className="sidebar-nav-button__text">
-        <span className="sidebar-nav-button__label">{pane.navTitle}</span>
+      <span className={SIDEBAR_BUTTON_TEXT_CLASS}>
+        <span className={SIDEBAR_BUTTON_LABEL_CLASS}>{pane.navTitle}</span>
       </span>
-    </button>
+    </Button>
   );
 }
 
@@ -260,16 +319,16 @@ function LivePaneSection(
   }, [pane.key, pane.title, relevantSettings]);
 
   return (
-    <section className="preferences-section" data-pane={pane.key} id={`section-${pane.key}`}>
-      <div className="preferences-card preferences-card--pane-shell">
-        <header className="preferences-section__header">
-          <h2 className="preferences-section__title">{pane.title}</h2>
-          {bootstrapError ? <p className="preferences-section__description">{bootstrapError}</p> : null}
+    <section className={SETTINGS_SECTION_CLASS} data-pane={pane.key} id={`section-${pane.key}`}>
+      <div className={SETTINGS_SECTION_CARD_CLASS}>
+        <header className={SETTINGS_SECTION_HEADER_CLASS}>
+          <h2 className={SETTINGS_SECTION_TITLE_CLASS}>{pane.title}</h2>
+          {bootstrapError ? <p className={SETTINGS_SECTION_DESCRIPTION_CLASS}>{bootstrapError}</p> : null}
           {!bootstrapError && lastActionError ? (
-            <p className="preferences-section__description">{lastActionError}</p>
+            <p className={SETTINGS_SECTION_DESCRIPTION_CLASS}>{lastActionError}</p>
           ) : null}
         </header>
-        <div className="cards-grid">
+        <div className={SETTINGS_CARDS_GRID_CLASS}>
           {cards.map(card => (
             <ContentCard
               key={`${pane.key}-${card.title}`}
@@ -297,33 +356,24 @@ function ContentCard(
       wide: boolean;
     }) {
   return (
-    <article className={joinClassNames('content-card', wide ? 'content-card--wide' : undefined)}>
-      <div className="content-card__header">
-        <div className="content-card__title-group">
-          <h3 className="content-card__title">{title}</h3>
-          {description ? <p className="content-card__copy">{description}</p> : null}
-        </div>
-      </div>
-      <div className="preferences-card__rows">
+    <Card className={cn('h-full border-border/70 bg-background/40 shadow-none', wide ? 'md:col-span-full' : undefined)}>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+        {description ? <CardDescription>{description}</CardDescription> : null}
+      </CardHeader>
+      <CardContent className="space-y-4">
         {missingSettingKeys.length > 0 ? (
-          <section className="setting-row setting-row--first">
-            <div className="setting-row__copy">
-              <h4 className="setting-row__title">Settings unavailable</h4>
-              <p className="setting-row__description">
-                {`The browser did not provide these schema-declared settings: ${missingSettingKeys.join(', ')}.`}
-              </p>
-            </div>
-          </section>
+          <div className="text-sm text-yellow-500 bg-yellow-500/10 p-3 rounded-md">
+            <h4 className="font-semibold">Settings unavailable</h4>
+            <p className="text-xs">
+              {`The browser did not provide these schema-declared settings: ${missingSettingKeys.join(', ')}.`}
+            </p>
+          </div>
         ) : null}
         {settings.length === 0 && missingSettingKeys.length === 0 ? (
-          <section className="setting-row setting-row--first">
-            <div className="setting-row__copy">
-              <h4 className="setting-row__title">No settings available</h4>
-              <p className="setting-row__description">
-                This section is defined, but there are no current settings to display.
-              </p>
-            </div>
-          </section>
+          <div className="text-sm text-muted-foreground text-center py-4">
+            No settings available
+          </div>
         ) : null}
         {settings.map((setting, index) => (
           <SettingRow
@@ -333,8 +383,8 @@ function ContentCard(
             store={store}
           />
         ))}
-      </div>
-    </article>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -347,18 +397,18 @@ function SettingRow(
   const meta = getSettingMetadata(item);
 
   return (
-    <section className={joinClassNames('setting-row', isFirstRow ? 'setting-row--first' : undefined)}>
-      <div className="setting-row__copy">
-        <h4 className="setting-row__title">{meta ? meta.label : item.key}</h4>
-        <p className="setting-row__description">
+    <section className={cn(SETTING_ROW_CLASS, isFirstRow ? SETTING_ROW_FIRST_CLASS : undefined)}>
+      <div className={SETTING_COPY_CLASS}>
+        <h4 className={SETTING_ROW_TITLE_CLASS}>{meta ? meta.label : item.key}</h4>
+        <p className={SETTING_ROW_DESCRIPTION_CLASS}>
           {meta ? meta.description : `Metadata missing for ${item.key}.`}
         </p>
       </div>
-      <div className="setting-row__control">
+      <div className={SETTING_CONTROL_CLASS}>
         {meta ? (
           <SettingControl item={item} meta={meta} store={store} />
         ) : (
-          <p className="setting-row__description">
+          <p className={SETTING_ROW_DESCRIPTION_CLASS}>
             {`Unsupported setting metadata for ${item.key}. Current value: ${item.value || '(empty)'}`}
           </p>
         )}
@@ -388,8 +438,6 @@ function SettingControl(
     }
     case 'select':
       return <SelectControl item={item} meta={meta} store={store} />;
-    case 'color-swatch':
-      return <ColorSwatchControl item={item} store={store} />;
     case 'slider':
       return <SliderControl item={item} meta={meta} store={store} />;
     case 'textarea':
@@ -421,10 +469,9 @@ function InputControl(
   }, [draftValue, item.key, item.value, meta, store]);
 
   return (
-    <div className="setting-input-shell">
-      <TextInput
+    <div className="flex items-center gap-2">
+      <Input
         aria-label={meta.label}
-        className="setting-input"
         disabled={isSaving}
         inputMode={meta.control === 'number' ? 'numeric' : undefined}
         max={meta.control === 'number' && meta.max !== undefined ? String(meta.max) : undefined}
@@ -433,6 +480,7 @@ function InputControl(
         step={meta.control === 'number' && meta.step !== undefined ? String(meta.step) : undefined}
         type={meta.control === 'number' ? 'number' : 'text'}
         value={draftValue}
+        className="w-24 h-9"
         onBlur={() => {
           void commitValue();
         }}
@@ -444,7 +492,7 @@ function InputControl(
         }}
       />
       {meta.control === 'number' ? (
-        <span className="setting-input-shell__suffix">px</span>
+        <span className="text-sm text-muted-foreground">px</span>
       ) : null}
     </div>
   );
@@ -463,33 +511,33 @@ function SelectControl(
   const options = meta.options || [];
   const isSaving = store.isSaving(item.key);
   const hasKnownValue = options.some(option => option.value === item.value);
+  const currentValue = hasKnownValue ? item.value : (options[0]?.value || '');
 
   return (
-    <div className="setting-input-shell setting-input-shell--select">
+    <div className="w-48">
       {!hasKnownValue ? (
-        <p className="setting-row__description">
-          {`Current value ${item.value || '(empty)'} is not recognized by the metadata registry.`}
+        <p className="text-xs text-destructive mb-1">
+          {`Current value ${item.value || '(empty)'} is not recognized.`}
         </p>
       ) : null}
-      <select
-        aria-invalid={!hasKnownValue || undefined}
-        aria-label={meta.label}
-        className="setting-input setting-select"
+      <Select
         disabled={isSaving}
-        value={hasKnownValue ? item.value : (options[0]?.value || '')}
-        onChange={event => {
-          void store.commitSettingValue(item.key, event.currentTarget.value);
-        }}>
-        {options.map(option => (
-          <option key={option.value} value={option.value}>{option.label}</option>
-        ))}
-      </select>
-      <img
-        alt=""
-        aria-hidden="true"
-        className="setting-icon setting-input-shell__suffix setting-input-shell__suffix--icon"
-        src="chrome://maho-settings/icons/chevron-down.svg"
-      />
+        value={currentValue}
+        onValueChange={(val: string) => {
+          void store.commitSettingValue(item.key, val);
+        }}
+      >
+        <SelectTrigger>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map(option => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 }
@@ -505,68 +553,28 @@ function SegmentedControl(
   const hasKnownValue = options.some(option => option.value === item.value);
 
   return (
-    <div>
+    <div className="flex flex-col gap-1">
       {!hasKnownValue ? (
-        <p className="setting-row__description">
-          {`Current value ${item.value || '(empty)'} is not recognized by the metadata registry.`}
+        <p className="text-xs text-destructive">
+          {`Current value ${item.value || '(empty)'} is not recognized.`}
         </p>
       ) : null}
-      <div aria-label={meta.label} className="setting-segmented" role="tablist">
-        {options.map(option => {
-        const isActive = option.value === item.value;
-        return (
-          <Button
-            key={option.value}
-            aria-selected={isActive}
-            className={joinClassNames('setting-segment', isActive ? 'is-active' : undefined)}
-            disabled={isSaving}
-            role="tab"
-            type="button"
-            onClick={() => {
-              if (isActive) {
-                return;
-              }
-              void store.commitSettingValue(item.key, option.value);
-            }}>
+      <ToggleGroup
+        type="single"
+        disabled={isSaving}
+        value={item.value}
+        onValueChange={(val: string) => {
+          if (val) {
+            void store.commitSettingValue(item.key, val);
+          }
+        }}
+      >
+        {options.map(option => (
+          <ToggleGroupItem key={option.value} value={option.value}>
             {option.displayLabel || option.label}
-          </Button>
-        );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function ColorSwatchControl(
-    {item, store}: {
-      item: SettingValue;
-      store: MahoSettingsStore;
-    }) {
-  const currentColor = parseAccentColor(item.value);
-  const isSaving = store.isSaving(item.key);
-
-  return (
-    <div className="setting-color-swatches">
-      {ACCENT_COLORS.map(color => {
-        const isActive = !!currentColor &&
-            currentColor.r === color.r &&
-            currentColor.g === color.g &&
-            currentColor.b === color.b;
-        return (
-          <Button
-            key={`${color.r}-${color.g}-${color.b}`}
-            aria-label={color.label}
-            className={joinClassNames('setting-color-swatch', isActive ? 'is-active' : undefined)}
-            disabled={isSaving}
-            style={{'--swatch-color': `rgb(${color.r}, ${color.g}, ${color.b})`} as React.CSSProperties}
-            type="button"
-            onClick={() => {
-              const value = JSON.stringify({r: color.r, g: color.g, b: color.b, a: 1.0});
-              void store.commitSettingValue(item.key, value);
-            }}
-          />
-        );
-      })}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
     </div>
   );
 }
@@ -608,10 +616,10 @@ function SliderControl(
   }, [item.key, store]);
 
   return (
-    <div className="setting-slider-shell">
+    <div className={SLIDER_SHELL_CLASS}>
       <input
         aria-label={meta.label}
-        className="setting-slider"
+        className={SLIDER_CLASS}
         disabled={isSaving}
         max={meta.max !== undefined ? String(meta.max) : undefined}
         min={meta.min !== undefined ? String(meta.min) : undefined}
@@ -624,7 +632,7 @@ function SliderControl(
           scheduleCommit(nextValue);
         }}
       />
-      <span className="setting-slider__value">{`${draftValue}px`}</span>
+      <span className={SLIDER_VALUE_CLASS}>{`${draftValue}px`}</span>
     </div>
   );
 }
@@ -643,15 +651,15 @@ function TextareaControl(
   }, [item.key, item.value]);
 
   return (
-    <div className="setting-textarea-shell">
-      <TextArea
+    <div className={TEXTAREA_SHELL_CLASS}>
+      <Textarea
         aria-label={meta.label}
-        className="setting-textarea"
         disabled={isSaving}
         placeholder={meta.placeholder || ''}
         rows={4}
         spellCheck={false}
         value={draftValue}
+        className="font-mono text-sm"
         onBlur={() => {
           void store.commitSettingValue(item.key, draftValue);
         }}
@@ -667,8 +675,8 @@ if (!(rootElement instanceof HTMLElement)) {
   throw new Error('Missing <maho-settings-app> root for maho_settings.');
 }
 
-const store = new MahoSettingsStore();
+const settingsStore = new MahoSettingsStore();
 createRoot(rootElement).render(
     <React.StrictMode>
-      <SettingsApp store={store} />
+      <SettingsApp store={settingsStore} />
     </React.StrictMode>);

@@ -46,6 +46,7 @@ source_set("maho_ai") {
     "//maho/browser:maho_ai_popup_lifetime_tracker",
     "//maho/browser:maho_ai_runtime_adapter",
     "//maho/browser:maho_browser_ai_tools",
+    "//maho/browser:maho_auth_utils",
     "//maho/browser:maho_core_holder",
     "//maho/browser/resources/maho_ai:resources",
     "//maho/components/constants",

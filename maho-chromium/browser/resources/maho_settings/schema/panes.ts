@@ -18,11 +18,6 @@ export const LIVE_PANE_SECTION_MANIFEST: Record<string, LivePaneSectionDefinitio
       description: '',
       settingKeys: [
         'appearance.theme',
-        'appearance.accent_color',
-        'appearance.density',
-        'appearance.show_home_button',
-        'appearance.font_size',
-        'appearance.minimum_font_size',
         'appearance.sidebar_width',
         'appearance.window_transparency',
       ],
@@ -133,6 +128,15 @@ const LOOK_AND_FEEL_PANES: PaneDefinition[] = [
 ];
 
 const IDENTITY_PANES: PaneDefinition[] = [
+  {
+    key: 'account',
+    symbol: 'AC',
+    navTitle: 'Account',
+    title: 'Account',
+    kind: 'live',
+    domain: 'identity',
+    contentKind: 'account',
+  },
   {
     key: 'profiles',
     symbol: 'P',

@@ -1,5 +1,5 @@
-import {cn} from '../../lib/cn.js';
-import {Button} from '../../ui/button.js';
+import * as React from 'react';
+import { Tabs, TabsList, TabsTrigger } from '@ui/tabs';
 
 export function ModeToggle(
     {
@@ -9,25 +9,16 @@ export function ModeToggle(
       developerMode: boolean;
       onSetDeveloperMode: (enabled: boolean) => void;
     }) {
-  const renderButton = (label: string, enabled: boolean) => {
-    const active = developerMode === enabled;
-    return (
-      <Button
-        aria-pressed={active}
-        aria-selected={active}
-        className={cn(active && 'is-active')}
-        role="tab"
-        variant="mode-toggle"
-        onClick={() => onSetDeveloperMode(enabled)}>
-        {label}
-      </Button>
-    );
-  };
-
   return (
-    <div aria-label="AI surface mode" className="mode-toggle" role="tablist">
-      {renderButton('Assistant', false)}
-      {renderButton('Developer', true)}
-    </div>
+    <Tabs
+      value={developerMode ? "developer" : "assistant"}
+      onValueChange={(val: string) => onSetDeveloperMode(val === "developer")}
+      className="w-full">
+      <TabsList className="grid w-full grid-cols-2">
+        <TabsTrigger value="assistant">Assistant</TabsTrigger>
+        <TabsTrigger value="developer">Developer</TabsTrigger>
+      </TabsList>
+    </Tabs>
   );
 }
+

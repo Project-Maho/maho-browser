@@ -5,6 +5,7 @@
 #include <string>
 
 #include "components/prefs/pref_registry_simple.h"
+#include "maho/browser/ui/webui/maho_account_prefs.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 
 namespace {
@@ -29,6 +30,23 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(ai_prefs::kSessionPersistenceEnabled, true);
   registry->RegisterDictionaryPref(ai_prefs::kSessionEventLogs);
   registry->RegisterStringPref(ai_prefs::kAiViewMode, "sidebar");
+  registry->RegisterStringPref(ai_prefs::kByokOpenAIEncryptedB64,
+                                std::string());
+  registry->RegisterStringPref(ai_prefs::kByokAnthropicEncryptedB64,
+                                std::string());
+
+  // Account / relay auth prefs.
+  registry->RegisterStringPref(
+      account_prefs::kRelayAccessTokenEncryptedB64, std::string());
+  registry->RegisterStringPref(
+      account_prefs::kRelayRefreshTokenEncryptedB64, std::string());
+  registry->RegisterInt64Pref(account_prefs::kRelayAccessTokenExpiresAt, 0);
+  registry->RegisterInt64Pref(account_prefs::kRelayRefreshTokenExpiresAt, 0);
+  registry->RegisterStringPref(account_prefs::kRelayUserEmail, std::string());
+  registry->RegisterStringPref(account_prefs::kRelayUserId, std::string());
+  registry->RegisterStringPref(
+      account_prefs::kRelayUserDisplayName, std::string());
+  registry->RegisterStringPref(account_prefs::kRelayUserTier, std::string());
 }
 
 }  // namespace maho::ai

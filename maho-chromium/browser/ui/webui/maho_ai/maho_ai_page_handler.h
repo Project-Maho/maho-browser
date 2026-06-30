@@ -13,10 +13,12 @@
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/values.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "maho/browser/ai/maho_ai_page_context_extractor.h"
 #include "maho/browser/ai/maho_ai_runtime_adapter.h"
 #include "maho/browser/ai/maho_ai_runtime_router.h"
 #include "maho/browser/ui/webui/maho_ai/maho_ai.mojom.h"
+#include "components/os_crypt/async/browser/os_crypt_async.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 
@@ -78,6 +80,7 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
                          bool approved) override;
   void ClosePanel() override;
   void OpenSettings() override;
+  void GetAISettings(GetAISettingsCallback callback) override;
   void GetViewMode(GetViewModeCallback callback) override;
   void SetViewMode(maho_ai::mojom::ViewMode mode) override;
 
@@ -198,6 +201,13 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   uint32_t tool_call_count_ = 0;
   std::vector<maho_ai::mojom::RuntimeEventPtr> session_event_log_;
   std::vector<maho_ai::mojom::SessionInfoPtr> persisted_sessions_;
+
+  std::optional<os_crypt_async::Encryptor> encryptor_;
+  void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
+
+  PrefChangeRegistrar pref_change_registrar_;
+  void OnAISettingsPrefsChanged();
+  maho_ai::mojom::AISettingsInfoPtr BuildAISettingsInfo() const;
 
   base::WeakPtrFactory<MahoAIPageHandler> weak_factory_{this};
   base::WeakPtrFactory<MahoAIPageHandler> session_list_weak_factory_{this};

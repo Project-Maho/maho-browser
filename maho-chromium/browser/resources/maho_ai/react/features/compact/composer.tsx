@@ -9,23 +9,21 @@ import type {
 import {
   createHistoryAttachment,
   createTabAttachment,
-  getHistoryItemDetail,
   getHistoryItemTitle,
-  getHistoryVisitedLabel,
-  getOpenTabDetail,
   getOpenTabTitle,
   hasCurrentPageAttachment,
   isHistoryAttachment,
   isTabAttachment,
   isSessionReadOnly,
 } from '../../../types.js';
-import {cn} from '../../lib/cn.js';
-import {Button} from '../../ui/button.js';
+import {cn} from '@lib/utils';
+import {Button} from '@ui/button';
+import {Input} from '@ui/input';
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-} from '../../ui/popover.js';
+} from '@ui/popover';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -33,11 +31,15 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '../../ui/dropdown-menu.js';
-import {Icon} from '../../ui/icon.js';
-import type {IconSymbol} from '../../ui/icon.js';
-import {IconButton} from '../../ui/icon-button.js';
-import {ComposerTextarea} from '../../ui/textarea.js';
+} from '@ui/dropdown-menu';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@ui/tooltip';
+import {Globe, Plus, StopCircle, Send, Search, AlertCircle} from '@icons/lucide';
+import {Alert, AlertDescription} from '@ui/alert';
+import {ComposerTextarea} from '../../components/composer-textarea.js';
 
 export interface ComposerHandlers {
   onCancel: () => void;
@@ -55,7 +57,16 @@ export interface ComposerHandlers {
   onRequestFileChooser: () => void;
   onRemoveAttachment: (attachment: ComposerAttachment) => void;
   onSetActiveAI: (providerId: string, modelId: string) => Promise<void>;
+  onOpenSettings: () => void;
 }
+
+const pickerRowClassName =
+    'group grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-foreground transition-colors outline-none hover:bg-accent/60 focus-visible:bg-accent/70 focus-visible:ring-1 focus-visible:ring-ring data-[focused=true]:bg-accent/70 disabled:cursor-default disabled:opacity-40';
+const pickerStatusClassName =
+    'grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-muted-foreground';
+const pickerSectionClassName = 'grid gap-1.5';
+const pickerSectionLabelClassName =
+    'px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground';
 
 function Favicon({pageUrl}: {pageUrl: string}) {
   if (!pageUrl) return null;
@@ -73,7 +84,7 @@ function Favicon({pageUrl}: {pageUrl: string}) {
     <img
       alt=""
       aria-hidden="true"
-      className="compact-context-picker__favicon"
+      className="size-4 rounded-[3px]"
       height={16}
       src={src}
       width={16}
@@ -90,11 +101,11 @@ function PickerStatus(
       title: string;
     }) {
   return (
-    <div className="compact-context-picker__status">
-      <span className="compact-context-picker__row-icon">
-        <Icon symbol="globe" />
+    <div className={pickerStatusClassName}>
+      <span className="flex size-4 items-center justify-center text-muted-foreground">
+        <Globe className="size-4" />
       </span>
-      <span className="compact-context-picker__row-title">{title}</span>
+      <span className="truncate text-sm text-inherit">{title}</span>
     </div>
   );
 }
@@ -104,7 +115,6 @@ function PickerOptionRow(
       active,
       disabled,
       faviconUrl,
-      iconSymbol,
       metaLabel,
       onClick,
       title,
@@ -113,7 +123,6 @@ function PickerOptionRow(
       detail?: string;
       disabled: boolean;
       faviconUrl?: string;
-      iconSymbol?: IconSymbol;
       metaLabel?: string;
       onClick: () => void;
       title: string;
@@ -121,20 +130,22 @@ function PickerOptionRow(
   return (
     <button
       aria-pressed={active}
+      data-picker-row="true"
       className={cn(
-          'compact-overflow-menu__item',
-          'compact-context-picker__row',
-          active && 'compact-context-picker__row--active',
-          disabled && 'compact-context-picker__row--muted')}
+          pickerRowClassName,
+          active && 'bg-accent/40 text-foreground',
+          disabled && 'opacity-40')}
       disabled={disabled}
       type="button"
       onClick={onClick}>
-      <span className="compact-context-picker__row-icon">
-        {faviconUrl ? <Favicon pageUrl={faviconUrl} /> : <Icon symbol={iconSymbol ?? 'globe'} />}
+      <span className="flex size-4 items-center justify-center text-muted-foreground">
+        {faviconUrl ? <Favicon pageUrl={faviconUrl} /> : <Globe className="size-4" />}
       </span>
-      <span className="compact-context-picker__row-title">{title}</span>
+      <span className="truncate text-sm font-medium text-inherit">{title}</span>
       {metaLabel ? (
-        <span className="compact-context-picker__badge">{metaLabel}</span>
+        <span className="inline-flex h-5 items-center rounded-full bg-secondary px-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+          {metaLabel}
+        </span>
       ) : null}
     </button>
   );
@@ -181,9 +192,9 @@ function TabsSection(
   };
 
   return (
-    <div className="compact-context-picker__section">
-      <div className="compact-context-picker__section-head">
-        <div className="compact-context-picker__section-label">Open tabs</div>
+    <div className={pickerSectionClassName}>
+      <div className="flex items-center justify-between gap-2 px-1">
+        <div className={pickerSectionLabelClassName}>Open tabs</div>
       </div>
 
       {openTabs.loading ? (
@@ -197,12 +208,13 @@ function TabsSection(
       {!openTabs.loaded && !openTabs.loading && !openTabs.error ? (
         <button
           aria-label="Load open tabs"
-          className="compact-context-picker__row"
+          className={pickerRowClassName}
+          data-picker-row="true"
           disabled={readOnly}
           type="button"
           onClick={handlers.onLoadOpenTabs}>
-          <span className="compact-context-picker__row-icon"><Icon symbol="globe" /></span>
-          <span className="compact-context-picker__row-title">Load open tabs</span>
+          <span className="flex size-4 items-center justify-center text-muted-foreground"><Globe className="size-4" /></span>
+          <span className="truncate text-sm font-medium">Load open tabs</span>
         </button>
       ) : null}
 
@@ -211,7 +223,7 @@ function TabsSection(
       ) : null}
 
       {filteredItems.length > 0 ? (
-        <div className="compact-context-picker__results">
+        <div className="grid max-h-[min(240px,36vh)] gap-1 overflow-y-auto pr-1">
           {filteredItems.map(renderTabRow)}
         </div>
       ) : null}
@@ -252,9 +264,9 @@ function HistorySection(
   };
 
   return (
-    <div className="compact-context-picker__section">
-      <div className="compact-context-picker__section-head">
-        <div className="compact-context-picker__section-label">{hasQuery ? 'History results' : 'History'}</div>
+    <div className={pickerSectionClassName}>
+      <div className="flex items-center justify-between gap-2 px-1">
+        <div className={pickerSectionLabelClassName}>{hasQuery ? 'History results' : 'History'}</div>
       </div>
 
       {historySearch.loading ? (
@@ -274,7 +286,7 @@ function HistorySection(
       ) : null}
 
       {historySearch.items.length > 0 ? (
-        <div className="compact-context-picker__results">
+        <div className="grid max-h-[min(240px,36vh)] gap-1 overflow-y-auto pr-1">
           {historySearch.items.map(renderHistoryRow)}
         </div>
       ) : null}
@@ -314,9 +326,9 @@ function PinnedTabsSection(
   };
 
   return (
-    <div className="compact-context-picker__section">
-      <div className="compact-context-picker__section-head">
-        <div className="compact-context-picker__section-label">Pinned tabs</div>
+    <div className={pickerSectionClassName}>
+      <div className="flex items-center justify-between gap-2 px-1">
+        <div className={pickerSectionLabelClassName}>Pinned tabs</div>
       </div>
 
       {openTabs.loading ? (
@@ -332,7 +344,7 @@ function PinnedTabsSection(
       ) : null}
 
       {pinnedItems.length > 0 ? (
-        <div className="compact-context-picker__results">
+        <div className="grid max-h-[min(240px,36vh)] gap-1 overflow-y-auto pr-1">
           {pinnedItems.map(renderPinnedRow)}
         </div>
       ) : null}
@@ -375,7 +387,7 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
       return;
     }
     const rows = pickerRef.current.querySelectorAll<HTMLButtonElement>(
-        '.compact-context-picker__row:not([disabled])');
+        '[data-picker-row="true"]:not([disabled])');
     rows.forEach((row, index) => {
       if (index === focusedRowIndex) {
         row.setAttribute('data-focused', 'true');
@@ -391,7 +403,7 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
       return;
     }
     const rows = pickerRef.current.querySelectorAll<HTMLButtonElement>(
-        '.compact-context-picker__row:not([disabled])');
+        '[data-picker-row="true"]:not([disabled])');
     if (rows.length === 0) {
       return;
     }
@@ -423,13 +435,30 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
     handlers.onSearchHistory(trimmedDraftSearchQuery);
   };
 
+  const quotaExhausted = state.chatBlockedReason === 'quota-exhausted';
+
   return (
     <section className={cn(
-        'compact-composer',
-        'compact-composer--docked',
-        readOnly && 'compact-composer--read-only')}>
-      <div className="compact-composer__body">
+        'grid gap-2 rounded-[1.35rem] border border-border bg-card/95 p-2 shadow-[0_24px_80px_-48px_var(--color-accent-glow)] backdrop-blur-xl supports-[backdrop-filter]:bg-card/90',
+        readOnly && 'opacity-90')}>
+      {quotaExhausted && (
+        <Alert variant="warning" className="mb-0 rounded-xl border-warning/40 bg-warning/10 py-2">
+          <AlertCircle className="h-4 w-4 text-warning" />
+          <AlertDescription className="flex items-center gap-2 text-xs">
+            <span>Out of credits.</span>
+            <Button
+              variant="link"
+              size="sm"
+              className="h-auto p-0 text-xs text-current underline"
+              onClick={() => window.open('chrome://maho-settings?pane=billing', '_blank')}>
+              Manage in Settings
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      <div className="min-h-0">
         <ComposerTextarea
+          className="min-h-[72px] max-h-80 resize-none border-0 bg-transparent px-2 py-2 text-sm leading-6 shadow-none focus-visible:ring-0"
           onPasteFiles={files => handlers.onAttachFiles(files)}
           onSubmit={handlers.onSubmit}
           onValueChange={handlers.onPromptChange}
@@ -441,7 +470,7 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
           value={state.composer.prompt}
         />
       </div>
-      <div className="compact-composer__toolbar">
+      <div className="flex min-w-0 items-center gap-2">
         <Popover
           open={pickerOpen}
           onOpenChange={open => {
@@ -451,33 +480,38 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
             }
           }}>
           <PopoverTrigger asChild>
-            <IconButton
-              ariaLabel="Add context or start a new session"
-              symbol="plus"
-              variant="composer-icon"
-            />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  aria-label="Add context or start a new session"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0 rounded-full">
+                  <Plus className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Add context</TooltipContent>
+            </Tooltip>
           </PopoverTrigger>
           <PopoverContent
-             align="start"
-             className="compact-context-picker"
-             side="top">
-             <section
-               ref={pickerRef}
-               aria-label="Context picker"
-               onKeyDown={handlePickerKeyDown}>
-              <div className="compact-context-picker__search-area">
-               <form className="compact-context-picker__search-form" onSubmit={handleSearchSubmit}>
-                 <span aria-hidden="true" className="compact-context-picker__search-icon">
-                  <svg aria-hidden="true" fill="none" focusable="false" height="14" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" viewBox="0 0 24 24" width="14" xmlns="http://www.w3.org/2000/svg">
-                    <circle cx="11" cy="11" r="7" />
-                    <path d="m20 20-3.5-3.5" />
-                  </svg>
-                </span>
-                <input
-                  className="console-input compact-context-picker__search-input"
-                   disabled={readOnly}
-                   placeholder="Search tabs and history"
-                   type="search"
+              align="start"
+              className="w-[min(22rem,calc(100vw-1.5rem))] rounded-2xl border-border bg-popover/95 p-2 shadow-2xl backdrop-blur-xl"
+              side="top">
+            <section
+                ref={pickerRef}
+                aria-label="Context picker"
+                className="grid gap-2"
+                onKeyDown={handlePickerKeyDown}>
+              <div className="grid gap-2 p-1">
+                <form className="relative grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2" onSubmit={handleSearchSubmit}>
+                  <span aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
+                    <Search className="size-3.5" />
+                  </span>
+                  <Input
+                    className="h-9 border-border bg-input/90 pl-9 pr-3 text-sm shadow-none focus-visible:ring-1"
+                    disabled={readOnly}
+                    placeholder="Search tabs and history"
+                    type="search"
                    value={draftSearchQuery}
                    onChange={event => {
                      const nextValue = event.currentTarget.value;
@@ -485,22 +519,24 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
                      if (!nextValue.trim() && searchQuery) {
                        handlers.onResetHistorySearch();
                      }
-                   }}
-                 />
-                 {canSubmitSearch ? (
-                   <Button
-                     className="compact-context-picker__mini-action"
-                     disabled={readOnly || state.historySearch.loading}
-                     type="submit"
-                     variant="overflow-item">
+                    }}
+                  />
+                  {canSubmitSearch ? (
+                    <Button
+                      className="h-9 rounded-xl px-3 text-xs font-semibold"
+                      disabled={readOnly || state.historySearch.loading}
+                      type="submit"
+                      variant="ghost"
+                     size="sm">
                      Search
                    </Button>
-                 ) : (hasSearchQuery || trimmedDraftSearchQuery) ? (
-                   <Button
-                     className="compact-context-picker__mini-action"
-                     disabled={readOnly}
-                     type="button"
-                     variant="overflow-item"
+                  ) : (hasSearchQuery || trimmedDraftSearchQuery) ? (
+                    <Button
+                      className="h-9 rounded-xl px-3 text-xs font-semibold"
+                      disabled={readOnly}
+                      type="button"
+                      variant="ghost"
+                     size="sm"
                      onClick={() => {
                        setDraftSearchQuery('');
                        handlers.onResetHistorySearch();
@@ -508,13 +544,13 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
                      Clear
                    </Button>
                  ) : null}
-               </form>
-             </div>
+                </form>
+              </div>
 
-            <div className="compact-context-picker__menu">
-              <HistorySection
-                handlers={handlers}
-                hasQuery={hasSearchQuery}
+              <div className="grid gap-2">
+                <HistorySection
+                  handlers={handlers}
+                  hasQuery={hasSearchQuery}
                 historySearch={state.historySearch}
                 readOnly={readOnly}
                 selectedAttachments={state.composer.attachments}
@@ -523,56 +559,59 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
               <PinnedTabsSection
                 handlers={handlers}
                 openTabs={state.openTabs}
-                readOnly={readOnly}
-                selectedAttachments={state.composer.attachments}
-              />
-
-              <div className="compact-context-picker__section">
-                <div className="compact-context-picker__section-head">
-                  <div className="compact-context-picker__section-label">Current page</div>
-                </div>
-                <PickerOptionRow
-                  active={currentPageAttached}
-                  disabled={!canToggleCurrentPage}
-                  title="Current page"
-                  onClick={handlers.onToggleBrowserContext}
+                  readOnly={readOnly}
+                  selectedAttachments={state.composer.attachments}
                 />
-              </div>
 
-              <TabsSection
-                handlers={handlers}
-                openTabs={state.openTabs}
-                readOnly={readOnly}
-                selectedAttachments={state.composer.attachments}
-                searchQuery={searchQuery}
-              />
-
-              <div className="compact-context-picker__section">
-                <div className="compact-context-picker__section-head">
-                  <div className="compact-context-picker__section-label">Files</div>
+                <div className={pickerSectionClassName}>
+                  <div className="flex items-center justify-between gap-2 px-1">
+                    <div className={pickerSectionLabelClassName}>Current page</div>
+                  </div>
+                  <PickerOptionRow
+                    active={currentPageAttached}
+                    disabled={!canToggleCurrentPage}
+                    title="Current page"
+                    onClick={handlers.onToggleBrowserContext}
+                  />
                 </div>
-                <button
-                  className={cn(
-                      'compact-context-picker__row',
-                      readOnly && 'compact-context-picker__row--muted')}
-                  disabled={readOnly}
-                  type="button"
-                  onClick={() => {
-                    setPickerOpen(false);
-                    handlers.onRequestFileChooser();
-                  }}>
-                  <span className="compact-context-picker__row-icon">
-                    <Icon symbol="plus" />
-                  </span>
-                  <span className="compact-context-picker__row-title">Upload file from computer</span>
-                </button>
-             </div>
-            </div>
+
+                <TabsSection
+                  handlers={handlers}
+                  openTabs={state.openTabs}
+                  readOnly={readOnly}
+                  selectedAttachments={state.composer.attachments}
+                  searchQuery={searchQuery}
+                />
+
+                <div className={pickerSectionClassName}>
+                  <div className="flex items-center justify-between gap-2 px-1">
+                    <div className={pickerSectionLabelClassName}>Files</div>
+                  </div>
+                  <button
+                    className={cn(
+                        pickerRowClassName,
+                        readOnly && 'opacity-40')}
+                    data-picker-row="true"
+                    disabled={readOnly}
+                    type="button"
+                    onClick={() => {
+                      setPickerOpen(false);
+                      handlers.onRequestFileChooser();
+                    }}>
+                    <span className="flex size-4 items-center justify-center text-muted-foreground">
+                      <Plus className="size-4" />
+                    </span>
+                    <span className="truncate text-sm font-medium">Upload file from computer</span>
+                  </button>
+                </div>
+              </div>
             </section>
-          </PopoverContent>
+           </PopoverContent>
         </Popover>
         {state.composer.attachments.length > 0 ? (
-          <section className="compact-composer__attachments" aria-label="Attached context">
+          <section
+            aria-label="Attached context"
+            className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto py-0.5">
             {state.composer.attachments.map(attachment => {
               const isImage = attachment.kind === 'file' &&
                   !!attachment.mimeType?.startsWith('image/') &&
@@ -581,21 +620,21 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
                 <span
                   key={attachment.id}
                   className={cn(
-                      'compact-composer__attachment-chip',
-                      isImage && 'compact-composer__attachment-chip--image')}
+                      'inline-flex h-6 max-w-[min(100%,220px)] items-center gap-1 rounded-full bg-secondary/80 px-2 text-xs text-foreground shadow-sm',
+                      isImage && 'h-8 pl-0.5 pr-2')}
                   title={attachment.detail || attachment.label}>
                   {isImage ? (
                     <img
                       alt=""
                       aria-hidden="true"
-                      className="compact-composer__attachment-thumb"
+                      className="size-7 rounded-md object-cover"
                       src={attachment.dataUrl}
                     />
                   ) : null}
-                  <span className="compact-composer__attachment-chip-label">{attachment.label}</span>
+                  <span className="truncate font-medium text-inherit">{attachment.label}</span>
                   <button
                     aria-label={`Remove ${attachment.label}`}
-                    className="compact-composer__attachment-chip-remove"
+                    className="inline-flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-background/80 hover:text-foreground focus-visible:bg-background/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                     type="button"
                     onClick={() => handlers.onRemoveAttachment(attachment)}>
                     <svg aria-hidden="true" fill="none" focusable="false" height="10" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24" width="10" xmlns="http://www.w3.org/2000/svg">
@@ -617,16 +656,32 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
           return (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button type="button" className="compact-composer__model-selector-btn" aria-label="Select model">
-                  <span className="compact-composer__model-name">
+                <Button
+                  type="button"
+                  aria-label="Select model"
+                  className="ml-auto h-8 max-w-40 shrink-0 rounded-full border-border bg-secondary/70 px-3 text-xs font-medium text-muted-foreground shadow-none hover:bg-accent/60 hover:text-foreground"
+                  size="sm"
+                  variant="outline">
+                  <span className="truncate">
                     {activeModel ? activeModel.split('/').pop() : 'Model'}
                   </span>
-                  <span className="compact-composer__model-selector-arrow">▾</span>
-                </button>
+                  <span className="shrink-0 text-[10px] text-muted-foreground">▾</span>
+                </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" side="top">
                 {providers.length === 0 ? (
-                  <div className="compact-overflow-menu__empty">No models configured</div>
+                  <>
+                    {activeModel ? (
+                      <DropdownMenuLabel>
+                        <span className="text-muted-foreground">Current: </span>
+                        {activeModel.split('/').pop() || activeModel}
+                      </DropdownMenuLabel>
+                    ) : null}
+                    <DropdownMenuItem
+                      onSelect={() => handlers.onOpenSettings()}>
+                      Configure in Settings →
+                    </DropdownMenuItem>
+                  </>
                 ) : (
                   providers.map((provider, providerIdx) => (
                     <React.Fragment key={provider.id}>
@@ -648,18 +703,28 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
             </DropdownMenu>
           );
         })()}
-        <Button
-          aria-label={canCancel ?
-            'Stop current turn' :
-            (state.currentSessionId ? 'Send prompt' : 'Start session')}
-          className={cn(canCancel && 'compact-composer__send--stop')}
-          disabled={canCancel ? false : submitDisabled}
-          variant="composer-send"
-          onClick={canCancel ? handlers.onCancel : handlers.onSubmit}>
-          <span className="compact-composer__send-icon">
-            <Icon symbol={canCancel ? 'stop' : 'send'} />
-          </span>
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              aria-label={canCancel ?
+                 'Stop current turn' :
+                 (state.currentSessionId ? 'Send prompt' : 'Start session')}
+              className={cn(
+                  'size-9 shrink-0 rounded-full shadow-sm transition-transform active:scale-95',
+                  canCancel && 'border border-warning/40 bg-warning/15 text-warning hover:bg-warning/25 hover:text-warning')}
+              disabled={canCancel ? false : submitDisabled}
+              variant="default"
+              size="icon"
+              onClick={canCancel ? handlers.onCancel : handlers.onSubmit}>
+              <span className="inline-flex items-center justify-center">
+                {canCancel ? <StopCircle className="size-4" /> : <Send className="size-4" />}
+              </span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {canCancel ? 'Stop' : (state.currentSessionId ? 'Send' : 'Start session')}
+          </TooltipContent>
+        </Tooltip>
       </div>
     </section>
   );

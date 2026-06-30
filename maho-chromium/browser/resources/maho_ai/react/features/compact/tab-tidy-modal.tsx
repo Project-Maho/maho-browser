@@ -1,9 +1,18 @@
 import React, {useState} from 'react';
-import {cn} from '../../lib/cn.js';
+import {cn} from '@lib/utils';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@ui/dialog';
+import {Button} from '@ui/button';
+import {Checkbox} from '@ui/checkbox';
 
 export interface TidyFolderSuggestion {
   name: string;
-  tabIds: string[];
+  tabIds: number[];
 }
 
 interface Props {
@@ -32,43 +41,38 @@ export function TabTidyModal({folders, onApply, onDismiss}: Props) {
   }
 
   return (
-    <div className="tab-tidy-modal-overlay">
-      <div className="tab-tidy-modal" role="dialog" aria-modal="true" aria-label="Tab Tidy Suggestions">
-        <div className="tab-tidy-modal__header">
-          <span className="tab-tidy-modal__title">Tab Tidy Suggestions</span>
-          <button type="button" className="compact-icon-button" onClick={onDismiss} aria-label="Dismiss">
-            ×
-          </button>
-        </div>
-        <p className="tab-tidy-modal__desc">Select folders to create:</p>
-        <ul className="tab-tidy-modal__list">
+    <Dialog open={true} onOpenChange={(open: boolean) => { if (!open) onDismiss(); }}>
+      <DialogContent className="sm:max-w-[425px]">
+        <DialogHeader>
+          <DialogTitle>Tab Tidy Suggestions</DialogTitle>
+        </DialogHeader>
+
+        <p className="text-sm text-muted-foreground">Select folders to create:</p>
+        <ul className="flex flex-col gap-2 max-h-60 overflow-y-auto py-2">
           {folders.map((folder, i) => (
-            <li key={i} className={cn('tab-tidy-modal__folder', checked.has(i) && 'tab-tidy-modal__folder--checked')}>
-              <label className="tab-tidy-modal__folder-label">
-                <input
-                  type="checkbox"
-                  checked={checked.has(i)}
-                  onChange={() => toggle(i)}
-                  className="tab-tidy-modal__checkbox"
-                />
-                <span className="tab-tidy-modal__folder-name">{folder.name}</span>
-                <span className="tab-tidy-modal__folder-count">{folder.tabIds.length} tab{folder.tabIds.length !== 1 ? 's' : ''}</span>
-              </label>
+            <li key={i} className="flex items-center space-x-2 p-2 border rounded hover:bg-accent/50 cursor-pointer" onClick={() => toggle(i)}>
+              <Checkbox
+                checked={checked.has(i)}
+                onCheckedChange={() => toggle(i)}
+              />
+              <span className="flex-1 text-sm font-medium">{folder.name}</span>
+              <span className="text-xs text-muted-foreground">{folder.tabIds.length} tab{folder.tabIds.length !== 1 ? 's' : ''}</span>
             </li>
           ))}
         </ul>
-        <div className="tab-tidy-modal__actions">
-          <button type="button" className="console-button" onClick={onDismiss}>Cancel</button>
-          <button
-            type="button"
-            className="console-button console-button--primary"
+
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={onDismiss}>Cancel</Button>
+          <Button
+            variant="default"
             onClick={handleApply}
             disabled={checked.size === 0}
           >
             Apply
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
+

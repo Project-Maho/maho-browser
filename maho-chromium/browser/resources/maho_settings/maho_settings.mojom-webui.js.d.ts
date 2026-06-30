@@ -25,13 +25,14 @@ export interface ATCRule {
 
 export interface AISettings {
   hasApiKey: boolean;
-  endpoint: string;
+  provider: string;
+  baseUrl: string;
   model: string;
   opencodeRuntimeEnabled: boolean;
   approvalPolicy: string;
   sessionPersistenceEnabled: boolean;
-  runtimeEndpoint: string;
-  runtimeModel: string;
+  hasByokOpenai: boolean;
+  hasByokAnthropic: boolean;
 }
 
 export interface ShortcutBinding {
@@ -154,6 +155,28 @@ export interface InstalledExtension {
   enabled: boolean;
 }
 
+export interface AccountStatus {
+  signed_in: boolean;
+  email: string;
+  display_name: string;
+  user_id: string;
+  tier: string;
+  subscription_status: string;
+  subscription_expires_at: bigint;
+}
+
+export interface BillingInfo {
+  tier: string;
+  subscription_status: string;
+  subscription_expires_at: bigint;
+  period_start_at: bigint;
+  anniversary_reset_day: number;
+  tier_ceiling_usd: number;
+  credit_balance_usd: number;
+  lifetime_purchased_usd: number;
+  has_payment_method: boolean;
+}
+
 export class PageCallbackRouter {
   $: {
     bindNewPipeAndPassRemote(): unknown;
@@ -164,6 +187,10 @@ export class PageCallbackRouter {
   installedExtensionsChanged: {
     addListener(listener: (extensions: InstalledExtension[]) => void): void;
     removeListener(listener: (extensions: InstalledExtension[]) => void): void;
+  };
+  accountStatusChanged: {
+    addListener(listener: (status: AccountStatus) => void): void;
+    removeListener(listener: (status: AccountStatus) => void): void;
   };
 }
 
@@ -183,12 +210,11 @@ export class PageHandlerRemote {
   toggleATCRule(ruleId: string, enabled: boolean): Promise<void>;
   getAISettings(): Promise<{settings: AISettings}>;
   setAIApiKey(key: string): Promise<void>;
-  setAIEndpoint(endpoint: string): Promise<void>;
+  setAIProvider(provider: string): Promise<void>;
+  setAIBaseUrl(url: string): Promise<void>;
   setAIModel(model: string): Promise<void>;
   setAIApprovalPolicy(policy: string): Promise<void>;
   setAISessionPersistence(enabled: boolean): Promise<void>;
-  setAIRuntimeEndpoint(endpoint: string): Promise<void>;
-  setAIRuntimeModel(model: string): Promise<void>;
   getShortcuts(): Promise<{shortcuts: ShortcutBinding[]}>;
   setShortcut(action: string, keyCombo: string): Promise<{success: boolean}>;
   resetShortcut(action: string): Promise<void>;
@@ -239,6 +265,12 @@ export class PageHandlerRemote {
   getInstalledExtensions(): Promise<{extensions: InstalledExtension[]}>;
   toggleExtension(id: string): Promise<{enabled: boolean}>;
   removeExtension(id: string): Promise<{success: boolean}>;
+  setBYOKKey(provider: string, key: string): Promise<{success: boolean}>;
+  clearBYOKKey(provider: string): Promise<{success: boolean}>;
+  login(email: string, password: string): Promise<{success: boolean; errorMessage: string}>;
+  logout(): Promise<void>;
+  getAccountStatus(): Promise<{status: AccountStatus}>;
+  getBillingInfo(): Promise<{info: BillingInfo}>;
 }
 
 export class PageHandlerFactory {

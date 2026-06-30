@@ -55,10 +55,13 @@ maho-chromium/
 | Build config | `build/config/args_{mac,linux,win}.gn` |
 | Mojo interfaces | `browser/ui/webui/maho_{feature}/maho_{feature}.mojom` |
 | Native Views icons (C++) | `browser/ui/views/maho_lucide_icons/` — Lucide-backed `aggregate_vector_icons` GN target. Use via `ui::ImageModel::FromVectorIcon(maho_lucide_icons::kFooIcon, color, size)`. See `../docs/icon-system.md`. |
-| WebUI icons (per-feature SVGs) | `browser/resources/maho_{feature}/icons/*.svg` — vendored Lucide SVGs with `currentColor` stroke; served via `chrome://maho-{feature}/icons/<kebab>.svg` |
+| WebUI icons (lucide-react) | `lucide-react` is the canonical icon library for React-based WebUI surfaces. Traditional SVG files inside `icons/` are deprecated for new surfaces. |
 
 ## CONVENTIONS
 - **WebUI pattern**: Each feature = `{feature}.mojom` + `_page_handler.cc/h` + `_ui.cc/h` + `resources/{feature}/app.ts` + `BUILD.gn`
+- **WebUI Styling**: WebUI surfaces use **shadcn + Tailwind CSS v4**. Theme variables and base styling are defined centrally in `maho_common/react/theme/tokens.css` and compiled via Tailwind CLI integration in the GN build.
+- **Shared UI Library**: Shared UI primitives are hand-authored following the shadcn registry specification at `maho_common/components.json` and located in `maho_common/react/ui/`.
+- **Theme bootstrapping**: Theme state (light/dark resolution) is controlled by writing a `data-theme` attribute to the `<html>` root, managed by `@theme/apply_theme`.
 - **Upstream overrides**: `chromium_src/` mirrors upstream paths; uses `#define` to rename original, then `#include` original, then add patches
 - **C++ style**: Chromium conventions — explicit includes, `DCHECK_CALLED_ON_VALID_SEQUENCE`, namespace-local helpers
 - **Shared build lock**: `build/scripts/build_maho.py` acquires the workspace root `.build.lock` once for the combined Rust + Chromium build flow; the Rust helper in `build/scripts/build_maho_core.py` still uses the same lock when run standalone, so this build flow can wait and print `Waiting for build lock: ...`

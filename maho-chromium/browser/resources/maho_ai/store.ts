@@ -25,10 +25,13 @@ import {
    hasCurrentPageAttachment,
    isRenderableTimelineEvent,
   TimelineEntry,
-} from './types.js';
+ } from './types.js';
 import {notifyListeners} from '../maho_common/react/store_utils.js';
 import type {Listener} from '../maho_common/react/store_utils.js';
 import {bindMojoPageHandler} from '../maho_common/react/use_mojo.js';
+import {toast} from 'sonner';
+
+type ToastTone = 'danger'|'info'|'success';
 
 function cloneState(state: AppState): AppState {
   return {
@@ -397,16 +400,22 @@ export class MahoAiStore {
     });
   }
 
-  addToast(text: string, tone: AppState['toast'] extends infer T ? (T extends {tone: infer Tone} ? Tone : never) : never = 'info') {
-    this.patch(state => {
-      state.toast = {text, tone};
-    });
+  addToast(text: string, tone: ToastTone = 'info') {
+    switch (tone) {
+      case 'danger':
+        toast.error(text);
+        break;
+      case 'success':
+        toast.success(text);
+        break;
+      default:
+        toast.message(text);
+        break;
+    }
   }
 
   clearToast() {
-    this.patch(state => {
-      state.toast = null;
-    });
+    toast.dismiss();
   }
 
   async requestFileChooser(): Promise<void> {
@@ -600,6 +609,29 @@ export class MahoAiStore {
       });
     });
 
+    this.callbackRouter.onAISettingsChanged.addListener(
+        (info: {activeProviderId: string; activeModelId: string}) => {
+          this.applyAISettings(info);
+        });
+
+  }
+
+  async refreshAISettings(): Promise<void> {
+    try {
+      const {info} = await this.pageHandler.getAISettings();
+      this.applyAISettings(info);
+    } catch (err) {
+      console.warn('[maho-ai] refreshAISettings failed', err);
+    }
+  }
+
+  private applyAISettings(info: {activeProviderId: string; activeModelId: string}): void {
+    this.patch(state => {
+      state.aiSettings = {
+        activeProviderId: info.activeProviderId || null,
+        activeModelId: info.activeModelId || null,
+      };
+    });
   }
 
   private appendEventInternal(state: AppState, sessionId: string, event: RuntimeEvent) {

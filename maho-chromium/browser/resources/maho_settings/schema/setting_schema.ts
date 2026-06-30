@@ -1,4 +1,4 @@
-import type {AccentColor, SettingDefinition, SettingMetadata} from '../models.js';
+import type {SettingDefinition, SettingMetadata} from '../models.js';
 
 export const RESTORE_ON_STARTUP_OPTIONS = [
   {value: '1', label: 'Continue where you left off', displayLabel: 'Resume'},
@@ -9,20 +9,6 @@ export const THEME_OPTIONS = [
   {value: '0', label: 'Match system', displayLabel: 'System'},
   {value: '1', label: 'Light'},
   {value: '2', label: 'Dark'},
-];
-
-export const DENSITY_OPTIONS = [
-  {value: 'compact', label: 'Compact'},
-  {value: 'comfortable', label: 'Comfortable'},
-];
-
-export const ACCENT_COLORS: AccentColor[] = [
-  {r: 0, g: 122, b: 255, label: 'Blue'},
-  {r: 255, g: 59, b: 48, label: 'Red'},
-  {r: 52, g: 199, b: 89, label: 'Green'},
-  {r: 255, g: 204, b: 0, label: 'Yellow'},
-  {r: 175, g: 82, b: 222, label: 'Purple'},
-  {r: 255, g: 149, b: 0, label: 'Orange'},
 ];
 
 export const ARCHIVE_TIMEOUT_OPTIONS = [
@@ -88,36 +74,6 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
     },
   },
   {
-    key: 'appearance.show_home_button',
-    metadata: {
-      label: 'Show home button',
-      description: 'Display a home button in the toolbar so you can open your chosen home page with one click.',
-      control: 'toggle',
-    },
-  },
-  {
-    key: 'appearance.font_size',
-    metadata: {
-      label: 'Default font size',
-      description: 'Sets the baseline text size used when pages rely on browser defaults.',
-      control: 'number',
-      min: 9,
-      max: 72,
-      step: 1,
-    },
-  },
-  {
-    key: 'appearance.minimum_font_size',
-    metadata: {
-      label: 'Minimum font size',
-      description: 'Prevent pages from rendering text smaller than this size, measured in pixels.',
-      control: 'number',
-      min: 1,
-      max: 24,
-      step: 1,
-    },
-  },
-  {
     key: 'appearance.theme',
     metadata: {
       label: 'Browser theme',
@@ -125,23 +81,6 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
       control: 'select',
       options: THEME_OPTIONS,
       segmented: true,
-    },
-  },
-  {
-    key: 'appearance.accent_color',
-    metadata: {
-      label: 'Accent color',
-      description: 'Choose a color to personalize the browser chrome and interactive elements.',
-      control: 'color-swatch',
-    },
-  },
-  {
-    key: 'appearance.density',
-    metadata: {
-      label: 'Display density',
-      description: 'Switch between a tighter or more spacious arrangement of controls and spacing.',
-      control: 'select',
-      options: DENSITY_OPTIONS,
     },
   },
   {

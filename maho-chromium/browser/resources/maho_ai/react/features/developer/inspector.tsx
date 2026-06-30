@@ -7,39 +7,61 @@ import {
   getSessionAccessLabel,
   getSessionTitle,
   getStatusLabel,
-  hasCurrentPageAttachment,
   isSessionReadOnly,
 } from '../../../types.js';
-import {cn} from '../../lib/cn.js';
-import {Button} from '../../ui/button.js';
-import {EmptyState} from '../../ui/empty-state.js';
-import {Pill} from '../../ui/pill.js';
-import type {PillTone} from '../../ui/pill.js';
+import {Button} from '@ui/button';
+import {EmptyState} from '../../components/empty-state.js';
+import {Badge} from '@ui/badge';
+import {Tabs, TabsContent, TabsList, TabsTrigger} from '@ui/tabs';
+import * as React from 'react';
+
+const mapToneToVariant = (tone: string): any => {
+  if (tone === 'danger') return 'destructive';
+  if (tone === 'neutral') return 'secondary';
+  return tone;
+};
 
 function SectionLabel({text}: {text: string}) {
-  return <div className="console-section-label">{text}</div>;
+  return (
+    <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+      {text}
+    </div>
+  );
 }
 
 function KeyValueRow({label, value}: {label: string; value: string}) {
   return (
-    <div className="inspector-row">
-      <span className="inspector-row__label">{label}</span>
-      <span className="inspector-row__value">{value}</span>
+    <div className="flex flex-col gap-1 border-t border-border/70 pt-3 first:border-t-0 first:pt-0 max-[1160px]:items-start min-[1161px]:flex-row min-[1161px]:items-start min-[1161px]:justify-between min-[1161px]:gap-4">
+      <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+        {label}
+      </span>
+      <span className="text-sm leading-6 text-muted-foreground min-[1161px]:text-right whitespace-pre-wrap break-words">
+        {value}
+      </span>
     </div>
+  );
+}
+
+function InspectorCard(
+    {children}: {children: React.ReactNode}) {
+  return (
+    <section className="grid gap-3 rounded-2xl border border-border/80 bg-secondary/35 p-4 shadow-sm">
+      {children}
+    </section>
   );
 }
 
 function SessionSummaryCard({session}: {session: SessionRecord}) {
   return (
-    <section className="inspector-card">
+    <InspectorCard>
       <SectionLabel text="Session" />
       <KeyValueRow label="Status" value={getStatusLabel(session.status)} />
       <KeyValueRow label="Access" value={getSessionAccessLabel(session)} />
       <KeyValueRow label="Adapter" value={session.adapterName} />
       <KeyValueRow label="Events" value={String(session.eventCount)} />
       <KeyValueRow label="Tools" value={String(session.toolCallCount)} />
-      {isSessionReadOnly(session) ? <Pill text="Historical session" tone="warning" /> : null}
-    </section>
+      {isSessionReadOnly(session) ? <Badge variant="warning">Historical session</Badge> : null}
+    </InspectorCard>
   );
 }
 
@@ -59,199 +81,186 @@ export function Inspector(
   const tabDefs: Array<AppState['selectedInspector']['kind']> = ['session', 'context', 'tool', 'approval'];
 
   return (
-    <aside className="console-inspector">
-      <div className="console-panel-header">
-        <h2>Inspector</h2>
-        <p>Session, context, tool, and approval details.</p>
+    <aside className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 rounded-[1.5rem] border border-border/80 bg-card/90 p-4 shadow-[0_24px_70px_-52px_rgba(8,12,24,0.85)] backdrop-blur-xl supports-[backdrop-filter]:bg-card/85">
+      <div className="grid gap-2">
+        <h2 className="text-lg font-semibold tracking-tight text-foreground">Inspector</h2>
+        <p className="text-sm leading-6 text-muted-foreground">
+          Session, context, tool, and approval details.
+        </p>
       </div>
-      <div className="inspector-tabs">
-        {tabDefs.map(kind => (
-          <Button
-            key={kind}
-            className={cn(state.selectedInspector.kind === kind && 'is-active')}
-            variant="inspector-tab"
-            onClick={() => onSelectInspector(kind, state.selectedInspector.id)}>
-            {kind[0]!.toUpperCase() + kind.slice(1)}
-          </Button>
-        ))}
-      </div>
-      <div className="inspector-body">
-        {!session || !currentSessionId ? (
-          <EmptyState
-            description="Start a session to inspect runtime state."
-            title="Nothing selected"
-          />
-        ) : state.selectedInspector.kind === 'session' ? (
-          <>
-            <SessionSummaryCard session={session} />
-            <section className="inspector-card">
-              <SectionLabel text="Context" />
-              <KeyValueRow label="Session" value={getSessionTitle(session)} />
-              <KeyValueRow label="Access" value={getSessionAccessLabel(session)} />
-              <KeyValueRow
-                label="Runtime session"
-                value={session.runtimeSessionId || 'Pending assignment'}
-              />
-              <KeyValueRow
-                label="Last runtime state"
-                value={getRuntimeStateLabel(session.lastRuntimeState)}
-              />
-            </section>
-          </>
-        ) : state.selectedInspector.kind === 'context' ? (
-          (() => {
-            const payloads = state.contextsBySessionId[currentSessionId] || [];
-            return (
-              <section className="inspector-card">
-                {payloads.length > 0 ? (
-                  <>
-                    <SectionLabel text={`Injected context (${payloads.length})`} />
-                    {payloads.map((ctx, idx) => (
-                      <div key={idx} className="inspector-context-entry">
-                        <KeyValueRow
-                          label={`#${idx + 1}`}
-                          value={ctx.label || `Attachment ${idx + 1}`}
-                        />
-                        <Pill
-                          text={getBrowserContextStatusLabel(ctx.status)}
-                          tone={getBrowserContextStatusTone(ctx.status) as PillTone}
-                        />
-                        {ctx.url ? <KeyValueRow label="URL" value={redactUrlForDisplay(ctx.url)} /> : null}
-                        {ctx.title ? <KeyValueRow label="Title" value={ctx.title} /> : null}
-                        {ctx.contentLength > 0 ? (
-                          <KeyValueRow
-                            label="Content size"
-                            value={`${ctx.contentLength.toLocaleString()} chars`}
-                          />
-                        ) : null}
-                        {ctx.contentSnippet ? (
-                          <pre className="inspector-pre">{ctx.contentSnippet}</pre>
-                        ) : null}
-                        {ctx.warnings.length ? (
-                          <KeyValueRow label="Warnings" value={ctx.warnings.join('\n')} />
-                        ) : null}
-                      </div>
-                    ))}
-                  </>
-                ) : (
-                  <>
-                    <SectionLabel text="Attached context" />
-                     <KeyValueRow
-                       label="Page context"
-                       value={readOnly ?
-                         'Historical snapshot only' :
-                         (hasCurrentPageAttachment(state.composer.attachments) ?
-                           'On — injected at send time' :
-                           'Off')}
-                     />
-                    <KeyValueRow label="Composer mode" value={state.composer.modeLabel} />
-                    <KeyValueRow
-                      label="Pending turn"
-                      value={state.turnPendingBySessionId[currentSessionId] ? 'Yes' : 'No'}
-                    />
-                    {!readOnly ? (
-                      <p className="inspector-note">
-                        Page context (URL, title, content) is assembled and injected by the browser
-                        runtime at send time. The actual payload will appear here after the first
-                        submission.
-                      </p>
-                    ) : null}
-                  </>
-                )}
-              </section>
-            );
-          })()
-        ) : state.selectedInspector.kind === 'tool' ? (
-          (() => {
-            const toolId = state.selectedInspector.id || Object.keys(state.toolCallsById).at(-1);
-            const tool = toolId ? state.toolCallsById[toolId] : null;
-            const result = toolId ? state.toolResultsByCallId[toolId] : null;
-            if (!tool && !result) {
-              return (
-                <EmptyState
-                  description="Tool requests and results will appear here."
-                  title="No tool selected"
-                />
-              );
-            }
+      <Tabs
+        value={state.selectedInspector.kind}
+        onValueChange={value => onSelectInspector(value as AppState['selectedInspector']['kind'], state.selectedInspector.id)}
+        className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
+        <TabsList className="grid h-auto w-full grid-cols-4 rounded-xl bg-secondary/60 p-1">
+          {tabDefs.map(kind => (
+            <TabsTrigger key={kind} value={kind} className="px-2 py-1.5 text-xs font-semibold uppercase tracking-[0.08em]">
+              {kind[0]!.toUpperCase() + kind.slice(1)}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+        <div className="min-h-0 overflow-y-auto pr-1">
+          {!session || !currentSessionId ? (
+            <EmptyState
+              description="Start a session to inspect runtime state."
+              title="Nothing selected"
+            />
+          ) : (
+            <>
+              <TabsContent value="session" className="mt-0 grid gap-3">
+                <SessionSummaryCard session={session} />
+                <InspectorCard>
+                  <SectionLabel text="Context" />
+                  <KeyValueRow label="Session" value={getSessionTitle(session)} />
+                  <KeyValueRow label="Access" value={getSessionAccessLabel(session)} />
+                  <KeyValueRow
+                    label="Runtime session"
+                    value={session.runtimeSessionId || 'Pending assignment'}
+                  />
+                  <KeyValueRow
+                    label="Last runtime state"
+                    value={getRuntimeStateLabel(session.lastRuntimeState)}
+                  />
+                </InspectorCard>
+              </TabsContent>
 
-            return (
-              <section className="inspector-card">
-                <SectionLabel text="Tool details" />
-                {tool ? (
-                  <>
-                    <KeyValueRow label="Tool" value={tool.toolName} />
-                    <KeyValueRow label="Call ID" value={tool.callId} />
-                    <KeyValueRow label="Arguments" value={tool.argumentsJson || '{}'} />
-                  </>
-                ) : null}
-                {result ? (
-                  <>
-                    <Pill text={result.success ? 'Success' : 'Failure'} tone={result.success ? 'success' : 'danger'} />
-                    <pre className="inspector-pre">
-                      {result.errorMessage || result.output || 'No output'}
-                    </pre>
-                  </>
-                ) : null}
-              </section>
-            );
-          })()
-        ) : (
-          (() => {
-            const approvalId = state.selectedInspector.id || Object.keys(state.approvalsById).at(-1);
-            const approval = approvalId ? state.approvalsById[approvalId] : null;
-            const result = approvalId ? state.approvalResultsById[approvalId] : null;
-            if (!approval) {
-              return (
-                <EmptyState
-                  description="Approval requests will appear here when the runtime pauses."
-                  title="No approval selected"
-                />
-              );
-            }
+              <TabsContent value="context" className="mt-0">
+                {(() => {
+                  const payloads = state.contextsBySessionId[currentSessionId] || [];
+                  return (
+                    <InspectorCard>
+                      {payloads.length > 0 ? (
+                        <>
+                          <SectionLabel text={`Injected context (${payloads.length})`} />
+                          {payloads.map((ctx: any, idx: number) => (
+                            <div key={idx} className="grid gap-2 rounded-xl border border-border/70 bg-background/40 p-3">
+                              <KeyValueRow
+                                label={`#${idx + 1}`}
+                                value={ctx.label || `Attachment ${idx + 1}`}
+                              />
+                              <Badge variant={mapToneToVariant(getBrowserContextStatusTone(ctx.status))}>
+                                {getBrowserContextStatusLabel(ctx.status)}
+                              </Badge>
+                              {ctx.url ? <KeyValueRow label="URL" value={redactUrlForDisplay(ctx.url)} /> : null}
+                              {ctx.title ? <KeyValueRow label="Title" value={ctx.title} /> : null}
+                              {ctx.contentLength > 0 ? (
+                                <KeyValueRow
+                                  label="Content size"
+                                  value={`${ctx.contentLength.toLocaleString()} chars`}
+                                />
+                              ) : null}
+                            </div>
+                          ))}
+                        </>
+                      ) : (
+                        <EmptyState
+                          description="No context has been injected into this session."
+                          title="No context"
+                        />
+                      )}
+                    </InspectorCard>
+                  );
+                })()}
+              </TabsContent>
 
-            return (
-              <section className="inspector-card">
-                <SectionLabel text="Approval request" />
-                <KeyValueRow label="Approval ID" value={approval.approvalId} />
-                <KeyValueRow label="Description" value={approval.description} />
-                {approval.relatedToolCall ? (
-                  <KeyValueRow label="Related tool" value={approval.relatedToolCall.toolName} />
-                ) : null}
-                {result ? (
-                  <>
-                    <Pill text={result.approved ? 'Approved' : 'Denied'} tone={result.approved ? 'success' : 'danger'} />
-                    {result.reason ? <KeyValueRow label="Reason" value={result.reason} /> : null}
-                  </>
-                ) : (
-                  <>
-                    <div className="inspector-actions">
-                      <Button
-                        disabled={readOnly}
-                        variant="console-primary"
-                        onClick={() => onRespondToApproval(approval.approvalId, true)}>
-                        Approve
-                      </Button>
-                      <Button
-                        disabled={readOnly}
-                        variant="console-default"
-                        onClick={() => onRespondToApproval(approval.approvalId, false)}>
-                        Deny
-                      </Button>
-                    </div>
-                    {readOnly ? (
+              <TabsContent value="tool" className="mt-0">
+                {(() => {
+                  const toolId = state.selectedInspector.id || Object.keys(state.toolCallsById).at(-1);
+                  const tool = toolId ? state.toolCallsById[toolId] : null;
+                  const result = toolId ? state.toolResultsByCallId[toolId] : null;
+                  if (!tool) {
+                    return (
                       <EmptyState
-                        description="This approval is shown from stored session history only and can no longer be answered from this view."
-                        title="Historical approval"
+                        description="Tool executions will appear here when they run."
+                        title="No tool selected"
                       />
-                    ) : null}
-                  </>
-                )}
-              </section>
-            );
-          })()
-        )}
-      </div>
+                    );
+                  }
+
+                  return (
+                    <InspectorCard>
+                      <SectionLabel text="Tool details" />
+                      <KeyValueRow label="Tool" value={tool.toolName} />
+                      <KeyValueRow label="Call ID" value={tool.callId} />
+                      <KeyValueRow label="Arguments" value={tool.argumentsJson || '{}'} />
+                      {result ? (
+                        <>
+                          <Badge variant={result.success ? 'success' : 'destructive'}>
+                            {result.success ? 'Success' : 'Failure'}
+                          </Badge>
+                          <pre className="m-0 whitespace-pre-wrap break-words rounded-xl border border-border/70 bg-background/60 p-3 text-xs leading-5 text-muted-foreground">
+                            {result.errorMessage || result.output || 'No output'}
+                          </pre>
+                        </>
+                      ) : null}
+                    </InspectorCard>
+                  );
+                })()}
+              </TabsContent>
+
+              <TabsContent value="approval" className="mt-0">
+                {(() => {
+                  const approvalId = state.selectedInspector.id || Object.keys(state.approvalsById).at(-1);
+                  const approval = approvalId ? state.approvalsById[approvalId] : null;
+                  const result = approvalId ? state.approvalResultsById[approvalId] : null;
+                  if (!approval) {
+                    return (
+                      <EmptyState
+                        description="Approval requests will appear here when the runtime pauses."
+                        title="No approval selected"
+                      />
+                    );
+                  }
+
+                  return (
+                    <InspectorCard>
+                      <SectionLabel text="Approval request" />
+                      <KeyValueRow label="Approval ID" value={approval.approvalId} />
+                      <KeyValueRow label="Description" value={approval.description} />
+                      {approval.relatedToolCall ? (
+                        <KeyValueRow label="Related tool" value={approval.relatedToolCall.toolName} />
+                      ) : null}
+                      {result ? (
+                        <>
+                          <Badge variant={result.approved ? 'success' : 'destructive'}>
+                            {result.approved ? 'Approved' : 'Denied'}
+                          </Badge>
+                          {result.reason ? <KeyValueRow label="Reason" value={result.reason} /> : null}
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                              disabled={readOnly}
+                              size="sm"
+                              variant="default"
+                              onClick={() => onRespondToApproval(approval.approvalId, true)}>
+                              Approve
+                            </Button>
+                            <Button
+                              disabled={readOnly}
+                              size="sm"
+                              variant="outline"
+                              onClick={() => onRespondToApproval(approval.approvalId, false)}>
+                              Deny
+                            </Button>
+                          </div>
+                          {readOnly ? (
+                            <EmptyState
+                              description="This approval is shown from stored session history only and can no longer be answered from this view."
+                              title="Historical approval"
+                            />
+                          ) : null}
+                        </>
+                      )}
+                    </InspectorCard>
+                  );
+                })()}
+              </TabsContent>
+            </>
+          )}
+        </div>
+      </Tabs>
     </aside>
   );
 }

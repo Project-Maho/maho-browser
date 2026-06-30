@@ -1,7 +1,38 @@
 import("//ui/webui/resources/tools/build_webui.gni")
 import("//ui/webui/resources/tools/generate_grd.gni")
+import("//maho/build/templates/tailwind_css.gni")
 
 assert(!is_android)
+
+tailwind_css("build_tailwind") {
+  input = "react/theme/app.css"
+  output = "$target_gen_dir/app.generated.css"
+  sources = [
+    "../maho_common/react/theme/tokens.css",
+    "../maho_common/react/ui/alert.tsx",
+    "../maho_common/react/ui/badge.tsx",
+    "../maho_common/react/ui/button.tsx",
+    "../maho_common/react/ui/card.tsx",
+    "../maho_common/react/ui/checkbox.tsx",
+    "../maho_common/react/ui/dialog.tsx",
+    "../maho_common/react/ui/dropdown-menu.tsx",
+    "../maho_common/react/ui/input.tsx",
+    "../maho_common/react/ui/popover.tsx",
+    "../maho_common/react/ui/select.tsx",
+    "../maho_common/react/ui/separator.tsx",
+    "../maho_common/react/ui/skeleton.tsx",
+    "../maho_common/react/ui/slider.tsx",
+    "../maho_common/react/ui/sonner.tsx",
+    "../maho_common/react/ui/switch.tsx",
+    "../maho_common/react/ui/tabs.tsx",
+    "../maho_common/react/ui/textarea.tsx",
+    "../maho_common/react/ui/toggle-group.tsx",
+    "../maho_common/react/ui/tooltip.tsx",
+    "react/app.tsx",
+    "react/domain_panes.tsx",
+    "react/theme/app.css",
+  ]
+}
 
 action("bundle_react") {
   script = "//third_party/node/node.py"
@@ -21,12 +52,6 @@ action("bundle_react") {
     "../maho_common/react/bundle_guard.mjs",
     "../maho_common/react/store_utils.ts",
     "../maho_common/react/use_mojo.ts",
-    "../maho_common/react/primitives/button.tsx",
-    "../maho_common/react/primitives/index.ts",
-    "../maho_common/react/primitives/join_class_names.ts",
-    "../maho_common/react/primitives/text_area.tsx",
-    "../maho_common/react/primitives/text_input.tsx",
-    "../maho_common/react/primitives/tooltip_provider.tsx",
   ]
   outputs = [ "$target_gen_dir/app_bundle.js" ]
   args = [
@@ -40,9 +65,15 @@ action("bundle_react") {
 generate_grd("bundle_grdp") {
   grd_prefix = "maho_settings_bundle"
   out_grd = "$target_gen_dir/maho_settings_bundle.grdp"
-  input_files = [ "app_bundle.js" ]
+  input_files = [
+    "app_bundle.js",
+    "app.generated.css",
+  ]
   input_files_base_dir = rebase_path(target_gen_dir, root_build_dir)
-  deps = [ ":bundle_react" ]
+  deps = [
+    ":bundle_react",
+    ":build_tailwind",
+  ]
 }
 
 build_webui("build") {
@@ -50,8 +81,8 @@ build_webui("build") {
 
   static_files = [
     "settings.html",
-    "settings.css",
     "icons/arrow-right.svg",
+    "icons/arrow-up-right.svg",
     "icons/chevron-down.svg",
     "icons/x.svg",
   ]

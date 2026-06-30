@@ -1,7 +1,8 @@
+import React from 'react';
 import type {AppState} from '../../../types.js';
 import {getConnectionStateLabel, getStatusLabel} from '../../../types.js';
-import {Button} from '../../ui/button.js';
-import {Pill} from '../../ui/pill.js';
+import {Button} from '@ui/button';
+import {Badge} from '@ui/badge';
 import {Inspector} from './inspector.js';
 import {LeftRail} from './left-rail.js';
 import {ModeToggle} from './mode-toggle.js';
@@ -28,34 +29,34 @@ export function DeveloperWorkspace(
   const session = state.currentSessionId ? state.sessionsById[state.currentSessionId] : null;
 
   return (
-    <div className="developer-console">
-      <header className="developer-console__topbar">
-        <div className="developer-console__summary">
-          <div className="developer-console__brand">
-            <h1 className="developer-console__title">Maho AI Console</h1>
-            <p className="developer-console__subtitle">
+    <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
+      <header className="flex flex-wrap items-center justify-between gap-4 rounded-[1.5rem] border border-border/80 bg-card/90 p-4 shadow-[0_24px_70px_-52px_rgba(8,12,24,0.85)] backdrop-blur-xl supports-[backdrop-filter]:bg-card/85">
+        <div className="min-w-0 flex-1">
+          <div className="grid gap-1">
+            <h1 className="text-lg font-semibold tracking-tight text-foreground">Maho AI Console</h1>
+            <p className="text-sm leading-6 text-muted-foreground">
               {state.currentSessionId ?
                 'Console views for sessions, event flow, and runtime inspection.' :
                 'Switch back to Assistant for the compact single-thread surface.'}
             </p>
           </div>
-          <div className="developer-console__pills">
-            <Pill text={getConnectionStateLabel(state.connectionState)} tone="neutral" />
-            <Pill text={state.activeAdapterName || 'OpenCode'} tone="accent" />
-            {session ? <Pill text={getStatusLabel(session.status)} tone="success" /> : null}
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            <Badge variant="secondary">{getConnectionStateLabel(state.connectionState)}</Badge>
+            <Badge variant="secondary">{state.activeAdapterName || 'OpenCode'}</Badge>
+            {session ? <Badge variant="success">{getStatusLabel(session.status)}</Badge> : null}
           </div>
         </div>
-        <div className="developer-console__actions">
+        <div className="flex flex-wrap items-center gap-3">
           <ModeToggle
             developerMode={state.developerMode}
             onSetDeveloperMode={onSetDeveloperMode}
           />
-          <Button variant="console-primary" onClick={onNewSession}>
+          <Button variant="default" onClick={onNewSession}>
             New session
           </Button>
         </div>
       </header>
-      <div className="developer-console__workspace">
+      <div className="flex min-h-0 gap-3 max-[1160px]:flex-col">
         <LeftRail
           onNewSession={onNewSession}
           onResumeSession={onResumeSession}

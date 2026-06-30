@@ -1,6 +1,7 @@
 import React, {Component, useEffect, useMemo, useRef, useState} from 'react';
 import type {ErrorInfo, ReactNode} from 'react';
 import {createRoot} from 'react-dom/client';
+import {toast} from 'sonner';
 
 import type {MahoAiStore} from '../store.js';
 import {createFileAttachment, isSessionReadOnly, RuntimeEventKind, ViewMode} from '../types.js';
@@ -9,17 +10,20 @@ import {getToolProgressLabel} from '../views/conversation_thread.js';
 import {bootstrapStore, createMahoAiStore} from './store.js';
 import {runWithBootGuard} from './boot-guard.js';
 import {CompactShell} from './features/compact/compact-shell.js';
-import {Toast} from './features/compact/toast.js';
 import {TabTidyModal} from './features/compact/tab-tidy-modal.js';
 import type {TidyFolderSuggestion} from './features/compact/tab-tidy-modal.js';
-import {BuyCreditsModal} from './features/compact/buy-credits-modal.js';
 import {
   Composer,
   type ComposerHandlers,
 } from './features/compact/composer.js';
 import {DeveloperWorkspace} from './features/developer/developer-workspace.js';
 import {useAppState} from './hooks/use-app-state.js';
-import {cn} from './lib/cn.js';
+import {cn} from '@lib/utils';
+import {Alert, AlertDescription, AlertTitle} from '@ui/alert';
+import {Toaster} from '@ui/sonner';
+import {TooltipProvider} from '@ui/tooltip';
+import {AlertCircle} from '@icons/lucide';
+import {applyTheme, watchAutoTheme} from '@theme/apply_theme';
 
 const PAGE_HANDLER_TIMEOUT_MS = 3000;
 
@@ -55,21 +59,27 @@ function getPendingThreadLabel(entries: TimelineEntry[], pending: boolean): stri
 
 function BootErrorCard({message}: {message: string}) {
   return (
-    <section className="boot-error">
-      <h1>Maho AI failed to start</h1>
-      <pre>{message}</pre>
-    </section>
+    <Alert className="border-destructive/60 bg-destructive/10 text-destructive shadow-sm" variant="destructive">
+      <AlertCircle className="size-4" />
+      <AlertTitle>Maho AI failed to start</AlertTitle>
+      <AlertDescription>
+        <pre className="m-0 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-destructive">{message}</pre>
+      </AlertDescription>
+    </Alert>
   );
 }
 
 function PageHandlerTimeoutCard() {
   return (
-    <section className="boot-error">
-      <h1>Maho AI failed to start</h1>
-      <pre>{'Page handler did not respond within ' +
-        String(PAGE_HANDLER_TIMEOUT_MS / 1000) +
-        's. Reload the panel or restart the browser.'}</pre>
-    </section>
+    <Alert className="border-destructive/60 bg-destructive/10 text-destructive shadow-sm" variant="destructive">
+      <AlertCircle className="size-4" />
+      <AlertTitle>Maho AI failed to start</AlertTitle>
+      <AlertDescription>
+        <pre className="m-0 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-destructive">{'Page handler did not respond within ' +
+          String(PAGE_HANDLER_TIMEOUT_MS / 1000) +
+          's. Reload the panel or restart the browser.'}</pre>
+      </AlertDescription>
+    </Alert>
   );
 }
 
@@ -115,11 +125,22 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
   const [handlerTimedOut, setHandlerTimedOut] = React.useState(false);
   const [tidySuggestions, setTidySuggestions] = useState<TidyFolderSuggestion[] | null>(null);
   const [tidyLoading, setTidyLoading] = useState(false);
-  const [buyCreditsModalOpen, setBuyCreditsModalOpen] = useState(false);
-
   useEffect(() => {
     (window as unknown as Record<string, unknown>)['__mahoAiMounted'] = true;
+    applyTheme("auto");
+    return watchAutoTheme((resolved) => applyTheme(resolved));
   }, []);
+
+  useEffect(() => {
+    void store.refreshAISettings();
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void store.refreshAISettings();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [store]);
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
@@ -201,7 +222,7 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
         } catch (e: unknown) {
           const errMsg = e instanceof Error ? e.message : String(e);
           console.error('Failed to attach file', file.name, e);
-          store.addToast(errMsg, 'danger');
+          toast.error(errMsg);
         }
       }
     },
@@ -213,6 +234,9 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
     },
     onSetActiveAI: (providerId: string, modelId: string) => {
       return store.setActiveAI(providerId, modelId);
+    },
+    onOpenSettings: () => {
+      void store.openSettings();
     },
     onSubmit: () => {
       if (!store.getSnapshot().currentSessionId) {
@@ -257,7 +281,7 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
     if (tidyLoading) return;
     setTidyLoading(true);
     const openTabsItems = state.openTabs.items;
-    const tabs = openTabsItems.map(t => ({tabId: String(t.tabId), title: t.title, url: t.url}));
+    const tabs = openTabsItems.map(t => ({tabId: t.tabId, title: t.title, url: t.url}));
     void store.requestTabTidy(tabs).then(folders => {
       setTidyLoading(false);
       if (folders.length > 0) {
@@ -287,18 +311,13 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
   }
 
   return (
-    <div className={cn('console-shell', state.developerMode && 'console-shell--developer')}>
-      <section className={cn('compact-panel', state.developerMode && 'compact-panel--developer')}>
-        {state.toast && (
-          <Toast
-            text={state.toast.text}
-            tone={state.toast.tone}
-            onDismiss={() => store.clearToast()}
-          />
-        )}
+    <div className="flex h-screen min-h-0 flex-col bg-background text-foreground">
+      <section className="grid h-full min-h-0 grid-rows-[minmax(0,1fr)_auto] gap-3 p-3 max-[520px]:gap-2 max-[520px]:p-2">
         {state.bootError ? <BootErrorCard message={state.bootError} /> : (
           <>
-            <div className="compact-panel__stage-host">
+            <div className={cn(
+                'min-h-0 overflow-hidden',
+                state.developerMode ? 'block' : 'grid grid-rows-[auto_minmax(0,1fr)] gap-3')}>
               {state.developerMode ? (
                 <DeveloperWorkspace
                   onNewSession={modeHandlers.onNewSession}
@@ -320,17 +339,13 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
                   onSetViewMode={modeHandlers.onSetViewMode}
                   onStartSession={modeHandlers.onNewSession}
                   onTidyTabs={handleTidyTabs}
-                  onOpenBuyCredits={() => setBuyCreditsModalOpen(true)}
                   readOnly={readOnly}
                   state={state}
-                  store={store}
                   thinkingLabel={thinkingLabel}
                 />
               )}
             </div>
-            <div className={cn(
-                'compact-panel__composer-host',
-                state.developerMode && 'console-composer-dock')}>
+            <div className="sticky bottom-0 z-10 bg-gradient-to-t from-background via-background/95 to-transparent pt-1">
               <Composer handlers={composerHandlers} state={state} />
             </div>
           </>
@@ -343,11 +358,6 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
           onDismiss={() => setTidySuggestions(null)}
         />
       )}
-      <BuyCreditsModal
-        isOpen={buyCreditsModalOpen}
-        store={store}
-        onClose={() => setBuyCreditsModalOpen(false)}
-      />
     </div>
   );
 }
@@ -362,8 +372,11 @@ const store = createMahoAiStore();
 runWithBootGuard(rootElement, () => {
   createRoot(rootElement).render(
       <React.StrictMode>
-        <ErrorBoundary>
-          <MahoAiApp store={store} />
-        </ErrorBoundary>
+        <TooltipProvider delayDuration={200}>
+          <ErrorBoundary>
+            <MahoAiApp store={store} />
+          </ErrorBoundary>
+          <Toaster position="bottom-right" />
+        </TooltipProvider>
       </React.StrictMode>);
 });

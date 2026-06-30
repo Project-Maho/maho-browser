@@ -1,15 +1,18 @@
 import React, {useEffect, useState} from 'react';
-import {IconButton} from '../../ui/icon-button.js';
+import {Button} from '@ui/button';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '../../ui/dropdown-menu.js';
-import {AppState, ViewMode} from '../../../types.js';
-import type {CreditBalanceInfo} from '../../../types.js';
-import type {MahoAiStore} from '../../../store.js';
-import {CreditBalanceBadge} from './credit-balance-badge.js';
+} from '@ui/dropdown-menu';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@ui/tooltip';
+import {Edit, Sparkles, Settings, Grid, X} from '@icons/lucide';
+import {ViewMode} from '../../../types.js';
 
 export function CompactTopbar(
     {
@@ -19,9 +22,6 @@ export function CompactTopbar(
       onGetViewMode,
       onStartSession,
       onTidyTabs,
-      onOpenBuyCredits,
-      store,
-      creditBalance,
     }: {
       onClosePanel: () => void;
       onOpenSettings: () => void;
@@ -29,10 +29,6 @@ export function CompactTopbar(
       onGetViewMode: () => Promise<ViewMode>;
       onStartSession: () => void;
       onTidyTabs?: () => void;
-      onOpenBuyCredits: () => void;
-      store: MahoAiStore;
-      creditBalance: CreditBalanceInfo|null;
-      state: AppState;
     }) {
   const [currentMode, setCurrentMode] = useState<ViewMode>(ViewMode.kSidebar);
 
@@ -49,69 +45,101 @@ export function CompactTopbar(
     onSetViewMode(mode);
   };
 
+  const iconButtonClass = 'rounded-full';
+
   return (
-    <div className="compact-panel__topbar">
-      <div className="compact-panel__topbar-left">
-        <IconButton
-          ariaLabel="Start new session"
-          symbol="edit"
-          variant="compact-icon-ghost"
-          onClick={onStartSession}
-        />
+    <div className="flex items-center gap-2 rounded-[1.25rem] border border-border/80 bg-card/90 px-3 py-2 shadow-[0_20px_60px_-48px_rgba(8,12,24,0.85)] backdrop-blur-xl supports-[backdrop-filter]:bg-card/85">
+      <div className="flex items-center gap-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="Start new session"
+                className={iconButtonClass}
+                size="icon"
+                variant="ghost"
+                onClick={onStartSession}>
+                <Edit className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>New session</TooltipContent>
+          </Tooltip>
+        </div>
+
+        <div className="min-w-0 flex-1" />
+
+        <div className="flex items-center gap-1">
+          {onTidyTabs && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  aria-label="Tidy tabs"
+                  className={iconButtonClass}
+                  size="icon"
+                  variant="ghost"
+                  onClick={onTidyTabs}>
+                  <Sparkles className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Tidy tabs</TooltipContent>
+            </Tooltip>
+          )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="Open settings"
+                className={iconButtonClass}
+                size="icon"
+                variant="ghost"
+                onClick={onOpenSettings}>
+                <Settings className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Settings</TooltipContent>
+          </Tooltip>
+
+          <DropdownMenu>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    aria-label="View mode"
+                    className={iconButtonClass}
+                    size="icon"
+                    variant="ghost">
+                    <Grid className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent>View mode</TooltipContent>
+            </Tooltip>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                disabled={currentMode === ViewMode.kSidebar}
+                onSelect={() => handleModeSelect(ViewMode.kSidebar)}>
+                Sidebar Mode {currentMode === ViewMode.kSidebar && '\u2713'}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={currentMode === ViewMode.kFloating}
+                onSelect={() => handleModeSelect(ViewMode.kFloating)}>
+                Floating {currentMode === ViewMode.kFloating && '\u2713'}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="Close panel"
+                className={iconButtonClass}
+                size="icon"
+                variant="ghost"
+                onClick={onClosePanel}>
+                <X className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Close</TooltipContent>
+          </Tooltip>
+        </div>
       </div>
-
-      <div className="compact-panel__topbar-center" />
-
-      <div className="compact-panel__topbar-right">
-        <CreditBalanceBadge
-          store={store}
-          creditBalance={creditBalance}
-          onOpenBuyCredits={onOpenBuyCredits}
-        />
-        {onTidyTabs && (
-          <IconButton
-            ariaLabel="Tidy tabs"
-            symbol="tidyWand"
-            variant="compact-icon-ghost"
-            onClick={onTidyTabs}
-          />
-        )}
-        <IconButton
-          ariaLabel="Open settings"
-          symbol="settingsGear"
-          variant="compact-icon-ghost"
-          onClick={onOpenSettings}
-        />
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <IconButton
-              ariaLabel="View mode"
-              symbol="viewModeToggle"
-              variant="compact-icon-ghost"
-            />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent>
-            <DropdownMenuItem
-              disabled={currentMode === ViewMode.kSidebar}
-              onSelect={() => handleModeSelect(ViewMode.kSidebar)}>
-              Sidebar Mode {currentMode === ViewMode.kSidebar && '\u2713'}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              disabled={currentMode === ViewMode.kFloating}
-              onSelect={() => handleModeSelect(ViewMode.kFloating)}>
-              Floating {currentMode === ViewMode.kFloating && '\u2713'}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        <IconButton
-          ariaLabel="Close panel"
-          symbol="xmark"
-          variant="compact-icon-ghost"
-          onClick={onClosePanel}
-        />
-      </div>
-    </div>
   );
 }

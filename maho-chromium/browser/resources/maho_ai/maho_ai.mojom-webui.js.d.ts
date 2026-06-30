@@ -53,6 +53,11 @@ export interface CreditBalanceInfo {
   lastConsumptionAt: number;
 }
 
+export interface AISettingsInfo {
+  activeProviderId: string;
+  activeModelId: string;
+}
+
 export interface ContextAttachment {
   kind: ContextSourceKind;
   tabId: number;
@@ -199,6 +204,9 @@ export class PageCallbackRouter {
   onSessionUpdated: {
     addListener(listener: (session: SessionInfo) => void): void;
   };
+  onAISettingsChanged: {
+    addListener(listener: (info: AISettingsInfo) => void): void;
+  };
 }
 
 export class PageHandlerRemote {
@@ -237,6 +245,7 @@ export class PageHandlerRemote {
       approved: boolean): Promise<void>;
   closePanel(): Promise<void>;
   openSettings(): Promise<void>;
+  getAISettings(): Promise<{info: AISettingsInfo}>;
   getViewMode(): Promise<{mode: ViewMode}>;
   setViewMode(mode: ViewMode): Promise<void>;
   requestTabTidy(tabs: TabInfo[]): Promise<{folders: TidyFolder[]}>;

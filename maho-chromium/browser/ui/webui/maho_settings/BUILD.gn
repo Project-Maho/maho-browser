@@ -20,6 +20,7 @@ source_set("maho_settings") {
   ]
 
   deps = [
+    "//maho/browser:maho_auth_utils",
     "//maho/browser:maho_extension_state_bridge",
     "//maho/browser:maho_password_provider",
     "//chrome/browser/extensions",

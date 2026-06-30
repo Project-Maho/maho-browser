@@ -12,6 +12,7 @@
 #include "chrome/browser/ui/browser_finder.h"  // nogncheck
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "services/network/public/mojom/content_security_policy.mojom.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
@@ -57,6 +58,9 @@ MahoAIUI::MahoAIUI(content::WebUI* web_ui)
   }
   webui::SetupWebUIDataSource(source, kMahoAiResources,
                               IDR_MAHO_AI_MAHO_AI_HTML);
+  source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::TrustedTypes,
+      "trusted-types default static-types;");
 }
 
 MahoAIUI::~MahoAIUI() = default;

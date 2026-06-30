@@ -20,3 +20,4 @@ build_webui("build") {
 
   webui_context_type = "trusted"
 }
+

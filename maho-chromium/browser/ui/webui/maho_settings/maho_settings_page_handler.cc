@@ -33,10 +33,13 @@
 #include "content/public/browser/storage_partition.h"
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "maho/browser/extensions/maho_extension_state_bridge.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/passwords/maho_password_provider_utils.h"
+#include "maho/browser/ui/webui/maho_account_prefs.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
+#include "maho/browser/ui/webui/maho_auth_utils.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -47,8 +50,62 @@
 namespace {
 
 namespace ai = maho::ai_prefs;
+namespace acct = maho::account_prefs;
 
 constexpr char kSettingsSyncRelayUrl[] = "https://sync.maho.app";
+
+// ── Auth traffic annotations ──
+
+const net::NetworkTrafficAnnotationTag kAuthLoginTrafficAnnotation =
+    net::DefineNetworkTrafficAnnotation("maho_auth_login", R"(
+      semantics {
+        sender: "Maho Auth Login"
+        description:
+          "Authenticates the user with the Maho relay using email and password."
+        trigger:
+          "User submits the sign-in form in the Account settings pane."
+        data: "User email and password in the request body."
+        destination: WEBSITE
+      }
+      policy {
+        cookies_allowed: NO
+        setting: "Triggered by an explicit user action; not background."
+        policy_exception_justification: "Not implemented."
+      }
+    )");
+
+const net::NetworkTrafficAnnotationTag kAuthLogoutTrafficAnnotation =
+    net::DefineNetworkTrafficAnnotation("maho_auth_logout", R"(
+      semantics {
+        sender: "Maho Auth Logout"
+        description: "Invalidates the user's relay session."
+        trigger: "User clicks Sign Out in the Account settings pane."
+        data: "Bearer access token in the Authorization header."
+        destination: WEBSITE
+      }
+      policy {
+        cookies_allowed: NO
+        setting: "Triggered by an explicit user action; not background."
+        policy_exception_justification: "Not implemented."
+      }
+    )");
+
+const net::NetworkTrafficAnnotationTag kSubscriptionTrafficAnnotation =
+    net::DefineNetworkTrafficAnnotation("maho_billing_subscription", R"(
+      semantics {
+        sender: "Maho Billing Subscription"
+        description:
+          "Fetches the user's plan, credits, and renewal info from the Maho relay."
+        trigger: "User opens the Billing settings pane."
+        data: "Bearer access token in the Authorization header."
+        destination: WEBSITE
+      }
+      policy {
+        cookies_allowed: NO
+        setting: "Triggered by opening the Billing pane; not background."
+        policy_exception_justification: "Not implemented."
+      }
+    )");
 constexpr char kThemeStoreCacheFileName[] = "maho_theme_store_manifest_cache.json";
 constexpr char kPasswordProviderModeMahoKey[] = "autofill.password_provider";
 constexpr char kPasswordsEnabledMahoKey[] = "autofill.passwords_enabled";
@@ -69,8 +126,6 @@ constexpr int kCookieControlsBlockThirdPartyValue =
     static_cast<int>(content_settings::CookieControlsMode::kBlockThirdParty);
 constexpr int kCookieControlsOffValue =
     static_cast<int>(content_settings::CookieControlsMode::kOff);
-constexpr int kWebKitMinimumFontSizeMinValue = 1;
-constexpr int kWebKitMinimumFontSizeMaxValue = 24;
 constexpr int kNetworkPredictionOptionsMinValue = 0;
 constexpr int kNetworkPredictionOptionsMaxValue = 3;
 constexpr int kNetworkPredictionOptionsStandardValue =
@@ -80,13 +135,7 @@ constexpr int kNetworkPredictionOptionsWifiOnlyDeprecatedValue =
 
 constexpr SettingMapping kSettingsMap[] = {
     {"general.homepage", prefs::kHomePage, SettingMapping::Type::kString},
-    {"appearance.show_home_button", prefs::kShowHomeButton,
-     SettingMapping::Type::kBool},
     {"general.restore_on_startup", prefs::kRestoreOnStartup,
-     SettingMapping::Type::kInt},
-    {"appearance.font_size", prefs::kWebKitDefaultFontSize,
-     SettingMapping::Type::kInt},
-    {"appearance.minimum_font_size", prefs::kWebKitMinimumFontSize,
      SettingMapping::Type::kInt},
     {"appearance.theme", prefs::kBrowserColorScheme,
      SettingMapping::Type::kInt},
@@ -1240,12 +1289,7 @@ void MahoSettingsPageHandler::SetSetting(const std::string& key,
           std::move(callback).Run(false);
           return;
         }
-        if (key == "appearance.font_size") {
-          int_value = std::clamp(int_value, 9, 72);
-        } else if (key == "appearance.minimum_font_size") {
-          int_value = std::clamp(int_value, kWebKitMinimumFontSizeMinValue,
-                                 kWebKitMinimumFontSizeMaxValue);
-        } else if (key == "advanced.preload_pages") {
+        if (key == "advanced.preload_pages") {
           int_value = std::clamp(int_value, kNetworkPredictionOptionsMinValue,
                                  kNetworkPredictionOptionsMaxValue);
         }
@@ -2316,4 +2360,497 @@ void MahoSettingsPageHandler::OnOsCryptReady(os_crypt_async::Encryptor encryptor
   encryptor_ = std::move(encryptor);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Auth — Login / Logout / GetAccountStatus / GetBillingInfo
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void MahoSettingsPageHandler::Login(const std::string& email,
+                                    const std::string& password,
+                                    LoginCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (email.empty() || password.empty()) {
+    std::move(callback).Run(false, "Email and password are required.");
+    return;
+  }
+
+  if (!encryptor_.has_value()) {
+    std::move(callback).Run(false, "Encryption not ready. Please try again.");
+    return;
+  }
+
+  base::DictValue body;
+  body.Set("email", email);
+  body.Set("password", password);
+  body.Set("device_name", "Maho Desktop");
+  body.Set("device_type", "desktop");
+  std::string body_json;
+  base::JSONWriter::Write(body, &body_json);
+
+  std::string relay_url = maho::auth::GetRelayBaseUrl();
+  GURL request_url(relay_url + "/auth/login");
+  if (!request_url.is_valid()) {
+    std::move(callback).Run(false, "Invalid relay URL.");
+    return;
+  }
+
+  auto resource_request = std::make_unique<network::ResourceRequest>();
+  resource_request->url = request_url;
+  resource_request->method = "POST";
+  resource_request->headers.SetHeader("Content-Type", "application/json");
+  resource_request->headers.SetHeader("Accept", "application/json");
+  resource_request->credentials_mode =
+      network::mojom::CredentialsMode::kOmit;
+
+  auto url_loader = network::SimpleURLLoader::Create(
+      std::move(resource_request), kAuthLoginTrafficAnnotation);
+  url_loader->AttachStringForUpload(body_json, "application/json");
+  url_loader->SetTimeoutDuration(base::Seconds(30));
+
+  auto url_loader_factory = profile_->GetDefaultStoragePartition()
+                                ->GetURLLoaderFactoryForBrowserProcess();
+
+  auto* raw_loader = url_loader.get();
+  raw_loader->DownloadToString(
+      url_loader_factory.get(),
+      base::BindOnce(&MahoSettingsPageHandler::OnLoginResponse,
+                     weak_factory_.GetWeakPtr(), std::move(callback),
+                     std::move(url_loader)),
+      /*max_body_size=*/64 * 1024);
+}
+
+void MahoSettingsPageHandler::OnLoginResponse(
+    LoginCallback callback,
+    std::unique_ptr<network::SimpleURLLoader> loader,
+    std::optional<std::string> response_body) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  int net_error = loader->NetError();
+  const auto* response_info = loader->ResponseInfo();
+  int http_status =
+      response_info ? response_info->headers->response_code() : 0;
+
+  if (net_error != net::OK || !response_body.has_value()) {
+    std::move(callback).Run(false, "Network error");
+    return;
+  }
+
+  auto parsed =
+      base::JSONReader::Read(*response_body, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_dict()) {
+    std::move(callback).Run(false, "Invalid server response.");
+    return;
+  }
+
+  const base::DictValue& dict = parsed->GetDict();
+
+  if (http_status != 200) {
+    const std::string* error_msg = dict.FindString("error");
+    std::move(callback).Run(
+        false,
+        error_msg ? *error_msg : "Authentication failed (HTTP " +
+                                      base::NumberToString(http_status) + ")");
+    return;
+  }
+
+  const std::string* access_token = dict.FindString("access_token");
+  const std::string* refresh_token = dict.FindString("refresh_token");
+  if (!access_token || !refresh_token) {
+    std::move(callback).Run(false, "Missing tokens in response.");
+    return;
+  }
+
+  int64_t expires_at = static_cast<int64_t>(
+      dict.FindDouble("expires_at").value_or(0));
+  int64_t refresh_expires_at = static_cast<int64_t>(
+      dict.FindDouble("refresh_expires_at").value_or(0));
+
+  const base::DictValue* account = dict.FindDict("account");
+  std::string user_email;
+  std::string user_id;
+  std::string user_display_name;
+  std::string user_tier;
+  if (account) {
+    if (const std::string* v = account->FindString("email"))
+      user_email = *v;
+    if (const std::string* v = account->FindString("id"))
+      user_id = *v;
+    if (const std::string* v = account->FindString("display_name"))
+      user_display_name = *v;
+    if (const std::string* v = account->FindString("tier"))
+      user_tier = *v;
+  }
+
+  maho::auth::StoreTokensParams params;
+  params.access_token = *access_token;
+  params.refresh_token = *refresh_token;
+  params.access_expires_at = expires_at;
+  params.refresh_expires_at = refresh_expires_at;
+  params.user_email = user_email;
+  params.user_id = user_id;
+  params.user_display_name = user_display_name;
+  params.user_tier = user_tier;
+
+  if (!maho::auth::StoreRelayTokens(prefs_, *encryptor_, params)) {
+    std::move(callback).Run(false, "Failed to store credentials.");
+    return;
+  }
+
+  // Fire ShellEvent::SignIn to maho-core on the thread pool.
+  {
+    base::DictValue sign_in_event;
+    base::DictValue sign_in_data;
+    sign_in_data.Set("email", user_email);
+    sign_in_data.Set("password", "");  // Don't pass password to core.
+    sign_in_data.Set("display_name", user_display_name);
+    sign_in_data.Set("access_token", *access_token);
+    sign_in_data.Set("user_id", user_id);
+    sign_in_event.Set("SignIn", std::move(sign_in_data));
+
+    std::string event_json;
+    base::JSONWriter::Write(sign_in_event, &event_json);
+
+    maho::PostCoreClosure(
+        FROM_HERE,
+        base::BindOnce(
+            [](std::string json) {
+              MahoCore* core = maho::GetCore();
+              if (!core) return;
+              char* result = maho_core_sign_in(core, json.c_str());
+              if (result) maho_string_free(result);
+            },
+            std::move(event_json)));
+  }
+
+  BroadcastAccountStatus();
+
+  std::move(callback).Run(true, "");
+}
+
+void MahoSettingsPageHandler::Logout(LogoutCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  // Best-effort POST /auth/logout — fire-and-forget.
+  if (encryptor_.has_value()) {
+    std::string access_token =
+        maho::auth::GetRelayAccessToken(prefs_, *encryptor_);
+    if (!access_token.empty()) {
+      std::string relay_url = maho::auth::GetRelayBaseUrl();
+      GURL request_url(relay_url + "/auth/logout");
+      if (request_url.is_valid()) {
+        auto resource_request = std::make_unique<network::ResourceRequest>();
+        resource_request->url = request_url;
+        resource_request->method = "POST";
+        resource_request->headers.SetHeader(
+            "Authorization", "Bearer " + access_token);
+        resource_request->credentials_mode =
+            network::mojom::CredentialsMode::kOmit;
+
+        auto url_loader = network::SimpleURLLoader::Create(
+            std::move(resource_request), kAuthLogoutTrafficAnnotation);
+        url_loader->SetTimeoutDuration(base::Seconds(10));
+
+        auto url_loader_factory = profile_->GetDefaultStoragePartition()
+                                      ->GetURLLoaderFactoryForBrowserProcess();
+        // Fire-and-forget: transfer loader ownership into the callback.
+        auto* raw_loader = url_loader.get();
+        raw_loader->DownloadToString(
+            url_loader_factory.get(),
+            base::BindOnce(
+                [](std::unique_ptr<network::SimpleURLLoader>,
+                   std::optional<std::string>) {
+                  // Intentionally empty — fire-and-forget.
+                },
+                std::move(url_loader)),
+            /*max_body_size=*/1024);
+      }
+    }
+  }
+
+  maho::auth::ClearRelayTokens(prefs_);
+
+  // ShellEvent::SignOut to maho-core (unit variant → JSON: "\"SignOut\"")
+  maho::PostCoreClosure(
+      FROM_HERE,
+      base::BindOnce([]() {
+        MahoCore* core = maho::GetCore();
+        if (!core) return;
+        const char* event_json = "\"SignOut\"";
+        char* result = maho_core_sign_in(core, event_json);
+        if (result) maho_string_free(result);
+      }));
+
+  // Broadcast empty AccountStatus to the page.
+  BroadcastAccountStatus();
+
+  std::move(callback).Run();
+}
+
+void MahoSettingsPageHandler::GetAccountStatus(
+    GetAccountStatusCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  auto status = maho_settings::mojom::AccountStatus::New();
+
+  std::string encrypted_b64 =
+      prefs_->GetString(acct::kRelayAccessTokenEncryptedB64);
+  if (encrypted_b64.empty()) {
+    status->signed_in = false;
+    status->email = "";
+    status->display_name = "";
+    status->user_id = "";
+    status->tier = "";
+    status->subscription_status = "";
+    status->subscription_expires_at = 0;
+    std::move(callback).Run(std::move(status));
+    return;
+  }
+
+  status->signed_in = true;
+  status->email = prefs_->GetString(acct::kRelayUserEmail);
+  status->display_name = prefs_->GetString(acct::kRelayUserDisplayName);
+  status->user_id = prefs_->GetString(acct::kRelayUserId);
+  status->tier = prefs_->GetString(acct::kRelayUserTier);
+  status->subscription_status = "";
+  status->subscription_expires_at = 0;
+
+  std::move(callback).Run(std::move(status));
+}
+
+void MahoSettingsPageHandler::GetBillingInfo(GetBillingInfoCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (!encryptor_.has_value()) {
+    auto info = maho_settings::mojom::BillingInfo::New();
+    info->tier = "";
+    info->subscription_status = "";
+    info->subscription_expires_at = 0;
+    info->period_start_at = 0;
+    info->anniversary_reset_day = 0;
+    info->tier_ceiling_usd = 0.0f;
+    info->credit_balance_usd = 0.0f;
+    info->lifetime_purchased_usd = 0.0f;
+    info->has_payment_method = false;
+    std::move(callback).Run(std::move(info));
+    return;
+  }
+
+  std::string access_token =
+      maho::auth::GetRelayAccessToken(prefs_, *encryptor_);
+  if (access_token.empty()) {
+    auto info = maho_settings::mojom::BillingInfo::New();
+    info->tier = "";
+    info->subscription_status = "";
+    info->subscription_expires_at = 0;
+    info->period_start_at = 0;
+    info->anniversary_reset_day = 0;
+    info->tier_ceiling_usd = 0.0f;
+    info->credit_balance_usd = 0.0f;
+    info->lifetime_purchased_usd = 0.0f;
+    info->has_payment_method = false;
+    std::move(callback).Run(std::move(info));
+    return;
+  }
+
+  std::string relay_url = maho::auth::GetRelayBaseUrl();
+  GURL request_url(relay_url + "/auth/subscription");
+  if (!request_url.is_valid()) {
+    auto info = maho_settings::mojom::BillingInfo::New();
+    info->tier = "";
+    info->subscription_status = "";
+    info->subscription_expires_at = 0;
+    info->period_start_at = 0;
+    info->anniversary_reset_day = 0;
+    info->tier_ceiling_usd = 0.0f;
+    info->credit_balance_usd = 0.0f;
+    info->lifetime_purchased_usd = 0.0f;
+    info->has_payment_method = false;
+    std::move(callback).Run(std::move(info));
+    return;
+  }
+
+  auto resource_request = std::make_unique<network::ResourceRequest>();
+  resource_request->url = request_url;
+  resource_request->method = "GET";
+  resource_request->headers.SetHeader(
+      "Authorization", "Bearer " + access_token);
+  resource_request->headers.SetHeader("Accept", "application/json");
+  resource_request->credentials_mode =
+      network::mojom::CredentialsMode::kOmit;
+
+  auto url_loader = network::SimpleURLLoader::Create(
+      std::move(resource_request), kSubscriptionTrafficAnnotation);
+  url_loader->SetTimeoutDuration(base::Seconds(15));
+
+  auto url_loader_factory = profile_->GetDefaultStoragePartition()
+                                ->GetURLLoaderFactoryForBrowserProcess();
+
+  auto* raw_loader = url_loader.get();
+  raw_loader->DownloadToString(
+      url_loader_factory.get(),
+      base::BindOnce(&MahoSettingsPageHandler::OnSubscriptionResponse,
+                     weak_factory_.GetWeakPtr(), std::move(callback),
+                     /*refreshed_once=*/false, std::move(url_loader)),
+      /*max_body_size=*/64 * 1024);
+}
+
+void MahoSettingsPageHandler::OnSubscriptionResponse(
+    GetBillingInfoCallback callback,
+    bool refreshed_once,
+    std::unique_ptr<network::SimpleURLLoader> loader,
+    std::optional<std::string> response_body) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  auto make_empty_info = []() {
+    auto info = maho_settings::mojom::BillingInfo::New();
+    info->tier = "";
+    info->subscription_status = "";
+    info->subscription_expires_at = 0;
+    info->period_start_at = 0;
+    info->anniversary_reset_day = 0;
+    info->tier_ceiling_usd = 0.0f;
+    info->credit_balance_usd = 0.0f;
+    info->lifetime_purchased_usd = 0.0f;
+    info->has_payment_method = false;
+    return info;
+  };
+
+  int net_error = loader->NetError();
+  const auto* response_info = loader->ResponseInfo();
+  int http_status =
+      response_info ? response_info->headers->response_code() : 0;
+
+  if (net_error != net::OK || !response_body.has_value()) {
+    std::move(callback).Run(make_empty_info());
+    return;
+  }
+
+  if (http_status == 401 && !refreshed_once && encryptor_.has_value()) {
+    auto url_loader_factory = profile_->GetDefaultStoragePartition()
+                                  ->GetURLLoaderFactoryForBrowserProcess();
+    const std::string current_refresh =
+        maho::auth::GetRelayRefreshToken(prefs_, *encryptor_);
+    maho::auth::RefreshAccessToken(
+        current_refresh, url_loader_factory,
+        base::BindOnce(
+            [](base::WeakPtr<MahoSettingsPageHandler> handler,
+               GetBillingInfoCallback cb, bool success,
+               std::optional<maho::auth::RefreshedTokens> tokens) {
+              auto make_empty = []() {
+                auto info = maho_settings::mojom::BillingInfo::New();
+                info->tier = "";
+                info->subscription_status = "";
+                info->subscription_expires_at = 0;
+                info->period_start_at = 0;
+                info->anniversary_reset_day = 0;
+                info->tier_ceiling_usd = 0.0f;
+                info->credit_balance_usd = 0.0f;
+                info->lifetime_purchased_usd = 0.0f;
+                info->has_payment_method = false;
+                return info;
+              };
+              if (!handler) {
+                std::move(cb).Run(make_empty());
+                return;
+              }
+              if (!success || !tokens || !handler->encryptor_.has_value()) {
+                maho::auth::ClearRelayTokens(handler->prefs_);
+                handler->BroadcastAccountStatus();
+                std::move(cb).Run(make_empty());
+                return;
+              }
+              maho::auth::StoreTokensParams params;
+              params.access_token = tokens->access_token;
+              params.refresh_token = tokens->refresh_token;
+              params.access_expires_at = tokens->access_expires_at;
+              params.refresh_expires_at = tokens->refresh_expires_at;
+              params.user_email = handler->prefs_->GetString(
+                  maho::account_prefs::kRelayUserEmail);
+              params.user_id = handler->prefs_->GetString(
+                  maho::account_prefs::kRelayUserId);
+              params.user_display_name = handler->prefs_->GetString(
+                  maho::account_prefs::kRelayUserDisplayName);
+              params.user_tier = handler->prefs_->GetString(
+                  maho::account_prefs::kRelayUserTier);
+              if (!maho::auth::StoreRelayTokens(
+                      handler->prefs_, *handler->encryptor_, params)) {
+                maho::auth::ClearRelayTokens(handler->prefs_);
+                handler->BroadcastAccountStatus();
+                std::move(cb).Run(make_empty());
+                return;
+              }
+              handler->GetBillingInfo(std::move(cb));
+            },
+            weak_factory_.GetWeakPtr(), std::move(callback)));
+    return;
+  }
+
+  if (http_status != 200) {
+    std::move(callback).Run(make_empty_info());
+    return;
+  }
+
+  auto parsed =
+      base::JSONReader::Read(*response_body, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_dict()) {
+    std::move(callback).Run(make_empty_info());
+    return;
+  }
+
+  const base::DictValue& dict = parsed->GetDict();
+
+  auto info = maho_settings::mojom::BillingInfo::New();
+  if (const std::string* v = dict.FindString("tier"))
+    info->tier = *v;
+  else
+    info->tier = "";
+  if (const std::string* v = dict.FindString("subscription_status"))
+    info->subscription_status = *v;
+  else
+    info->subscription_status = "";
+
+  info->subscription_expires_at = static_cast<int64_t>(
+      dict.FindDouble("subscription_expires_at").value_or(0));
+  info->period_start_at = static_cast<int64_t>(
+      dict.FindDouble("period_start_at").value_or(0));
+  info->anniversary_reset_day = static_cast<int32_t>(
+      dict.FindInt("anniversary_reset_day").value_or(0));
+  info->tier_ceiling_usd = static_cast<float>(
+      dict.FindDouble("tier_ceiling_usd").value_or(0));
+  info->credit_balance_usd = static_cast<float>(
+      dict.FindDouble("credit_balance_usd").value_or(0));
+  info->lifetime_purchased_usd = static_cast<float>(
+      dict.FindDouble("lifetime_purchased_usd").value_or(0));
+  info->has_payment_method = false;  // Backend not implemented yet.
+
+  std::move(callback).Run(std::move(info));
+}
+
+void MahoSettingsPageHandler::BroadcastAccountStatus() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  auto status = maho_settings::mojom::AccountStatus::New();
+
+  std::string encrypted_b64 =
+      prefs_->GetString(acct::kRelayAccessTokenEncryptedB64);
+  if (encrypted_b64.empty()) {
+    status->signed_in = false;
+    status->email = "";
+    status->display_name = "";
+    status->user_id = "";
+    status->tier = "";
+    status->subscription_status = "";
+    status->subscription_expires_at = 0;
+  } else {
+    status->signed_in = true;
+    status->email = prefs_->GetString(acct::kRelayUserEmail);
+    status->display_name = prefs_->GetString(acct::kRelayUserDisplayName);
+    status->user_id = prefs_->GetString(acct::kRelayUserId);
+    status->tier = prefs_->GetString(acct::kRelayUserTier);
+    status->subscription_status = "";
+    status->subscription_expires_at = 0;
+  }
+
+  page_->AccountStatusChanged(std::move(status));
+}
 

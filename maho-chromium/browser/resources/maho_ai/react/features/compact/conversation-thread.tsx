@@ -1,5 +1,7 @@
 import {useMemo, useState} from 'react';
 
+import {cn} from '@lib/utils';
+import {ChevronDown} from '@icons/lucide';
 import {useAutoScroll} from '../../hooks/use-auto-scroll.js';
 import type {TimelineEntry} from '../../../types.js';
 import {collectConversationItems} from '../../../views/conversation_thread.js';
@@ -15,48 +17,22 @@ function ThinkingBubble({item}: {item: ConversationItem}) {
       : item.text;
 
   return (
-    <article className="compact-thread__row compact-thread__row--system compact-thread__row--thinking-content">
+    <article className="w-full motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-reduce:animate-none">
       <button
         type="button"
-        className="compact-thread__bubble compact-thread__bubble--thinking"
+        className="flex w-full items-start gap-3 rounded-xl border border-border/80 bg-secondary/60 px-3 py-2 text-left shadow-sm transition-colors hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         onClick={() => setExpanded(!expanded)}>
-        <span className="compact-thread__thinking-label">Thinking</span>
-        <span className="compact-thread__thinking-text">{preview}</span>
+        <div className="min-w-0 flex-1">
+          <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Thinking</span>
+          <span className="block whitespace-pre-wrap text-xs italic leading-5 text-muted-foreground">{preview}</span>
+        </div>
         {item.text.length > 80 ? (
-          <span className="compact-thread__thinking-chevron" data-expanded={expanded}>
-            {expanded ? '\u25be' : '\u25b8'}
-          </span>
+          <ChevronDown className={cn(
+              'mt-0.5 size-3.5 shrink-0 text-muted-foreground transition-transform',
+              expanded && 'rotate-180')} />
         ) : null}
       </button>
     </article>
-  );
-}
-
-function QuotaBanner({onOpenBuyCredits}: {onOpenBuyCredits: () => void}) {
-  return (
-    <div className="compact-thread__quota-banner" role="alert">
-      <span className="compact-thread__quota-banner-text">
-        You have hit your monthly quota and have no PAYG credits.
-      </span>
-      <div className="compact-thread__quota-banner-actions">
-        <button
-          type="button"
-          className="console-button console-button--primary"
-          onClick={onOpenBuyCredits}
-        >
-          Buy credits
-        </button>
-        <button
-          type="button"
-          className="console-button"
-          onClick={() => {
-            window.open('chrome://maho-settings/', '_blank');
-          }}
-        >
-          Upgrade
-        </button>
-      </div>
-    </div>
   );
 }
 
@@ -66,22 +42,18 @@ export function ConversationThread(
       onRespondToApproval,
       readOnly,
       thinkingLabel,
-      chatBlockedReason,
-      onOpenBuyCredits,
     }: {
       entries: TimelineEntry[];
       onRespondToApproval: (approvalId: string, approved: boolean) => void;
       readOnly: boolean;
       thinkingLabel: string | null;
-      chatBlockedReason?: 'quota-exhausted'|null;
-      onOpenBuyCredits?: () => void;
     }) {
   const items = useMemo(() => collectConversationItems(entries), [entries]);
   const listRef = useAutoScroll<HTMLDivElement>(items);
 
   return (
-    <main className="compact-thread">
-      <div ref={listRef} className="compact-thread__list">
+    <main className="flex min-h-0 flex-1 flex-col px-0 pb-0 pt-3">
+      <div ref={listRef} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-1 pb-6 pt-2 max-[520px]:gap-3 max-[520px]:pb-5">
         {items.map(item => {
           if (item.kind === 'thinking') {
             return <ThinkingBubble key={item.key} item={item} />;
@@ -105,9 +77,6 @@ export function ConversationThread(
           );
         })}
         {thinkingLabel ? <PendingThought label={thinkingLabel} /> : null}
-        {chatBlockedReason === 'quota-exhausted' && onOpenBuyCredits ? (
-          <QuotaBanner onOpenBuyCredits={onOpenBuyCredits} />
-        ) : null}
       </div>
     </main>
   );

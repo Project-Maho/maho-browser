@@ -1,7 +1,28 @@
-import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore} from 'react';
 
-import {Button, TextInput, joinClassNames} from '../../maho_common/react/primitives/index.js';
+import {Alert, AlertDescription, AlertTitle} from '@ui/alert';
+import {Badge} from '@ui/badge';
+import {Button} from '@ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@ui/card';
+import {Input} from '@ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@ui/select';
+import {Switch} from '@ui/switch';
+import {AlertCircle, ArrowUpRight, Sparkles} from '@icons/lucide';
+import {cn} from '@lib/utils';
 import {PasswordProviderKind} from '../mojo.js';
+import type {AccountStatus, BillingInfo} from '../maho_settings.mojom-webui.js';
 import type {
   AISettings,
   ATCRule,
@@ -95,6 +116,13 @@ function createTransientId(prefix: string): string {
 
 const SHORTCUT_ACRONYMS = new Set(['URL', 'JS', 'HC', 'AI', 'API', 'OS', 'CSS', 'HTML', 'JSON', 'RSS', 'ID', 'UI', 'UX', 'IP', 'DNS', 'TLS', 'SSL', 'VPN', 'CPU', 'GPU', 'RAM']);
 
+const USD_FORMATTER = new Intl.NumberFormat(undefined, {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
 function formatShortcutAction(action: string): string {
   return action.split('_').map((word, index) => {
     const upper = word.toUpperCase();
@@ -106,6 +134,36 @@ function formatShortcutAction(action: string): string {
     }
     return word;
   }).join(' ');
+}
+
+function formatPlanLabel(tier: AccountStatus['tier'] | BillingInfo['tier']): string {
+  if (!tier) {
+    return 'Free';
+  }
+
+  return tier.charAt(0).toUpperCase() + tier.slice(1);
+}
+
+function formatBillingDate(timestamp: bigint | number): string | null {
+  const seconds = typeof timestamp === 'bigint' ? Number(timestamp) : timestamp;
+  if (!seconds) {
+    return null;
+  }
+
+  return new Date(seconds * 1000).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+function formatUsd(amount: number): string {
+  return USD_FORMATTER.format(Math.max(0, amount));
+}
+
+function useSettingsStoreState(store: MahoSettingsStore) {
+  return useSyncExternalStore(
+      listener => store.subscribe(listener), () => store.getSnapshot());
 }
 
 function getPasswordsEnabled(settings: SettingValue[]): boolean {
@@ -125,6 +183,47 @@ function normalizeSavedPasswords(passwords: SavedPassword[]): SavedPassword[] {
   }));
 }
 
+const PANE_SECTION_CLASS = 'mb-6 scroll-mt-8';
+const PANE_SHELL_CLASS = 'overflow-hidden rounded-xl border border-border bg-card shadow-sm';
+const PANE_HEADER_CLASS = 'border-b border-border px-6 py-4';
+const PANE_TITLE_CLASS = 'text-2xl font-semibold tracking-tight';
+const PANE_GRID_CLASS = 'grid gap-4 p-4 md:grid-cols-2 md:p-5';
+const PANE_CONTENT_CLASS = 'min-w-0 space-y-4 md:col-span-2';
+const SECTION_CARD_CLASS = 'overflow-hidden rounded-xl border border-border/70 bg-background/20';
+const STANDALONE_MESSAGE_CLASS = 'rounded-xl border border-border/70 bg-background/20 px-6 py-4 text-sm leading-6 text-muted-foreground';
+const RETRY_ROW_CLASS =
+    'grid gap-4 rounded-xl border border-border/70 bg-background/20 px-6 py-4 sm:grid-cols-[minmax(0,1fr)_minmax(270px,344px)] sm:items-start';
+const SECTION_HEADER_CLASS =
+    'flex flex-col gap-3 rounded-xl border border-border/70 bg-background/20 px-6 py-4 sm:flex-row sm:items-center sm:justify-between';
+const SECTION_HEADER_SPACED_CLASS = 'mt-6';
+const SECTION_TITLE_CLASS = 'text-base font-semibold tracking-tight';
+const ROWS_CLASS = SECTION_CARD_CLASS;
+const SETTING_ROW_CLASS =
+    'grid gap-4 border-t border-border px-6 py-4 sm:grid-cols-[minmax(0,1fr)_minmax(270px,344px)] sm:items-start';
+const SETTING_ROW_FIRST_CLASS = 'border-t-0 pt-0';
+const SETTING_COPY_CLASS = 'min-w-0';
+const SETTING_TITLE_CLASS = 'text-sm font-medium text-foreground';
+const SETTING_DESCRIPTION_CLASS = 'mt-1 text-xs leading-5 text-muted-foreground';
+const EMPTY_DESCRIPTION_CLASS = 'border-b border-border px-6 py-4 text-sm leading-6 text-muted-foreground';
+const SETTING_CONTROL_CLASS = 'flex w-full items-center justify-start gap-2 sm:justify-end';
+const SETTING_ACTIONS_CLASS = 'flex w-full flex-wrap items-center gap-2 sm:justify-end';
+const SETTING_CONTROL_STACKED_CLASS = 'flex-col items-stretch sm:justify-start';
+const SETTING_CONTROL_STACK_CLASS = 'flex w-full flex-col gap-2';
+const INPUT_SHELL_CLASS = 'w-full min-w-0';
+const INPUT_FIELD_CLASS = 'bg-background/70';
+const SELECT_SHELL_CLASS = 'w-full min-w-0';
+const SELECT_TRIGGER_CLASS = 'bg-background/70';
+const ACTION_BUTTON_CLASS =
+    'h-9 min-w-fit rounded-lg border-border bg-background/70 px-4 text-sm font-medium text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground';
+const INLINE_STATUS_CLASS = 'inline-flex min-h-9 items-center rounded-lg border border-border bg-background/70 px-3 text-sm font-medium text-foreground';
+const CONTENT_STACKED_HEADER_CLASS = 'rounded-xl border border-border/70 bg-background/20 px-6 py-4';
+const CONTENT_TITLE_GROUP_CLASS = 'min-w-0 space-y-1';
+const CONTENT_COPY_CLASS = 'text-sm leading-6 text-muted-foreground';
+const PROVIDER_CARD_CLASS = 'grid gap-0 overflow-hidden rounded-lg border border-border/70 bg-background/40';
+const CAPABILITIES_COPY_CLASS = 'px-6 py-4 text-xs leading-5 text-muted-foreground';
+const BROWSER_SHELL_CLASS = 'overflow-hidden rounded-xl border border-border/70 bg-background/20';
+const ICON_CLASS = 'inline-block size-4 shrink-0 align-middle';
+
 export function DomainPaneContent(
     {pane, settings, store}: {
       pane: PaneDefinition;
@@ -132,6 +231,8 @@ export function DomainPaneContent(
       store: MahoSettingsStore;
     }) {
   switch (pane.contentKind) {
+    case 'account':
+      return <AccountPane pane={pane} store={store} />;
     case 'profiles':
       return <ProfilesPane pane={pane} store={store} />;
     case 'sync':
@@ -157,22 +258,151 @@ export function DomainPaneContent(
     default:
       return (
         <DomainPaneSection pane={pane}>
-          <p className="setting-row__description">This pane is not available.</p>
+          <p className={STANDALONE_MESSAGE_CLASS}>This pane is not available.</p>
         </DomainPaneSection>
       );
   }
 }
 
+function AccountPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}) {
+  const mountedRef = useMountedRef();
+  const state = useSettingsStoreState(store);
+  const account = state.accountStatus;
+  const error = state.accountError;
+  const loading = state.accountLoading;
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    void store.refreshAccountStatus();
+  }, [store]);
+
+  if (loading && !submitting && account === null) {
+    return (
+      <DomainPaneSection pane={pane}>
+        <PaneLoading message="Loading account…" />
+      </DomainPaneSection>
+    );
+  }
+
+  if (!account?.signed_in) {
+    return (
+      <DomainPaneSection pane={pane}>
+        <Card className="max-w-md border-border/70 bg-card/95 shadow-sm">
+          <CardHeader className="space-y-4">
+            <div className="flex size-10 items-center justify-center rounded-full bg-primary/10 text-primary">
+              <Sparkles className="size-4" />
+            </div>
+            <div className="space-y-1">
+              <CardTitle>Sign in to Maho</CardTitle>
+              <CardDescription>Access your subscription, sync, and billing.</CardDescription>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <form
+              className="grid gap-4"
+              onSubmit={async (event) => {
+                event.preventDefault();
+                if (submitting) {
+                  return;
+                }
+
+                setSubmitting(true);
+                const result = await store.signIn(email.trim(), password);
+                if (!mountedRef.current) {
+                  return;
+                }
+
+                setSubmitting(false);
+                if (result.success) {
+                  setEmail('');
+                  setPassword('');
+                }
+              }}>
+              <div className="grid gap-2">
+                <label className="text-sm font-medium leading-none" htmlFor="account-email">Email</label>
+                <Input
+                  autoComplete="email"
+                  disabled={submitting}
+                  id="account-email"
+                  required
+                  type="email"
+                  value={email}
+                  onChange={event => setEmail(event.currentTarget.value)}
+                />
+              </div>
+              <div className="grid gap-2">
+                <label className="text-sm font-medium leading-none" htmlFor="account-password">Password</label>
+                <Input
+                  autoComplete="current-password"
+                  disabled={submitting}
+                  id="account-password"
+                  required
+                  type="password"
+                  value={password}
+                  onChange={event => setPassword(event.currentTarget.value)}
+                />
+              </div>
+              {error ? (
+                <Alert className="border-destructive/60 bg-destructive/10 text-destructive shadow-sm" variant="destructive">
+                  <AlertCircle className="size-4" />
+                  <AlertTitle>Sign in failed</AlertTitle>
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              ) : null}
+              <Button disabled={submitting || !email.trim() || !password} type="submit">
+                {submitting ? 'Signing in…' : 'Sign in'}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      </DomainPaneSection>
+    );
+  }
+
+  const tierLabel = formatPlanLabel(account.tier);
+  const planBadgeVariant: 'default' | 'secondary' =
+      account.tier && account.tier !== 'free' ? 'default' : 'secondary';
+  const renewDate = formatBillingDate(account.subscription_expires_at);
+
+  return (
+    <DomainPaneSection pane={pane}>
+      <Card className="max-w-2xl border-border/70 bg-card/95 shadow-sm">
+        <CardHeader className="gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <CardTitle className="text-2xl tracking-tight">{account.email}</CardTitle>
+              <CardDescription className="flex flex-wrap items-center gap-2">
+                <Badge variant={planBadgeVariant}>{tierLabel} plan</Badge>
+                {account.display_name ? <span>{account.display_name}</span> : null}
+                {account.subscription_status ? <span>· {account.subscription_status}</span> : null}
+              </CardDescription>
+            </div>
+            <div className="grid gap-1 text-sm text-muted-foreground">
+              {account.user_id ? <p>Account ID: {account.user_id}</p> : null}
+              {renewDate ? <p>Next renewal on {renewDate}</p> : null}
+            </div>
+          </div>
+          <Button disabled={loading} type="button" variant="outline" onClick={() => void store.signOut()}>
+            Sign out
+          </Button>
+        </CardHeader>
+      </Card>
+    </DomainPaneSection>
+  );
+}
+
 function DomainPaneSection(
     {children, pane}: {children: React.ReactNode; pane: PaneDefinition}) {
   return (
-    <section className="preferences-section" data-pane={pane.key} id={`section-${pane.key}`}>
-      <div className="preferences-card preferences-card--pane-shell">
-        <header className="preferences-section__header">
-          <h2 className="preferences-section__title">{pane.title}</h2>
+    <section className={PANE_SECTION_CLASS} data-pane={pane.key} id={`section-${pane.key}`}>
+      <div className={PANE_SHELL_CLASS}>
+        <header className={PANE_HEADER_CLASS}>
+          <h2 className={PANE_TITLE_CLASS}>{pane.title}</h2>
         </header>
-        <div className="cards-grid">
-          <article className="content-card content-card--wide">{children}</article>
+        <div className={PANE_GRID_CLASS}>
+          <article className={PANE_CONTENT_CLASS}>{children}</article>
         </div>
       </div>
     </section>
@@ -180,7 +410,7 @@ function DomainPaneSection(
 }
 
 function PaneLoading({message}: {message: string}) {
-  return <p className="setting-row__description">{message}</p>;
+  return <p className={STANDALONE_MESSAGE_CLASS}>{message}</p>;
 }
 
 function PaneRetry(
@@ -190,12 +420,12 @@ function PaneRetry(
       title: string;
     }) {
   return (
-    <section className="setting-row setting-row--first">
-      <div className="setting-row__copy">
-        <h4 className="setting-row__title">{title}</h4>
-        <p className="setting-row__description">{message}</p>
+    <section className={RETRY_ROW_CLASS}>
+      <div className={SETTING_COPY_CLASS}>
+        <h4 className={SETTING_TITLE_CLASS}>{title}</h4>
+        <p className={SETTING_DESCRIPTION_CLASS}>{message}</p>
       </div>
-      <div className="setting-row__control setting-actions">
+      <div className={SETTING_ACTIONS_CLASS}>
         <ActionButton label="Retry" onClick={onRetry} />
       </div>
     </section>
@@ -203,7 +433,7 @@ function PaneRetry(
 }
 
 function EmptyDescription({message}: {message: string}) {
-  return <p className="setting-row__description setting-empty-description">{message}</p>;
+  return <p className={EMPTY_DESCRIPTION_CLASS}>{message}</p>;
 }
 
 function SectionHeader(
@@ -213,8 +443,8 @@ function SectionHeader(
       title: string;
     }) {
   return (
-    <div className={spaced ? 'content-card__header content-card__header--spaced' : 'content-card__header'}>
-      <h3 className="content-card__title">{title}</h3>
+    <div className={cn(SECTION_HEADER_CLASS, spaced ? SECTION_HEADER_SPACED_CLASS : undefined)}>
+      <h3 className={SECTION_TITLE_CLASS}>{title}</h3>
       {action ?? null}
     </div>
   );
@@ -235,10 +465,11 @@ function ActionButton(
   return (
     <Button
       aria-label={ariaLabel}
-      className={joinClassNames('setting-switch setting-switch--action', className)}
+      className={cn(ACTION_BUTTON_CLASS, className)}
       disabled={disabled || isBusy}
       style={style}
       type="button"
+      variant="outline"
       onClick={async () => {
         if (mountedRef.current) {
           setIsBusy(true);
@@ -266,33 +497,27 @@ export function Toggle(
   const mountedRef = useMountedRef();
 
   return (
-    <Button
-      aria-checked={enabled}
-      aria-label={label}
-      className={joinClassNames('setting-switch', enabled ? 'is-on' : undefined)}
-      disabled={isBusy}
-      role="switch"
-      type="button"
-      onClick={async () => {
-        if (isBusy) {
-          return;
-        }
-        if (mountedRef.current) {
-          setIsBusy(true);
-        }
-        try {
-          await onToggle(!enabled);
-        } finally {
+    <div className="flex items-center space-x-2">
+      <Switch
+        checked={enabled}
+        disabled={isBusy}
+        aria-label={label}
+        onCheckedChange={async (checked) => {
+          if (isBusy) return;
           if (mountedRef.current) {
-            setIsBusy(false);
+            setIsBusy(true);
           }
-        }
-      }}>
-      <span className="setting-switch__track">
-        <span className="setting-switch__thumb" />
-      </span>
-      <span className="setting-switch__status">{enabled ? 'On' : 'Off'}</span>
-    </Button>
+          try {
+            await onToggle(checked);
+          } finally {
+            if (mountedRef.current) {
+              setIsBusy(false);
+            }
+          }
+        }}
+      />
+      <span className="text-sm text-muted-foreground">{enabled ? 'On' : 'Off'}</span>
+    </div>
   );
 }
 
@@ -305,12 +530,12 @@ function ManagedSettingRow(
       title: string;
     }) {
   return (
-    <section className={joinClassNames('setting-row', isFirstRow ? 'setting-row--first' : undefined)}>
-      <div className="setting-row__copy">
-        <h4 className="setting-row__title">{title}</h4>
-        <p className="setting-row__description">{description}</p>
+    <section className={cn(SETTING_ROW_CLASS, isFirstRow ? SETTING_ROW_FIRST_CLASS : undefined)}>
+      <div className={SETTING_COPY_CLASS}>
+        <h4 className={SETTING_TITLE_CLASS}>{title}</h4>
+        <p className={SETTING_DESCRIPTION_CLASS}>{description}</p>
       </div>
-      <div className={joinClassNames('setting-row__control', controlClassName)}>{children}</div>
+      <div className={cn(SETTING_CONTROL_CLASS, controlClassName)}>{children}</div>
     </section>
   );
 }
@@ -324,10 +549,10 @@ function TextFieldShell(
       value: string;
     }) {
   return (
-    <div className="setting-input-shell">
-      <TextInput
+    <div className={INPUT_SHELL_CLASS}>
+      <Input
         aria-label={ariaLabel}
-        className="setting-input"
+        className={INPUT_FIELD_CLASS}
         placeholder={placeholder}
         type={type}
         value={value}
@@ -344,25 +569,20 @@ function SelectShell<T extends string>(
       options: Array<{label: string; value: T}>;
       value: T;
     }) {
+  const placeholder = options[0]?.label || ariaLabel;
+
   return (
-    <div className="setting-input-shell setting-input-shell--select">
-      <select
-        aria-label={ariaLabel}
-        className="setting-input setting-select"
-        value={value}
-        onChange={event => onChange(event.currentTarget.value as T)}>
-        {options.map(option => (
-          <option key={option.value} value={option.value}>{option.label}</option>
-        ))}
-      </select>
-      <span aria-hidden="true" className="setting-input-shell__suffix setting-input-shell__suffix--icon">
-        <img
-          alt=""
-          aria-hidden="true"
-          className="setting-icon"
-          src="chrome://maho-settings/icons/chevron-down.svg"
-        />
-      </span>
+    <div className={SELECT_SHELL_CLASS}>
+      <Select value={value} onValueChange={nextValue => onChange(nextValue as T)}>
+        <SelectTrigger aria-label={ariaLabel} className={SELECT_TRIGGER_CLASS}>
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map(option => (
+            <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 }
@@ -394,13 +614,13 @@ function ProfilesPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
         <PaneRetry message={state.message} title="Profiles unavailable" onRetry={() => void loadProfiles()} />
       ) : null}
       {state.status === 'loaded' ? (
-        <div className="preferences-card__rows">
+        <div className={ROWS_CLASS}>
           {state.data.length === 0 ? <EmptyDescription message="No profiles configured." /> : null}
           {state.data.map(profile => (
             <ProfileRow key={profile.id} profile={profile} onReload={loadProfiles} store={store} />
           ))}
           <ManagedSettingRow
-            controlClassName="setting-actions"
+            controlClassName={SETTING_ACTIONS_CLASS}
             description="Create a new browser profile."
             title="Add profile">
             <TextFieldShell
@@ -450,7 +670,7 @@ function ProfileRow(
 
   return (
     <ManagedSettingRow
-      controlClassName="setting-actions"
+      controlClassName={SETTING_ACTIONS_CLASS}
       description={parts.join(' · ')}
       title={profile.name}>
       {!profile.isActive ? (
@@ -465,7 +685,7 @@ function ProfileRow(
       {!profile.isDefault && !profile.isActive ? (
         <ActionButton
           ariaLabel="Delete profile"
-          label={<img alt="" aria-hidden="true" className="setting-icon" src="chrome://maho-settings/icons/x.svg" />}
+          label={<img alt="" aria-hidden="true" className={ICON_CLASS} src="chrome://maho-settings/icons/x.svg" />}
           onClick={async () => {
             await handler.deleteProfile(profile.id);
             await onReload();
@@ -504,7 +724,7 @@ function ATCPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}
         <PaneRetry message={rulesState.message} title="Rules unavailable" onRetry={() => void loadRules()} />
       ) : null}
       {rulesState.status === 'loaded' ? (
-        <div className="preferences-card__rows">
+        <div className={ROWS_CLASS}>
           {rulesState.data.map(rule => (
             <ATCRuleRow
               key={rule.id}
@@ -524,7 +744,7 @@ function ATCPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}
             />
           ))}
           <ManagedSettingRow
-            controlClassName="setting-actions"
+            controlClassName={SETTING_ACTIONS_CLASS}
             description="Route matching URLs into a target space."
             title="Add rule">
             <TextFieldShell
@@ -570,11 +790,11 @@ function ATCRuleRow(
     }) {
   return (
     <ManagedSettingRow
-      controlClassName="setting-actions"
-      description={<><img alt="" aria-hidden="true" className="setting-icon" src="chrome://maho-settings/icons/arrow-right.svg" /> {rule.targetSpaceId}</>}
+      controlClassName={SETTING_ACTIONS_CLASS}
+      description={<><img alt="" aria-hidden="true" className={ICON_CLASS} src="chrome://maho-settings/icons/arrow-right.svg" /> {rule.targetSpaceId}</>}
       title={rule.urlPattern}>
       <Toggle enabled={rule.enabled} label={rule.urlPattern} onToggle={onToggle} />
-      <ActionButton ariaLabel="Remove rule" label={<img alt="" aria-hidden="true" className="setting-icon" src="chrome://maho-settings/icons/x.svg" />} onClick={onRemove} />
+      <ActionButton ariaLabel="Remove rule" label={<img alt="" aria-hidden="true" className={ICON_CLASS} src="chrome://maho-settings/icons/x.svg" />} onClick={onRemove} />
     </ManagedSettingRow>
   );
 }
@@ -612,13 +832,13 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
   return (
     <DomainPaneSection pane={pane}>
       <SectionHeader title="Maho AI configuration" />
-      {actionError ? <p className="setting-row__description">{actionError}</p> : null}
+      {actionError ? <p className={STANDALONE_MESSAGE_CLASS}>{actionError}</p> : null}
       {state.status === 'loading' ? <PaneLoading message="Loading Maho AI settings…" /> : null}
       {state.status === 'error' ? (
         <PaneRetry message={state.message} title="Maho AI settings unavailable" onRetry={() => void loadSettings()} />
       ) : null}
       {state.status === 'loaded' ? (
-        <div className="preferences-card__rows">
+        <div className={ROWS_CLASS}>
           <AiSelectRow
             label="Provider"
             initialValue={state.data.provider}
@@ -690,69 +910,196 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
   );
 }
 
-function BillingPane({pane}: {pane: PaneDefinition; store: MahoSettingsStore}) {
-  const PLACEHOLDER = {
-    planName: 'Free',
-    renewDate: 'Jul 1, 2026',
-    hasPaymentMethod: false,
-    creditsRemainingPct: 98,
-    creditsRenewTotal: 500,
-    hasInvoices: false,
-  };
+function BillingPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}) {
+  const state = useSettingsStoreState(store);
+  const account = state.accountStatus;
+  const billing = state.billingInfo;
+  const error = state.billingError;
+  const loading = state.billingLoading;
 
-  const openManagePaymentMethod = () => {
+  useEffect(() => {
+    void store.refreshAccountStatus();
+  }, [store]);
+
+  useEffect(() => {
+    if (account?.signed_in) {
+      void store.refreshBilling();
+    }
+  }, [account?.signed_in, store]);
+
+  const openBillingPortal = () => {
     window.open('https://billing.stripe.com/', '_blank', 'noopener');
   };
-  const openAdjustPlan = () => {
-  };
+
+  if (!account?.signed_in) {
+    return (
+      <DomainPaneSection pane={pane}>
+        <Card className="max-w-xl border-border/70 bg-card/95 shadow-sm">
+          <CardHeader>
+            <CardTitle>Sign in to manage your subscription</CardTitle>
+            <CardDescription>You'll see plan details, credits, and invoices here after signing in.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button type="button" onClick={() => store.selectPane('account')}>
+              Go to sign in
+            </Button>
+          </CardContent>
+        </Card>
+      </DomainPaneSection>
+    );
+  }
+
+  if (loading && !billing) {
+    return (
+      <DomainPaneSection pane={pane}>
+        <PaneLoading message="Loading billing details…" />
+      </DomainPaneSection>
+    );
+  }
+
+  if (error) {
+    return (
+      <DomainPaneSection pane={pane}>
+        <div className="grid max-w-xl gap-3">
+          <Alert className="border-destructive/60 bg-destructive/10 text-destructive shadow-sm" variant="destructive">
+            <AlertCircle className="size-4" />
+            <AlertTitle>Connection lost</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+          <div>
+            <Button type="button" variant="outline" onClick={() => void store.refreshBilling()}>
+              Retry
+            </Button>
+          </div>
+        </div>
+      </DomainPaneSection>
+    );
+  }
+
+  if (!billing) {
+    return (
+      <DomainPaneSection pane={pane}>
+        <PaneLoading message="Loading billing details…" />
+      </DomainPaneSection>
+    );
+  }
+
+  const tier = billing.tier || account.tier;
+  const tierLabel = formatPlanLabel(tier);
+  const renewDate = formatBillingDate(
+      billing.subscription_expires_at || account.subscription_expires_at);
+  const creditLimit = billing.tier_ceiling_usd;
+  const creditBalance = billing.credit_balance_usd;
+  const remainingPct = creditLimit > 0 ?
+      Math.max(0, Math.min(100, Math.round((creditBalance / creditLimit) * 1000) / 10)) :
+      0;
+  const progressValue = creditLimit > 0 ? remainingPct : creditBalance > 0 ? 100 : 0;
+  const statusBadgeVariant: 'success' | 'secondary' =
+      billing.subscription_status === 'active' ? 'success' : 'secondary';
 
   return (
     <DomainPaneSection pane={pane}>
-      <SectionHeader title="Overview" />
-      <div className="preferences-card__rows">
-        <ManagedSettingRow
-          controlClassName="setting-actions"
-          description={`Auto-renews on ${PLACEHOLDER.renewDate}`}
-          isFirstRow
-          title={PLACEHOLDER.planName}>
-          <ActionButton label="Adjust plan" onClick={openAdjustPlan} />
-        </ManagedSettingRow>
-        <ManagedSettingRow
-          controlClassName="setting-actions"
-          description={PLACEHOLDER.hasPaymentMethod ? 'Manage your payment method in Stripe.' : 'Add a payment method in Stripe'}
-          title={PLACEHOLDER.hasPaymentMethod ? 'Payment method on file' : 'No payment method'}>
-          <ActionButton
-            label={<>Manage <img alt="" aria-hidden="true" className="setting-icon" src="chrome://maho-settings/icons/arrow-up-right.svg" /></>}
-            onClick={openManagePaymentMethod}
-          />
-        </ManagedSettingRow>
-      </div>
+      <div className="grid max-w-3xl gap-6">
+        <Card className="border-border/70 bg-card/95 shadow-sm">
+          <CardHeader className="gap-4 pb-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <CardTitle>Overview</CardTitle>
+                <Badge variant={statusBadgeVariant}>{billing.subscription_status || 'No subscription'}</Badge>
+              </div>
+              <CardDescription>Plan details, renewal timing, and payment status for your Maho account.</CardDescription>
+            </div>
+            <Button size="sm" type="button" variant="outline" onClick={openBillingPortal}>
+              Adjust plan
+              <ArrowUpRight className="size-3.5" />
+            </Button>
+          </CardHeader>
+          <CardContent className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-xl border border-border/70 bg-background/60 p-4">
+              <p className="text-sm font-medium text-muted-foreground">Plan</p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <p className="text-lg font-semibold tracking-tight">{tierLabel}</p>
+                <Badge variant={tier && tier !== 'free' ? 'default' : 'secondary'}>{tierLabel} plan</Badge>
+              </div>
+              <p className="mt-2 text-sm text-muted-foreground">
+                {renewDate ? `Auto-renews on ${renewDate}.` : 'Renewal details will appear once your subscription is active.'}
+              </p>
+            </div>
+            <div className="rounded-xl border border-border/70 bg-background/60 p-4">
+              <p className="text-sm font-medium text-muted-foreground">Payment method</p>
+              <p className="mt-3 text-lg font-semibold tracking-tight">
+                {billing.has_payment_method ? 'Payment method on file' : 'No payment method'}
+              </p>
+              <p className="mt-2 text-sm text-muted-foreground">Update cards, receipts, and billing details in Stripe.</p>
+              <Button className="mt-4" size="sm" type="button" variant="outline" onClick={openBillingPortal}>
+                Manage
+                <ArrowUpRight className="size-3.5" />
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
 
-      <SectionHeader spaced title="Credits" />
-      <div className="preferences-card__rows">
-        <section className="billing-credits-card">
-          <div className="setting-row__copy">
-            <h4 className="setting-row__title">{PLACEHOLDER.creditsRemainingPct}% remaining</h4>
-            <p className="setting-row__description">Renews to {PLACEHOLDER.creditsRenewTotal} credits on {PLACEHOLDER.renewDate}.</p>
-          </div>
-          <div
-            aria-valuemax={100}
-            aria-valuemin={0}
-            aria-valuenow={PLACEHOLDER.creditsRemainingPct}
-            className="billing-credits-bar"
-            role="progressbar">
-            <div className="billing-credits-bar__fill" style={{width: `${PLACEHOLDER.creditsRemainingPct}%`}} />
-          </div>
-        </section>
-      </div>
+        <Card className="border-border/70 bg-card/95 shadow-sm">
+          <CardHeader className="pb-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="space-y-1">
+                <CardTitle>Credits</CardTitle>
+                <CardDescription>
+                  {creditLimit > 0 ? `${remainingPct}% remaining` : 'Current available balance'}
+                </CardDescription>
+              </div>
+              <Badge variant={progressValue > 20 ? 'success' : progressValue > 5 ? 'warning' : 'destructive'}>
+                {formatUsd(creditBalance)}
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-4 rounded-xl border border-border/70 bg-background/60 p-4">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <p className="text-3xl font-semibold tracking-tight">
+                    {creditLimit > 0 ? `${remainingPct}%` : formatUsd(creditBalance)}
+                  </p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {creditLimit > 0 ? `${formatUsd(creditBalance)} of ${formatUsd(creditLimit)} remaining.` : 'Your current balance is available for usage.'}
+                  </p>
+                </div>
+                {loading ? <Badge variant="secondary">Refreshing…</Badge> : null}
+              </div>
+              <div
+                aria-valuemax={100}
+                aria-valuemin={0}
+                aria-valuenow={progressValue}
+                className="h-3 overflow-hidden rounded-full bg-muted/80"
+                role="progressbar">
+                <div className="h-full rounded-full bg-success transition-all" style={{width: `${progressValue}%`}} />
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+                <span>
+                  {renewDate ? `Resets to ${formatUsd(creditLimit)} on ${renewDate}.` : 'Your next reset date will appear here.'}
+                </span>
+                {billing.lifetime_purchased_usd > 0 ? (
+                  <span>Purchased {formatUsd(billing.lifetime_purchased_usd)} total</span>
+                ) : null}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
-      <SectionHeader spaced title="Invoices" />
-      <div className="preferences-card__rows">
-        <ManagedSettingRow
-          description={PLACEHOLDER.hasInvoices ? '' : 'Invoices will appear after your first payment.'}
-          isFirstRow
-          title={PLACEHOLDER.hasInvoices ? 'Recent invoices' : 'No invoices yet'}
-        />
+        <Card className="border-border/70 bg-card/95 shadow-sm">
+          <CardHeader>
+            <CardTitle>Invoices</CardTitle>
+            <CardDescription>Receipts and invoices will appear here after your first paid charge.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid min-h-36 place-items-center rounded-xl border border-dashed border-border/70 bg-background/40 px-6 py-10 text-center">
+              <div className="space-y-1">
+                <p className="text-base font-semibold tracking-tight">No invoices yet</p>
+                <p className="text-sm text-muted-foreground">Invoices will appear after your first payment.</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     </DomainPaneSection>
   );
@@ -828,7 +1175,7 @@ function ShortcutsPane({pane, store}: {pane: PaneDefinition; store: MahoSettings
 
   return (
     <DomainPaneSection pane={pane}>
-      <div className="setting-actions">
+      <div className={SETTING_ACTIONS_CLASS}>
         <ActionButton label="Reset all" onClick={async () => {
           await handler.resetAllShortcuts();
           await loadShortcuts();
@@ -839,7 +1186,7 @@ function ShortcutsPane({pane, store}: {pane: PaneDefinition; store: MahoSettings
         <PaneRetry message={state.message} title="Shortcuts unavailable" onRetry={() => void loadShortcuts()} />
       ) : null}
       {state.status === 'loaded' ? (
-        <div className="preferences-card__rows">
+        <div className={ROWS_CLASS}>
           {state.data.map(binding => (
             <ShortcutRow key={binding.action} binding={binding} onReload={loadShortcuts} store={store} />
           ))}
@@ -864,7 +1211,7 @@ function ShortcutRow(
 
   return (
     <ManagedSettingRow
-      controlClassName="setting-actions"
+      controlClassName={SETTING_ACTIONS_CLASS}
           description={!binding.isDefault ? 'Custom binding.' : 'Default.'}
       title={formatShortcutAction(binding.action)}>
       <Toggle
@@ -943,7 +1290,7 @@ function SyncPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore
         <PaneRetry message={state.message} title="Sync unavailable" onRetry={() => void loadStatus()} />
       ) : null}
       {state.status === 'loaded' ? (
-        <div className="preferences-card__rows">
+        <div className={ROWS_CLASS}>
           <ManagedSettingRow
             description={state.data.status.isSyncing ?
               `Syncing · ${state.data.status.statusLabel}` :
@@ -969,7 +1316,7 @@ function SyncPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore
               {state.data.devicesError ? (
                 <ManagedSettingRow description={state.data.devicesError} title="Devices" />
               ) : null}
-              <ManagedSettingRow controlClassName="setting-actions" description="Disconnect this browser from sync." title="Stop Sync">
+              <ManagedSettingRow controlClassName={SETTING_ACTIONS_CLASS} description="Disconnect this browser from sync." title="Stop Sync">
                 <ActionButton label="Stop Sync" onClick={async () => {
                   await handler.stopSync();
                   await loadStatus();
@@ -979,7 +1326,7 @@ function SyncPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore
           ) : (
             <>
               <ManagedSettingRow
-                controlClassName="setting-actions"
+                controlClassName={SETTING_ACTIONS_CLASS}
                 description="Generate a recovery phrase for a new sync session."
                 title="Start new sync">
                 <ActionButton label={pendingKeyInfo ? 'Generate new phrase' : 'Generate recovery phrase'} onClick={async () => {
@@ -993,7 +1340,7 @@ function SyncPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore
                   await loadStatus();
                 }} />
               ) : null}
-              <ManagedSettingRow controlClassName="setting-actions" description="Join an existing sync session with a recovery phrase." title="Join existing sync">
+              <ManagedSettingRow controlClassName={SETTING_ACTIONS_CLASS} description="Join an existing sync session with a recovery phrase." title="Join existing sync">
                 <TextFieldShell
                   ariaLabel="Recovery phrase"
                   placeholder="Recovery phrase"
@@ -1036,7 +1383,7 @@ function SyncRecoveryPhraseRow(
   }, []);
 
   return (
-    <ManagedSettingRow controlClassName="setting-actions" description={keyInfo.recoveryPhrase} title="Recovery Phrase">
+    <ManagedSettingRow controlClassName={SETTING_ACTIONS_CLASS} description={keyInfo.recoveryPhrase} title="Recovery Phrase">
       {navigator.clipboard?.writeText ? (
         <ActionButton label={copyLabel} onClick={async () => {
           await navigator.clipboard.writeText(keyInfo.recoveryPhrase);
@@ -1100,10 +1447,10 @@ function ThemeStorePane({pane, store}: {pane: PaneDefinition; store: MahoSetting
           />
           {state.data.themes.length === 0 ? <EmptyDescription message="No themes available." /> : null}
           {state.data.success ? null : (
-            <p className="setting-row__description">Showing cached themes while the remote catalog is unavailable.</p>
+            <p className={STANDALONE_MESSAGE_CLASS}>Showing cached themes while the remote catalog is unavailable.</p>
           )}
           {state.data.spaces.length > 0 ? (
-            <ManagedSettingRow controlClassName="setting-actions" description="Select which space should receive the theme." isFirstRow title="Apply to space">
+            <ManagedSettingRow controlClassName={SETTING_ACTIONS_CLASS} description="Select which space should receive the theme." isFirstRow title="Apply to space">
               <SelectShell
                 ariaLabel="Target space"
                 options={state.data.spaces.map(space => ({label: space.name, value: space.id}))}
@@ -1112,7 +1459,7 @@ function ThemeStorePane({pane, store}: {pane: PaneDefinition; store: MahoSetting
               />
             </ManagedSettingRow>
           ) : null}
-          <div className="preferences-card__rows">
+          <div className={ROWS_CLASS}>
             {state.data.themes.map(theme => (
               <ThemeRow
                 key={theme.id}
@@ -1147,7 +1494,7 @@ function ThemeRow(
 
   return (
     <ManagedSettingRow
-      controlClassName="setting-actions"
+      controlClassName={SETTING_ACTIONS_CLASS}
       description={parts.join(' · ') || 'Community theme'}
       title={theme.name}>
       <ActionButton label={label} onClick={async () => {
@@ -1210,7 +1557,7 @@ function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
       {state.status === 'loaded' ? (
         <>
           <SectionHeader title="Saved addresses" />
-          <div className="preferences-card__rows">
+          <div className={ROWS_CLASS}>
             {state.data.addresses.length === 0 ? <EmptyDescription message="No saved addresses." /> : null}
             {state.data.addresses.map((address, index) => {
               const locationParts = [
@@ -1231,7 +1578,7 @@ function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
               return (
                 <ManagedSettingRow
                   key={address.id}
-                  controlClassName="setting-actions"
+                  controlClassName={SETTING_ACTIONS_CLASS}
                   description={descriptionParts.join(' · ') || 'No address details'}
                   isFirstRow={index === 0}
                   title={address.name || address.email || address.addressLine1 || 'Unnamed address'}>
@@ -1247,11 +1594,11 @@ function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
               );
             })}
             <ManagedSettingRow
-              controlClassName="setting-row__control--stacked"
+              controlClassName={SETTING_CONTROL_STACKED_CLASS}
               description="Create a new saved address for form autofill. Fields left blank stay empty."
               isFirstRow={state.data.addresses.length === 0}
               title="Add address">
-              <div className="setting-control-stack">
+              <div className={SETTING_CONTROL_STACK_CLASS}>
                 <TextFieldShell ariaLabel="Address full name" placeholder="Full name" value={addressForm.name} onChange={value => setAddressForm(current => ({...current, name: value}))} />
                 <TextFieldShell ariaLabel="Address line 1" placeholder="Address line 1" value={addressForm.addressLine1} onChange={value => setAddressForm(current => ({...current, addressLine1: value}))} />
                 <TextFieldShell ariaLabel="Address line 2" placeholder="Address line 2" value={addressForm.addressLine2} onChange={value => setAddressForm(current => ({...current, addressLine2: value}))} />
@@ -1262,7 +1609,7 @@ function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
                 <TextFieldShell ariaLabel="Address phone number" placeholder="Phone" value={addressForm.phone} onChange={value => setAddressForm(current => ({...current, phone: value}))} />
                 <TextFieldShell ariaLabel="Address email" placeholder="Email" value={addressForm.email} onChange={value => setAddressForm(current => ({...current, email: value}))} />
               </div>
-              <div className="setting-actions">
+              <div className={SETTING_ACTIONS_CLASS}>
                 <ActionButton label="Add address" onClick={async () => {
                   const values = {
                     addressLine1: addressForm.addressLine1.trim(),
@@ -1290,14 +1637,14 @@ function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
             </ManagedSettingRow>
           </div>
           <SectionHeader spaced title="Payment methods" />
-          <div className="preferences-card__rows">
+          <div className={ROWS_CLASS}>
             {state.data.payments.length === 0 ? <EmptyDescription message="No saved payment methods." /> : null}
             {state.data.payments.map((payment, index) => {
               const descriptionParts = [payment.cardholderName, payment.expiration ? `Exp ${payment.expiration}` : ''].filter(Boolean);
               return (
                 <ManagedSettingRow
                   key={payment.id}
-                  controlClassName="setting-actions"
+                  controlClassName={SETTING_ACTIONS_CLASS}
                   description={descriptionParts.join(' · ') || 'No details'}
                   isFirstRow={index === 0}
                   title={`${payment.cardNetwork || 'Card'} •••• ${payment.lastFour || '????'}`}>
@@ -1313,17 +1660,17 @@ function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
               );
             })}
             <ManagedSettingRow
-              controlClassName="setting-row__control--stacked"
+              controlClassName={SETTING_CONTROL_STACKED_CLASS}
               description="Store a payment method for faster checkout autofill."
               isFirstRow={state.data.payments.length === 0}
               title="Add payment method">
-              <div className="setting-control-stack">
+              <div className={SETTING_CONTROL_STACK_CLASS}>
                 <TextFieldShell ariaLabel="Payment card network" placeholder="Card network" value={paymentForm.cardNetwork} onChange={value => setPaymentForm(current => ({...current, cardNetwork: value}))} />
                 <TextFieldShell ariaLabel="Payment card last four digits" placeholder="Last four digits" value={paymentForm.lastFour} onChange={value => setPaymentForm(current => ({...current, lastFour: value}))} />
                 <TextFieldShell ariaLabel="Payment card expiration" placeholder="Expiration (MM/YY)" value={paymentForm.expiration} onChange={value => setPaymentForm(current => ({...current, expiration: value}))} />
                 <TextFieldShell ariaLabel="Payment cardholder name" placeholder="Cardholder name" value={paymentForm.cardholderName} onChange={value => setPaymentForm(current => ({...current, cardholderName: value}))} />
               </div>
-              <div className="setting-actions">
+              <div className={SETTING_ACTIONS_CLASS}>
                 <ActionButton label="Add payment" onClick={async () => {
                   const values = {
                     cardNetwork: paymentForm.cardNetwork.trim(),
@@ -1422,12 +1769,12 @@ function PasswordsPane(
       ) : null}
       {loadState.status === 'loaded' ? (
         <>
-          <div className="content-card__header content-card__header--stacked">
-            <div className="content-card__title-group">
-                <h3 className="content-card__title">Saved passwords</h3>
-              <p className="content-card__copy">{`Passwords provider: ${loadState.data.providerStatus.displayName}.`}</p>
+          <div className={CONTENT_STACKED_HEADER_CLASS}>
+            <div className={CONTENT_TITLE_GROUP_CLASS}>
+                <h3 className={SECTION_TITLE_CLASS}>Saved passwords</h3>
+              <p className={CONTENT_COPY_CLASS}>{`Passwords provider: ${loadState.data.providerStatus.displayName}.`}</p>
             </div>
-            <div className="content-card__copy passwords-provider-card">
+            <div className={PROVIDER_CARD_CLASS}>
               <ManagedSettingRow
                 description="Enable password management to show saved passwords."
                 isFirstRow
@@ -1447,7 +1794,7 @@ function PasswordsPane(
               <ManagedSettingRow
                 description={loadState.data.providerStatus.description}
                 title={`Password provider · ${loadState.data.providerStatus.displayName}`}>
-                <span className="setting-switch">
+                <span className={INLINE_STATUS_CLASS}>
                   {loadState.data.providerStatus.provider === PasswordProviderKind.kMahoNative ?
                     'Maho Native' :
                     loadState.data.providerStatus.provider === PasswordProviderKind.kBitwarden ?
@@ -1455,27 +1802,27 @@ function PasswordsPane(
                       '1Password'}
                 </span>
               </ManagedSettingRow>
-              <p className="content-card__copy passwords-capabilities">
+              <p className={CAPABILITIES_COPY_CLASS}>
                 {`Capabilities: ${loadState.data.providerStatus.capabilities.canListSavedPasswords ? 'list' : 'no list'}, ${loadState.data.providerStatus.capabilities.canSearchSavedPasswords ? 'search' : 'no search'}, ${loadState.data.providerStatus.capabilities.canAddSavedPasswords ? 'add' : 'no add'}, ${loadState.data.providerStatus.capabilities.canEditSavedPasswords ? 'edit' : 'no edit'}, ${loadState.data.providerStatus.capabilities.canRevealPasswords ? 'reveal' : 'no reveal'}, ${loadState.data.providerStatus.capabilities.canDeleteSavedPasswords ? 'delete' : 'no delete'}.`}
               </p>
             </div>
           </div>
-          <div className="browser-settings-shell browser-settings-shell--wide">
+          <div className={BROWSER_SHELL_CLASS}>
             {!isMahoNativeProvider(loadState.data.providerStatus.provider) ? (
               <>
                 <ManagedSettingRow
                   description={`${loadState.data.providerStatus.displayName} handles save, fill, and autosave through its extension. Chromium's built-in password manager is suppressed in this mode, and Maho Native passwords are not manageable here.`}
                   title={`${loadState.data.providerStatus.displayName} is managing passwords`}>
-                  <span className="setting-switch">Extension-managed</span>
+                  <span className={INLINE_STATUS_CLASS}>Extension-managed</span>
                 </ManagedSettingRow>
                 {loadState.data.passwords.length > 0 ? (
-                  <p className="setting-row__description">
+                  <p className={STANDALONE_MESSAGE_CLASS}>
                     {`${loadState.data.passwords.length} Maho Native password${loadState.data.passwords.length === 1 ? '' : 's'} remain stored locally and can only be managed after switching back to Maho Native.`}
                   </p>
                 ) : null}
               </>
             ) : !passwordsEnabled ? (
-              <p className="setting-row__description">Passwords is turned off. Turn it on to show saved passwords.</p>
+              <p className={STANDALONE_MESSAGE_CLASS}>Passwords is turned off. Turn it on to show saved passwords.</p>
             ) : (
               <NativePasswordsContent
                 data={loadState.data}
@@ -1523,7 +1870,7 @@ function NativePasswordsContent(
       {providerStatus.capabilities.canAddSavedPasswords ? (
         <AddPasswordRow loadPasswords={loadPasswords} query={searchQuery} store={store} />
       ) : null}
-      <div className="preferences-card__rows">
+      <div className={ROWS_CLASS}>
         {data.passwords.length === 0 ? <EmptyDescription message="No saved passwords." /> : null}
         {data.passwords.map(savedPassword => (
           <PasswordRow
@@ -1555,15 +1902,15 @@ function AddPasswordRow(
 
   return (
     <ManagedSettingRow
-      controlClassName="setting-row__control--stacked"
+      controlClassName={SETTING_CONTROL_STACKED_CLASS}
       description="Store a new native password entry."
       title="Add password">
-      <div className="setting-control-stack">
+      <div className={SETTING_CONTROL_STACK_CLASS}>
         <TextFieldShell ariaLabel="Password domain" placeholder="Domain" value={domain} onChange={setDomain} />
         <TextFieldShell ariaLabel="Password username" placeholder="Username" value={username} onChange={setUsername} />
         <TextFieldShell ariaLabel="Password value" placeholder="Password" type="password" value={password} onChange={setPassword} />
       </div>
-      <div className="setting-actions">
+      <div className={SETTING_ACTIONS_CLASS}>
         <ActionButton label="Add password" onClick={async () => {
           const trimmedDomain = domain.trim();
           const trimmedUsername = username.trim();
@@ -1608,13 +1955,13 @@ function PasswordRow(
 
   return (
     <ManagedSettingRow
-      controlClassName="setting-row__control--stacked"
+      controlClassName={SETTING_CONTROL_STACKED_CLASS}
       description={description || 'No usage history'}
       title={`${password.username || 'Unknown user'} @ ${password.domain || 'Unknown domain'}`}>
-      <p className="setting-row__description">
+      <p className={SETTING_DESCRIPTION_CLASS}>
         {password.password ? (isRevealed ? `Password: ${password.password}` : 'Password hidden') : 'No password stored.'}
       </p>
-      <div className="setting-actions">
+      <div className={SETTING_ACTIONS_CLASS}>
         {providerStatus.capabilities.canEditSavedPasswords ? (
           <>
             <TextFieldShell
@@ -1694,7 +2041,7 @@ function ContentBlockerPane({pane, store}: {pane: PaneDefinition; store: MahoSet
         <>
           <SectionHeader title="Content blocker" />
           <ManagedSettingRow
-            controlClassName="setting-actions"
+            controlClassName={SETTING_ACTIONS_CLASS}
             description={`${state.data.stats.totalRuleCount.toLocaleString()} rules active · ${state.data.stats.filterListCount} filter list(s)`}
             isFirstRow
             title="Engine status">
@@ -1704,12 +2051,12 @@ function ContentBlockerPane({pane, store}: {pane: PaneDefinition; store: MahoSet
             }} />
           </ManagedSettingRow>
           <SectionHeader spaced title="Filter lists" />
-          <div className="preferences-card__rows">
+          <div className={ROWS_CLASS}>
             {state.data.lists.length === 0 ? <EmptyDescription message="No filter lists configured." /> : null}
             {state.data.lists.map((filterList, index) => (
               <ManagedSettingRow
                 key={filterList.id}
-                controlClassName="setting-actions"
+                controlClassName={SETTING_ACTIONS_CLASS}
                 description={[filterList.url, `${filterList.ruleCount.toLocaleString()} rules`, filterList.enabled ? 'Enabled' : 'Disabled'].filter(Boolean).join(' · ')}
                 isFirstRow={index === 0}
                 title={filterList.name || filterList.id}>
@@ -1732,15 +2079,15 @@ function ContentBlockerPane({pane, store}: {pane: PaneDefinition; store: MahoSet
               </ManagedSettingRow>
             ))}
             <ManagedSettingRow
-              controlClassName="setting-row__control--stacked"
+              controlClassName={SETTING_CONTROL_STACKED_CLASS}
               description="Add a custom filter list by name and source URL."
               isFirstRow={state.data.lists.length === 0}
               title="Add filter list">
-              <div className="setting-control-stack">
+              <div className={SETTING_CONTROL_STACK_CLASS}>
                 <TextFieldShell ariaLabel="Filter list name" placeholder="Filter list name" value={form.name} onChange={value => setForm(current => ({...current, name: value}))} />
                 <TextFieldShell ariaLabel="Filter list URL" placeholder="https://example.com/filters.txt" value={form.url} onChange={value => setForm(current => ({...current, url: value}))} />
               </div>
-              <div className="setting-actions">
+              <div className={SETTING_ACTIONS_CLASS}>
                 <ActionButton label="Add filter list" onClick={async () => {
                   const name = form.name.trim();
                   const url = form.url.trim();
@@ -1797,7 +2144,7 @@ function ExtensionsPane({pane, store}: {pane: PaneDefinition; store: MahoSetting
         <PaneRetry message={state.message} title="Extensions unavailable" onRetry={() => void loadExtensions()} />
       ) : null}
       {state.status === 'loaded' ? (
-        <div className="preferences-card__rows">
+        <div className={ROWS_CLASS}>
           {state.data.length === 0 ? <EmptyDescription message="No extensions installed." /> : null}
           {state.data.map((extension, index) => {
             const descriptionParts = [
@@ -1809,7 +2156,7 @@ function ExtensionsPane({pane, store}: {pane: PaneDefinition; store: MahoSetting
             return (
               <ManagedSettingRow
                 key={extension.id}
-                controlClassName="setting-actions"
+                controlClassName={SETTING_ACTIONS_CLASS}
                 description={descriptionParts.join(' · ')}
                 isFirstRow={index === 0}
                 title={extension.name || extension.id}>

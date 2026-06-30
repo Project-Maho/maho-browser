@@ -42,6 +42,42 @@
       "@radix-ui/react-dropdown-menu": [
         "../../../../../website/node_modules/@radix-ui/react-dropdown-menu/dist/index.d.ts"
       ],
+      "@radix-ui/react-tooltip": [
+        "../../../../../website/node_modules/@radix-ui/react-tooltip/dist/index.d.ts"
+      ],
+      "@radix-ui/react-checkbox": [
+        "../../../../../website/node_modules/@radix-ui/react-checkbox/dist/index.d.ts"
+      ],
+      "@radix-ui/react-dialog": [
+        "../../../../../website/node_modules/@radix-ui/react-dialog/dist/index.d.ts"
+      ],
+      "@radix-ui/react-tabs": [
+        "../../../../../website/node_modules/@radix-ui/react-tabs/dist/index.d.ts"
+      ],
+      "@radix-ui/react-select": [
+        "../../../../../website/node_modules/@radix-ui/react-select/dist/index.d.ts"
+      ],
+      "@radix-ui/react-toggle-group": [
+        "../../../../../website/node_modules/@radix-ui/react-toggle-group/dist/index.d.ts"
+      ],
+      "@radix-ui/react-switch": [
+        "../../../../../website/node_modules/@radix-ui/react-switch/dist/index.d.ts"
+      ],
+      "@radix-ui/react-separator": [
+        "../../../../../website/node_modules/@radix-ui/react-separator/dist/index.d.ts"
+      ],
+      "@radix-ui/react-slider": [
+        "../../../../../website/node_modules/@radix-ui/react-slider/dist/index.d.ts"
+      ],
+      "lucide-react": [
+        "../../../../../website/node_modules/lucide-react/dist/lucide-react.d.ts"
+      ],
+      "tailwind-merge": [
+        "../../../../../website/node_modules/tailwind-merge/dist/types.d.ts"
+      ],
+      "sonner": [
+        "../../../../../website/node_modules/sonner/dist/index.d.ts"
+      ],
       "@features/*": [
         "./features/*"
       ],
@@ -49,10 +85,17 @@
         "./hooks/*"
       ],
       "@lib/*": [
+        "../../maho_common/react/lib/*",
         "./lib/*"
       ],
       "@ui/*": [
-        "./ui/*"
+        "../../maho_common/react/ui/*"
+      ],
+      "@theme/*": [
+        "../../maho_common/react/theme/*"
+      ],
+      "@icons/*": [
+        "../../maho_common/react/icons/*"
       ],
       "//resources/maho_common/*": [
         "../../maho_common/*"

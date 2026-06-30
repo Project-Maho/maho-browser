@@ -5,7 +5,7 @@ import {
   isSessionReadOnly,
 } from '../../../types.js';
 import {useAutoScroll} from '../../hooks/use-auto-scroll.js';
-import {EmptyState} from '../../ui/empty-state.js';
+import {EmptyState} from '../../components/empty-state.js';
 import {EventCard} from './event-card.js';
 
 export function Timeline({state}: {state: AppState}) {
@@ -16,10 +16,10 @@ export function Timeline({state}: {state: AppState}) {
   const streamRef = useAutoScroll<HTMLDivElement>(events);
 
   return (
-    <main className="console-timeline">
-      <div className="console-panel-header">
-        <h2>Timeline</h2>
-        <p>
+    <main className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-3 rounded-[1.5rem] border border-border/80 bg-card/90 p-4 shadow-[0_24px_70px_-52px_rgba(8,12,24,0.85)] backdrop-blur-xl supports-[backdrop-filter]:bg-card/85">
+      <div className="grid gap-2">
+        <h2 className="text-lg font-semibold tracking-tight text-foreground">Timeline</h2>
+        <p className="text-sm leading-6 text-muted-foreground">
           {state.currentSessionId ?
             'Live runtime events, tool activity, and approval flow.' :
             'Create or resume a session to begin streaming runtime activity.'}
@@ -31,40 +31,40 @@ export function Timeline({state}: {state: AppState}) {
           title="No active session"
         />
       ) : (
-        <>
+        <div ref={streamRef} className="flex min-h-0 flex-col gap-3 overflow-y-auto pr-1">
           {session ? (
-            <div className="console-panel-status-row">
-              <div className="console-section-label">Session state</div>
-              <div className="console-section-label">{getStatusLabel(session.status)}</div>
-              <div className="console-section-label">{getSessionAccessLabel(session)}</div>
+            <div className="flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+              <span className="rounded-full bg-secondary px-3 py-1 text-secondary-foreground">Session state</span>
+              <span className="rounded-full bg-secondary px-3 py-1 text-secondary-foreground">{getStatusLabel(session.status)}</span>
+              <span className="rounded-full bg-secondary px-3 py-1 text-secondary-foreground">{getSessionAccessLabel(session)}</span>
             </div>
           ) : null}
-          <div ref={streamRef} className="timeline-stream">
-            <div className="console-section-label">Event stream</div>
-            {!events.length ? (
-              (() => {
-                const history =
-                    state.currentSessionId ? state.historiesBySessionId[state.currentSessionId] : null;
-                const isReadOnlySession = isSessionReadOnly(session);
-                const title = history?.loaded ?
-                    (isReadOnlySession ? 'No historical events stored' : 'No runtime events yet') :
-                    (isReadOnlySession ? 'Loading historical session' : 'Connecting to session stream');
-                const description = history?.loaded ?
-                    (isReadOnlySession ?
-                      'This session is available as stored history only. The runtime did not return any persisted events.' :
-                      'The session exists, but the runtime has not emitted any renderable events yet.') :
-                    (isReadOnlySession ?
-                      'Fetching persisted events for this read-only session.' :
-                      'Waiting for replayed history or live runtime events.');
-                return <EmptyState description={description} title={title} />;
-              })()
-            ) : (
-              events.map(entry => (
-                <EventCard key={`${entry.event.sequence}-${entry.event.timestamp}`} event={entry.event} />
-              ))
-            )}
+          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+            Event stream
           </div>
-        </>
+          {!events.length ? (
+            (() => {
+              const history =
+                  state.currentSessionId ? state.historiesBySessionId[state.currentSessionId] : null;
+              const isReadOnlySession = isSessionReadOnly(session);
+              const title = history?.loaded ?
+                  (isReadOnlySession ? 'No historical events stored' : 'No runtime events yet') :
+                  (isReadOnlySession ? 'Loading historical session' : 'Connecting to session stream');
+              const description = history?.loaded ?
+                  (isReadOnlySession ?
+                    'This session is available as stored history only. The runtime did not return any persisted events.' :
+                    'The session exists, but the runtime has not emitted any renderable events yet.') :
+                  (isReadOnlySession ?
+                    'Fetching persisted events for this read-only session.' :
+                    'Waiting for replayed history or live runtime events.');
+              return <EmptyState description={description} title={title} />;
+            })()
+          ) : (
+            events.map(entry => (
+              <EventCard key={`${entry.event.sequence}-${entry.event.timestamp}`} event={entry.event} />
+            ))
+          )}
+        </div>
       )}
     </main>
   );
