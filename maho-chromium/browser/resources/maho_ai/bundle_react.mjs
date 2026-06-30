@@ -18,6 +18,9 @@ const outputFile = path.resolve(process.cwd(), outputFileArg);
 
 await build({
   absWorkingDir: sourceDir,
+  banner: {
+    js: "(()=>{if(window.trustedTypes&&typeof window.trustedTypes.createPolicy==='function'){try{window.trustedTypes.createPolicy('default',{createHTML:s=>s,createScript:s=>s,createScriptURL:s=>s});}catch(e){}}})();",
+  },
   bundle: true,
   entryPoints: [path.join(sourceDir, 'react/app.tsx')],
   format: 'esm',
@@ -45,6 +48,7 @@ await build({
   ],
   sourcemap: false,
   target: ['chrome120'],
+  tsconfig: path.join(sourceDir, 'react/tsconfig.json'),
   external: [
     'chrome://resources/js/*',
   ],

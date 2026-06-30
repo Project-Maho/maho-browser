@@ -1186,16 +1186,41 @@ impl TabLifecycleManager {
         closed
     }
 
+    /// Returns non-pinned, non-archived tab IDs whose `last_active_at` is strictly older
+    /// than `cutoff_ts` (epoch seconds). Read-only — does NOT mutate state. Unparseable
+    /// `last_active_at` is skipped so newly-created tabs (no activation yet) are kept.
+    pub fn find_tabs_older_than(&self, cutoff_ts: i64) -> Vec<TabId> {
+        let mut ids: Vec<&TabId> = self
+            .tabs
+            .iter()
+            .filter(|(_, tab)| {
+                if tab.is_pinned {
+                    return false;
+                }
+                if matches!(tab.state, TabLifecycleState::Archived { .. }) {
+                    return false;
+                }
+                match chrono::DateTime::parse_from_rfc3339(&tab.last_active_at.0) {
+                    Ok(dt) => dt.timestamp() < cutoff_ts,
+                    Err(_) => false,
+                }
+            })
+            .map(|(id, _)| id)
+            .collect();
+        ids.sort_by(|a, b| a.as_ref().cmp(b.as_ref()));
+        ids.into_iter().cloned().collect()
+    }
+
     /// Close every non-pinned tab whose `last_active_at` is strictly less than `cutoff_ts`
     /// (epoch seconds). Iterates all spaces in a stable order (sorted by space_id, then tab_id).
     ///
-    /// Tabs with an unparseable or empty `last_active_at` are treated as epoch 0 (very old)
-    /// and will be closed if the cutoff is > 0. This is intentional: a tab with no valid
-    /// timestamp has never been meaningfully accessed.
+    /// Tabs with unparseable or empty `last_active_at` are SKIPPED (kept). This avoids
+    /// surprising users by closing newly-created tabs that have not yet been activated.
     ///
-    /// Returns the number of tabs actually closed.
-    pub fn close_tabs_older_than(&mut self, cutoff_ts: i64) -> usize {
-        let to_close: Vec<TabId> = {
+    /// Returns `(space_id, tab_id)` pairs for each closed tab so callers can update
+    /// space membership.
+    pub fn close_tabs_older_than(&mut self, cutoff_ts: i64) -> Vec<(SpaceId, TabId)> {
+        let to_close: Vec<(SpaceId, TabId)> = {
             let mut candidates: Vec<(&TabId, &Tab)> = self
                 .tabs
                 .iter()
@@ -1206,10 +1231,10 @@ impl TabLifecycleManager {
                     if matches!(tab.state, TabLifecycleState::Archived { .. }) {
                         return false;
                     }
-                    let tab_epoch = chrono::DateTime::parse_from_rfc3339(&tab.last_active_at.0)
-                        .map(|dt| dt.timestamp())
-                        .unwrap_or(0);
-                    tab_epoch < cutoff_ts
+                    match chrono::DateTime::parse_from_rfc3339(&tab.last_active_at.0) {
+                        Ok(dt) => dt.timestamp() < cutoff_ts,
+                        Err(_) => false,
+                    }
                 })
                 .collect();
             candidates.sort_by(|(id_a, tab_a), (id_b, tab_b)| {
@@ -1219,11 +1244,14 @@ impl TabLifecycleManager {
                     .cmp(tab_b.space_id.as_ref())
                     .then_with(|| id_a.as_ref().cmp(id_b.as_ref()))
             });
-            candidates.into_iter().map(|(id, _)| id.clone()).collect()
+            candidates
+                .into_iter()
+                .map(|(id, tab)| (tab.space_id.clone(), id.clone()))
+                .collect()
         };
 
-        let mut closed_count = 0;
-        for tab_id in to_close {
+        let mut closed = Vec::new();
+        for (space_id, tab_id) in to_close {
             if let Some(tab) = self.tabs.remove(&tab_id) {
                 self.state_timestamps.remove(&tab_id);
                 self.creation_timestamps.remove(&tab_id);
@@ -1235,13 +1263,13 @@ impl TabLifecycleManager {
                     self.closed_stack.pop_front();
                 }
                 (self.on_update)(CoreUpdate::TabClosed {
-                    tab_id,
+                    tab_id: tab_id.clone(),
                     animated: true,
                 });
-                closed_count += 1;
+                closed.push((space_id, tab_id));
             }
         }
-        closed_count
+        closed
     }
 
     pub fn toggle_freeze(&mut self, tab_id: &TabId) {
@@ -1520,7 +1548,7 @@ mod tests {
         }
 
         let closed = manager.close_tabs_older_than(1_700_000_000);
-        assert_eq!(closed, 0);
+        assert_eq!(closed.len(), 0);
         assert!(manager.get_tab(&tab_id).is_some());
     }
 
@@ -1542,7 +1570,7 @@ mod tests {
         }
 
         let closed = manager.close_tabs_older_than(1_700_000_000);
-        assert_eq!(closed, 1);
+        assert_eq!(closed.len(), 1);
         assert!(manager.get_tab(&old_id).is_none());
         assert!(manager.get_tab(&recent_id).is_some());
     }
@@ -1561,13 +1589,13 @@ mod tests {
 
         let cutoff = 1_700_000_000;
         let closed = manager.close_tabs_older_than(cutoff);
-        assert_eq!(closed, 5);
+        assert_eq!(closed.len(), 5);
     }
 
     #[test]
     fn close_tabs_older_than_empty_returns_zero() {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let closed = manager.close_tabs_older_than(1_700_000_000);
-        assert_eq!(closed, 0);
+        assert_eq!(closed.len(), 0);
     }
 }

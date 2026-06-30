@@ -421,6 +421,38 @@ pub unsafe extern "C" fn maho_core_close_tabs_older_than(
     }, -1)
 }
 
+/// Returns non-pinned tab IDs older than `cutoff_ts` (epoch seconds) as a JSON array of strings.
+/// Read-only — does NOT modify state. Caller frees the returned string with `maho_string_free`.
+/// Returns NULL on null pointer or internal error.
+///
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_find_tabs_older_than(
+    core: *mut MahoCore,
+    cutoff_ts: i64,
+) -> *mut c_char {
+    ffi_safe!({
+
+    if core.is_null() {
+        return std::ptr::null_mut();
+    }
+    if import_gate::is_active() { return std::ptr::null_mut(); }
+    let core_ref = &*core;
+    let ids: Vec<String> = core_ref
+        .find_tabs_older_than(cutoff_ts)
+        .into_iter()
+        .map(|id| id.as_ref().to_string())
+        .collect();
+    let json = serde_json::to_string(&ids).unwrap_or_else(|_| "[]".to_string());
+    match CString::new(json) {
+        Ok(c) => c.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+
+    }, std::ptr::null_mut())
+}
+
 /// # Safety
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
 /// `space_id_json` must be a valid null-terminated C string containing a SpaceId JSON.

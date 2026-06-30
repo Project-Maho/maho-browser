@@ -182,6 +182,16 @@ void maho_core_release_window_tabs(struct MahoCore *ptr, int64_t window_id);
 int32_t maho_core_close_tabs_older_than(struct MahoCore *core, int64_t cutoff_ts);
 
 /**
+ * Returns JSON array of non-pinned tab IDs older than `cutoff_ts` (epoch seconds).
+ * Read-only — does NOT modify state. Caller frees the returned string with
+ * `maho_string_free`. Returns NULL on null pointer or internal error.
+ *
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ */
+char *maho_core_find_tabs_older_than(struct MahoCore *core, int64_t cutoff_ts);
+
+/**
  * # Safety
  * `ptr` must be a valid pointer returned by `maho_core_new`.
  * `space_id_json` must be a valid null-terminated C string containing a SpaceId JSON.

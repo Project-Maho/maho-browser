@@ -665,6 +665,124 @@ mod tests {
         let bogus_space = SpaceId::new("nonexistent-space-id");
         assert!(core.get_sidebar_state_v2(&bogus_space).is_none());
     }
+
+    #[test]
+    fn tidy_capability_create_folder_and_add_tab_directly() {
+        let mut core = MahoCore::new();
+        let space_id = core.get_active_space_id().clone();
+        let tab_a = create_tab(&mut core);
+        let tab_b = create_tab(&mut core);
+
+        let folder = core
+            .space_manager
+            .create_folder(&space_id, "Wappalyzer", false, None)
+            .expect("create_folder must return a FolderViewModel");
+        core.space_manager
+            .add_tab_to_folder(&space_id, &folder.id, tab_a.clone());
+        core.space_manager
+            .add_tab_to_folder(&space_id, &folder.id, tab_b.clone());
+
+        let folders = core.space_manager.get_folder_view_models(&space_id);
+        let created = folders
+            .iter()
+            .find(|f| f.id == folder.id)
+            .expect("folder must appear in space");
+        assert_eq!(created.name, "Wappalyzer");
+        assert!(created.tab_ids.contains(&tab_a));
+        assert!(created.tab_ids.contains(&tab_b));
+        assert_eq!(created.tab_count, 2);
+    }
+
+    #[test]
+    fn tidy_tabs_below_threshold_emits_no_llm_request() {
+        let mut core = MahoCore::new();
+        let space_id = core.get_active_space_id().clone();
+        for _ in 0..5 {
+            create_tab(&mut core);
+        }
+        let updates = core.handle_event(ShellEvent::RequestTidyTabs {
+            space_id: space_id.clone(),
+        });
+        let has_llm_request = updates
+            .iter()
+            .any(|u| matches!(u, CoreUpdate::RequestLlmCompletion { .. }));
+        assert!(
+            !has_llm_request,
+            "Tidy must not fire LLM when fewer than 6 unpinned tabs"
+        );
+    }
+
+    #[test]
+    fn tidy_tabs_end_to_end_creates_folders_with_correct_membership() {
+        let mut core = MahoCore::new();
+        let space_id = core.get_active_space_id().clone();
+        let mut tab_ids: Vec<TabId> = Vec::new();
+        for _ in 0..6 {
+            tab_ids.push(create_tab(&mut core));
+        }
+
+        let updates = core.handle_event(ShellEvent::RequestTidyTabs {
+            space_id: space_id.clone(),
+        });
+        let request_id = updates
+            .iter()
+            .find_map(|u| match u {
+                CoreUpdate::RequestLlmCompletion { request_id, .. } => Some(request_id.clone()),
+                _ => None,
+            })
+            .expect("RequestTidyTabs with 6+ tabs must emit RequestLlmCompletion");
+
+        let llm_result = serde_json::json!({
+            "folders": [
+                {
+                    "name": "Group A",
+                    "tab_ids": [tab_ids[0].to_string(), tab_ids[1].to_string(), tab_ids[2].to_string()]
+                },
+                {
+                    "name": "Group B",
+                    "tab_ids": [tab_ids[3].to_string(), tab_ids[4].to_string()]
+                },
+            ]
+        })
+        .to_string();
+        let updates = core.handle_event(ShellEvent::LlmResult {
+            request_id,
+            result: llm_result,
+        });
+        let tidy_ready = updates
+            .iter()
+            .any(|u| matches!(u, CoreUpdate::TidyTabsReady { .. }));
+        assert!(tidy_ready, "LlmResult must emit TidyTabsReady");
+
+        let updates = core.handle_event(ShellEvent::ApplyTidyTabs {
+            space_id: space_id.clone(),
+        });
+        let folder_ids: Vec<FolderId> = updates
+            .iter()
+            .filter_map(|u| match u {
+                CoreUpdate::FolderCreated { folder } => Some(folder.id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(folder_ids.len(), 2, "ApplyTidyTabs must create 2 folders");
+
+        let folders = core.space_manager.get_folder_view_models(&space_id);
+        let group_a = folders
+            .iter()
+            .find(|f| f.name == "Group A")
+            .expect("Group A folder must exist after Apply");
+        let group_b = folders
+            .iter()
+            .find(|f| f.name == "Group B")
+            .expect("Group B folder must exist after Apply");
+        assert_eq!(group_a.tab_count, 3);
+        assert_eq!(group_b.tab_count, 2);
+        assert!(group_a.tab_ids.contains(&tab_ids[0]));
+        assert!(group_a.tab_ids.contains(&tab_ids[1]));
+        assert!(group_a.tab_ids.contains(&tab_ids[2]));
+        assert!(group_b.tab_ids.contains(&tab_ids[3]));
+        assert!(group_b.tab_ids.contains(&tab_ids[4]));
+    }
 }
 
 impl std::fmt::Display for PersistenceError {
@@ -4135,7 +4253,15 @@ impl MahoCore {
     }
 
     pub fn close_tabs_older_than(&mut self, cutoff_ts: i64) -> usize {
-        self.tab_manager.close_tabs_older_than(cutoff_ts)
+        let closed = self.tab_manager.close_tabs_older_than(cutoff_ts);
+        for (space_id, tab_id) in &closed {
+            self.space_manager.remove_tab_from_space(space_id, tab_id);
+        }
+        closed.len()
+    }
+
+    pub fn find_tabs_older_than(&self, cutoff_ts: i64) -> Vec<TabId> {
+        self.tab_manager.find_tabs_older_than(cutoff_ts)
     }
 
     pub fn favorite_tab(&mut self, tab_id: &TabId) -> bool {

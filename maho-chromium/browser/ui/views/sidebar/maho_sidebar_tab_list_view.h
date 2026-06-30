@@ -204,8 +204,8 @@ class MahoSidebarTabListView : public views::View,
 
   raw_ptr<Browser> browser_ = nullptr;
   raw_ptr<views::LabelButton> new_tab_button_ = nullptr;
-  raw_ptr<views::ImageButton> tidy_button_ = nullptr;
-  raw_ptr<views::ImageButton> clear_button_ = nullptr;
+  raw_ptr<views::View> tidy_button_ = nullptr;
+  raw_ptr<views::View> clear_button_ = nullptr;
   std::unique_ptr<ui::SimpleMenuModel> clear_menu_model_;
   std::unique_ptr<views::MenuRunner> clear_menu_runner_;
   raw_ptr<views::View> tab_rows_ = nullptr;

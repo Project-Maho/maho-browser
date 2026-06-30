@@ -48,6 +48,7 @@
 #include "maho/browser/ui/context_menu/maho_folder_context_menu.h"
 #include "maho/browser/ui/context_menu/maho_space_context_menu.h"
 #include "maho/browser/ui/context_menu/maho_tab_context_menu.h"
+#include "maho/browser/ai/maho_tab_tidy_orchestrator.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_id_helper.h"
@@ -131,7 +132,6 @@ constexpr int kFolderRowLeadingInsetDp = 8;
 constexpr int kDragStartThresholdDp = 5;
 constexpr int kDropIndicatorThicknessDp = 2;
 constexpr int kDropIndicatorOutlineThicknessDp = 1;
-constexpr int kInlineActionButtonSizeDp = 28;
 constexpr int kInlineActionIconSizeDp = 16;
 constexpr int kInlineActionsSpacingDp = 4;
 
@@ -3031,11 +3031,7 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
   }
   pinned_section_target_->SetVisible(pinned_visible);
   pinned_separator_->SetVisible(true);
-  new_tab_button_ = AddInlineRow(
-      tab_rows_, u"+ New Tab",
-      base::BindRepeating(&MahoSidebarTabListView::OpenNewTab,
-                          weak_factory_.GetWeakPtr()),
-      false, true);
+  AddTabActionsRow();
   RebuildTreeSection(tab_rows_, effective_model->normal_tree,
                      MahoSidebarTabSection::kNormal, browser);
 
@@ -3597,60 +3593,62 @@ void MahoSidebarTabListView::AddTabActionsRow() {
       u"+ New Tab",
       /*active=*/false,
       /*subtle=*/true);
-  auto* new_tab_ptr = static_cast<views::LabelButton*>(
-      row_ptr->AddChildView(std::move(new_tab)));
+  auto* new_tab_ptr = new_tab.get();
+  row_ptr->AddChildView(std::unique_ptr<views::View>(new_tab.release()));
   row_ptr->SetFlexForView(new_tab_ptr, 1);
   new_tab_button_ = new_tab_ptr;
 
-  auto tidy = std::make_unique<views::ImageButton>(base::BindRepeating(
-      &MahoSidebarTabListView::OnTidyPressed, weak_factory_.GetWeakPtr()));
+  auto tidy = std::make_unique<SidebarInlineRow>(
+      base::BindRepeating(&MahoSidebarTabListView::OnTidyPressed,
+                          weak_factory_.GetWeakPtr()),
+      u"Tidy",
+      /*active=*/false,
+      /*subtle=*/true);
   tidy->SetImageModel(
       views::Button::STATE_NORMAL,
       ui::ImageModel::FromVectorIcon(maho_lucide_icons::kWandSparklesIcon,
                                      ui::kColorSysOnSurfaceSubtle,
                                      kInlineActionIconSizeDp));
-  tidy->SetTooltipText(u"Tidy tabs");
-  tidy->GetViewAccessibility().SetName(u"Tidy tabs with AI");
-  tidy->SetPreferredSize(
-      gfx::Size(kInlineActionButtonSizeDp, kInlineActionButtonSizeDp));
-  tidy->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
-  tidy->SetImageVerticalAlignment(views::ImageButton::ALIGN_MIDDLE);
-  tidy->SetInstallFocusRingOnFocus(false);
-  views::InstallCircleHighlightPathGenerator(tidy.get());
-  tidy_button_ = row_ptr->AddChildView(std::move(tidy));
+  tidy->SetImageLabelSpacing(kInlineActionsSpacingDp);
+  tidy->SetTooltipText(u"Tidy tabs with AI");
+  auto* tidy_ptr = tidy.get();
+  row_ptr->AddChildView(std::unique_ptr<views::View>(tidy.release()));
+  row_ptr->SetFlexForView(tidy_ptr, 1);
+  tidy_button_ = tidy_ptr;
 
-  auto clear = std::make_unique<views::ImageButton>(base::BindRepeating(
-      &MahoSidebarTabListView::OnClearPressed, weak_factory_.GetWeakPtr()));
+  auto clear = std::make_unique<SidebarInlineRow>(
+      base::BindRepeating(&MahoSidebarTabListView::OnClearPressed,
+                          weak_factory_.GetWeakPtr()),
+      u"Clear",
+      /*active=*/false,
+      /*subtle=*/true);
   clear->SetImageModel(
       views::Button::STATE_NORMAL,
       ui::ImageModel::FromVectorIcon(maho_lucide_icons::kArrowDownToLineIcon,
                                      ui::kColorSysOnSurfaceSubtle,
                                      kInlineActionIconSizeDp));
+  clear->SetImageLabelSpacing(kInlineActionsSpacingDp);
   clear->SetTooltipText(u"Close old tabs");
-  clear->GetViewAccessibility().SetName(u"Clear old tabs");
-  clear->SetPreferredSize(
-      gfx::Size(kInlineActionButtonSizeDp, kInlineActionButtonSizeDp));
-  clear->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
-  clear->SetImageVerticalAlignment(views::ImageButton::ALIGN_MIDDLE);
-  clear->SetInstallFocusRingOnFocus(false);
-  views::InstallCircleHighlightPathGenerator(clear.get());
-  clear_button_ = row_ptr->AddChildView(std::move(clear));
+  auto* clear_ptr = clear.get();
+  row_ptr->AddChildView(std::unique_ptr<views::View>(clear.release()));
+  row_ptr->SetFlexForView(clear_ptr, 1);
+  clear_button_ = clear_ptr;
 }
 
 void MahoSidebarTabListView::OnTidyPressed(const ui::Event& event) {
   if (!browser_) {
     return;
   }
-  auto* side_panel_ui = browser_->GetFeatures().side_panel_ui();
-  if (!side_panel_ui) {
-    return;
-  }
-  if (side_panel_ui->GetCurrentEntryId(SidePanelType::kContent) ==
-      SidePanelEntryId::kMahoAiPanel) {
-    return;
-  }
-  side_panel_ui->Show(SidePanelEntryKey(SidePanelEntryId::kMahoAiPanel),
-                      SidePanelOpenTrigger::kToolbarButton);
+  maho::MahoTabTidyOrchestrator::RunOneShot(
+      browser_,
+      base::BindOnce([](int folder_count, const std::string& error) {
+        if (folder_count > 0) {
+          DVLOG(1) << "[maho-sidebar] Tidy created " << folder_count
+                   << " folders";
+        } else {
+          DVLOG(1) << "[maho-sidebar] Tidy failed: " << error;
+        }
+      }));
 }
 
 void MahoSidebarTabListView::OnClearPressed(const ui::Event& event) {
@@ -3683,14 +3681,51 @@ void MahoSidebarTabListView::ExecuteCommand(int command_id, int event_flags) {
   if (!core) {
     return;
   }
+  TabStripModel* model = browser_ ? browser_->tab_strip_model() : nullptr;
+  if (!model) {
+    return;
+  }
   const int64_t cutoff_ts = ComputeClearCutoffSeconds(command_id);
   if (cutoff_ts <= 0) {
     return;
   }
-  const int32_t closed =
-      maho_core_close_tabs_older_than(core, cutoff_ts);
-  DVLOG(1) << "[maho-sidebar] Clear menu closed " << closed
-           << " tabs older than cutoff_ts=" << cutoff_ts;
+
+  char* ids_json = maho_core_find_tabs_older_than(core, cutoff_ts);
+  if (!ids_json) {
+    return;
+  }
+  std::string json_str(ids_json);
+  maho_string_free(ids_json);
+
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(json_str, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_list()) {
+    return;
+  }
+
+  std::vector<int> indices_to_close;
+  indices_to_close.reserve(parsed->GetList().size());
+  for (const auto& v : parsed->GetList()) {
+    if (!v.is_string()) {
+      continue;
+    }
+    const int idx = ResolveTabStripIndexForTabId(v.GetString());
+    if (idx >= 0 && model->ContainsIndex(idx)) {
+      indices_to_close.push_back(idx);
+    }
+  }
+  // Close in descending order so earlier indices remain valid as later ones
+  // are removed from the strip.
+  std::sort(indices_to_close.rbegin(), indices_to_close.rend());
+  for (int idx : indices_to_close) {
+    if (!model->ContainsIndex(idx)) {
+      continue;
+    }
+    model->CloseWebContentsAt(
+        idx,
+        TabCloseTypes::CLOSE_USER_GESTURE |
+            TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
+  }
 }
 
 void MahoSidebarTabListView::ToggleFolderExpanded(

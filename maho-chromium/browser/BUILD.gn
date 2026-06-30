@@ -50,6 +50,24 @@ source_set("maho_ai_client") {
   ]
 }
 
+source_set("maho_tab_tidy_orchestrator") {
+  sources = [
+    "ai/maho_tab_tidy_orchestrator.cc",
+    "ai/maho_tab_tidy_orchestrator.h",
+  ]
+  deps = [
+    ":maho_ai_client",
+    ":maho_core_holder",
+    ":maho_prompt_utils",
+    ":maho_space_profile_bridge",
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//content/public/browser",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//services/network/public/cpp",
+  ]
+}
+
 source_set("maho_ffi_callback_handle") {
   sources = [
     "ai/maho_ffi_callback_handle.cc",
@@ -697,5 +715,25 @@ test("maho_theme_io_test") {
     "//mojo/core/embedder",
     "//testing/gtest",
     "//ui/views:test_support",
+  ]
+}
+
+source_set("maho_auth_utils") {
+  sources = [
+    "ui/webui/maho_auth_utils.cc",
+    "ui/webui/maho_auth_utils.h",
+  ]
+
+  public_deps = [
+    "//base",
+    "//components/os_crypt/async/browser",
+    "//components/prefs",
+    "//services/network/public/cpp",
+  ]
+
+  deps = [
+    "//net",
+    "//services/network/public/mojom",
+    "//url",
   ]
 }
