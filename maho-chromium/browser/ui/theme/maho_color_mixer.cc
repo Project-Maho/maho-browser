@@ -121,6 +121,20 @@ void AddInteractiveSurfaceColors(ui::ColorMixer& mixer, bool dark_mode) {
       : SkColorSetARGB(97, 176, 182, 210)};
 }
 
+void AddTabRowColors(ui::ColorMixer& mixer, bool dark_mode) {
+  mixer[kMahoColorTabRowHoverBackground] = {dark_mode
+      ? SkColorSetARGB(26, 255, 255, 255)
+      : SkColorSetARGB(20, 0, 0, 0)};
+  mixer[kMahoColorTabRowActiveBackground] = {dark_mode
+      ? SkColorSetARGB(51, 255, 255, 255)
+      : SkColorSetARGB(38, 0, 0, 0)};
+  mixer[kMahoColorTabRowActiveHoveredBackground] = {
+      kMahoColorTabRowActiveBackground};
+  mixer[kMahoColorInteractiveChipIdleBackground] = {dark_mode
+      ? SkColorSetARGB(16, 255, 255, 255)
+      : SkColorSetARGB(13, 0, 0, 0)};
+}
+
 void AddFavoritesColors(ui::ColorMixer& mixer, bool dark_mode) {
   mixer[kMahoColorFavoritesEmptyCardBackground] = {dark_mode
       ? SkColorSetARGB(245, 38, 35, 59)
@@ -449,6 +463,7 @@ void AddMahoColorMixers(ui::ColorProvider* provider,
   AddWindowAndSurfaceColors(mixer, dark_mode);
   AddCanvasColors(mixer, dark_mode);
   AddInteractiveSurfaceColors(mixer, dark_mode);
+  AddTabRowColors(mixer, dark_mode);
   AddFavoritesColors(mixer, dark_mode);
   AddArchiveColors(mixer, dark_mode);
   AddLibraryRailColors(mixer, dark_mode);
@@ -517,6 +532,11 @@ void AddMahoColorMixers(ui::ColorProvider* provider,
         base_gradient_bottom, secondary_tint,
         GetGradientBlendForKind(theme_data->kind) * opacity_bias +
             texture_bias * 0.75f)};
+    const SkColor base_tab_active = dark_mode
+        ? SkColorSetARGB(51, 255, 255, 255)
+        : SkColorSetARGB(38, 0, 0, 0);
+    tint_mixer[kMahoColorTabRowActiveBackground] = {
+        maho_theme::BlendColors(base_tab_active, primary_tint, 0.05f)};
   }
 
   DVLOG(1) << "MahoColorMixers: registered " << (kMahoColorsEnd - kMahoColorsStart)

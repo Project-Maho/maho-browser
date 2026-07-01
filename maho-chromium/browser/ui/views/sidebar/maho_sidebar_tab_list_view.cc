@@ -33,6 +33,7 @@
 #include "components/favicon/core/favicon_service.h"
 #include "components/favicon_base/favicon_types.h"
 #include "components/keyed_service/core/service_access_type.h"
+#include "maho/browser/ui/theme/maho_color_id.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/common/referrer.h"
@@ -112,18 +113,18 @@ namespace {
 using namespace maho;  // NOLINT(build/namespaces)
 
 constexpr int kRowSpacingDp = 0;
-constexpr int kRowHeightDp = 33;
+constexpr int kRowHeightDp = 36;
 constexpr int kRowCornerRadiusDp = 6;
-constexpr int kRowIconSizeDp = 16;
+constexpr int kRowIconSizeDp = 17;
 constexpr int kCloseButtonSizeDp = 24;
-constexpr int kCloseIconSizeDp = 14;
-constexpr int kRowIconTextSpacingDp = 10;
+constexpr int kCloseIconSizeDp = 15;
+constexpr int kRowIconTextSpacingDp = 12;
 constexpr int kRowTrailingSpacingDp = 0;
 constexpr int kFolderIndentDp = 15;
-constexpr int kFolderRowHeightDp = 33;
-constexpr int kSectionSeparatorHeightDp = 6;
+constexpr int kFolderRowHeightDp = 36;
+constexpr int kSectionSeparatorHeightDp = 14;
 constexpr int kSectionSeparatorLineHeightDp = 1;
-constexpr int kFolderGlyphSizeDp = 13;
+constexpr int kFolderGlyphSizeDp = 14;
 constexpr int kAutoScrollEdgeDp = 24;
 constexpr int kAutoScrollStepDp = 4;
 constexpr int kAutoScrollHz = 30;
@@ -132,8 +133,9 @@ constexpr int kFolderRowLeadingInsetDp = 8;
 constexpr int kDragStartThresholdDp = 5;
 constexpr int kDropIndicatorThicknessDp = 2;
 constexpr int kDropIndicatorOutlineThicknessDp = 1;
-constexpr int kInlineActionIconSizeDp = 16;
-constexpr int kInlineActionsSpacingDp = 4;
+constexpr int kInlineActionIconSizeDp = 17;
+constexpr int kInlineActionsSpacingDp = 6;
+[[maybe_unused]] constexpr int kAudioIndicatorSizeDp = 14;
 
 const gfx::Insets kRootInsets = gfx::Insets::TLBR(0, 0, 0, 0);
 const gfx::Insets kInlineRowInsets = gfx::Insets::TLBR(0, 10, 0, 8);
@@ -228,6 +230,50 @@ class SidebarVirtualLayoutDelegate : public views::LayoutManagerBase {
   raw_ptr<SidebarVisibilityManager> visibility_mgr_;
   int row_height_;
 };
+
+class MahoInlineActionButton : public views::LabelButton {
+  METADATA_HEADER(MahoInlineActionButton, views::LabelButton)
+
+ public:
+  MahoInlineActionButton(PressedCallback callback,
+                         std::u16string text,
+                         int corner_radius)
+      : views::LabelButton(std::move(callback), std::move(text)),
+        corner_radius_(corner_radius) {}
+
+  MahoInlineActionButton(const MahoInlineActionButton&) = delete;
+  MahoInlineActionButton& operator=(const MahoInlineActionButton&) = delete;
+  ~MahoInlineActionButton() override = default;
+
+  void StateChanged(ButtonState old_state) override {
+    views::LabelButton::StateChanged(old_state);
+    UpdateHoverBackground();
+  }
+
+  void OnThemeChanged() override {
+    views::LabelButton::OnThemeChanged();
+    UpdateHoverBackground();
+  }
+
+ private:
+  void UpdateHoverBackground() {
+    const ButtonState state = GetState();
+    if (state == STATE_PRESSED) {
+      SetBackground(views::CreateRoundedRectBackground(
+          kMahoColorTabRowActiveBackground, corner_radius_));
+    } else if (state == STATE_HOVERED) {
+      SetBackground(views::CreateRoundedRectBackground(
+          kMahoColorTabRowHoverBackground, corner_radius_));
+    } else {
+      SetBackground(nullptr);
+    }
+  }
+
+  int corner_radius_;
+};
+
+BEGIN_METADATA(MahoInlineActionButton)
+END_METADATA
 
 class SidebarDropForwardingLabelButton : public views::LabelButton {
  public:
@@ -860,25 +906,24 @@ class SidebarInlineRow : public views::LabelButton {
                          GetState() == STATE_PRESSED;
     if (active_) {
       SetBackground(views::CreateRoundedRectBackground(
-          hovered ? ui::kColorSysSurface3 : ui::kColorSysSurface1,
+          hovered ? kMahoColorTabRowActiveHoveredBackground
+                  : kMahoColorTabRowActiveBackground,
           kRowCornerRadiusDp));
-      SetBorder(views::CreatePaddedBorder(
-          views::CreateRoundedRectBorder(
-              1, kRowCornerRadiusDp, ui::kColorSysSurfaceVariant),
-          kInlineRowInsets));
+      SetBorder(views::CreateEmptyBorder(kInlineRowInsets));
       SetEnabledTextColors(ui::kColorSysOnSurface);
-      label()->SetTextStyle(views::style::STYLE_BODY_3_MEDIUM);
+      label()->SetTextStyle(views::style::STYLE_BODY_2_MEDIUM);
       return;
     }
 
     SetBackground(hovered ? views::CreateRoundedRectBackground(
-                                ui::kColorSysSurface2, kRowCornerRadiusDp)
+                                kMahoColorTabRowHoverBackground,
+                                kRowCornerRadiusDp)
                           : nullptr);
     SetBorder(views::CreateEmptyBorder(kInlineRowInsets));
     SetEnabledTextColors(subtle_ ? ui::kColorSysOnSurfaceSubtle
                                  : ui::kColorSysOnSurface);
-    label()->SetTextStyle(subtle_ ? views::style::STYLE_BODY_3
-                                  : views::style::STYLE_BODY_3_MEDIUM);
+    label()->SetTextStyle(subtle_ ? views::style::STYLE_BODY_2
+                                  : views::style::STYLE_BODY_2_MEDIUM);
   }
 
   const bool active_;
@@ -1226,6 +1271,7 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
       preview_show_callback_(std::move(preview_show_callback)),
       preview_hide_callback_(std::move(preview_hide_callback)),
       activate_callback_(std::move(activate_callback)) {
+  SetNotifyEnterExitOnChild(true);
   const int indent = node.depth * kFolderIndentDp;
   auto row_insets = gfx::Insets::TLBR(0, 9 + indent, 0, 7);
 
@@ -1264,7 +1310,7 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
   title_button_->SetTextColor(views::Button::STATE_DISABLED,
                               ui::kColorSysOnSurfaceSubtle);
   title_button_->SetTextSubpixelRenderingEnabled(false);
-  title_button_->SetLabelStyle(views::style::STYLE_BODY_3);
+  title_button_->SetLabelStyle(views::style::STYLE_BODY_2);
   layout->SetFlexForView(title_button_, 1);
 
   auto title_field = std::make_unique<views::Textfield>();
@@ -1281,15 +1327,17 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
     audio_indicator_view_ = AddChildView(std::make_unique<views::ImageView>());
     audio_indicator_view_->SetImage(ui::ImageModel::FromVectorIcon(
         vector_icons::kVolumeOffChromeRefreshIcon, ui::kColorSysOnSurfaceSubtle,
-        12));
-    audio_indicator_view_->SetImageSize(gfx::Size(12, 12));
+        kAudioIndicatorSizeDp));
+    audio_indicator_view_->SetImageSize(
+        gfx::Size(kAudioIndicatorSizeDp, kAudioIndicatorSizeDp));
     audio_indicator_view_->SetTooltipText(u"Tab muted");
   } else if (audible_) {
     audio_indicator_view_ = AddChildView(std::make_unique<views::ImageView>());
     audio_indicator_view_->SetImage(ui::ImageModel::FromVectorIcon(
         vector_icons::kVolumeUpChromeRefreshIcon, ui::kColorSysOnSurfaceSubtle,
-        12));
-    audio_indicator_view_->SetImageSize(gfx::Size(12, 12));
+        kAudioIndicatorSizeDp));
+    audio_indicator_view_->SetImageSize(
+        gfx::Size(kAudioIndicatorSizeDp, kAudioIndicatorSizeDp));
     audio_indicator_view_->SetTooltipText(u"Tab playing audio");
   }
 
@@ -1307,11 +1355,12 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
   close_button_->SetProperty(
       views::kMarginsKey,
       gfx::Insets::TLBR(0, kRowTrailingSpacingDp, 0, 0));
-  close_button_->SetVisible(false);
   views::InstallCircleHighlightPathGenerator(close_button_);
 
   close_button_->SetPaintToLayer();
   close_button_->layer()->SetFillsBoundsOpaquely(false);
+  close_button_->layer()->SetOpacity(0.0f);
+  close_button_->SetCanProcessEventsWithinSubtree(false);
   if (audio_indicator_view_) {
     audio_indicator_view_->SetPaintToLayer();
     audio_indicator_view_->layer()->SetFillsBoundsOpaquely(false);
@@ -1793,14 +1842,14 @@ void SidebarTabRowView::UpdateAppearance() {
         break;
       case AppearanceVisualState::kActive:
         SetBackground(views::CreateRoundedRectBackground(
-            hovered ? ui::kColorSysSurface3 : ui::kColorSysSurface1,
+            hovered ? kMahoColorTabRowActiveHoveredBackground
+                    : kMahoColorTabRowActiveBackground,
             kRowCornerRadiusDp));
-        SetBorder(views::CreateRoundedRectBorder(
-            1, kRowCornerRadiusDp, ui::kColorSysSurfaceVariant));
+        SetBorder(nullptr);
         break;
       case AppearanceVisualState::kHovered:
-        SetBackground(views::CreateRoundedRectBackground(ui::kColorSysSurface2,
-                                                         kRowCornerRadiusDp));
+        SetBackground(views::CreateRoundedRectBackground(
+            kMahoColorTabRowHoverBackground, kRowCornerRadiusDp));
         SetBorder(nullptr);
         break;
       case AppearanceVisualState::kIdle:
@@ -1908,6 +1957,7 @@ SidebarFolderRowView::SidebarFolderRowView(
       browser_(browser),
       rename_callback_(std::move(rename_callback)),
       committed_name_(node.folder_name.empty() ? u"Folder" : node.folder_name) {
+  SetNotifyEnterExitOnChild(true);
   toggle_callback_ = toggle_callback;
   const int indent = node.depth * kFolderIndentDp;
   auto row_insets = gfx::Insets::TLBR(0, kFolderRowLeadingInsetDp + indent,
@@ -1954,7 +2004,7 @@ SidebarFolderRowView::SidebarFolderRowView(
   label_button_->SetTextColor(views::Button::STATE_PRESSED,
                               ui::kColorSysOnSurface);
   label_button_->SetTextSubpixelRenderingEnabled(false);
-  label_button_->SetLabelStyle(views::style::STYLE_BODY_3_MEDIUM);
+  label_button_->SetLabelStyle(views::style::STYLE_BODY_2_MEDIUM);
   layout->SetFlexForView(label_button_, 1);
 
   auto name_field = std::make_unique<views::Textfield>();
@@ -2066,6 +2116,9 @@ void SidebarFolderRowView::OnThemeChanged() {
 void SidebarFolderRowView::OnMouseEntered(const ui::MouseEvent& event) {
   views::View::OnMouseEntered(event);
   UpdateAppearance();
+  if (show_popup_callback_ && !children_snapshot_.empty()) {
+    show_popup_callback_.Run();
+  }
 }
 
 void SidebarFolderRowView::OnMouseExited(const ui::MouseEvent& event) {
@@ -2360,6 +2413,7 @@ void SidebarFolderRowView::SetExpanded(bool expanded) {
 
 void SidebarFolderRowView::UpdateAppearance() {
   const bool show_drop_target = drag_over_drop_target_;
+  const bool hovered = !show_drop_target && IsMouseHovered();
   const bool expanded = is_expanded_;
   if (folder_glyph_container_) {
     folder_glyph_container_->SetBackground(nullptr);
@@ -2387,15 +2441,34 @@ void SidebarFolderRowView::UpdateAppearance() {
   if (name_field_) {
     name_field_->SetVisible(is_editing_name_);
   }
+  FolderVisualState current_state;
   if (show_drop_target) {
-    SetBackground(views::CreateRoundedRectBackground(ui::kColorSysSurface4,
-                                                     kRowCornerRadiusDp));
-    SetBorder(views::CreateRoundedRectBorder(
-        kDropIndicatorOutlineThicknessDp, kRowCornerRadiusDp,
-        ui::kColorSysPrimary));
+    current_state = FolderVisualState::kDropTarget;
+  } else if (hovered) {
+    current_state = FolderVisualState::kHovered;
   } else {
-    SetBackground(nullptr);
-    SetBorder(nullptr);
+    current_state = FolderVisualState::kIdle;
+  }
+  if (current_state != last_folder_visual_state_) {
+    last_folder_visual_state_ = current_state;
+    switch (current_state) {
+      case FolderVisualState::kDropTarget:
+        SetBackground(views::CreateRoundedRectBackground(ui::kColorSysSurface4,
+                                                         kRowCornerRadiusDp));
+        SetBorder(views::CreateRoundedRectBorder(
+            kDropIndicatorOutlineThicknessDp, kRowCornerRadiusDp,
+            ui::kColorSysPrimary));
+        break;
+      case FolderVisualState::kHovered:
+        SetBackground(views::CreateRoundedRectBackground(
+            kMahoColorTabRowHoverBackground, kRowCornerRadiusDp));
+        SetBorder(nullptr);
+        break;
+      case FolderVisualState::kIdle:
+        SetBackground(nullptr);
+        SetBorder(nullptr);
+        break;
+    }
   }
 }
 
@@ -2451,7 +2524,7 @@ class SidebarSpaceHeaderRow : public views::View {
     icon_label_->SetVisible(false);
 
     name_label_ = AddChildView(std::make_unique<views::Label>());
-    name_label_->SetTextStyle(views::style::STYLE_BODY_4_MEDIUM);
+    name_label_->SetTextStyle(views::style::STYLE_BODY_3_MEDIUM);
     name_label_->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
     name_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     name_label_->SetVerticalAlignment(gfx::ALIGN_MIDDLE);
@@ -3587,67 +3660,74 @@ void MahoSidebarTabListView::AddTabActionsRow() {
   row_view->SetProperty(views::kMarginsKey, kNewTabRowMargins);
   auto* row_ptr = tab_rows_->AddChildView(std::move(row_view));
 
-  auto new_tab = std::make_unique<SidebarInlineRow>(
+  auto new_tab = std::make_unique<MahoInlineActionButton>(
       base::BindRepeating(&MahoSidebarTabListView::OpenNewTab,
                           weak_factory_.GetWeakPtr()),
-      u"+ New Tab",
-      /*active=*/false,
-      /*subtle=*/true);
-  auto* new_tab_ptr = new_tab.get();
-  row_ptr->AddChildView(std::unique_ptr<views::View>(new_tab.release()));
+      u"+ New Tab", kRowCornerRadiusDp);
+  new_tab->SetEnabledTextColors(ui::kColorSysOnSurfaceSubtle);
+  new_tab->SetTextSubpixelRenderingEnabled(false);
+  new_tab->SetBorder(views::CreateEmptyBorder(kInlineRowInsets));
+  new_tab->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+  new_tab->SetMinSize(gfx::Size(0, kRowHeightDp));
+  new_tab->SetInstallFocusRingOnFocus(false);
+  auto* new_tab_ptr = row_ptr->AddChildView(std::move(new_tab));
   row_ptr->SetFlexForView(new_tab_ptr, 1);
   new_tab_button_ = new_tab_ptr;
 
-  auto tidy = std::make_unique<SidebarInlineRow>(
+  auto tidy = std::make_unique<MahoInlineActionButton>(
       base::BindRepeating(&MahoSidebarTabListView::OnTidyPressed,
                           weak_factory_.GetWeakPtr()),
-      u"Tidy",
-      /*active=*/false,
-      /*subtle=*/true);
+      u"Tidy", kRowCornerRadiusDp);
   tidy->SetImageModel(
       views::Button::STATE_NORMAL,
       ui::ImageModel::FromVectorIcon(maho_lucide_icons::kWandSparklesIcon,
                                      ui::kColorSysOnSurfaceSubtle,
                                      kInlineActionIconSizeDp));
   tidy->SetImageLabelSpacing(kInlineActionsSpacingDp);
+  tidy->SetTextSubpixelRenderingEnabled(false);
+  tidy->SetEnabledTextColors(ui::kColorSysOnSurfaceSubtle);
+  tidy->SetBorder(views::CreateEmptyBorder(kInlineRowInsets));
+  tidy->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+  tidy->SetMinSize(gfx::Size(0, kRowHeightDp));
   tidy->SetTooltipText(u"Tidy tabs with AI");
-  auto* tidy_ptr = tidy.get();
-  row_ptr->AddChildView(std::unique_ptr<views::View>(tidy.release()));
+  tidy->SetInstallFocusRingOnFocus(false);
+  auto* tidy_ptr = row_ptr->AddChildView(std::move(tidy));
   row_ptr->SetFlexForView(tidy_ptr, 1);
   tidy_button_ = tidy_ptr;
 
-  auto clear = std::make_unique<SidebarInlineRow>(
+  auto clear = std::make_unique<MahoInlineActionButton>(
       base::BindRepeating(&MahoSidebarTabListView::OnClearPressed,
                           weak_factory_.GetWeakPtr()),
-      u"Clear",
-      /*active=*/false,
-      /*subtle=*/true);
+      u"Clear", kRowCornerRadiusDp);
   clear->SetImageModel(
       views::Button::STATE_NORMAL,
       ui::ImageModel::FromVectorIcon(maho_lucide_icons::kArrowDownToLineIcon,
                                      ui::kColorSysOnSurfaceSubtle,
                                      kInlineActionIconSizeDp));
   clear->SetImageLabelSpacing(kInlineActionsSpacingDp);
+  clear->SetTextSubpixelRenderingEnabled(false);
+  clear->SetEnabledTextColors(ui::kColorSysOnSurfaceSubtle);
+  clear->SetBorder(views::CreateEmptyBorder(kInlineRowInsets));
+  clear->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+  clear->SetMinSize(gfx::Size(0, kRowHeightDp));
   clear->SetTooltipText(u"Close old tabs");
-  auto* clear_ptr = clear.get();
-  row_ptr->AddChildView(std::unique_ptr<views::View>(clear.release()));
+  clear->SetInstallFocusRingOnFocus(false);
+  auto* clear_ptr = row_ptr->AddChildView(std::move(clear));
   row_ptr->SetFlexForView(clear_ptr, 1);
   clear_button_ = clear_ptr;
 }
 
 void MahoSidebarTabListView::OnTidyPressed(const ui::Event& event) {
   if (!browser_) {
+    LOG(INFO) << "[maho-tidy] No browser";
     return;
   }
+  LOG(INFO) << "[maho-tidy] starting orchestrator";
   maho::MahoTabTidyOrchestrator::RunOneShot(
       browser_,
       base::BindOnce([](int folder_count, const std::string& error) {
-        if (folder_count > 0) {
-          DVLOG(1) << "[maho-sidebar] Tidy created " << folder_count
-                   << " folders";
-        } else {
-          DVLOG(1) << "[maho-sidebar] Tidy failed: " << error;
-        }
+        LOG(INFO) << "[maho-tidy] result folder_count=" << folder_count
+                  << " error='" << error << "'";
       }));
 }
 
@@ -3679,32 +3759,40 @@ void MahoSidebarTabListView::OnClearPressed(const ui::Event& event) {
 void MahoSidebarTabListView::ExecuteCommand(int command_id, int event_flags) {
   MahoCore* core = maho::GetCore();
   if (!core) {
+    LOG(INFO) << "[maho-clear] No core available";
     return;
   }
   TabStripModel* model = browser_ ? browser_->tab_strip_model() : nullptr;
   if (!model) {
+    LOG(INFO) << "[maho-clear] No tab strip model";
     return;
   }
   const int64_t cutoff_ts = ComputeClearCutoffSeconds(command_id);
   if (cutoff_ts <= 0) {
+    LOG(INFO) << "[maho-clear] Invalid cutoff";
     return;
   }
 
   char* ids_json = maho_core_find_tabs_older_than(core, cutoff_ts);
   if (!ids_json) {
+    LOG(INFO) << "[maho-clear] FFI returned null";
     return;
   }
   std::string json_str(ids_json);
   maho_string_free(ids_json);
+  LOG(INFO) << "[maho-clear] cmd=" << command_id << " cutoff_ts=" << cutoff_ts
+            << " candidates_json=" << json_str;
 
   std::optional<base::Value> parsed =
       base::JSONReader::Read(json_str, base::JSON_PARSE_RFC);
   if (!parsed || !parsed->is_list()) {
+    LOG(INFO) << "[maho-clear] JSON parse failed or not a list";
     return;
   }
 
   std::vector<int> indices_to_close;
   indices_to_close.reserve(parsed->GetList().size());
+  int unresolved = 0;
   for (const auto& v : parsed->GetList()) {
     if (!v.is_string()) {
       continue;
@@ -3712,10 +3800,13 @@ void MahoSidebarTabListView::ExecuteCommand(int command_id, int event_flags) {
     const int idx = ResolveTabStripIndexForTabId(v.GetString());
     if (idx >= 0 && model->ContainsIndex(idx)) {
       indices_to_close.push_back(idx);
+    } else {
+      unresolved++;
     }
   }
-  // Close in descending order so earlier indices remain valid as later ones
-  // are removed from the strip.
+  LOG(INFO) << "[maho-clear] candidates=" << parsed->GetList().size()
+            << " resolved=" << indices_to_close.size()
+            << " unresolved=" << unresolved;
   std::sort(indices_to_close.rbegin(), indices_to_close.rend());
   for (int idx : indices_to_close) {
     if (!model->ContainsIndex(idx)) {

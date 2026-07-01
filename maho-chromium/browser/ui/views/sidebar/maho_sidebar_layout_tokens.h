@@ -22,8 +22,8 @@ inline constexpr int kLegacyRailWidthResetThresholdDp = 80;
 inline constexpr int kCompactNavigationThresholdDp = 208;
 inline constexpr int kRailCornerRadiusDp = 18;
 inline constexpr int kSectionCornerRadiusDp = 12;
-inline constexpr int kSectionSpacingDp = 5;
-inline constexpr int kTopRegionSpacingDp = 4;
+inline constexpr int kSectionSpacingDp = 7;
+inline constexpr int kTopRegionSpacingDp = 8;
 // Width reserved for macOS native traffic-light buttons (close/min/zoom).
 // Derived from upstream BrowserFrameViewMac::GetCaptionButtonBounds():
 //   pre-macOS 26: RectF(20, 11, 54, 16) → right edge x=74
@@ -45,7 +45,7 @@ inline constexpr int kTrafficLightCenterYDp = 19;
 inline constexpr int kTopBarButtonSizeDp = 20;
 inline constexpr int kTopBarButtonCornerRadiusDp = 8;
 // Rendered icon size within the button hit target.
-inline constexpr int kTopBarIconSizeDp = 15;
+inline constexpr int kTopBarIconSizeDp = 16;
 // Gap between adjacent buttons in a cluster (tight packing).
 inline constexpr int kTopBarButtonSpacingDp = 0;
 // Extra gap after the sidebar-toggle button when navigation is active,
@@ -76,18 +76,18 @@ inline constexpr int kArchiveEmptyStateIconSizeDp = 28;
 inline constexpr int kArchiveEmptyStateContentMaxWidthDp = 252;
 inline constexpr int kArchiveEmptyStateItemSpacingDp = 8;
 inline constexpr int kSearchPillHeightDp = 35;
-inline constexpr int kSearchPillCornerRadiusDp = 16;
+inline constexpr int kSearchPillCornerRadiusDp = 10;
 inline constexpr int kSearchPillCompactHeightDp = 32;
-inline constexpr int kSearchPillCompactCornerRadiusDp = 18;
-inline constexpr int kSearchPillIconSizeDp = 14;
-inline constexpr std::size_t kMahoSidebarFavoriteSlotCount = 10;
-inline constexpr int kFavoritesColumns = 3;
+inline constexpr int kSearchPillCompactCornerRadiusDp = 12;
+inline constexpr int kSearchPillIconSizeDp = 16;
+inline constexpr std::size_t kMahoSidebarFavoriteSlotCount = 12;
+inline constexpr int kFavoritesColumns = 4;
 inline constexpr int kFavoriteTileHeightDp = 47;
 inline constexpr int kFavoriteTileCornerRadiusDp = 12;
 inline constexpr int kFavoriteTileSpacingDp = 6;
 inline constexpr int kFavoriteGlyphContainerSizeDp = 28;
 inline constexpr int kFavoriteGlyphContainerRadiusDp = 10;
-inline constexpr int kFavoriteGlyphSizeDp = 15;
+inline constexpr int kFavoriteGlyphSizeDp = 16;
 inline constexpr int kFavoriteLabelMaxWidthDp = 60;
 inline constexpr int kSpacesScrollPaddingDp = 12;
 inline constexpr int kHoverTriggerWidthDp = 2;      // Invisible trigger zone width
@@ -106,7 +106,7 @@ inline const gfx::Insets kRailInsets =
                       kRailInsetBottomDp, kRailInsetRightDp);
 inline const gfx::Insets kSectionInsets = gfx::Insets::TLBR(2, 0, 2, 0);
 inline constexpr int kContentInsetDp = 4;
-inline const gfx::Insets kRowInsets = gfx::Insets::TLBR(2, 5, 2, 5);
+inline const gfx::Insets kRowInsets = gfx::Insets::TLBR(2, 7, 2, 7);
 // Top-bar row padding. Horizontal 1dp keeps icons off the rail edge; bottom
 // 1dp separates the action row from the search pill below it. Top is 3dp so
 // that the action-button center Y equals the macOS traffic-light center Y;

@@ -1,5 +1,6 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
+#include "maho/browser/ui/theme/maho_color_id.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
 
 #include <algorithm>
@@ -99,8 +100,6 @@ constexpr int kFavoriteEmptyCloseSizeDp = 12;
 constexpr int kFavoriteEmptyCloseHitTargetDp = 22;
 constexpr int kFavoriteEmptyCloseInsetDp = 8;
 constexpr int kDragStartThresholdDp = 5;
-constexpr int kDropIndicatorThicknessDp = 2;
-constexpr int kDropIndicatorInsetDp = 3;
 
 constexpr base::TimeDelta kReorderDuration = base::Milliseconds(220);
 constexpr base::TimeDelta kInsertionDuration = base::Milliseconds(220);
@@ -383,15 +382,20 @@ class FavoriteTileButton : public views::Button,
 
  private:
   void UpdateAppearance() {
-    const bool hovered =
-        GetEnabled() &&
-        (GetState() == STATE_HOVERED || GetState() == STATE_PRESSED);
-    SetBorder(views::CreateRoundedRectBorder(
-        1, sidebar_layout::kFavoriteTileCornerRadiusDp,
-        hovered ? ui::kColorSysNeutralOutline : ui::kColorSysSurfaceVariant));
+    const bool enabled = GetEnabled();
+    const bool is_press = enabled && GetState() == STATE_PRESSED;
+    const bool is_hover = enabled && GetState() == STATE_HOVERED;
+    ui::ColorId bg;
+    if (is_press) {
+      bg = kMahoColorTabRowActiveBackground;
+    } else if (is_hover) {
+      bg = kMahoColorTabRowHoverBackground;
+    } else {
+      bg = kMahoColorInteractiveChipIdleBackground;
+    }
     SetBackground(views::CreateRoundedRectBackground(
-        hovered ? ui::kColorSysSurface3 : ui::kColorSysSurface1,
-        sidebar_layout::kFavoriteTileCornerRadiusDp));
+        bg, sidebar_layout::kFavoriteTileCornerRadiusDp));
+    SetBorder(nullptr);
   }
 
   base::RepeatingCallback<void(const std::string&)> drag_done_callback_;
@@ -450,7 +454,7 @@ views::Label* AddPlaceholderLabel(views::View* parent, std::u16string text) {
   label->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
   label->SetMultiLine(false);
   label->SetElideBehavior(gfx::ELIDE_TAIL);
-  label->SetTextStyle(views::style::STYLE_BODY_4);
+  label->SetTextStyle(views::style::STYLE_BODY_3);
   label->SetSubpixelRenderingEnabled(false);
   return parent->AddChildView(std::move(label));
 }
@@ -701,13 +705,8 @@ void MahoSidebarFavoritesGridView::Update(
           gfx::Size(sidebar_layout::kFavoriteGlyphSizeDp,
                     sidebar_layout::kFavoriteGlyphSizeDp));
       if (tile_glyph_containers_[index]) {
-        tile_glyph_containers_[index]->SetBackground(
-            views::CreateRoundedRectBackground(
-                ui::kColorSysSurface,
-                sidebar_layout::kFavoriteGlyphContainerRadiusDp));
-        tile_glyph_containers_[index]->SetBorder(views::CreateRoundedRectBorder(
-            1, sidebar_layout::kFavoriteGlyphContainerRadiusDp,
-            ui::kColorSysSurfaceVariant));
+        tile_glyph_containers_[index]->SetBackground(nullptr);
+        tile_glyph_containers_[index]->SetBorder(nullptr);
       }
       tile_labels_[index]->SetText(specs[index].text);
       tile_labels_[index]->SetVisible(false);
@@ -760,26 +759,67 @@ void MahoSidebarFavoritesGridView::OnFaviconLoaded(
 
 MahoSidebarFavoritesGridView::LayoutSpec
 MahoSidebarFavoritesGridView::GetLayoutSpec(size_t favorite_count,
-                                           int available_width) {
+                                            int available_width) {
   const size_t count = std::min(favorite_count, kTileCount);
   LayoutSpec spec;
 
+  // Zen essentials layout table. Maps N favorites → (row_counts, max_columns).
+  // Mirrors zen-browser/desktop ZenSpaceManager.mjs essentialHackType logic.
   switch (count) {
     case 0:
       break;
     case 1:
       spec.row_counts = {1};
-      spec.max_columns = 3;
+      spec.max_columns = 1;
       break;
     case 2:
       spec.row_counts = {2};
+      spec.max_columns = 2;
+      break;
+    case 3:
+      spec.row_counts = {3};
       spec.max_columns = 3;
       break;
-    default:
+    case 4:
+      spec.row_counts = {2, 2};
+      spec.max_columns = 2;
+      break;
+    case 5:
+      spec.row_counts = {4, 1};
+      spec.max_columns = 4;
+      break;
+    case 6:
+      spec.row_counts = {3, 3};
       spec.max_columns = 3;
+      break;
+    case 7:
+      spec.row_counts = {4, 3};
+      spec.max_columns = 4;
+      break;
+    case 8:
+      spec.row_counts = {4, 4};
+      spec.max_columns = 4;
+      break;
+    case 9:
+      spec.row_counts = {3, 3, 3};
+      spec.max_columns = 3;
+      break;
+    case 10:
+      spec.row_counts = {4, 4, 2};
+      spec.max_columns = 4;
+      break;
+    case 11:
+      spec.row_counts = {4, 4, 3};
+      spec.max_columns = 4;
+      break;
+    case 12:
+      spec.row_counts = {4, 4, 4};
+      spec.max_columns = 4;
+      break;
+    default:
+      spec.max_columns = 4;
       for (size_t remaining = count; remaining > 0;) {
-        const int row_count = std::min<int>(sidebar_layout::kFavoritesColumns,
-                                            remaining);
+        const int row_count = std::min<int>(4, remaining);
         spec.row_counts.push_back(row_count);
         remaining -= row_count;
       }
@@ -958,11 +998,7 @@ int MahoSidebarFavoritesGridView::OnDragUpdated(
       current_drag_preview_index_ = preview_index;
       AnimateDragPreview(preview_index, payload.node_id);
     }
-
-    SetBorder(views::CreateSolidSidedBorder(
-        gfx::Insets::TLBR(kDropIndicatorThicknessDp, kDropIndicatorInsetDp,
-                          kDropIndicatorThicknessDp, kDropIndicatorInsetDp),
-        ui::kColorSysPrimary));
+    SetBorder(nullptr);
   } else {
     current_drag_preview_index_ = -1;
   }

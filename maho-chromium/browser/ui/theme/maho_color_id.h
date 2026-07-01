@@ -48,6 +48,10 @@
   E_CPONLY(kMahoColorSearchFieldBorder) \
   E_CPONLY(kMahoColorNewTabStripBackground) \
   E_CPONLY(kMahoColorNewTabStripBorder) \
+  E_CPONLY(kMahoColorTabRowHoverBackground) \
+  E_CPONLY(kMahoColorTabRowActiveBackground) \
+  E_CPONLY(kMahoColorTabRowActiveHoveredBackground) \
+  E_CPONLY(kMahoColorInteractiveChipIdleBackground) \
   /* Favorites */ \
   E_CPONLY(kMahoColorFavoritesEmptyCardBackground) \
   E_CPONLY(kMahoColorFavoritesEmptyCardBorder) \

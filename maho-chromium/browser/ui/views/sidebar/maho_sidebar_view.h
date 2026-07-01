@@ -9,6 +9,7 @@
 #include <string>
 
 #include "base/memory/raw_ptr.h"
+#include "base/callback_list.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/values.h"
@@ -106,7 +107,6 @@ class MahoSidebarView
   bool IsPositionInWindowCaption(const gfx::Point& point) const;
 
   void ScheduleRefreshAll();
-
   // Test-only accessors for live browser tests. Keep minimal.
   MahoSidebarFavoritesGridView* favorites_view_for_testing() {
     return favorites_view_;
@@ -150,6 +150,7 @@ class MahoSidebarView
 
  private:
   void BuildUi();
+  void OnTabListScrolled();
   void SetBodyMode(MahoSidebarBodyMode mode);
   void CaptureLastFocusedBodyView();
   void RestoreLastFocusedBodyView();
@@ -224,6 +225,7 @@ class MahoSidebarView
   raw_ptr<MahoSidebarTabListView> tab_list_view_ = nullptr;
   raw_ptr<views::View> space_header_view_ = nullptr;
   raw_ptr<views::ScrollView> tab_scroll_view_ = nullptr;
+  base::CallbackListSubscription tab_scroll_subscription_;
   raw_ptr<MahoSidebarFooterView> footer_view_ = nullptr;
   std::unique_ptr<MahoSidebarUpdateNotificationController>
       update_notification_controller_;

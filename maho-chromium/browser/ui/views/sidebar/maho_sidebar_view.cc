@@ -129,6 +129,12 @@ void MahoSidebarView::OnThemeChanged() {
   RefreshAll();
 }
 
+void MahoSidebarView::OnTabListScrolled() {
+  if (tab_list_view_) {
+    tab_list_view_->OnScrollChanged();
+  }
+}
+
 bool MahoSidebarView::IsPositionInWindowCaption(
     const gfx::Point& point) const {
   if (top_bar_view_ && top_bar_view_->GetVisible()) {
@@ -239,6 +245,10 @@ void MahoSidebarView::BuildUi() {
   tab_scroll_view_ = tabs_surface_->AddChildView(std::move(scroll));
 
   tab_list_view_->SetAutoScrollScrollView(tab_scroll_view_);
+
+  tab_scroll_subscription_ = tab_scroll_view_->AddContentsScrolledCallback(
+      base::BindRepeating(&MahoSidebarView::OnTabListScrolled,
+                          base::Unretained(this)));
 
   library_container_ =
       content_host_->AddChildView(std::make_unique<views::View>());

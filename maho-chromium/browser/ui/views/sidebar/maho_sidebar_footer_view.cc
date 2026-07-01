@@ -107,13 +107,47 @@ bool ParseHexColor(const std::string& color, SkColor* out) {
   return true;
 }
 
+class MahoFooterIconButton : public views::MdTextButton {
+  METADATA_HEADER(MahoFooterIconButton, views::MdTextButton)
+
+ public:
+  using views::MdTextButton::MdTextButton;
+
+  void StateChanged(ButtonState old_state) override {
+    views::MdTextButton::StateChanged(old_state);
+    UpdateHoverBackground();
+  }
+
+  void OnThemeChanged() override {
+    views::MdTextButton::OnThemeChanged();
+    UpdateHoverBackground();
+  }
+
+ private:
+  void UpdateHoverBackground() {
+    const ButtonState state = GetState();
+    if (state == STATE_PRESSED) {
+      SetBackground(views::CreateRoundedRectBackground(
+          kMahoColorTabRowActiveBackground, kFooterControlCornerRadius));
+    } else if (state == STATE_HOVERED) {
+      SetBackground(views::CreateRoundedRectBackground(
+          kMahoColorTabRowHoverBackground, kFooterControlCornerRadius));
+    } else {
+      SetBackground(nullptr);
+    }
+  }
+};
+
+BEGIN_METADATA(MahoFooterIconButton)
+END_METADATA
+
 views::MdTextButton* CreateRoundActionButton(
     views::View* parent,
     views::Button::PressedCallback callback,
     const gfx::VectorIcon& icon,
     const std::u16string& tooltip) {
-  auto button = std::make_unique<views::MdTextButton>(std::move(callback),
-                                                      std::u16string());
+  auto button = std::make_unique<MahoFooterIconButton>(std::move(callback),
+                                                       std::u16string());
   button->SetStyle(ui::ButtonStyle::kText);
   button->SetCornerRadius(kFooterControlCornerRadius);
   button->SetMinSize(gfx::Size(kFooterControlSize, kFooterControlSize));
@@ -601,7 +635,6 @@ void MahoSidebarFooterView::UpdateFooterChromeAppearance() {
       return;
     }
     button->SetBgColorOverrideDeprecated(SK_ColorTRANSPARENT);
-    button->SetBackground(nullptr);
     button->SetBorder(views::CreateEmptyBorder(gfx::Insets()));
     button->SetPaintToLayer();
     button->layer()->SetFillsBoundsOpaquely(false);

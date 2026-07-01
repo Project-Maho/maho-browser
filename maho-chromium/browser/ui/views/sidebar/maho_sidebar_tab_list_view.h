@@ -548,6 +548,8 @@ class SidebarFolderRowView : public views::View,
   raw_ptr<views::LabelButton> label_button_ = nullptr;
   raw_ptr<views::Textfield> name_field_ = nullptr;
   bool drag_over_drop_target_ = false;
+  enum class FolderVisualState { kIdle, kHovered, kDropTarget };
+  FolderVisualState last_folder_visual_state_ = FolderVisualState::kIdle;
   SidebarFolderDropZone active_drop_zone_ = SidebarFolderDropZone::kNone;
   std::unique_ptr<MahoFolderContextMenu> active_folder_context_menu_;
   std::unique_ptr<ui::SimpleMenuModel> active_folder_menu_model_;

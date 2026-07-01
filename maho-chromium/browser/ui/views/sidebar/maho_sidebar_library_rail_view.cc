@@ -48,7 +48,7 @@ namespace {
 
 constexpr float kBackButtonDisabledAlpha = 0.38f;
 constexpr int kLibraryRailLabelLineHeightDp = 11;
-constexpr int kLibraryRailLabelFontSizeDeltaDp = -2;
+constexpr int kLibraryRailLabelFontSizeDeltaDp = -1;
 constexpr int kLibraryRailIconOpticalSizeDp = 22;
 
 struct RailCategorySpec {

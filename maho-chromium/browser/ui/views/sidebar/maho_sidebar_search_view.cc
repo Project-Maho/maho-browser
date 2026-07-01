@@ -27,6 +27,7 @@
 #include "content/public/common/referrer.h"
 #include "maho/browser/maho_features.h"
 #include "maho/browser/ui/context_menu/maho_address_bar_context_menu.h"
+#include "maho/browser/ui/theme/maho_color_id.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_provider.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_view.h"
@@ -104,9 +105,11 @@ class SidebarSearchIdleButton : public views::LabelButton {
  public:
   SidebarSearchIdleButton(views::Button::PressedCallback callback,
                           const std::u16string& text,
-                          base::RepeatingCallback<void(bool)> hover_callback)
+                          base::RepeatingCallback<void(bool)> hover_callback,
+                          base::RepeatingClosure state_changed_callback)
       : views::LabelButton(std::move(callback), text),
-        hover_callback_(std::move(hover_callback)) {
+        hover_callback_(std::move(hover_callback)),
+        state_changed_callback_(std::move(state_changed_callback)) {
     SetNotifyEnterExitOnChild(true);
   }
 
@@ -128,8 +131,16 @@ class SidebarSearchIdleButton : public views::LabelButton {
     }
   }
 
+  void StateChanged(ButtonState old_state) override {
+    views::LabelButton::StateChanged(old_state);
+    if (state_changed_callback_) {
+      state_changed_callback_.Run();
+    }
+  }
+
  private:
   base::RepeatingCallback<void(bool)> hover_callback_;
+  base::RepeatingClosure state_changed_callback_;
 };
 
 }  // namespace
@@ -163,6 +174,8 @@ MahoSidebarSearchView::MahoSidebarSearchView(Browser* browser)
                           weak_factory_.GetWeakPtr()),
       std::u16string(),
       base::BindRepeating(&MahoSidebarSearchView::OnIdleButtonHoverChanged,
+                          weak_factory_.GetWeakPtr()),
+      base::BindRepeating(&MahoSidebarSearchView::UpdateSearchChrome,
                           weak_factory_.GetWeakPtr()));
   auto* idle_button_raw =
       static_cast<SidebarSearchIdleButton*>(idle_button.get());
@@ -194,7 +207,7 @@ MahoSidebarSearchView::MahoSidebarSearchView(Browser* browser)
   primary_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   primary_label_->SetAutoColorReadabilityEnabled(false);
   primary_label_->SetEnabledColor(ui::kColorSysOnSurface);
-  primary_label_->SetTextStyle(views::style::STYLE_BODY_4);
+  primary_label_->SetTextStyle(views::style::STYLE_BODY_3);
   primary_label_->SetMultiLine(false);
   primary_label_->SetElideBehavior(gfx::ELIDE_TAIL);
 
@@ -202,7 +215,7 @@ MahoSidebarSearchView::MahoSidebarSearchView(Browser* browser)
   secondary_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   secondary_label_->SetAutoColorReadabilityEnabled(false);
   secondary_label_->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
-  secondary_label_->SetTextStyle(views::style::STYLE_BODY_5);
+  secondary_label_->SetTextStyle(views::style::STYLE_BODY_4);
   secondary_label_->SetMultiLine(false);
   secondary_label_->SetElideBehavior(gfx::ELIDE_TAIL);
   secondary_label_->SetBorder(views::CreateEmptyBorder(
@@ -647,20 +660,24 @@ void MahoSidebarSearchView::UpdateSearchChrome() {
   const bool show_placeholder =
       !is_editing_ &&
       model_.display_mode == MahoSidebarAddressDisplayMode::kSearchPlaceholder;
+  const views::Button::ButtonState btn_state =
+      idle_button_ ? idle_button_->GetState() : views::Button::STATE_NORMAL;
+  const bool btn_pressed = btn_state == views::Button::STATE_PRESSED;
+  const bool btn_hovered = btn_state == views::Button::STATE_HOVERED;
+  ui::ColorId pill_bg;
+  if (btn_pressed) {
+    pill_bg = kMahoColorTabRowActiveBackground;
+  } else if (btn_hovered) {
+    pill_bg = kMahoColorTabRowHoverBackground;
+  } else {
+    pill_bg = kMahoColorInteractiveChipIdleBackground;
+  }
   idle_button_->SetBackground(views::CreateRoundedRectBackground(
-      ui::kColorSysSurface1,
+      pill_bg,
       show_placeholder ? sidebar_layout::kSearchPillCompactCornerRadiusDp
                        : sidebar_layout::kSearchPillCornerRadiusDp));
-  // Padded border provides the pill's inner leading/trailing breathing room.
-  // The trailing side is intentionally wider than the leading side so the
-  // utility affordance (trailing icon) doesn't hug the pill's right edge.
   idle_button_->SetBorder(views::CreatePaddedBorder(
-      views::CreateRoundedRectBorder(
-          1,
-          show_placeholder ? sidebar_layout::kSearchPillCompactCornerRadiusDp
-                           : sidebar_layout::kSearchPillCornerRadiusDp,
-          show_placeholder ? ui::kColorSysSurfaceVariant
-                           : ui::kColorSysNeutralOutline),
+      views::CreateEmptyBorder(gfx::Insets()),
       gfx::Insets::TLBR(
           kSearchPillInnerVerticalInsetDp,
           show_placeholder ? kSearchPillLeadingInsetDp
@@ -680,8 +697,8 @@ void MahoSidebarSearchView::UpdateSearchChrome() {
   }
   primary_label_->SetEnabledColor(show_placeholder ? ui::kColorSysOnSurfaceSubtle
                                                     : ui::kColorSysOnSurface);
-  primary_label_->SetTextStyle(show_placeholder ? views::style::STYLE_BODY_5
-                                                : views::style::STYLE_BODY_4);
+  primary_label_->SetTextStyle(show_placeholder ? views::style::STYLE_BODY_4
+                                                : views::style::STYLE_BODY_3);
   textfield_->SetBorder(views::CreateEmptyBorder(
       gfx::Insets::VH(0, kSearchTextfieldHorizontalInsetDp)));
   textfield_->SetPreferredSize(
