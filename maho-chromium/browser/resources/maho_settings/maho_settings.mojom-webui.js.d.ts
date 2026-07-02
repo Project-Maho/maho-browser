@@ -28,7 +28,6 @@ export interface AISettings {
   provider: string;
   baseUrl: string;
   model: string;
-  opencodeRuntimeEnabled: boolean;
   approvalPolicy: string;
   sessionPersistenceEnabled: boolean;
   hasByokOpenai: boolean;
@@ -156,25 +155,34 @@ export interface InstalledExtension {
 }
 
 export interface AccountStatus {
-  signed_in: boolean;
+  signedIn: boolean;
   email: string;
-  display_name: string;
-  user_id: string;
+  displayName: string;
+  userId: string;
   tier: string;
-  subscription_status: string;
-  subscription_expires_at: bigint;
+  subscriptionStatus: string;
+  subscriptionExpiresAt: bigint;
 }
 
 export interface BillingInfo {
   tier: string;
-  subscription_status: string;
-  subscription_expires_at: bigint;
-  period_start_at: bigint;
-  anniversary_reset_day: number;
-  tier_ceiling_usd: number;
-  credit_balance_usd: number;
-  lifetime_purchased_usd: number;
-  has_payment_method: boolean;
+  subscriptionStatus: string;
+  subscriptionExpiresAt: bigint;
+  periodStartAt: bigint;
+  anniversaryResetDay: number;
+  tierCeilingUsd: number;
+  creditBalanceUsd: number;
+  lifetimePurchasedUsd: number;
+  hasPaymentMethod: boolean;
+}
+
+export interface Invoice {
+  id: string;
+  createdAt: bigint;
+  amountUsd: number;
+  currency: string;
+  status: string;
+  pdfUrl: string;
 }
 
 export class PageCallbackRouter {

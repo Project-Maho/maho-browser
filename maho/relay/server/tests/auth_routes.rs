@@ -500,3 +500,55 @@ async fn test_admin_force_verify_email() {
         .unwrap();
     assert_eq!(not_found_resp.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn test_subscription_returns_billing_info_for_authenticated_user() {
+    let config = RelayConfig {
+        open_registration: true,
+        ..RelayConfig::default()
+    };
+    let addr = spawn_test_server_with_config(config).await;
+    let base = format!("http://{}", addr);
+    let client = reqwest::Client::new();
+
+    let signup_resp = client
+        .post(format!("{}/auth/signup", base))
+        .json(&json!({
+            "email": "carol@example.com",
+            "password": "correct horse battery staple",
+            "display_name": "Carol",
+            "device_name": "Carol Laptop",
+            "device_type": "desktop"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(signup_resp.status(), StatusCode::OK);
+    let signup_json: serde_json::Value = signup_resp.json().await.unwrap();
+    let access_token = signup_json["access_token"].as_str().unwrap().to_string();
+
+    let unauth_resp = client
+        .get(format!("{}/auth/subscription", base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauth_resp.status(), StatusCode::UNAUTHORIZED);
+
+    let sub_resp = client
+        .get(format!("{}/auth/subscription", base))
+        .header("Authorization", format!("Bearer {}", access_token))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(sub_resp.status(), StatusCode::OK);
+    let sub_json: serde_json::Value = sub_resp.json().await.unwrap();
+
+    assert_eq!(sub_json["tier"], "free");
+    assert_eq!(sub_json["tier_ceiling_usd"], 0.50);
+    assert_eq!(sub_json["credit_balance_usd"], 0.0);
+    assert_eq!(sub_json["lifetime_purchased_usd"], 0.0);
+    assert!(sub_json["subscription_status"].is_string());
+    assert!(sub_json["subscription_expires_at"].is_null() || sub_json["subscription_expires_at"].is_i64());
+    assert!(sub_json["period_start_at"].is_null() || sub_json["period_start_at"].is_i64());
+    assert!(sub_json["anniversary_reset_day"].is_null() || sub_json["anniversary_reset_day"].is_i64());
+}

@@ -94,7 +94,10 @@ const net::NetworkTrafficAnnotationTag kCreditBalanceTrafficAnnotation =
         cookies_allowed: NO
         setting:
           "This request is enabled when the user is signed in and opens the Maho AI surface."
-        policy_exception_justification: "Not implemented."
+        policy_exception_justification:
+          "Not controlled by enterprise policy. Triggered when the signed-in "
+          "user opens the AI panel. Fetches the current PAYG credit balance. "
+          "No ambient or background network activity."
       }
     )");
 

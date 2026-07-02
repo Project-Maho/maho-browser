@@ -27,7 +27,6 @@ struct AISettings {
   string provider;
   string base_url;
   string model;
-  bool opencode_runtime_enabled;
   string approval_policy;
   bool session_persistence_enabled;
   bool has_byok_openai;
@@ -185,6 +184,15 @@ struct BillingInfo {
   bool has_payment_method;
 };
 
+struct Invoice {
+  string id;
+  int64 created_at;
+  float amount_usd;
+  string currency;
+  string status;
+  string pdf_url;
+};
+
 interface PageHandlerFactory {
   CreatePageHandler(pending_remote<Page> page,
                     pending_receiver<PageHandler> handler);
@@ -287,6 +295,12 @@ interface PageHandler {
   // On 401: attempts a single refresh via /auth/refresh, then retries once.
   // Returns an empty BillingInfo (tier="", all zeros, has_payment_method=false) when signed out.
   GetBillingInfo() => (BillingInfo info);
+
+  // GetInvoices retrieves the user's order history from the relay.
+  GetInvoices() => (array<Invoice> invoices);
+
+  // GetBillingPortalUrl retrieves a customer portal link from the relay.
+  GetBillingPortalUrl() => (string url);
 };
 
 interface Page {

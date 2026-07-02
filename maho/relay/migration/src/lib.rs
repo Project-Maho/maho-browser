@@ -6,6 +6,7 @@ mod m20260627_000003_add_billing;
 mod m20260627_000004_add_email_verification;
 mod m20260628_000005_add_consumed_bypass_tokens;
 mod m20260628_000006_add_payg_credits;
+mod m20260702_000007_add_has_payment_method;
 
 pub struct Migrator;
 
@@ -19,6 +20,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260627_000004_add_email_verification::Migration),
             Box::new(m20260628_000005_add_consumed_bypass_tokens::Migration),
             Box::new(m20260628_000006_add_payg_credits::Migration),
+            Box::new(m20260702_000007_add_has_payment_method::Migration),
         ]
     }
 }

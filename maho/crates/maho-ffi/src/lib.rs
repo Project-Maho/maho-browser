@@ -295,6 +295,17 @@ pub unsafe extern "C" fn maho_core_sign_in(
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
 /// Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
+pub unsafe extern "C" fn maho_core_dispatch_shell_event(
+    ptr: *mut MahoCore,
+    event_json: *const c_char,
+) -> *mut c_char {
+    maho_core_sign_in(ptr, event_json)
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
 pub unsafe extern "C" fn maho_core_tick(ptr: *mut MahoCore) -> *mut c_char {
     ffi_safe!({
 
@@ -398,49 +409,32 @@ pub unsafe extern "C" fn maho_core_release_window_tabs(
     }, ())
 }
 
-/// Close non-pinned tabs whose `last_active_at` is strictly older than `cutoff_ts` (epoch seconds).
-/// Returns the number of tabs closed, or -1 on null pointer or internal error.
-///
-/// # Safety
-/// `core` must be a valid pointer returned by `maho_core_new`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_core_close_tabs_older_than(
-    core: *mut MahoCore,
-    cutoff_ts: i64,
-) -> i32 {
-    ffi_safe!({
-
-    if core.is_null() {
-        return -1;
-    }
-    if import_gate::is_active() { return -1; }
-    let core_ref = &mut *core;
-    let closed = core_ref.close_tabs_older_than(cutoff_ts);
-    closed.min(i32::MAX as usize) as i32
-
-    }, -1)
-}
-
-/// Returns non-pinned tab IDs older than `cutoff_ts` (epoch seconds) as a JSON array of strings.
+/// Returns non-pinned tab IDs older than `cutoff_ts` (epoch seconds) in the given `space_id` as a JSON array of strings.
 /// Read-only — does NOT modify state. Caller frees the returned string with `maho_string_free`.
 /// Returns NULL on null pointer or internal error.
 ///
 /// # Safety
-/// `core` must be a valid pointer returned by `maho_core_new`.
+/// `core` and `space_id` must be valid pointers.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_find_tabs_older_than(
     core: *mut MahoCore,
     cutoff_ts: i64,
+    space_id: *const c_char,
 ) -> *mut c_char {
     ffi_safe!({
 
-    if core.is_null() {
+    if core.is_null() || space_id.is_null() {
         return std::ptr::null_mut();
     }
     if import_gate::is_active() { return std::ptr::null_mut(); }
     let core_ref = &*core;
+    let space_id_str = match CStr::from_ptr(space_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let space_id = maho_types::identifiers::SpaceId::new(space_id_str);
     let ids: Vec<String> = core_ref
-        .find_tabs_older_than(cutoff_ts)
+        .find_tabs_older_than(cutoff_ts, &space_id)
         .into_iter()
         .map(|id| id.as_ref().to_string())
         .collect();
@@ -7791,11 +7785,5 @@ mod tests {
         let schedule = maho_core::routines::CronSchedule::parse("0 8 * * *").unwrap();
         let next = schedule.next_fire_after(t);
         assert!(next > t, "next_fire_after must be strictly after last_run");
-    }
-
-    #[test]
-    fn ffi_close_tabs_older_than_null_returns_neg1() {
-        let result = unsafe { maho_core_close_tabs_older_than(std::ptr::null_mut(), 1_700_000_000) };
-        assert_eq!(result, -1);
     }
 }

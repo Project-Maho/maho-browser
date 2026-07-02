@@ -37,6 +37,7 @@
 #include "maho/browser/extensions/maho_extension_state_bridge.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/passwords/maho_password_provider_utils.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/webui/maho_account_prefs.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/browser/ui/webui/maho_auth_utils.h"
@@ -70,7 +71,10 @@ const net::NetworkTrafficAnnotationTag kAuthLoginTrafficAnnotation =
       policy {
         cookies_allowed: NO
         setting: "Triggered by an explicit user action; not background."
-        policy_exception_justification: "Not implemented."
+        policy_exception_justification:
+          "Not controlled by enterprise policy. The user explicitly submits "
+          "credentials in the Account settings pane to authenticate with the "
+          "Maho relay service. No ambient or background network activity."
       }
     )");
 
@@ -86,7 +90,10 @@ const net::NetworkTrafficAnnotationTag kAuthLogoutTrafficAnnotation =
       policy {
         cookies_allowed: NO
         setting: "Triggered by an explicit user action; not background."
-        policy_exception_justification: "Not implemented."
+        policy_exception_justification:
+          "Not controlled by enterprise policy. The user explicitly clicks "
+          "Sign Out. A single best-effort POST invalidates the server session. "
+          "No ambient or background network activity."
       }
     )");
 
@@ -103,9 +110,53 @@ const net::NetworkTrafficAnnotationTag kSubscriptionTrafficAnnotation =
       policy {
         cookies_allowed: NO
         setting: "Triggered by opening the Billing pane; not background."
-        policy_exception_justification: "Not implemented."
+        policy_exception_justification:
+          "Not controlled by enterprise policy. Triggered when the user "
+          "opens the Billing pane to view plan and credit balance. "
+          "No ambient or background network activity."
       }
     )");
+
+const net::NetworkTrafficAnnotationTag kInvoicesTrafficAnnotation =
+    net::DefineNetworkTrafficAnnotation("maho_billing_invoices", R"(
+      semantics {
+        sender: "Maho Billing Invoices"
+        description:
+          "Fetches the user's billing invoice history from the Maho relay."
+        trigger: "User opens the Billing settings pane and views invoice history."
+        data: "Bearer access token in the Authorization header."
+        destination: WEBSITE
+      }
+      policy {
+        cookies_allowed: NO
+        setting: "Triggered by viewing the Billing pane; not background."
+        policy_exception_justification:
+          "Not controlled by enterprise policy. Triggered when the user "
+          "opens the Billing pane to view invoices. "
+          "No ambient or background network activity."
+      }
+    )");
+
+const net::NetworkTrafficAnnotationTag kBillingPortalTrafficAnnotation =
+    net::DefineNetworkTrafficAnnotation("maho_billing_portal", R"(
+      semantics {
+        sender: "Maho Billing Portal"
+        description:
+          "Requests a self-service billing portal session URL from the Maho relay."
+        trigger: "User clicks the Manage or Adjust Plan button in the Billing pane."
+        data: "Bearer access token in the Authorization header."
+        destination: WEBSITE
+      }
+      policy {
+        cookies_allowed: NO
+        setting: "Triggered by clicking the Manage or Adjust Plan button; not background."
+        policy_exception_justification:
+          "Not controlled by enterprise policy. Triggered when the user "
+          "requests a customer billing portal link. "
+          "No ambient or background network activity."
+      }
+    )");
+
 constexpr char kThemeStoreCacheFileName[] = "maho_theme_store_manifest_cache.json";
 constexpr char kPasswordProviderModeMahoKey[] = "autofill.password_provider";
 constexpr char kPasswordsEnabledMahoKey[] = "autofill.passwords_enabled";
@@ -1402,6 +1453,10 @@ bool MahoSettingsPageHandler::HandleFfiSetting(const std::string& key,
     int width = 0;
     if (!base::StringToInt(value, &width)) return true;
     width = std::clamp(width, 180, 400);
+    // Chromium desktop authoritative source: sidebar_prefs::kSidebarWidth is
+    // observed by MahoSidebarContainerView for live width updates. Also
+    // mirror to maho-core so iOS/Android shells stay in sync.
+    prefs_->SetInteger(maho::sidebar_prefs::kSidebarWidth, width);
     base::DictValue settings;
     base::DictValue appearance;
     appearance.Set("sidebarWidth", width);
@@ -1478,9 +1533,17 @@ void MahoSettingsPageHandler::AppendFfiSettings(
   if (const std::string* density = appearance->FindString("density")) {
     add("appearance.density", *density);
   }
-  if (auto width = appearance->FindDouble("sidebarWidth")) {
-    add("appearance.sidebar_width",
-        base::NumberToString(static_cast<int>(*width)));
+  // Sidebar width: prefer the Chromium pref (authoritative for desktop, observed
+  // by MahoSidebarContainerView). Fall back to maho-core if pref is unset.
+  {
+    int chromium_width =
+        prefs_->GetInteger(maho::sidebar_prefs::kSidebarWidth);
+    if (chromium_width > 0) {
+      add("appearance.sidebar_width", base::NumberToString(chromium_width));
+    } else if (auto width = appearance->FindDouble("sidebarWidth")) {
+      add("appearance.sidebar_width",
+          base::NumberToString(static_cast<int>(*width)));
+    }
   }
   if (auto transparency = appearance->FindBool("windowTransparency")) {
     add("appearance.window_transparency", *transparency ? "true" : "false");
@@ -1618,7 +1681,6 @@ void MahoSettingsPageHandler::GetAISettings(GetAISettingsCallback callback) {
   settings->provider = prefs_->GetString(ai::kProvider);
   settings->base_url = prefs_->GetString(ai::kBaseUrl);
   settings->model = prefs_->GetString(ai::kModel);
-  settings->opencode_runtime_enabled = false;
   settings->approval_policy = prefs_->GetString(ai::kApprovalPolicy);
   settings->session_persistence_enabled =
       prefs_->GetBoolean(ai::kSessionPersistenceEnabled);
@@ -2382,8 +2444,25 @@ void MahoSettingsPageHandler::Login(const std::string& email,
   base::DictValue body;
   body.Set("email", email);
   body.Set("password", password);
-  body.Set("device_name", "Maho Desktop");
+#if BUILDFLAG(IS_MAC)
+  body.Set("device_name", "Maho macOS");
   body.Set("device_type", "desktop");
+#elif BUILDFLAG(IS_WIN)
+  body.Set("device_name", "Maho Windows");
+  body.Set("device_type", "desktop");
+#elif BUILDFLAG(IS_LINUX)
+  body.Set("device_name", "Maho Linux");
+  body.Set("device_type", "desktop");
+#elif BUILDFLAG(IS_IOS)
+  body.Set("device_name", "Maho iOS");
+  body.Set("device_type", "mobile");
+#elif BUILDFLAG(IS_ANDROID)
+  body.Set("device_name", "Maho Android");
+  body.Set("device_type", "mobile");
+#else
+  body.Set("device_name", "Maho");
+  body.Set("device_type", "unknown");
+#endif
   std::string body_json;
   base::JSONWriter::Write(body, &body_json);
 
@@ -2473,12 +2552,12 @@ void MahoSettingsPageHandler::OnLoginResponse(
   if (account) {
     if (const std::string* v = account->FindString("email"))
       user_email = *v;
-    if (const std::string* v = account->FindString("id"))
-      user_id = *v;
+    if (std::optional<int> v_int = account->FindInt("id"))
+      user_id = base::NumberToString(*v_int);
+    else if (const std::string* v_str = account->FindString("id"))
+      user_id = *v_str;
     if (const std::string* v = account->FindString("display_name"))
       user_display_name = *v;
-    if (const std::string* v = account->FindString("tier"))
-      user_tier = *v;
   }
 
   maho::auth::StoreTokensParams params;
@@ -2523,6 +2602,12 @@ void MahoSettingsPageHandler::OnLoginResponse(
   }
 
   BroadcastAccountStatus();
+
+  // Populate tier + subscription prefs from /auth/subscription.
+  // Fire-and-forget — failure leaves tier empty until user opens Billing pane.
+  GetBillingInfo(base::BindOnce([](maho_settings::mojom::BillingInfoPtr) {
+    // Result persisted to prefs inside OnSubscriptionResponse; discard here.
+  }));
 
   std::move(callback).Run(true, "");
 }
@@ -2576,7 +2661,7 @@ void MahoSettingsPageHandler::Logout(LogoutCallback callback) {
         MahoCore* core = maho::GetCore();
         if (!core) return;
         const char* event_json = "\"SignOut\"";
-        char* result = maho_core_sign_in(core, event_json);
+        char* result = maho_core_dispatch_shell_event(core, event_json);
         if (result) maho_string_free(result);
       }));
 
@@ -2611,8 +2696,8 @@ void MahoSettingsPageHandler::GetAccountStatus(
   status->display_name = prefs_->GetString(acct::kRelayUserDisplayName);
   status->user_id = prefs_->GetString(acct::kRelayUserId);
   status->tier = prefs_->GetString(acct::kRelayUserTier);
-  status->subscription_status = "";
-  status->subscription_expires_at = 0;
+  status->subscription_status = prefs_->GetString(acct::kRelaySubscriptionStatus);
+  status->subscription_expires_at = prefs_->GetInt64(acct::kRelaySubscriptionExpiresAt);
 
   std::move(callback).Run(std::move(status));
 }
@@ -2734,7 +2819,7 @@ void MahoSettingsPageHandler::OnSubscriptionResponse(
         current_refresh, url_loader_factory,
         base::BindOnce(
             [](base::WeakPtr<MahoSettingsPageHandler> handler,
-               GetBillingInfoCallback cb, bool success,
+               GetBillingInfoCallback cb, bool success, int refresh_http_status,
                std::optional<maho::auth::RefreshedTokens> tokens) {
               auto make_empty = []() {
                 auto info = maho_settings::mojom::BillingInfo::New();
@@ -2754,8 +2839,14 @@ void MahoSettingsPageHandler::OnSubscriptionResponse(
                 return;
               }
               if (!success || !tokens || !handler->encryptor_.has_value()) {
-                maho::auth::ClearRelayTokens(handler->prefs_);
-                handler->BroadcastAccountStatus();
+                if (refresh_http_status == 401) {
+                  maho::auth::ClearRelayTokens(handler->prefs_);
+                  handler->BroadcastAccountStatus();
+                } else {
+                  DLOG(WARNING) << "Billing refresh failed (HTTP "
+                                << refresh_http_status
+                                << "); preserving auth state.";
+                }
                 std::move(cb).Run(make_empty());
                 return;
               }
@@ -2821,7 +2912,19 @@ void MahoSettingsPageHandler::OnSubscriptionResponse(
       dict.FindDouble("credit_balance_usd").value_or(0));
   info->lifetime_purchased_usd = static_cast<float>(
       dict.FindDouble("lifetime_purchased_usd").value_or(0));
-  info->has_payment_method = false;  // Backend not implemented yet.
+  info->has_payment_method = dict.FindBool("has_payment_method").value_or(false);
+
+  // Persist subscription fields to prefs for GetAccountStatus:
+  prefs_->SetString(maho::account_prefs::kRelaySubscriptionStatus, info->subscription_status);
+  prefs_->SetInt64(maho::account_prefs::kRelaySubscriptionExpiresAt, info->subscription_expires_at);
+
+  // Also store tier from subscription response (login response doesn't carry tier):
+  if (!info->tier.empty()) {
+    prefs_->SetString(maho::account_prefs::kRelayUserTier, info->tier);
+  }
+
+  // Re-broadcast so account pane updates without page reload:
+  BroadcastAccountStatus();
 
   std::move(callback).Run(std::move(info));
 }
@@ -2847,10 +2950,183 @@ void MahoSettingsPageHandler::BroadcastAccountStatus() {
     status->display_name = prefs_->GetString(acct::kRelayUserDisplayName);
     status->user_id = prefs_->GetString(acct::kRelayUserId);
     status->tier = prefs_->GetString(acct::kRelayUserTier);
-    status->subscription_status = "";
-    status->subscription_expires_at = 0;
+    status->subscription_status = prefs_->GetString(acct::kRelaySubscriptionStatus);
+    status->subscription_expires_at = prefs_->GetInt64(acct::kRelaySubscriptionExpiresAt);
   }
 
   page_->AccountStatusChanged(std::move(status));
+}
+
+void MahoSettingsPageHandler::GetInvoices(GetInvoicesCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (!encryptor_.has_value()) {
+    std::move(callback).Run(std::vector<maho_settings::mojom::InvoicePtr>());
+    return;
+  }
+
+  std::string access_token =
+      maho::auth::GetRelayAccessToken(prefs_, *encryptor_);
+  if (access_token.empty()) {
+    std::move(callback).Run(std::vector<maho_settings::mojom::InvoicePtr>());
+    return;
+  }
+
+  std::string relay_url = maho::auth::GetRelayBaseUrl();
+  GURL request_url(relay_url + "/billing/invoices");
+  if (!request_url.is_valid()) {
+    std::move(callback).Run(std::vector<maho_settings::mojom::InvoicePtr>());
+    return;
+  }
+
+  auto resource_request = std::make_unique<network::ResourceRequest>();
+  resource_request->url = request_url;
+  resource_request->method = "GET";
+  resource_request->headers.SetHeader(
+      "Authorization", "Bearer " + access_token);
+  resource_request->headers.SetHeader("Accept", "application/json");
+  resource_request->credentials_mode =
+      network::mojom::CredentialsMode::kOmit;
+
+  auto url_loader = network::SimpleURLLoader::Create(
+      std::move(resource_request), kInvoicesTrafficAnnotation);
+  url_loader->SetTimeoutDuration(base::Seconds(15));
+
+  auto url_loader_factory = profile_->GetDefaultStoragePartition()
+                                ->GetURLLoaderFactoryForBrowserProcess();
+
+  auto* raw_loader = url_loader.get();
+  raw_loader->DownloadToString(
+      url_loader_factory.get(),
+      base::BindOnce(
+          [](std::unique_ptr<network::SimpleURLLoader> loader,
+             GetInvoicesCallback cb,
+             std::optional<std::string> response_body) {
+            const int net_error = loader->NetError();
+            const int http_status =
+                (loader->ResponseInfo() && loader->ResponseInfo()->headers)
+                    ? loader->ResponseInfo()->headers->response_code()
+                    : 0;
+
+            std::vector<maho_settings::mojom::InvoicePtr> invoices;
+            if (net_error != net::OK || http_status != 200 || !response_body.has_value()) {
+              std::move(cb).Run(std::move(invoices));
+              return;
+            }
+
+            auto parsed =
+                base::JSONReader::Read(*response_body, base::JSON_PARSE_RFC);
+            if (!parsed || !parsed->is_dict()) {
+              std::move(cb).Run(std::move(invoices));
+              return;
+            }
+
+            const base::DictValue& dict = parsed->GetDict();
+            const base::ListValue* invoices_list = dict.FindList("invoices");
+            if (invoices_list) {
+              for (const auto& item : *invoices_list) {
+                if (item.is_dict()) {
+                  const base::DictValue& inv_dict = item.GetDict();
+                  auto inv = maho_settings::mojom::Invoice::New();
+                  if (const std::string* id = inv_dict.FindString("id")) {
+                    inv->id = *id;
+                  }
+                  inv->created_at = static_cast<int64_t>(
+                      inv_dict.FindDouble("created_at").value_or(0));
+                  inv->amount_usd = static_cast<float>(
+                      inv_dict.FindDouble("amount_usd").value_or(0));
+                  if (const std::string* currency = inv_dict.FindString("currency")) {
+                    inv->currency = *currency;
+                  }
+                  if (const std::string* status = inv_dict.FindString("status")) {
+                    inv->status = *status;
+                  }
+                  if (const std::string* pdf_url = inv_dict.FindString("pdf_url")) {
+                    inv->pdf_url = *pdf_url;
+                  }
+                  invoices.push_back(std::move(inv));
+                }
+              }
+            }
+
+            std::move(cb).Run(std::move(invoices));
+          },
+          std::move(url_loader), std::move(callback)),
+      /*max_body_size=*/65536);
+}
+
+void MahoSettingsPageHandler::GetBillingPortalUrl(GetBillingPortalUrlCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (!encryptor_.has_value()) {
+    std::move(callback).Run("");
+    return;
+  }
+
+  std::string access_token =
+      maho::auth::GetRelayAccessToken(prefs_, *encryptor_);
+  if (access_token.empty()) {
+    std::move(callback).Run("");
+    return;
+  }
+
+  std::string relay_url = maho::auth::GetRelayBaseUrl();
+  GURL request_url(relay_url + "/billing/portal_session");
+  if (!request_url.is_valid()) {
+    std::move(callback).Run("");
+    return;
+  }
+
+  auto resource_request = std::make_unique<network::ResourceRequest>();
+  resource_request->url = request_url;
+  resource_request->method = "POST";
+  resource_request->headers.SetHeader(
+      "Authorization", "Bearer " + access_token);
+  resource_request->headers.SetHeader("Accept", "application/json");
+  resource_request->credentials_mode =
+      network::mojom::CredentialsMode::kOmit;
+
+  auto url_loader = network::SimpleURLLoader::Create(
+      std::move(resource_request), kBillingPortalTrafficAnnotation);
+  url_loader->SetTimeoutDuration(base::Seconds(15));
+
+  auto url_loader_factory = profile_->GetDefaultStoragePartition()
+                                ->GetURLLoaderFactoryForBrowserProcess();
+
+  auto* raw_loader = url_loader.get();
+  raw_loader->DownloadToString(
+      url_loader_factory.get(),
+      base::BindOnce(
+          [](std::unique_ptr<network::SimpleURLLoader> loader,
+             GetBillingPortalUrlCallback cb,
+             std::optional<std::string> response_body) {
+            const int net_error = loader->NetError();
+            const int http_status =
+                (loader->ResponseInfo() && loader->ResponseInfo()->headers)
+                    ? loader->ResponseInfo()->headers->response_code()
+                    : 0;
+
+            if (net_error != net::OK || http_status != 200 || !response_body.has_value()) {
+              std::move(cb).Run("");
+              return;
+            }
+
+            auto parsed =
+                base::JSONReader::Read(*response_body, base::JSON_PARSE_RFC);
+            if (!parsed || !parsed->is_dict()) {
+              std::move(cb).Run("");
+              return;
+            }
+
+            const base::DictValue& dict = parsed->GetDict();
+            if (const std::string* url = dict.FindString("url")) {
+              std::move(cb).Run(*url);
+              return;
+            }
+
+            std::move(cb).Run("");
+          },
+          std::move(url_loader), std::move(callback)),
+      /*max_body_size=*/16384);
 }
 

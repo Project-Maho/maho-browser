@@ -26,6 +26,11 @@ inline constexpr char kRelayUserDisplayName[] =
     "maho.auth.relay.user.display_name";
 inline constexpr char kRelayUserTier[] = "maho.auth.relay.user.tier";
 
+inline constexpr char kRelaySubscriptionStatus[] =
+    "maho.auth.relay.subscription_status";
+inline constexpr char kRelaySubscriptionExpiresAt[] =
+    "maho.auth.relay.subscription_expires_at";
+
 }  // namespace maho::account_prefs
 
 #endif  // MAHO_BROWSER_UI_WEBUI_MAHO_ACCOUNT_PREFS_H_

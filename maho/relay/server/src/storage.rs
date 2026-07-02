@@ -196,6 +196,8 @@ where
         anniversary_reset_day: Set(None),
         verification_token: Set(None),
         verification_token_expires_at: Set(None),
+        has_payment_method: Set(false),
+        lemonsqueezy_customer_id: Set(None),
     }
     .insert(db)
     .await
@@ -452,6 +454,8 @@ pub async fn update_user_subscription<T>(
     expires_at: Option<i64>,
     period_start_at: Option<i64>,
     anniversary_reset_day: Option<i32>,
+    has_payment_method: Option<bool>,
+    customer_id: Option<String>,
 ) -> Result<(), DbErr>
 where
     T: ConnectionTrait,
@@ -469,6 +473,32 @@ where
         active.subscription_expires_at = Set(expires_at);
         active.period_start_at = Set(period_start_at);
         active.anniversary_reset_day = Set(anniversary_reset_day);
+        if let Some(hpm) = has_payment_method {
+            active.has_payment_method = Set(hpm);
+        }
+        if let Some(cid) = customer_id {
+            active.lemonsqueezy_customer_id = Set(Some(cid));
+        }
+        active.update(db).await?;
+    }
+    Ok(())
+}
+
+pub async fn update_user_payment_method_and_customer<T>(
+    db: &T,
+    user_id: i32,
+    has_payment_method: bool,
+    customer_id: Option<String>,
+) -> Result<(), DbErr>
+where
+    T: ConnectionTrait,
+{
+    if let Some(user) = users::Entity::find_by_id(user_id).one(db).await? {
+        let mut active: users::ActiveModel = user.into();
+        active.has_payment_method = Set(has_payment_method);
+        if let Some(cid) = customer_id {
+            active.lemonsqueezy_customer_id = Set(Some(cid));
+        }
         active.update(db).await?;
     }
     Ok(())

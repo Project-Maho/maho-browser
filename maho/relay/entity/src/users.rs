@@ -22,6 +22,8 @@ pub struct Model {
     pub anniversary_reset_day: Option<i32>,
     pub verification_token: Option<String>,
     pub verification_token_expires_at: Option<i64>,
+    pub has_payment_method: bool,
+    pub lemonsqueezy_customer_id: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

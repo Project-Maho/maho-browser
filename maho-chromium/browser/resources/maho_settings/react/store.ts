@@ -7,6 +7,7 @@ import type {
   AccountStatus,
   BillingInfo,
   SettingValue,
+  Invoice,
 } from '../maho_settings.mojom-webui.js';
 import {PANE_DEFINITION_MAP, PANE_DEFINITIONS} from '../schema/panes.js';
 import {SETTING_METADATA} from '../schema/setting_schema.js';
@@ -23,6 +24,9 @@ export interface SettingsState {
   readonly billingError: string;
   readonly billingInfo: BillingInfo | null;
   readonly billingLoading: boolean;
+  readonly invoices: Invoice[];
+  readonly invoicesLoading: boolean;
+  readonly invoicesError: string;
   readonly currentPaneKey: string;
   readonly lastActionError: string | null;
   readonly savingKeys: ReadonlySet<string>;
@@ -31,13 +35,13 @@ export interface SettingsState {
 
 function createSignedOutAccountStatus(): AccountStatus {
   return {
-    signed_in: false,
+    signedIn: false,
     email: '',
-    display_name: '',
-    user_id: '',
+    displayName: '',
+    userId: '',
     tier: '',
-    subscription_status: '',
-    subscription_expires_at: 0n,
+    subscriptionStatus: '',
+    subscriptionExpiresAt: 0n,
   };
 }
 
@@ -98,6 +102,9 @@ function createInitialState(): SettingsState {
     billingError: '',
     billingInfo: null,
     billingLoading: false,
+    invoices: [],
+    invoicesLoading: false,
+    invoicesError: '',
     currentPaneKey: paneKeyFromCurrentUrl(),
     lastActionError: null,
     savingKeys: new Set<string>(),
@@ -132,13 +139,17 @@ export class MahoSettingsStore {
         accountError: '',
         accountLoading: false,
         accountStatus: status,
-        billingError: status.signed_in ? state.billingError : '',
-        billingInfo: status.signed_in ? state.billingInfo : null,
-        billingLoading: status.signed_in ? state.billingLoading : false,
+        billingError: status.signedIn ? state.billingError : '',
+        billingInfo: status.signedIn ? state.billingInfo : null,
+        billingLoading: status.signedIn ? state.billingLoading : false,
+        invoices: status.signedIn ? state.invoices : [],
+        invoicesError: status.signedIn ? state.invoicesError : '',
+        invoicesLoading: status.signedIn ? state.invoicesLoading : false,
       }));
 
-      if (status.signed_in) {
+      if (status.signedIn) {
         void this.refreshBilling();
+        void this.refreshInvoices();
       }
     });
 
@@ -219,9 +230,9 @@ export class MahoSettingsStore {
         ...state,
         accountLoading: false,
         accountStatus: status,
-        billingError: status.signed_in ? state.billingError : '',
-        billingInfo: status.signed_in ? state.billingInfo : null,
-        billingLoading: status.signed_in ? state.billingLoading : false,
+        billingError: status.signedIn ? state.billingError : '',
+        billingInfo: status.signedIn ? state.billingInfo : null,
+        billingLoading: status.signedIn ? state.billingLoading : false,
       }));
     } catch (error) {
       this.patch(state => ({
@@ -254,6 +265,7 @@ export class MahoSettingsStore {
 
       await this.refreshAccountStatus();
       await this.refreshBilling();
+      await this.refreshInvoices();
       return {success: true};
     } catch (error) {
       const message = formatActionError(error);
@@ -284,12 +296,15 @@ export class MahoSettingsStore {
         billingError: '',
         billingInfo: null,
         billingLoading: false,
+        invoices: [],
+        invoicesLoading: false,
+        invoicesError: '',
       }));
     }
   }
 
   async refreshBilling(): Promise<void> {
-    if (!this.state.accountStatus?.signed_in) {
+    if (!this.state.accountStatus?.signedIn) {
       this.patch(state => ({
         ...state,
         billingError: '',
@@ -317,6 +332,39 @@ export class MahoSettingsStore {
         ...state,
         billingError: formatActionError(error),
         billingLoading: false,
+      }));
+    }
+  }
+
+  async refreshInvoices(): Promise<void> {
+    if (!this.state.accountStatus?.signedIn) {
+      this.patch(state => ({
+        ...state,
+        invoices: [],
+        invoicesLoading: false,
+        invoicesError: '',
+      }));
+      return;
+    }
+
+    this.patch(state => ({
+      ...state,
+      invoicesError: '',
+      invoicesLoading: true,
+    }));
+
+    try {
+      const {invoices} = await this.pageHandler.getInvoices();
+      this.patch(state => ({
+        ...state,
+        invoices,
+        invoicesLoading: false,
+      }));
+    } catch (error) {
+      this.patch(state => ({
+        ...state,
+        invoicesError: formatActionError(error),
+        invoicesLoading: false,
       }));
     }
   }

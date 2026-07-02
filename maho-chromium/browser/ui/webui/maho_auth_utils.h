@@ -69,6 +69,7 @@ struct RefreshedTokens {
 };
 using RefreshCallback =
     base::OnceCallback<void(bool success,
+                            int http_status,
                             std::optional<RefreshedTokens> tokens)>;
 void RefreshAccessToken(
     const std::string& current_refresh_token,

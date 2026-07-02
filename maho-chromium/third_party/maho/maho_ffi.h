@@ -146,6 +146,13 @@ char *maho_core_sign_in(struct MahoCore *ptr, const char *event_json);
  * `ptr` must be a valid pointer returned by `maho_core_new`.
  * Caller must free the returned string with `maho_string_free`.
  */
+char *maho_core_dispatch_shell_event(struct MahoCore *ptr, const char *event_json);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
 char *maho_core_tick(struct MahoCore *ptr);
 
 /**
@@ -173,23 +180,14 @@ char *maho_core_get_space_tabs(struct MahoCore *ptr,
 void maho_core_release_window_tabs(struct MahoCore *ptr, int64_t window_id);
 
 /**
- * Close non-pinned tabs whose `last_active_at` is strictly older than `cutoff_ts` (epoch seconds).
- * Returns the number of tabs closed, or -1 on null pointer or internal error.
- *
- * # Safety
- * `core` must be a valid pointer returned by `maho_core_new`.
- */
-int32_t maho_core_close_tabs_older_than(struct MahoCore *core, int64_t cutoff_ts);
-
-/**
- * Returns JSON array of non-pinned tab IDs older than `cutoff_ts` (epoch seconds).
+ * Returns JSON array of non-pinned tab IDs older than `cutoff_ts` (epoch seconds) in the given `space_id`.
  * Read-only — does NOT modify state. Caller frees the returned string with
  * `maho_string_free`. Returns NULL on null pointer or internal error.
  *
  * # Safety
- * `core` must be a valid pointer returned by `maho_core_new`.
+ * `core` and `space_id` must be valid pointers.
  */
-char *maho_core_find_tabs_older_than(struct MahoCore *core, int64_t cutoff_ts);
+char *maho_core_find_tabs_older_than(struct MahoCore *core, int64_t cutoff_ts, const char *space_id);
 
 /**
  * # Safety

@@ -55,7 +55,10 @@ const net::NetworkTrafficAnnotationTag kRefreshTrafficAnnotation =
         cookies_allowed: NO
         setting:
           "Active while the user is signed in to Maho."
-        policy_exception_justification: "Not implemented."
+        policy_exception_justification:
+          "Not controlled by enterprise policy. Triggered when the browser "
+          "receives a 401 response and attempts to refresh the access token "
+          "using the stored refresh token. No ambient or background network activity."
       }
     )");
 
@@ -137,6 +140,8 @@ void ClearRelayTokens(PrefService* prefs) {
   prefs->ClearPref(maho::account_prefs::kRelayUserId);
   prefs->ClearPref(maho::account_prefs::kRelayUserDisplayName);
   prefs->ClearPref(maho::account_prefs::kRelayUserTier);
+  prefs->ClearPref(maho::account_prefs::kRelaySubscriptionStatus);
+  prefs->ClearPref(maho::account_prefs::kRelaySubscriptionExpiresAt);
 }
 
 std::string GetRelayBaseUrl() {
@@ -152,7 +157,7 @@ void RefreshAccessToken(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     RefreshCallback callback) {
   if (current_refresh_token.empty()) {
-    std::move(callback).Run(false, std::nullopt);
+    std::move(callback).Run(false, 0, std::nullopt);
     return;
   }
 
@@ -187,14 +192,14 @@ void RefreshAccessToken(
                     : 0;
 
             if (net_error != net::OK || http_status != 200 || !response_body) {
-              std::move(cb).Run(false, std::nullopt);
+              std::move(cb).Run(false, http_status, std::nullopt);
               return;
             }
 
             auto parsed = base::JSONReader::Read(
                 *response_body, base::JSON_PARSE_RFC);
             if (!parsed || !parsed->is_dict()) {
-              std::move(cb).Run(false, std::nullopt);
+              std::move(cb).Run(false, http_status, std::nullopt);
               return;
             }
 
@@ -202,7 +207,7 @@ void RefreshAccessToken(
             const std::string* new_access = dict.FindString("access_token");
             const std::string* new_refresh = dict.FindString("refresh_token");
             if (!new_access || !new_refresh) {
-              std::move(cb).Run(false, std::nullopt);
+              std::move(cb).Run(false, http_status, std::nullopt);
               return;
             }
 
@@ -215,7 +220,7 @@ void RefreshAccessToken(
             tokens.refresh_expires_at = static_cast<int64_t>(
                 dict.FindDouble("refresh_expires_at").value_or(0));
 
-            std::move(cb).Run(true, std::move(tokens));
+            std::move(cb).Run(true, http_status, std::move(tokens));
           },
           std::move(url_loader), std::move(callback)),
       /*max_body_size=*/16384);

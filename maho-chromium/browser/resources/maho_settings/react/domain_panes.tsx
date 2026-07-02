@@ -19,7 +19,7 @@ import {
   SelectValue,
 } from '@ui/select';
 import {Switch} from '@ui/switch';
-import {AlertCircle, ArrowUpRight, Sparkles} from '@icons/lucide';
+import {AlertCircle, ArrowUpRight, Sparkles, Download, ExternalLink} from '@icons/lucide';
 import {cn} from '@lib/utils';
 import {PasswordProviderKind} from '../mojo.js';
 import type {AccountStatus, BillingInfo} from '../maho_settings.mojom-webui.js';
@@ -161,6 +161,35 @@ function formatUsd(amount: number): string {
   return USD_FORMATTER.format(Math.max(0, amount));
 }
 
+interface ProgressProps extends React.HTMLAttributes<HTMLDivElement> {
+  value?: number;
+}
+
+const Progress = React.forwardRef<HTMLDivElement, ProgressProps>(
+  ({ className, value, ...props }, ref) => {
+    return (
+      <div
+        ref={ref}
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={value}
+        className={cn(
+          "relative h-2.5 w-full overflow-hidden rounded-full bg-muted/80 backdrop-blur-sm border border-border/20 shadow-inner",
+          className
+        )}
+        {...props}
+      >
+        <div
+          className="h-full w-full flex-1 rounded-full bg-gradient-to-r from-success/80 to-success transition-all duration-500 ease-out shadow-[0_0_12px_rgba(34,197,94,0.3)]"
+          style={{ transform: `translateX(-${100 - (value || 0)}%)` }}
+        />
+      </div>
+    );
+  }
+);
+Progress.displayName = "Progress";
+
 function useSettingsStoreState(store: MahoSettingsStore) {
   return useSyncExternalStore(
       listener => store.subscribe(listener), () => store.getSnapshot());
@@ -286,7 +315,7 @@ function AccountPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
     );
   }
 
-  if (!account?.signed_in) {
+  if (!account?.signedIn) {
     return (
       <DomainPaneSection pane={pane}>
         <Card className="max-w-md border-border/70 bg-card/95 shadow-sm">
@@ -364,7 +393,7 @@ function AccountPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
   const tierLabel = formatPlanLabel(account.tier);
   const planBadgeVariant: 'default' | 'secondary' =
       account.tier && account.tier !== 'free' ? 'default' : 'secondary';
-  const renewDate = formatBillingDate(account.subscription_expires_at);
+  const renewDate = formatBillingDate(account.subscriptionExpiresAt);
 
   return (
     <DomainPaneSection pane={pane}>
@@ -375,12 +404,12 @@ function AccountPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
               <CardTitle className="text-2xl tracking-tight">{account.email}</CardTitle>
               <CardDescription className="flex flex-wrap items-center gap-2">
                 <Badge variant={planBadgeVariant}>{tierLabel} plan</Badge>
-                {account.display_name ? <span>{account.display_name}</span> : null}
-                {account.subscription_status ? <span>· {account.subscription_status}</span> : null}
+                {account.displayName ? <span>{account.displayName}</span> : null}
+                {account.subscriptionStatus ? <span>· {account.subscriptionStatus}</span> : null}
               </CardDescription>
             </div>
             <div className="grid gap-1 text-sm text-muted-foreground">
-              {account.user_id ? <p>Account ID: {account.user_id}</p> : null}
+              {account.userId ? <p>Account ID: {account.userId}</p> : null}
               {renewDate ? <p>Next renewal on {renewDate}</p> : null}
             </div>
           </div>
@@ -916,22 +945,33 @@ function BillingPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
   const billing = state.billingInfo;
   const error = state.billingError;
   const loading = state.billingLoading;
+  const invoices = state.invoices;
 
   useEffect(() => {
     void store.refreshAccountStatus();
   }, [store]);
 
   useEffect(() => {
-    if (account?.signed_in) {
+    if (account?.signedIn) {
       void store.refreshBilling();
+      void store.refreshInvoices();
     }
-  }, [account?.signed_in, store]);
+  }, [account?.signedIn, store]);
 
-  const openBillingPortal = () => {
-    window.open('https://billing.stripe.com/', '_blank', 'noopener');
+  const openBillingPortal = async () => {
+    try {
+      const {url} = await store.getHandler().getBillingPortalUrl();
+      if (url) {
+        window.open(url, '_blank', 'noopener');
+      } else {
+        window.open('https://app.lemonsqueezy.com/my-orders', '_blank', 'noopener');
+      }
+    } catch {
+      window.open('https://app.lemonsqueezy.com/my-orders', '_blank', 'noopener');
+    }
   };
 
-  if (!account?.signed_in) {
+  if (!account?.signedIn) {
     return (
       <DomainPaneSection pane={pane}>
         <Card className="max-w-xl border-border/70 bg-card/95 shadow-sm">
@@ -987,15 +1027,15 @@ function BillingPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
   const tier = billing.tier || account.tier;
   const tierLabel = formatPlanLabel(tier);
   const renewDate = formatBillingDate(
-      billing.subscription_expires_at || account.subscription_expires_at);
-  const creditLimit = billing.tier_ceiling_usd;
-  const creditBalance = billing.credit_balance_usd;
+      billing.subscriptionExpiresAt || account.subscriptionExpiresAt);
+  const creditLimit = billing.tierCeilingUsd;
+  const creditBalance = billing.creditBalanceUsd;
   const remainingPct = creditLimit > 0 ?
       Math.max(0, Math.min(100, Math.round((creditBalance / creditLimit) * 1000) / 10)) :
       0;
   const progressValue = creditLimit > 0 ? remainingPct : creditBalance > 0 ? 100 : 0;
   const statusBadgeVariant: 'success' | 'secondary' =
-      billing.subscription_status === 'active' ? 'success' : 'secondary';
+      billing.subscriptionStatus === 'active' ? 'success' : 'secondary';
 
   return (
     <DomainPaneSection pane={pane}>
@@ -1005,7 +1045,7 @@ function BillingPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
             <div className="space-y-2">
               <div className="flex flex-wrap items-center gap-2">
                 <CardTitle>Overview</CardTitle>
-                <Badge variant={statusBadgeVariant}>{billing.subscription_status || 'No subscription'}</Badge>
+                <Badge variant={statusBadgeVariant}>{billing.subscriptionStatus || 'No subscription'}</Badge>
               </div>
               <CardDescription>Plan details, renewal timing, and payment status for your Maho account.</CardDescription>
             </div>
@@ -1028,7 +1068,7 @@ function BillingPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
             <div className="rounded-xl border border-border/70 bg-background/60 p-4">
               <p className="text-sm font-medium text-muted-foreground">Payment method</p>
               <p className="mt-3 text-lg font-semibold tracking-tight">
-                {billing.has_payment_method ? 'Payment method on file' : 'No payment method'}
+                {billing.hasPaymentMethod ? 'Payment method on file' : 'No payment method'}
               </p>
               <p className="mt-2 text-sm text-muted-foreground">Update cards, receipts, and billing details in Stripe.</p>
               <Button className="mt-4" size="sm" type="button" variant="outline" onClick={openBillingPortal}>
@@ -1066,20 +1106,13 @@ function BillingPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
                 </div>
                 {loading ? <Badge variant="secondary">Refreshing…</Badge> : null}
               </div>
-              <div
-                aria-valuemax={100}
-                aria-valuemin={0}
-                aria-valuenow={progressValue}
-                className="h-3 overflow-hidden rounded-full bg-muted/80"
-                role="progressbar">
-                <div className="h-full rounded-full bg-success transition-all" style={{width: `${progressValue}%`}} />
-              </div>
+              <Progress value={progressValue} />
               <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
                 <span>
                   {renewDate ? `Resets to ${formatUsd(creditLimit)} on ${renewDate}.` : 'Your next reset date will appear here.'}
                 </span>
-                {billing.lifetime_purchased_usd > 0 ? (
-                  <span>Purchased {formatUsd(billing.lifetime_purchased_usd)} total</span>
+                {billing.lifetimePurchasedUsd > 0 ? (
+                  <span>Purchased {formatUsd(billing.lifetimePurchasedUsd)} total</span>
                 ) : null}
               </div>
             </div>
@@ -1087,17 +1120,82 @@ function BillingPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
         </Card>
 
         <Card className="border-border/70 bg-card/95 shadow-sm">
-          <CardHeader>
-            <CardTitle>Invoices</CardTitle>
-            <CardDescription>Receipts and invoices will appear here after your first paid charge.</CardDescription>
+          <CardHeader className="flex-row items-center justify-between">
+            <div className="space-y-1">
+              <CardTitle>Invoices</CardTitle>
+              <CardDescription>Receipts and invoices will appear here after your first paid charge.</CardDescription>
+            </div>
+            {state.invoicesLoading && <Badge variant="secondary">Loading…</Badge>}
           </CardHeader>
           <CardContent>
-            <div className="grid min-h-36 place-items-center rounded-xl border border-dashed border-border/70 bg-background/40 px-6 py-10 text-center">
-              <div className="space-y-1">
-                <p className="text-base font-semibold tracking-tight">No invoices yet</p>
-                <p className="text-sm text-muted-foreground">Invoices will appear after your first payment.</p>
+            {state.invoicesError ? (
+              <Alert className="border-destructive/60 bg-destructive/10 text-destructive shadow-sm" variant="destructive">
+                <AlertCircle className="size-4" />
+                <AlertTitle>Failed to load invoices</AlertTitle>
+                <AlertDescription>{state.invoicesError}</AlertDescription>
+              </Alert>
+            ) : invoices.length === 0 ? (
+              <div className="grid min-h-36 place-items-center rounded-xl border border-dashed border-border/70 bg-background/40 px-6 py-10 text-center">
+                <div className="space-y-1">
+                  <p className="text-base font-semibold tracking-tight">No invoices yet</p>
+                  <p className="text-sm text-muted-foreground">Invoices will appear after your first payment.</p>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="overflow-x-auto rounded-xl border border-border/70 bg-background/60">
+                <table className="w-full text-left border-collapse text-sm">
+                  <thead>
+                    <tr className="border-b border-border/60 bg-muted/30 text-muted-foreground font-medium">
+                      <th className="p-3">Date</th>
+                      <th className="p-3">Amount</th>
+                      <th className="p-3">Status</th>
+                      <th className="p-3 text-right">PDF</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/40">
+                    {invoices.map(invoice => (
+                      <tr key={invoice.id} className="hover:bg-muted/10 transition-colors">
+                        <td className="p-3 font-medium whitespace-nowrap">
+                          {formatBillingDate(invoice.createdAt) || 'N/A'}
+                        </td>
+                        <td className="p-3 whitespace-nowrap">
+                          {formatUsd(invoice.amountUsd)} {invoice.currency?.toUpperCase() || 'USD'}
+                        </td>
+                        <td className="p-3 whitespace-nowrap">
+                          <Badge
+                            variant={
+                              invoice.status === 'paid'
+                                ? 'success'
+                                : invoice.status === 'void' || invoice.status === 'failed'
+                                ? 'destructive'
+                                : 'warning'
+                            }
+                          >
+                            {invoice.status}
+                          </Badge>
+                        </td>
+                        <td className="p-3 text-right whitespace-nowrap">
+                          {invoice.pdfUrl ? (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              type="button"
+                              onClick={() => window.open(invoice.pdfUrl, '_blank', 'noopener')}
+                              title="Download PDF Invoice"
+                            >
+                              <Download className="size-3.5 mr-1" />
+                              PDF
+                            </Button>
+                          ) : (
+                            <span className="text-muted-foreground text-xs">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -1433,11 +1531,14 @@ function ThemeStorePane({pane, store}: {pane: PaneDefinition; store: MahoSetting
     <DomainPaneSection pane={pane}>
       {state.status === 'loading' ? <PaneLoading message="Loading themes…" /> : null}
       {state.status === 'loaded' && state.data.themes.length === 0 && !state.data.success ? (
-        <PaneRetry
-          message="We could not load the theme catalog right now. Check your connection and try again."
-          title="Theme store unavailable"
-          onRetry={() => void loadThemeStore()}
-        />
+        <section className={RETRY_ROW_CLASS}>
+          <div className={SETTING_COPY_CLASS}>
+            <h4 className={SETTING_TITLE_CLASS}>Theme store coming soon</h4>
+            <p className={SETTING_DESCRIPTION_CLASS}>
+              We're building a community theme catalog. Once it's ready, browse and apply themes here.
+            </p>
+          </div>
+        </section>
       ) : null}
       {state.status === 'loaded' && !(state.data.themes.length === 0 && !state.data.success) ? (
         <>

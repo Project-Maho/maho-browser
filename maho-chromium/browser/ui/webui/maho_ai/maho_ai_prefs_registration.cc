@@ -47,6 +47,10 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterStringPref(
       account_prefs::kRelayUserDisplayName, std::string());
   registry->RegisterStringPref(account_prefs::kRelayUserTier, std::string());
+  registry->RegisterStringPref(
+      account_prefs::kRelaySubscriptionStatus, std::string());
+  registry->RegisterInt64Pref(
+      account_prefs::kRelaySubscriptionExpiresAt, 0);
 }
 
 }  // namespace maho::ai

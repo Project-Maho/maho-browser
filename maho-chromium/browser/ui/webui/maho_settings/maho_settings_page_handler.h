@@ -158,6 +158,8 @@ class MahoSettingsPageHandler
   void Logout(LogoutCallback callback) override;
   void GetAccountStatus(GetAccountStatusCallback callback) override;
   void GetBillingInfo(GetBillingInfoCallback callback) override;
+  void GetInvoices(GetInvoicesCallback callback) override;
+  void GetBillingPortalUrl(GetBillingPortalUrlCallback callback) override;
 
   // maho::MahoExtensionStateBridge::Observer:
   void OnInstalledExtensionsChanged() override;

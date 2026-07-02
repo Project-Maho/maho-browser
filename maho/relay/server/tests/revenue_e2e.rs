@@ -509,8 +509,8 @@ async fn test_stale_period_webhook_rejected() {
             "attributes": {
                 "variant_id": 1001,
                 "status": "active",
-                "created_at": "2026-01-01T12:00:00Z",
-                "renews_at": "2026-02-01T12:00:00Z"
+                "created_at": "2026-01-05T12:00:00Z",
+                "renews_at": "2026-02-05T12:00:00Z"
             }
         }
     });

@@ -10,6 +10,8 @@ use crate::storage;
 use sha2::Sha256;
 use hmac::{Hmac, Mac};
 use chrono::{Datelike, TimeZone, Utc};
+use crate::auth::middleware::BearerAuth;
+use crate::auth::models::{InvoiceEntry, InvoicesResponse};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -45,6 +47,12 @@ pub struct WebhookAttributes {
     pub renews_at: Option<String>,
     pub created_at: Option<String>,
     pub total: Option<i32>, // in cents
+    pub customer_id: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PortalSessionResponse {
+    pub url: String,
 }
 
 // Verify LemonSqueezy signature (R-2)
@@ -218,6 +226,20 @@ pub async fn lemonsqueezy_webhook(
         let period_start_sec = calculate_period_start(created_at_sec);
         let period_start_at = Some(period_start_sec);
 
+        let customer_id_str = payload.data.attributes.customer_id.as_ref().map(|v| match v {
+            serde_json::Value::Number(n) => n.to_string(),
+            serde_json::Value::String(s) => s.clone(),
+            _ => v.to_string(),
+        });
+
+        let has_payment = if event_name == "subscription_created" {
+            Some(true)
+        } else if event_name == "subscription_cancelled" || event_name == "subscription_expired" {
+            Some(false)
+        } else {
+            None
+        };
+
         if let Err(e) = storage::update_user_subscription(
             &state.db,
             user_id,
@@ -226,6 +248,8 @@ pub async fn lemonsqueezy_webhook(
             expires_at,
             period_start_at,
             anniversary_reset_day,
+            has_payment,
+            customer_id_str,
         ).await {
             return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to update user subscription: {e}")).into_response();
         }
@@ -290,6 +314,15 @@ pub async fn lemonsqueezy_webhook(
         let status = payload.data.attributes.status.clone().unwrap_or_default();
 
         if status == "paid" || status == "completed" || status.is_empty() {
+            let customer_id_str = payload.data.attributes.customer_id.as_ref().map(|v| match v {
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::String(s) => s.clone(),
+                _ => v.to_string(),
+            });
+            if let Err(e) = storage::update_user_payment_method_and_customer(&state.db, user_id, true, customer_id_str).await {
+                tracing::error!("Failed to update payment method for user {}: {}", user_id, e);
+            }
+
             // PAYG credit packs: 4001=$10, 4002=$50, 4003=$100
             // Legacy variants 3001-3003 (v1 subscription top-ups) are deliberately NOT aliased here:
             // they fall through to the `total / 100` fallback, which gives the actual v1 amount the
@@ -478,6 +511,158 @@ pub async fn lemonsqueezy_webhook(
     (StatusCode::OK, "Webhook processed successfully").into_response()
 }
 
+pub async fn portal_session(
+    State(_state): State<Arc<AppState>>,
+    auth: BearerAuth,
+) -> Result<axum::Json<PortalSessionResponse>, StatusCode> {
+    let user = auth.0.user;
+    
+    // Check if user has lemonsqueezy_customer_id
+    let customer_id = match user.lemonsqueezy_customer_id {
+        Some(id) if !id.trim().is_empty() => id,
+        _ => {
+            return Ok(axum::Json(PortalSessionResponse {
+                url: "https://app.lemonsqueezy.com/my-orders".to_string(),
+            }));
+        }
+    };
+
+    let api_key = match std::env::var("LEMONSQUEEZY_API_KEY") {
+        Ok(key) if !key.trim().is_empty() => key,
+        _ => {
+            tracing::warn!("LEMONSQUEEZY_API_KEY is not set; returning fallback billing portal URL");
+            return Ok(axum::Json(PortalSessionResponse {
+                url: "https://app.lemonsqueezy.com/my-orders".to_string(),
+            }));
+        }
+    };
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("https://api.lemonsqueezy.com/v1/customers/{}", customer_id))
+        .bearer_auth(api_key)
+        .header("Accept", "application/vnd.api+json")
+        .header("Content-Type", "application/vnd.api+json")
+        .send()
+        .await;
+
+    match response {
+        Ok(resp) if resp.status().is_success() => {
+            #[derive(Deserialize)]
+            struct LSResponse {
+                data: LSData,
+            }
+            #[derive(Deserialize)]
+            struct LSData {
+                attributes: LSAttributes,
+            }
+            #[derive(Deserialize)]
+            struct LSAttributes {
+                urls: LSUrls,
+            }
+            #[derive(Deserialize)]
+            struct LSUrls {
+                customer_portal: String,
+            }
+
+            if let Ok(ls_resp) = resp.json::<LSResponse>().await {
+                return Ok(axum::Json(PortalSessionResponse {
+                    url: ls_resp.data.attributes.urls.customer_portal,
+                }));
+            }
+        }
+        Ok(resp) => {
+            tracing::error!("LemonSqueezy Customers API returned status {}", resp.status());
+        }
+        Err(e) => {
+            tracing::error!("Failed to request LemonSqueezy Customers API: {}", e);
+        }
+    }
+
+    Ok(axum::Json(PortalSessionResponse {
+        url: "https://app.lemonsqueezy.com/my-orders".to_string(),
+    }))
+}
+
+pub async fn invoices(
+    State(_state): State<Arc<AppState>>,
+    auth: BearerAuth,
+) -> Result<axum::Json<InvoicesResponse>, StatusCode> {
+    let user = auth.0.user;
+    
+    let api_key = match std::env::var("LEMONSQUEEZY_API_KEY") {
+        Ok(key) if !key.trim().is_empty() => key,
+        _ => {
+            return Ok(axum::Json(InvoicesResponse { invoices: vec![] }));
+        }
+    };
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get("https://api.lemonsqueezy.com/v1/orders")
+        .query(&[("filter[user_email]", &user.email)])
+        .bearer_auth(api_key)
+        .header("Accept", "application/vnd.api+json")
+        .header("Content-Type", "application/vnd.api+json")
+        .send()
+        .await;
+
+    match response {
+        Ok(resp) if resp.status().is_success() => {
+            #[derive(Deserialize)]
+            struct LSOrdersResponse {
+                data: Vec<LSOrderData>,
+            }
+            #[derive(Deserialize)]
+            struct LSOrderData {
+                id: String,
+                attributes: LSOrderAttributes,
+            }
+            #[derive(Deserialize)]
+            struct LSOrderAttributes {
+                created_at: String,
+                total: i64,
+                currency: String,
+                status: String,
+                urls: LSOrderUrls,
+            }
+            #[derive(Deserialize)]
+            struct LSOrderUrls {
+                receipt: Option<String>,
+            }
+
+            if let Ok(ls_resp) = resp.json::<LSOrdersResponse>().await {
+                let mut invoices = Vec::new();
+                for order in ls_resp.data {
+                    let created_at = chrono::DateTime::parse_from_rfc3339(&order.attributes.created_at)
+                        .map(|dt| dt.timestamp())
+                        .unwrap_or(0);
+                    invoices.push(InvoiceEntry {
+                        id: order.id,
+                        created_at,
+                        amount_usd: (order.attributes.total as f64) / 100.0,
+                        currency: order.attributes.currency,
+                        status: order.attributes.status,
+                        pdf_url: order.attributes.urls.receipt.unwrap_or_default(),
+                    });
+                }
+                return Ok(axum::Json(InvoicesResponse { invoices }));
+            }
+        }
+        Ok(resp) => {
+            tracing::error!("LemonSqueezy Orders API returned status {}", resp.status());
+        }
+        Err(e) => {
+            tracing::error!("Failed to request LemonSqueezy Orders API: {}", e);
+        }
+    }
+
+    Ok(axum::Json(InvoicesResponse { invoices: vec![] }))
+}
+
 pub fn router() -> axum::Router<Arc<AppState>> {
-    axum::Router::new().route("/lemonsqueezy", axum::routing::post(lemonsqueezy_webhook))
+    axum::Router::new()
+        .route("/lemonsqueezy", axum::routing::post(lemonsqueezy_webhook))
+        .route("/portal_session", axum::routing::post(portal_session))
+        .route("/invoices", axum::routing::get(invoices))
 }

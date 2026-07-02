@@ -246,3 +246,31 @@ pub struct AdminSetCreditBalanceResponse {
     pub user_id: i32,
     pub new_balance_usd: f64,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SubscriptionResponse {
+    pub tier: String,
+    pub subscription_status: String,
+    pub subscription_expires_at: Option<i64>,
+    pub period_start_at: Option<i64>,
+    pub anniversary_reset_day: Option<i32>,
+    pub tier_ceiling_usd: f64,
+    pub credit_balance_usd: f64,
+    pub lifetime_purchased_usd: f64,
+    pub has_payment_method: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InvoiceEntry {
+    pub id: String,
+    pub created_at: i64,
+    pub amount_usd: f64,
+    pub currency: String,
+    pub status: String,  // "paid", "pending", "refunded"
+    pub pdf_url: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InvoicesResponse {
+    pub invoices: Vec<InvoiceEntry>,
+}

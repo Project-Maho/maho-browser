@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
-use sea_orm::{DatabaseTransaction, TransactionTrait};
+use sea_orm::{DatabaseTransaction, EntityTrait, TransactionTrait};
 
 use crate::auth::middleware::BearerAuth;
 use crate::auth::models::{
@@ -15,7 +15,7 @@ use crate::auth::models::{
     AdminSetCreditBalanceRequest, AdminSetCreditBalanceResponse,
     AuthResponse, ConsumeBypassRequest, ConsumeBypassResponse, DeleteDeviceResponse, ErrorResponse,
     LoginRequest, LogoutResponse, MeResponse, PublicDevice, PublicSession, PublicUser,
-    RefreshRequest, SignupRequest,
+    RefreshRequest, SignupRequest, SubscriptionResponse,
     IntrospectRequest, IntrospectResponse, VerifyRequest, VerifyResponse, RequestVerifyResponse,
 };
 use crate::auth::passwords::{hash_password, verify_password};
@@ -56,6 +56,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/logout", post(logout))
         .route("/refresh", post(refresh))
         .route("/me", get(me))
+        .route("/subscription", get(subscription))
         .route("/devices/{id}", delete(delete_device))
         .route("/introspect", post(introspect))
         .route("/request_verify", post(request_verify))
@@ -250,6 +251,40 @@ async fn me(
         devices,
         current_device: PublicDevice::from(auth.0.device),
         current_session: PublicSession::from(auth.0.session),
+    }))
+}
+
+fn tier_ceiling_usd(tier: &str) -> f64 {
+    match tier {
+        "pro" => 2.10,
+        "max" => 13.30,
+        _ => 0.50,
+    }
+}
+
+async fn subscription(
+    State(state): State<Arc<AppState>>,
+    auth: BearerAuth,
+) -> Result<Json<SubscriptionResponse>, ApiError> {
+    let user = auth.0.user;
+    let credits_row = maho_relay_entity::credits::Entity::find_by_id(user.id)
+        .one(&state.db)
+        .await
+        .map_err(|_| ApiError::internal("failed to load credits"))?;
+    let (credit_balance_usd, lifetime_purchased_usd) = credits_row
+        .map(|row| (row.balance_usd, row.lifetime_purchased_usd))
+        .unwrap_or((0.0, 0.0));
+
+    Ok(Json(SubscriptionResponse {
+        tier_ceiling_usd: tier_ceiling_usd(&user.tier),
+        tier: user.tier,
+        subscription_status: user.subscription_status,
+        subscription_expires_at: user.subscription_expires_at,
+        period_start_at: user.period_start_at,
+        anniversary_reset_day: user.anniversary_reset_day,
+        credit_balance_usd,
+        lifetime_purchased_usd,
+        has_payment_method: user.has_payment_method,
     }))
 }
 
