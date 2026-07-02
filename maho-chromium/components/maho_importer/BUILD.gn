@@ -1,0 +1,13 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+# Use of this source code is governed by the same license as the chromium-src
+# directory.
+
+import("//mojo/public/tools/bindings/mojom.gni")
+
+# Bit-mask constants shared across the shell → EssentialImporter FFI path.
+# Consumers: maho/browser/importer/importers/essential_importer.cc and its
+# BUILD.gn public_deps entry.
+mojom("maho_importer_mojo_bindings") {
+  sources = [ "maho_importer_constants.mojom" ]
+  cpp_only = true
+}

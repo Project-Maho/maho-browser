@@ -1,0 +1,19 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+# Use of this source code is governed by the same license as the chromium-src
+# directory.
+
+import("//build/buildflag_header.gni")
+
+declare_args() {
+  # When true, register the maho_test WebUI surface (chrome://maho-test) in
+  # the Chromium WebUI config map. Enabled by default for development builds;
+  # release channels can flip this to false via args_{mac,linux,win}.gn.
+  enable_maho_test_webui = true
+}
+
+buildflag_header("maho_test_buildflags") {
+  header = "maho_test_buildflags.h"
+  flags = [
+    "ENABLE_MAHO_TEST_WEBUI=$enable_maho_test_webui",
+  ]
+}
