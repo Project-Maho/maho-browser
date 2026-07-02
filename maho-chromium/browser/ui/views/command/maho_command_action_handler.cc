@@ -321,10 +321,24 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
       tab_num = action_id[11] - '0';
     }
     if (tab_num >= 1 && tab_num <= 9) {
-      if (tab_num == 9) {
-        chrome::SelectLastTab(browser);
-      } else {
-        chrome::SelectNumberedTab(browser, tab_num - 1);
+      bool activated = false;
+      if (tab_num <= 8) {
+        auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
+        auto* container = browser_view
+            ? static_cast<MahoSidebarContainerView*>(
+                  browser_view->maho_sidebar_container())
+            : nullptr;
+        if (container) {
+          activated = container->TryActivateFavoriteByIndex(
+              static_cast<size_t>(tab_num - 1));
+        }
+      }
+      if (!activated) {
+        if (tab_num == 9) {
+          chrome::SelectLastTab(browser);
+        } else {
+          chrome::SelectNumberedTab(browser, tab_num - 1);
+        }
       }
     }
   } else if (action_id == "copy_url") {

@@ -60,6 +60,7 @@ class MahoSidebarFavoritesGridView : public views::View {
   ~MahoSidebarFavoritesGridView() override;
 
   void Update(const MahoSidebarFavoritesModel& model);
+  bool ActivateFavoriteByIndex(size_t index);
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
 
   bool GetDropFormats(int* formats,

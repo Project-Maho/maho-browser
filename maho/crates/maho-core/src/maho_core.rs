@@ -3103,13 +3103,18 @@ impl MahoCore {
                     .clone();
                 let tab_opt = self.tab_manager.get_tab(tab_id);
                 let is_pinned = tab_opt.map(|t| t.is_pinned).unwrap_or(false);
+                let is_favorite_tab = tab_opt.map(|t| t.is_favorite).unwrap_or(false);
                 let already_suspended = tab_opt
                     .map(|t| matches!(t.state, TabLifecycleState::Suspended { .. }))
                     .unwrap_or(false);
 
-                if is_pinned && !matches!(behavior, PinnedCloseBehavior::Close) {
-                    if already_suspended {
+                if (is_pinned || is_favorite_tab) && !matches!(behavior, PinnedCloseBehavior::Close) {
+                    if already_suspended && !is_favorite_tab {
                         // 2nd close on a ghost pinned tab -> fall through to full delete
+                    } else if already_suspended && is_favorite_tab {
+                        // Favorite tabs must persist: 2nd close is a no-op so
+                        // the tile always remains clickable.
+                        return vec![];
                     } else {
                         let space_id =
                             match self.tab_manager.get_tab(tab_id).map(|t| t.space_id.clone()) {
@@ -4252,16 +4257,8 @@ impl MahoCore {
             .unwrap_or(false)
     }
 
-    pub fn close_tabs_older_than(&mut self, cutoff_ts: i64) -> usize {
-        let closed = self.tab_manager.close_tabs_older_than(cutoff_ts);
-        for (space_id, tab_id) in &closed {
-            self.space_manager.remove_tab_from_space(space_id, tab_id);
-        }
-        closed.len()
-    }
-
-    pub fn find_tabs_older_than(&self, cutoff_ts: i64) -> Vec<TabId> {
-        self.tab_manager.find_tabs_older_than(cutoff_ts)
+    pub fn find_tabs_older_than(&self, cutoff_ts: i64, space_id: &SpaceId) -> Vec<TabId> {
+        self.tab_manager.find_tabs_older_than(cutoff_ts, space_id)
     }
 
     pub fn favorite_tab(&mut self, tab_id: &TabId) -> bool {
@@ -6335,6 +6332,10 @@ impl TabManagerInterface for TabLifecycleManager {
 
     fn activate_tab(&mut self, tab_id: &TabId) {
         self.activate_tab(tab_id)
+    }
+
+    fn restore_to_active(&mut self, tab_id: &TabId) {
+        self.restore_to_active(tab_id)
     }
 
     fn duplicate_tab(&mut self, tab_id: &TabId) -> Option<Tab> {

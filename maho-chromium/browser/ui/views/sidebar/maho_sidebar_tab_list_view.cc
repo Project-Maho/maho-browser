@@ -17,6 +17,7 @@
 #include "base/pickle.h"
 #include "base/strings/string_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/values.h"
 #include "chrome/browser/ui/browser.h"
@@ -35,6 +36,7 @@
 #include "components/keyed_service/core/service_access_type.h"
 #include "maho/browser/ui/theme/maho_color_id.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+#include "maho/browser/ui/notifications/maho_notification_overlay.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/common/referrer.h"
 #include "chrome/browser/ui/tab_ui_helper.h"
@@ -3725,10 +3727,21 @@ void MahoSidebarTabListView::OnTidyPressed(const ui::Event& event) {
   LOG(INFO) << "[maho-tidy] starting orchestrator";
   maho::MahoTabTidyOrchestrator::RunOneShot(
       browser_,
-      base::BindOnce([](int folder_count, const std::string& error) {
-        LOG(INFO) << "[maho-tidy] result folder_count=" << folder_count
-                  << " error='" << error << "'";
-      }));
+      base::BindOnce(&MahoSidebarTabListView::OnTidyFinished,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void MahoSidebarTabListView::OnTidyFinished(int folder_count, const std::string& error_message) {
+  LOG(INFO) << "[maho-tidy] result folder_count=" << folder_count
+            << " error='" << error_message << "'";
+  if (folder_count == 0 && !error_message.empty()) {
+    auto* overlay = MahoNotificationOverlay::GetOrCreateForBrowser(browser_);
+    if (overlay) {
+      std::u16string title = u"Tab Tidy";
+      std::u16string body = base::UTF8ToUTF16(error_message);
+      overlay->Show(title, body);
+    }
+  }
 }
 
 void MahoSidebarTabListView::OnClearPressed(const ui::Event& event) {
@@ -3773,7 +3786,9 @@ void MahoSidebarTabListView::ExecuteCommand(int command_id, int event_flags) {
     return;
   }
 
-  char* ids_json = maho_core_find_tabs_older_than(core, cutoff_ts);
+  auto* bridge = MahoSpaceProfileBridge::GetInstance();
+  std::string space_id = bridge ? bridge->GetActiveSpaceId(browser_) : std::string();
+  char* ids_json = maho_core_find_tabs_older_than(core, cutoff_ts, space_id.c_str());
   if (!ids_json) {
     LOG(INFO) << "[maho-clear] FFI returned null";
     return;

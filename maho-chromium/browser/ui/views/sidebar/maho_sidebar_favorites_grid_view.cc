@@ -2,6 +2,7 @@
 
 #include "maho/browser/ui/theme/maho_color_id.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 
 #include <algorithm>
 #include <array>
@@ -75,12 +76,22 @@
 #include "ui/views/animation/animation_builder.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/style/typography.h"
+#include "ui/views/view_utils.h"
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 
 namespace maho {
 
 namespace {
+
+MahoSidebarView* FindSidebarViewAncestor(views::View* view) {
+  for (views::View* current = view; current; current = current->parent()) {
+    if (auto* sidebar_view = views::AsViewClass<MahoSidebarView>(current)) {
+      return sidebar_view;
+    }
+  }
+  return nullptr;
+}
 
 constexpr int kFavoriteSectionSpacingDp = 6;
 constexpr int kFavoriteShellContentSpacingDp = 0;
@@ -287,6 +298,14 @@ class FavoriteTileButton : public views::Button,
     UpdateAppearance();
   }
 
+  void SetIsActive(bool is_active) {
+    if (is_active_ == is_active) {
+      return;
+    }
+    is_active_ = is_active;
+    UpdateAppearance();
+  }
+
   void WriteDragDataForView(views::View* sender,
                             const gfx::Point& press_pt,
                             ui::OSExchangeData* data) override {
@@ -389,7 +408,10 @@ class FavoriteTileButton : public views::Button,
     if (is_press) {
       bg = kMahoColorTabRowActiveBackground;
     } else if (is_hover) {
-      bg = kMahoColorTabRowHoverBackground;
+      bg = is_active_ ? kMahoColorTabRowActiveHoveredBackground
+                      : kMahoColorTabRowHoverBackground;
+    } else if (is_active_) {
+      bg = kMahoColorTabRowActiveBackground;
     } else {
       bg = kMahoColorInteractiveChipIdleBackground;
     }
@@ -403,6 +425,7 @@ class FavoriteTileButton : public views::Button,
   std::string tab_id_;
   std::string dragging_tab_id_;
   size_t tile_index_ = 0;
+  bool is_active_ = false;
 };
 
 struct FavoriteTileSpec {
@@ -410,6 +433,7 @@ struct FavoriteTileSpec {
   std::u16string text;
   GURL url;
   std::string tab_id;
+  bool is_active = false;
 };
 
 std::u16string BuildFavoriteText(const MahoSidebarFavoriteItemModel& item) {
@@ -443,6 +467,7 @@ BuildTileSpecs(const MahoSidebarFavoritesModel& model) {
     specs[index].text = BuildFavoriteText(model.items[index]);
     specs[index].url = model.items[index].url;
     specs[index].tab_id = model.items[index].tab_id;
+    specs[index].is_active = model.items[index].is_active;
   }
   return specs;
 }
@@ -668,6 +693,7 @@ void MahoSidebarFavoritesGridView::Update(
 
     auto* tile_btn = static_cast<FavoriteTileButton*>(tile_views_[index].get());
     tile_btn->set_tab_id(tile_tab_ids_[index]);
+    tile_btn->SetIsActive(has_item && specs[index].is_active);
 
     if (has_item) {
       // O(log M) map lookup instead of O(M) tab-strip scan per tile.
@@ -1286,41 +1312,30 @@ void MahoSidebarFavoritesGridView::OnTilePressed(size_t index) {
   if (!browser_ || index >= tile_urls_.size()) {
     return;
   }
-
-  // 1. Prefer activating an existing live tab when the favorite has a tab id
-  //    that matches a live WebContents. Single authoritative path:
-  //    MahoTabIdHelper::stable_tab_id(). Mirrors
-  //    MahoSidebarTabListView::ResolveTabStripIndexForTabId().
   const std::string& tab_id = tile_tab_ids_[index];
-  if (!tab_id.empty()) {
-    TabStripModel* strip = browser_->tab_strip_model();
-    if (strip) {
-      for (int i = 0; i < strip->count(); ++i) {
-        content::WebContents* contents = strip->GetWebContentsAt(i);
-        if (!contents) {
-          continue;
-        }
-        auto* helper = MahoTabIdHelper::FromWebContents(contents);
-        if (helper && helper->stable_tab_id() == tab_id) {
-          strip->ActivateTabAt(
-              i, TabStripUserGestureDetails(
-                     TabStripUserGestureDetails::GestureType::kOther));
-          return;
-        }
-      }
-    }
-  }
-
-  // 2. Fallback: no live tab matches. Open the favorite URL in a NEW
-  //    foreground tab so the user's current tab is preserved.
-  if (!tile_urls_[index].is_valid()) {
+  if (tab_id.empty()) {
     return;
   }
-  browser_->OpenURL(content::OpenURLParams(
-                        tile_urls_[index], content::Referrer(),
-                        WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                        ui::PAGE_TRANSITION_AUTO_BOOKMARK, false),
-                    base::NullCallback());
+  auto* sidebar_view = FindSidebarViewAncestor(this);
+  if (sidebar_view) {
+    sidebar_view->ActivateTabById(tab_id);
+  }
+}
+
+bool MahoSidebarFavoritesGridView::ActivateFavoriteByIndex(size_t index) {
+  if (index >= favorite_count_ || index >= tile_tab_ids_.size()) {
+    return false;
+  }
+  const std::string& tab_id = tile_tab_ids_[index];
+  if (tab_id.empty()) {
+    return false;
+  }
+  auto* sidebar_view = FindSidebarViewAncestor(this);
+  if (!sidebar_view) {
+    return false;
+  }
+  sidebar_view->ActivateTabById(tab_id);
+  return true;
 }
 
 void MahoSidebarFavoritesGridView::ShowTileContextMenu(

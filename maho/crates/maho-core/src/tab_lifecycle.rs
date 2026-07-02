@@ -213,6 +213,22 @@ impl TabLifecycleManager {
         }
     }
 
+    /// Reset a tab's lifecycle state to `Active` without touching `last_active_at`.
+    /// Used on session-restore re-announce: Chromium spawns a fresh WebContents for a
+    /// tab that was Frozen/Suspended at shutdown, so the lifecycle state must snap to
+    /// Active, but the user-activation timestamp must be preserved so Clear time-range
+    /// filters still see the tab as stale.
+    pub fn restore_to_active(&mut self, tab_id: &TabId) {
+        if let Some(tab) = self.tabs.get_mut(tab_id) {
+            tab.state = TabLifecycleState::Active;
+            self.state_timestamps.insert(tab_id.clone(), now_millis());
+            (self.on_update)(CoreUpdate::TabLifecycleChanged {
+                tab_id: tab_id.clone(),
+                state: tab.state.clone(),
+            });
+        }
+    }
+
     pub fn freeze_tab(&mut self, tab_id: &TabId) {
         if let Some(tab) = self.tabs.get_mut(tab_id) {
             if !matches!(tab.state, TabLifecycleState::Active) {
@@ -457,6 +473,7 @@ impl TabLifecycleManager {
             .unwrap_or(0);
         if let Some(tab) = self.tabs.get_mut(tab_id) {
             tab.is_favorite = true;
+            tab.is_pinned = true;
             tab.favorite_order = Some(max_order + 1);
             let fav_order = tab.favorite_order;
             (self.on_update)(CoreUpdate::TabUpdated {
@@ -467,7 +484,7 @@ impl TabLifecycleManager {
                     url: None,
                     favicon: None,
                     is_loading: None,
-                    is_pinned: None,
+                    is_pinned: Some(true),
                     is_favorite: Some(true),
                     favorite_order: Some(fav_order),
                     is_muted: None,
@@ -481,6 +498,7 @@ impl TabLifecycleManager {
     pub fn unfavorite_tab(&mut self, tab_id: &TabId) {
         if let Some(tab) = self.tabs.get_mut(tab_id) {
             tab.is_favorite = false;
+            tab.is_pinned = false;
             tab.favorite_order = None;
             (self.on_update)(CoreUpdate::TabUpdated {
                 tab_id: tab_id.clone(),
@@ -490,7 +508,7 @@ impl TabLifecycleManager {
                     url: None,
                     favicon: None,
                     is_loading: None,
-                    is_pinned: None,
+                    is_pinned: Some(false),
                     is_favorite: Some(false),
                     favorite_order: Some(None),
                     is_muted: None,
@@ -768,7 +786,7 @@ impl TabLifecycleManager {
     pub fn get_pinned_tabs(&self, space_id: &SpaceId) -> Vec<&Tab> {
         self.tabs
             .values()
-            .filter(|t| t.space_id == *space_id && t.is_pinned && !matches!(t.state, TabLifecycleState::Archived { .. }))
+            .filter(|t| t.space_id == *space_id && t.is_pinned && !t.is_favorite && !matches!(t.state, TabLifecycleState::Archived { .. }))
             .collect()
     }
 
@@ -1186,18 +1204,25 @@ impl TabLifecycleManager {
         closed
     }
 
-    /// Returns non-pinned, non-archived tab IDs whose `last_active_at` is strictly older
-    /// than `cutoff_ts` (epoch seconds). Read-only — does NOT mutate state. Unparseable
-    /// `last_active_at` is skipped so newly-created tabs (no activation yet) are kept.
-    pub fn find_tabs_older_than(&self, cutoff_ts: i64) -> Vec<TabId> {
+    /// Returns non-pinned, non-archived, non-suspended tab IDs whose `last_active_at` is strictly older
+    /// than `cutoff_ts` (epoch seconds) and belong to the active `space_id`. Read-only —
+    /// does NOT mutate state. Unparseable `last_active_at` is skipped so newly-created tabs
+    /// (no activation yet) are kept.
+    pub fn find_tabs_older_than(&self, cutoff_ts: i64, space_id: &SpaceId) -> Vec<TabId> {
         let mut ids: Vec<&TabId> = self
             .tabs
             .iter()
             .filter(|(_, tab)| {
+                if tab.space_id != *space_id {
+                    return false;
+                }
                 if tab.is_pinned {
                     return false;
                 }
                 if matches!(tab.state, TabLifecycleState::Archived { .. }) {
+                    return false;
+                }
+                if matches!(tab.state, TabLifecycleState::Suspended { .. }) {
                     return false;
                 }
                 match chrono::DateTime::parse_from_rfc3339(&tab.last_active_at.0) {
@@ -1209,67 +1234,6 @@ impl TabLifecycleManager {
             .collect();
         ids.sort_by(|a, b| a.as_ref().cmp(b.as_ref()));
         ids.into_iter().cloned().collect()
-    }
-
-    /// Close every non-pinned tab whose `last_active_at` is strictly less than `cutoff_ts`
-    /// (epoch seconds). Iterates all spaces in a stable order (sorted by space_id, then tab_id).
-    ///
-    /// Tabs with unparseable or empty `last_active_at` are SKIPPED (kept). This avoids
-    /// surprising users by closing newly-created tabs that have not yet been activated.
-    ///
-    /// Returns `(space_id, tab_id)` pairs for each closed tab so callers can update
-    /// space membership.
-    pub fn close_tabs_older_than(&mut self, cutoff_ts: i64) -> Vec<(SpaceId, TabId)> {
-        let to_close: Vec<(SpaceId, TabId)> = {
-            let mut candidates: Vec<(&TabId, &Tab)> = self
-                .tabs
-                .iter()
-                .filter(|(_, tab)| {
-                    if tab.is_pinned {
-                        return false;
-                    }
-                    if matches!(tab.state, TabLifecycleState::Archived { .. }) {
-                        return false;
-                    }
-                    match chrono::DateTime::parse_from_rfc3339(&tab.last_active_at.0) {
-                        Ok(dt) => dt.timestamp() < cutoff_ts,
-                        Err(_) => false,
-                    }
-                })
-                .collect();
-            candidates.sort_by(|(id_a, tab_a), (id_b, tab_b)| {
-                tab_a
-                    .space_id
-                    .as_ref()
-                    .cmp(tab_b.space_id.as_ref())
-                    .then_with(|| id_a.as_ref().cmp(id_b.as_ref()))
-            });
-            candidates
-                .into_iter()
-                .map(|(id, tab)| (tab.space_id.clone(), id.clone()))
-                .collect()
-        };
-
-        let mut closed = Vec::new();
-        for (space_id, tab_id) in to_close {
-            if let Some(tab) = self.tabs.remove(&tab_id) {
-                self.state_timestamps.remove(&tab_id);
-                self.creation_timestamps.remove(&tab_id);
-                self.loading_states.remove(&tab_id);
-                self.security_states.remove(&tab_id);
-                self.reader_mode_tabs.remove(&tab_id);
-                self.closed_stack.push_back(tab);
-                if self.closed_stack.len() > MAX_CLOSED_STACK {
-                    self.closed_stack.pop_front();
-                }
-                (self.on_update)(CoreUpdate::TabClosed {
-                    tab_id: tab_id.clone(),
-                    animated: true,
-                });
-                closed.push((space_id, tab_id));
-            }
-        }
-        closed
     }
 
     pub fn toggle_freeze(&mut self, tab_id: &TabId) {
@@ -1536,10 +1500,10 @@ mod tests {
     }
 
     #[test]
-    fn close_tabs_older_than_skips_pinned() {
+    fn find_tabs_older_than_skips_pinned() {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
-        let tab = manager.create_tab(space_id, Some(Url::new("https://example.com")), None, None);
+        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None);
         let tab_id = tab.id.clone();
 
         manager.pin_tab(&tab_id);
@@ -1547,13 +1511,12 @@ mod tests {
             t.last_active_at = DateTime::from_iso("2020-01-01T00:00:00.000Z");
         }
 
-        let closed = manager.close_tabs_older_than(1_700_000_000);
-        assert_eq!(closed.len(), 0);
-        assert!(manager.get_tab(&tab_id).is_some());
+        let found = manager.find_tabs_older_than(1_700_000_000, &space_id);
+        assert_eq!(found.len(), 0);
     }
 
     #[test]
-    fn close_tabs_older_than_respects_cutoff() {
+    fn find_tabs_older_than_respects_cutoff() {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
 
@@ -1563,39 +1526,143 @@ mod tests {
             t.last_active_at = DateTime::from_iso("2023-01-01T00:00:00.000Z");
         }
 
-        let recent_tab = manager.create_tab(space_id, Some(Url::new("https://recent.com")), None, None);
+        let recent_tab = manager.create_tab(space_id.clone(), Some(Url::new("https://recent.com")), None, None);
         let recent_id = recent_tab.id.clone();
         if let Some(t) = manager.tabs.get_mut(&recent_id) {
             t.last_active_at = DateTime::from_iso("2024-06-01T00:00:00.000Z");
         }
 
-        let closed = manager.close_tabs_older_than(1_700_000_000);
-        assert_eq!(closed.len(), 1);
-        assert!(manager.get_tab(&old_id).is_none());
-        assert!(manager.get_tab(&recent_id).is_some());
+        let found = manager.find_tabs_older_than(1_700_000_000, &space_id);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0], old_id);
     }
 
     #[test]
-    fn close_tabs_older_than_returns_count() {
+    fn find_tabs_older_than_filters_by_space() {
+        let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
+        let space_a = SpaceId::new("space-a");
+        let space_b = SpaceId::new("space-b");
+
+        let tab_a = manager.create_tab(space_a.clone(), Some(Url::new("https://a.com")), None, None);
+        let id_a = tab_a.id.clone();
+        if let Some(t) = manager.tabs.get_mut(&id_a) {
+            t.last_active_at = DateTime::from_iso("2020-01-01T00:00:00.000Z");
+        }
+
+        let tab_b = manager.create_tab(space_b.clone(), Some(Url::new("https://b.com")), None, None);
+        let id_b = tab_b.id.clone();
+        if let Some(t) = manager.tabs.get_mut(&id_b) {
+            t.last_active_at = DateTime::from_iso("2020-01-01T00:00:00.000Z");
+        }
+
+        let found_a = manager.find_tabs_older_than(1_700_000_000, &space_a);
+        assert_eq!(found_a, vec![id_a]);
+
+        let found_b = manager.find_tabs_older_than(1_700_000_000, &space_b);
+        assert_eq!(found_b, vec![id_b]);
+    }
+
+    #[test]
+    fn find_tabs_older_than_empty_returns_zero() {
+        let manager = TabLifecycleManager::new(Box::new(|_| {}));
+        let found = manager.find_tabs_older_than(1_700_000_000, &SpaceId::new("space-1"));
+        assert_eq!(found.len(), 0);
+    }
+
+    #[test]
+    fn find_tabs_older_than_integration_activate() {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
 
-        for i in 0..5 {
-            let tab = manager.create_tab(space_id.clone(), Some(Url::new(&format!("https://{i}.com"))), None, None);
-            if let Some(t) = manager.tabs.get_mut(&tab.id) {
-                t.last_active_at = DateTime::from_iso("2020-06-01T00:00:00.000Z");
-            }
-        }
+        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None);
+        let tab_id = tab.id.clone();
 
-        let cutoff = 1_700_000_000;
-        let closed = manager.close_tabs_older_than(cutoff);
-        assert_eq!(closed.len(), 5);
+        // 1. Initial tab activation updates last_active_at to now.
+        manager.activate_tab(&tab_id);
+
+        // 2. Querying tabs older than 1 hour ago should NOT return the tab.
+        let cutoff = chrono::Utc::now().timestamp() - 3600;
+        let found = manager.find_tabs_older_than(cutoff, &space_id);
+        assert_eq!(found.len(), 0);
     }
 
     #[test]
-    fn close_tabs_older_than_empty_returns_zero() {
+    fn find_tabs_older_than_excludes_suspended() {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
-        let closed = manager.close_tabs_older_than(1_700_000_000);
-        assert_eq!(closed.len(), 0);
+        let space_id = SpaceId::new("space-1");
+
+        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None);
+        let tab_id = tab.id.clone();
+
+        manager.suspend_tab(&tab_id);
+
+        if let Some(t) = manager.tabs.get_mut(&tab_id) {
+            t.last_active_at = DateTime::from_iso("2020-01-01T00:00:00.000Z");
+        }
+
+        let found = manager.find_tabs_older_than(1_700_000_000, &space_id);
+        assert_eq!(found.len(), 0);
+    }
+
+    #[test]
+    fn find_tabs_older_than_includes_frozen() {
+        let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
+        let space_id = SpaceId::new("space-1");
+
+        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None);
+        let tab_id = tab.id.clone();
+
+        manager.freeze_tab(&tab_id);
+
+        if let Some(t) = manager.tabs.get_mut(&tab_id) {
+            t.last_active_at = DateTime::from_iso("2020-01-01T00:00:00.000Z");
+        }
+
+        let found = manager.find_tabs_older_than(1_700_000_000, &space_id);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0], tab_id);
+    }
+
+    #[test]
+    fn restore_to_active_preserves_last_active_at() {
+        let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
+        let space_id = SpaceId::new("space-1");
+
+        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None);
+        let tab_id = tab.id.clone();
+
+        manager.freeze_tab(&tab_id);
+        let old_stamp = "2020-01-01T00:00:00.000Z";
+        if let Some(t) = manager.tabs.get_mut(&tab_id) {
+            t.last_active_at = DateTime::from_iso(old_stamp);
+        }
+
+        manager.restore_to_active(&tab_id);
+
+        let t = manager.get_tab(&tab_id).unwrap();
+        assert!(matches!(t.state, TabLifecycleState::Active));
+        assert_eq!(t.last_active_at.0, old_stamp);
+    }
+
+    #[test]
+    fn activate_tab_bumps_last_active_at() {
+        let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
+        let space_id = SpaceId::new("space-1");
+
+        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None);
+        let tab_id = tab.id.clone();
+
+        manager.freeze_tab(&tab_id);
+        let old_stamp = "2020-01-01T00:00:00.000Z";
+        if let Some(t) = manager.tabs.get_mut(&tab_id) {
+            t.last_active_at = DateTime::from_iso(old_stamp);
+        }
+
+        manager.activate_tab(&tab_id);
+
+        let t = manager.get_tab(&tab_id).unwrap();
+        assert!(matches!(t.state, TabLifecycleState::Active));
+        assert_ne!(t.last_active_at.0, old_stamp);
     }
 }
+

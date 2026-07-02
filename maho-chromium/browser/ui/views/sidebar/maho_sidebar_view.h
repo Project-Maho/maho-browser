@@ -148,6 +148,9 @@ class MahoSidebarView
   MahoSidebarLibraryRailView::Category active_library_category_for_testing()
       const;
 
+  void ActivateTabById(const std::string& tab_id);
+  bool ActivateFavoriteByIndex(size_t index);
+
  private:
   void BuildUi();
   void OnTabListScrolled();

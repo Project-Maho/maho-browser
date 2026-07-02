@@ -597,6 +597,16 @@ void MahoSidebarView::OpenLibrary() {
   OpenLibrary(MahoSidebarLibraryRailView::Category::kArchivedTabs);
 }
 
+void MahoSidebarView::ActivateTabById(const std::string& tab_id) {
+  if (tab_list_view_) {
+    tab_list_view_->ActivateTabById(tab_id);
+  }
+}
+
+bool MahoSidebarView::ActivateFavoriteByIndex(size_t index) {
+  return favorites_view_ && favorites_view_->ActivateFavoriteByIndex(index);
+}
+
 void MahoSidebarView::OpenLibrary(
     MahoSidebarLibraryRailView::Category category) {
   active_library_category_ = category;

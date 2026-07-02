@@ -85,6 +85,11 @@ void MahoSidebarContainerView::ShowCommandOverlayForCurrentTab() {
   }
 }
 
+bool MahoSidebarContainerView::TryActivateFavoriteByIndex(size_t index) {
+  auto* sidebar = static_cast<MahoSidebarView*>(sidebar_view_);
+  return sidebar && sidebar->ActivateFavoriteByIndex(index);
+}
+
 void MahoSidebarContainerView::ShowCommandOverlayForNewTab() {
   if (browser_) {
     if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_)) {

@@ -128,8 +128,9 @@ void AddTabRowColors(ui::ColorMixer& mixer, bool dark_mode) {
   mixer[kMahoColorTabRowActiveBackground] = {dark_mode
       ? SkColorSetARGB(51, 255, 255, 255)
       : SkColorSetARGB(38, 0, 0, 0)};
-  mixer[kMahoColorTabRowActiveHoveredBackground] = {
-      kMahoColorTabRowActiveBackground};
+  mixer[kMahoColorTabRowActiveHoveredBackground] = {dark_mode
+      ? SkColorSetARGB(51, 255, 255, 255)
+      : SkColorSetARGB(38, 0, 0, 0)};
   mixer[kMahoColorInteractiveChipIdleBackground] = {dark_mode
       ? SkColorSetARGB(16, 255, 255, 255)
       : SkColorSetARGB(13, 0, 0, 0)};
@@ -301,9 +302,7 @@ void AddCommandBarColors(ui::ColorMixer& mixer, bool dark_mode) {
   mixer[kMahoColorCommandBarInputBorder] = {
       dark_mode ? SkColorSetARGB(0x0E, 0xFF, 0xFF, 0xFF)
                 : SkColorSetARGB(0x28, 0xA3, 0xAE, 0xCB)};
-  mixer[kMahoColorCommandBarSelectionFill] = {dark_mode
-      ? SkColorSetRGB(0x4A, 0x54, 0xE8)
-      : SkColorSetARGB(88, 95, 121, 244)};
+  mixer[kMahoColorCommandBarSelectionFill] = {kMahoColorAccentBlue};
   mixer[kMahoColorCommandBarSelectionBorder] = {
       dark_mode ? SkColorSetARGB(18, 255, 255, 255)
                 : SkColorSetARGB(44, 92, 126, 237)};
@@ -325,12 +324,31 @@ void AddCommandBarColors(ui::ColorMixer& mixer, bool dark_mode) {
   mixer[kMahoColorCommandBarDivider] = {dark_mode
       ? SkColorSetARGB(8, 255, 255, 255)
       : SkColorSetARGB(18, 120, 129, 157)};
+  mixer[kMahoColorCommandBarDividerHairline] = {dark_mode
+      ? SkColorSetARGB(102, 255, 255, 255)
+      : SkColorSetARGB(60, 0, 0, 0)};
   mixer[kMahoColorCommandBarRowTitleSelected] = {dark_mode
       ? SkColorSetARGB(0xFF, 0xFF, 0xFF, 0xFF)
       : SkColorSetARGB(0xE0, 0xFF, 0xFF, 0xFF)};
   mixer[kMahoColorCommandBarRowSubtitleSelected] = {dark_mode
       ? SkColorSetARGB(0xC8, 0xF7, 0xF9, 0xFF)
       : SkColorSetARGB(0x98, 0xFF, 0xFF, 0xFF)};
+
+  mixer[kMahoColorCommandBarSparkleOuter] = {SkColorSetRGB(0x73, 0x7C, 0xFF)};
+  mixer[kMahoColorCommandBarSparkleInner] = {SkColorSetRGB(0xFF, 0xC7, 0x57)};
+
+  mixer[kMahoColorCommandGlyphTab] = {SkColorSetRGB(0xEE, 0xF1, 0xF8)};
+  mixer[kMahoColorCommandGlyphBookmark] = {SkColorSetRGB(0xF0, 0xC6, 0x66)};
+  mixer[kMahoColorCommandGlyphHistory] = {SkColorSetRGB(0xBE, 0xC7, 0xD9)};
+  mixer[kMahoColorCommandGlyphAction] = {SkColorSetRGB(0xC8, 0x92, 0xFF)};
+  mixer[kMahoColorCommandGlyphNavigation] = {SkColorSetRGB(0x86, 0xE0, 0xCB)};
+  mixer[kMahoColorCommandGlyphSearch] = {SkColorSetRGB(0xA8, 0xC4, 0xF0)};
+  mixer[kMahoColorCommandGlyphCalculator] = {SkColorSetRGB(0xFF, 0xA3, 0x7E)};
+  mixer[kMahoColorCommandGlyphUnitConversion] = {SkColorSetRGB(0xF2, 0x9A, 0x9A)};
+  mixer[kMahoColorCommandGlyphArchivedTab] = {SkColorSetRGB(0xA5, 0xB7, 0xD2)};
+  mixer[kMahoColorCommandGlyphClosedTab] = {SkColorSetRGB(0xC3, 0xA6, 0xEB)};
+  mixer[kMahoColorCommandGlyphFolder] = {SkColorSetRGB(0x8C, 0xA6, 0xFF)};
+  mixer[kMahoColorCommandGlyphRecentSearch] = {SkColorSetRGB(0xB1, 0xBC, 0xD7)};
 }
 
 void AddAccentAndSemanticColors(ui::ColorMixer& mixer, SkColor accent_color) {
@@ -535,8 +553,10 @@ void AddMahoColorMixers(ui::ColorProvider* provider,
     const SkColor base_tab_active = dark_mode
         ? SkColorSetARGB(51, 255, 255, 255)
         : SkColorSetARGB(38, 0, 0, 0);
-    tint_mixer[kMahoColorTabRowActiveBackground] = {
-        maho_theme::BlendColors(base_tab_active, primary_tint, 0.05f)};
+    const SkColor tinted_tab_active =
+        maho_theme::BlendColors(base_tab_active, primary_tint, 0.05f);
+    tint_mixer[kMahoColorTabRowActiveBackground] = {tinted_tab_active};
+    tint_mixer[kMahoColorTabRowActiveHoveredBackground] = {tinted_tab_active};
   }
 
   DVLOG(1) << "MahoColorMixers: registered " << (kMahoColorsEnd - kMahoColorsStart)

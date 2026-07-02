@@ -237,6 +237,69 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
         ),
         Replacement(
+            old='#include "chrome/browser/ui/views/frame/browser_view.h"\n',
+            new=(
+                '#include "chrome/browser/ui/views/frame/browser_view.h"\n'
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"\n'
+            ),
+            description=(
+                "Re-add Maho sidebar container include for Cmd+N favorite "
+                "activation"
+            ),
+            guard='#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"',
+        ),
+        Replacement(
+            old=(
+                '    case IDC_SELECT_TAB_0:\n'
+                '    case IDC_SELECT_TAB_1:\n'
+                '    case IDC_SELECT_TAB_2:\n'
+                '    case IDC_SELECT_TAB_3:\n'
+                '    case IDC_SELECT_TAB_4:\n'
+                '    case IDC_SELECT_TAB_5:\n'
+                '    case IDC_SELECT_TAB_6:\n'
+                '    case IDC_SELECT_TAB_7:\n'
+                '      base::RecordAction(base::UserMetricsAction("Accel_SelectNumberedTab"));\n'
+                '      SelectNumberedTab(\n'
+                '          browser_, id - IDC_SELECT_TAB_0,\n'
+                '          TabStripUserGestureDetails(\n'
+                '              TabStripUserGestureDetails::GestureType::kKeyboard, time_stamp));\n'
+                '      break;\n'
+            ),
+            new=(
+                '    case IDC_SELECT_TAB_0:\n'
+                '    case IDC_SELECT_TAB_1:\n'
+                '    case IDC_SELECT_TAB_2:\n'
+                '    case IDC_SELECT_TAB_3:\n'
+                '    case IDC_SELECT_TAB_4:\n'
+                '    case IDC_SELECT_TAB_5:\n'
+                '    case IDC_SELECT_TAB_6:\n'
+                '    case IDC_SELECT_TAB_7: {\n'
+                '      base::RecordAction(base::UserMetricsAction("Accel_SelectNumberedTab"));\n'
+                '      auto* maho_browser_view =\n'
+                '          BrowserView::GetBrowserViewForBrowser(browser_);\n'
+                '      auto* maho_sidebar_container =\n'
+                '          maho_browser_view\n'
+                '              ? static_cast<maho::MahoSidebarContainerView*>(\n'
+                '                    maho_browser_view->maho_sidebar_container())\n'
+                '              : nullptr;\n'
+                '      if (maho_sidebar_container &&\n'
+                '          maho_sidebar_container->TryActivateFavoriteByIndex(\n'
+                '              id - IDC_SELECT_TAB_0)) {\n'
+                '        break;\n'
+                '      }\n'
+                '      SelectNumberedTab(\n'
+                '          browser_, id - IDC_SELECT_TAB_0,\n'
+                '          TabStripUserGestureDetails(\n'
+                '              TabStripUserGestureDetails::GestureType::kKeyboard, time_stamp));\n'
+                '      break;\n'
+                '    }\n'
+            ),
+            description=(
+                "Maho Cmd+1..8 activates Nth favorite (Zen essentials) with "
+                "fallback to Chrome tab strip when no favorite exists"
+            ),
+        ),
+        Replacement(
             old='constexpr char kShortcutTracePrefix[] = "[maho-shortcut-trace]";\n\n',
             new=(
                 'constexpr char kShortcutTracePrefix[] = "[maho-shortcut-trace]";\n'
@@ -1189,6 +1252,85 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Add Maho shortcut interceptor to BrowserView::OnKeyEvent",
             guard="maho::MahoShortcutInterceptor::ResolveActionForKeyEvent",
+        ),
+        # ── [Maho fix] WebView fast_resize race defensive cleanup ────────────
+        # See chromium_src overlay browser_view.cc section 13 for the
+        # full rationale.  TL;DR: upstream BrowserView::ToolbarSizeChanged()
+        # has an explicit comment about a "gray rect because the clip wasn't
+        # updated" race.  Maho hits intermittent variants of this race at
+        # startup / session-restore — visible as the Settings tab being
+        # vertically clipped (gray below content) and the AI side panel
+        # overflowing its container horizontally.  Both share the same root
+        # cause: a views::WebView is left with stale fast_resize state so
+        # its underlying WebContents stays rendered at a previous bounds.
+        Replacement(
+            old='#include "ui/views/view_class_properties.h"\n',
+            new=(
+                '#include "ui/views/view_class_properties.h"\n'
+                '#include "ui/views/view_utils.h"\n'
+            ),
+            description=(
+                "Include ui/views/view_utils.h so BrowserView::"
+                "OnWidgetVisibilityChanged can use views::AsViewClass<"
+                "views::WebView>() to walk the View tree and reset stale "
+                "fast_resize state. Part of the Maho fast_resize race fix."
+            ),
+            guard='#include "ui/views/view_utils.h"',
+        ),
+        Replacement(
+            old=(
+                "void BrowserView::OnWidgetVisibilityChanged(views::Widget* widget,\n"
+                "                                            bool visible) {\n"
+                "  UpdateLoadingAnimations(visible);\n"
+                "}\n"
+            ),
+            new=(
+                "void BrowserView::OnWidgetVisibilityChanged(views::Widget* widget,\n"
+                "                                            bool visible) {\n"
+                "  UpdateLoadingAnimations(visible);\n"
+                "\n"
+                "  // [Maho fix] Defensive cleanup for the upstream \"gray rect\"\n"
+                "  // / content-overflow race documented in ToolbarSizeChanged().\n"
+                "  // A views::WebView can be left with stale fast_resize state\n"
+                "  // after animation, infobar, or session-restore transitions,\n"
+                "  // leaving the underlying WebContents rendered at its previous\n"
+                "  // bounds while the View clips to the new bounds — producing\n"
+                "  // a visible gray rect (when the View grew) or content\n"
+                "  // overflowing its container (when the View shrank). On every\n"
+                "  // visibility-true transition, walk the View tree, force\n"
+                "  // fast_resize off on every views::WebView descendant, and\n"
+                "  // request a layout so the WebContents tracks the View bounds.\n"
+                "  if (visible) {\n"
+                "    std::vector<views::View*> stack;\n"
+                "    stack.push_back(this);\n"
+                "    while (!stack.empty()) {\n"
+                "      views::View* node = stack.back();\n"
+                "      stack.pop_back();\n"
+                "      if (auto* web_view =\n"
+                "              views::AsViewClass<views::WebView>(node)) {\n"
+                "        web_view->SetFastResize(false);\n"
+                "        web_view->InvalidateLayout();\n"
+                "      }\n"
+                "      for (views::View* child : node->children()) {\n"
+                "        stack.push_back(child);\n"
+                "      }\n"
+                "    }\n"
+                "    if (contents_container_) {\n"
+                "      contents_container_->DeprecatedLayoutImmediately();\n"
+                "    }\n"
+                "  }\n"
+                "}\n"
+            ),
+            description=(
+                "Defensive cleanup against upstream gray-rect / WebContents "
+                "bounds-stuck race. On every visibility-true transition, walk "
+                "the View tree, clear fast_resize on every views::WebView, "
+                "invalidate their layout, and force an immediate layout of "
+                "contents_container_. Covers both the tab WebContents path "
+                "(Settings tab being clipped) and the side panel WebUI path "
+                "(AI panel overflowing its container)."
+            ),
+            guard="[Maho fix] Defensive cleanup",
         ),
     ],
     # ── browser.cc ───────────────────────────────────────────────────────────

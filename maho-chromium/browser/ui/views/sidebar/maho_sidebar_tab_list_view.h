@@ -118,6 +118,7 @@ class MahoSidebarTabListView : public views::View,
   // Called by MahoSidebarView when the scroll position changes.
   // Invalidates tab_rows_ layout to recalculate visible set.
   void OnScrollChanged();
+  void ActivateTabById(const std::string& tab_id);
 
   views::View* FindSectionDropTargetForTesting(MahoSidebarTabSection section);
   SidebarTabRowView* FindTabRowByIdForTesting(const std::string& tab_id);
@@ -175,7 +176,6 @@ class MahoSidebarTabListView : public views::View,
   std::u16string GetNodeDisplayText(const SidebarTreeNode& node) const;
   std::u16string GetNodeTooltipText(const SidebarTreeNode& node) const;
   void ActivateTab(int tab_index);
-  void ActivateTabById(const std::string& tab_id);
   void WakeSuspendedTab(const std::string& tab_id);
   void CloseTab(int tab_index);
   void CloseTabById(const std::string& tab_id);
@@ -183,6 +183,7 @@ class MahoSidebarTabListView : public views::View,
   void OpenNewTab(const ui::Event& event);
   // Opens Maho AI side panel. Auto-firing Tab Tidy on open deferred (ADR-0010 §future).
   void OnTidyPressed(const ui::Event& event);
+  void OnTidyFinished(int folder_count, const std::string& error_message);
   void OnClearPressed(const ui::Event& event);
   void AddTabActionsRow();
 

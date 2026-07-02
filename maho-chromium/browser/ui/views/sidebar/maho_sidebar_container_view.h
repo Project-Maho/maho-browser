@@ -39,6 +39,8 @@ class MahoSidebarContainerView : public views::View,
   void ShowCommandOverlayForNewTab();
   void ShowCommandOverlayForSearch(const std::string& initial_query);
 
+  bool TryActivateFavoriteByIndex(size_t index);
+
   bool IsPositionInWindowCaption(const gfx::Point& point) const;
 
   double GetRevealFraction() const;
