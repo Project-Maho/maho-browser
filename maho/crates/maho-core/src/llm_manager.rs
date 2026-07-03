@@ -162,26 +162,29 @@ impl LLMManager {
         tabs: Vec<(TabId, String, String)>,
     ) -> CoreUpdate {
         let request_id = self.generate_request_id();
-        let tabs_json: Vec<serde_json::Value> = tabs
+        let tabs_lines: Vec<String> = tabs
             .iter()
-            .map(|(id, title, url)| {
-                serde_json::json!({
-                    "id": id.to_string(),
-                    "title": title,
-                    "url": url,
-                })
-            })
+            .map(|(id, title, url)| format!("- id={} title={} url={}", id.as_ref(), title, url))
             .collect();
-        let prompt = serde_json::json!({
-            "instruction": "Group these browser tabs into 2-4 folders. Return JSON only.",
-            "tabs": tabs_json,
-            "response_format": {
-                "folders": [
-                    {"name": "Example", "tab_ids": ["tab_1"]}
-                ]
+        let user_content = format!(
+            "Group these {} browser tabs into 2-4 topical folders. \
+Respond with JSON only, matching this schema: \
+{{\"folders\":[{{\"name\":\"<folder name>\",\"tab_ids\":[\"<tab_id>\",...]}}]}}. \
+Use the exact tab ids provided. Do not include prose.\n\nTabs:\n{}",
+            tabs.len(),
+            tabs_lines.join("\n"),
+        );
+        let messages = serde_json::json!([
+            {
+                "role": "system",
+                "content": "You are Maho AI, a browser tab organizer. Return valid JSON only."
+            },
+            {
+                "role": "user",
+                "content": user_content
             }
-        })
-        .to_string();
+        ]);
+        let prompt = serde_json::to_string(&messages).unwrap_or_default();
         let context = LLMRequestContext::TidyTabs {
             space_id: space_id.clone(),
         };
@@ -660,13 +663,15 @@ mod tests {
             _ => panic!("Expected RequestLlmCompletion"),
         };
 
-        // Check all tabs are in the prompt
         let prompt_json: serde_json::Value = serde_json::from_str(&prompt).unwrap();
-        let tabs_arr = prompt_json["tabs"].as_array().unwrap();
-        assert_eq!(tabs_arr.len(), 12, "All 12 tabs must be in the prompt");
-        assert_eq!(tabs_arr[0]["title"], "rust-lang/rust PR #1234");
-        assert_eq!(tabs_arr[11]["url"], "https://youtube.com");
-        assert!(prompt_json["instruction"].as_str().unwrap().contains("Group these browser tabs"));
+        let messages = prompt_json.as_array().expect("prompt must be a messages array");
+        assert_eq!(messages.len(), 2, "prompt must have system + user message");
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[1]["role"], "user");
+        let user_content = messages[1]["content"].as_str().unwrap();
+        assert!(user_content.contains("rust-lang/rust PR #1234"));
+        assert!(user_content.contains("https://youtube.com"));
+        assert!(user_content.contains("Group these"));
 
         // Simulate LLM returning a folder grouping
         let mock_result = serde_json::json!({
@@ -716,10 +721,11 @@ mod tests {
             _ => panic!("Expected RequestLlmCompletion"),
         };
 
-        // Prompt should have empty tabs array
         let prompt_json: serde_json::Value = serde_json::from_str(&prompt).unwrap();
-        let tabs_arr = prompt_json["tabs"].as_array().unwrap();
-        assert_eq!(tabs_arr.len(), 0);
+        let messages = prompt_json.as_array().expect("prompt must be a messages array");
+        assert_eq!(messages.len(), 2);
+        let user_content = messages[1]["content"].as_str().unwrap();
+        assert!(user_content.contains("Group these 0"));
 
         // Simulate LLM returning empty folders (realistic for empty input)
         let empty_result = r#"{"folders": []}"#;

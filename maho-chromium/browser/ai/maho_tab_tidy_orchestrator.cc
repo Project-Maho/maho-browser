@@ -201,7 +201,7 @@ class TidyRun {
 
   void OnLLMError(const std::string& error) {
     LOG(ERROR) << "[maho-tidy] LLM error: " << error;
-    Finish(0, "LLM call failed");
+    Finish(0, error.empty() ? std::string("LLM call failed") : error);
   }
 
   void Finish(int folder_count, const std::string& error_message) {
