@@ -34,6 +34,7 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
                                 std::string());
   registry->RegisterStringPref(ai_prefs::kByokAnthropicEncryptedB64,
                                 std::string());
+  registry->RegisterDictionaryPref(ai_prefs::kAgentToolGrants);
 
   // Account / relay auth prefs.
   registry->RegisterStringPref(

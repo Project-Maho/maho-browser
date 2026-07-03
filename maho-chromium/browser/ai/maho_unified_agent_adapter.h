@@ -7,6 +7,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <set>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
@@ -38,6 +39,12 @@ class SharedURLLoaderFactory;
 //     guarantees no leak (C5) and cancellation-based lifetime (H6).
 //   - ConversationTask: owns the per-turn accumulator with 2 MB cap (H13).
 //   - ToolExecutionGraph: owns the tool executor instance (C2, lifetime).
+enum class PromptDecision {
+  kAllow = 0,
+  kDeny = 1,
+  kAllowOnce = 2
+};
+
 class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
  public:
   MahoUnifiedAgentAdapter(
@@ -125,6 +132,16 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
   std::string session_id_;
   RuntimeEventCallback current_on_event_;
   std::string pending_message_;
+
+  std::string permission_extension_id_;
+  std::set<std::string> session_grants_;
+  void ShowPermissionPromptOnUIThread(
+      const std::string& extension_id,
+      const std::string& tool_name,
+      base::OnceCallback<void(PromptDecision)> callback);
+  MahoAgentPermissionDecision OnAgentPermissionOnSequence(
+      const char* tool_name,
+      const char* arguments);
 
   std::shared_ptr<os_crypt_async::Encryptor> encryptor_;
   void OnOsCryptReady(os_crypt_async::Encryptor encryptor);

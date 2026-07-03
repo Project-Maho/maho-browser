@@ -35,6 +35,7 @@ pub trait TabManagerInterface {
     fn freeze_tab(&mut self, tab_id: &TabId);
     fn suspend_tab(&mut self, tab_id: &TabId);
     fn archive_tab(&mut self, tab_id: &TabId);
+    fn restore_to_active(&mut self, tab_id: &TabId);
     fn reopen_last_closed(&mut self) -> Option<Tab>;
     fn handle_memory_pressure(&mut self, level: MemoryPressureLevel) -> MemoryAction;
     fn update_tab_title(&mut self, tab_id: &TabId, title: String);

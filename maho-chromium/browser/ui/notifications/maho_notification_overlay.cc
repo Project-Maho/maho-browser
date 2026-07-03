@@ -10,6 +10,7 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "maho/browser/ui/notifications/maho_toast_vibrancy.h"
 #include "maho/browser/ui/notifications/maho_toast_view.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/animation/tween.h"
@@ -66,6 +67,7 @@ void MahoNotificationOverlay::Show(const std::u16string& title,
   toast_view_->SetOnClicked(base::BindRepeating(
       &MahoNotificationOverlay::Hide, weak_factory_.GetWeakPtr()));
 
+  PrimeAnimationStartFrame();
   widget_->ShowInactive();
   StartShowAnimation();
   dismiss_timer_.Start(FROM_HERE, duration,
@@ -121,8 +123,7 @@ void MahoNotificationOverlay::OnBrowserClosed(BrowserWindowInterface* browser) {
 void MahoNotificationOverlay::AnimationProgressed(
     const gfx::Animation* animation) {
   if (!widget_ || animation != &slide_animation_) return;
-  double progress = animation->GetCurrentValue();
-  double effective = is_hiding_ ? (1.0 - progress) : progress;
+  double effective = animation->GetCurrentValue();
 
   gfx::Rect target = ComputeTargetBounds();
   if (target.IsEmpty()) return;
@@ -156,7 +157,7 @@ void MahoNotificationOverlay::CreateWidget() {
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
   params.activatable = views::Widget::InitParams::Activatable::kNo;
   params.accept_events = true;
-  params.shadow_type = views::Widget::InitParams::ShadowType::kDrop;
+  params.shadow_type = views::Widget::InitParams::ShadowType::kNone;
 
   if (browser_) {
     BrowserView* bv = BrowserView::GetBrowserViewForBrowser(browser_);
@@ -178,6 +179,22 @@ void MahoNotificationOverlay::CreateWidget() {
   if (root_view) {
     root_view->SetPaintToLayer();
     root_view->layer()->SetFillsBoundsOpaquely(false);
+  }
+  maho::ApplyVibrancyToToast(widget_.get());
+}
+
+void MahoNotificationOverlay::PrimeAnimationStartFrame() {
+  if (!widget_) return;
+  gfx::Rect target = ComputeTargetBounds();
+  if (!target.IsEmpty()) {
+    gfx::Rect start = target;
+    int slide_distance = target.height() + 24;
+    start.set_y(target.y() - slide_distance);
+    widget_->SetBounds(start);
+  }
+  auto* root_view = widget_->GetRootView();
+  if (root_view && root_view->layer()) {
+    root_view->layer()->SetOpacity(0.0f);
   }
 }
 

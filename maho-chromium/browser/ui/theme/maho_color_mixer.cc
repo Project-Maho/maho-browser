@@ -267,8 +267,8 @@ void AddTextColors(ui::ColorMixer& mixer, bool dark_mode) {
 
 void AddToastColors(ui::ColorMixer& mixer, bool dark_mode) {
   mixer[kMahoColorToastBackground] = {dark_mode
-      ? SkColorSetARGB(255, 42, 39, 61)
-      : SkColorSetARGB(255, 255, 255, 255)};
+      ? SkColorSetARGB(40, 42, 39, 61)
+      : SkColorSetARGB(40, 255, 255, 255)};
   mixer[kMahoColorToastForeground] = {dark_mode
       ? SkColorSetARGB(255, 243, 243, 247)
       : SkColorSetARGB(255, 45, 51, 74)};
@@ -276,8 +276,8 @@ void AddToastColors(ui::ColorMixer& mixer, bool dark_mode) {
       ? SkColorSetARGB(255, 188, 188, 202)
       : SkColorSetARGB(255, 89, 97, 128)};
   mixer[kMahoColorToastBorder] = {dark_mode
-      ? SkColorSetARGB(30, 255, 255, 255)
-      : SkColorSetARGB(20, 0, 0, 0)};
+      ? SkColorSetARGB(80, 255, 255, 255)
+      : SkColorSetARGB(50, 0, 0, 0)};
 }
 
 void AddLegacyAliasColors(ui::ColorMixer& mixer, bool dark_mode) {
@@ -302,10 +302,12 @@ void AddCommandBarColors(ui::ColorMixer& mixer, bool dark_mode) {
   mixer[kMahoColorCommandBarInputBorder] = {
       dark_mode ? SkColorSetARGB(0x0E, 0xFF, 0xFF, 0xFF)
                 : SkColorSetARGB(0x28, 0xA3, 0xAE, 0xCB)};
-  mixer[kMahoColorCommandBarSelectionFill] = {kMahoColorAccentBlue};
+  mixer[kMahoColorCommandBarSelectionFill] = {dark_mode
+      ? SkColorSetARGB(56, 210, 155, 145)   // warm rose tint (Arc parity)
+      : SkColorSetARGB(28, 120, 55, 50)};   // warm rose tint (light)
   mixer[kMahoColorCommandBarSelectionBorder] = {
-      dark_mode ? SkColorSetARGB(18, 255, 255, 255)
-                : SkColorSetARGB(44, 92, 126, 237)};
+      dark_mode ? SkColorSetARGB(0, 0, 0, 0)
+                : SkColorSetARGB(0, 0, 0, 0)};
   mixer[kMahoColorCommandBarKeycapBorder] = {
       dark_mode ? SkColorSetARGB(0x16, 0xFF, 0xFF, 0xFF)
                 : SkColorSetARGB(0x2C, 0x91, 0x9C, 0xB8)};
@@ -325,14 +327,14 @@ void AddCommandBarColors(ui::ColorMixer& mixer, bool dark_mode) {
       ? SkColorSetARGB(8, 255, 255, 255)
       : SkColorSetARGB(18, 120, 129, 157)};
   mixer[kMahoColorCommandBarDividerHairline] = {dark_mode
-      ? SkColorSetARGB(102, 255, 255, 255)
-      : SkColorSetARGB(60, 0, 0, 0)};
+      ? SkColorSetARGB(0, 0, 0, 0)
+      : SkColorSetARGB(0, 0, 0, 0)};
   mixer[kMahoColorCommandBarRowTitleSelected] = {dark_mode
       ? SkColorSetARGB(0xFF, 0xFF, 0xFF, 0xFF)
-      : SkColorSetARGB(0xE0, 0xFF, 0xFF, 0xFF)};
+      : kMahoColorPrimaryText};
   mixer[kMahoColorCommandBarRowSubtitleSelected] = {dark_mode
       ? SkColorSetARGB(0xC8, 0xF7, 0xF9, 0xFF)
-      : SkColorSetARGB(0x98, 0xFF, 0xFF, 0xFF)};
+      : kMahoColorTertiaryText};
 
   mixer[kMahoColorCommandBarSparkleOuter] = {SkColorSetRGB(0x73, 0x7C, 0xFF)};
   mixer[kMahoColorCommandBarSparkleInner] = {SkColorSetRGB(0xFF, 0xC7, 0x57)};

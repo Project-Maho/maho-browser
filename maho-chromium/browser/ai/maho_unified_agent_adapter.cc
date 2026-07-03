@@ -29,6 +29,18 @@
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "maho/browser/maho_core_holder.h"
+#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "ui/base/base_window.h"
+#include "ui/views/controls/button/md_text_button.h"
+#include "ui/views/controls/label.h"
+#include "ui/views/layout/box_layout.h"
+#include "ui/views/widget/widget.h"
+#include "ui/views/window/dialog_delegate.h"
+#include "components/prefs/scoped_user_pref_update.h"
+#include "base/strings/string_util.h"
+#include "base/synchronization/waitable_event.h"
+#include "content/public/browser/browser_thread.h"
 
 namespace {
 
@@ -112,6 +124,12 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
       session_id_ = "unified_agent_session";
     }
 
+    if (base::StartsWith(session_id_, "ext_")) {
+      permission_extension_id_ = session_id_.substr(4);
+    } else {
+      permission_extension_id_.clear();
+    }
+
     // Snapshot BYOK data for secure-storage callback (immutable, thread-safe).
     byok_snapshot_ = std::make_shared<ByokSnapshot>();
     if (prefs_) {
@@ -132,7 +150,7 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
     // rather than fall through to plaintext SQLite settings.
     agent_session_ = maho_agent_create_session(
         core, session_id_.c_str(), nullptr, /*allow_insecure_key_storage=*/false,
-        &MahoUnifiedAgentAdapter::OnAgentPermission, nullptr,
+        &MahoUnifiedAgentAdapter::OnAgentPermission, this,
         &MahoUnifiedAgentAdapter::OnAgentSecureStorage, byok_bridge_);
     if (!agent_session_) {
       TransitionToError("Failed to create agent session.");
@@ -209,16 +227,185 @@ void MahoUnifiedAgentAdapter::Reset() {
 }
 
 // static
-MahoAgentPermissionDecision MahoUnifiedAgentAdapter::OnAgentPermission(void* /*user_data*/,
+namespace {
+
+class MahoAgentPermissionPromptDialogView : public views::DialogDelegate {
+ public:
+  MahoAgentPermissionPromptDialogView(
+      const std::string& extension_id,
+      const std::string& tool_name,
+      base::OnceCallback<void(PromptDecision)> callback)
+      : callback_(std::move(callback)) {
+    SetButtons(static_cast<int>(ui::mojom::DialogButton::kOk) |
+               static_cast<int>(ui::mojom::DialogButton::kCancel));
+    SetModalType(ui::mojom::ModalType::kWindow);
+    SetDefaultButton(static_cast<int>(ui::mojom::DialogButton::kOk));
+    SetButtonLabel(ui::mojom::DialogButton::kOk, u"Always Allow");
+    SetButtonLabel(ui::mojom::DialogButton::kCancel, u"Deny");
+
+    auto contents = std::make_unique<views::View>();
+    contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kVertical, gfx::Insets(16), 12));
+
+    auto* label = contents->AddChildView(std::make_unique<views::Label>(
+        base::UTF8ToUTF16("The extension \"" + extension_id + "\" wants to use the agent tool \"" + tool_name + "\".")));
+    label->SetMultiLine(true);
+    label->SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_LEFT);
+
+    contents->AddChildView(std::make_unique<views::MdTextButton>(
+        base::BindRepeating(&MahoAgentPermissionPromptDialogView::OnAllowOnce, base::Unretained(this)),
+        u"Allow Once"));
+
+    SetContentsView(std::move(contents));
+  }
+
+  MahoAgentPermissionPromptDialogView(const MahoAgentPermissionPromptDialogView&) = delete;
+  MahoAgentPermissionPromptDialogView& operator=(const MahoAgentPermissionPromptDialogView&) = delete;
+
+  std::u16string GetWindowTitle() const override {
+    return u"Agent Tool Access Request";
+  }
+
+  bool Accept() override {
+    if (callback_) std::move(callback_).Run(PromptDecision::kAllow);
+    return true;
+  }
+
+  bool Cancel() override {
+    if (callback_) std::move(callback_).Run(PromptDecision::kDeny);
+    return true;
+  }
+
+  void OnAllowOnce() {
+    if (callback_) std::move(callback_).Run(PromptDecision::kAllowOnce);
+    GetWidget()->Close();
+  }
+
+ private:
+  base::OnceCallback<void(PromptDecision)> callback_;
+};
+
+}  // namespace
+
+// static
+MahoAgentPermissionDecision MahoUnifiedAgentAdapter::OnAgentPermission(void* user_data,
                                                                         const char* tool_name,
-                                                                        const char* /*arguments*/) {
-  // Mirror iOS policy: default-deny, allowlist only safe read tools.
-  // shell_exec is never granted from the desktop adapter callback path.
-  if (!tool_name) return MahoAgentPermissionDecision_Deny;  // Deny
+                                                                        const char* arguments) {
+  if (!user_data) {
+    if (!tool_name) return MahoAgentPermissionDecision_Deny;
+    const std::string tool(tool_name);
+    if (tool == "shell_exec") return MahoAgentPermissionDecision_Deny;
+    if (tool == "fs_read" || tool == "web_search") return MahoAgentPermissionDecision_Allow;
+    return MahoAgentPermissionDecision_Deny;
+  }
+  MahoUnifiedAgentAdapter* adapter = static_cast<MahoUnifiedAgentAdapter*>(user_data);
+  return adapter->OnAgentPermissionOnSequence(tool_name, arguments);
+}
+
+MahoAgentPermissionDecision MahoUnifiedAgentAdapter::OnAgentPermissionOnSequence(
+    const char* tool_name,
+    const char* arguments) {
+  if (!tool_name) return MahoAgentPermissionDecision_Deny;
   const std::string tool(tool_name);
   if (tool == "shell_exec") return MahoAgentPermissionDecision_Deny;
-  if (tool == "fs_read" || tool == "web_search") return MahoAgentPermissionDecision_Allow;  // Allow
-  return MahoAgentPermissionDecision_Deny;  // Default deny
+
+  if (permission_extension_id_.empty()) {
+    if (tool == "fs_read" || tool == "web_search") return MahoAgentPermissionDecision_Allow;
+    return MahoAgentPermissionDecision_Deny;
+  }
+
+  // 1. Check persistent grants in prefs
+  if (prefs_) {
+    const auto& grants = prefs_->GetDict(maho::ai_prefs::kAgentToolGrants);
+    const auto* tool_list = grants.FindList(permission_extension_id_);
+    if (tool_list) {
+      for (const auto& item : *tool_list) {
+        if (item.is_string() && item.GetString() == tool) {
+          return MahoAgentPermissionDecision_Allow;
+        }
+      }
+    }
+  }
+
+  // 2. Check session-level grants
+  if (session_grants_.contains(tool)) {
+    return MahoAgentPermissionDecision_Allow;
+  }
+
+  // 3. Show lazy prompt and block using WaitableEvent
+  PromptDecision decision_val = PromptDecision::kDeny;
+  base::WaitableEvent event(base::WaitableEvent::ResetPolicy::MANUAL,
+                            base::WaitableEvent::InitialState::NOT_SIGNALED);
+
+  content::GetUIThreadTaskRunner({})->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          &MahoUnifiedAgentAdapter::ShowPermissionPromptOnUIThread,
+          weak_factory_.GetWeakPtr(),
+          permission_extension_id_,
+          tool,
+          base::BindOnce(
+              [](PromptDecision* out_decision, base::WaitableEvent* event, PromptDecision result) {
+                *out_decision = result;
+                event->Signal();
+              },
+              &decision_val,
+              &event)));
+
+  event.Wait();
+
+  LOG(INFO) << "MahoUnifiedAgentAdapter: Extension " << permission_extension_id_
+            << " requested tool " << tool << ". Decision: "
+            << (decision_val == PromptDecision::kAllow ? "ALLOW"
+                : decision_val == PromptDecision::kAllowOnce ? "ALLOW_ONCE"
+                : "DENY");
+
+  if (decision_val == PromptDecision::kAllow) {
+    if (prefs_) {
+      ScopedDictPrefUpdate update(prefs_, maho::ai_prefs::kAgentToolGrants);
+      auto* tool_list = update->EnsureList(permission_extension_id_);
+      if (tool_list) {
+        bool exists = false;
+        for (const auto& item : *tool_list) {
+          if (item.is_string() && item.GetString() == tool) {
+            exists = true;
+            break;
+          }
+        }
+        if (!exists) {
+          tool_list->Append(tool);
+        }
+      }
+    }
+    return MahoAgentPermissionDecision_Allow;
+  } else if (decision_val == PromptDecision::kAllowOnce) {
+    session_grants_.insert(tool);
+    return MahoAgentPermissionDecision_Allow;
+  }
+
+  return MahoAgentPermissionDecision_Deny;
+}
+
+void MahoUnifiedAgentAdapter::ShowPermissionPromptOnUIThread(
+    const std::string& extension_id,
+    const std::string& tool_name,
+    base::OnceCallback<void(PromptDecision)> callback) {
+  BrowserWindowInterface* browser = chrome::FindLastActive();
+  if (!browser || !browser->GetWindow()) {
+    std::move(callback).Run(PromptDecision::kDeny);
+    return;
+  }
+
+  auto delegate = std::make_unique<MahoAgentPermissionPromptDialogView>(
+      extension_id, tool_name, std::move(callback));
+  views::Widget* widget = views::DialogDelegate::CreateDialogWidget(
+      std::move(delegate), browser->GetWindow()->GetNativeWindow(),
+      gfx::NativeView());
+  if (widget) {
+    widget->Show();
+  } else {
+    std::move(callback).Run(PromptDecision::kDeny);
+  }
 }
 
 namespace {

@@ -78,10 +78,6 @@ class MahoCommandOverlayView : public views::View,
 
   views::Textfield* textfield() { return textfield_; }
   size_t GetRenderedResultCountForTesting() const;
-  const std::vector<CommandSuggestion>& GetSeededResultsForTesting() const {
-    return seeded_results_;
-  }
-  bool IsSeededStateForTesting() const { return is_seeded_state_; }
   views::View* GetResultsContainerForTesting() const { return results_container_; }
   bool IsModeChipVisibleForTesting() const {
     return mode_chip_ && mode_chip_->GetVisible();
@@ -98,28 +94,11 @@ class MahoCommandOverlayView : public views::View,
   void UpdateResultViewsForTesting(
       const std::vector<CommandSuggestion>& results);
   void UpdateSelectionA11yForTesting(int old_index, int new_index);
-  void InitializeSeededStateForTesting(
-      std::vector<CommandSuggestion> seeds);
-  void ApplyHydratedSeededIconForTesting(size_t result_index,
-                                         const ImageData& icon) {
-    ApplyHydratedSeededIcon(result_index, icon);
-  }
   WindowOpenDisposition DispositionForModeForTesting() const {
     return DispositionForMode();
   }
   CommandOverlayMode CurrentModeForTesting() const { return mode_; }
   CommandOverlayMode OriginModeForTesting() const { return origin_mode_; }
-  static size_t GetMaxSeededVisibleResultsForTesting();
-  static CommandSuggestion BuildCurrentTabSeedForTesting(
-      const std::string& url,
-      const std::string& title) {
-    return BuildCurrentTabSeed(url, title, std::nullopt);
-  }
-  static std::vector<CommandSuggestion>
-  BuildCurrentTabSeedResultsFromHistoryForTesting(
-      const std::string& current_url,
-      const std::string& current_title,
-      const std::vector<std::pair<std::string, std::string>>& history_entries);
   static int GetPanelCornerRadiusForTesting();
   static int GetSearchRowCornerRadiusForTesting();
   static int GetTopbarHorizontalInsetForTesting();
@@ -141,11 +120,6 @@ class MahoCommandOverlayView : public views::View,
   void OnThemeChanged() override;
 
  private:
-  struct SeededResultHydration {
-    size_t result_index = 0u;
-    GURL url;
-  };
-
   void OnSearchResults(std::vector<CommandSuggestion> results);
   void TriggerSearchForCurrentText();
   void UpdateResultViews(const std::vector<CommandSuggestion>& results);
@@ -162,14 +136,14 @@ class MahoCommandOverlayView : public views::View,
   void UpdateSearchLeadingAccessory();
   void UpdateTrailingAccessoryPresentation();
   void UpdateSearchRowChrome();
-  void InitializeCurrentTabSeedState(const std::string& initial_text);
-  void StartSeededFaviconHydration();
-  void OnSeededFaviconHydrated(
-      uint32_t hydration_generation,
-      SeededResultHydration hydration,
-      const favicon_base::FaviconImageResult& image_result);
-  void ApplyHydratedSeededIcon(size_t result_index, const ImageData& icon);
-  bool ShouldClearSeededStateForText(std::u16string_view text) const;
+  void ExitSiteSearchMode();
+  void EnterAIMode();
+  void ExitAIMode();
+  void EnterCommandsOnlyMode();
+  void ExitCommandsOnlyMode();
+  void ApplyPlaceholderForMode();
+  void UpdateModeChipVisibility();
+  void UpdateModeChip();
 
   raw_ptr<Browser> browser_;
   CommandOverlayMode mode_;
@@ -202,41 +176,19 @@ class MahoCommandOverlayView : public views::View,
 
   void EnterSiteSearchMode(const std::string& prefix,
                            const std::string& engine_name);
-  void ExitSiteSearchMode();
-  void EnterAIMode();
-  void ExitAIMode();
-  void EnterCommandsOnlyMode();
-  void ExitCommandsOnlyMode();
-  void ApplyPlaceholderForMode();
-  void UpdateModeChipVisibility();
-  void UpdateModeChip();
-
-  static CommandSuggestion BuildCurrentTabSeed(
-      const std::string& url,
-      const std::string& title,
-      std::optional<ImageData> icon);
-  static std::vector<CommandSuggestion> BuildCurrentTabSeedResultsFromHistory(
-      const std::string& current_url,
-      const std::string& current_title,
-      const std::optional<ImageData>& current_icon,
-      const std::vector<CommandSuggestion>& history_entries);
-  static std::vector<CommandSuggestion> BuildCurrentTabSeedResults(
-      Browser* browser,
-      const std::string& url);
 
   // views::WidgetObserver:
   void OnWidgetDestroying(views::Widget* widget) override;
 
+  void ApplyVibrancyBackgroundTransparency(bool vibrancy_active);
+
   void OnSearchEngineBadgePressed();
   void OnSearchEngineSelected(const std::string& engine_id);
 
-  std::vector<CommandSuggestion> seeded_results_;
-  bool is_seeded_state_ = false;
-  std::string initial_url_;
-  base::CancelableTaskTracker seeded_favicon_task_tracker_;
-  uint32_t seeded_favicon_hydration_generation_ = 0;
+
 
   raw_ptr<views::Widget> picker_widget_ = nullptr;
+  std::string initial_url_;
   base::ScopedObservation<views::Widget, views::WidgetObserver> picker_observation_{this};
 
   base::WeakPtrFactory<MahoCommandOverlayView> weak_factory_{this};

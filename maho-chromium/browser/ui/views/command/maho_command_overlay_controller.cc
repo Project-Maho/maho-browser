@@ -13,11 +13,13 @@
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "maho/browser/ui/views/command/maho_command_overlay_view.h"
+#include "maho/browser/ui/views/command/maho_command_overlay_vibrancy.h"
 #include "ui/compositor/layer.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/animation/tween.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/transform.h"
 #include "ui/views/animation/animation_builder.h"
@@ -237,6 +239,13 @@ void MahoCommandOverlayController::OnWidgetActivationChanged(
             if (self->widget_->IsActive()) {
               return;
             }
+            // Ignore dismiss requests that arrive within 500ms of Show().
+            // These are almost always spurious activation-change events during
+            // a window foreground transition.
+            if (base::TimeTicks::Now() - self->open_start_ticks_ <
+                base::Milliseconds(500)) {
+              return;
+            }
             self->Hide();
           },
           weak_factory_.GetWeakPtr()));
@@ -394,6 +403,7 @@ void MahoCommandOverlayController::Show(views::View* anchor,
   }
 
   widget_ptr->Show();
+  ApplyVibrancyToCommandOverlay(widget_ptr);
   widget_ptr->Activate();
   {
     const base::TimeDelta open_latency =

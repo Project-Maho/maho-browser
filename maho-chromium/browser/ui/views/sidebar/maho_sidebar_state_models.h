@@ -152,6 +152,7 @@ struct MahoSidebarSearchModel {
   bool has_active_tab = false;
   bool force_placeholder_for_empty_favorites = false;
   bool translation_available = false;
+  bool is_page_translated = false;
   MahoSidebarAddressDisplayMode display_mode =
       MahoSidebarAddressDisplayMode::kSearchPlaceholder;
 };

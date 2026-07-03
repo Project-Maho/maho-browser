@@ -228,32 +228,6 @@ const GURL& GetVisibleOrCommittedUrl(content::WebContents* contents) {
                                               : contents->GetVisibleURL();
 }
 
-MahoLocationBarUtilityPanelAction BuildDeveloperModeAction(
-    const base::Value* parsed_settings) {
-  if (!parsed_settings || !parsed_settings->is_dict()) {
-    return MakeAction(u"Developer mode", u"Developer mode unavailable",
-                      kDeveloperModeIcon,
-                      MahoLocationBarUtilityPanelDataState::kUnavailable,
-                      false);
-  }
-
-  const base::DictValue& root = parsed_settings->GetDict();
-  const base::DictValue* advanced = root.FindDict("advanced");
-  const std::optional<bool> developer_mode =
-      advanced ? advanced->FindBool("developer_mode") : std::nullopt;
-  if (!developer_mode.has_value()) {
-    return MakeAction(u"Developer mode", u"Developer mode unavailable",
-                      kDeveloperModeIcon,
-                      MahoLocationBarUtilityPanelDataState::kUnavailable,
-                      false);
-  }
-
-  return MakeAction(u"Developer mode",
-                    *developer_mode ? u"Enabled" : u"Disabled",
-                    kDeveloperModeIcon,
-                    MahoLocationBarUtilityPanelDataState::kLive, false);
-}
-
 std::u16string DescribeAutoPipState(ContentSetting setting, bool embargoed) {
   if (embargoed) {
     return u"Blocked for this site";
@@ -820,10 +794,6 @@ MahoUtilityPanelZone BuildSettingsZone(Browser* browser) {
   zone.style = MahoUtilityPanelZoneStyle::kSettingsList;
   zone.header_label = u"Settings";
 
-  MahoCore* core = maho::GetCore();
-  std::optional<base::Value> settings = ReadCoreSettings(core);
-  zone.items.push_back(BuildDeveloperModeAction(
-      settings ? &*settings : nullptr));
   zone.items.push_back(BuildBlockAdsAndTrackersRow(browser));
   zone.items.push_back(BuildAutoPipSettingsRow(
       GetActiveWebContents(browser), browser ? browser->profile() : nullptr));

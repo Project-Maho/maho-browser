@@ -82,6 +82,7 @@ class MahoCommandResultRowView : public views::View {
   void UpdateLayout();
 
   const CommandSuggestionType suggestion_type_;
+  const bool is_tab_type_;
   const PresentationStyle presentation_style_;
   const std::u16string title_text_;
   const std::u16string subtitle_text_;
@@ -102,6 +103,10 @@ class MahoCommandResultRowView : public views::View {
   raw_ptr<views::Label> compact_separator_label_ = nullptr;
   raw_ptr<views::Label> compact_metadata_label_ = nullptr;
   raw_ptr<views::Label> shortcut_label_ = nullptr;
+  raw_ptr<views::View> switch_tab_container_ = nullptr;
+  raw_ptr<views::Label> switch_tab_label_ = nullptr;
+  raw_ptr<views::View> switch_tab_chip_ = nullptr;
+  raw_ptr<views::ImageView> switch_tab_icon_ = nullptr;
   bool uses_fallback_glyph_ = false;
   bool selected_ = false;
 };

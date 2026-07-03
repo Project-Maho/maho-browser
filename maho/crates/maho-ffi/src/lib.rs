@@ -4,7 +4,7 @@ pub mod import;
 pub mod import_destination;
 pub(crate) mod import_gate;
 
-use std::ffi::{c_char, CStr, CString};
+use std::ffi::{c_char, CStr, CString, c_void};
 use std::path::Path;
 use std::ptr;
 
@@ -626,14 +626,151 @@ pub unsafe extern "C" fn maho_core_set_installed_extensions(
         Ok(s) => s,
         Err(_) => return,
     };
-    let extensions: Vec<maho_core::extension_bridge::InstalledExtension> =
-        match serde_json::from_str(json_str) {
+    let extensions =
+        match maho_core::extension_bridge::parse_extension_payload(json_str) {
             Ok(exts) => exts,
             Err(_) => return,
         };
     core.set_installed_extensions(extensions);
 
     }, ())
+}
+
+pub type MahoExtensionSyncCallback = unsafe extern "C" fn(
+    user_data: *mut c_void,
+    extension_id: *const c_char,
+    enabled: bool,
+    deleted: bool,
+);
+
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_register_extension_sync_callback(
+    ptr: *mut MahoCore,
+    callback: Option<MahoExtensionSyncCallback>,
+    user_data: *mut c_void,
+) {
+    ffi_safe!({
+        if ptr.is_null() {
+            return;
+        }
+        let core = &mut *ptr;
+        if let Some(cb) = callback {
+            let ud_raw = user_data as usize;
+            core.register_extension_sync_callback(Some(Box::new(move |id, enabled, deleted| {
+                let id_c = CString::new(id).unwrap();
+                let ud = ud_raw as *mut c_void;
+                cb(ud, id_c.as_ptr(), enabled, deleted);
+            })));
+        } else {
+            core.register_extension_sync_callback(None);
+        }
+    }, ())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_register_side_panel(
+    ptr: *mut MahoCore,
+    extension_id: *const c_char,
+    path: *const c_char,
+    layout: *const c_char,
+    default_width: i32,
+) {
+    ffi_safe!({
+        if ptr.is_null() || extension_id.is_null() || path.is_null() || layout.is_null() {
+            return;
+        }
+        let core = &mut *ptr;
+        let ext_id = CStr::from_ptr(extension_id).to_string_lossy();
+        let p = CStr::from_ptr(path).to_string_lossy();
+        let lay_str = CStr::from_ptr(layout).to_string_lossy();
+        let layout_enum = if lay_str == "left" {
+            maho_core::extension_bridge::SidePanelLayout::Left
+        } else {
+            maho_core::extension_bridge::SidePanelLayout::Right
+        };
+        core.register_side_panel(&ext_id, maho_core::extension_bridge::SidePanelOptions {
+            path: p.to_string(),
+            layout: layout_enum,
+            default_width,
+        });
+    }, ())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_unregister_side_panel(
+    ptr: *mut MahoCore,
+    extension_id: *const c_char,
+) {
+    ffi_safe!({
+        if ptr.is_null() || extension_id.is_null() {
+            return;
+        }
+        let core = &mut *ptr;
+        let ext_id = CStr::from_ptr(extension_id).to_string_lossy();
+        core.unregister_side_panel(&ext_id);
+    }, ())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_side_panel_options(
+    ptr: *mut MahoCore,
+    extension_id: *const c_char,
+    out_path: *mut *mut c_char,
+    out_layout: *mut *mut c_char,
+    out_default_width: *mut i32,
+) -> bool {
+    ffi_safe!({
+        if ptr.is_null() || extension_id.is_null() {
+            return false;
+        }
+        let core = &*ptr;
+        let ext_id = CStr::from_ptr(extension_id).to_string_lossy();
+        if let Some(opt) = core.get_side_panel_options(ext_id.as_ref()) {
+            if !out_path.is_null() {
+                let p_cstr = CString::new(opt.path.clone()).unwrap();
+                *out_path = p_cstr.into_raw();
+            }
+            if !out_layout.is_null() {
+                let lay_str = match opt.layout {
+                    maho_core::extension_bridge::SidePanelLayout::Left => "left",
+                    maho_core::extension_bridge::SidePanelLayout::Right => "right",
+                };
+                let lay_cstr = CString::new(lay_str).unwrap();
+                *out_layout = lay_cstr.into_raw();
+            }
+            if !out_default_width.is_null() {
+                *out_default_width = opt.default_width;
+            }
+            true
+        } else {
+            false
+        }
+    }, false)
+}
+
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// Caller must free the returned string with `maho_string_free` if not null.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_password_provider_extension(
+    ptr: *mut MahoCore,
+) -> *mut c_char {
+    ffi_safe!({
+        if ptr.is_null() {
+            return ptr::null_mut();
+        }
+        if import_gate::is_active() {
+            return ptr::null_mut();
+        }
+        let core = &*ptr;
+        let extensions = core.get_installed_extensions();
+        if let Some(ext_id) = maho_core::extension_bridge::find_password_provider(&extensions) {
+            CString::new(ext_id).map(|c| c.into_raw()).unwrap_or(ptr::null_mut())
+        } else {
+            ptr::null_mut()
+        }
+    }, ptr::null_mut())
 }
 
 /// # Safety
@@ -649,81 +786,6 @@ pub unsafe extern "C" fn maho_core_is_native_password_provider_active(ptr: *mut 
     if import_gate::is_active() { return false; }
     let core = &*ptr;
     core.get_settings().autofill.password_provider == maho_types::passwords::PasswordProviderKind::MahoNative
-
-    }, false)
-}
-
-/// # Safety
-/// `ptr` must be a valid pointer returned by `maho_core_new`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_core_is_bitwarden_extension_available(ptr: *mut MahoCore) -> bool {
-    ffi_safe!({
-
-    if ptr.is_null() {
-        return false;
-    }
-    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
-    if import_gate::is_active() { return false; }
-    let core = &*ptr;
-    core.get_installed_extensions().iter().any(|ext| {
-        ext.enabled && ext.name.to_lowercase().contains("bitwarden")
-    })
-
-    }, false)
-}
-
-/// # Safety
-/// `ptr` must be a valid pointer returned by `maho_core_new`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_core_is_onepassword_extension_available(ptr: *mut MahoCore) -> bool {
-    ffi_safe!({
-
-    if ptr.is_null() {
-        return false;
-    }
-    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
-    if import_gate::is_active() { return false; }
-    let core = &*ptr;
-    core.get_installed_extensions().iter().any(|ext| {
-        ext.enabled && (ext.name.to_lowercase().contains("1password") || ext.name.to_lowercase().contains("onepassword"))
-    })
-
-    }, false)
-}
-
-/// # Safety
-/// `ptr` must be a valid pointer to a MahoCore.
-/// `mode` must be a valid null-terminated C string.
-#[no_mangle]
-pub unsafe extern "C" fn maho_core_is_password_provider_available(
-    ptr: *mut MahoCore,
-    mode: *const c_char,
-) -> bool {
-    ffi_safe!({
-
-    if ptr.is_null() || mode.is_null() {
-        return false;
-    }
-    // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
-    if import_gate::is_active() { return false; }
-    let core = &*ptr;
-    let mode_str = match CStr::from_ptr(mode).to_str() {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-    if mode_str == "chromium" || mode_str == "builtin" || mode_str == "disabled" || mode_str == "system" || mode_str == "maho_native" {
-        true
-    } else if mode_str == "bitwarden" {
-        core.get_installed_extensions().iter().any(|ext| {
-            ext.enabled && ext.name.to_lowercase().contains("bitwarden")
-        })
-    } else if mode_str == "onepassword" {
-        core.get_installed_extensions().iter().any(|ext| {
-            ext.enabled && (ext.name.to_lowercase().contains("1password") || ext.name.to_lowercase().contains("onepassword"))
-        })
-    } else {
-        true
-    }
 
     }, false)
 }

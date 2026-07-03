@@ -1752,38 +1752,6 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
         ),
     ],
-    # ── webstore_install_helper.cc ────────────────────────────────────────────
-    "extensions/browser/webstore_install_helper.cc": [
-        Replacement(
-            old='#include "base/values.h"\n',
-            new=(
-                '#include "base/logging.h"\n'
-                '#include "base/values.h"\n'
-            ),
-            description=(
-                "Inject base/logging.h before base/values.h in "
-                "webstore_install_helper.cc so LOG(ERROR) is available for the "
-                "[maho-diag] icon-fetch diagnostic"
-            ),
-            guard='#include "base/logging.h"',
-        ),
-        Replacement(
-            old='  error_ = kImageDecodeError;\n',
-            new=(
-                '  LOG(ERROR) << "[maho-diag] WebstoreInstallHelper::OnFetchComplete"\n'
-                '             << " icon_url=" << icon_url_.spec()\n'
-                '             << " http_code=" << metadata.http_response_code\n'
-                '             << " image_empty=" << fetched_image.IsEmpty();\n'
-                '  error_ = kImageDecodeError;\n'
-            ),
-            description=(
-                "Inject [maho-diag] LOG(ERROR) in OnFetchComplete() image-decode "
-                "error path to surface icon_url, HTTP response code, and image "
-                "emptiness for diagnostic purposes"
-            ),
-            guard='"[maho-diag] WebstoreInstallHelper::OnFetchComplete"',
-        ),
-    ],
     # ── chrome_web_ui_configs.cc ──────────────────────────────────────────────
     "chrome/browser/ui/webui/chrome_web_ui_configs.cc": [
         Replacement(

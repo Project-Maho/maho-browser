@@ -126,9 +126,6 @@ namespace internal {
 bool IsAtMaxZoom(zoom::ZoomController* zoom_controller);
 bool IsAtMinZoom(zoom::ZoomController* zoom_controller);
 
-MahoLocationBarUtilityPanelAction BuildDeveloperModeAction(
-    const base::Value* parsed_settings);
-
 MahoLocationBarUtilityPanelAction BuildShareAction(Browser* browser);
 
 MahoLocationBarUtilityPanelAction BuildCameraAction(Browser* browser);

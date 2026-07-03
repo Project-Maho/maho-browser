@@ -64,6 +64,7 @@ class MahoNotificationOverlay
 
  private:
   void CreateWidget();
+  void PrimeAnimationStartFrame();
   void StartShowAnimation();
   void StartHideAnimation();
   gfx::Rect ComputeTargetBounds() const;

@@ -6,8 +6,10 @@ mod server;
 mod storage;
 mod sync;
 mod billing;
+mod themes;
 
 use config::RelayConfig;
+
 use sea_orm::{ConnectionTrait, Database};
 use sea_orm_migration::MigratorTrait;
 

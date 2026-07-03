@@ -10,12 +10,14 @@ BASE_FEATURE(kMahoUnifiedClickPath,
              "MahoUnifiedClickPath",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kMahoCommandPaletteSeededHistory,
-             "MahoCommandPaletteSeededHistory",
-             base::FEATURE_ENABLED_BY_DEFAULT);
+
 
 BASE_FEATURE(kMahoArcToolbarButtonProvider,
              "MahoArcToolbarButtonProvider",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kMahoCommandPaletteVibrancy,
+             "MahoCommandPaletteVibrancy",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 }  // namespace maho::features

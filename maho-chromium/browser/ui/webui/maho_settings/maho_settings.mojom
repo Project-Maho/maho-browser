@@ -160,6 +160,7 @@ struct InstalledExtension {
   string version;
   string description;
   bool enabled;
+  uint32 manifest_version;
 };
 
 struct AccountStatus {
@@ -274,6 +275,7 @@ interface PageHandler {
   GetInstalledExtensions() => (array<InstalledExtension> extensions);
   ToggleExtension(string id) => (bool enabled);
   RemoveExtension(string id) => (RemoveExtensionResult result);
+  OpenExtensionsPage();
 
   SetBYOKKey(string provider, string key) => (bool success);
   ClearBYOKKey(string provider) => (bool success);

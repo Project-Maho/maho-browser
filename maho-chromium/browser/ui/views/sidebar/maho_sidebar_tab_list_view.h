@@ -152,6 +152,10 @@ class MahoSidebarTabListView : public views::View,
                              ui::mojom::MenuSourceType source_type,
                              MahoTabContextMenu::Delegate* delegate = nullptr);
 
+  void UpdateActiveTabHighlightOnly(const std::string& new_active_tab_id);
+
+  bool HasTabInLastModel(const std::string& tab_id) const;
+
   void ShowContextMenuForViewImpl(views::View* source,
                                   const gfx::Point& point,
                                   ui::mojom::MenuSourceType source_type) override;
@@ -241,6 +245,7 @@ class MahoSidebarTabListView : public views::View,
   bool suppress_state_push_rebuild_ = false;
 
   std::string last_model_fingerprint_;
+  std::string last_active_tab_id_;
 
   std::map<std::string, raw_ptr<SidebarFolderRowView>> folder_rows_by_id_;
 
@@ -355,6 +360,10 @@ class SidebarTabRowView : public views::View,
   void SetSuspended(bool suspended);
   bool is_suspended() const { return is_suspended_; }
 
+  // Toggles active-highlight without rebuilding. Enables the fast path in
+  // MahoSidebarTabListView that skips ~2s RebuildRows() on tab activation.
+  void SetActive(bool active);
+
   void SetFavicon(ui::ImageModel image);
   const std::string& tab_id() const { return tab_id_; }
   const std::string& containing_folder_id() const { return source_parent_folder_id_; }
@@ -369,7 +378,8 @@ class SidebarTabRowView : public views::View,
   void ApplyDisplayedTitle(const std::u16string& title);
   void UpdateAppearance();
 
-  const bool active_;
+  // Non-const to allow SetActive() partial update; see comment on SetActive().
+  bool active_;
   const bool pinned_;
   const bool audible_;
   const bool muted_;

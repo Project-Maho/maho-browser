@@ -1,102 +1,16 @@
 #!/usr/bin/env bun
-// CDP E2E verification harness for maho_settings auth/billing flow.
-// Usage:
-//   1. Start local relay:
-//        MAHO_RELAY_SERVICE_TOKEN=qa-test \
-//          maho/relay/target/release/maho-relay \
-//          --port 18765 --db-path /tmp/relay.db --open-registration \
-//          --min-password-length 8 &
-//   2. Signup test user:
-//        curl -X POST http://127.0.0.1:18765/auth/signup \
-//          -H "Content-Type: application/json" \
-//          -d '{"email":"qa@maho.local","password":"test12345678","display_name":"QA","device_name":"CDP","device_type":"desktop"}'
-//   3. Launch Maho with MAHO_RELAY_URL=http://127.0.0.1:18765 --remote-debugging-port=9222
-//   4. Run this script: bunx tsx .tmp/test_settings_auth_billing_flow.ts
-
-const RELAY = "http://127.0.0.1:18765";
-const CDP_HOST = "http://127.0.0.1:9222";
-const CDP_URL_ROOT = "chrome://maho-settings/?pane=";
-
-const RESET = "\x1b[0m";
-const GREEN = "\x1b[32m";
-const RED = "\x1b[31m";
-const CYAN = "\x1b[36m";
-
-let passed = 0;
-let failed = 0;
-const failures: string[] = [];
-
-function assert(cond: unknown, label: string): void {
-  if (cond) {
-    console.log(`${GREEN}  ✓${RESET} ${label}`);
-    passed++;
-  } else {
-    console.log(`${RED}  ✗${RESET} ${label}`);
-    failures.push(label);
-    failed++;
-  }
-}
-
-function step(label: string): void {
-  console.log(`\n${CYAN}=== ${label} ===${RESET}`);
-}
-
-async function getSettingsWs(): Promise<WebSocket> {
-  const targets = await (await fetch(`${CDP_HOST}/json`)).json();
-  let t = targets.find((x: any) => x.url.includes("maho-settings"));
-  if (!t) {
-    await fetch(`${CDP_HOST}/json/new?chrome://maho-settings/?pane=account`, {method: "PUT"});
-    await new Promise(r => setTimeout(r, 3000));
-    const retry = await (await fetch(`${CDP_HOST}/json`)).json();
-    t = retry.find((x: any) => x.url.includes("maho-settings"));
-  }
-  if (!t) throw new Error("no maho-settings tab");
-  const ws = new WebSocket(t.webSocketDebuggerUrl);
-  await new Promise<void>(r => (ws.onopen = () => r()));
-  return ws;
-}
-
-class CDP {
-  ws: WebSocket;
-  id = 0;
-  pending = new Map<number, (msg: any) => void>();
-  constructor(ws: WebSocket) {
-    this.ws = ws;
-    ws.onmessage = (e) => {
-      const m = JSON.parse(e.data);
-      if (m.id && this.pending.has(m.id)) {
-        this.pending.get(m.id)!(m);
-        this.pending.delete(m.id);
-      }
-    };
-  }
-  send(method: string, params: any = {}): Promise<any> {
-    const i = ++this.id;
-    return new Promise((res) => {
-      this.pending.set(i, res);
-      this.ws.send(JSON.stringify({id: i, method, params}));
-    });
-  }
-  async eval<T = any>(expr: string, awaitPromise = false): Promise<T | undefined> {
-    const r = await this.send("Runtime.evaluate", {expression: expr, returnByValue: true, awaitPromise});
-    return r?.result?.result?.value;
-  }
-  async navigate(url: string, waitMs = 3500): Promise<void> {
-    await this.send("Page.navigate", {url});
-    await new Promise(r => setTimeout(r, waitMs));
-  }
-}
+import {
+  CDP,
+  assert,
+  step,
+  getSettingsWs,
+  checkRelayOrExit,
+  reportResultsAndExit,
+  CDP_URL_ROOT
+} from "./cdp_harness";
 
 async function main() {
-  console.log(`${CYAN}Maho Settings E2E harness${RESET}`);
-  console.log(`Relay: ${RELAY}`);
-  console.log(`CDP:   ${CDP_HOST}`);
-
-  const healthOk = await fetch(`${RELAY}/health`).then(r => r.text()).catch(() => "");
-  if (healthOk.trim() !== "ok") {
-    console.error(`${RED}Relay not reachable at ${RELAY}. Start it first.${RESET}`);
-    process.exit(2);
-  }
+  await checkRelayOrExit();
 
   const ws = await getSettingsWs();
   const cdp = new CDP(ws);
@@ -158,7 +72,6 @@ async function main() {
     var hasInvoicesSection = /Invoices|No invoices|Receipts/i.test(text);
     var btns = Array.from(main.querySelectorAll('button')).map(function(b){return b.textContent.trim();});
     var portalBtnLabels = btns.filter(function(l){return /Manage|Adjust plan/i.test(l);});
-    // Note: cannot inspect onclick handler from DOM; we validate at the network layer separately.
     return {hasInvoicesSection: hasInvoicesSection, portalBtnLabels: portalBtnLabels, noStripeCom: true, text: text.slice(0, 400)};
   })()`);
   assert(invoicesPortal!.hasInvoicesSection === true, "Invoices section rendered (Bug #8)");
@@ -223,30 +136,19 @@ async function main() {
   })()`);
   assert(afterSignout!.formVisible === true, `Sign-in form visible after Sign out: ${afterSignout!.text.slice(0, 80)}`);
 
-  step("Step 7 — Theme store UX (Bug #12)");
+  step("Step 7 — Theme store UX (after Phase B)");
   await cdp.navigate(`${CDP_URL_ROOT}theme-store`, 4500);
-  const themeStore = await cdp.eval<{comingSoon: boolean; hasRetry: boolean; text: string}>(`(function(){
+  const themeStore = await cdp.eval<{hasThemeCards: boolean; text: string}>(`(function(){
     var main = document.querySelector('main');
     var text = (main ? main.textContent : '').replace(/\\s+/g, ' ');
-    var comingSoon = /coming soon/i.test(text);
-    var btns = Array.from(main.querySelectorAll('button')).map(function(b){return b.textContent.trim();});
-    var hasRetry = btns.some(function(t){return t.toLowerCase() === 'retry';});
-    return {comingSoon: comingSoon, hasRetry: hasRetry, text: text.slice(0, 300)};
+    var hasThemeCards = /Midnight|Sunset Glow|Forest Green/i.test(text);
+    return {hasThemeCards: hasThemeCards, text: text.slice(0, 300)};
   })()`);
-  assert(themeStore!.comingSoon === true, `Theme store 'coming soon' text visible (Bug #12): ${themeStore!.text.slice(0, 120)}`);
-  assert(themeStore!.hasRetry === false, "Retry button hidden on theme store failure (Bug #12)");
+  assert(themeStore!.hasThemeCards === true, `Theme store loaded themes successfully (Bug #12, Phase B backend verified): ${themeStore!.text.slice(0, 120)}`);
+  assert(themeStore!.text.toLowerCase().includes("midnight"), "Midnight theme card rendered in the list");
 
   ws.close();
-
-  console.log(`\n${CYAN}=== Result ===${RESET}`);
-  console.log(`${GREEN}Passed: ${passed}${RESET}`);
-  console.log(`${RED}Failed: ${failed}${RESET}`);
-  if (failed > 0) {
-    console.log(`${RED}Failures:${RESET}`);
-    for (const f of failures) console.log(`  - ${f}`);
-    process.exit(1);
-  }
-  process.exit(0);
+  reportResultsAndExit();
 }
 
 await main();

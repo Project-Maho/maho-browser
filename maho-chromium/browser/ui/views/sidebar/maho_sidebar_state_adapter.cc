@@ -724,6 +724,8 @@ MahoSidebarSearchModel MahoSidebarStateAdapter::BuildSearchModel(
             language_state &&
             language_state->translate_enabled() &&
             !language_state->IsPageTranslated();
+        model.is_page_translated =
+            language_state && language_state->IsPageTranslated();
       }
     }
   } else {

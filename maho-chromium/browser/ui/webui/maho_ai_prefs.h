@@ -32,6 +32,7 @@ inline constexpr char kAiViewMode[] = "maho.ai.view_mode";
 // creation. Empty string means "no key configured" → agent fails closed.
 inline constexpr char kByokOpenAIEncryptedB64[] = "maho.ai.byok.openai.encrypted_b64";
 inline constexpr char kByokAnthropicEncryptedB64[] = "maho.ai.byok.anthropic.encrypted_b64";
+inline constexpr char kAgentToolGrants[] = "maho.ai.extensions.agent_tool_grants";
 
 }  // namespace maho::ai_prefs
 

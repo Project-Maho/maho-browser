@@ -25,6 +25,7 @@
 #include "components/translate/content/browser/content_translate_driver.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
+#include "maho/browser/maho_tab_id_helper.h"
 #include "url/gurl.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -798,6 +799,34 @@ void MahoSidebarView::OnTabStripModelChanged(
       change.type() == TabStripModelChange::kReplaced) {
     RefreshTranslateObservation();
   }
+
+  auto get_new_active_tab_id = [&selection]() -> std::string {
+    if (!selection.new_contents) {
+      return {};
+    }
+    auto* helper = MahoTabIdHelper::FromWebContents(selection.new_contents);
+    return helper ? helper->stable_tab_id() : std::string();
+  };
+
+  // Fast path: pure activation of a live tab.
+  if (change.type() == TabStripModelChange::kSelectionOnly &&
+      selection.active_tab_changed() && tab_list_view_) {
+    tab_list_view_->UpdateActiveTabHighlightOnly(get_new_active_tab_id());
+    return;
+  }
+
+  // Fast path: wake-from-suspend. The tab already exists in the sidebar
+  // model, so the "insert" is not a structural change — just a state flip
+  // (suspended → live). Skip the full refresh cascade.
+  if (change.type() == TabStripModelChange::kInserted &&
+      selection.active_tab_changed() && tab_list_view_) {
+    const std::string new_active_tab_id = get_new_active_tab_id();
+    if (tab_list_view_->HasTabInLastModel(new_active_tab_id)) {
+      tab_list_view_->UpdateActiveTabHighlightOnly(new_active_tab_id);
+      return;
+    }
+  }
+
   ScheduleRefreshAll();
 }
 

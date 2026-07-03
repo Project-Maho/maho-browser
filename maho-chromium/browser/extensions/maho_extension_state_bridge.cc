@@ -17,8 +17,11 @@
 #include "extensions/browser/ui_util.h"
 #include "extensions/browser/uninstall_reason.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/permissions/permissions_data.h"
+#include "extensions/common/permissions/permission_set.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/third_party/maho/maho_ffi.h"
+#include "content/public/browser/browser_thread.h"
 
 namespace maho {
 
@@ -51,6 +54,11 @@ MahoExtensionStateBridge::MahoExtensionStateBridge(Profile* profile)
   GetInstanceMap()[profile_] = this;
   observation_.Observe(extensions::ExtensionRegistry::Get(profile_));
   PushFullSnapshot();
+
+  MahoCore* core = maho::GetCore();
+  if (core) {
+    maho_core_register_extension_sync_callback(core, OnSyncCallback, this);
+  }
 }
 
 MahoExtensionStateBridge::~MahoExtensionStateBridge() {
@@ -58,6 +66,7 @@ MahoExtensionStateBridge::~MahoExtensionStateBridge() {
   MahoCore* core = maho::GetCore();
   if (core) {
     maho_core_clear_installed_extensions(core);
+    maho_core_register_extension_sync_callback(core, nullptr, nullptr);
   }
 }
 
@@ -189,6 +198,14 @@ void MahoExtensionStateBridge::PushFullSnapshot() {
     dict.Set("version", ext->version().GetString());
     dict.Set("description", ext->description());
     dict.Set("enabled", true);
+    dict.Set("manifestVersion", ext->manifest_version());
+
+    base::ListValue permissions_list;
+    for (const extensions::APIPermission* permission : ext->permissions_data()->active_permissions().apis()) {
+      permissions_list.Append(permission->name());
+    }
+    dict.Set("permissions", std::move(permissions_list));
+
     list.Append(std::move(dict));
   }
 
@@ -203,11 +220,23 @@ void MahoExtensionStateBridge::PushFullSnapshot() {
     dict.Set("version", ext->version().GetString());
     dict.Set("description", ext->description());
     dict.Set("enabled", false);
+    dict.Set("manifestVersion", ext->manifest_version());
+
+    base::ListValue permissions_list;
+    for (const extensions::APIPermission* permission : ext->permissions_data()->active_permissions().apis()) {
+      permissions_list.Append(permission->name());
+    }
+    dict.Set("permissions", std::move(permissions_list));
+
     list.Append(std::move(dict));
   }
 
+  base::DictValue envelope;
+  envelope.Set("schema_version", 1);
+  envelope.Set("extensions", std::move(list));
+
   std::string json;
-  if (base::JSONWriter::Write(list, &json)) {
+  if (base::JSONWriter::Write(envelope, &json)) {
     maho_core_set_installed_extensions(core, json.c_str());
   }
 
@@ -232,6 +261,47 @@ void MahoExtensionStateBridge::NotifyObservers() {
   for (auto& observer : observers_) {
     observer.OnInstalledExtensionsChanged();
   }
+}
+
+void MahoExtensionStateBridge::HandleIncomingSync(const std::string& extension_id,
+                                                  bool enabled,
+                                                  bool deleted) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  auto* registry = extensions::ExtensionRegistry::Get(profile_);
+  if (!registry) {
+    return;
+  }
+
+  if (deleted) {
+    auto* registrar = extensions::ExtensionRegistrar::Get(profile_);
+    if (registrar) {
+      registrar->UninstallExtension(
+          extension_id,
+          extensions::UNINSTALL_REASON_SYNC,
+          nullptr);
+    }
+    return;
+  }
+
+  bool currently_enabled = registry->enabled_extensions().Contains(extension_id);
+  if (enabled && !currently_enabled) {
+    RequestEnable(extension_id);
+  } else if (!enabled && currently_enabled) {
+    RequestDisable(extension_id);
+  }
+}
+
+// static
+void MahoExtensionStateBridge::OnSyncCallback(void* user_data,
+                                              const char* extension_id,
+                                              bool enabled,
+                                              bool deleted) {
+  MahoExtensionStateBridge* bridge = static_cast<MahoExtensionStateBridge*>(user_data);
+  std::string id(extension_id);
+  content::GetUIThreadTaskRunner({})->PostTask(
+      FROM_HERE,
+      base::BindOnce(&MahoExtensionStateBridge::HandleIncomingSync,
+                     bridge->weak_factory_.GetWeakPtr(), id, enabled, deleted));
 }
 
 }  // namespace maho

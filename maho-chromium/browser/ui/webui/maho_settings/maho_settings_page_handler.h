@@ -145,6 +145,7 @@ class MahoSettingsPageHandler
                        ToggleExtensionCallback callback) override;
   void RemoveExtension(const std::string& id,
                        RemoveExtensionCallback callback) override;
+  void OpenExtensionsPage() override;
 
   void SetBYOKKey(const std::string& provider,
                   const std::string& key,
@@ -227,6 +228,17 @@ class MahoSettingsPageHandler
 
   std::unique_ptr<extensions::ExtensionUninstallDialog> uninstall_dialog_;
   RemoveExtensionCallback pending_remove_callback_;
+
+  struct PendingToggle {
+    PendingToggle();
+    ~PendingToggle();
+    bool target_state;
+    ToggleExtensionCallback callback;
+    base::OneShotTimer timer;
+  };
+  base::flat_map<std::string, std::unique_ptr<PendingToggle>> pending_toggles_;
+
+  void OnToggleTimeout(const std::string& extension_id);
 
   std::unique_ptr<network::SimpleURLLoader> theme_store_loader_;
   std::string cached_theme_store_json_;

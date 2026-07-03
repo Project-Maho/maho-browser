@@ -31,7 +31,7 @@ namespace maho::features {
 // mouse/keyboard focus path. The flag is retained as a kill-switch pending
 // end-to-end QA sign-off.
 BASE_DECLARE_FEATURE(kMahoUnifiedClickPath);
-BASE_DECLARE_FEATURE(kMahoCommandPaletteSeededHistory);
+
 
 // When enabled, Maho replaces the upstream `ToolbarButtonProvider`
 // (registered by `ToolbarView` on `BrowserWindowInterface`) with a
@@ -46,6 +46,7 @@ BASE_DECLARE_FEATURE(kMahoCommandPaletteSeededHistory);
 // sidebar's "Translation Available" label loses its click handler.  Used
 // as a kill-switch pending end-to-end QA sign-off.
 BASE_DECLARE_FEATURE(kMahoArcToolbarButtonProvider);
+BASE_DECLARE_FEATURE(kMahoCommandPaletteVibrancy);
 
 }  // namespace maho::features
 

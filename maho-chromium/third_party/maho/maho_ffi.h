@@ -242,37 +242,38 @@ char *maho_core_get_installed_extensions(struct MahoCore *ptr);
  */
 void maho_core_clear_installed_extensions(struct MahoCore *ptr);
 
-/**
- * # Safety
- * `ptr` must be a valid pointer returned by `maho_core_new`.
- * `extensions_json` must be a valid null-terminated C string.
- */
 void maho_core_set_installed_extensions(struct MahoCore *ptr, const char *extensions_json);
+
+typedef void (*MahoExtensionSyncCallback)(void* user_data,
+                                          const char* extension_id,
+                                          bool enabled,
+                                          bool deleted);
+
+void maho_core_register_extension_sync_callback(struct MahoCore *ptr,
+                                                MahoExtensionSyncCallback callback,
+                                                void* user_data);
+
+void maho_core_register_side_panel(struct MahoCore *ptr,
+                                   const char *extension_id,
+                                   const char *path,
+                                   const char *layout,
+                                   int32_t default_width);
+
+void maho_core_unregister_side_panel(struct MahoCore *ptr,
+                                     const char *extension_id);
+
+bool maho_core_get_side_panel_options(struct MahoCore *ptr,
+                                      const char *extension_id,
+                                      char **out_path,
+                                      char **out_layout,
+                                      int32_t *out_default_width);
 
 /**
  * # Safety
  * `ptr` must be a valid pointer returned by `maho_core_new`.
  */
 bool maho_core_is_native_password_provider_active(struct MahoCore *ptr);
-
-/**
- * # Safety
- * `ptr` must be a valid pointer returned by `maho_core_new`.
- */
-bool maho_core_is_bitwarden_extension_available(struct MahoCore *ptr);
-
-/**
- * # Safety
- * `ptr` must be a valid pointer returned by `maho_core_new`.
- */
-bool maho_core_is_onepassword_extension_available(struct MahoCore *ptr);
-
-/**
- * # Safety
- * `ptr` must be a valid pointer to a MahoCore.
- * `mode` must be a valid null-terminated C string.
- */
-bool maho_core_is_password_provider_available(struct MahoCore *ptr, const char *mode);
+char *maho_core_get_password_provider_extension(struct MahoCore *ptr);
 
 /**
  * # Safety

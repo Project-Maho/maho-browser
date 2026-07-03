@@ -103,6 +103,7 @@ pub enum SyncEntityType {
     SearchEngine,
     Shortcut,
     Memory,
+    Extension,
 }
 
 /// A versioned entity for LWW sync

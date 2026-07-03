@@ -435,5 +435,42 @@ TEST_F(MahoCommandOverlayControllerTest,
   ReleaseInjectedWidget(*controller);
 }
 
+TEST_F(MahoCommandOverlayControllerTest,
+       SpuriousActivationLossImmediatelyAfterShowDoesNotDismiss) {
+  std::unique_ptr<views::Widget> parent = CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+  parent->Show();
+
+  auto controller = MakeController();
+  InjectVisibleWidget(*controller, parent.get());
+
+  // Set open_start_ticks_ to now.
+  controller->open_start_ticks_ = base::TimeTicks::Now();
+
+  // Simulate deactivation immediately after show.
+  CallOnWidgetActivationChanged(*controller, GetOverlayWidget(*controller), false);
+  ASSERT_TRUE(DeactivationTimerIsRunning(*controller));
+
+  // Fast-forward by 300ms (so timer fires, since delay is 200ms).
+  task_environment()->FastForwardBy(base::Milliseconds(300));
+
+  // The overlay should still be visible because we are within the 500ms grace period.
+  EXPECT_TRUE(controller->IsVisible());
+
+  // Fast-forward to 600ms after show.
+  task_environment()->FastForwardBy(base::Milliseconds(300));
+
+  // Simulate deactivation again.
+  CallOnWidgetActivationChanged(*controller, GetOverlayWidget(*controller), false);
+  ASSERT_TRUE(DeactivationTimerIsRunning(*controller));
+
+  // Fast-forward by another 300ms (total time since show > 500ms).
+  task_environment()->FastForwardBy(base::Milliseconds(300));
+
+  // Now it should be hidden (or starting to hide).
+  EXPECT_FALSE(controller->IsVisible());
+
+  ReleaseInjectedWidget(*controller);
+}
+
 }  // namespace
 }  // namespace maho

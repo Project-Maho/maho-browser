@@ -21,6 +21,7 @@
 class Browser;
 namespace views {
 class ContextMenuController;
+class ImageButton;
 class MenuRunner;
 class Label;
 class Textfield;
@@ -96,6 +97,7 @@ class MahoSidebarSearchView : public views::View,
   void OnIdleButtonPressed(const ui::Event& event);
   void OnTranslateLabelClicked();
   void OnIdleButtonHoverChanged(bool hover_visible);
+  void OnCopyUrlPressed(const ui::Event& event);
   void ToggleUtilityPanel();
   views::Widget* ShowUtilityPanel();
   void SetUtilityPanelWidget(views::Widget* widget);
@@ -112,6 +114,7 @@ class MahoSidebarSearchView : public views::View,
   raw_ptr<views::Label> secondary_label_ = nullptr;
   raw_ptr<views::View> utility_icon_slot_ = nullptr;
   raw_ptr<MahoLocationBarUtilityIconView> utility_icon_ = nullptr;
+  raw_ptr<views::ImageButton> copy_url_button_ = nullptr;
   raw_ptr<views::Textfield> textfield_ = nullptr;
   raw_ptr<views::Widget> utility_panel_widget_ = nullptr;
   base::ScopedObservation<views::Widget, views::WidgetObserver>

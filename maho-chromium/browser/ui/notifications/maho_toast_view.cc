@@ -13,7 +13,8 @@
 
 MahoToastView::MahoToastView() {
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::Orientation::kVertical, gfx::Insets(12), 4));
+      views::BoxLayout::Orientation::kVertical,
+      gfx::Insets::TLBR(10, 14, 10, 14), 2));
   layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kStretch);
 
   auto title = std::make_unique<views::Label>();
@@ -22,7 +23,7 @@ MahoToastView::MahoToastView() {
   title_label_->SetSubpixelRenderingEnabled(false);
   title_label_->SetAutoColorReadabilityEnabled(false);
   title_label_->SetFontList(title_label_->font_list().Derive(
-      2, gfx::Font::NORMAL, gfx::Font::Weight::BOLD));
+      1, gfx::Font::NORMAL, gfx::Font::Weight::MEDIUM));
 
   auto body = std::make_unique<views::Label>();
   body_label_ = AddChildView(std::move(body));
@@ -34,16 +35,19 @@ MahoToastView::MahoToastView() {
   body_label_->SetMultiLine(true);
   body_label_->SetMaxLines(2);
   body_label_->SetElideBehavior(gfx::ELIDE_TAIL);
+  body_label_->SetVisible(false);
 }
 
 MahoToastView::~MahoToastView() = default;
 
 void MahoToastView::SetTitleText(const std::u16string& title) {
   title_label_->SetText(title);
+  title_label_->SetVisible(!title.empty());
 }
 
 void MahoToastView::SetBodyText(const std::u16string& body) {
   body_label_->SetText(body);
+  body_label_->SetVisible(!body.empty());
 }
 
 void MahoToastView::SetOnClicked(base::RepeatingClosure callback) {
@@ -54,23 +58,15 @@ void MahoToastView::OnPaintBackground(gfx::Canvas* canvas) {
   const auto* cp = GetColorProvider();
   cc::PaintFlags flags;
   flags.setAntiAlias(true);
-
-  // Background fill
   flags.setStyle(cc::PaintFlags::kFill_Style);
-  flags.setColor(cp->GetColor(kMahoColorToastBackground));
-  canvas->DrawRoundRect(GetLocalBounds(), 10, flags);
-
-  // Border stroke
-  flags.setStyle(cc::PaintFlags::kStroke_Style);
-  flags.setStrokeWidth(1.0f);
-  flags.setColor(cp->GetColor(kMahoColorToastBorder));
+  flags.setColor(cp->GetColor(kMahoColorTabRowActiveBackground));
   canvas->DrawRoundRect(GetLocalBounds(), 10, flags);
 }
 
 gfx::Size MahoToastView::CalculatePreferredSize(
     const views::SizeBounds& available_size) const {
   gfx::Size size = views::View::CalculatePreferredSize(available_size);
-  size.set_width(std::clamp(size.width(), 240, 360));
+  size.set_width(std::clamp(size.width(), 120, 360));
   return size;
 }
 

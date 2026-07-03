@@ -399,7 +399,8 @@ void MahoCommandModel::Search(const std::string& query,
     debounce_timer_.Stop();
     results_.clear();
     if (mode == CommandOverlayMode::kNewTab ||
-        mode == CommandOverlayMode::kCommandsOnly) {
+        mode == CommandOverlayMode::kCommandsOnly ||
+        mode == CommandOverlayMode::kCurrentTab) {
       debounce_timer_.Start(FROM_HERE, kDebounceDelay,
                             base::BindOnce(&MahoCommandModel::FireSearch,
                                            weak_factory_.GetWeakPtr()));
@@ -745,8 +746,11 @@ void MahoCommandModel::RequestBookmarkFavicons() {
 
   std::set<std::string> requested_urls;
   for (const auto& result : results_) {
-    if (result.type != CommandSuggestionType::kBookmark ||
-        result.icon.has_value() || result.execution_payload.empty() ||
+    const bool eligible_type =
+        result.type == CommandSuggestionType::kBookmark ||
+        result.type == CommandSuggestionType::kHistory;
+    if (!eligible_type || result.icon.has_value() ||
+        result.execution_payload.empty() ||
         !requested_urls.insert(result.execution_payload).second) {
       continue;
     }
@@ -786,8 +790,10 @@ void MahoCommandModel::OnBookmarkLargeIconLoaded(
 
   bool updated = false;
   for (auto& suggestion : results_) {
-    if (suggestion.type == CommandSuggestionType::kBookmark &&
-        suggestion.execution_payload == bookmark_url &&
+    const bool eligible_type =
+        suggestion.type == CommandSuggestionType::kBookmark ||
+        suggestion.type == CommandSuggestionType::kHistory;
+    if (eligible_type && suggestion.execution_payload == bookmark_url &&
         !suggestion.icon.has_value()) {
       suggestion.icon = *icon;
       updated = true;
@@ -933,7 +939,7 @@ void MahoCommandModel::CapResults(std::vector<CommandSuggestion>& results, Comma
       (mode == CommandOverlayMode::kCommandsOnly ||
        mode == CommandOverlayMode::kSiteSearch)
           ? 20
-          : 8;
+          : 5;
   if (results.size() > max_visible) {
     results.resize(max_visible);
   }

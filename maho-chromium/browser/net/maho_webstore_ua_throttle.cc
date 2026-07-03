@@ -1,7 +1,10 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/net/maho_webstore_ua_throttle.h"
-
+#include "base/metrics/histogram_functions.h"
+#include "base/logging.h"
+#include "net/http/http_response_headers.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "base/strings/string_util.h"
 #include "net/http/http_request_headers.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -55,6 +58,7 @@ void MahoWebStoreUAThrottle::WillStartRequest(
     if (NeedsChromeLikeUA(request->url)) {
       request->headers.SetHeader(net::HttpRequestHeaders::kUserAgent,
                                  cached_clean_ua_);
+      base::UmaHistogramBoolean("Maho.Extensions.UAThrottleApplied", true);
     }
   }
 }
@@ -71,5 +75,20 @@ void MahoWebStoreUAThrottle::WillRedirectRequest(
       modified_request_headers) {
     modified_request_headers->SetHeader(net::HttpRequestHeaders::kUserAgent,
                                        cached_clean_ua_);
+    base::UmaHistogramBoolean("Maho.Extensions.UAThrottleApplied", true);
+  }
+}
+
+void MahoWebStoreUAThrottle::WillProcessResponse(
+    const GURL& response_url,
+    network::mojom::URLResponseHead* response_head,
+    bool* defer) {
+  if (response_head && response_head->headers && NeedsChromeLikeUA(response_url)) {
+    int response_code = response_head->headers->response_code();
+    if (response_code == 401 || response_code == 403) {
+      LOG(WARNING) << "MahoWebStoreUAThrottle: Web Store request to "
+                   << response_url.spec() << " failed with HTTP " << response_code
+                   << ". User-Agent used: " << cached_clean_ua_;
+    }
   }
 }

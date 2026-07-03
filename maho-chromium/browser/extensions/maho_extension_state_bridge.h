@@ -61,6 +61,13 @@ class MahoExtensionStateBridge : public extensions::ExtensionRegistryObserver {
 
  private:
   void PushFullSnapshot();
+  void HandleIncomingSync(const std::string& extension_id,
+                          bool enabled,
+                          bool deleted);
+  static void OnSyncCallback(void* user_data,
+                             const char* extension_id,
+                             bool enabled,
+                             bool deleted);
 
   // Posts NotifyObservers() to the current sequence if no notification is
   // already pending.  Safe to call from inside an ExtensionRegistry callback

@@ -1,12 +1,7 @@
 name: Security Audit
 
 on:
-  pull_request:
-    branches: [main]
-  push:
-    branches: [main]
-  schedule:
-    - cron: '0 0 * * *' # Run daily
+  workflow_dispatch:
 
 jobs:
   security-audit:

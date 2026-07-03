@@ -3,6 +3,7 @@
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h"
 
 #include "base/functional/bind.h"
+#include "maho/browser/ui/theme/maho_color_id.h"
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -24,8 +25,8 @@ namespace {
 // proportional to the pill height without crowding adjacent controls.
 constexpr int kUtilityButtonWidth = 24;   // Horizontal hit target within the pill slot.
 constexpr int kUtilityButtonHeight = 20;  // Shorter than pill height; vertically centered.
-constexpr int kUtilityIconSize = 12;      // SF Symbol render size; small to avoid visual weight.
-constexpr int kUtilityButtonCornerRadius = 8;  // Matches the pill's inner rounding.
+constexpr int kUtilityIconSize = 14;      // SF Symbol render size; small to avoid visual weight.
+constexpr int kUtilityButtonCornerRadius = 7;  // Matches copy button chip.
 
 ui::ImageModel CreateUtilityButtonImage(ui::ColorId color_id) {
   return ui::ImageModel::FromVectorIcon(
@@ -148,7 +149,7 @@ void MahoLocationBarUtilityIconView::UpdateButtonChrome() {
                       GetState() == STATE_PRESSED;
   SetBorder(views::CreateEmptyBorder(gfx::Insets()));
   SetBackground(active ? views::CreateRoundedRectBackground(
-                             ui::kColorSysSurfaceVariant,
+                             kMahoColorTabRowActiveBackground,
                              kUtilityButtonCornerRadius)
                        : nullptr);
 }

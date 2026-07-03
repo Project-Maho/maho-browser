@@ -2513,11 +2513,25 @@ impl MahoCore {
 
     pub fn handle_event(&mut self, event: ShellEvent) -> Vec<CoreUpdate> {
         let dirty_bits = Self::event_dirty_flags(&event);
+        let urgent = Self::event_persist_is_urgent(&event);
         let result = self.handle_event_inner(event);
         if dirty_bits != 0 {
-            self.persist_lmdb_now_partial(dirty_bits);
+            if urgent {
+                self.persist_lmdb_now_partial(dirty_bits);
+            } else {
+                self.persist_throttle.borrow_mut().pending_bits |= dirty_bits;
+            }
         }
         result
+    }
+
+    // ActivateTab fires on every sidebar click and only mutates a timestamp on
+    // one tab and one space field. Persisting all tabs + spaces synchronously
+    // on the caller thread dominates click latency with hundreds of tabs.
+    // Deferring lets the bits accumulate and flush with the next structural
+    // event or shutdown flush.
+    fn event_persist_is_urgent(event: &ShellEvent) -> bool {
+        !matches!(event, ShellEvent::ActivateTab { .. })
     }
 
     fn event_dirty_flags(event: &ShellEvent) -> u8 {
@@ -4418,7 +4432,48 @@ impl MahoCore {
         }
     }
 
+    pub fn register_extension_sync_callback(&mut self, callback: Option<Box<dyn Fn(&str, bool, bool) + Send + Sync>>) {
+        self.extension_bridge.sync_callback = callback;
+    }
+
+    pub fn register_side_panel(&mut self, extension_id: &str, options: crate::extension_bridge::SidePanelOptions) {
+        self.extension_bridge.register_side_panel(extension_id, options);
+    }
+
+    pub fn unregister_side_panel(&mut self, extension_id: &str) {
+        self.extension_bridge.unregister_side_panel(extension_id);
+    }
+
+    pub fn get_side_panel_options(&self, extension_id: &str) -> Option<crate::extension_bridge::SidePanelOptions> {
+        self.extension_bridge.side_panels.get(extension_id).cloned()
+    }
+
     pub fn set_installed_extensions(&mut self, exts: Vec<crate::extension_bridge::InstalledExtension>) {
+        for ext in &exts {
+            let old_ext = self.extension_bridge.extensions.get(&ext.id);
+            let state_changed = match old_ext {
+                Some(old) => old.enabled != ext.enabled,
+                None => true,
+            };
+            if state_changed {
+                let cws_url = format!("https://chromewebstore.google.com/detail/{}", ext.id);
+                let payload = serde_json::json!({
+                    "id": ext.id,
+                    "cws_url": cws_url,
+                    "enabled": ext.enabled,
+                });
+                let sync_entity = SyncEntity {
+                    entity_type: SyncEntityType::Extension,
+                    entity_id: ext.id.clone(),
+                    version: chrono::Utc::now().timestamp_millis() as u64,
+                    modified_at: chrono::Utc::now().timestamp(),
+                    payload_json: payload.to_string(),
+                    deleted: false,
+                };
+                self.sync_push_entity_persisted(sync_entity);
+            }
+        }
+
         self.extension_bridge.set_installed_extensions(exts);
         let update = CoreUpdate::InstalledExtensionsUpdated;
         for listener in self.update_listeners.borrow().iter() {
@@ -5909,6 +5964,12 @@ impl MahoCore {
         self.sync_manager = None;
     }
 
+    pub fn set_sync_status(&mut self, status: crate::sync_models::SyncStatus) {
+        if let Some(ref mut sm) = self.sync_manager {
+            sm.set_status(status);
+        }
+    }
+
     pub fn set_account_auth_error(&mut self, message: String) -> Option<AccountInfo> {
         self.account_manager.mark_auth_error(message)
     }
@@ -6032,10 +6093,33 @@ impl MahoCore {
         &mut self,
         entities: Vec<crate::sync_models::SyncEntity>,
     ) -> Vec<crate::sync_models::SyncEntity> {
-        match &mut self.sync_manager {
+        let applied = match &mut self.sync_manager {
             Some(sm) => sm.apply_remote_batch(entities),
-            None => Vec::new(),
+            None => return Vec::new(),
+        };
+
+        for entity in &applied {
+            if entity.entity_type == SyncEntityType::Extension {
+                if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&entity.payload_json) {
+                    if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
+                        let enabled = payload.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+                        let deleted = entity.deleted;
+
+                        if let Some(ext) = self.extension_bridge.extensions.get_mut(id) {
+                            if ext.enabled != enabled {
+                                ext.enabled = enabled;
+                            }
+                        }
+
+                        if let Some(ref cb) = self.extension_bridge.sync_callback {
+                            cb(id, enabled, deleted);
+                        }
+                    }
+                }
+            }
         }
+
+        applied
     }
 
     /// Get and drain pending outgoing sync messages.
@@ -6311,6 +6395,7 @@ fn parse_sync_entity_type(s: &str) -> SyncEntityType {
         "SearchEngine" => SyncEntityType::SearchEngine,
         "Shortcut" => SyncEntityType::Shortcut,
         "Memory" => SyncEntityType::Memory,
+        "Extension" => SyncEntityType::Extension,
         _ => SyncEntityType::Tab, // fallback
     }
 }

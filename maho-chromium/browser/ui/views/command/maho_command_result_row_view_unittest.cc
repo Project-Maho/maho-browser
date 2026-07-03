@@ -200,7 +200,7 @@ TEST_F(MahoCommandResultRowViewTest,
             content_view->bounds().bottom());
   EXPECT_NE(nullptr, content_view->GetBackground());
   EXPECT_EQ(nullptr, content_view->GetBorder());
-  EXPECT_EQ(8, MahoCommandResultRowView::GetSelectionCornerRadiusForTesting(
+  EXPECT_EQ(6, MahoCommandResultRowView::GetSelectionCornerRadiusForTesting(
                    MahoCommandResultRowView::PresentationStyle::kCurrentTabSeeded));
 }
 
@@ -368,6 +368,17 @@ TEST_F(MahoCommandResultRowViewTest,
   auto* content_view = GetContentView(row);
   EXPECT_NE(nullptr, content_view->GetBackground());
   EXPECT_EQ(nullptr, content_view->GetBorder());
+}
+
+TEST_F(MahoCommandResultRowViewTest,
+       SwitchToTabAffordanceRendersForTabType) {
+  CommandSuggestion suggestion;
+  suggestion.title = "Example Tab";
+  suggestion.subtitle = "https://example.com";
+  suggestion.type = CommandSuggestionType::kTab;
+
+  auto* row = CreateRow(suggestion);
+  EXPECT_NE(nullptr, row);
 }
 
 }  // namespace

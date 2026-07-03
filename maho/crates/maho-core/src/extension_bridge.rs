@@ -86,10 +86,36 @@ pub struct ExtensionBridge {
     /// Active tab ID provider
     get_active_tab: Box<dyn Fn() -> Option<TabId>>,
     /// Installed extensions registry
-    extensions: HashMap<String, InstalledExtension>,
+    pub extensions: HashMap<String, InstalledExtension>,
+    /// Extension sync callback
+    pub sync_callback: Option<Box<dyn Fn(&str, bool, bool) + Send + Sync>>,
+    /// Registered side panels
+    pub side_panels: HashMap<String, SidePanelOptions>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum SidePanelLayout {
+    Left,
+    Right,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SidePanelOptions {
+    pub path: String,
+    pub layout: SidePanelLayout,
+    pub default_width: i32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RegisteredSidePanel {
+    pub extension_id: String,
+    pub path: String,
+    pub layout: SidePanelLayout,
+    pub default_width: i32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct InstalledExtension {
     pub id: String,
@@ -98,6 +124,10 @@ pub struct InstalledExtension {
     #[serde(default)]
     pub description: String,
     pub enabled: bool,
+    #[serde(default)]
+    pub permissions: Vec<String>,
+    #[serde(default)]
+    pub manifest_version: u32,
 }
 
 impl ExtensionBridge {
@@ -111,7 +141,29 @@ impl ExtensionBridge {
             get_tabs,
             get_active_tab,
             extensions: HashMap::new(),
+            sync_callback: None,
+            side_panels: HashMap::new(),
         }
+    }
+
+    pub fn register_side_panel(&mut self, extension_id: &str, options: SidePanelOptions) {
+        self.side_panels.insert(extension_id.to_string(), options);
+    }
+
+    pub fn unregister_side_panel(&mut self, extension_id: &str) {
+        self.side_panels.remove(extension_id);
+    }
+
+    pub fn list_side_panels(&self) -> Vec<RegisteredSidePanel> {
+        self.side_panels
+            .iter()
+            .map(|(ext_id, opt)| RegisteredSidePanel {
+                extension_id: ext_id.clone(),
+                path: opt.path.clone(),
+                layout: opt.layout.clone(),
+                default_width: opt.default_width,
+            })
+            .collect()
     }
 
     // === chrome.tabs API ===
@@ -336,5 +388,88 @@ impl ExtensionBridge {
 
     pub fn get_extension(&self, extension_id: &str) -> Option<&InstalledExtension> {
         self.extensions.get(extension_id)
+    }
+
+    pub fn get_password_provider_extension_id(&self) -> Option<String> {
+        let exts: Vec<InstalledExtension> = self.extensions.values().cloned().collect();
+        find_password_provider(&exts)
+    }
+}
+
+pub fn find_password_provider(exts: &[InstalledExtension]) -> Option<String> {
+    exts.iter()
+        .find(|ext| {
+            ext.enabled && (ext.permissions.iter().any(|p| p == "passwords")
+                || ext.id == "nngceckbapebfimnlniiiahkandclblb"
+                || ext.id == "aeblfdkhhhdcdjpifhhbdiojplfjncoa")
+        })
+        .map(|ext| ext.id.clone())
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ExtensionPayload {
+    V1 {
+        schema_version: u32,
+        extensions: Vec<InstalledExtension>,
+    },
+    V0(Vec<InstalledExtension>),
+}
+
+pub fn parse_extension_payload(json: &str) -> Result<Vec<InstalledExtension>, serde_json::Error> {
+    match serde_json::from_str::<ExtensionPayload>(json)? {
+        ExtensionPayload::V1 { schema_version, extensions } => {
+            if schema_version != 1 {
+                return Err(serde::de::Error::custom(format!("Unsupported schema version: {}", schema_version)));
+            }
+            Ok(extensions)
+        }
+        ExtensionPayload::V0(extensions) => Ok(extensions),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_v0_bare_array() {
+        let json = r#"[{"id":"abc","name":"Test","version":"1.0","enabled":true}]"#;
+        let result = parse_extension_payload(json);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn parse_v1_envelope() {
+        let json = r#"{"schema_version":1,"extensions":[{"id":"abc","name":"Test","version":"1.0","enabled":true}]}"#;
+        let result = parse_extension_payload(json);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn reject_unknown_version() {
+        let json = r#"{"schema_version":99,"extensions":[]}"#;
+        let result = parse_extension_payload(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn detect_password_provider_by_permission() {
+        let extensions = vec![
+            InstalledExtension { id: "abc".into(), name: "Some Ext".into(), permissions: vec!["tabs".into()], enabled: true, ..Default::default() },
+            InstalledExtension { id: "bw123".into(), name: "Bitwarden".into(), permissions: vec!["passwords".into(), "storage".into()], enabled: true, ..Default::default() },
+        ];
+        let result = find_password_provider(&extensions);
+        assert_eq!(result, Some("bw123".to_string()));
+    }
+
+    #[test]
+    fn no_password_provider_when_none_have_permission() {
+        let extensions = vec![
+            InstalledExtension { id: "abc".into(), name: "Bitwarden Fake".into(), permissions: vec!["tabs".into()], enabled: true, ..Default::default() },
+        ];
+        let result = find_password_provider(&extensions);
+        assert_eq!(result, None);
     }
 }

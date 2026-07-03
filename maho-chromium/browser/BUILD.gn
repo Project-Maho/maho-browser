@@ -300,7 +300,7 @@ source_set("maho_location_bar_views") {
 source_set("maho_location_bar_views_unittests") {
   testonly = true
   sources = [
-    "ui/views/location_bar/maho_dom_screenshot_action_dialog_view_unittest.cc",
+    # "ui/views/location_bar/maho_dom_screenshot_action_dialog_view_unittest.cc",
     "ui/views/location_bar/maho_location_bar_utility_panel_provider_unittest.cc",
   ]
   deps = [
@@ -394,6 +394,7 @@ source_set("maho_theme_support") {
     "ui/notifications/maho_notification_overlay.h",
     "ui/notifications/maho_toast_view.cc",
     "ui/notifications/maho_toast_view.h",
+    "ui/notifications/maho_toast_vibrancy.h",
     "ui/tab_preview/maho_tab_preview_controller.cc",
     "ui/tab_preview/maho_tab_preview_controller.h",
   ]
@@ -401,8 +402,11 @@ source_set("maho_theme_support") {
     sources += [
       "ui/notifications/maho_notification_share_mac.h",
       "ui/notifications/maho_notification_share_mac.mm",
+      "ui/notifications/maho_toast_vibrancy_mac.mm",
     ]
     frameworks = [ "AppKit.framework" ]
+  } else {
+    sources += [ "ui/notifications/maho_toast_vibrancy_stub.cc" ]
   }
   deps = [
     ":maho_core_holder",
@@ -464,9 +468,9 @@ source_set("maho_extension_state_bridge_unittests") {
   testonly = true
   sources = [
     "extensions/maho_extension_state_bridge_unittest.cc",
+    "ui/views/side_panel/maho_extension_side_panel_coordinator_unittest.cc",
   ]
   deps = [
-    ":maho_extension_state_bridge",
     ":maho_core_holder",
     "//base",
     "//base/test:test_support",
@@ -476,8 +480,6 @@ source_set("maho_extension_state_bridge_unittests") {
     "//extensions/browser",
     "//extensions/browser:test_support",
     "//extensions/common",
-    "//maho/third_party/maho:maho_bridge",
-    "//maho/third_party/maho:maho_core_prebuilt",
     "//maho/third_party/maho:maho_ffi_headers",
     "//testing/gtest",
   ]

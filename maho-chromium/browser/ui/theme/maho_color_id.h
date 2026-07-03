@@ -110,8 +110,23 @@
   E_CPONLY(kMahoColorCommandBarShortcutBadge) \
   E_CPONLY(kMahoColorCommandBarShortcutText) \
   E_CPONLY(kMahoColorCommandBarDivider) \
+  E_CPONLY(kMahoColorCommandBarDividerHairline) \
   E_CPONLY(kMahoColorCommandBarRowTitleSelected) \
   E_CPONLY(kMahoColorCommandBarRowSubtitleSelected) \
+  E_CPONLY(kMahoColorCommandBarSparkleOuter) \
+  E_CPONLY(kMahoColorCommandBarSparkleInner) \
+  E_CPONLY(kMahoColorCommandGlyphTab) \
+  E_CPONLY(kMahoColorCommandGlyphBookmark) \
+  E_CPONLY(kMahoColorCommandGlyphHistory) \
+  E_CPONLY(kMahoColorCommandGlyphAction) \
+  E_CPONLY(kMahoColorCommandGlyphNavigation) \
+  E_CPONLY(kMahoColorCommandGlyphSearch) \
+  E_CPONLY(kMahoColorCommandGlyphCalculator) \
+  E_CPONLY(kMahoColorCommandGlyphUnitConversion) \
+  E_CPONLY(kMahoColorCommandGlyphArchivedTab) \
+  E_CPONLY(kMahoColorCommandGlyphClosedTab) \
+  E_CPONLY(kMahoColorCommandGlyphFolder) \
+  E_CPONLY(kMahoColorCommandGlyphRecentSearch) \
   /* Accent & Semantic */ \
   E_CPONLY(kMahoColorAccentBlue) \
   E_CPONLY(kMahoColorAccentBlueBright) \

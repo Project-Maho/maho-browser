@@ -24,6 +24,9 @@
 #include "chrome/browser/extensions/extension_uninstall_dialog.h"
 #include "chrome/browser/preloading/preloading_prefs.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/chrome_pages.h"
+#include "base/metrics/histogram_functions.h"
 #include "chrome/common/pref_names.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
 #include "components/content_settings/core/common/pref_names.h"
@@ -1013,6 +1016,7 @@ BuildInstalledExtensionsOnCoreSequence() {
     ext->version = s("version");
     ext->description = s("description");
     ext->enabled = dict->FindBool("enabled").value_or(true);
+    ext->manifest_version = dict->FindInt("manifestVersion").value_or(0);
     exts.push_back(std::move(ext));
   }
 
@@ -1143,6 +1147,9 @@ bool DeleteAutofillPaymentOnCoreSequence(const std::string& id) {
 }
 
 }  // namespace
+
+MahoSettingsPageHandler::PendingToggle::PendingToggle() = default;
+MahoSettingsPageHandler::PendingToggle::~PendingToggle() = default;
 
 // ── Constructor / Destructor ──
 
@@ -1405,7 +1412,36 @@ void MahoSettingsPageHandler::FlushNotify() {
 }
 
 void MahoSettingsPageHandler::OnInstalledExtensionsChanged() {
+  auto* registry = extensions::ExtensionRegistry::Get(profile_);
+  if (registry) {
+    std::vector<std::string> resolved_ids;
+    for (const auto& pair : pending_toggles_) {
+      const std::string& id = pair.first;
+      const bool currently_enabled = registry->enabled_extensions().Contains(id);
+      if (currently_enabled == pair.second->target_state) {
+        resolved_ids.push_back(id);
+      }
+    }
+    for (const std::string& id : resolved_ids) {
+      auto it = pending_toggles_.find(id);
+      if (it != pending_toggles_.end()) {
+        std::move(it->second->callback).Run(it->second->target_state);
+        pending_toggles_.erase(it);
+      }
+    }
+  }
   ScheduleExtensionNotify();
+}
+
+void MahoSettingsPageHandler::OnToggleTimeout(const std::string& extension_id) {
+  auto it = pending_toggles_.find(extension_id);
+  if (it != pending_toggles_.end()) {
+    LOG(WARNING) << "Toggle extension " << extension_id << " timed out waiting for state change.";
+    auto* registry = extensions::ExtensionRegistry::Get(profile_);
+    const bool currently_enabled = registry && registry->enabled_extensions().Contains(extension_id);
+    std::move(it->second->callback).Run(currently_enabled);
+    pending_toggles_.erase(it);
+  }
 }
 
 void MahoSettingsPageHandler::ScheduleExtensionNotify() {
@@ -1863,7 +1899,7 @@ void MahoSettingsPageHandler::FetchThemeStore(
 
   theme_store_loader_.reset();
   auto request = std::make_unique<network::ResourceRequest>();
-  request->url = GURL("https://themes.maho.app/manifest.json");
+  request->url = GURL(maho::auth::GetRelayBaseUrl() + "/themes/manifest");
   request->method = "GET";
   net::NetworkTrafficAnnotationTag traffic_annotation =
       net::DefineNetworkTrafficAnnotation("maho_settings_theme_store", R"(
@@ -1872,7 +1908,7 @@ void MahoSettingsPageHandler::FetchThemeStore(
           description: "Fetches community theme manifest."
           trigger: "User opens the theme store settings pane."
           data: "No user data sent."
-          destination: OTHER
+          destination: WEBSITE
         }
         policy {
           cookies_allowed: NO
@@ -1888,6 +1924,7 @@ void MahoSettingsPageHandler::FetchThemeStore(
       base::BindOnce(&MahoSettingsPageHandler::OnThemeStoreFetched,
                      weak_factory_.GetWeakPtr(), std::move(callback)),
       1024 * 1024);
+
 }
 
 void MahoSettingsPageHandler::OnThemeStoreFetched(
@@ -2290,7 +2327,7 @@ void MahoSettingsPageHandler::GetInstalledExtensions(
 
 void MahoSettingsPageHandler::ToggleExtension(const std::string& id,
                                               ToggleExtensionCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   auto* registry = extensions::ExtensionRegistry::Get(profile_);
   auto* bridge = maho::MahoExtensionStateBridge::FromProfile(profile_);
   if (!bridge) {
@@ -2300,18 +2337,43 @@ void MahoSettingsPageHandler::ToggleExtension(const std::string& id,
   }
   const bool currently_enabled =
       registry && registry->enabled_extensions().Contains(id);
+
+  if (!ext_bridge_observation_.IsObserving()) {
+    ext_bridge_observation_.Observe(bridge);
+  }
+
+  const bool target_state = !currently_enabled;
+
+  auto pending = std::make_unique<PendingToggle>();
+  pending->target_state = target_state;
+  pending->callback = std::move(callback);
+  pending->timer.Start(
+      FROM_HERE, base::Seconds(2),
+      base::BindOnce(&MahoSettingsPageHandler::OnToggleTimeout,
+                     weak_factory_.GetWeakPtr(), id));
+
+  pending_toggles_[id] = std::move(pending);
+
   if (currently_enabled) {
     bridge->RequestDisable(id);
   } else {
     bridge->RequestEnable(id);
   }
-  std::move(callback).Run(
-      registry && registry->enabled_extensions().Contains(id));
 }
+
+void MahoSettingsPageHandler::OpenExtensionsPage() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  base::UmaHistogramBoolean("Maho.Settings.Extensions.AdvancedControlsClicked", true);
+  BrowserWindowInterface* browser = chrome::FindLastActiveWithProfile(profile_);
+  if (browser) {
+    chrome::ShowExtensions(browser);
+  }
+}
+
 
 void MahoSettingsPageHandler::RemoveExtension(const std::string& id,
                                               RemoveExtensionCallback callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (uninstall_dialog_ || pending_remove_callback_) {
     std::move(callback).Run(

@@ -18,6 +18,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "cc/paint/paint_flags.h"
+#include "ui/compositor/layer.h"
 #include "maho/browser/ui/views/command/maho_command_action_handler.h"
 #include "maho/browser/ui/views/command/maho_command_model.h"
 #include "maho/browser/ui/views/command/maho_command_sparkle_geometry.h"
@@ -91,7 +92,7 @@ namespace maho {
 
 namespace {
 
-constexpr int kPanelCornerRadiusDp = 20;
+constexpr int kPanelCornerRadiusDp = 26;
 constexpr int kPanelBorderWidthDp = 1;
 constexpr int kPanelPaddingTopDp = 10;
 constexpr int kPanelPaddingSideDp = 8;
@@ -106,7 +107,7 @@ constexpr int kTrailingAccessoryTrailingInsetDp = 6;
 constexpr int kLeadingPageIconSizeDp = 20;
 constexpr int kSparkToInputGapDp = 8;
 constexpr int kPanelSectionSpacingDp = 0;
-constexpr int kResultRowSpacingDp = 4;
+constexpr int kResultRowSpacingDp = 2;
 constexpr int kDividerTopGapDp = 4;
 constexpr int kDividerBottomGapDp = 2;
 constexpr int kDividerHorizontalInsetDp = 10;
@@ -127,7 +128,6 @@ constexpr int kEmptyStateBottomInsetDp = 4;
 constexpr int kNoResultsTopInsetDp = 6;
 constexpr int kNoResultsBottomInsetDp = 3;
 constexpr int kEmptyStateHorizontalInsetDp = 40;
-constexpr size_t kMaxSeededVisibleResults = 3;
 
 constexpr SkColor kSparkleOuterColor = SkColorSetRGB(0x73, 0x7C, 0xFF);
 constexpr SkColor kSparkleInnerColor = SkColorSetRGB(0xFF, 0xC7, 0x57);
@@ -140,47 +140,6 @@ gfx::Insets EmptyStateInsets(bool compact) {
       kEmptyStateHorizontalInsetDp);
 }
 
-std::optional<ImageData> BuildImageDataFromFavicon(const ui::ImageModel& favicon) {
-  gfx::Image favicon_image(favicon.Rasterize(nullptr));
-  if (favicon_image.IsEmpty()) {
-    return std::nullopt;
-  }
-
-  scoped_refptr<base::RefCountedMemory> favicon_bytes =
-      favicon_image.As1xPNGBytes();
-  if (!favicon_bytes || favicon_bytes->size() == 0u) {
-    return std::nullopt;
-  }
-
-  ImageData icon;
-  icon.width = favicon_image.Width();
-  icon.height = favicon_image.Height();
-  icon.format = "png";
-  icon.data.assign(base::span(*favicon_bytes).begin(),
-                   base::span(*favicon_bytes).end());
-  return icon;
-}
-
-std::optional<ImageData> BuildImageDataFromImage(const gfx::Image& favicon_image) {
-  if (favicon_image.IsEmpty()) {
-    return std::nullopt;
-  }
-
-  scoped_refptr<base::RefCountedMemory> favicon_bytes =
-      favicon_image.As1xPNGBytes();
-  if (!favicon_bytes || favicon_bytes->size() == 0u) {
-    return std::nullopt;
-  }
-
-  ImageData icon;
-  icon.width = favicon_image.Width();
-  icon.height = favicon_image.Height();
-  icon.format = "png";
-  icon.data.assign(base::span(*favicon_bytes).begin(),
-                   base::span(*favicon_bytes).end());
-  return icon;
-}
-
 gfx::Image DecodeAccessoryImage(const ImageData& icon) {
   if (icon.data.empty()) {
     return gfx::Image();
@@ -191,69 +150,6 @@ gfx::Image DecodeAccessoryImage(const ImageData& icon) {
   }
 
   return gfx::Image();
-}
-
-std::optional<ImageData> SyncCachedFaviconForEntry(content::NavigationEntry* entry) {
-  if (!entry) {
-    return std::nullopt;
-  }
-
-  std::optional<ImageData> icon =
-      BuildImageDataFromImage(entry->GetFavicon().image);
-  if (icon.has_value()) {
-    return icon;
-  }
-
-  return std::nullopt;
-}
-
-std::optional<ImageData> SyncCachedFaviconForCurrentTab(content::WebContents* contents) {
-  if (!contents) {
-    return std::nullopt;
-  }
-
-  if (content::NavigationEntry* entry =
-          contents->GetController().GetVisibleEntry()) {
-    std::optional<ImageData> icon = SyncCachedFaviconForEntry(entry);
-    if (icon.has_value()) {
-      return icon;
-    }
-  }
-
-  favicon::FaviconDriver* favicon_driver =
-      favicon::ContentFaviconDriver::FromWebContents(contents);
-  if (favicon_driver) {
-    std::optional<ImageData> icon =
-        BuildImageDataFromImage(favicon_driver->GetFavicon());
-    if (icon.has_value()) {
-      return icon;
-    }
-  }
-
-  TabUIHelper* helper = TabUIHelper::From(
-      tabs::TabInterface::GetFromContents(contents));
-  if (!helper) {
-    return std::nullopt;
-  }
-  return BuildImageDataFromFavicon(helper->GetFavicon());
-}
-
-bool IsEligibleSeededCurrentTabHistoryEntry(const CommandSuggestion& entry) {
-  return !entry.execution_payload.empty() &&
-         !MahoDisplayPolicy::IsInternalBrowserPage(GURL(entry.execution_payload));
-}
-
-std::string EntryDisplayTitle(const content::NavigationEntry* entry) {
-  if (!entry) {
-    return std::string();
-  }
-
-  const std::string title = base::UTF16ToUTF8(entry->GetTitle());
-  if (!title.empty()) {
-    return title;
-  }
-
-  return entry->GetURL().spec();
 }
 
 class SearchIconView : public views::View {
@@ -371,7 +267,8 @@ MahoCommandOverlayView::MahoCommandOverlayView(
   search_icon_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
   search_icon_lane_ = search_icon_lane;
-  search_icon_lane->SetPreferredSize(gfx::Size(kSearchIconLaneWidthDp, 0));
+  search_icon_lane->SetPreferredSize(
+      gfx::Size(kSearchIconLaneWidthDp, kLeadingPageIconSizeDp));
   search_icon_lane->AddChildView(std::make_unique<SearchIconView>());
   search_context_icon_ = search_icon_lane->AddChildView(
       std::make_unique<views::ImageView>());
@@ -501,7 +398,6 @@ MahoCommandOverlayView::MahoCommandOverlayView(
     }
   }
 
-  InitializeCurrentTabSeedState(initial_text);
   UpdateSearchLeadingAccessory();
 
   if (!initial_text.empty() && mode_ == CommandOverlayMode::kCurrentTab) {
@@ -538,8 +434,17 @@ MahoCommandOverlayView::MahoCommandOverlayView(
   layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
-  SetBackground(views::CreateRoundedRectBackground(
-      kMahoColorCommandBarBackground, kPanelCornerRadiusDp));
+  bool use_vibrancy = false;
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+  use_vibrancy = base::FeatureList::IsEnabled(features::kMahoCommandPaletteVibrancy);
+#endif
+
+  if (!use_vibrancy) {
+    SetBackground(views::CreateRoundedRectBackground(
+        kMahoColorCommandBarBackground, kPanelCornerRadiusDp));
+  } else {
+    SetBackground(nullptr);
+  }
   SetBorder(views::CreateRoundedRectBorder(
       kPanelBorderWidthDp, kPanelCornerRadiusDp,
       kMahoColorCommandBarPanelBorder));
@@ -574,7 +479,8 @@ MahoCommandOverlayView::MahoCommandOverlayView(
   search_icon_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
   search_icon_lane_ = search_icon_lane;
-  search_icon_lane->SetPreferredSize(gfx::Size(kSearchIconLaneWidthDp, 0));
+  search_icon_lane->SetPreferredSize(
+      gfx::Size(kSearchIconLaneWidthDp, kLeadingPageIconSizeDp));
   search_icon_lane->AddChildView(std::make_unique<SearchIconView>());
   search_context_icon_ = search_icon_lane->AddChildView(
       std::make_unique<views::ImageView>());
@@ -709,7 +615,6 @@ MahoCommandOverlayView::MahoCommandOverlayView(
     }
   }
 
-  InitializeCurrentTabSeedState(initial_text);
   UpdateSearchLeadingAccessory();
 
   if (!initial_text.empty() && mode_ == CommandOverlayMode::kCurrentTab) {
@@ -719,20 +624,31 @@ MahoCommandOverlayView::MahoCommandOverlayView(
     }
   }
 
-  if (!initial_text.empty() && !is_seeded_state_) {
+  if (!initial_text.empty()) {
+    initial_url_ = initial_text;
     ContentsChanged(textfield_, std::u16string(textfield_->GetText()));
   }
+
+  ApplyVibrancyBackgroundTransparency(use_vibrancy);
 }
 
 MahoCommandOverlayView::~MahoCommandOverlayView() {
-  seeded_favicon_task_tracker_.TryCancelAll();
   if (model_)
     model_->Cancel();
 }
 
-// static
-size_t MahoCommandOverlayView::GetMaxSeededVisibleResultsForTesting() {
-  return kMaxSeededVisibleResults;
+size_t MahoCommandOverlayView::GetRenderedResultCountForTesting() const {
+  if (!results_container_) {
+    return 0u;
+  }
+
+  size_t rendered_result_count = 0u;
+  for (const auto& child : results_container_->children()) {
+    if (child.get() != hint_label_) {
+      ++rendered_result_count;
+    }
+  }
+  return rendered_result_count;
 }
 
 // static
@@ -775,20 +691,6 @@ int MahoCommandOverlayView::GetResultRowSpacingForTesting() {
 gfx::Insets MahoCommandOverlayView::GetDividerInsetsForTesting() {
   return gfx::Insets::TLBR(kDividerTopGapDp, kDividerHorizontalInsetDp,
                              kDividerBottomGapDp, kDividerHorizontalInsetDp);
-}
-
-size_t MahoCommandOverlayView::GetRenderedResultCountForTesting() const {
-  if (!results_container_) {
-    return 0u;
-  }
-
-  size_t rendered_result_count = 0u;
-  for (const auto& child : results_container_->children()) {
-    if (child.get() != hint_label_) {
-      ++rendered_result_count;
-    }
-  }
-  return rendered_result_count;
 }
 
 bool MahoCommandOverlayView::TextfieldControlsResultsContainerForTesting() const {
@@ -842,271 +744,7 @@ void MahoCommandOverlayView::UpdateResultViewsForTesting(
   UpdateResultViews(results);
 }
 
-void MahoCommandOverlayView::InitializeSeededStateForTesting(
-    std::vector<CommandSuggestion> seeds) {
-  seeded_results_ = std::move(seeds);
-  is_seeded_state_ = !seeded_results_.empty();
-  if (is_seeded_state_) {
-    UpdateResultViews({});
-  }
-}
 
-// static
-CommandSuggestion MahoCommandOverlayView::BuildCurrentTabSeed(
-    const std::string& url,
-    const std::string& title,
-    std::optional<ImageData> icon) {
-  CommandSuggestion s;
-  s.type = CommandSuggestionType::kNavigation;
-  s.key = "seed:current:" + url;
-  s.title = title.empty() ? url : title;
-  s.subtitle = url;
-  s.execution_payload = url;
-  s.icon = std::move(icon);
-  return s;
-}
-
-// static
-std::vector<CommandSuggestion>
-MahoCommandOverlayView::BuildCurrentTabSeedResultsFromHistoryForTesting(
-    const std::string& current_url,
-    const std::string& current_title,
-    const std::vector<std::pair<std::string, std::string>>& history_entries) {
-  std::vector<CommandSuggestion> history_suggestions;
-  history_suggestions.reserve(history_entries.size());
-  for (const auto& [entry_url, entry_title] : history_entries) {
-    history_suggestions.push_back(
-        BuildCurrentTabSeed(entry_url, entry_title, std::nullopt));
-  }
-  return BuildCurrentTabSeedResultsFromHistory(current_url, current_title,
-                                               std::nullopt,
-                                               history_suggestions);
-}
-
-// static
-std::vector<CommandSuggestion>
-MahoCommandOverlayView::BuildCurrentTabSeedResultsFromHistory(
-    const std::string& current_url,
-    const std::string& current_title,
-    const std::optional<ImageData>& current_icon,
-    const std::vector<CommandSuggestion>& history_entries) {
-  if (current_url.empty()) {
-    return {};
-  }
-
-  std::vector<CommandSuggestion> seeds;
-  seeds.reserve(kMaxSeededVisibleResults);
-
-  std::vector<std::string> seen_urls;
-  seen_urls.reserve(kMaxSeededVisibleResults);
-  seen_urls.push_back(current_url);
-
-  seeds.push_back(
-      BuildCurrentTabSeed(current_url, current_title, current_icon));
-
-  for (const auto& entry : history_entries) {
-    if (!IsEligibleSeededCurrentTabHistoryEntry(entry)) {
-      continue;
-    }
-
-    const std::string& entry_url = entry.execution_payload;
-    if (entry_url.empty() ||
-        std::find(seen_urls.begin(), seen_urls.end(), entry_url) !=
-            seen_urls.end()) {
-      continue;
-    }
-
-    seen_urls.push_back(entry_url);
-    seeds.push_back(entry);
-    if (seeds.size() >= kMaxSeededVisibleResults) {
-      break;
-    }
-  }
-
-  return seeds;
-}
-
-// static
-std::vector<CommandSuggestion> MahoCommandOverlayView::BuildCurrentTabSeedResults(
-    Browser* browser,
-    const std::string& url) {
-  if (url.empty()) {
-    return {};
-  }
-
-  std::vector<CommandSuggestion> seeds;
-  seeds.reserve(kMaxSeededVisibleResults);
-
-  std::string current_title = url;
-  std::optional<ImageData> current_icon;
-  if (browser) {
-    content::WebContents* contents =
-        browser->tab_strip_model()->GetActiveWebContents();
-    if (contents) {
-      current_title = EntryDisplayTitle(
-          contents->GetController().GetVisibleEntry());
-      current_icon = SyncCachedFaviconForCurrentTab(contents);
-
-      content::NavigationController& controller = contents->GetController();
-      const int current_index = controller.GetCurrentEntryIndex();
-      std::vector<CommandSuggestion> history_entries;
-      history_entries.reserve(current_index > 0 ? current_index : 0);
-      for (int index = current_index - 1; index >= 0;
-           --index) {
-        content::NavigationEntry* entry = controller.GetEntryAtIndex(index);
-        if (!entry) {
-          continue;
-        }
-
-        history_entries.push_back(BuildCurrentTabSeed(
-            entry->GetURL().spec(), EntryDisplayTitle(entry),
-            SyncCachedFaviconForEntry(entry)));
-      }
-
-      seeds = BuildCurrentTabSeedResultsFromHistory(
-          url, current_title, current_icon, history_entries);
-      return seeds;
-    }
-  }
-
-  seeds.push_back(BuildCurrentTabSeed(url, current_title, std::nullopt));
-  return seeds;
-}
-
-void MahoCommandOverlayView::InitializeCurrentTabSeedState(
-    const std::string& initial_text) {
-  if (!base::FeatureList::IsEnabled(features::kMahoCommandPaletteSeededHistory)) {
-    return;
-  }
-
-  if (mode_ != CommandOverlayMode::kCurrentTab || initial_text.empty()) {
-    return;
-  }
-
-  seeded_favicon_task_tracker_.TryCancelAll();
-  ++seeded_favicon_hydration_generation_;
-
-  if (MahoDisplayPolicy::IsInternalBrowserPage(GURL(initial_text))) {
-    return;
-  }
-
-  initial_url_ = initial_text;
-  seeded_results_ = BuildCurrentTabSeedResults(browser_, initial_text);
-
-  is_seeded_state_ = !seeded_results_.empty();
-  UpdateSearchLeadingAccessory();
-  if (is_seeded_state_) {
-    UpdateResultViews({});
-    StartSeededFaviconHydration();
-  }
-}
-
-void MahoCommandOverlayView::StartSeededFaviconHydration() {
-  seeded_favicon_task_tracker_.TryCancelAll();
-  ++seeded_favicon_hydration_generation_;
-
-  if (!browser_ || !browser_->profile() || seeded_results_.empty()) {
-    return;
-  }
-
-  favicon::FaviconService* favicon_service =
-      FaviconServiceFactory::GetForProfile(browser_->profile(),
-                                           ServiceAccessType::EXPLICIT_ACCESS);
-  if (!favicon_service) {
-    return;
-  }
-
-  for (size_t i = 0; i < seeded_results_.size(); ++i) {
-    if (seeded_results_[i].icon.has_value()) {
-      continue;
-    }
-
-    const GURL url(seeded_results_[i].execution_payload);
-    if (!url.is_valid() || MahoDisplayPolicy::IsInternalBrowserPage(url)) {
-      continue;
-    }
-
-    SeededResultHydration hydration;
-    hydration.result_index = i;
-    hydration.url = url;
-    favicon_service->GetFaviconImageForPageURL(
-        url,
-        base::BindOnce(&MahoCommandOverlayView::OnSeededFaviconHydrated,
-                       weak_factory_.GetWeakPtr(),
-                       seeded_favicon_hydration_generation_, hydration),
-        &seeded_favicon_task_tracker_);
-  }
-}
-
-void MahoCommandOverlayView::OnSeededFaviconHydrated(
-    uint32_t hydration_generation,
-    SeededResultHydration hydration,
-    const favicon_base::FaviconImageResult& image_result) {
-  if (hydration_generation != seeded_favicon_hydration_generation_ ||
-      hydration.result_index >= seeded_results_.size() ||
-      seeded_results_[hydration.result_index].execution_payload !=
-          hydration.url.spec() ||
-      seeded_results_[hydration.result_index].icon.has_value() ||
-      image_result.image.IsEmpty()) {
-    return;
-  }
-
-  std::optional<ImageData> icon = BuildImageDataFromImage(image_result.image);
-  if (!icon.has_value()) {
-    return;
-  }
-
-  ApplyHydratedSeededIcon(hydration.result_index, *icon);
-}
-
-void MahoCommandOverlayView::ApplyHydratedSeededIcon(size_t result_index,
-                                                     const ImageData& icon) {
-  if (result_index >= seeded_results_.size()) {
-    return;
-  }
-
-  seeded_results_[result_index].icon = icon;
-  if (model_) {
-    std::vector<CommandSuggestion> updated_results = model_->results();
-    if (result_index < updated_results.size() &&
-        updated_results[result_index].execution_payload ==
-            seeded_results_[result_index].execution_payload) {
-      updated_results[result_index].icon = icon;
-      model_->set_results(std::move(updated_results));
-    }
-  }
-
-  if (!is_seeded_state_ || !results_container_) {
-    if (result_index == 0u) {
-      UpdateSearchLeadingAccessory();
-    }
-    return;
-  }
-
-  auto children = results_container_->children();
-  if (result_index >= children.size()) {
-    if (result_index == 0u) {
-      UpdateSearchLeadingAccessory();
-    }
-    return;
-  }
-
-  auto* row = views::AsViewClass<MahoCommandResultRowView>(
-      children[result_index].get());
-  if (!row) {
-    return;
-  }
-
-  row->SetIcon(icon);
-  if (result_index == 0u) {
-    UpdateSearchLeadingAccessory();
-  }
-}
-
-bool MahoCommandOverlayView::ShouldClearSeededStateForText(
-    std::u16string_view text) const {
-  return is_seeded_state_ && base::UTF16ToUTF8(text) != initial_url_;
-}
 
 void MahoCommandOverlayView::RequestFocus() {
   if (textfield_ && GetFocusManager()) {
@@ -1153,8 +791,10 @@ void MahoCommandOverlayView::UpdateTextfieldPresentation() {
     return;
   }
 
-  textfield_->SetFontList(views::Textfield::GetDefaultFontList());
-  textfield_->set_placeholder_font_list(views::Textfield::GetDefaultFontList());
+  gfx::FontList base = views::Textfield::GetDefaultFontList();
+  gfx::FontList bumped = base.DeriveWithSizeDelta(1);
+  textfield_->SetFontList(bumped);
+  textfield_->set_placeholder_font_list(bumped);
 }
 
 void MahoCommandOverlayView::UpdateSearchLeadingAccessory() {
@@ -1163,31 +803,33 @@ void MahoCommandOverlayView::UpdateSearchLeadingAccessory() {
   }
 
   views::View* sparkle_view = search_icon_lane_->children().front();
+  sparkle_view->SetVisible(false);
   std::optional<ImageData> icon_to_decode;
 
   if (model_) {
-    int selected_idx = model_->selected_index();
-    if (selected_idx >= 0 && selected_idx < static_cast<int>(model_->results().size())) {
-      icon_to_decode = model_->results()[selected_idx].icon;
+    if (mode_ == CommandOverlayMode::kCurrentTab && !initial_url_.empty()) {
+      for (const auto& result : model_->results()) {
+        if (result.execution_payload == initial_url_ && result.icon.has_value()) {
+          icon_to_decode = result.icon;
+          break;
+        }
+      }
+    }
+    if (!icon_to_decode.has_value()) {
+      int selected_idx = model_->selected_index();
+      if (selected_idx >= 0 && selected_idx < static_cast<int>(model_->results().size())) {
+        icon_to_decode = model_->results()[selected_idx].icon;
+      }
     }
   }
 
   if (!icon_to_decode.has_value()) {
-    if (mode_ == CommandOverlayMode::kCurrentTab && !seeded_results_.empty() &&
-        seeded_results_.front().icon.has_value()) {
-      icon_to_decode = seeded_results_.front().icon;
-    }
-  }
-
-  if (!icon_to_decode.has_value()) {
-    sparkle_view->SetVisible(true);
     search_context_icon_->SetVisible(false);
     return;
   }
 
   const gfx::Image context_icon = DecodeAccessoryImage(*icon_to_decode);
   if (context_icon.IsEmpty()) {
-    sparkle_view->SetVisible(true);
     search_context_icon_->SetVisible(false);
     return;
   }
@@ -1196,7 +838,6 @@ void MahoCommandOverlayView::UpdateSearchLeadingAccessory() {
       ui::ImageModel::FromImageSkia(context_icon.AsImageSkia()));
   search_context_icon_->SetImageSize(
       gfx::Size(kLeadingPageIconSizeDp, kLeadingPageIconSizeDp));
-  sparkle_view->SetVisible(false);
   search_context_icon_->SetVisible(true);
 }
 
@@ -1268,10 +909,6 @@ void MahoCommandOverlayView::OnThemeChanged() {
 void MahoCommandOverlayView::ContentsChanged(
     views::Textfield* sender,
     const std::u16string& new_contents) {
-  if (ShouldClearSeededStateForText(new_contents)) {
-    is_seeded_state_ = false;
-    UpdateSearchLeadingAccessory();
-  }
 
   if ((mode_ == CommandOverlayMode::kSearch ||
        mode_ == CommandOverlayMode::kCurrentTab ||
@@ -1284,24 +921,24 @@ void MahoCommandOverlayView::ContentsChanged(
   TriggerSearchForCurrentText();
 }
 
-void MahoCommandOverlayView::OnAfterUserAction(views::Textfield* sender) {
-  if (ShouldClearSeededStateForText(sender->GetText())) {
-    is_seeded_state_ = false;
-    UpdateSearchLeadingAccessory();
-  }
-}
+void MahoCommandOverlayView::OnAfterUserAction(views::Textfield* sender) {}
 
 void MahoCommandOverlayView::TriggerSearchForCurrentText() {
   if (mode_ == CommandOverlayMode::kAI)
-    return;
-
-  if (is_seeded_state_)
     return;
 
   if (!model_)
     return;
 
   std::string query = base::UTF16ToUTF8(textfield_->GetText());
+
+  if (mode_ == CommandOverlayMode::kCurrentTab && !initial_url_.empty() &&
+      query == initial_url_) {
+    query.clear();
+  }
+  LOG(WARNING) << "[maho-cmdl-diag] TriggerSearch mode=" << static_cast<int>(mode_)
+               << " initial_url_.empty=" << initial_url_.empty()
+               << " query='" << query << "'";
 
   if (mode_ == CommandOverlayMode::kSiteSearch && !query.empty()) {
     query = "@" + site_search_prefix_ + " " + query;
@@ -1428,14 +1065,41 @@ bool MahoCommandOverlayView::HandleKeyEvent(views::Textfield* sender,
 
 void MahoCommandOverlayView::OnSearchResults(
     std::vector<CommandSuggestion> results) {
-  // While the seeded open-state is still active (user has not yet changed the
-  // text away from the initial URL), do not let backend results overwrite the
-  // seeded rows.  UpdateResultViews({}) already rendered them; just drop the
-  // incoming results.
-  if (is_seeded_state_) {
-    return;
+  LOG(WARNING) << "[maho-cmdl-diag] OnSearchResults count=" << results.size()
+               << " mode=" << static_cast<int>(mode_)
+               << " initial_url_='" << initial_url_ << "'";
+  if (mode_ == CommandOverlayMode::kCurrentTab && !initial_url_.empty()) {
+    for (size_t i = 0; i < results.size(); ++i) {
+      if (results[i].type == CommandSuggestionType::kTab &&
+          results[i].execution_payload == initial_url_) {
+        if (i > 0) {
+          std::rotate(results.begin(), results.begin() + i,
+                      results.begin() + i + 1);
+        }
+        break;
+      }
+    }
+  }
+  // Arc-parity: sync model with rotated results and always select first row.
+  if (model_) {
+    model_->set_results(results);
+    model_->set_selected_index(results.empty() ? -1 : 0);
   }
   UpdateResultViews(results);
+}
+
+namespace {
+
+void DisableSubpixelRenderingOnLabelsRecursive(views::View* view) {
+  if (!view) return;
+  if (views::Label* label = views::AsViewClass<views::Label>(view)) {
+    label->SetSkipSubpixelRenderingOpacityCheck(true);
+  }
+  for (views::View* child : view->children()) {
+    DisableSubpixelRenderingOnLabelsRecursive(child);
+  }
+}
+
 }
 
 void MahoCommandOverlayView::UpdateResultViews(
@@ -1445,46 +1109,6 @@ void MahoCommandOverlayView::UpdateResultViews(
 
   if (results.empty()) {
     const bool is_no_results_state = model_ && !model_->query().empty();
-
-    if (is_seeded_state_ && !seeded_results_.empty()) {
-      const int seeded_size = static_cast<int>(seeded_results_.size());
-      for (size_t i = 0; i < seeded_results_.size(); ++i) {
-        auto* row = results_container_->AddChildView(
-            std::make_unique<MahoCommandResultRowView>(
-                seeded_results_[i], static_cast<int>(i), seeded_size,
-                base::BindRepeating(&MahoCommandOverlayView::UpdateSelection,
-                                    weak_factory_.GetWeakPtr()),
-                base::BindRepeating(
-                    &MahoCommandOverlayView::ActivateResultAtIndex,
-                    weak_factory_.GetWeakPtr()),
-                MahoCommandResultRowView::PresentationStyle::kCurrentTabSeeded));
-        if (static_cast<int>(i) == 0) {
-          row->SetSelected(true);
-        }
-      }
-      if (model_) {
-        model_->set_results(seeded_results_);
-        model_->set_selected_index(0);
-      }
-      // Seeded kCurrentTab rows must not show the divider (frozen no-divider
-      // rule for the ordinary-site Cmd+L acceptance path).
-      if (divider_)
-        divider_->SetVisible(false);
-      InvalidateLayout();
-      ResizeWidgetToContents();
-      textfield_->GetViewAccessibility().SetIsExpanded();
-      {
-        auto children = results_container_->children();
-        if (!children.empty()) {
-          textfield_->GetViewAccessibility().SetActiveDescendant(
-              *children.front());
-        }
-      }
-      results_container_->GetViewAccessibility().NotifyEvent(
-          ax::mojom::Event::kSelectedChildrenChanged, true);
-      GetViewAccessibility().NotifyEvent(ax::mojom::Event::kValueChanged, true);
-      return;
-    }
 
     if (!model_ || model_->query().empty()) {
       auto recent = model_ ? model_->GetRecentSearches()
@@ -1542,6 +1166,7 @@ void MahoCommandOverlayView::UpdateResultViews(
     hint_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
     hint_label_->SetAutoColorReadabilityEnabled(false);
     hint_label_->SetMultiLine(true);
+    hint_label_->SetSkipSubpixelRenderingOpacityCheck(true);
     hint_label_->SetBorder(
         views::CreateEmptyBorder(EmptyStateInsets(is_no_results_state)));
     if (divider_)
@@ -1584,6 +1209,7 @@ void MahoCommandOverlayView::UpdateResultViews(
   results_container_->GetViewAccessibility().NotifyEvent(
       ax::mojom::Event::kSelectedChildrenChanged, true);
   GetViewAccessibility().NotifyEvent(ax::mojom::Event::kValueChanged, true);
+  DisableSubpixelRenderingOnLabelsRecursive(this);
 }
 
 void MahoCommandOverlayView::UpdateSelection(int new_index) {
@@ -1981,6 +1607,27 @@ void MahoCommandOverlayView::OnWidgetDestroying(views::Widget* widget) {
     picker_observation_.Reset();
     picker_widget_ = nullptr;
   }
+}
+
+void MahoCommandOverlayView::ApplyVibrancyBackgroundTransparency(bool vibrancy_active) {
+  if (!vibrancy_active) return;
+  if (scroll_view_) {
+    scroll_view_->SetBackgroundColor(std::nullopt);
+    scroll_view_->SetDrawOverflowIndicator(false);
+    if (scroll_view_->layer()) {
+      scroll_view_->layer()->SetFillsBoundsOpaquely(true);
+    }
+  }
+  if (results_container_) {
+    results_container_->SetBackground(nullptr);
+  }
+  if (field_shell_) {
+    field_shell_->SetBackground(nullptr);
+  }
+  if (divider_) {
+    divider_->SetPreferredSize(gfx::Size(0, 1));
+  }
+  DisableSubpixelRenderingOnLabelsRecursive(this);
 }
 
 }  // namespace maho

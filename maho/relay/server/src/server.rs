@@ -113,9 +113,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .nest("/auth", auth::routes::router())
         .nest("/sync", sync::routes::router())
         .nest("/billing", crate::billing::router())
+        .nest("/themes", crate::themes::router())
         .route("/ws", get(ws_upgrade))
         .with_state(state)
 }
+
 
 pub async fn run(config: RelayConfig, db: DatabaseConnection) -> Result<(), Box<dyn std::error::Error>> {
     let addr = format!("0.0.0.0:{}", config.port);

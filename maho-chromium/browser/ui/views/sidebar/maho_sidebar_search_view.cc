@@ -17,6 +17,8 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/translate/translate_bubble_controller.h"
+#include "chrome/grit/generated_resources.h"
+#include "ui/compositor/layer.h"
 #include "components/language_detection/core/constants.h"
 #include "components/prefs/pref_service.h"
 #include "components/translate/core/browser/language_state.h"
@@ -27,23 +29,32 @@
 #include "content/public/common/referrer.h"
 #include "maho/browser/maho_features.h"
 #include "maho/browser/ui/context_menu/maho_address_bar_context_menu.h"
+#include "maho/browser/ui/notifications/maho_notification_overlay.h"
 #include "maho/browser/ui/theme/maho_color_id.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_provider.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_view.h"
+#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
+#include "ui/base/clipboard/clipboard.h"
+#include "ui/base/clipboard/scoped_clipboard_writer.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/models/image_model.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/color/color_id.h"
 #include "ui/events/event.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/views/animation/ink_drop.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/button.h"
+#include "ui/views/controls/button/image_button.h"
+#include "ui/views/controls/button/image_button_factory.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/controls/textfield/textfield.h"
@@ -75,10 +86,10 @@ constexpr int kSearchCardLeadingInsetDp = 13;
 // right border stroke. Intentionally wider than the leading inset so the
 // utility affordance doesn't feel cramped against the pill edge.
 constexpr int kSearchCardTrailingInsetDp = 15;
-constexpr int kSearchPillTrailingInsetDp = 15;
+// constexpr int kSearchPillTrailingInsetDp = 15;
 
 // Leading inset for the compact (placeholder) pill variant.
-constexpr int kSearchPillLeadingInsetDp = 13;
+// constexpr int kSearchPillLeadingInsetDp = 13;
 
 // Textfield horizontal padding (used in editing mode).
 constexpr int kSearchTextfieldHorizontalInsetDp = 13;
@@ -141,6 +152,38 @@ class SidebarSearchIdleButton : public views::LabelButton {
  private:
   base::RepeatingCallback<void(bool)> hover_callback_;
   base::RepeatingClosure state_changed_callback_;
+};
+
+constexpr int kSearchPillActionIconSizeDp = 14;
+constexpr int kSearchPillActionChipCornerRadiusDp = 7;
+
+class SearchPillActionButton : public views::ImageButton {
+ public:
+  explicit SearchPillActionButton(PressedCallback callback)
+      : views::ImageButton(std::move(callback)) {
+    SetImageHorizontalAlignment(ALIGN_CENTER);
+    SetImageVerticalAlignment(ALIGN_MIDDLE);
+    SetInstallFocusRingOnFocus(false);
+    views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::OFF);
+  }
+  SearchPillActionButton(const SearchPillActionButton&) = delete;
+  SearchPillActionButton& operator=(const SearchPillActionButton&) = delete;
+  ~SearchPillActionButton() override = default;
+
+  void StateChanged(ButtonState old_state) override {
+    views::ImageButton::StateChanged(old_state);
+    UpdateChip();
+  }
+
+ private:
+  void UpdateChip() {
+    const bool active =
+        GetState() == STATE_HOVERED || GetState() == STATE_PRESSED;
+    SetBackground(active ? views::CreateRoundedRectBackground(
+                               kMahoColorTabRowActiveBackground,
+                               kSearchPillActionChipCornerRadiusDp)
+                         : nullptr);
+  }
 };
 
 }  // namespace
@@ -247,6 +290,34 @@ MahoSidebarSearchView::MahoSidebarSearchView(Browser* browser)
   utility_icon_slot_->SetProperty(
       views::kMarginsKey,
       gfx::Insets::TLBR(0, kSearchPillUtilitySlotSpacingDp, 0, 0));
+
+  std::unique_ptr<views::ImageButton> copy_url_button =
+      std::make_unique<SearchPillActionButton>(
+          base::BindRepeating(&MahoSidebarSearchView::OnCopyUrlPressed,
+                              weak_factory_.GetWeakPtr()));
+  copy_url_button->SetImageModel(
+      views::Button::STATE_NORMAL,
+      ui::ImageModel::FromVectorIcon(maho_lucide_icons::kLinkIcon,
+                                     ui::kColorSysOnSurfaceSubtle,
+                                     kSearchPillActionIconSizeDp));
+  copy_url_button->SetImageModel(
+      views::Button::STATE_HOVERED,
+      ui::ImageModel::FromVectorIcon(maho_lucide_icons::kLinkIcon,
+                                     ui::kColorSysOnSurface,
+                                     kSearchPillActionIconSizeDp));
+  copy_url_button->SetImageModel(
+      views::Button::STATE_PRESSED,
+      ui::ImageModel::FromVectorIcon(maho_lucide_icons::kLinkIcon,
+                                     ui::kColorSysOnSurface,
+                                     kSearchPillActionIconSizeDp));
+  copy_url_button->SetPreferredSize(gfx::Size(kSearchPillActionShellWidthDp,
+                                              kSearchPillActionShellHeightDp));
+  copy_url_button->SetTooltipText(u"Copy URL");
+  copy_url_button->SetAccessibleName(u"Copy URL");
+  copy_url_button->SetPaintToLayer();
+  copy_url_button->layer()->SetFillsBoundsOpaquely(false);
+  copy_url_button->layer()->SetOpacity(0.0f);
+  copy_url_button_ = utility_icon_slot_->AddChildView(std::move(copy_url_button));
 
   utility_icon_ = utility_icon_slot_->AddChildView(
       std::make_unique<MahoLocationBarUtilityIconView>(base::BindRepeating(
@@ -568,7 +639,29 @@ void MahoSidebarSearchView::OnIdleButtonHoverChanged(bool hover_visible) {
   }
 
   utility_icon_->SetHoverVisible(CanShowUtilityAffordance() && hover_visible);
+  if (copy_url_button_ && copy_url_button_->layer()) {
+    const bool show_copy =
+        CanShowUtilityAffordance() && hover_visible && !model_.current_url.empty();
+    copy_url_button_->layer()->SetOpacity(show_copy ? 1.0f : 0.0f);
+    copy_url_button_->SetCanProcessEventsWithinSubtree(show_copy);
+  }
   UpdateUtilityAffordanceVisibility();
+}
+
+void MahoSidebarSearchView::OnCopyUrlPressed(const ui::Event& event) {
+  LOG(INFO) << "[maho-copy-url] pressed url_empty="
+            << model_.current_url.empty();
+  if (!browser_ || model_.current_url.empty()) {
+    return;
+  }
+  ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
+  writer.WriteText(base::UTF8ToUTF16(model_.current_url));
+  auto* overlay = MahoNotificationOverlay::GetOrCreateForBrowser(browser_);
+  if (overlay) {
+    overlay->Show(l10n_util::GetStringUTF16(IDS_MAHO_TOAST_LINK_COPIED),
+                  std::u16string(),
+                  base::Seconds(2));
+  }
 }
 
 void MahoSidebarSearchView::ToggleUtilityPanel() {
@@ -631,9 +724,16 @@ void MahoSidebarSearchView::UpdateUtilityAffordanceVisibility() {
 
   const bool affordance = CanShowUtilityAffordance();
   utility_icon_slot_->SetVisible(affordance);
-  utility_icon_->SetAffordanceVisible(affordance);
+  utility_icon_->SetAffordanceVisible(false);
   if (!affordance) {
     utility_icon_->SetHoverVisible(false);
+  }
+  if (copy_url_button_) {
+    copy_url_button_->SetVisible(affordance);
+    if (!affordance && copy_url_button_->layer()) {
+      copy_url_button_->layer()->SetOpacity(0.0f);
+      copy_url_button_->SetCanProcessEventsWithinSubtree(false);
+    }
   }
 }
 
@@ -673,21 +773,15 @@ void MahoSidebarSearchView::UpdateSearchChrome() {
     pill_bg = kMahoColorInteractiveChipIdleBackground;
   }
   idle_button_->SetBackground(views::CreateRoundedRectBackground(
-      pill_bg,
-      show_placeholder ? sidebar_layout::kSearchPillCompactCornerRadiusDp
-                       : sidebar_layout::kSearchPillCornerRadiusDp));
+      pill_bg, sidebar_layout::kSearchPillCornerRadiusDp));
   idle_button_->SetBorder(views::CreatePaddedBorder(
       views::CreateEmptyBorder(gfx::Insets()),
-      gfx::Insets::TLBR(
-          kSearchPillInnerVerticalInsetDp,
-          show_placeholder ? kSearchPillLeadingInsetDp
-                           : kSearchCardLeadingInsetDp,
-          kSearchPillInnerVerticalInsetDp,
-          show_placeholder ? kSearchPillTrailingInsetDp
-                           : kSearchCardTrailingInsetDp)));
+      gfx::Insets::TLBR(kSearchPillInnerVerticalInsetDp,
+                        kSearchCardLeadingInsetDp,
+                        kSearchPillInnerVerticalInsetDp,
+                        kSearchCardTrailingInsetDp)));
   idle_button_->SetPreferredSize(
-      gfx::Size(1, show_placeholder ? sidebar_layout::kSearchPillCompactHeightDp
-                                    : sidebar_layout::kSearchPillHeightDp));
+      gfx::Size(1, sidebar_layout::kSearchPillHeightDp));
   if (utility_icon_slot_) {
     utility_icon_slot_->SetBackground(nullptr);
     utility_icon_slot_->SetBorder(nullptr);
@@ -697,13 +791,11 @@ void MahoSidebarSearchView::UpdateSearchChrome() {
   }
   primary_label_->SetEnabledColor(show_placeholder ? ui::kColorSysOnSurfaceSubtle
                                                     : ui::kColorSysOnSurface);
-  primary_label_->SetTextStyle(show_placeholder ? views::style::STYLE_BODY_4
-                                                : views::style::STYLE_BODY_3);
+  primary_label_->SetTextStyle(views::style::STYLE_BODY_3);
   textfield_->SetBorder(views::CreateEmptyBorder(
       gfx::Insets::VH(0, kSearchTextfieldHorizontalInsetDp)));
   textfield_->SetPreferredSize(
-      gfx::Size(1, show_placeholder ? sidebar_layout::kSearchPillCompactHeightDp
-                                    : sidebar_layout::kSearchPillHeightDp));
+      gfx::Size(1, sidebar_layout::kSearchPillHeightDp));
   PreferredSizeChanged();
 }
 
@@ -729,10 +821,16 @@ std::u16string MahoSidebarSearchView::BuildPrimaryText() const {
 
 std::u16string MahoSidebarSearchView::BuildSecondaryText() const {
   if (model_.display_mode != MahoSidebarAddressDisplayMode::kAddressCard ||
-      !model_.has_active_tab || !model_.translation_available) {
+      !model_.has_active_tab) {
     return std::u16string();
   }
-  return u"Translation Available";
+  if (model_.is_page_translated) {
+    return u"Translated";
+  }
+  if (model_.translation_available) {
+    return u"Translation Available";
+  }
+  return std::u16string();
 }
 
 bool MahoSidebarSearchView::LooksLikeUrl(const std::string& input) const {
@@ -786,7 +884,7 @@ bool MahoSidebarSearchView::ShouldToggleUtilityPanelForEvent(
 bool MahoSidebarSearchView::ShouldRouteEventToTranslate(
     const ui::Event& event) const {
   if (!idle_button_ || !secondary_label_ || !secondary_label_->GetVisible() ||
-      !model_.translation_available) {
+      (!model_.translation_available && !model_.is_page_translated)) {
     return false;
   }
 

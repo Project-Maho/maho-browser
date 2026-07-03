@@ -1531,16 +1531,14 @@ function ThemeStorePane({pane, store}: {pane: PaneDefinition; store: MahoSetting
     <DomainPaneSection pane={pane}>
       {state.status === 'loading' ? <PaneLoading message="Loading themes…" /> : null}
       {state.status === 'loaded' && state.data.themes.length === 0 && !state.data.success ? (
-        <section className={RETRY_ROW_CLASS}>
-          <div className={SETTING_COPY_CLASS}>
-            <h4 className={SETTING_TITLE_CLASS}>Theme store coming soon</h4>
-            <p className={SETTING_DESCRIPTION_CLASS}>
-              We're building a community theme catalog. Once it's ready, browse and apply themes here.
-            </p>
-          </div>
-        </section>
+        <PaneRetry
+          title="Failed to load theme store"
+          message="Could not connect to the theme store catalog. Please check your network connection and try again."
+          onRetry={loadThemeStore}
+        />
       ) : null}
       {state.status === 'loaded' && !(state.data.themes.length === 0 && !state.data.success) ? (
+
         <>
           <SectionHeader
             action={<ActionButton label="Refresh" onClick={() => loadThemeStore()} />}
@@ -2212,6 +2210,7 @@ function ExtensionsPane({pane, store}: {pane: PaneDefinition; store: MahoSetting
   const handler = store.getHandler();
   const callbackRouter = store.getCallbackRouter();
   const [state, setState] = useState<LoadState<InstalledExtension[]>>(createLoadingState());
+  const [bannerDismissed, setBannerDismissed] = useState(false);
 
   const loadExtensions = useCallback(async () => {
     setState(createLoadingState());
@@ -2237,6 +2236,8 @@ function ExtensionsPane({pane, store}: {pane: PaneDefinition; store: MahoSetting
     };
   }, [callbackRouter]);
 
+  const hasMv2Extensions = state.status === 'loaded' && state.data.some(e => e.manifestVersion === 2);
+
   return (
     <DomainPaneSection pane={pane}>
       <SectionHeader title="Installed extensions" />
@@ -2246,19 +2247,60 @@ function ExtensionsPane({pane, store}: {pane: PaneDefinition; store: MahoSetting
       ) : null}
       {state.status === 'loaded' ? (
         <div className={ROWS_CLASS}>
+          {hasMv2Extensions && !bannerDismissed ? (
+            <Alert className="mb-4 flex items-start gap-3 border-amber-200/50 bg-amber-500/5 text-amber-900 dark:text-amber-200">
+              <AlertCircle className="h-5 w-5 mt-0.5 text-amber-500" />
+              <div className="flex-1">
+                <AlertTitle className="font-semibold text-amber-800 dark:text-amber-300">Manifest V2 Support Ending</AlertTitle>
+                <AlertDescription className="text-sm mt-1 leading-relaxed opacity-90">
+                  Some of your installed extensions are using Manifest V2, which will soon be deprecated. Please migrate to Manifest V3 versions to ensure they continue working.{' '}
+                  <a
+                    href="https://developer.chrome.com/docs/extensions/develop/migrate"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline font-semibold hover:opacity-80 inline-flex items-center gap-0.5"
+                  >
+                    Learn more <ExternalLink className="h-3 w-3 inline" />
+                  </a>
+                </AlertDescription>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 px-2 text-amber-700 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300 hover:bg-amber-500/10"
+                onClick={() => setBannerDismissed(true)}
+              >
+                Dismiss
+              </Button>
+            </Alert>
+          ) : null}
           {state.data.length === 0 ? <EmptyDescription message="No extensions installed." /> : null}
           {state.data.map((extension, index) => {
+            const isMv2 = extension.manifestVersion === 2;
             const descriptionParts = [
               extension.version ? `v${extension.version}` : '',
               extension.enabled ? 'Enabled' : 'Disabled',
               extension.description || '',
             ].filter(Boolean);
 
+            const descriptionNode = (
+              <span className="flex flex-col gap-1.5">
+                <span>{descriptionParts.join(' · ')}</span>
+                {isMv2 ? (
+                  <span className="inline-flex">
+                    <Badge variant="warning" className="text-[10px] py-0 px-1.5 h-4 font-semibold uppercase tracking-wider bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                      Manifest V2 (deprecated)
+                    </Badge>
+                  </span>
+                ) : null}
+              </span>
+            );
+
             return (
               <ManagedSettingRow
                 key={extension.id}
                 controlClassName={SETTING_ACTIONS_CLASS}
-                description={descriptionParts.join(' · ')}
+                description={descriptionNode}
                 isFirstRow={index === 0}
                 title={extension.name || extension.id}>
                 <Toggle
@@ -2280,6 +2322,19 @@ function ExtensionsPane({pane, store}: {pane: PaneDefinition; store: MahoSetting
               </ManagedSettingRow>
             );
           })}
+          <ManagedSettingRow
+            controlClassName={SETTING_ACTIONS_CLASS}
+            isFirstRow={state.data.length === 0}
+            title="Advanced extension controls"
+            description="Access full extension settings and developer features.">
+            <ActionButton
+              ariaLabel="Open extensions page"
+              label="Manage"
+              onClick={() => {
+                handler.openExtensionsPage();
+              }}
+            />
+          </ManagedSettingRow>
         </div>
       ) : null}
     </DomainPaneSection>

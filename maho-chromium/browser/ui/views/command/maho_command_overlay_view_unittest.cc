@@ -479,150 +479,7 @@ TEST_F(MahoCommandOverlayViewTest,
 // chrome:// URL seeding suppression (internal-page policy regression)
 // ---------------------------------------------------------------------------
 
-TEST_F(MahoCommandOverlayViewTest,
-       CurrentTabModeWithChromeUrlDoesNotEnterSeededState) {
-  const std::string url = "chrome://settings/";
-  auto* view = CreateView(CommandOverlayMode::kCurrentTab, url, true);
 
-  EXPECT_FALSE(view->IsSeededStateForTesting())
-      << "Internal chrome:// pages must not enter seeded state; the overlay "
-         "should fall through to the backend search path";
-}
-
-TEST_F(MahoCommandOverlayViewTest,
-       CurrentTabModeWithChromeUrlHasNoSeededResults) {
-  const std::string url = "chrome://settings/";
-  auto* view = CreateView(CommandOverlayMode::kCurrentTab, url, true);
-
-  EXPECT_TRUE(view->GetSeededResultsForTesting().empty())
-      << "No seeded rows must be stored for an internal chrome:// page";
-}
-
-TEST_F(MahoCommandOverlayViewTest,
-       CurrentTabModeWithChromeUrlPreFillsTextfield) {
-  const std::string url = "chrome://newtab/";
-  auto* view = CreateView(CommandOverlayMode::kCurrentTab, url, true);
-
-  EXPECT_EQ(base::UTF8ToUTF16(url), view->textfield()->GetText())
-      << "chrome:// URL must still appear verbatim in the textfield (prefill "
-         "comes from the opener, not the overlay seeding path)";
-}
-
-TEST_F(MahoCommandOverlayViewTest,
-       NewTabUrlDoesNotEnterSeededState) {
-  auto* view = CreateView(CommandOverlayMode::kCurrentTab,
-                          "chrome://newtab/", true);
-
-  EXPECT_FALSE(view->IsSeededStateForTesting())
-      << "chrome://newtab/ must not lock the palette in seeded state";
-}
-
-TEST_F(MahoCommandOverlayViewTest,
-       NewTabUrlSeededResultsAreEmpty) {
-  auto* view = CreateView(CommandOverlayMode::kCurrentTab,
-                          "chrome://newtab/", true);
-
-  EXPECT_TRUE(view->GetSeededResultsForTesting().empty())
-      << "No seeded rows must be stored for chrome://newtab/";
-}
-
-TEST_F(MahoCommandOverlayViewTest,
-       NonNewTabChromeUrlAlsoDoesNotEnterSeededState) {
-  auto* view = CreateView(CommandOverlayMode::kCurrentTab,
-                          "chrome://settings/", true);
-
-  EXPECT_FALSE(view->IsSeededStateForTesting())
-      << "All chrome:// URLs (not just newtab) must be suppressed by the "
-         "internal-page policy";
-  EXPECT_TRUE(view->GetSeededResultsForTesting().empty());
-}
-
-TEST_F(MahoCommandOverlayViewTest,
-       CurrentTabModeWithChromeUrlSeedNotVisibleOnEmptyBackendResponse) {
-  const std::string url = "chrome://history/";
-  auto* view = CreateView(CommandOverlayMode::kCurrentTab, url, true);
-
-  view->UpdateResultViewsForTesting({});
-
-  EXPECT_EQ(0u, view->GetRenderedResultCountForTesting())
-      << "Internal chrome:// pages must not produce visible seeded rows";
-}
-
-TEST_F(MahoCommandOverlayViewTest,
-       CurrentTabModeSeedReplacedByRealBackendResults) {
-  const std::string url = "https://example.com/page";
-  auto* view = CreateView(CommandOverlayMode::kCurrentTab, url, true);
-
-  view->UpdateResultViewsForTesting({});
-  ASSERT_FALSE(view->GetResultsContainerForTesting()->children().empty());
-
-  CommandSuggestion hist;
-  hist.title = "History Result";
-  hist.subtitle = "https://visited.com/";
-  hist.type = CommandSuggestionType::kHistory;
-
-  view->UpdateResultViewsForTesting({hist});
-
-  EXPECT_EQ(1u, view->GetResultsContainerForTesting()->children().size());
-}
-
-TEST_F(MahoCommandOverlayViewTest,
-       CurrentTabModeSeedClearedAfterUserEditsText) {
-  const std::string url = "https://example.com/page";
-  auto* view = CreateView(CommandOverlayMode::kCurrentTab, url, true);
-
-  view->UpdateResultViewsForTesting({});
-  ASSERT_FALSE(view->GetResultsContainerForTesting()->children().empty());
-  ASSERT_TRUE(view->IsSeededStateForTesting());
-
-  view->textfield()->SetText(u"somethingelse");
-  view->ContentsChanged(view->textfield(), u"somethingelse");
-
-  EXPECT_FALSE(view->IsSeededStateForTesting());
-
-  view->UpdateResultViewsForTesting({});
-
-  EXPECT_EQ(0u, view->GetRenderedResultCountForTesting());
-  auto children = view->GetResultsContainerForTesting()->children();
-  ASSERT_EQ(1u, children.size())
-      << "After user edits, empty backend response should show hint label";
-}
-
-TEST_F(MahoCommandOverlayViewTest,
-       CurrentTabModeAfterUserActionWithoutEditKeepsSeededState) {
-  const std::string url = "https://example.com/page";
-  auto* view = CreateView(CommandOverlayMode::kCurrentTab, url, true);
-
-  ASSERT_TRUE(view->IsSeededStateForTesting());
-
-  view->OnAfterUserAction(view->textfield());
-
-  EXPECT_TRUE(view->IsSeededStateForTesting());
-}
-
-TEST_F(MahoCommandOverlayViewTest,
-       CurrentTabModeRestoringOriginalUrlAfterEditDoesNotReenterSeededState) {
-  const std::string url = "https://example.com/page";
-  auto* view = CreateView(CommandOverlayMode::kCurrentTab, url, true);
-
-  ASSERT_TRUE(view->IsSeededStateForTesting());
-
-  view->textfield()->SetText(u"somethingelse");
-  view->ContentsChanged(view->textfield(), u"somethingelse");
-  ASSERT_FALSE(view->IsSeededStateForTesting());
-
-  view->textfield()->SetText(base::UTF8ToUTF16(url));
-  view->ContentsChanged(view->textfield(), base::UTF8ToUTF16(url));
-
-  EXPECT_FALSE(view->IsSeededStateForTesting());
-
-  view->UpdateResultViewsForTesting({});
-
-  EXPECT_EQ(0u, view->GetRenderedResultCountForTesting());
-  auto children = view->GetResultsContainerForTesting()->children();
-  ASSERT_EQ(1u, children.size())
-      << "Returning to the original URL must not silently restore seeded mode";
-}
 
 TEST_F(MahoCommandOverlayViewTest,
        RenderedResultCountIgnoresHintLabel) {
@@ -893,17 +750,7 @@ TEST_F(MahoCommandOverlayViewTest,
 // Divider visibility contract
 // ---------------------------------------------------------------------------
 
-TEST_F(MahoCommandOverlayViewTest,
-       SeededCurrentTabKeepsDividerHidden) {
-  const std::string url = "https://example.com/page";
-  auto* view = CreateView(CommandOverlayMode::kCurrentTab, url, true);
 
-  ASSERT_TRUE(view->IsSeededStateForTesting());
-  view->UpdateResultViewsForTesting({});
-
-  EXPECT_FALSE(view->IsDividerVisibleForTesting())
-      << "Divider must remain hidden in seeded kCurrentTab state";
-}
 
 TEST_F(MahoCommandOverlayViewTest,
        NonSeededResultsPathShowsDividerWhenResultsPresent) {
@@ -1048,14 +895,12 @@ TEST_F(MahoCommandOverlayViewTest,
 TEST_F(MahoCommandOverlayViewTest,
        EmptyQueryInCurrentTabModeWithNoSeedShowsHintLabel) {
   auto* view = CreateView(CommandOverlayMode::kCurrentTab);
-  ASSERT_FALSE(view->IsSeededStateForTesting());
 
   view->UpdateResultViewsForTesting({});
 
   auto children = view->GetResultsContainerForTesting()->children();
   ASSERT_EQ(1u, children.size())
       << "Empty kCurrentTab with no seed must show hint label only";
-  EXPECT_EQ(0u, view->GetRenderedResultCountForTesting());
 }
 
 TEST_F(MahoCommandOverlayViewTest,
@@ -1067,7 +912,6 @@ TEST_F(MahoCommandOverlayViewTest,
   auto children = view->GetResultsContainerForTesting()->children();
   ASSERT_EQ(1u, children.size())
       << "Empty kSearch must show hint label only, not seeded rows";
-  EXPECT_EQ(0u, view->GetRenderedResultCountForTesting());
 }
 
 TEST_F(MahoCommandOverlayViewTest,
@@ -1079,23 +923,13 @@ TEST_F(MahoCommandOverlayViewTest,
   auto children = view->GetResultsContainerForTesting()->children();
   ASSERT_EQ(1u, children.size())
       << "Empty kNewTab must show hint label (backend results not yet arrived)";
-  EXPECT_EQ(0u, view->GetRenderedResultCountForTesting());
 }
 
 // ---------------------------------------------------------------------------
 // Phase 2 (Zen parity): four-state agreement and disposition at activation
 // ---------------------------------------------------------------------------
 
-TEST_F(MahoCommandOverlayViewTest,
-       FourStateAgreement_CurrentTabModeDispositionIsCurrentTab) {
-  auto* view = CreateView(CommandOverlayMode::kCurrentTab,
-                          "https://example.test/", true);
 
-  ASSERT_TRUE(view->IsSeededStateForTesting());
-  EXPECT_EQ(WindowOpenDisposition::CURRENT_TAB,
-            view->DispositionForModeForTesting())
-      << "kCurrentTab mode must always resolve to CURRENT_TAB disposition";
-}
 
 TEST_F(MahoCommandOverlayViewTest,
        FourStateAgreement_NewTabModeDispositionIsNewForegroundTab) {
@@ -1143,50 +977,7 @@ TEST_F(MahoCommandOverlayViewTest,
       << "kAI entered from kCurrentTab must yield CURRENT_TAB";
 }
 
-TEST_F(MahoCommandOverlayViewTest,
-       EmptyTextAfterSeededClearShowsHintNotSeededRows) {
-  const std::string url = "https://seeded.test/page";
-  auto* view = CreateView(CommandOverlayMode::kCurrentTab, url, true);
-  ASSERT_TRUE(view->IsSeededStateForTesting());
-  ASSERT_EQ(1u, view->GetRenderedResultCountForTesting());
 
-  view->textfield()->SetText(u"x");
-  view->ContentsChanged(view->textfield(), u"x");
-  ASSERT_FALSE(view->IsSeededStateForTesting());
-
-  view->textfield()->SetText(u"");
-  view->ContentsChanged(view->textfield(), u"");
-
-  view->UpdateResultViewsForTesting({});
-
-  EXPECT_EQ(0u, view->GetRenderedResultCountForTesting())
-      << "After seeded state is cleared and text is emptied, "
-         "no seeded rows must appear";
-  auto children = view->GetResultsContainerForTesting()->children();
-  EXPECT_GE(children.size(), 1u)
-      << "Hint label must be present after seeded clear";
-}
-
-TEST_F(MahoCommandOverlayViewTest,
-       SeededCurrentTabRows_DefaultCount) {
-  EXPECT_EQ(3u, SeededVisibleResultCap())
-      << "The default visible seeded cap must be reduced to 3";
-}
-
-TEST_F(MahoCommandOverlayViewTest,
-       SeededCurrentTabRows_FeatureFlagDisabled) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndDisableFeature(
-      features::kMahoCommandPaletteSeededHistory);
-
-  const std::string url = "https://example.com/page";
-  auto* view = CreateView(CommandOverlayMode::kCurrentTab, url, true);
-
-  EXPECT_FALSE(view->IsSeededStateForTesting())
-      << "Seeded state must be completely disabled when the feature flag is "
-         "turned off";
-  EXPECT_TRUE(view->GetSeededResultsForTesting().empty());
-}
 
 TEST_F(MahoCommandOverlayViewTest,
        CommandsOnlyMode_EnterExitLifecycle) {

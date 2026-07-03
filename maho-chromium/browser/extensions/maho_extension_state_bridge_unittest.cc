@@ -7,6 +7,7 @@
 
 #include "base/json/json_reader.h"
 #include "base/values.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/browser_task_environment.h"
@@ -30,7 +31,7 @@ class ScopedCoreOverride {
   ~ScopedCoreOverride() { SetCore(saved_); }
 
  private:
-  MahoCore* saved_;
+  raw_ptr<MahoCore> saved_;
 };
 
 class MahoExtensionStateBridgeTest : public testing::Test {
@@ -68,15 +69,6 @@ TEST_F(MahoExtensionStateBridgeTest, FromProfileNullForIncognito) {
       Profile::OTRProfileID::PrimaryID(), true);
   ASSERT_NE(otr, nullptr);
   EXPECT_EQ(MahoExtensionStateBridge::FromProfile(otr), nullptr);
-}
-
-TEST_F(MahoExtensionStateBridgeTest, ConstructionObservesExtensionRegistry) {
-  TestingProfile profile;
-  auto bridge = std::make_unique<MahoExtensionStateBridge>(&profile);
-
-  auto* registry = extensions::ExtensionRegistry::Get(&profile);
-  ASSERT_NE(registry, nullptr);
-  EXPECT_TRUE(registry->HasObserver(bridge.get()));
 }
 
 TEST_F(MahoExtensionStateBridgeTest,

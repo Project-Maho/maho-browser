@@ -2,6 +2,8 @@
 
 #include "maho/browser/ui/views/command/maho_command_result_row_view.h"
 
+#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <memory>
@@ -142,21 +144,21 @@ std::u16string SeededCompactMetadataText(const std::u16string& subtitle_text) {
   return subtitle_text;
 }
 
-constexpr int kDefaultRowHeightDp = 48;
-constexpr int kCurrentTabSeededRowHeightDp = 42;
+constexpr int kDefaultRowHeightDp = 46;
+constexpr int kCurrentTabSeededRowHeightDp = 36;
 constexpr int kRowCornerRadiusDp = 12;
-constexpr int kCurrentTabSeededRowCornerRadiusDp = 8;
-constexpr int kRowHorizontalInsetDp = 2;
+constexpr int kCurrentTabSeededRowCornerRadiusDp = 6;
+constexpr int kRowHorizontalInsetDp = 4;
 constexpr int kDefaultRowVerticalInsetDp = 0;
 constexpr int kCurrentTabSeededRowVerticalInsetDp = 1;
-constexpr int kDefaultRowPaddingHDp = 12;
+constexpr int kDefaultRowPaddingHDp = 10;
 constexpr int kCurrentTabSeededRowPaddingHDp = 12;
-constexpr int kGlyphTileSizeDp = 26;
+constexpr int kGlyphTileSizeDp = 28;
 constexpr int kCurrentTabSeededGlyphTileSizeDp = 20;
-constexpr int kGlyphIconSizeDp = 17;
-constexpr int kCurrentTabSeededGlyphIconSizeDp = 16;
-constexpr int kGlyphCornerRadiusDp = 8;
-constexpr int kCurrentTabSeededGlyphCornerRadiusDp = 7;
+constexpr int kGlyphIconSizeDp = 20;
+constexpr int kCurrentTabSeededGlyphIconSizeDp = 14;
+constexpr int kGlyphCornerRadiusDp = 0;
+constexpr int kCurrentTabSeededGlyphCornerRadiusDp = 0;
 constexpr int kCurrentTabSeededSelectedFaviconTileSizeDp = 16;
 constexpr int kCurrentTabSeededSelectedFaviconImageSizeDp = 12;
 constexpr int kCurrentTabSeededFaviconTileCornerRadiusDp = 5;
@@ -440,23 +442,16 @@ void DrawLineIcon(gfx::Canvas* canvas,
       break;
     }
     case CommandSuggestionType::kTab: {
-      const gfx::RectF sparkle_rect = command_palette::MakeSparkleRect(rect);
-      const SkPath outer_path = command_palette::BuildSparklePath(
-          sparkle_rect, command_palette::kSparkleOuterPoints);
-      const SkPath inner_path = command_palette::BuildSparklePath(
-          sparkle_rect, command_palette::kSparkleInnerPoints);
-
-      cc::PaintFlags outer_flags;
-      outer_flags.setAntiAlias(true);
-      outer_flags.setStyle(cc::PaintFlags::kFill_Style);
-      outer_flags.setColor(SkColorSetRGB(0x73, 0x7C, 0xFF));
-      canvas->DrawPath(outer_path, outer_flags);
-
-      cc::PaintFlags inner_flags;
-      inner_flags.setAntiAlias(true);
-      inner_flags.setStyle(cc::PaintFlags::kFill_Style);
-      inner_flags.setColor(SkColorSetRGB(0xFF, 0xC7, 0x57));
-      canvas->DrawPath(inner_path, inner_flags);
+      const float pad = rect.width() * 0.16f;
+      gfx::RectF window_rect = rect;
+      window_rect.Inset(gfx::InsetsF::TLBR(pad, pad, pad, pad));
+      const float radius = window_rect.width() * 0.14f;
+      canvas->DrawRoundRect(window_rect, radius, stroke_flags);
+      const float bar_y = window_rect.y() + window_rect.height() * 0.28f;
+      canvas->DrawLine(
+          gfx::PointF(window_rect.x() + window_rect.width() * 0.18f, bar_y),
+          gfx::PointF(window_rect.x() + window_rect.width() * 0.82f, bar_y),
+          stroke_flags);
       break;
     }
   }
@@ -511,6 +506,7 @@ MahoCommandResultRowView::MahoCommandResultRowView(
     ActivateCallback activate_callback,
     PresentationStyle presentation_style)
     : suggestion_type_(suggestion.type),
+      is_tab_type_(suggestion.type == CommandSuggestionType::kTab),
       presentation_style_(presentation_style),
       title_text_(base::UTF8ToUTF16(suggestion.title)),
       subtitle_text_(base::UTF8ToUTF16(suggestion.subtitle)),
@@ -597,6 +593,7 @@ MahoCommandResultRowView::MahoCommandResultRowView(
   title_label_->SetAutoColorReadabilityEnabled(false);
   title_label_->SetMultiLine(false);
   title_label_->SetElideBehavior(gfx::ELIDE_TAIL);
+  title_label_->SetSkipSubpixelRenderingOpacityCheck(true);
   text_layout->SetFlexForView(title_label_, compact ? 0 : 1);
 
   compact_separator_label_ = text_stack_->AddChildView(
@@ -605,6 +602,7 @@ MahoCommandResultRowView::MahoCommandResultRowView(
   compact_separator_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   compact_separator_label_->SetAutoColorReadabilityEnabled(false);
   compact_separator_label_->SetMultiLine(false);
+  compact_separator_label_->SetSkipSubpixelRenderingOpacityCheck(true);
   compact_separator_label_->SetBorder(
       views::CreateEmptyBorder(gfx::Insets::TLBR(
           presentation_style_ == PresentationStyle::kCurrentTabSeeded ? 0
@@ -617,6 +615,7 @@ MahoCommandResultRowView::MahoCommandResultRowView(
   compact_metadata_label_->SetAutoColorReadabilityEnabled(false);
   compact_metadata_label_->SetMultiLine(false);
   compact_metadata_label_->SetElideBehavior(gfx::ELIDE_TAIL);
+  compact_metadata_label_->SetSkipSubpixelRenderingOpacityCheck(true);
   compact_metadata_label_->SetBorder(
       views::CreateEmptyBorder(gfx::Insets::TLBR(
           compact ? 0 : kSelectedSubtitleTopInsetDp,
@@ -629,10 +628,36 @@ MahoCommandResultRowView::MahoCommandResultRowView(
         views::style::CONTEXT_LABEL, views::style::STYLE_BODY_5));
     shortcut_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
     shortcut_label_->SetAutoColorReadabilityEnabled(false);
+    shortcut_label_->SetSkipSubpixelRenderingOpacityCheck(true);
     shortcut_label_->SetBorder(views::CreatePaddedBorder(
         views::CreateRoundedRectBorder(1, kShortcutCornerRadiusDp,
                                        kMahoColorCommandBarKeycapBorder),
         gfx::Insets::VH(kShortcutPaddingVDp, kShortcutPaddingHDp)));
+  }
+
+  if (is_tab_type_) {
+    switch_tab_container_ = content_view_->AddChildView(std::make_unique<views::View>());
+    auto* tab_affordance_layout = switch_tab_container_->SetLayoutManager(
+        std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal,
+                                           gfx::Insets::TLBR(0, 8, 0, 0), 6));
+    tab_affordance_layout->set_cross_axis_alignment(
+        views::BoxLayout::CrossAxisAlignment::kCenter);
+
+    switch_tab_label_ = switch_tab_container_->AddChildView(
+        std::make_unique<views::Label>(u"Switch to Tab",
+                                       views::style::CONTEXT_LABEL,
+                                       views::style::STYLE_BODY_5));
+    switch_tab_label_->SetAutoColorReadabilityEnabled(false);
+
+    switch_tab_chip_ = switch_tab_container_->AddChildView(std::make_unique<views::View>());
+    switch_tab_chip_->SetPreferredSize(gfx::Size(24, 24));
+    auto* chip_layout = switch_tab_chip_->SetLayoutManager(
+        std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kHorizontal));
+    chip_layout->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kCenter);
+    chip_layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
+
+    switch_tab_icon_ = switch_tab_chip_->AddChildView(std::make_unique<views::ImageView>());
+    switch_tab_icon_->SetCanProcessEventsWithinSubtree(false);
   }
 
   UpdateLayout();
@@ -701,10 +726,10 @@ void MahoCommandResultRowView::ApplyTitleStyles(SkColor title_color) {
   const bool compact =
       presentation_style_ == PresentationStyle::kCurrentTabSeeded;
   title_label_->SetTextStyle(selected_
-                                   ? (compact ? views::style::STYLE_BODY_5_MEDIUM
-                                              : views::style::STYLE_BODY_4_MEDIUM)
-                                   : (compact ? views::style::STYLE_BODY_5
-                                              : views::style::STYLE_BODY_4));
+                                   ? (compact ? views::style::STYLE_BODY_5_BOLD
+                                              : views::style::STYLE_BODY_4_BOLD)
+                                   : (compact ? views::style::STYLE_BODY_5_MEDIUM
+                                              : views::style::STYLE_BODY_4_MEDIUM));
   if (compact) {
     title_label_->SetFontList(title_label_->font_list().Derive(
         0, gfx::Font::NORMAL, kSeededRowTitleFontWeight));
@@ -906,6 +931,25 @@ void MahoCommandResultRowView::UpdateColors() {
     shortcut_label_->SetEnabledColor(
         selected_ ? selected_subtitle_color
                   : cp->GetColor(kMahoColorCommandBarShortcutText));
+  }
+
+  if (is_tab_type_ && switch_tab_container_) {
+    const bool dark_mode = SkColorGetR(cp->GetColor(kMahoColorCommandBarBackground)) < 0x80;
+    const SkColor label_color = selected_
+        ? cp->GetColor(kMahoColorCommandBarRowSubtitleSelected)
+        : cp->GetColor(kMahoColorSecondaryText);
+    switch_tab_label_->SetEnabledColor(label_color);
+
+    const SkColor chip_bg = selected_
+        ? (dark_mode ? SK_ColorWHITE : SkColorSetRGB(0xE0, 0xE3, 0xEB))
+        : (dark_mode ? SkColorSetARGB(13, 255, 255, 255) : SkColorSetARGB(13, 0, 0, 0));
+    switch_tab_chip_->SetBackground(views::CreateRoundedRectBackground(chip_bg, 12));
+
+    const SkColor icon_color = selected_
+        ? cp->GetColor(kMahoColorAccentBlue)
+        : cp->GetColor(kMahoColorSecondaryText);
+    switch_tab_icon_->SetImage(ui::ImageModel::FromVectorIcon(
+        maho_lucide_icons::kChevronRightIcon, icon_color, 14));
   }
 }
 

@@ -1814,6 +1814,14 @@ bool SidebarTabRowView::CanStartDragForView(views::View* sender,
   return (press_pt - current_pt).Length() >= kDragStartThresholdDp;
 }
 
+void SidebarTabRowView::SetActive(bool active) {
+  if (active_ == active) {
+    return;
+  }
+  active_ = active;
+  UpdateAppearance();
+}
+
 void SidebarTabRowView::UpdateAppearance() {
   const bool hovered = IsMouseHovered();
   const bool show_close_button = hovered && !is_editing_title_;
@@ -2846,6 +2854,7 @@ void MahoSidebarTabListView::Update(const MahoSidebarTabListModel& model,
     last_model_ = model;
     has_last_model_ = true;
     last_model_fingerprint_ = ComputeModelFingerprint(model);
+    last_active_tab_id_ = model.active_tab.tab_id;
     return;
   }
 
@@ -2859,9 +2868,15 @@ void MahoSidebarTabListView::Update(const MahoSidebarTabListModel& model,
   // pass, the view tree is already correct and the rebuild is wasted work.
   std::string fingerprint = ComputeModelFingerprint(model);
   if (!last_model_fingerprint_.empty() && fingerprint == last_model_fingerprint_) {
+    // Structure unchanged; if only the active tab changed, apply the
+    // active-highlight delta in O(2) row lookups instead of rebuilding.
+    if (model.active_tab.tab_id != last_active_tab_id_) {
+      UpdateActiveTabHighlightOnly(model.active_tab.tab_id);
+    }
     return;
   }
   last_model_fingerprint_ = std::move(fingerprint);
+  last_active_tab_id_ = model.active_tab.tab_id;
 
   RebuildRows(model, browser);
 
@@ -2887,8 +2902,9 @@ std::string MahoSidebarTabListView::ComputeModelFingerprint(
   out.reserve(8192);
   out.append(model.active_space_id);
   out.push_back('|');
-  out.append(model.active_tab.tab_id);
-  out.push_back('|');
+  // Fingerprint intentionally omits model.active_tab.tab_id: the active-tab
+  // highlight is applied by UpdateActiveTabHighlightOnly() without a full
+  // ~2s RebuildRows() pass. Including it here would defeat that fast path.
   std::function<void(const std::vector<SidebarTreeNode>&)> walk;
   walk = [&](const std::vector<SidebarTreeNode>& nodes) {
     for (const auto& n : nodes) {
@@ -2902,8 +2918,6 @@ std::string MahoSidebarTabListView::ComputeModelFingerprint(
         out.append(base::UTF16ToUTF8(n.folder_name));
       } else {
         out.append(base::UTF16ToUTF8(n.title));
-        out.push_back(':');
-        out.push_back(n.is_loading ? 'L' : '-');
       }
       out.push_back(';');
       if (!n.children.empty()) {
@@ -2917,6 +2931,62 @@ std::string MahoSidebarTabListView::ComputeModelFingerprint(
   out.push_back('|');
   walk(model.normal_tree);
   return out;
+}
+
+bool MahoSidebarTabListView::HasTabInLastModel(
+    const std::string& tab_id) const {
+  if (!has_last_model_ || tab_id.empty()) {
+    return false;
+  }
+  std::function<bool(const std::vector<SidebarTreeNode>&)> search;
+  search = [&](const std::vector<SidebarTreeNode>& nodes) -> bool {
+    for (const auto& n : nodes) {
+      if (n.kind == SidebarNodeKind::kTab && n.tab_id == tab_id) {
+        return true;
+      }
+      if (!n.children.empty() && search(n.children)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  return search(last_model_.pinned_tree) || search(last_model_.normal_tree);
+}
+
+void MahoSidebarTabListView::UpdateActiveTabHighlightOnly(
+    const std::string& new_active_tab_id) {
+  if (last_active_tab_id_ == new_active_tab_id) {
+    return;
+  }
+  if (!tab_rows_) {
+    last_active_tab_id_ = new_active_tab_id;
+    return;
+  }
+
+  if (!last_active_tab_id_.empty()) {
+    const std::string previous_id = last_active_tab_id_;
+    if (auto* previous_row = RecursiveFindView<SidebarTabRowView>(
+            tab_rows_,
+            std::function<bool(SidebarTabRowView*)>(
+                [&previous_id](SidebarTabRowView* row) {
+                  return row->tab_id() == previous_id;
+                }))) {
+      previous_row->SetActive(false);
+    }
+  }
+
+  if (!new_active_tab_id.empty()) {
+    if (auto* next_row = RecursiveFindView<SidebarTabRowView>(
+            tab_rows_,
+            std::function<bool(SidebarTabRowView*)>(
+                [&new_active_tab_id](SidebarTabRowView* row) {
+                  return row->tab_id() == new_active_tab_id;
+                }))) {
+      next_row->SetActive(true);
+    }
+  }
+
+  last_active_tab_id_ = new_active_tab_id;
 }
 
 bool MahoSidebarTabListView::GetDropFormats(
@@ -3159,6 +3229,8 @@ void MahoSidebarTabListView::FlushDeferredRebuild() {
     return;
   }
   rebuild_deferred_ = false;
+  last_model_fingerprint_ = ComputeModelFingerprint(deferred_model_);
+  last_active_tab_id_ = deferred_model_.active_tab.tab_id;
   RebuildRows(deferred_model_, deferred_browser_);
   deferred_model_ = {};
   deferred_browser_ = nullptr;

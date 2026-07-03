@@ -40,10 +40,17 @@ std::string GetActivePasswordProviderMode() {
   if (maho_core_is_native_password_provider_active(core)) {
     return kNativeProviderMode;
   }
-  if (maho_core_is_bitwarden_extension_available(core)) {
+  char* ext_id = maho_core_get_password_provider_extension(core);
+  if (!ext_id) {
+    return kNativeProviderMode;
+  }
+  std::string provider = ext_id;
+  maho_string_free(ext_id);
+
+  if (provider == "nngceckbapebfimnlniiiahkandclblb") {
     return "bitwarden";
   }
-  if (maho_core_is_onepassword_extension_available(core)) {
+  if (provider == "aeblfdkhhhdcdjpifhhbdiojplfjncoa") {
     return "onepassword";
   }
   return kNativeProviderMode;
@@ -60,12 +67,22 @@ bool ShouldEnableChromiumPasswordManager() {
 
 bool IsBitwardenExtensionAvailable() {
   MahoCore* core = maho::GetCore();
-  return core ? maho_core_is_bitwarden_extension_available(core) : false;
+  if (!core) return false;
+  char* ext_id = maho_core_get_password_provider_extension(core);
+  if (!ext_id) return false;
+  bool res = (std::string(ext_id) == "nngceckbapebfimnlniiiahkandclblb");
+  maho_string_free(ext_id);
+  return res;
 }
 
 bool IsOnePasswordExtensionAvailable() {
   MahoCore* core = maho::GetCore();
-  return core ? maho_core_is_onepassword_extension_available(core) : false;
+  if (!core) return false;
+  char* ext_id = maho_core_get_password_provider_extension(core);
+  if (!ext_id) return false;
+  bool res = (std::string(ext_id) == "aeblfdkhhhdcdjpifhhbdiojplfjncoa");
+  maho_string_free(ext_id);
+  return res;
 }
 
 bool IsPasswordProviderAvailable(std::string_view mode) {
@@ -74,7 +91,22 @@ bool IsPasswordProviderAvailable(std::string_view mode) {
     return true;
   }
   std::string mode_str(mode);
-  return maho_core_is_password_provider_available(core, mode_str.c_str());
+  if (mode_str == "chromium" || mode_str == "builtin" || mode_str == "disabled" ||
+      mode_str == "system" || mode_str == "maho_native") {
+    return true;
+  }
+  char* ext_id = maho_core_get_password_provider_extension(core);
+  if (!ext_id) return false;
+  std::string provider = ext_id;
+  maho_string_free(ext_id);
+
+  if (mode_str == "bitwarden") {
+    return provider == "nngceckbapebfimnlniiiahkandclblb";
+  }
+  if (mode_str == "onepassword") {
+    return provider == "aeblfdkhhhdcdjpifhhbdiojplfjncoa";
+  }
+  return false;
 }
 
 }  // namespace passwords

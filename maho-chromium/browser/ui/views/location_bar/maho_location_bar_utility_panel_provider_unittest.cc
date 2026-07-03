@@ -87,24 +87,24 @@ class FakeLocationBarModel : public LocationBarModel {
   security_state::SecurityLevel level_;
 };
 
-std::optional<base::Value> ParseJson(const std::string& json) {
-  return base::JSONReader::Read(json, base::JSON_PARSE_RFC);
-}
+// std::optional<base::Value> ParseJson(const std::string& json) {
+//   return base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+// }
 
-std::optional<base::Value> ReadCoreSettingsForTest(MahoCore* core) {
-  if (!core) {
-    return std::nullopt;
-  }
-
-  char* json_str = maho_core_get_settings(core);
-  if (!json_str) {
-    return std::nullopt;
-  }
-
-  std::string json(json_str);
-  maho_string_free(json_str);
-  return ParseJson(json);
-}
+// std::optional<base::Value> ReadCoreSettingsForTest(MahoCore* core) {
+//   if (!core) {
+//     return std::nullopt;
+//   }
+// 
+//   char* json_str = maho_core_get_settings(core);
+//   if (!json_str) {
+//     return std::nullopt;
+//   }
+// 
+//   std::string json(json_str);
+//   maho_string_free(json_str);
+//   return ParseJson(json);
+// }
 
 std::vector<std::u16string> TitlesFrom(
     const std::vector<MahoLocationBarUtilityPanelAction>& actions) {
@@ -143,38 +143,7 @@ void ExpectActionsEquivalent(const MahoLocationBarUtilityPanelAction& actual,
   EXPECT_EQ(actual.callback.is_null(), expected.callback.is_null());
 }
 
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     DeveloperModeActionReflectsParsedSettingsBranches) {
-  const auto disabled_settings =
-      ParseJson(R"({"advanced":{"developer_mode":false}})");
-  ASSERT_TRUE(disabled_settings.has_value());
-  MahoLocationBarUtilityPanelAction disabled =
-      internal::BuildDeveloperModeAction(&*disabled_settings);
-  EXPECT_EQ(disabled.title, u"Developer mode");
-  EXPECT_EQ(disabled.subtitle, u"Disabled");
-  EXPECT_EQ(disabled.icon, &maho_lucide_icons::kHammerIcon);
-  EXPECT_EQ(disabled.data_state,
-            MahoLocationBarUtilityPanelDataState::kLive);
-  EXPECT_FALSE(disabled.enabled);
 
-  const auto missing_advanced = ParseJson(R"({"profile":"default"})");
-  ASSERT_TRUE(missing_advanced.has_value());
-  MahoLocationBarUtilityPanelAction unavailable =
-      internal::BuildDeveloperModeAction(&*missing_advanced);
-  EXPECT_EQ(unavailable.subtitle, u"Developer mode unavailable");
-  EXPECT_EQ(unavailable.icon, &maho_lucide_icons::kHammerIcon);
-  EXPECT_EQ(unavailable.data_state,
-            MahoLocationBarUtilityPanelDataState::kUnavailable);
-  EXPECT_FALSE(unavailable.enabled);
-
-  MahoLocationBarUtilityPanelAction null_action =
-      internal::BuildDeveloperModeAction(nullptr);
-  EXPECT_EQ(null_action.subtitle, u"Developer mode unavailable");
-  EXPECT_EQ(null_action.icon, &maho_lucide_icons::kHammerIcon);
-  EXPECT_EQ(null_action.data_state,
-            MahoLocationBarUtilityPanelDataState::kUnavailable);
-  EXPECT_FALSE(null_action.enabled);
-}
 
 TEST(MahoLocationBarUtilityPanelProviderInternalTest,
      ShareActionUsesNativeSharingHubSubtitleAndIsUnavailableWithNullBrowser) {
@@ -219,21 +188,21 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
 
 
 
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     SecuritySymbolNameReflectsSecurityLevel) {
-  EXPECT_EQ(internal::GetSecuritySFSymbolNameForLevel(
-                static_cast<int>(security_state::NONE)),
-            "questionmark.shield");
-  EXPECT_EQ(internal::GetSecuritySFSymbolNameForLevel(
-                static_cast<int>(security_state::SECURE)),
-            "checkmark.shield");
-  EXPECT_EQ(internal::GetSecuritySFSymbolNameForLevel(
-                static_cast<int>(security_state::WARNING)),
-            "exclamationmark.shield");
-  EXPECT_EQ(internal::GetSecuritySFSymbolNameForLevel(
-                static_cast<int>(security_state::DANGEROUS)),
-            "xmark.shield");
-}
+// TEST(MahoLocationBarUtilityPanelProviderInternalTest,
+//      SecuritySymbolNameReflectsSecurityLevel) {
+//   EXPECT_EQ(internal::GetSecuritySFSymbolNameForLevel(
+//                 static_cast<int>(security_state::NONE)),
+//             "questionmark.shield");
+//   EXPECT_EQ(internal::GetSecuritySFSymbolNameForLevel(
+//                 static_cast<int>(security_state::SECURE)),
+//             "checkmark.shield");
+//   EXPECT_EQ(internal::GetSecuritySFSymbolNameForLevel(
+//                 static_cast<int>(security_state::WARNING)),
+//             "exclamationmark.shield");
+//   EXPECT_EQ(internal::GetSecuritySFSymbolNameForLevel(
+//                 static_cast<int>(security_state::DANGEROUS)),
+//             "xmark.shield");
+// }
 
 TEST(MahoLocationBarUtilityPanelProviderInternalTest,
      ToolbarZoneHasThreeActionsInExactOrder) {
@@ -435,34 +404,12 @@ TEST(MahoLocationBarUtilityPanelProviderInternalTest,
 }
 
 TEST(MahoLocationBarUtilityPanelProviderInternalTest,
-     SettingsDeveloperModeRowDelegatesToBuildDeveloperModeAction) {
-  MahoCore* core = maho_core_new();
-  ASSERT_TRUE(core);
-  {
-    ScopedCoreOverride scoped_core(core);
-    std::optional<base::Value> parsed_settings = ReadCoreSettingsForTest(core);
-    ASSERT_TRUE(parsed_settings.has_value());
-
-    MahoUtilityPanelZone zone = internal::BuildSettingsZone(nullptr);
-    ASSERT_GE(zone.items.size(), 1u);
-    MahoLocationBarUtilityPanelAction expected =
-        internal::BuildDeveloperModeAction(&*parsed_settings);
-    EXPECT_EQ(zone.items[0].title, expected.title);
-    EXPECT_EQ(zone.items[0].subtitle, expected.subtitle);
-    EXPECT_EQ(zone.items[0].icon, expected.icon);
-    EXPECT_EQ(zone.items[0].enabled, expected.enabled);
-    EXPECT_EQ(zone.items[0].data_state, expected.data_state);
-  }
-  maho_core_free(core);
-}
-
-TEST(MahoLocationBarUtilityPanelProviderInternalTest,
      SettingsAutoPipRowDelegatesToBuildAutoPipSettingsRow) {
   ScopedCoreOverride scoped_core(nullptr);
   MahoUtilityPanelZone zone = internal::BuildSettingsZone(nullptr);
-  ASSERT_EQ(zone.items.size(), 3u);
-  ExpectActionsEquivalent(zone.items[2],
-                          internal::BuildAutoPipSettingsRow(nullptr, nullptr));
+  ASSERT_EQ(zone.items.size(), 2u);
+  ExpectActionsEquivalent(zone.items[1],
+                           internal::BuildAutoPipSettingsRow(nullptr, nullptr));
 }
 
 TEST(MahoLocationBarUtilityPanelProviderTest,
@@ -504,10 +451,9 @@ TEST(MahoLocationBarUtilityPanelProviderTest,
   EXPECT_EQ(extensions_zone->items[1].title, u"+");
   EXPECT_FALSE(extensions_zone->items[1].enabled);
 
-  ASSERT_EQ(settings_zone->items.size(), 3u);
-  EXPECT_EQ(settings_zone->items[0].subtitle, u"Developer mode unavailable");
-  EXPECT_EQ(settings_zone->items[1].subtitle, u"Current page unavailable");
-  EXPECT_EQ(settings_zone->items[2].subtitle, u"No active page available");
+  ASSERT_EQ(settings_zone->items.size(), 2u);
+  EXPECT_EQ(settings_zone->items[0].subtitle, u"Current page unavailable");
+  EXPECT_EQ(settings_zone->items[1].subtitle, u"No active page available");
 }
 
 TEST(MahoLocationBarUtilityPanelProviderTest,

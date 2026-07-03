@@ -17,6 +17,7 @@ aggregate_vector_icons("maho_lucide_icons") {
     "hammer.icon",
     "images.icon",
     "inbox.icon",
+    "link.icon",
     "message_square.icon",
     "minus.icon",
     "notebook_text.icon",
