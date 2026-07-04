@@ -3034,6 +3034,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "maho-browser-mcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "directories",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "maho-cli"
 version = "0.1.0"
 dependencies = [
