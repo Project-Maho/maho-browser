@@ -8,6 +8,7 @@ members = [
     "crates/maho-bench",
     "crates/maho-import", "crates/maho-agent", "crates/maho-jni",
     "crates/maho-cli",
+    "crates/maho-browser-mcp",
 ]
 exclude = ["billing-proxy"]
 

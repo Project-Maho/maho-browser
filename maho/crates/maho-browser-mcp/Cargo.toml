@@ -1,0 +1,10 @@
+[package]
+name = "maho-browser-mcp"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+
+[dependencies]
+rmcp = { version = "1.7", features = ["server", "transport-io"] }
+tokio = { version = "1", features = ["rt", "macros"] }
