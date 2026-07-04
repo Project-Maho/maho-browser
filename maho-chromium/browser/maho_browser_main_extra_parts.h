@@ -5,6 +5,7 @@
 
 #include "base/callback_list.h"
 #include "base/files/file_path.h"
+#include "build/build_config.h"
 #include "chrome/browser/chrome_browser_main_extra_parts.h"
 #include "base/memory/raw_ptr_exclusion.h"
 #include "maho/browser/extensions/maho_extension_state_bridge.h"
@@ -12,6 +13,10 @@
 
 class Profile;
 struct MahoCore;
+
+namespace maho {
+class MahoMcpSocketServer;
+}  // namespace maho
 
 class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts {
  public:
@@ -33,6 +38,10 @@ class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts {
   std::unique_ptr<maho::MahoExtensionStateBridge> extension_state_bridge_;
   std::unique_ptr<maho::MahoRoutinesScheduler> routines_scheduler_;
   base::CallbackListSubscription session_restored_subscription_;
+
+#if !BUILDFLAG(IS_WIN)
+  std::unique_ptr<maho::MahoMcpSocketServer> mcp_socket_server_;
+#endif
 };
 
 #endif  // MAHO_BROWSER_MAHO_BROWSER_MAIN_EXTRA_PARTS_H_

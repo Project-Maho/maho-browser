@@ -9,6 +9,11 @@
 #include "base/path_service.h"
 #include "base/values.h"
 #include "base/functional/bind.h"
+#include "build/build_config.h"
+
+#if !BUILDFLAG(IS_WIN)
+#include "maho/browser/mcp/maho_mcp_socket_server.h"
+#endif
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -224,10 +229,20 @@ void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
     session_restored_subscription_ =
         SessionRestore::RegisterOnSessionRestoredCallback(
             base::BindRepeating(&OnSessionRestoreFinished));
+
+#if !BUILDFLAG(IS_WIN)
+    mcp_socket_server_ =
+        std::make_unique<maho::MahoMcpSocketServer>(storage_path_);
+    mcp_socket_server_->Start();
+#endif
   }
 }
 
 void MahoBrowserMainExtraParts::PostMainMessageLoopRun() {
+#if !BUILDFLAG(IS_WIN)
+  mcp_socket_server_.reset();
+#endif
+
   ProfileManager* manager = g_browser_process->profile_manager();
   if (manager) {
     for (Profile* profile : manager->GetLoadedProfiles()) {

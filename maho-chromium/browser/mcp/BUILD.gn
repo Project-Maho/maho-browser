@@ -1,0 +1,40 @@
+# Copyright 2026 The Maho Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//build/config/features.gni")
+
+source_set("maho_mcp") {
+  sources = [
+    "maho_mcp_json_rpc.cc",
+    "maho_mcp_json_rpc.h",
+    "maho_mcp_session.cc",
+    "maho_mcp_session.h",
+    "maho_mcp_socket_server.cc",
+    "maho_mcp_socket_server.h",
+  ]
+
+  deps = [
+    "//base",
+    "//net",
+  ]
+}
+
+source_set("unittests") {
+  testonly = true
+
+  sources = [
+    "maho_mcp_json_rpc_unittest.cc",
+    "maho_mcp_session_unittest.cc",
+    "maho_mcp_socket_server_unittest.cc",
+  ]
+
+  deps = [
+    ":maho_mcp",
+    "//base",
+    "//base/test:test_support",
+    "//net",
+    "//net:test_support",
+    "//testing/gtest",
+  ]
+}
