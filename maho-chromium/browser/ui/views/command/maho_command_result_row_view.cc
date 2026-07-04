@@ -144,16 +144,16 @@ std::u16string SeededCompactMetadataText(const std::u16string& subtitle_text) {
   return subtitle_text;
 }
 
-constexpr int kDefaultRowHeightDp = 46;
+constexpr int kDefaultRowHeightDp = 36;
 constexpr int kCurrentTabSeededRowHeightDp = 36;
-constexpr int kRowCornerRadiusDp = 12;
+constexpr int kRowCornerRadiusDp = 10;
 constexpr int kCurrentTabSeededRowCornerRadiusDp = 6;
-constexpr int kRowHorizontalInsetDp = 4;
+constexpr int kRowHorizontalInsetDp = 6;
 constexpr int kDefaultRowVerticalInsetDp = 0;
 constexpr int kCurrentTabSeededRowVerticalInsetDp = 1;
-constexpr int kDefaultRowPaddingHDp = 10;
+constexpr int kDefaultRowPaddingHDp = 12;
 constexpr int kCurrentTabSeededRowPaddingHDp = 12;
-constexpr int kGlyphTileSizeDp = 28;
+constexpr int kGlyphTileSizeDp = 30;
 constexpr int kCurrentTabSeededGlyphTileSizeDp = 20;
 constexpr int kGlyphIconSizeDp = 20;
 constexpr int kCurrentTabSeededGlyphIconSizeDp = 14;
@@ -442,16 +442,15 @@ void DrawLineIcon(gfx::Canvas* canvas,
       break;
     }
     case CommandSuggestionType::kTab: {
-      const float pad = rect.width() * 0.16f;
-      gfx::RectF window_rect = rect;
-      window_rect.Inset(gfx::InsetsF::TLBR(pad, pad, pad, pad));
-      const float radius = window_rect.width() * 0.14f;
-      canvas->DrawRoundRect(window_rect, radius, stroke_flags);
-      const float bar_y = window_rect.y() + window_rect.height() * 0.28f;
-      canvas->DrawLine(
-          gfx::PointF(window_rect.x() + window_rect.width() * 0.18f, bar_y),
-          gfx::PointF(window_rect.x() + window_rect.width() * 0.82f, bar_y),
-          stroke_flags);
+      const gfx::PointF center = rect.CenterPoint();
+      const float radius = rect.width() * 0.34f;
+      canvas->DrawCircle(center, radius, stroke_flags);
+      canvas->DrawLine(gfx::PointF(center.x() - radius, center.y()),
+                       gfx::PointF(center.x() + radius, center.y()),
+                       stroke_flags);
+      canvas->DrawLine(gfx::PointF(center.x(), center.y() - radius),
+                       gfx::PointF(center.x(), center.y() + radius),
+                       stroke_flags);
       break;
     }
   }
@@ -480,9 +479,14 @@ class CommandIconView : public views::View {
     if (bounds.IsEmpty()) {
       return;
     }
-    DrawLineIcon(canvas,
-                 gfx::RectF(bounds.x(), bounds.y(), bounds.width(), bounds.height()),
-                 type_, GlyphForegroundColor(type_));
+    const gfx::RectF rect_f(bounds.x(), bounds.y(), bounds.width(),
+                            bounds.height());
+    cc::PaintFlags bg_flags;
+    bg_flags.setAntiAlias(true);
+    bg_flags.setStyle(cc::PaintFlags::kFill_Style);
+    bg_flags.setColor(GlyphForegroundColor(type_));
+    canvas->DrawRoundRect(rect_f, rect_f.width() * 0.25f, bg_flags);
+    DrawLineIcon(canvas, rect_f, type_, SK_ColorWHITE);
   }
 
  private:
@@ -543,6 +547,7 @@ MahoCommandResultRowView::MahoCommandResultRowView(
       SelectionInsetsForPresentation(presentation_style_));
 
   content_view_ = AddChildView(std::make_unique<views::View>());
+  outer_layout->SetFlexForView(content_view_, 1);
   auto* row_layout = content_view_->SetLayoutManager(
       std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kHorizontal,
@@ -603,6 +608,10 @@ MahoCommandResultRowView::MahoCommandResultRowView(
   compact_separator_label_->SetAutoColorReadabilityEnabled(false);
   compact_separator_label_->SetMultiLine(false);
   compact_separator_label_->SetSkipSubpixelRenderingOpacityCheck(true);
+  if (!compact) {
+    compact_separator_label_->SetFontList(
+        compact_separator_label_->font_list().DeriveWithSizeDelta(1));
+  }
   compact_separator_label_->SetBorder(
       views::CreateEmptyBorder(gfx::Insets::TLBR(
           presentation_style_ == PresentationStyle::kCurrentTabSeeded ? 0
@@ -616,11 +625,19 @@ MahoCommandResultRowView::MahoCommandResultRowView(
   compact_metadata_label_->SetMultiLine(false);
   compact_metadata_label_->SetElideBehavior(gfx::ELIDE_TAIL);
   compact_metadata_label_->SetSkipSubpixelRenderingOpacityCheck(true);
+  if (!compact) {
+    compact_metadata_label_->SetFontList(
+        compact_metadata_label_->font_list().DeriveWithSizeDelta(1));
+  }
   compact_metadata_label_->SetBorder(
       views::CreateEmptyBorder(gfx::Insets::TLBR(
           compact ? 0 : kSelectedSubtitleTopInsetDp,
           0, 0, 0)));
   text_layout->SetFlexForView(compact_metadata_label_, compact ? 1 : 0);
+  if (!compact) {
+    compact_separator_label_->SetVisible(false);
+    compact_metadata_label_->SetVisible(false);
+  }
 
   if (!suggestion.shortcut_label.empty()) {
     shortcut_label_ = text_container_->AddChildView(std::make_unique<views::Label>(
@@ -725,11 +742,12 @@ void MahoCommandResultRowView::ApplyTitleStyles(SkColor title_color) {
   title_label_->SetEnabledColor(title_color);
   const bool compact =
       presentation_style_ == PresentationStyle::kCurrentTabSeeded;
-  title_label_->SetTextStyle(selected_
-                                   ? (compact ? views::style::STYLE_BODY_5_BOLD
-                                              : views::style::STYLE_BODY_4_BOLD)
-                                   : (compact ? views::style::STYLE_BODY_5_MEDIUM
-                                              : views::style::STYLE_BODY_4_MEDIUM));
+  title_label_->SetTextStyle(compact ? views::style::STYLE_BODY_5_MEDIUM
+                                     : views::style::STYLE_BODY_4_MEDIUM);
+  if (!compact) {
+    title_label_->SetFontList(
+        title_label_->font_list().DeriveWithSizeDelta(0));
+  }
   if (compact) {
     title_label_->SetFontList(title_label_->font_list().Derive(
         0, gfx::Font::NORMAL, kSeededRowTitleFontWeight));
@@ -746,10 +764,8 @@ void MahoCommandResultRowView::ApplyTitleStyles(SkColor title_color) {
       continue;
     }
     title_label_->SetTextStyleRange(
-        selected_ ? (compact ? views::style::STYLE_BODY_5_BOLD
-                             : views::style::STYLE_BODY_4_BOLD)
-                  : (compact ? views::style::STYLE_BODY_5_BOLD
-                              : views::style::STYLE_BODY_4_EMPHASIS),
+        compact ? views::style::STYLE_BODY_5_MEDIUM
+                : views::style::STYLE_BODY_4_MEDIUM,
         gfx::Range(clamped_start, clamped_end));
   }
 }
@@ -838,7 +854,9 @@ void MahoCommandResultRowView::UpdateLayout() {
   title_label_->SetText(title_text_);
   if (compact_metadata_label_) {
     compact_metadata_label_->SetText(compact_metadata_text_);
-    const bool show_metadata = !compact_metadata_text_.empty();
+    const bool show_metadata =
+        presentation_style_ == PresentationStyle::kCurrentTabSeeded &&
+        !compact_metadata_text_.empty();
     compact_metadata_label_->SetVisible(show_metadata);
     if (compact_separator_label_) {
       compact_separator_label_->SetVisible(show_metadata);
@@ -859,7 +877,7 @@ void MahoCommandResultRowView::UpdateColors() {
   const bool compact = presentation_style_ == PresentationStyle::kCurrentTabSeeded;
   const bool show_selected_seeded_favicon_tile =
       compact && selected_ && favicon_image_ != nullptr;
-  const int glyph_corner_radius =
+  [[maybe_unused]] const int glyph_corner_radius =
       compact ? kCurrentTabSeededGlyphCornerRadiusDp : kGlyphCornerRadiusDp;
   const SkColor selected_fill = cp->GetColor(kMahoColorCommandBarSelectionFill);
   const SkColor selected_title_color =
@@ -877,14 +895,8 @@ void MahoCommandResultRowView::UpdateColors() {
   }
 
   if (uses_fallback_glyph_) {
-    glyph_container_->SetBackground(views::CreateRoundedRectBackground(
-        selected_ ? SkColorSetARGB(0x14, 0xFF, 0xFF, 0xFF)
-                  : cp->GetColor(kMahoColorCommandBarShortcutBadge),
-        glyph_corner_radius));
-    glyph_container_->SetBorder(views::CreateRoundedRectBorder(
-        1, glyph_corner_radius,
-        selected_ ? SkColorSetARGB(0x10, 0xFF, 0xFF, 0xFF)
-                  : cp->GetColor(kMahoColorCommandBarKeycapBorder)));
+    glyph_container_->SetBackground(nullptr);
+    glyph_container_->SetBorder(nullptr);
   } else if (show_selected_seeded_favicon_tile) {
     glyph_container_->SetBackground(nullptr);
     glyph_container_->SetBorder(nullptr);
@@ -942,7 +954,7 @@ void MahoCommandResultRowView::UpdateColors() {
 
     const SkColor chip_bg = selected_
         ? (dark_mode ? SK_ColorWHITE : SkColorSetRGB(0xE0, 0xE3, 0xEB))
-        : (dark_mode ? SkColorSetARGB(13, 255, 255, 255) : SkColorSetARGB(13, 0, 0, 0));
+        : (dark_mode ? SkColorSetARGB(60, 255, 255, 255) : SkColorSetARGB(13, 0, 0, 0));
     switch_tab_chip_->SetBackground(views::CreateRoundedRectBackground(chip_bg, 12));
 
     const SkColor icon_color = selected_

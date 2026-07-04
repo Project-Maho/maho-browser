@@ -12,6 +12,12 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+#include "chrome/browser/permissions/permission_decision_auto_blocker_factory.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/content_settings/core/common/content_settings.h"
+#include "components/content_settings/core/common/content_settings_types.h"
+#include "components/permissions/permission_decision_auto_blocker.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/test_browser_window.h"
 #include "chrome/browser/ui/browser.h"
@@ -758,6 +764,90 @@ TEST_F(MahoLocationBarUtilityPanelProviderRegistryTest,
 
   // Close all tabs before browser destruction to avoid crash
   browser->tab_strip_model()->CloseAllTabs();
+}
+
+class MahoLocationBarUtilityPanelProviderAutoPipTest : public ::testing::Test {
+ protected:
+  MahoLocationBarUtilityPanelProviderAutoPipTest() = default;
+  ~MahoLocationBarUtilityPanelProviderAutoPipTest() override = default;
+
+  ContentSetting GetAutoPipSetting(Profile* profile, const GURL& url) {
+    HostContentSettingsMap* map =
+        HostContentSettingsMapFactory::GetForProfile(profile);
+    return map->GetContentSetting(
+        url, GURL(), ContentSettingsType::AUTO_PICTURE_IN_PICTURE);
+  }
+
+  content::BrowserTaskEnvironment task_environment_;
+  content::RenderViewHostTestEnabler rvh_test_enabler_;
+};
+
+TEST_F(MahoLocationBarUtilityPanelProviderAutoPipTest,
+       SetAutoPipEnabledForOriginTrueStoresAllow) {
+  TestingProfile profile;
+  const GURL url("https://example.com/");
+
+  internal::SetAutoPipEnabledForOrigin(url, &profile, /*enabled=*/true);
+  EXPECT_EQ(GetAutoPipSetting(&profile, url), CONTENT_SETTING_ALLOW);
+}
+
+TEST_F(MahoLocationBarUtilityPanelProviderAutoPipTest,
+       SetAutoPipEnabledForOriginFalseResetsToDefault) {
+  TestingProfile profile;
+  const GURL url("https://example.com/");
+
+  internal::SetAutoPipEnabledForOrigin(url, &profile, /*enabled=*/true);
+  ASSERT_EQ(GetAutoPipSetting(&profile, url), CONTENT_SETTING_ALLOW);
+
+  internal::SetAutoPipEnabledForOrigin(url, &profile, /*enabled=*/false);
+  EXPECT_EQ(GetAutoPipSetting(&profile, url), CONTENT_SETTING_ASK);
+}
+
+TEST_F(MahoLocationBarUtilityPanelProviderAutoPipTest,
+       SetAutoPipEnabledForOriginIsSiteScoped) {
+  TestingProfile profile;
+  const GURL url_a("https://a.example.com/");
+  const GURL url_b("https://b.example.com/");
+
+  internal::SetAutoPipEnabledForOrigin(url_a, &profile, /*enabled=*/true);
+  EXPECT_EQ(GetAutoPipSetting(&profile, url_a), CONTENT_SETTING_ALLOW);
+  EXPECT_EQ(GetAutoPipSetting(&profile, url_b), CONTENT_SETTING_ASK);
+}
+
+TEST_F(MahoLocationBarUtilityPanelProviderAutoPipTest,
+       SetAutoPipEnabledForOriginNullProfileIsNoOp) {
+  const GURL url("https://example.com/");
+  internal::SetAutoPipEnabledForOrigin(url, nullptr, /*enabled=*/true);
+}
+
+TEST_F(MahoLocationBarUtilityPanelProviderAutoPipTest,
+       SetAutoPipEnabledForOriginInvalidUrlIsNoOp) {
+  TestingProfile profile;
+  const GURL empty;
+  internal::SetAutoPipEnabledForOrigin(empty, &profile, /*enabled=*/true);
+}
+
+TEST_F(MahoLocationBarUtilityPanelProviderAutoPipTest,
+       SetAutoPipEnabledForOriginClearsEmbargo) {
+  TestingProfile profile;
+  const GURL url("https://example.com/");
+  permissions::PermissionDecisionAutoBlocker* auto_blocker =
+      PermissionDecisionAutoBlockerFactory::GetForProfile(&profile);
+  ASSERT_TRUE(auto_blocker);
+
+  for (int i = 0; i < 3; ++i) {
+    auto_blocker->RecordDismissAndEmbargo(
+        url, ContentSettingsType::AUTO_PICTURE_IN_PICTURE,
+        /*dismissed_prompt_was_quiet=*/false);
+  }
+  ASSERT_TRUE(auto_blocker->IsEmbargoed(
+      url, ContentSettingsType::AUTO_PICTURE_IN_PICTURE));
+
+  internal::SetAutoPipEnabledForOrigin(url, &profile, /*enabled=*/true);
+
+  EXPECT_FALSE(auto_blocker->IsEmbargoed(
+      url, ContentSettingsType::AUTO_PICTURE_IN_PICTURE));
+  EXPECT_EQ(GetAutoPipSetting(&profile, url), CONTENT_SETTING_ALLOW);
 }
 
 }  // namespace

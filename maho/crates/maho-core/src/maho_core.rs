@@ -1230,14 +1230,14 @@ impl MahoCore {
                         }
                     }
                     if let Ok(shortcuts_data) = storage.load_shortcuts() {
-                        for (action, key_combo_json, _) in &shortcuts_data {
+                        for (action, key_combo_json, _, _) in &shortcuts_data {
                             if !key_combo_json.is_empty() {
                                 if let Ok(key_combo) = serde_json::from_str(key_combo_json) {
                                     let _ = self.shortcut_manager.set_shortcut(action, key_combo);
                                 }
                             }
                         }
-                        for (action, _, enabled) in shortcuts_data {
+                        for (action, _, enabled, _) in shortcuts_data {
                             if !enabled {
                                 self.shortcut_manager.toggle_shortcut(&action, false);
                             }
@@ -1574,6 +1574,19 @@ impl MahoCore {
                 self.autofill_manager.add_payment(payment);
             }
         }
+        // Load profiles
+        if let Ok(profile_jsons) = storage.get_all_profiles() {
+            let profiles: Vec<maho_types::profile::ProfileConfig> = profile_jsons.iter()
+                .filter_map(|j| serde_json::from_str(j).ok())
+                .collect();
+            if !profiles.is_empty() {
+                let mut active_id = self.profile_manager.get_active_profile_id().cloned();
+                if let Ok(Some(saved_id_str)) = storage.get_setting("active_profile_id") {
+                    active_id = Some(maho_types::identifiers::ProfileId::new(saved_id_str));
+                }
+                self.profile_manager.restore_profiles(profiles, active_id);
+            }
+        }
 
         if let Ok(passwords) = storage.get_all_passwords() {
             for (id, domain, username, created_at, last_used, password) in passwords {
@@ -1661,12 +1674,12 @@ impl MahoCore {
 
         // Load shortcuts
         if let Ok(shortcuts_data) = storage.load_shortcuts() {
-            for (action, key_combo_json, _) in shortcuts_data {
+            for (action, key_combo_json, enabled, updated_at) in shortcuts_data {
                 if let Ok(key_combo) =
                     serde_json::from_str::<maho_types::keyboard::KeyCombo>(&key_combo_json)
                 {
-                    // Ignore conflicts during restore
-                    let _ = self.shortcut_manager.set_shortcut(&action, key_combo);
+                    // Ignore conflicts during restore, restore full state
+                    self.shortcut_manager.restore_shortcut_state(&action, key_combo, enabled, updated_at);
                 }
             }
         }
@@ -1970,6 +1983,27 @@ impl MahoCore {
                 note.created_at.as_ref(),
                 note.updated_at.as_ref(),
             );
+        }
+    }
+
+    fn persist_profile(&self, profile: &maho_types::profile::ProfileConfig) {
+        if let Some(ref storage) = self.storage {
+            match serde_json::to_string(profile) {
+                Ok(json) => {
+                    if let Err(e) = storage.save_profile(profile.id.as_ref(), &json) {
+                        eprintln!("Failed to persist profile {}: {}", profile.id, e);
+                    }
+                }
+                Err(e) => eprintln!("Failed to serialize profile {}: {}", profile.id, e),
+            }
+        }
+    }
+
+    fn delete_persisted_profile(&self, id: &maho_types::identifiers::ProfileId) {
+        if let Some(ref storage) = self.storage {
+            if let Err(e) = storage.delete_profile(id.as_ref()) {
+                eprintln!("Failed to delete persisted profile {}: {}", id, e);
+            }
         }
     }
 
@@ -2661,7 +2695,7 @@ impl MahoCore {
                 return vec![];
             }
             ShellEvent::CreateProfile { name } => {
-                self.create_profile(name.clone());
+                self.create_profile_persisted(name.clone());
                 return vec![];
             }
             ShellEvent::DeleteProfile { profile_id } => {
@@ -3866,8 +3900,9 @@ impl MahoCore {
         self.profile_manager.list_profiles()
     }
 
-    pub fn create_profile(&mut self, name: String) -> maho_types::profile::ProfileConfig {
+    pub fn create_profile_persisted(&mut self, name: String) -> maho_types::profile::ProfileConfig {
         let profile = self.profile_manager.create_profile(name).clone();
+        self.persist_profile(&profile);
         let update = CoreUpdate::ProfileCreated {
             profile: profile.clone(),
         };
@@ -3906,6 +3941,7 @@ impl MahoCore {
 
         let deleted = self.profile_manager.delete_profile(id);
         if deleted {
+            self.delete_persisted_profile(id);
             let update = CoreUpdate::ProfileDeleted {
                 profile_id: id.clone(),
                 data_store_id,
@@ -3981,6 +4017,10 @@ impl MahoCore {
     pub fn switch_profile(&mut self, id: &maho_types::identifiers::ProfileId) -> bool {
         let switched = self.profile_manager.switch_profile(id);
         if switched {
+            self.persist_lmdb_now_partial(LMDB_DIRTY_ACTIVE_PROFILE);
+            if let Some(ref storage) = self.storage {
+                let _ = storage.set_setting("active_profile_id", &id.to_string());
+            }
             let update = CoreUpdate::ActiveProfileChanged {
                 profile_id: id.clone(),
             };
@@ -5535,27 +5575,87 @@ impl MahoCore {
         self.shortcut_manager.reset_all_shortcuts();
     }
 
+    fn push_shortcut_sync(&mut self, action: &str) {
+        let binding_opt = self.shortcut_manager.get_all_bindings().iter().find(|b| b.action == action).cloned();
+        if let Some(binding) = binding_opt {
+            let payload = serde_json::json!({
+                "action": binding.action,
+                "keyCombo": binding.key_combo,
+                "enabled": binding.enabled,
+            });
+            let sync_entity = crate::sync_models::SyncEntity {
+                entity_type: crate::sync_models::SyncEntityType::Shortcut,
+                entity_id: action.to_string(),
+                version: chrono::Utc::now().timestamp_millis() as u64,
+                modified_at: chrono::Utc::now().timestamp(),
+                payload_json: payload.to_string(),
+                deleted: false,
+            };
+            self.sync_push_entity_persisted(sync_entity);
+        }
+    }
+
+    fn push_shortcut_sync_deleted(&mut self, action: &str) {
+        let payload = serde_json::json!({
+            "action": action,
+        });
+        let sync_entity = crate::sync_models::SyncEntity {
+            entity_type: crate::sync_models::SyncEntityType::Shortcut,
+            entity_id: action.to_string(),
+            version: chrono::Utc::now().timestamp_millis() as u64,
+            modified_at: chrono::Utc::now().timestamp(),
+            payload_json: payload.to_string(),
+            deleted: true,
+        };
+        self.sync_push_entity_persisted(sync_entity);
+    }
+
+    pub fn trigger_sync_shortcuts_to_relay_async(&self) {
+        if let Some(ref sm) = self.sync_manager {
+            let server_url = sm.config().server_url.clone();
+            let room_id = sm.config().sync_key.clone().unwrap_or_default();
+            if room_id.is_empty() { return; }
+            let shortcuts_json = self.get_all_shortcuts_json();
+            
+            crate::memory_manager::get_runtime().spawn(async move {
+                let client = crate::http::shared_http_client();
+                let url = format!("{}/api/v1/shortcuts", server_url.trim_end_matches('/'));
+                let _ = client.put(&url)
+                    .header("Authorization", format!("Bearer {}", room_id))
+                    .json(&serde_json::json!({ "json_data": shortcuts_json }))
+                    .send()
+                    .await;
+            });
+        }
+    }
+
     pub fn toggle_shortcut_persisted(&mut self, action: &str, enabled: bool) {
         self.shortcut_manager.toggle_shortcut(action, enabled);
+        let updated_at = self.shortcut_manager.get_all_bindings().iter().find(|b| b.action == action).map(|b| b.updated_at).unwrap_or(0);
         if let Some(ref storage) = self.storage {
-            let _ = storage.save_shortcut_enabled(action, enabled);
+            let _ = storage.save_shortcut_enabled(action, enabled, updated_at);
         }
+        self.push_shortcut_sync(action);
+        self.trigger_sync_shortcuts_to_relay_async();
     }
 
     pub fn set_shortcut_persisted(
         &mut self,
         action: &str,
         key_combo: maho_types::keyboard::KeyCombo,
-    ) -> Result<(), maho_types::keyboard::ShortcutConflict> {
+    ) -> Result<(), maho_types::keyboard::SetShortcutError> {
         let result = self
             .shortcut_manager
             .set_shortcut(action, key_combo.clone());
         if result.is_ok() {
+            let updated_at = self.shortcut_manager.get_all_bindings().iter().find(|b| b.action == action).map(|b| b.updated_at).unwrap_or(0);
             if let Some(ref storage) = self.storage {
                 if let Ok(json) = serde_json::to_string(&key_combo) {
-                    let _ = storage.save_shortcut(action, &json);
+                    let _ = storage.save_shortcut(action, &json, updated_at);
                 }
             }
+            self.push_shortcut_sync(action);
+            self.trigger_sync_shortcuts_to_relay_async();
         }
         result
     }
@@ -5565,13 +5665,20 @@ impl MahoCore {
         if let Some(ref storage) = self.storage {
             let _ = storage.delete_shortcut(action);
         }
+        self.push_shortcut_sync_deleted(action);
+        self.trigger_sync_shortcuts_to_relay_async();
     }
 
     pub fn reset_all_shortcuts_persisted(&mut self) {
+        let actions: Vec<String> = self.shortcut_manager.get_all_bindings().iter().map(|b| b.action.clone()).collect();
         self.shortcut_manager.reset_all_shortcuts();
         if let Some(ref storage) = self.storage {
             let _ = storage.delete_all_shortcuts();
         }
+        for action in actions {
+            self.push_shortcut_sync_deleted(&action);
+        }
+        self.trigger_sync_shortcuts_to_relay_async();
     }
 
     pub fn resolve_shortcut_json(&self, key_combo_json: &str) -> Option<String> {
@@ -5580,6 +5687,88 @@ impl MahoCore {
         self.shortcut_manager
             .find_binding_by_key_combo(&key_combo)
             .map(|b| b.action.clone())
+    }
+
+    pub fn check_shortcut_conflict_json(&self, key_combo_json: &str) -> Option<String> {
+        let key_combo: maho_types::keyboard::KeyCombo =
+            serde_json::from_str(key_combo_json).ok()?;
+        self.shortcut_manager
+            .check_conflict("", &key_combo)
+            .map(|conflict| conflict.existing_action)
+    }
+
+    pub fn export_shortcuts_json(&self) -> String {
+        let platform = if cfg!(target_os = "macos") {
+            "macos"
+        } else if cfg!(target_os = "windows") {
+            "windows"
+        } else {
+            "linux"
+        };
+        let envelope = serde_json::json!({
+            "version": 1,
+            "platform": platform,
+            "exportedAt": chrono::Utc::now().to_rfc3339(),
+            "shortcuts": self.shortcut_manager.get_all_bindings()
+        });
+        serde_json::to_string(&envelope).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    pub fn import_shortcuts_json(&mut self, json_str: &str) -> Result<(), String> {
+        let value: serde_json::Value = serde_json::from_str(json_str).map_err(|e| e.to_string())?;
+        let bindings: Vec<maho_types::keyboard::ShortcutBinding> = if value.is_array() {
+            serde_json::from_value(value).map_err(|e| e.to_string())?
+        } else if let Some(shortcuts_val) = value.get("shortcuts") {
+            serde_json::from_value(shortcuts_val.clone()).map_err(|e| e.to_string())?
+        } else {
+            return Err("Invalid shortcuts import format: missing shortcuts array".to_string());
+        };
+
+        for binding in bindings {
+            if binding.is_custom {
+                let _ = self.set_shortcut_persisted(&binding.action, binding.key_combo);
+            } else {
+                self.reset_shortcut_persisted(&binding.action);
+            }
+            self.toggle_shortcut_persisted(&binding.action, binding.enabled);
+        }
+        Ok(())
+    }
+
+    pub fn merge_shortcuts_json(&mut self, json_str: &str) -> Result<(), String> {
+        let value: serde_json::Value = serde_json::from_str(json_str).map_err(|e| e.to_string())?;
+        let bindings: Vec<maho_types::keyboard::ShortcutBinding> = if value.is_array() {
+            serde_json::from_value(value).map_err(|e| e.to_string())?
+        } else if let Some(shortcuts_val) = value.get("shortcuts") {
+            serde_json::from_value(shortcuts_val.clone()).map_err(|e| e.to_string())?
+        } else {
+            return Err("Invalid shortcuts import format: missing shortcuts array".to_string());
+        };
+
+        for incoming_b in bindings {
+            let local_opt = self.shortcut_manager.get_all_bindings().iter().find(|b| b.action == incoming_b.action).cloned();
+            if let Some(local_b) = local_opt {
+                if incoming_b.updated_at > local_b.updated_at {
+                    if incoming_b.is_custom {
+                        let _ = self.set_shortcut_persisted(&incoming_b.action, incoming_b.key_combo.clone());
+                    } else {
+                        self.reset_shortcut_persisted(&incoming_b.action);
+                    }
+                    self.toggle_shortcut_persisted(&incoming_b.action, incoming_b.enabled);
+                    if let Some(ref storage) = self.storage {
+                        if incoming_b.is_custom {
+                            if let Ok(json) = serde_json::to_string(&incoming_b.key_combo) {
+                                let _ = storage.save_shortcut(&incoming_b.action, &json, incoming_b.updated_at);
+                            }
+                        } else {
+                            let _ = storage.save_shortcut_enabled(&incoming_b.action, incoming_b.enabled, incoming_b.updated_at);
+                        }
+                    }
+                    self.shortcut_manager.restore_shortcut_state(&incoming_b.action, incoming_b.key_combo, incoming_b.enabled, incoming_b.updated_at);
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn set_density(&mut self, density_str: &str) {
@@ -5958,10 +6147,77 @@ impl MahoCore {
         };
         let sm = crate::sync_manager::SyncManager::new(config);
         self.sync_manager = Some(sm);
+        let _ = self.sync_shortcuts_from_relay();
     }
 
     pub fn stop_sync(&mut self) {
         self.sync_manager = None;
+    }
+
+    pub fn sync_shortcuts_to_relay(&mut self) -> Result<(), String> {
+        let (server_url, room_id) = match &self.sync_manager {
+            Some(sm) => (sm.config().server_url.clone(), sm.config().sync_key.clone().unwrap_or_default()),
+            None => return Ok(()),
+        };
+        if room_id.is_empty() {
+            return Ok(());
+        }
+
+        let client = crate::http::shared_http_client();
+        let shortcuts_json = self.get_all_shortcuts_json();
+
+        let url = format!("{}/api/v1/shortcuts", server_url.trim_end_matches('/'));
+        let rt = crate::memory_manager::get_runtime();
+        let res = rt.block_on(async {
+            client.put(&url)
+                .header("Authorization", format!("Bearer {}", room_id))
+                .json(&serde_json::json!({ "json_data": shortcuts_json }))
+                .send()
+                .await
+        });
+
+        match res {
+            Ok(resp) if resp.status().is_success() => Ok(()),
+            Ok(resp) => Err(format!("Server returned error status: {}", resp.status())),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    pub fn sync_shortcuts_from_relay(&mut self) -> Result<(), String> {
+        let (server_url, room_id) = match &self.sync_manager {
+            Some(sm) => (sm.config().server_url.clone(), sm.config().sync_key.clone().unwrap_or_default()),
+            None => return Ok(()),
+        };
+        if room_id.is_empty() {
+            return Ok(());
+        }
+
+        let client = crate::http::shared_http_client();
+        let url = format!("{}/api/v1/shortcuts", server_url.trim_end_matches('/'));
+        let rt = crate::memory_manager::get_runtime();
+        let res = rt.block_on(async {
+            client.get(&url)
+                .header("Authorization", format!("Bearer {}", room_id))
+                .send()
+                .await
+        });
+
+        let resp = match res {
+            Ok(resp) if resp.status().is_success() => resp,
+            Ok(resp) => return Err(format!("Server returned error status: {}", resp.status())),
+            Err(e) => return Err(e.to_string()),
+        };
+
+        #[derive(serde::Deserialize)]
+        struct GetShortcutsResponse {
+            json_data: String,
+        }
+
+        let body: GetShortcutsResponse = rt.block_on(async {
+            resp.json::<GetShortcutsResponse>().await
+        }).map_err(|e: reqwest::Error| e.to_string())?;
+        self.merge_shortcuts_json(&body.json_data).map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     pub fn set_sync_status(&mut self, status: crate::sync_models::SyncStatus) {
@@ -6113,6 +6369,37 @@ impl MahoCore {
 
                         if let Some(ref cb) = self.extension_bridge.sync_callback {
                             cb(id, enabled, deleted);
+                        }
+                    }
+                }
+            } else if entity.entity_type == SyncEntityType::Shortcut {
+                if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&entity.payload_json) {
+                    if let Some(action) = payload.get("action").and_then(|v| v.as_str()) {
+                        if entity.deleted {
+                            self.shortcut_manager.reset_shortcut(action);
+                            if let Some(ref storage) = self.storage {
+                                let _ = storage.delete_shortcut(action);
+                            }
+                        } else {
+                            if let Some(key_combo_val) = payload.get("keyCombo") {
+                                if let Ok(key_combo) = serde_json::from_value::<maho_types::keyboard::KeyCombo>(key_combo_val.clone()) {
+                                    let _ = self.shortcut_manager.set_shortcut(action, key_combo.clone());
+                                    let enabled = self.shortcut_manager.get_all_bindings().iter().find(|b| b.action == action).map(|b| b.enabled).unwrap_or(true);
+                                    self.shortcut_manager.restore_shortcut_state(action, key_combo.clone(), enabled, entity.version);
+                                    if let Some(ref storage) = self.storage {
+                                        if let Ok(json) = serde_json::to_string(&key_combo) {
+                                            let _ = storage.save_shortcut(action, &json, entity.version);
+                                        }
+                                    }
+                                }
+                            }
+                            if let Some(enabled) = payload.get("enabled").and_then(|v| v.as_bool()) {
+                                let key_combo = self.shortcut_manager.get_all_bindings().iter().find(|b| b.action == action).map(|b| b.key_combo.clone()).unwrap_or_else(|| maho_types::keyboard::KeyCombo::new("", vec![]));
+                                self.shortcut_manager.restore_shortcut_state(action, key_combo, enabled, entity.version);
+                                if let Some(ref storage) = self.storage {
+                                    let _ = storage.save_shortcut_enabled(action, enabled, entity.version);
+                                }
+                            }
                         }
                     }
                 }

@@ -21,7 +21,6 @@ pub mod search_engine;
 pub mod sharing;
 pub mod settings;
 pub mod space;
-pub mod theme_store;
 pub mod split_view;
 pub mod tab;
 pub mod traits;

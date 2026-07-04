@@ -189,6 +189,7 @@ class MahoCommandOverlayView : public views::View,
 
   raw_ptr<views::Widget> picker_widget_ = nullptr;
   std::string initial_url_;
+  bool suppress_search_ = false;
   base::ScopedObservation<views::Widget, views::WidgetObserver> picker_observation_{this};
 
   base::WeakPtrFactory<MahoCommandOverlayView> weak_factory_{this};

@@ -40,6 +40,7 @@
 #include "maho/browser/extensions/maho_extension_state_bridge.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/passwords/maho_password_provider_utils.h"
+#include "maho/browser/ui/views/command/maho_shortcut_interceptor.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/webui/maho_account_prefs.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
@@ -160,7 +161,6 @@ const net::NetworkTrafficAnnotationTag kBillingPortalTrafficAnnotation =
       }
     )");
 
-constexpr char kThemeStoreCacheFileName[] = "maho_theme_store_manifest_cache.json";
 constexpr char kPasswordProviderModeMahoKey[] = "autofill.password_provider";
 constexpr char kPasswordsEnabledMahoKey[] = "autofill.passwords_enabled";
 
@@ -564,6 +564,19 @@ void ToggleATCRuleOnCoreSequence(const std::string& rule_id, bool enabled) {
 
 // ── Shortcuts domain helpers (MahoCore sequence) ──
 
+std::string KeyComboToJson(const maho_settings::mojom::MojoKeyComboPtr& key_combo) {
+  base::DictValue dict;
+  dict.Set("key", key_combo->key);
+  base::ListValue modifiers;
+  for (const auto& mod : key_combo->modifiers) {
+    modifiers.Append(mod);
+  }
+  dict.Set("modifiers", std::move(modifiers));
+  std::string json;
+  base::JSONWriter::Write(base::Value(std::move(dict)), &json);
+  return json;
+}
+
 std::vector<maho_settings::mojom::ShortcutBindingPtr>
 BuildShortcutsOnCoreSequence() {
   std::vector<maho_settings::mojom::ShortcutBindingPtr> shortcuts;
@@ -584,16 +597,30 @@ BuildShortcutsOnCoreSequence() {
     if (!dict) continue;
     const std::string* action = dict->FindString("action");
     const std::string* label = dict->FindString("label");
-    const std::string* key_combo = dict->FindString("key_combo");
-    std::optional<bool> is_default = dict->FindBool("is_default");
+    const std::string* category = dict->FindString("category");
+    const base::DictValue* key_combo_dict = dict->FindDict("keyCombo");
+    std::optional<bool> is_custom = dict->FindBool("isCustom");
     std::optional<bool> enabled = dict->FindBool("enabled");
     if (!action) continue;
 
     auto shortcut = maho_settings::mojom::ShortcutBinding::New();
     shortcut->action = *action;
     shortcut->label = label ? *label : *action;
-    shortcut->key_combo = key_combo ? *key_combo : "";
-    shortcut->is_default = is_default.value_or(true);
+    shortcut->category = category ? *category : "navigation";
+    shortcut->key_combo = maho_settings::mojom::MojoKeyCombo::New();
+    if (key_combo_dict) {
+      if (const std::string* key = key_combo_dict->FindString("key")) {
+        shortcut->key_combo->key = *key;
+      }
+      if (const base::ListValue* modifiers = key_combo_dict->FindList("modifiers")) {
+        for (const auto& mod : *modifiers) {
+          if (mod.is_string()) {
+            shortcut->key_combo->modifiers.push_back(mod.GetString());
+          }
+        }
+      }
+    }
+    shortcut->is_custom = is_custom.value_or(false);
     shortcut->enabled = enabled.value_or(true);
     shortcuts.push_back(std::move(shortcut));
   }
@@ -601,15 +628,49 @@ BuildShortcutsOnCoreSequence() {
   return shortcuts;
 }
 
-bool SetShortcutOnCoreSequence(const std::string& action,
-                       const std::string& key_combo) {
+struct SetShortcutResultInternal {
+  bool success;
+  std::string conflict_action;
+};
+
+SetShortcutResultInternal SetShortcutOnCoreSequence(
+    const std::string& action,
+    const std::string& key_combo_json) {
+  SetShortcutResultInternal res;
+  res.success = false;
   MahoCore* core = maho::GetCore();
-  if (!core) return false;
+  if (!core) return res;
   char* result = maho_core_set_shortcut(core, action.c_str(),
-                                        key_combo.c_str());
-  bool ok = result != nullptr;
-  if (result) maho_string_free(result);
-  return ok;
+                                        key_combo_json.c_str());
+  if (result) {
+    std::string result_str(result);
+    maho_string_free(result);
+    std::optional<base::Value> parsed =
+        base::JSONReader::Read(result_str, base::JSON_PARSE_RFC);
+    if (parsed && parsed->is_dict()) {
+      if (parsed->GetDict().FindBool("success").value_or(false)) {
+        res.success = true;
+      } else if (const base::DictValue* err = parsed->GetDict().FindDict("error")) {
+        if (const std::string* existing = err->FindString("existingAction")) {
+          res.conflict_action = *existing;
+        }
+      }
+    }
+  }
+  return res;
+}
+
+std::optional<std::string> CheckShortcutConflictOnCoreSequence(
+    const std::string& key_combo_json) {
+  MahoCore* core = maho::GetCore();
+  if (!core) return std::nullopt;
+  char* result = maho_core_check_conflict(core, key_combo_json.c_str());
+  if (result) {
+    std::string res_str(result);
+    maho_string_free(result);
+    return res_str;
+  }
+  return std::nullopt;
 }
 
 void ResetShortcutOnCoreSequence(const std::string& action) {
@@ -628,6 +689,24 @@ void ToggleShortcutOnCoreSequence(const std::string& action, bool enabled) {
   MahoCore* core = maho::GetCore();
   if (!core) return;
   maho_core_toggle_shortcut(core, action.c_str(), enabled);
+}
+
+std::string ExportShortcutsOnCoreSequence() {
+  MahoCore* core = maho::GetCore();
+  if (!core) return "[]";
+  char* result = maho_core_export_shortcuts(core);
+  if (result) {
+    std::string res_str(result);
+    maho_string_free(result);
+    return res_str;
+  }
+  return "[]";
+}
+
+bool ImportShortcutsOnCoreSequence(const std::string& json_data) {
+  MahoCore* core = maho::GetCore();
+  if (!core) return false;
+  return maho_core_import_shortcuts(core, json_data.c_str());
 }
 
 // ── Sync domain helpers (MahoCore sequence) ──
@@ -770,27 +849,6 @@ void StopSyncOnCoreSequence() {
 
 // ── Theme / Spaces domain helpers (MahoCore sequence) ──
 
-bool ApplyThemeToSpaceOnCoreSequence(const std::string& space_id,
-                             const std::string& theme_json) {
-  MahoCore* core = maho::GetCore();
-  if (!core) return false;
-
-  std::optional<base::Value> theme_value =
-      base::JSONReader::Read(theme_json, base::JSON_PARSE_RFC);
-  if (!theme_value) return false;
-
-  base::DictValue changes;
-  changes.Set("spaceId", space_id);
-  changes.Set("theme", std::move(*theme_value));
-  base::DictValue event;
-  event.Set("kind", "update_space_config");
-  event.Set("changes", std::move(changes));
-  std::string event_json;
-  base::JSONWriter::Write(event, &event_json);
-  char* result = maho_core_handle_event(core, event_json.c_str());
-  if (result) maho_string_free(result);
-  return true;
-}
 
 std::vector<maho_settings::mojom::SpaceBasicInfoPtr> BuildSpacesOnCoreSequence() {
   std::vector<maho_settings::mojom::SpaceBasicInfoPtr> spaces;
@@ -1023,28 +1081,7 @@ BuildInstalledExtensionsOnCoreSequence() {
   return exts;
 }
 
-std::optional<std::string> ReadCachedThemeStoreFromDiskOnPool(
-    const base::FilePath& cache_path) {
-  if (cache_path.empty()) {
-    return std::nullopt;
-  }
 
-  std::string cached_json;
-  if (!base::ReadFileToString(cache_path, &cached_json) || cached_json.empty()) {
-    return std::nullopt;
-  }
-
-  return cached_json;
-}
-
-void WriteCachedThemeStoreToDiskOnPool(base::FilePath cache_path,
-                                       std::string cached_theme_store_json) {
-  if (cache_path.empty() || cached_theme_store_json.empty()) {
-    return;
-  }
-
-  base::WriteFile(cache_path, cached_theme_store_json);
-}
 
 std::optional<maho_settings::mojom::AutofillAddressPtr>
 AddAutofillAddressOnCoreSequence(const std::string& id,
@@ -1153,6 +1190,20 @@ MahoSettingsPageHandler::PendingToggle::~PendingToggle() = default;
 
 // ── Constructor / Destructor ──
 
+MahoSettingsPageHandler* MahoSettingsPageHandler::g_active_instance = nullptr;
+
+// static
+MahoSettingsPageHandler* MahoSettingsPageHandler::GetActiveInstance() {
+  return g_active_instance;
+}
+
+void MahoSettingsPageHandler::NotifyShortcutRecorded(
+    maho_settings::mojom::MojoKeyComboPtr key_combo) {
+  if (page_.is_bound()) {
+    page_->OnShortcutRecorded(std::move(key_combo));
+  }
+}
+
 MahoSettingsPageHandler::MahoSettingsPageHandler(
     mojo::PendingReceiver<maho_settings::mojom::PageHandler> receiver,
     mojo::PendingRemote<maho_settings::mojom::Page> page,
@@ -1162,6 +1213,7 @@ MahoSettingsPageHandler::MahoSettingsPageHandler(
       profile_(profile),
       prefs_(profile->GetPrefs()),
       local_state_(g_browser_process->local_state()) {
+  g_active_instance = this;
   pref_registrar_.Init(prefs_);
   if (local_state_) {
     local_state_pref_registrar_.Init(local_state_);
@@ -1185,7 +1237,7 @@ MahoSettingsPageHandler::MahoSettingsPageHandler(
         os_crypt_async::Encryptor::Option::kEncryptSyncCompat);
   }
 
-  LoadCachedThemeStoreFromDisk();
+
 
 
   if (auto* bridge = maho::MahoExtensionStateBridge::FromProfile(profile_)) {
@@ -1193,51 +1245,13 @@ MahoSettingsPageHandler::MahoSettingsPageHandler(
   }
 }
 
-MahoSettingsPageHandler::~MahoSettingsPageHandler() = default;
-
-base::FilePath MahoSettingsPageHandler::GetThemeStoreCachePath() const {
-  if (!profile_) {
-    return base::FilePath();
+MahoSettingsPageHandler::~MahoSettingsPageHandler() {
+  if (g_active_instance == this) {
+    g_active_instance = nullptr;
   }
-  return profile_->GetPath().AppendASCII(kThemeStoreCacheFileName);
 }
 
-void MahoSettingsPageHandler::LoadCachedThemeStoreFromDisk() {
-  const base::FilePath cache_path = GetThemeStoreCachePath();
-  if (cache_path.empty()) {
-    return;
-  }
 
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&ReadCachedThemeStoreFromDiskOnPool, cache_path),
-      base::BindOnce(
-          [](base::WeakPtr<MahoSettingsPageHandler> self,
-             std::optional<std::string> cached_json) {
-            if (!self || !cached_json || cached_json->empty()) {
-              return;
-            }
-            self->cached_theme_store_json_ = std::move(*cached_json);
-            self->last_theme_store_fetch_ = base::TimeTicks::Now();
-          },
-          weak_factory_.GetWeakPtr()));
-}
-
-void MahoSettingsPageHandler::PersistCachedThemeStoreToDisk() const {
-  if (cached_theme_store_json_.empty()) {
-    return;
-  }
-
-  const base::FilePath cache_path = GetThemeStoreCachePath();
-  if (cache_path.empty()) {
-    return;
-  }
-
-  base::ThreadPool::PostTask(
-      FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-      base::BindOnce(&WriteCachedThemeStoreToDiskOnPool, cache_path,
-                     cached_theme_store_json_));
-}
 
 // ── Key-value pref settings ──
 
@@ -1766,16 +1780,38 @@ void MahoSettingsPageHandler::GetShortcuts(GetShortcutsCallback callback) {
           std::move(callback)));
 }
 
-void MahoSettingsPageHandler::SetShortcut(const std::string& action,
-                                           const std::string& key_combo,
-                                           SetShortcutCallback callback) {
+void MahoSettingsPageHandler::SetShortcut(
+    const std::string& action,
+    maho_settings::mojom::MojoKeyComboPtr key_combo,
+    SetShortcutCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  std::string json_str = KeyComboToJson(key_combo);
   maho::PostCoreTask(
       FROM_HERE,
-      base::BindOnce(&SetShortcutOnCoreSequence, action, key_combo),
+      base::BindOnce(&SetShortcutOnCoreSequence, action, json_str),
       base::BindOnce(
-          [](SetShortcutCallback cb, bool success) {
-            std::move(cb).Run(success);
+          [](SetShortcutCallback cb, SetShortcutResultInternal internal_res) {
+            auto res = maho_settings::mojom::SetShortcutResult::New();
+            res->success = internal_res.success;
+            if (!internal_res.conflict_action.empty()) {
+              res->conflict_action = internal_res.conflict_action;
+            }
+            std::move(cb).Run(std::move(res));
+          },
+          std::move(callback)));
+}
+
+void MahoSettingsPageHandler::CheckShortcutConflict(
+    maho_settings::mojom::MojoKeyComboPtr key_combo,
+    CheckShortcutConflictCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  std::string json_str = KeyComboToJson(key_combo);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&CheckShortcutConflictOnCoreSequence, json_str),
+      base::BindOnce(
+          [](CheckShortcutConflictCallback cb, std::optional<std::string> conflict_action) {
+            std::move(cb).Run(conflict_action);
           },
           std::move(callback)));
 }
@@ -1800,6 +1836,36 @@ void MahoSettingsPageHandler::ToggleShortcut(const std::string& action,
   maho::PostCoreClosure(
       FROM_HERE,
       base::BindOnce(&ToggleShortcutOnCoreSequence, action, enabled));
+}
+
+void MahoSettingsPageHandler::SetRecordingMode(bool enabled) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::MahoShortcutInterceptor::SetRecordingMode(enabled);
+}
+
+void MahoSettingsPageHandler::ExportShortcuts(ExportShortcutsCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&ExportShortcutsOnCoreSequence),
+      base::BindOnce(
+          [](ExportShortcutsCallback cb, std::string json_data) {
+            std::move(cb).Run(json_data);
+          },
+          std::move(callback)));
+}
+
+void MahoSettingsPageHandler::ImportShortcuts(const std::string& json_data,
+                                             ImportShortcutsCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&ImportShortcutsOnCoreSequence, json_data),
+      base::BindOnce(
+          [](ImportShortcutsCallback cb, bool success) {
+            std::move(cb).Run(success);
+          },
+          std::move(callback)));
 }
 
 // ── Sync domain ──
@@ -1889,128 +1955,7 @@ void MahoSettingsPageHandler::StopSync() {
       base::BindOnce(&StopSyncOnCoreSequence));
 }
 
-void MahoSettingsPageHandler::FetchThemeStore(
-    FetchThemeStoreCallback callback) {
-  if (!cached_theme_store_json_.empty() &&
-      (base::TimeTicks::Now() - last_theme_store_fetch_) < base::Minutes(5)) {
-    OnThemeStoreFetched(std::move(callback), cached_theme_store_json_);
-    return;
-  }
 
-  theme_store_loader_.reset();
-  auto request = std::make_unique<network::ResourceRequest>();
-  request->url = GURL(maho::auth::GetRelayBaseUrl() + "/themes/manifest");
-  request->method = "GET";
-  net::NetworkTrafficAnnotationTag traffic_annotation =
-      net::DefineNetworkTrafficAnnotation("maho_settings_theme_store", R"(
-        semantics {
-          sender: "Maho Settings Theme Store"
-          description: "Fetches community theme manifest."
-          trigger: "User opens the theme store settings pane."
-          data: "No user data sent."
-          destination: WEBSITE
-        }
-        policy {
-          cookies_allowed: NO
-          setting: "Not user-configurable."
-        })");
-  theme_store_loader_ = network::SimpleURLLoader::Create(
-      std::move(request), traffic_annotation);
-  theme_store_loader_->SetTimeoutDuration(base::Seconds(15));
-  auto url_loader_factory = profile_->GetDefaultStoragePartition()
-                                ->GetURLLoaderFactoryForBrowserProcess();
-  theme_store_loader_->DownloadToString(
-      url_loader_factory.get(),
-      base::BindOnce(&MahoSettingsPageHandler::OnThemeStoreFetched,
-                     weak_factory_.GetWeakPtr(), std::move(callback)),
-      1024 * 1024);
-
-}
-
-void MahoSettingsPageHandler::OnThemeStoreFetched(
-    FetchThemeStoreCallback callback,
-    std::optional<std::string> body) {
-  theme_store_loader_.reset();
-  std::vector<maho_settings::mojom::ThemeStoreEntryPtr> themes;
-  const bool success = body.has_value() || !cached_theme_store_json_.empty();
-
-  std::string json = body.value_or(cached_theme_store_json_);
-  if (json.empty()) {
-    std::move(callback).Run(std::move(themes), success);
-    return;
-  }
-
-  if (body) {
-    cached_theme_store_json_ = *body;
-    last_theme_store_fetch_ = base::TimeTicks::Now();
-    PersistCachedThemeStoreToDisk();
-  }
-
-  std::optional<base::Value> parsed =
-      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_dict()) {
-    std::move(callback).Run(std::move(themes), success);
-    return;
-  }
-
-  const base::ListValue* theme_list =
-      parsed->GetDict().FindList("themes");
-  if (!theme_list) {
-    std::move(callback).Run(std::move(themes), success);
-    return;
-  }
-
-  for (const auto& item : *theme_list) {
-    const auto* dict = item.GetIfDict();
-    if (!dict) continue;
-    const std::string* id = dict->FindString("id");
-    const std::string* name = dict->FindString("name");
-    if (!id || !name) continue;
-
-    auto entry = maho_settings::mojom::ThemeStoreEntry::New();
-    entry->id = *id;
-    entry->name = *name;
-    if (const std::string* author = dict->FindString("author"))
-      entry->author = *author;
-    if (const std::string* desc = dict->FindString("description"))
-      entry->description = *desc;
-    if (const std::string* preview = dict->FindString("preview_url"))
-      entry->preview_url = *preview;
-
-    const base::Value* theme_val = dict->Find("theme");
-    if (theme_val) {
-      std::string theme_json_str;
-      base::JSONWriter::Write(*theme_val, &theme_json_str);
-      entry->theme_json = std::move(theme_json_str);
-    }
-
-    const base::ListValue* tags = dict->FindList("tags");
-    if (tags) {
-      for (const auto& tag : *tags) {
-        if (tag.is_string()) entry->tags.push_back(tag.GetString());
-      }
-    }
-
-    themes.push_back(std::move(entry));
-  }
-
-  std::move(callback).Run(std::move(themes), success);
-}
-
-void MahoSettingsPageHandler::ApplyThemeToSpace(
-    const std::string& space_id,
-    const std::string& theme_json,
-    ApplyThemeToSpaceCallback callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  maho::PostCoreTask(
-      FROM_HERE,
-      base::BindOnce(&ApplyThemeToSpaceOnCoreSequence, space_id, theme_json),
-      base::BindOnce(
-          [](ApplyThemeToSpaceCallback cb, bool success) {
-            std::move(cb).Run(success);
-          },
-          std::move(callback)));
-}
 
 void MahoSettingsPageHandler::GetSpaces(GetSpacesCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);

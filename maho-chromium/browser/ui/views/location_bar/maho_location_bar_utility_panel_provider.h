@@ -16,6 +16,7 @@ class Browser;
 class LocationBar;
 class LocationBarModel;
 class Profile;
+class GURL;
 
 namespace views {
 class View;
@@ -142,6 +143,9 @@ MahoLocationBarUtilityPanelAction BuildBlockAdsAndTrackersRowForState(
 void SetBlockAdsAndTrackersEnabledForOrigin(const std::string& origin,
                                             bool blocking_enabled);
 
+void SetAutoPipEnabledForOrigin(const GURL& url,
+                                Profile* profile,
+                                bool enabled);
 std::vector<MahoLocationBarUtilityPanelAction> BuildExtensionIconActions(
     Browser* browser);
 

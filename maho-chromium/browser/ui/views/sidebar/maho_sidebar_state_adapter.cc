@@ -14,6 +14,7 @@
 #include "base/json/json_writer.h"
 #include "base/json/string_escape.h"
 #include "base/logging.h"
+#include "base/timer/elapsed_timer.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/ui/browser.h"
@@ -1067,18 +1068,24 @@ std::string MahoSidebarStateAdapter::FetchSidebarStateV2(
 
 MahoSidebarViewStateModel MahoSidebarStateAdapter::BuildViewStateModel(
     Browser* browser) const {
+  base::ElapsedTimer maho_perf_t;
   if (!IsSidebarSafeMode()) {
+    base::ElapsedTimer footer_t;
     cycle_space_cache_ = std::make_unique<CycleSpaceCache>();
     cycle_space_cache_->state = GetCoreFooterSpaceState();
+    LOG(INFO) << "[MAHO_PERF]     GetCoreFooterSpaceState="
+              << footer_t.Elapsed().InMillisecondsF() << "ms";
   }
 
-  // --- V2 path: single FFI call for tree + favicons ---
   std::string space_id_json = GetActiveSpaceIdJsonForBrowser(browser);
   base::flat_map<std::string, std::vector<uint8_t>> favicon_map;
 
   ::MahoCore* core = maho::GetCore();
   if (core && !space_id_json.empty() && !IsSidebarSafeMode()) {
+    base::ElapsedTimer v2_t;
     std::string v2_json = FetchSidebarStateV2(core, space_id_json);
+    LOG(INFO) << "[MAHO_PERF]     FetchSidebarStateV2="
+              << v2_t.Elapsed().InMillisecondsF() << "ms bytes=" << v2_json.size();
     if (!v2_json.empty()) {
       std::optional<base::Value> v2_parsed =
           base::JSONReader::Read(v2_json, base::JSON_PARSE_RFC);
@@ -1114,14 +1121,19 @@ MahoSidebarViewStateModel MahoSidebarStateAdapter::BuildViewStateModel(
   v2_favicon_map_ = std::move(favicon_map);
 
   MahoSidebarViewStateModel model;
+  base::ElapsedTimer build_t;
   model.top_bar = BuildTopBarModel(browser);
   model.search = BuildSearchModel(browser);
   model.favorites = BuildFavoritesModel(browser);
   model.tab_list = BuildTabListModel(browser);
   model.footer = BuildFooterModel(browser);
+  LOG(INFO) << "[MAHO_PERF]     BuildXXXModel(top+search+fav+tabList+footer)="
+            << build_t.Elapsed().InMillisecondsF() << "ms";
   v2_favicon_map_.clear();
   v2_tree_.reset();
   cycle_space_cache_.reset();
+  LOG(INFO) << "[MAHO_PERF]   BuildViewStateModel TOTAL="
+            << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
   return model;
 }
 

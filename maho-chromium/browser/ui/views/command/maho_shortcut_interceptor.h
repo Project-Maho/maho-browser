@@ -35,6 +35,12 @@ class MahoShortcutInterceptor {
   // without dispatching the action. Intended for focused widgets that need
   // to mirror BrowserView shortcut behavior locally.
   static std::string ResolveActionForKeyEvent(const ui::KeyEvent& event);
+
+  static void SetRecordingMode(bool enabled);
+  static bool IsRecording();
+
+ private:
+  static bool g_recording_mode;
 };
 
 }  // namespace maho

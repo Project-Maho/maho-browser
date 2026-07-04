@@ -1,6 +1,8 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/ui/views/command/maho_shortcut_interceptor.h"
+#include "maho/browser/ui/webui/maho_settings/maho_settings.mojom.h"
+#include "maho/browser/ui/webui/maho_settings/maho_settings_page_handler.h"
 
 #include <string>
 
@@ -20,6 +22,8 @@
 #include "ui/views/view_utils.h"
 
 namespace maho {
+
+bool MahoShortcutInterceptor::g_recording_mode = false;
 
 namespace {
 
@@ -198,73 +202,43 @@ bool MahoShortcutInterceptor::MaybeHandleKeyEvent(
     return false;
   }
 
+  if (g_recording_mode) {
+    std::string key = VKeyToString(event.windows_key_code);
+    if (!key.empty()) {
+      auto mojo_key_combo = maho_settings::mojom::MojoKeyCombo::New();
+      mojo_key_combo->key = key;
+      const int mods = event.GetModifiers();
+      if (mods & blink::WebInputEvent::kAltKey)
+        mojo_key_combo->modifiers.push_back("alt");
+      if (mods & blink::WebInputEvent::kControlKey)
+        mojo_key_combo->modifiers.push_back("ctrl");
+      if (mods & blink::WebInputEvent::kMetaKey)
+        mojo_key_combo->modifiers.push_back("meta");
+      if (mods & blink::WebInputEvent::kShiftKey)
+        mojo_key_combo->modifiers.push_back("shift");
+
+      if (auto* handler = MahoSettingsPageHandler::GetActiveInstance()) {
+        handler->NotifyShortcutRecorded(std::move(mojo_key_combo));
+      }
+    }
+    return false;
+  }
+
   const int modifiers = event.GetModifiers();
   const bool has_cmd_ctrl =
       modifiers & (blink::WebInputEvent::kMetaKey |
                    blink::WebInputEvent::kControlKey);
   const bool trace_shortcut =
       has_cmd_ctrl && !(modifiers & blink::WebInputEvent::kShiftKey) &&
-      (event.windows_key_code == ui::VKEY_E || event.windows_key_code == ui::VKEY_T);
+      (event.windows_key_code == ui::VKEY_E || event.windows_key_code == ui::VKEY_T ||
+       event.windows_key_code == ui::VKEY_L);
   const std::string key_combo_json =
       trace_shortcut ? BuildKeyComboJson(event) : std::string();
-
-  if (event.windows_key_code == ui::VKEY_L && has_cmd_ctrl) {
-    BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
-    if (!browser_view) {
-      if (trace_shortcut) {
-        LogShortcutTrace(event, key_combo_json, "command_bar", false, false,
-                         "cmd_l_no_browser_view");
-      }
-      return false;
-    }
-
-    browser_view->ShowMahoCommandOverlayForCurrentTab();
-    if (trace_shortcut) {
-      LogShortcutTrace(event, key_combo_json, "command_bar", false, true,
-                       "cmd_l_browser_global_command_palette");
-    }
-    return true;
-  }
-
-  if (event.windows_key_code == ui::VKEY_T && has_cmd_ctrl &&
-      !(modifiers & blink::WebInputEvent::kShiftKey)) {
-    BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
-    if (!browser_view) {
-      if (trace_shortcut) {
-        LogShortcutTrace(event, key_combo_json, "command_bar", false, false,
-                         "cmd_t_no_browser_view");
-      }
-      return false;
-    }
-
-    auto* sidebar_container = views::AsViewClass<MahoSidebarContainerView>(
-        browser_view->maho_sidebar_container());
-    if (!sidebar_container) {
-      if (trace_shortcut) {
-        LogShortcutTrace(event, key_combo_json, "new_tab", false, true,
-                         "cmd_t_no_sidebar_container_fallback");
-      }
-      browser_view->ShowMahoCommandOverlayForNewTab();
-      return true;
-    }
-
-    sidebar_container->ShowCommandOverlayForNewTab();
-    if (trace_shortcut) {
-      LogShortcutTrace(event, key_combo_json, "new_tab", false, true,
-                       "cmd_t_special_case_executed");
-    }
-    return true;
-  }
 
   std::string action_id =
       ResolveActionForKeyComboJson(trace_shortcut ? key_combo_json
                                                   : BuildKeyComboJson(event));
   bool fallback_applied = false;
-  if (action_id.empty() && event.windows_key_code == ui::VKEY_E &&
-      has_cmd_ctrl && !(modifiers & blink::WebInputEvent::kShiftKey)) {
-    action_id = "ai_panel";
-    fallback_applied = true;
-  }
   if (action_id.empty()) {
     if (trace_shortcut) {
       LogShortcutTrace(event, key_combo_json, action_id, fallback_applied,
@@ -279,6 +253,16 @@ bool MahoShortcutInterceptor::MaybeHandleKeyEvent(
   }
   ExecuteCommandAction(browser, action_id);
   return true;
+}
+
+// static
+void MahoShortcutInterceptor::SetRecordingMode(bool enabled) {
+  g_recording_mode = enabled;
+}
+
+// static
+bool MahoShortcutInterceptor::IsRecording() {
+  return g_recording_mode;
 }
 
 }  // namespace maho

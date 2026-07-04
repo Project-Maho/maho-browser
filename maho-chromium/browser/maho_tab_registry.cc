@@ -9,6 +9,7 @@
 #include "base/check.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
+#include "base/timer/elapsed_timer.h"
 #include "base/memory/raw_ptr.h"
 #include "base/values.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
@@ -73,10 +74,16 @@ void DispatchShellEventLocal(
   if (!core) {
     return;
   }
+  base::ElapsedTimer maho_perf_t;
   maho::core::HandleEvent(core, json.c_str());
+  const double he_ms = maho_perf_t.Elapsed().InMillisecondsF();
+  base::ElapsedTimer notify_t;
   if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
     bridge->NotifyChanged();
   }
+  LOG(INFO) << "[MAHO_PERF] DispatchShellEventLocal kind=" << kind
+            << " HandleEvent=" << he_ms
+            << "ms NotifyChanged=" << notify_t.Elapsed().InMillisecondsF() << "ms";
 }
 
 void DispatchCreateTabForContents(BrowserWindowInterface* browser,
@@ -262,6 +269,16 @@ class MahoTabRegistry::StripObserver : public TabStripModelObserver {
       TabStripModel* tab_strip_model,
       const TabStripModelChange& change,
       const TabStripSelectionChange& selection) override {
+    base::ElapsedTimer maho_perf_t;
+    const char* ch = "?";
+    switch (change.type()) {
+      case TabStripModelChange::kSelectionOnly: ch = "SelectionOnly"; break;
+      case TabStripModelChange::kInserted: ch = "Inserted"; break;
+      case TabStripModelChange::kRemoved: ch = "Removed"; break;
+      case TabStripModelChange::kMoved: ch = "Moved"; break;
+      case TabStripModelChange::kReplaced: ch = "Replaced"; break;
+    }
+    LOG(INFO) << "[MAHO_PERF] TabRegistry::OnTabStripModelChanged type=" << ch;
     if (change.type() == TabStripModelChange::kInserted) {
       const auto* insert = change.GetInsert();
       if (!insert) {
@@ -349,6 +366,8 @@ class MahoTabRegistry::StripObserver : public TabStripModelObserver {
         AttachNavObserver(new_contents);
       }
     }
+    LOG(INFO) << "[MAHO_PERF] TabRegistry::OnTabStripModelChanged END "
+              << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
   }
 
  private:

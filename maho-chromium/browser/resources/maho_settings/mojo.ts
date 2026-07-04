@@ -18,8 +18,9 @@ export type {
   SpaceBasicInfo,
   SettingValue,
   ShortcutBinding,
+  MojoKeyCombo,
+  SetShortcutResult,
   SyncDeviceInfo,
   SyncKeyInfo,
   SyncStatus,
-  ThemeStoreEntry,
 } from './maho_settings.mojom-webui.js';

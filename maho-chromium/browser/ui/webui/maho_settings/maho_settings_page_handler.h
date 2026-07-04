@@ -41,6 +41,9 @@ class MahoSettingsPageHandler
   MahoSettingsPageHandler& operator=(const MahoSettingsPageHandler&) = delete;
   ~MahoSettingsPageHandler() override;
 
+  static MahoSettingsPageHandler* GetActiveInstance();
+  void NotifyShortcutRecorded(maho_settings::mojom::MojoKeyComboPtr key_combo);
+
   void GetSettings(GetSettingsCallback callback) override;
   void SetSetting(const std::string& key,
                   const std::string& value,
@@ -71,11 +74,17 @@ class MahoSettingsPageHandler
 
   void GetShortcuts(GetShortcutsCallback callback) override;
   void SetShortcut(const std::string& action,
-                   const std::string& key_combo,
+                   maho_settings::mojom::MojoKeyComboPtr key_combo,
                    SetShortcutCallback callback) override;
+  void CheckShortcutConflict(maho_settings::mojom::MojoKeyComboPtr key_combo,
+                             CheckShortcutConflictCallback callback) override;
   void ResetShortcut(const std::string& action) override;
   void ResetAllShortcuts() override;
   void ToggleShortcut(const std::string& action, bool enabled) override;
+  void SetRecordingMode(bool enabled) override;
+  void ExportShortcuts(ExportShortcutsCallback callback) override;
+  void ImportShortcuts(const std::string& json_data,
+                       ImportShortcutsCallback callback) override;
 
   void GetSyncStatus(GetSyncStatusCallback callback) override;
   void GetSyncDevices(GetSyncDevicesCallback callback) override;
@@ -86,10 +95,7 @@ class MahoSettingsPageHandler
                 JoinSyncCallback callback) override;
   void StopSync() override;
 
-  void FetchThemeStore(FetchThemeStoreCallback callback) override;
-  void ApplyThemeToSpace(const std::string& space_id,
-                         const std::string& theme_json,
-                         ApplyThemeToSpaceCallback callback) override;
+
   void GetSpaces(GetSpacesCallback callback) override;
 
   void GetPasswordProviderStatus(GetPasswordProviderStatusCallback callback) override;
@@ -194,11 +200,6 @@ class MahoSettingsPageHandler
   void ScheduleExtensionNotify();
   void FlushExtensionNotify();
 
-  void OnThemeStoreFetched(FetchThemeStoreCallback callback,
-                           std::optional<std::string> body);
-  void LoadCachedThemeStoreFromDisk();
-  void PersistCachedThemeStoreToDisk() const;
-  base::FilePath GetThemeStoreCachePath() const;
 
   void OnLoginResponse(LoginCallback callback,
                        std::unique_ptr<network::SimpleURLLoader> loader,
@@ -240,12 +241,11 @@ class MahoSettingsPageHandler
 
   void OnToggleTimeout(const std::string& extension_id);
 
-  std::unique_ptr<network::SimpleURLLoader> theme_store_loader_;
-  std::string cached_theme_store_json_;
-  base::TimeTicks last_theme_store_fetch_;
 
   std::optional<os_crypt_async::Encryptor> encryptor_;
   void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
+
+  static MahoSettingsPageHandler* g_active_instance;
 
   SEQUENCE_CHECKER(sequence_checker_);
 

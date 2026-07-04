@@ -245,6 +245,10 @@ std::u16string DescribeAutoPipState(ContentSetting setting, bool embargoed) {
   }
 }
 
+void SetAutoPipEnabledForOrigin(const GURL& url,
+                                Profile* profile,
+                                bool enabled);
+
 MahoLocationBarUtilityPanelAction BuildAutoPipActionForContext(
     content::WebContents* web_contents,
     Profile* profile,
@@ -289,15 +293,25 @@ MahoLocationBarUtilityPanelAction BuildAutoPipActionForContext(
   if (setting == CONTENT_SETTING_ASK && auto_blocker) {
     embargoed = auto_blocker->IsEmbargoed(
         url, ContentSettingsType::AUTO_PICTURE_IN_PICTURE);
-    if (embargoed) {
-      setting = CONTENT_SETTING_BLOCK;
-    }
   }
 
-  return MakeAction(u"Automatic Picture-In-Picture",
-                    DescribeAutoPipState(setting, embargoed),
-                    kAutoPipIcon,
-                    MahoLocationBarUtilityPanelDataState::kLive, false);
+  const bool is_block = (setting == CONTENT_SETTING_BLOCK);
+  const bool toggle_is_on = (setting == CONTENT_SETTING_ALLOW);
+
+  MahoLocationBarUtilityPanelAction action =
+      MakeAction(u"Automatic Picture-In-Picture",
+                 DescribeAutoPipState(setting, embargoed),
+                 kAutoPipIcon,
+                 MahoLocationBarUtilityPanelDataState::kLive,
+                 !is_block);
+  action.has_toggle = true;
+  action.toggle_is_on = toggle_is_on;
+  action.toggle_on_subtitle = u"Allowed on every visit";
+  action.toggle_off_subtitle =
+      embargoed ? u"Blocked automatically" : u"Ask to allow";
+  action.toggle_callback = base::BindRepeating(
+      &SetAutoPipEnabledForOrigin, url, profile);
+  return action;
 }
 
 content::WebContents* GetActiveWebContents(Browser* browser) {
@@ -479,7 +493,7 @@ MahoLocationBarUtilityPanelAction BuildBlockAdsAndTrackersRowForState(
 }
 
 void SetBlockAdsAndTrackersEnabledForOrigin(const std::string& origin,
-                                            bool blocking_enabled) {
+                                             bool blocking_enabled) {
   if (origin.empty()) {
     return;
   }
@@ -495,6 +509,32 @@ void SetBlockAdsAndTrackersEnabledForOrigin(const std::string& origin,
   }
 
   maho::core::AddSiteException(core, origin.c_str());
+}
+
+void SetAutoPipEnabledForOrigin(const GURL& url,
+                                Profile* profile,
+                                bool enabled) {
+  if (!profile || !url.is_valid()) {
+    return;
+  }
+  HostContentSettingsMap* settings_map =
+      HostContentSettingsMapFactory::GetForProfile(profile);
+  if (!settings_map) {
+    return;
+  }
+
+  if (enabled) {
+    if (auto* auto_blocker =
+            PermissionDecisionAutoBlockerFactory::GetForProfile(profile)) {
+      auto_blocker->RemoveEmbargoAndResetCounts(
+          url, ContentSettingsType::AUTO_PICTURE_IN_PICTURE);
+    }
+  }
+
+  settings_map->SetContentSettingDefaultScope(
+      url, url,
+      ContentSettingsType::AUTO_PICTURE_IN_PICTURE,
+      enabled ? CONTENT_SETTING_ALLOW : CONTENT_SETTING_DEFAULT);
 }
 
 MahoLocationBarUtilityPanelAction BuildBlockAdsAndTrackersRow(Browser* browser) {

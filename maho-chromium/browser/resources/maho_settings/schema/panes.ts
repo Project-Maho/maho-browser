@@ -116,15 +116,6 @@ const LOOK_AND_FEEL_PANES: PaneDefinition[] = [
     domain: 'look-and-feel',
     groupKeys: ['appearance'],
   },
-  {
-    key: 'theme-store',
-    symbol: 'TS',
-    navTitle: 'Theme store',
-    title: 'Theme store',
-    kind: 'live',
-    domain: 'look-and-feel',
-    contentKind: 'theme-store',
-  },
 ];
 
 const IDENTITY_PANES: PaneDefinition[] = [

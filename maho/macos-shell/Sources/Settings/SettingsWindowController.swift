@@ -122,7 +122,6 @@ private final class SettingsContainerViewController: NSViewController, NSTableVi
         SettingsPane(identifier: "passwords", title: "Passwords", imageName: "lock", makeViewController: { PasswordsSettingsViewController() }),
         SettingsPane(identifier: "account_sync", title: "Account & Sync", imageName: "person.crop.circle", makeViewController: { AccountSyncSettingsViewController() }),
         SettingsPane(identifier: "css_mods", title: "CSS Mods", imageName: "paintbrush.pointed", makeViewController: { CssModsSettingsViewController() }),
-        SettingsPane(identifier: "theme_store", title: "Theme Store", imageName: "storefront", makeViewController: { ThemeStoreSettingsViewController() }),
         SettingsPane(identifier: "extensions", title: "Extensions", imageName: "puzzlepiece.extension", makeViewController: { ExtensionsSettingsViewController() }),
         SettingsPane(identifier: SettingsWindowController.mahoAIPaneIdentifier, title: "Maho AI", imageName: "sparkles", makeViewController: { AISettingsViewController() }),
     ]

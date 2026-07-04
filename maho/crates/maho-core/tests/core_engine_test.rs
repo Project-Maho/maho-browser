@@ -185,7 +185,7 @@ fn delete_active_space_falls_back_and_persists_order_name_and_profile_linkage() 
     let storage_path = temp_dir.path().join("maho-core.lmdb");
 
     let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
-    let profile = core.create_profile("Work Profile".to_string());
+    let profile = core.create_profile_persisted("Work Profile".to_string());
     let color = SpaceColor {
         hue: 210.0,
         saturation: 0.6,
@@ -572,5 +572,113 @@ mod persistence_tests {
             Some(folder_id),
             "bookmark should be in restored folder"
         );
+    }
+
+    #[test]
+    fn profile_persistence_round_trip() {
+        let temp_dir = temp_dir();
+        let mut core = create_persisted_core(&temp_dir);
+        assert!(core.load_persisted_data().is_ok());
+
+        let profile = core.create_profile_persisted("Test Profile".to_string());
+        let profile_id = profile.id.clone();
+
+        drop(core);
+
+        let mut restored = create_persisted_core(&temp_dir);
+        assert!(restored.load_persisted_data().is_ok());
+
+        let list = restored.list_profiles();
+        assert!(list.iter().any(|p| p.id == profile_id && p.name == "Test Profile"));
+    }
+
+    #[test]
+    fn profile_delete_persistence() {
+        let temp_dir = temp_dir();
+        let mut core = create_persisted_core(&temp_dir);
+        assert!(core.load_persisted_data().is_ok());
+
+        let profile = core.create_profile_persisted("Test Profile 2".to_string());
+        let profile_id = profile.id.clone();
+
+        let deleted = core.delete_profile(&profile_id);
+        assert!(deleted);
+
+        drop(core);
+
+        let mut restored = create_persisted_core(&temp_dir);
+        assert!(restored.load_persisted_data().is_ok());
+
+        let list = restored.list_profiles();
+        assert!(!list.iter().any(|p| p.id == profile_id));
+    }
+
+    #[test]
+    fn active_profile_id_survives_restart() {
+        let temp_dir = temp_dir();
+        let mut core = create_persisted_core(&temp_dir);
+        assert!(core.load_persisted_data().is_ok());
+
+        let profile = core.create_profile_persisted("Test Profile 3".to_string());
+        let profile_id = profile.id.clone();
+
+        let switched = core.switch_profile(&profile_id);
+        assert!(switched);
+
+        drop(core);
+
+        let mut restored = create_persisted_core(&temp_dir);
+        assert!(restored.load_persisted_data().is_ok());
+
+        let restored_active = restored.get_active_profile_id();
+        assert_eq!(restored_active, Some(&profile_id));
+    }
+
+    #[test]
+    fn shortcut_manager_rejects_reserved_combo() {
+        let temp_dir = temp_dir();
+        let mut core = create_persisted_core(&temp_dir);
+
+        let reserved_combo = KeyCombo {
+            key: "q".to_string(),
+            modifiers: vec![KeyModifier::Meta],
+        };
+
+        let res = core.set_shortcut_persisted("reload_tab", reserved_combo);
+        assert!(matches!(res, Err(maho_types::keyboard::SetShortcutError::Reserved)));
+    }
+
+    #[test]
+    fn shortcut_exhaustive_actions_parity_test() {
+        let temp_dir = temp_dir();
+        let core = create_persisted_core(&temp_dir);
+
+        let shortcuts_json = core.get_all_shortcuts_json();
+        let bindings: Vec<serde_json::Value> =
+            serde_json::from_str(&shortcuts_json).expect("should parse shortcuts JSON");
+
+        assert!(bindings.len() >= 54, "Expected at least 54 shortcuts, got {}", bindings.len());
+
+        let spot_checks = vec![
+            "command_bar",
+            "new_tab",
+            "close_tab",
+            "new_space",
+            "toggle_sidebar",
+            "ai_panel",
+            "find_in_page",
+            "add_split_view",
+            "remove_split_view",
+            "select_tab_1",
+            "select_space_1",
+        ];
+
+        for action in spot_checks {
+            assert!(
+                bindings.iter().any(|b| b["action"] == action),
+                "Missing action in registry: {}",
+                action
+            );
+        }
     }
 }

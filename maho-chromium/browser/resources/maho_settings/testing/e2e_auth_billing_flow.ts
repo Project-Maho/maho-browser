@@ -136,17 +136,6 @@ async function main() {
   })()`);
   assert(afterSignout!.formVisible === true, `Sign-in form visible after Sign out: ${afterSignout!.text.slice(0, 80)}`);
 
-  step("Step 7 — Theme store UX (after Phase B)");
-  await cdp.navigate(`${CDP_URL_ROOT}theme-store`, 4500);
-  const themeStore = await cdp.eval<{hasThemeCards: boolean; text: string}>(`(function(){
-    var main = document.querySelector('main');
-    var text = (main ? main.textContent : '').replace(/\\s+/g, ' ');
-    var hasThemeCards = /Midnight|Sunset Glow|Forest Green/i.test(text);
-    return {hasThemeCards: hasThemeCards, text: text.slice(0, 300)};
-  })()`);
-  assert(themeStore!.hasThemeCards === true, `Theme store loaded themes successfully (Bug #12, Phase B backend verified): ${themeStore!.text.slice(0, 120)}`);
-  assert(themeStore!.text.toLowerCase().includes("midnight"), "Midnight theme card rendered in the list");
-
   ws.close();
   reportResultsAndExit();
 }

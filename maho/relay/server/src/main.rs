@@ -6,7 +6,7 @@ mod server;
 mod storage;
 mod sync;
 mod billing;
-mod themes;
+mod shortcuts;
 
 use config::RelayConfig;
 

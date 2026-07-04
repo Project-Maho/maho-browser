@@ -22,6 +22,8 @@ pub struct ShortcutBinding {
     pub key_combo: KeyCombo,
     pub is_custom: bool,
     pub enabled: bool,
+    #[serde(default)]
+    pub updated_at: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -77,6 +79,15 @@ impl ShortcutBinding {
             key_combo,
             is_custom: false,
             enabled: true,
+            updated_at: 0,
         }
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SetShortcutError {
+    Conflict(ShortcutConflict),
+    Reserved,
+    Invalid,
 }

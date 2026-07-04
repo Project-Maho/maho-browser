@@ -5,6 +5,28 @@ pub struct ShortcutManager {
     defaults: Vec<ShortcutBinding>,
 }
 
+fn is_reserved_combo(key_combo: &KeyCombo) -> bool {
+    let key = key_combo.key.to_lowercase();
+    let has_meta = key_combo.modifiers.contains(&KeyModifier::Meta);
+    let has_ctrl = key_combo.modifiers.contains(&KeyModifier::Ctrl);
+    let has_alt = key_combo.modifiers.contains(&KeyModifier::Alt);
+    let has_shift = key_combo.modifiers.contains(&KeyModifier::Shift);
+
+    // Platform-specific primary modifier
+    let is_primary = if cfg!(target_os = "macos") {
+        has_meta
+    } else {
+        has_ctrl
+    };
+
+    if is_primary && !has_alt && !has_shift {
+        if key == "q" || key == "h" || key == "m" {
+            return true;
+        }
+    }
+    false
+}
+
 impl ShortcutManager {
     pub fn new() -> Self {
         let defaults = register_default_bindings();
@@ -23,22 +45,40 @@ impl ShortcutManager {
             .collect()
     }
 
+    fn get_now_secs() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    }
+
     pub fn set_shortcut(
         &mut self,
         action: &str,
         key_combo: KeyCombo,
-    ) -> Result<(), ShortcutConflict> {
+    ) -> Result<(), SetShortcutError> {
+        if is_reserved_combo(&key_combo) {
+            return Err(SetShortcutError::Reserved);
+        }
         if let Some(conflict) = self.check_conflict(action, &key_combo) {
-            return Err(conflict);
+            return Err(SetShortcutError::Conflict(conflict));
         }
         if let Some(binding) = self.bindings.iter_mut().find(|b| b.action == action) {
             binding.key_combo = key_combo;
             binding.is_custom = true;
+            binding.updated_at = Self::get_now_secs();
         }
         Ok(())
     }
 
     pub fn check_conflict(&self, action: &str, key_combo: &KeyCombo) -> Option<ShortcutConflict> {
+        if is_reserved_combo(key_combo) {
+            return Some(ShortcutConflict {
+                key_combo: key_combo.clone(),
+                existing_action: "reserved".to_string(),
+                new_action: action.to_string(),
+            });
+        }
         let normalized = key_combo.to_normalized_string();
         self.bindings
             .iter()
@@ -57,17 +97,45 @@ impl ShortcutManager {
             if let Some(binding) = self.bindings.iter_mut().find(|b| b.action == action) {
                 binding.key_combo = default_binding.key_combo.clone();
                 binding.is_custom = false;
+                binding.updated_at = Self::get_now_secs();
             }
         }
     }
 
     pub fn reset_all_shortcuts(&mut self) {
+        let now = Self::get_now_secs();
         self.bindings = self.defaults.clone();
+        for b in &mut self.bindings {
+            b.updated_at = now;
+        }
     }
 
     pub fn toggle_shortcut(&mut self, action: &str, enabled: bool) {
         if let Some(binding) = self.bindings.iter_mut().find(|b| b.action == action) {
             binding.enabled = enabled;
+            binding.updated_at = Self::get_now_secs();
+        }
+    }
+
+    pub fn merge_bindings(&mut self, incoming: Vec<ShortcutBinding>) {
+        for incoming_b in incoming {
+            if let Some(local_b) = self.bindings.iter_mut().find(|b| b.action == incoming_b.action) {
+                if incoming_b.updated_at > local_b.updated_at {
+                    local_b.key_combo = incoming_b.key_combo;
+                    local_b.is_custom = incoming_b.is_custom;
+                    local_b.enabled = incoming_b.enabled;
+                    local_b.updated_at = incoming_b.updated_at;
+                }
+            }
+        }
+    }
+
+    pub fn restore_shortcut_state(&mut self, action: &str, key_combo: KeyCombo, enabled: bool, updated_at: u64) {
+        if let Some(binding) = self.bindings.iter_mut().find(|b| b.action == action) {
+            binding.key_combo = key_combo;
+            binding.is_custom = true;
+            binding.enabled = enabled;
+            binding.updated_at = updated_at;
         }
     }
 
@@ -129,8 +197,8 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
         KeyCombo::new(".", vec![primary_modifier()]),
     ));
     bindings.push(ShortcutBinding::new(
-        "focus_url_bar",
-        "Focus Address Bar",
+        "command_bar",
+        "Command Bar",
         nav.clone(),
         KeyCombo::new("l", vec![primary_modifier()]),
     ));

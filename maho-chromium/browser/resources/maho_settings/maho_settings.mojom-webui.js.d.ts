@@ -34,12 +34,23 @@ export interface AISettings {
   hasByokAnthropic: boolean;
 }
 
+export interface MojoKeyCombo {
+  key: string;
+  modifiers: string[];
+}
+
 export interface ShortcutBinding {
   action: string;
   label: string;
-  keyCombo: string;
-  isDefault: boolean;
+  category: string;
+  keyCombo: MojoKeyCombo;
+  isCustom: boolean;
   enabled: boolean;
+}
+
+export interface SetShortcutResult {
+  success: boolean;
+  conflictAction: string | null;
 }
 
 export interface SyncStatus {
@@ -97,15 +108,6 @@ export interface SavedPassword {
   password?: string | null;
 }
 
-export interface ThemeStoreEntry {
-  id: string;
-  name: string;
-  author: string;
-  description: string;
-  previewUrl: string;
-  themeJson: string;
-  tags: string[];
-}
 
 export interface SpaceBasicInfo {
   id: string;
@@ -200,6 +202,10 @@ export class PageCallbackRouter {
     addListener(listener: (status: AccountStatus) => void): void;
     removeListener(listener: (status: AccountStatus) => void): void;
   };
+  onShortcutRecorded: {
+    addListener(listener: (keyCombo: MojoKeyCombo) => void): void;
+    removeListener(listener: (keyCombo: MojoKeyCombo) => void): void;
+  };
 }
 
 export class PageHandlerRemote {
@@ -224,18 +230,20 @@ export class PageHandlerRemote {
   setAIApprovalPolicy(policy: string): Promise<void>;
   setAISessionPersistence(enabled: boolean): Promise<void>;
   getShortcuts(): Promise<{shortcuts: ShortcutBinding[]}>;
-  setShortcut(action: string, keyCombo: string): Promise<{success: boolean}>;
+  setShortcut(action: string, keyCombo: MojoKeyCombo): Promise<{result: SetShortcutResult}>;
+  checkShortcutConflict(keyCombo: MojoKeyCombo): Promise<{conflictAction: string | null}>;
   resetShortcut(action: string): Promise<void>;
   resetAllShortcuts(): Promise<void>;
   toggleShortcut(action: string, enabled: boolean): Promise<void>;
+  setRecordingMode(enabled: boolean): Promise<void>;
+  exportShortcuts(): Promise<{jsonData: string}>;
+  importShortcuts(jsonData: string): Promise<{success: boolean}>;
   getSyncStatus(): Promise<{status: SyncStatus}>;
   getSyncDevices(): Promise<{devices: SyncDeviceInfo[]}>;
   generateSyncKey(): Promise<{keyInfo: SyncKeyInfo}>;
   startSync(syncKey: string): Promise<{status: SyncStatus}>;
   joinSync(recoveryPhrase: string): Promise<{status: SyncStatus}>;
   stopSync(): Promise<void>;
-  fetchThemeStore(): Promise<{themes: ThemeStoreEntry[]; success: boolean}>;
-  applyThemeToSpace(spaceId: string, themeJson: string): Promise<{success: boolean}>;
   getSpaces(): Promise<{spaces: SpaceBasicInfo[]}>;
   getPasswordProviderStatus(): Promise<{status: PasswordProviderStatus}>;
   getSavedPasswords(): Promise<{passwords: SavedPassword[]}>;

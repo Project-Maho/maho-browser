@@ -1242,7 +1242,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeCreateProfile<'loc
         Some(s) => s,
         None => return std::ptr::null_mut(),
     };
-    let profile = core.create_profile(name_str);
+    let profile = core.create_profile_persisted(name_str);
     to_json_jstring(&mut env, &profile)
 }
 

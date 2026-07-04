@@ -1192,6 +1192,14 @@ char *maho_core_set_shortcut(struct MahoCore *ptr, const char *action, const cha
 
 /**
  * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `key_combo_json` must be
+ * a valid NUL-terminated C string. Caller must free returned string with `maho_string_free`.
+ * Returns null on null input, invalid UTF-8, if import is active, or if no conflict is found.
+ */
+char *maho_core_check_conflict(struct MahoCore *ptr, const char *key_combo_json);
+
+/**
+ * # Safety
  * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `action` must be a
  * valid NUL-terminated C string. No-op on null input or if import is active.
  */
@@ -1210,6 +1218,18 @@ void maho_core_reset_all_shortcuts(struct MahoCore *ptr);
  * valid NUL-terminated C string. No-op on null input or if import is active.
  */
 void maho_core_toggle_shortcut(struct MahoCore *ptr, const char *action, bool enabled);
+
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. Caller must free returned string.
+ */
+char *maho_core_export_shortcuts(struct MahoCore *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `json_data` must be a valid C string.
+ */
+bool maho_core_import_shortcuts(struct MahoCore *ptr, const char *json_data);
 
 /**
  * # Safety

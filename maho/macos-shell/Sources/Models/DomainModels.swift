@@ -207,26 +207,6 @@ struct SpaceConfigUpdate: Codable, Equatable {
     }
 }
 
-struct ThemeStoreEntry: Codable, Identifiable {
-    let id: String
-    let name: String
-    let description: String
-    let author: String
-    let version: String
-    /// Raw SpaceTheme JSON — decode separately
-    let theme: SpaceTheme
-    let previewUrl: String?
-    let downloadCount: Int
-    let createdAt: String
-    let updatedAt: String
-    let tags: [String]
-}
-
-struct ThemeStoreManifest: Codable {
-    let version: Int
-    let themes: [ThemeStoreEntry]
-}
-
 struct CssMod: Codable, Identifiable {
     let id: String
     let name: String

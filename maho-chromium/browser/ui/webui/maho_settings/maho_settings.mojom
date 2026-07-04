@@ -33,12 +33,23 @@ struct AISettings {
   bool has_byok_anthropic;
 };
 
+struct MojoKeyCombo {
+  string key;
+  array<string> modifiers;
+};
+
 struct ShortcutBinding {
   string action;
   string label;
-  string key_combo;
-  bool is_default;
+  string category;
+  MojoKeyCombo key_combo;
+  bool is_custom;
   bool enabled;
+};
+
+struct SetShortcutResult {
+  bool success;
+  string? conflict_action;
 };
 
 struct SyncStatus {
@@ -96,15 +107,6 @@ struct SavedPassword {
   string? password;
 };
 
-struct ThemeStoreEntry {
-  string id;
-  string name;
-  string author;
-  string description;
-  string preview_url;
-  string theme_json;
-  array<string> tags;
-};
 
 struct SpaceBasicInfo {
   string id;
@@ -222,10 +224,14 @@ interface PageHandler {
   SetAISessionPersistence(bool enabled);
 
   GetShortcuts() => (array<ShortcutBinding> shortcuts);
-  SetShortcut(string action, string key_combo) => (bool success);
+  SetShortcut(string action, MojoKeyCombo key_combo) => (SetShortcutResult result);
+  CheckShortcutConflict(MojoKeyCombo key_combo) => (string? conflict_action);
   ResetShortcut(string action);
   ResetAllShortcuts();
   ToggleShortcut(string action, bool enabled);
+  SetRecordingMode(bool enabled);
+  ExportShortcuts() => (string json_data);
+  ImportShortcuts(string json_data) => (bool success);
 
   GetSyncStatus() => (SyncStatus status);
   GetSyncDevices() => (array<SyncDeviceInfo> devices);
@@ -234,8 +240,6 @@ interface PageHandler {
   JoinSync(string recovery_phrase) => (SyncStatus status);
   StopSync();
 
-  FetchThemeStore() => (array<ThemeStoreEntry> themes, bool success);
-  ApplyThemeToSpace(string space_id, string theme_json) => (bool success);
   GetSpaces() => (array<SpaceBasicInfo> spaces);
 
   GetPasswordProviderStatus() => (PasswordProviderStatus status);
@@ -312,4 +316,7 @@ interface Page {
   // Pushed when account state changes (e.g., post-login, post-logout).
   // Page can re-render Account and Billing surfaces without polling.
   AccountStatusChanged(AccountStatus status);
+
+  // Pushed when a shortcut key combo is intercepted in recording mode.
+  OnShortcutRecorded(MojoKeyCombo key_combo);
 };

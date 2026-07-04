@@ -128,30 +128,6 @@ final class ThemeSystemTests: XCTestCase {
         XCTAssertTrue(tableExists || emptyExists, "CSS Mods should show either table or empty state")
     }
 
-    // MARK: - Theme Store Settings (Phase 6)
-
-    func testThemeStoreSettingsPaneExists() {
-        openSettingsWindow()
-
-        let settingsWindow = app.windows["settingsWindow"]
-        XCTAssertTrue(settingsWindow.waitForExistence(timeout: 5))
-
-        navigateToSettingsPane(named: "Theme Store", in: settingsWindow)
-
-        // Verify Theme Store UI elements
-        let refreshButton = settingsWindow.buttons["settings.themeStore.refresh"]
-        XCTAssertTrue(refreshButton.waitForExistence(timeout: 5), "Refresh button should exist")
-
-        let table = settingsWindow.descendants(matching: .table).matching(NSPredicate(format: "identifier == %@", "settings.themeStore.table")).firstMatch
-        let emptyState = settingsWindow.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@", "settings.themeStore.emptyState")).firstMatch
-        let loadingState = settingsWindow.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@", "settings.themeStore.loading")).firstMatch
-
-        // One of table, empty state, or loading should exist
-        let anyVisible = table.waitForExistence(timeout: 3) ||
-                         emptyState.waitForExistence(timeout: 3) ||
-                         loadingState.waitForExistence(timeout: 3)
-        XCTAssertTrue(anyVisible, "Theme Store should show table, empty state, or loading indicator")
-    }
 
     // MARK: - Helpers
 

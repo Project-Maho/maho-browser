@@ -12,6 +12,7 @@ aggregate_vector_icons("maho_lucide_icons") {
     "chevron_left.icon",
     "chevron_right.icon",
     "copy.icon",
+    "ellipsis.icon",
     "folder.icon",
     "folder_open.icon",
     "hammer.icon",

@@ -303,7 +303,7 @@ void AddCommandBarColors(ui::ColorMixer& mixer, bool dark_mode) {
       dark_mode ? SkColorSetARGB(0x0E, 0xFF, 0xFF, 0xFF)
                 : SkColorSetARGB(0x28, 0xA3, 0xAE, 0xCB)};
   mixer[kMahoColorCommandBarSelectionFill] = {dark_mode
-      ? SkColorSetARGB(56, 210, 155, 145)   // warm rose tint (Arc parity)
+      ? SkColorSetARGB(112, 210, 155, 145)  // warm rose tint (Arc parity)
       : SkColorSetARGB(28, 120, 55, 50)};   // warm rose tint (light)
   mixer[kMahoColorCommandBarSelectionBorder] = {
       dark_mode ? SkColorSetARGB(0, 0, 0, 0)

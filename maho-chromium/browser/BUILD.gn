@@ -258,7 +258,14 @@ source_set("maho_location_bar_views") {
     "ui/views/location_bar/maho_location_bar_utility_panel_provider.h",
     "ui/views/location_bar/maho_location_bar_utility_panel_view.cc",
     "ui/views/location_bar/maho_location_bar_utility_panel_view.h",
+    "ui/views/location_bar/maho_utility_panel_vibrancy.h",
   ]
+  if (is_mac) {
+    sources += [ "ui/views/location_bar/maho_utility_panel_vibrancy_mac.mm" ]
+    frameworks = [ "AppKit.framework" ]
+  } else {
+    sources += [ "ui/views/location_bar/maho_utility_panel_vibrancy_stub.cc" ]
+  }
   deps = [
     ":maho_core_holder",
     ":maho_extension_state_bridge",

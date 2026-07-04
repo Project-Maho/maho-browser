@@ -87,7 +87,7 @@ fn lmdb_persists_space_create_immediately() {
 
     let space_id = {
         let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
-        let profile = core.create_profile("Work Profile".to_string());
+        let profile = core.create_profile_persisted("Work Profile".to_string());
         let color = SpaceColor {
             hue: 120.0,
             saturation: 0.5,
@@ -114,7 +114,7 @@ fn lmdb_persists_active_space_change_immediately() {
 
     let new_space_id = {
         let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
-        let profile = core.create_profile("Work Profile".to_string());
+        let profile = core.create_profile_persisted("Work Profile".to_string());
         let color = SpaceColor {
             hue: 120.0,
             saturation: 0.5,
@@ -160,7 +160,7 @@ fn lmdb_persists_move_tab_immediately() {
             .id
             .clone();
 
-        let profile = core.create_profile("Work Profile".to_string());
+        let profile = core.create_profile_persisted("Work Profile".to_string());
         let color = SpaceColor {
             hue: 120.0,
             saturation: 0.5,

@@ -4,6 +4,16 @@ import {Alert, AlertDescription, AlertTitle} from '@ui/alert';
 import {Badge} from '@ui/badge';
 import {Button} from '@ui/button';
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@ui/dialog';
+import {useShortcutInterceptor} from './use_shortcut_interceptor.js';
+import {ShortcutsPane} from './shortcuts/index.js';
+import {
   Card,
   CardContent,
   CardDescription,
@@ -40,7 +50,6 @@ import type {
   SyncDeviceInfo,
   SyncKeyInfo,
   SyncStatus,
-  ThemeStoreEntry,
 } from '../mojo.js';
 import type {PaneDefinition} from '../models.js';
 import type {MahoSettingsStore} from './store.js';
@@ -50,11 +59,6 @@ type LoadState<T> =
     | {status: 'error'; message: string}
     | {data: T; status: 'loaded'};
 
-interface ThemeStoreData {
-  spaces: SpaceBasicInfo[];
-  success: boolean;
-  themes: ThemeStoreEntry[];
-}
 
 interface SyncPaneData {
   devicesError: string | null;
@@ -270,10 +274,8 @@ export function DomainPaneContent(
       return <PasswordsPane pane={pane} settings={settings} store={store} />;
     case 'autofill':
       return <AutofillPane pane={pane} store={store} />;
-    case 'theme-store':
-      return <ThemeStorePane pane={pane} store={store} />;
     case 'shortcuts':
-      return <ShortcutsPane pane={pane} store={store} />;
+      return <ShortcutsPane store={store} />;
     case 'ai':
       return <AiPane pane={pane} store={store} />;
     case 'billing':
@@ -1253,98 +1255,6 @@ function AiSelectRow(
   );
 }
 
-function ShortcutsPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}) {
-  const handler = store.getHandler();
-  const [state, setState] = useState<LoadState<ShortcutBinding[]>>(createLoadingState());
-
-  const loadShortcuts = useCallback(async () => {
-    setState(createLoadingState());
-    try {
-      const {shortcuts} = await handler.getShortcuts();
-      setState(createLoadedState(shortcuts));
-    } catch {
-      setState(createErrorState('Failed to load shortcuts.'));
-    }
-  }, [handler]);
-
-  useEffect(() => {
-    void loadShortcuts();
-  }, [loadShortcuts]);
-
-  return (
-    <DomainPaneSection pane={pane}>
-      <div className={SETTING_ACTIONS_CLASS}>
-        <ActionButton label="Reset all" onClick={async () => {
-          await handler.resetAllShortcuts();
-          await loadShortcuts();
-        }} />
-      </div>
-      {state.status === 'loading' ? <PaneLoading message="Loading shortcuts…" /> : null}
-      {state.status === 'error' ? (
-        <PaneRetry message={state.message} title="Shortcuts unavailable" onRetry={() => void loadShortcuts()} />
-      ) : null}
-      {state.status === 'loaded' ? (
-        <div className={ROWS_CLASS}>
-          {state.data.map(binding => (
-            <ShortcutRow key={binding.action} binding={binding} onReload={loadShortcuts} store={store} />
-          ))}
-        </div>
-      ) : null}
-    </DomainPaneSection>
-  );
-}
-
-function ShortcutRow(
-    {binding, onReload, store}: {
-      binding: ShortcutBinding;
-      onReload: () => Promise<void>;
-      store: MahoSettingsStore;
-    }) {
-  const handler = store.getHandler();
-  const [draft, setDraft] = useState(binding.keyCombo);
-
-  useEffect(() => {
-    setDraft(binding.keyCombo);
-  }, [binding.keyCombo]);
-
-  return (
-    <ManagedSettingRow
-      controlClassName={SETTING_ACTIONS_CLASS}
-          description={!binding.isDefault ? 'Custom binding.' : 'Default.'}
-      title={formatShortcutAction(binding.action)}>
-      <Toggle
-        enabled={binding.enabled}
-        label={`Enable ${binding.action}`}
-        onToggle={async nextEnabled => {
-          await handler.toggleShortcut(binding.action, nextEnabled);
-          await onReload();
-        }}
-      />
-      <TextFieldShell
-        ariaLabel={`Shortcut for ${binding.action}`}
-        placeholder="Shortcut"
-        value={draft}
-        onChange={setDraft}
-      />
-      <ActionButton
-        label="Save"
-        onClick={async () => {
-          await handler.setShortcut(binding.action, draft);
-          await onReload();
-        }}
-      />
-      <ActionButton
-        disabled={binding.isDefault}
-        label="Reset"
-        onClick={async () => {
-          await handler.resetShortcut(binding.action);
-          await onReload();
-        }}
-      />
-    </ManagedSettingRow>
-  );
-}
-
 function SyncPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}) {
   const handler = store.getHandler();
   const [joinPhrase, setJoinPhrase] = useState('');
@@ -1504,110 +1414,6 @@ function SyncRecoveryPhraseRow(
   );
 }
 
-function ThemeStorePane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}) {
-  const handler = store.getHandler();
-  const [selectedSpaceId, setSelectedSpaceId] = useState('');
-  const [state, setState] = useState<LoadState<ThemeStoreData>>(createLoadingState());
-
-  const loadThemeStore = useCallback(async () => {
-    setState(createLoadingState());
-    const [themeStoreResult, spacesResult] = await Promise.allSettled([
-      handler.fetchThemeStore(),
-      handler.getSpaces(),
-    ]);
-    const themeStore = themeStoreResult.status === 'fulfilled' ? themeStoreResult.value : null;
-    const spaces = spacesResult.status === 'fulfilled' ? spacesResult.value.spaces : [];
-    const themes = themeStore?.themes || [];
-    const success = themeStore?.success || false;
-    setSelectedSpaceId(spaces[0]?.id || '');
-    setState(createLoadedState({spaces, success, themes}));
-  }, [handler]);
-
-  useEffect(() => {
-    void loadThemeStore();
-  }, [loadThemeStore]);
-
-  return (
-    <DomainPaneSection pane={pane}>
-      {state.status === 'loading' ? <PaneLoading message="Loading themes…" /> : null}
-      {state.status === 'loaded' && state.data.themes.length === 0 && !state.data.success ? (
-        <PaneRetry
-          title="Failed to load theme store"
-          message="Could not connect to the theme store catalog. Please check your network connection and try again."
-          onRetry={loadThemeStore}
-        />
-      ) : null}
-      {state.status === 'loaded' && !(state.data.themes.length === 0 && !state.data.success) ? (
-
-        <>
-          <SectionHeader
-            action={<ActionButton label="Refresh" onClick={() => loadThemeStore()} />}
-            title="Community themes"
-          />
-          {state.data.themes.length === 0 ? <EmptyDescription message="No themes available." /> : null}
-          {state.data.success ? null : (
-            <p className={STANDALONE_MESSAGE_CLASS}>Showing cached themes while the remote catalog is unavailable.</p>
-          )}
-          {state.data.spaces.length > 0 ? (
-            <ManagedSettingRow controlClassName={SETTING_ACTIONS_CLASS} description="Select which space should receive the theme." isFirstRow title="Apply to space">
-              <SelectShell
-                ariaLabel="Target space"
-                options={state.data.spaces.map(space => ({label: space.name, value: space.id}))}
-                value={selectedSpaceId}
-                onChange={setSelectedSpaceId}
-              />
-            </ManagedSettingRow>
-          ) : null}
-          <div className={ROWS_CLASS}>
-            {state.data.themes.map(theme => (
-              <ThemeRow
-                key={theme.id}
-                selectedSpaceId={selectedSpaceId}
-                store={store}
-                theme={theme}
-              />
-            ))}
-          </div>
-        </>
-      ) : null}
-    </DomainPaneSection>
-  );
-}
-
-function ThemeRow(
-    {selectedSpaceId, store, theme}: {
-      selectedSpaceId: string;
-      store: MahoSettingsStore;
-      theme: ThemeStoreEntry;
-    }) {
-  const handler = store.getHandler();
-  const [label, setLabel] = useState('Apply');
-
-  const parts: string[] = [];
-  if (theme.author) {
-    parts.push(`by ${theme.author}`);
-  }
-  if (theme.description) {
-    parts.push(theme.description);
-  }
-
-  return (
-    <ManagedSettingRow
-      controlClassName={SETTING_ACTIONS_CLASS}
-      description={parts.join(' · ') || 'Community theme'}
-      title={theme.name}>
-      <ActionButton label={label} onClick={async () => {
-        const spaceId = selectedSpaceId;
-        if (!spaceId || !theme.themeJson) {
-          return;
-        }
-        setLabel('Applying…');
-        const {success} = await handler.applyThemeToSpace(spaceId, theme.themeJson);
-        setLabel(success ? 'Applied' : 'Failed');
-      }} />
-    </ManagedSettingRow>
-  );
-}
 
 function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}) {
   const handler = store.getHandler();

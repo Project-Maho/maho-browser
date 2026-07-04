@@ -5,6 +5,7 @@
 
 #include <map>
 
+#include "base/memory/weak_ptr.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_provider.h"
 #include "maho/browser/extensions/maho_extension_state_bridge.h"
 #include "base/memory/raw_ptr.h"
@@ -65,6 +66,8 @@ class MahoLocationBarUtilityPanelView : public views::BubbleDialogDelegate,
       const MahoLocationBarUtilityPanelAction& action,
       views::View* view);
   void OnManageButtonClicked(MahoLocationBarUtilityPanelAction action);
+  void OnSecuritySummaryClicked();
+  void OnEllipsisMenuClicked();
 
   MahoLocationBarUtilityPanelModel model_;
   std::map<std::u16string, raw_ptr<views::View>> action_views_for_testing_;
@@ -78,6 +81,7 @@ class MahoLocationBarUtilityPanelView : public views::BubbleDialogDelegate,
   std::unique_ptr<views::MenuRunner> context_menu_runner_;
   int menu_generation_ = 0;
   bool rebuilding_extensions_ = false;
+  base::WeakPtrFactory<MahoLocationBarUtilityPanelView> weak_factory_{this};
 };
 
 }  // namespace maho

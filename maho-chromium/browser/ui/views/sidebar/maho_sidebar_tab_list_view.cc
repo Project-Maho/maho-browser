@@ -11,6 +11,7 @@
 
 #include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/timer/elapsed_timer.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
@@ -2804,6 +2805,8 @@ void MahoSidebarTabListView::SetTabPreviewShowDelayForTesting(
 
 void MahoSidebarTabListView::Update(const MahoSidebarTabListModel& model,
                                     Browser* browser) {
+  base::ElapsedTimer maho_perf_t;
+  LOG(INFO) << "[MAHO_PERF] Update START";
   browser_ = browser;
   active_space_id_ = model.active_space_id;
   pinned_drop_lane_revealed_ = false;
@@ -2868,17 +2871,23 @@ void MahoSidebarTabListView::Update(const MahoSidebarTabListModel& model,
   // pass, the view tree is already correct and the rebuild is wasted work.
   std::string fingerprint = ComputeModelFingerprint(model);
   if (!last_model_fingerprint_.empty() && fingerprint == last_model_fingerprint_) {
-    // Structure unchanged; if only the active tab changed, apply the
-    // active-highlight delta in O(2) row lookups instead of rebuilding.
     if (model.active_tab.tab_id != last_active_tab_id_) {
+      LOG(INFO) << "[MAHO_PERF]   fp_match active_only";
       UpdateActiveTabHighlightOnly(model.active_tab.tab_id);
+    } else {
+      LOG(INFO) << "[MAHO_PERF]   fp_match noop";
     }
+    LOG(INFO) << "[MAHO_PERF] Update END(fp_match) "
+              << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
     return;
   }
   last_model_fingerprint_ = std::move(fingerprint);
   last_active_tab_id_ = model.active_tab.tab_id;
 
+  base::ElapsedTimer rebuild_t;
   RebuildRows(model, browser);
+  LOG(INFO) << "[MAHO_PERF]   RebuildRows="
+            << rebuild_t.Elapsed().InMillisecondsF() << "ms rows=" << (tab_rows_ ? tab_rows_->children().size() : 0);
 
   // Rebuild tab_id→strip_index cache after successful update.
   tab_id_to_index_.clear();
@@ -2894,6 +2903,8 @@ void MahoSidebarTabListView::Update(const MahoSidebarTabListModel& model,
       }
     }
   }
+  LOG(INFO) << "[MAHO_PERF] Update END(rebuilt) "
+            << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
 }
 
 std::string MahoSidebarTabListView::ComputeModelFingerprint(
@@ -2916,8 +2927,6 @@ std::string MahoSidebarTabListView::ComputeModelFingerprint(
         out.push_back(n.is_expanded ? 'E' : 'C');
         out.push_back(':');
         out.append(base::UTF16ToUTF8(n.folder_name));
-      } else {
-        out.append(base::UTF16ToUTF8(n.title));
       }
       out.push_back(';');
       if (!n.children.empty()) {
@@ -2935,7 +2944,11 @@ std::string MahoSidebarTabListView::ComputeModelFingerprint(
 
 bool MahoSidebarTabListView::HasTabInLastModel(
     const std::string& tab_id) const {
+  base::ElapsedTimer maho_perf_t;
   if (!has_last_model_ || tab_id.empty()) {
+    LOG(INFO) << "[MAHO_PERF] HasTabInLastModel(id='" << tab_id
+              << "') early_return has_last_model=" << has_last_model_
+              << " empty=" << tab_id.empty();
     return false;
   }
   std::function<bool(const std::vector<SidebarTreeNode>&)> search;
@@ -2950,11 +2963,36 @@ bool MahoSidebarTabListView::HasTabInLastModel(
     }
     return false;
   };
-  return search(last_model_.pinned_tree) || search(last_model_.normal_tree);
+  bool found = search(last_model_.pinned_tree) || search(last_model_.normal_tree);
+  int pinned_top = static_cast<int>(last_model_.pinned_tree.size());
+  int normal_top = static_cast<int>(last_model_.normal_tree.size());
+  std::string sample_ids;
+  int shown = 0;
+  std::function<void(const std::vector<SidebarTreeNode>&)> collect;
+  collect = [&](const std::vector<SidebarTreeNode>& nodes) {
+    for (const auto& n : nodes) {
+      if (shown >= 3) return;
+      if (n.kind == SidebarNodeKind::kTab && !n.tab_id.empty()) {
+        if (!sample_ids.empty()) sample_ids += ",";
+        sample_ids += n.tab_id.substr(0, 8);
+        ++shown;
+      }
+      if (!n.children.empty()) collect(n.children);
+    }
+  };
+  collect(last_model_.normal_tree);
+  LOG(INFO) << "[MAHO_PERF] HasTabInLastModel(id='" << tab_id.substr(0, 8)
+            << "') found=" << found
+            << " pinned_top=" << pinned_top
+            << " normal_top=" << normal_top
+            << " sample_normal_ids=[" << sample_ids << "]"
+            << " took " << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
+  return found;
 }
 
 void MahoSidebarTabListView::UpdateActiveTabHighlightOnly(
     const std::string& new_active_tab_id) {
+  base::ElapsedTimer maho_perf_t;
   if (last_active_tab_id_ == new_active_tab_id) {
     return;
   }
@@ -2987,6 +3025,8 @@ void MahoSidebarTabListView::UpdateActiveTabHighlightOnly(
   }
 
   last_active_tab_id_ = new_active_tab_id;
+  LOG(INFO) << "[MAHO_PERF] UpdateActiveTabHighlightOnly="
+            << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
 }
 
 bool MahoSidebarTabListView::GetDropFormats(
@@ -3129,42 +3169,44 @@ void MahoSidebarTabListView::UpdatePinnedDropLaneVisibility(bool visible) {
 
 void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
                                              Browser* browser) {
+  base::ElapsedTimer maho_rr_t;
   HandleTabRowHoverEnd();
   folder_rows_by_id_.clear();
-  // Tear down active context-menu state before destroying row views.
-  // The menu runner, menu model, and delegate chain may still reference row
-  // views, so preserve this order before RemoveAllChildViews() clears them.
   active_menu_runner_.reset();
   active_menu_model_.reset();
   active_context_menu_.reset();
+  base::ElapsedTimer rr_remove_t;
   tab_rows_->RemoveAllChildViews();
+  LOG(INFO) << "[MAHO_PERF]     RR.RemoveAllChildViews="
+            << rr_remove_t.Elapsed().InMillisecondsF() << "ms";
   pinned_section_target_ = nullptr;
   normal_section_target_ = nullptr;
   pinned_separator_ = nullptr;
 
   const bool has_tree = !model.pinned_tree.empty() ||
                         !model.normal_tree.empty();
-  // True zero-context: no browser/tab-strip AND no model content.
   if (!HasTabStripContext(browser) && !has_tree) {
     AddTabActionsRow();
+    LOG(INFO) << "[MAHO_PERF]     RR.zero_context TOTAL="
+              << maho_rr_t.Elapsed().InMillisecondsF() << "ms";
     return;
   }
 
   const MahoSidebarTabListModel* effective_model = &model;
   MahoSidebarTabListModel fallback_model;
-  // Only fall back to the live strip when there is genuinely no space
-  // context yet (bridge not initialized). An empty per-space tree for a
-  // valid active_space_id is a legitimate state — that space simply has no
-  // tabs of its own. Falling back in that case would leak every other
-  // space's strip tabs into this space's sidebar.
   if (!has_tree && active_space_id_.empty()) {
     fallback_model =
         BuildLiveStripFallbackTabListModel(browser, active_space_id_);
     effective_model = &fallback_model;
   }
 
+  base::ElapsedTimer rr_pinned_t;
   RebuildTreeSection(tab_rows_, effective_model->pinned_tree,
                      MahoSidebarTabSection::kPinned, browser);
+  LOG(INFO) << "[MAHO_PERF]     RR.RebuildPinned="
+            << rr_pinned_t.Elapsed().InMillisecondsF()
+            << "ms nodes=" << effective_model->pinned_tree.size();
+
   auto separator = std::make_unique<SidebarSeparatorRow>();
   pinned_separator_ = tab_rows_->AddChildView(std::move(separator));
   const bool pinned_visible = !effective_model->pinned_tree.empty() ||
@@ -3177,30 +3219,38 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
   pinned_section_target_->SetVisible(pinned_visible);
   pinned_separator_->SetVisible(true);
   AddTabActionsRow();
+
+  base::ElapsedTimer rr_normal_t;
   RebuildTreeSection(tab_rows_, effective_model->normal_tree,
                      MahoSidebarTabSection::kNormal, browser);
+  LOG(INFO) << "[MAHO_PERF]     RR.RebuildNormal="
+            << rr_normal_t.Elapsed().InMillisecondsF()
+            << "ms nodes=" << effective_model->normal_tree.size();
 
-  // After rebuilding, propagate layout through the full ancestor chain so the
-  // outer scroll view owned by MahoSidebarView commits the new content bounds
-  // before we synthesize hover updates. Then fire an immediate synthesize for
-  // the common case, plus a deferred follow-up on the next UI task to catch
-  // native tracking-area state that settles slightly later on macOS.
   if (GetWidget() && GetWidget()->IsVisible()) {
+    base::ElapsedTimer rr_layout_t;
+    int ancestor_count = 0;
     for (views::View* current = this; current; current = current->parent()) {
       current->DeprecatedLayoutImmediately();
+      ++ancestor_count;
     }
+    LOG(INFO) << "[MAHO_PERF]     RR.DeprecatedLayoutImmediately="
+              << rr_layout_t.Elapsed().InMillisecondsF()
+              << "ms ancestors=" << ancestor_count;
     if (GetWidget()->HasCapture()) {
+      LOG(INFO) << "[MAHO_PERF]     RR TOTAL(has_capture)="
+                << maho_rr_t.Elapsed().InMillisecondsF() << "ms";
       return;
     }
-    // P3: Skip synthesizing a mouse move when the cursor is already inside the
-    // sidebar — doing so would re-trigger the hover cascade on every visible
-    // row that was just rebuilt, undoing the cost we avoided with the opacity fix.
     const gfx::Point cursor_screen =
         display::Screen::Get()->GetCursorScreenPoint();
     const gfx::Rect widget_bounds_screen =
         GetWidget()->GetWindowBoundsInScreen();
     if (!widget_bounds_screen.Contains(cursor_screen)) {
+      base::ElapsedTimer rr_syn_t;
       GetWidget()->SynthesizeMouseMoveEvent();
+      LOG(INFO) << "[MAHO_PERF]     RR.SynthesizeMouseMove="
+                << rr_syn_t.Elapsed().InMillisecondsF() << "ms";
     }
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
@@ -3222,6 +3272,8 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
             },
              weak_factory_.GetWeakPtr()));
   }
+  LOG(INFO) << "[MAHO_PERF]     RR TOTAL="
+            << maho_rr_t.Elapsed().InMillisecondsF() << "ms";
 }
 
 void MahoSidebarTabListView::FlushDeferredRebuild() {
@@ -3553,19 +3605,29 @@ void MahoSidebarTabListView::ActivateTabById(const std::string& tab_id) {
 }
 
 void MahoSidebarTabListView::WakeSuspendedTab(const std::string& tab_id) {
+  base::ElapsedTimer maho_perf_t;
+  LOG(INFO) << "[MAHO_PERF] WakeSuspendedTab START tab_id=" << tab_id;
+
+  base::ElapsedTimer query_t;
   auto persisted = QueryTabFromCore(tab_id);
+  LOG(INFO) << "[MAHO_PERF]   QueryTabFromCore="
+            << query_t.Elapsed().InMillisecondsF() << "ms";
   if (!persisted) {
+    LOG(INFO) << "[MAHO_PERF] WakeSuspendedTab END(no_persisted) "
+              << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
     return;
   }
 
   MahoTabIdHelper::SetPendingRestoredTabId(tab_id);
 
+  base::ElapsedTimer nav_t;
   NavigateParams params(browser_, GURL(persisted->url),
                         ui::PAGE_TRANSITION_AUTO_BOOKMARK);
   params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
   Navigate(&params);
+  LOG(INFO) << "[MAHO_PERF]   Navigate()="
+            << nav_t.Elapsed().InMillisecondsF() << "ms";
 
-  // If the persisted tab was pinned, re-pin in the new WebContents' tab strip slot
   if (persisted->is_pinned && params.navigated_or_inserted_contents) {
     TabStripModel* model = browser_->tab_strip_model();
     int new_idx = model->GetIndexOfWebContents(params.navigated_or_inserted_contents);
@@ -3573,6 +3635,8 @@ void MahoSidebarTabListView::WakeSuspendedTab(const std::string& tab_id) {
       model->SetTabPinned(new_idx, true);
     }
   }
+  LOG(INFO) << "[MAHO_PERF] WakeSuspendedTab END total="
+            << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
 }
 
 void MahoSidebarTabListView::CloseTab(int tab_index) {

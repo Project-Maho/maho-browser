@@ -9,6 +9,7 @@
 #include "base/location.h"
 #include "base/json/string_escape.h"
 #include "base/logging.h"
+#include "base/timer/elapsed_timer.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/profiles/profile.h"
@@ -684,8 +685,20 @@ void MahoSidebarView::OnFavoritesModelReady(
 }
 
 void MahoSidebarView::RefreshAll() {
+  base::ElapsedTimer maho_perf_t;
+  LOG(INFO) << "[MAHO_PERF] RefreshAll START";
   refresh_scheduled_ = false;
-  ApplyViewState(state_adapter_.BuildViewStateModel(browser_));
+
+  base::ElapsedTimer bvsm_t;
+  auto model = state_adapter_.BuildViewStateModel(browser_);
+  LOG(INFO) << "[MAHO_PERF]   BuildViewStateModel="
+            << bvsm_t.Elapsed().InMillisecondsF() << "ms";
+
+  base::ElapsedTimer apply_t;
+  ApplyViewState(model);
+  LOG(INFO) << "[MAHO_PERF]   ApplyViewState="
+            << apply_t.Elapsed().InMillisecondsF() << "ms";
+
   if (current_body_mode_ == MahoSidebarBodyMode::kLibrary &&
       active_library_category_ ==
           MahoSidebarLibraryRailView::Category::kArchivedTabs &&
@@ -696,6 +709,8 @@ void MahoSidebarView::RefreshAll() {
     needs_re_refresh_ = false;
     ScheduleRefreshAll();
   }
+  LOG(INFO) << "[MAHO_PERF] RefreshAll END "
+            << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
 }
 
 void MahoSidebarView::ApplyViewState(const MahoSidebarViewStateModel& model) {
@@ -795,6 +810,18 @@ void MahoSidebarView::OnTabStripModelChanged(
     TabStripModel* tab_strip_model,
     const TabStripModelChange& change,
     const TabStripSelectionChange& selection) {
+  base::ElapsedTimer maho_perf_t;
+  const char* ch = "?";
+  switch (change.type()) {
+    case TabStripModelChange::kSelectionOnly: ch = "SelectionOnly"; break;
+    case TabStripModelChange::kInserted: ch = "Inserted"; break;
+    case TabStripModelChange::kRemoved: ch = "Removed"; break;
+    case TabStripModelChange::kMoved: ch = "Moved"; break;
+    case TabStripModelChange::kReplaced: ch = "Replaced"; break;
+  }
+  LOG(INFO) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged type=" << ch
+            << " active_tab_changed=" << selection.active_tab_changed();
+
   if (selection.active_tab_changed() ||
       change.type() == TabStripModelChange::kReplaced) {
     RefreshTranslateObservation();
@@ -808,26 +835,29 @@ void MahoSidebarView::OnTabStripModelChanged(
     return helper ? helper->stable_tab_id() : std::string();
   };
 
-  // Fast path: pure activation of a live tab.
   if (change.type() == TabStripModelChange::kSelectionOnly &&
       selection.active_tab_changed() && tab_list_view_) {
     tab_list_view_->UpdateActiveTabHighlightOnly(get_new_active_tab_id());
+    LOG(INFO) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged END(fast_select) "
+              << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
     return;
   }
 
-  // Fast path: wake-from-suspend. The tab already exists in the sidebar
-  // model, so the "insert" is not a structural change — just a state flip
-  // (suspended → live). Skip the full refresh cascade.
   if (change.type() == TabStripModelChange::kInserted &&
       selection.active_tab_changed() && tab_list_view_) {
     const std::string new_active_tab_id = get_new_active_tab_id();
     if (tab_list_view_->HasTabInLastModel(new_active_tab_id)) {
       tab_list_view_->UpdateActiveTabHighlightOnly(new_active_tab_id);
+      LOG(INFO) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged END(fast_wake) "
+                << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
       return;
     }
   }
 
+  LOG(INFO) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged -> ScheduleRefreshAll";
   ScheduleRefreshAll();
+  LOG(INFO) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged END(slow) "
+            << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
 }
 
 void MahoSidebarView::OnTabChangedAt(tabs::TabInterface* tab,

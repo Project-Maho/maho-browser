@@ -6,5 +6,4 @@ pub mod sync;
 pub mod auth;
 pub mod storage;
 pub mod billing;
-pub mod themes;
-
+pub mod shortcuts;

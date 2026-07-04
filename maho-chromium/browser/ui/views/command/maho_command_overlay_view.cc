@@ -92,17 +92,17 @@ namespace maho {
 
 namespace {
 
-constexpr int kPanelCornerRadiusDp = 26;
+constexpr int kPanelCornerRadiusDp = 24;
 constexpr int kPanelBorderWidthDp = 1;
 constexpr int kPanelPaddingTopDp = 10;
 constexpr int kPanelPaddingSideDp = 8;
 constexpr int kFieldShellSpacingDp = 6;
-constexpr int kTopbarHorizontalInsetDp = 12;
+constexpr int kTopbarHorizontalInsetDp = 18;
 constexpr int kPanelBottomInsetDp = 8;
-constexpr int kSearchRowHeightDp = 48;
+constexpr int kSearchRowHeightDp = 36;
 constexpr int kSearchRowCornerRadiusDp = 14;
 constexpr int kSearchRowPaddingHDp = 0;
-constexpr int kSearchIconLaneWidthDp = 28;
+constexpr int kSearchIconLaneWidthDp = 30;
 constexpr int kTrailingAccessoryTrailingInsetDp = 6;
 constexpr int kLeadingPageIconSizeDp = 20;
 constexpr int kSparkToInputGapDp = 8;
@@ -122,7 +122,7 @@ constexpr int kModeChipHorizontalInsetDp = 8;
 constexpr int kModeChipVerticalInsetDp = 2;
 constexpr int kModeChipDotSizeDp = 5;
 constexpr int kModeChipDotLabelSpacingDp = 5;
-constexpr int kSearchTextfieldHeightDp = 30;
+constexpr int kSearchTextfieldHeightDp = 24;
 constexpr int kEmptyStateTopInsetDp = 8;
 constexpr int kEmptyStateBottomInsetDp = 4;
 constexpr int kNoResultsTopInsetDp = 6;
@@ -792,9 +792,10 @@ void MahoCommandOverlayView::UpdateTextfieldPresentation() {
   }
 
   gfx::FontList base = views::Textfield::GetDefaultFontList();
-  gfx::FontList bumped = base.DeriveWithSizeDelta(1);
-  textfield_->SetFontList(bumped);
-  textfield_->set_placeholder_font_list(bumped);
+  gfx::FontList medium =
+      base.Derive(0, gfx::Font::NORMAL, gfx::Font::Weight::MEDIUM);
+  textfield_->SetFontList(medium);
+  textfield_->set_placeholder_font_list(medium);
 }
 
 void MahoCommandOverlayView::UpdateSearchLeadingAccessory() {
@@ -807,18 +808,16 @@ void MahoCommandOverlayView::UpdateSearchLeadingAccessory() {
   std::optional<ImageData> icon_to_decode;
 
   if (model_) {
-    if (mode_ == CommandOverlayMode::kCurrentTab && !initial_url_.empty()) {
+    int selected_idx = model_->selected_index();
+    if (selected_idx >= 0 && selected_idx < static_cast<int>(model_->results().size())) {
+      icon_to_decode = model_->results()[selected_idx].icon;
+    }
+    if (!icon_to_decode.has_value() && mode_ == CommandOverlayMode::kCurrentTab && !initial_url_.empty()) {
       for (const auto& result : model_->results()) {
         if (result.execution_payload == initial_url_ && result.icon.has_value()) {
           icon_to_decode = result.icon;
           break;
         }
-      }
-    }
-    if (!icon_to_decode.has_value()) {
-      int selected_idx = model_->selected_index();
-      if (selected_idx >= 0 && selected_idx < static_cast<int>(model_->results().size())) {
-        icon_to_decode = model_->results()[selected_idx].icon;
       }
     }
   }
@@ -909,6 +908,9 @@ void MahoCommandOverlayView::OnThemeChanged() {
 void MahoCommandOverlayView::ContentsChanged(
     views::Textfield* sender,
     const std::u16string& new_contents) {
+  if (suppress_search_) {
+    return;
+  }
 
   if ((mode_ == CommandOverlayMode::kSearch ||
        mode_ == CommandOverlayMode::kCurrentTab ||
@@ -1086,6 +1088,7 @@ void MahoCommandOverlayView::OnSearchResults(
     model_->set_selected_index(results.empty() ? -1 : 0);
   }
   UpdateResultViews(results);
+  UpdateSearchLeadingAccessory();
 }
 
 namespace {
@@ -1231,6 +1234,17 @@ void MahoCommandOverlayView::UpdateSelection(int new_index) {
     row->SetSelected(true);
     row->ScrollViewToVisible();
     textfield_->GetViewAccessibility().SetActiveDescendant(*row);
+    if (new_index < static_cast<int>(model_->results().size())) {
+      const auto& sel = model_->results()[new_index];
+      const std::string& payload = sel.execution_payload;
+      if (!payload.empty()) {
+        suppress_search_ = true;
+        textfield_->SetText(std::u16string());
+        textfield_->SetText(base::UTF8ToUTF16(payload));
+        textfield_->SetSelectedRange(gfx::Range(0, 0));
+        suppress_search_ = false;
+      }
+    }
     UpdateSearchLeadingAccessory();
   }
   results_container_->GetViewAccessibility().NotifyEvent(

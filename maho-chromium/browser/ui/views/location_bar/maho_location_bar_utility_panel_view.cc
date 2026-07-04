@@ -2,6 +2,8 @@
 
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_view.h"
 
+#include "maho/browser/ui/views/location_bar/maho_utility_panel_vibrancy.h"
+
 #include <memory>
 #include <string>
 #include <utility>
@@ -11,18 +13,31 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "ui/views/controls/button/md_text_button.h"
+#include "build/build_config.h"
+#include "chrome/browser/certificate_viewer.h"
 #include "chrome/browser/extensions/extension_action_runner.h"
 #include "chrome/browser/extensions/extension_context_menu_model.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/bubble_anchor_util.h"
+#include "chrome/browser/ui/page_info/page_info_dialog.h"
 #include "components/sessions/content/session_tab_helper.h"
+#include "components/security_state/core/security_state.h"
+#include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/ssl_status.h"
+#if BUILDFLAG(IS_MAC)
+#include "components/remote_cocoa/browser/window.h"
+#include "components/remote_cocoa/common/native_widget_ns_window.mojom.h"
+#endif
 #include "extensions/browser/extension_action.h"
 #include "extensions/browser/extension_action_icon_factory.h"
 #include "extensions/browser/extension_action_manager.h"
 #include "extensions/browser/extension_icon_image.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
+#include "maho/browser/ui/theme/maho_color_id.h"
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -36,7 +51,9 @@
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/text_constants.h"
 #include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/animation/ink_drop.h"
 #include "ui/views/background.h"
+#include "ui/views/controls/button/image_button.h"
 #include "ui/views/border.h"
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
@@ -58,29 +75,30 @@ namespace {
 
 constexpr int kPanelCornerRadius = 18;
 constexpr int kPanelWidth = 304;
-constexpr int kPanelSectionSpacing = 4;
-constexpr int kPanelOuterPadding = 12;
-constexpr int kFooterTopPadding = 2;
-constexpr int kFooterHeight = 18;
-constexpr int kFooterHorizontalPadding = 0;
-constexpr int kFooterIconSize = 10;
-constexpr int kFooterLabelSpacing = 3;
-constexpr int kZoneHeaderTopPadding = 8;
-constexpr int kZoneHeaderBottomPadding = 4;
+constexpr int kPanelSectionSpacing = 14;
+constexpr int kPanelOuterPadding = 14;
+constexpr int kFooterTopPadding = 6;
+constexpr int kFooterIconSize = 12;
+constexpr int kZoneHeaderTopPadding = 2;
+constexpr int kZoneHeaderBottomPadding = 8;
+constexpr int kPanelChipButtonHeight = 32;
+constexpr int kPanelChipButtonCornerRadius = 10;
+constexpr int kPanelChipButtonHorizontalPadding = 10;
+constexpr int kPanelChipButtonIconLabelSpacing = 6;
+constexpr int kPanelChipButtonDefaultIconSize = 14;
 constexpr int kToolbarRowHeight = 36;
 constexpr int kToolbarIconSize = 13;
 constexpr int kToolbarIconSpacing = 8;
 constexpr int kToolbarButtonCornerRadius = 10;
 constexpr int kChipRowSpacing = 8;
 constexpr int kChipHeight = 30;
-constexpr int kChipCornerRadius = 9;
+constexpr int kChipCornerRadius = 10;
 constexpr int kChipHorizontalPadding = 10;
 constexpr int kAddChipWidth = 30;
 constexpr int kSettingsRowHeight = 38;
 constexpr int kSettingsRowHorizontalPadding = 10;
 constexpr int kSettingsRowCornerRadius = 10;
 constexpr int kSettingsIconSize = 12;
-constexpr int kFooterEllipsisSize = 18;
 
 bool FooterIsEmpty(const MahoLocationBarUtilityPanelFooter& footer) {
   return footer.title.empty() && footer.subtitle.empty();
@@ -245,7 +263,7 @@ class MahoLocationBarUtilityPanelActionView
       auto* text_layout = text_column->SetLayoutManager(
           std::make_unique<views::BoxLayout>(views::BoxLayout::Orientation::kVertical,
                                              gfx::Insets(),
-                                             0));
+                                             2));
       text_layout->set_cross_axis_alignment(
            views::BoxLayout::CrossAxisAlignment::kStart);
       text_layout->set_main_axis_alignment(
@@ -257,7 +275,7 @@ class MahoLocationBarUtilityPanelActionView
             is_chip || is_settings ? views::style::STYLE_BODY_4
                                    : views::style::STYLE_BODY_4));
       title_label->SetAutoColorReadabilityEnabled(false);
-      title_label->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
+      title_label->SetEnabledColor(ui::kColorSysOnSurface);
       title_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
       title_label->SetMultiLine(false);
       title_label->SetElideBehavior(gfx::ELIDE_TAIL);
@@ -476,53 +494,89 @@ class MahoLocationBarUtilityPanelActionView
 BEGIN_METADATA(MahoLocationBarUtilityPanelActionView)
 END_METADATA
 
-class MahoLocationBarUtilityPanelSecuritySummaryView : public views::View {
-  METADATA_HEADER(MahoLocationBarUtilityPanelSecuritySummaryView, views::View)
+class PanelChipButton : public views::LabelButton {
+  METADATA_HEADER(PanelChipButton, views::LabelButton)
 
  public:
-  explicit MahoLocationBarUtilityPanelSecuritySummaryView(
-      const MahoLocationBarUtilityPanelFooter& footer) {
-    SetLayoutManager(std::make_unique<views::BoxLayout>(
-        views::BoxLayout::Orientation::kHorizontal,
-        gfx::Insets::VH(0, kFooterHorizontalPadding), kFooterLabelSpacing));
-    SetPreferredSize(gfx::Size(0, kFooterHeight));
-    auto* icon_image = AddChildView(std::make_unique<views::ImageView>());
-    icon_image->SetImageSize(gfx::Size(kFooterIconSize, kFooterIconSize));
-    icon_image->SetCanProcessEventsWithinSubtree(false);
-    icon_image->SetImage(footer.icon
-        ? ui::ImageModel::FromVectorIcon(*footer.icon,
-                                         ui::kColorSysOnSurfaceSubtle,
-                                         kFooterIconSize)
-        : ui::ImageModel());
-
-    auto* title = AddChildView(std::make_unique<views::Label>(
-        footer.title, views::style::CONTEXT_LABEL,
-        views::style::STYLE_BODY_5));
-    title->SetAutoColorReadabilityEnabled(false);
-    title->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
-    title->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-
-    if (!footer.subtitle.empty()) {
-      auto* separator = AddChildView(std::make_unique<views::Label>(u"·"));
-      separator->SetAutoColorReadabilityEnabled(false);
-      separator->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
-
-      auto* subtitle = AddChildView(std::make_unique<views::Label>(
-          footer.subtitle, views::style::CONTEXT_LABEL, views::style::STYLE_BODY_5));
-      subtitle->SetAutoColorReadabilityEnabled(false);
-      subtitle->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
-      subtitle->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+  PanelChipButton(PressedCallback callback,
+                  const std::u16string& text,
+                  const gfx::VectorIcon* icon,
+                  int icon_size,
+                  bool text_uses_accent,
+                  const std::u16string& accessible_name)
+      : views::LabelButton(std::move(callback), text) {
+    SetTextSubpixelRenderingEnabled(false);
+    SetInstallFocusRingOnFocus(false);
+    views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::OFF);
+    SetHorizontalAlignment(text.empty() ? gfx::ALIGN_CENTER : gfx::ALIGN_LEFT);
+    SetBorder(views::CreateEmptyBorder(
+        gfx::Insets::VH(0, kPanelChipButtonHorizontalPadding)));
+    label()->SetTextContext(views::style::CONTEXT_LABEL);
+    label()->SetTextStyle(views::style::STYLE_BODY_5);
+    const ui::ColorId text_color = text_uses_accent
+                                       ? ui::kColorSysPrimary
+                                       : ui::kColorSysOnSurfaceSubtle;
+    const ui::ColorId text_color_active = text_uses_accent
+                                              ? ui::kColorSysPrimary
+                                              : ui::kColorSysOnSurface;
+    SetTextColor(views::Button::STATE_NORMAL, text_color);
+    SetTextColor(views::Button::STATE_HOVERED, text_color_active);
+    SetTextColor(views::Button::STATE_PRESSED, text_color_active);
+    if (icon) {
+      SetImageLabelSpacing(text.empty() ? 0 : kPanelChipButtonIconLabelSpacing);
+      SetImageModel(views::Button::STATE_NORMAL,
+                    ui::ImageModel::FromVectorIcon(
+                        *icon, ui::kColorSysOnSurfaceSubtle, icon_size));
+      SetImageModel(views::Button::STATE_HOVERED,
+                    ui::ImageModel::FromVectorIcon(
+                        *icon, ui::kColorSysOnSurface, icon_size));
+      SetImageModel(views::Button::STATE_PRESSED,
+                    ui::ImageModel::FromVectorIcon(
+                        *icon, ui::kColorSysOnSurface, icon_size));
     }
+    if (text.empty() && icon) {
+      SetPreferredSize(gfx::Size(kPanelChipButtonHeight, kPanelChipButtonHeight));
+    } else {
+      SetMinSize(gfx::Size(0, kPanelChipButtonHeight));
+    }
+    UpdateBackground();
+    GetViewAccessibility().SetRole(ax::mojom::Role::kButton);
+    const std::u16string& a11y_name =
+        !accessible_name.empty() ? accessible_name : text;
+    GetViewAccessibility().SetName(a11y_name);
+    SetTooltipText(a11y_name);
+  }
+  PanelChipButton(const PanelChipButton&) = delete;
+  PanelChipButton& operator=(const PanelChipButton&) = delete;
+  ~PanelChipButton() override = default;
 
-    GetViewAccessibility().SetRole(ax::mojom::Role::kStatus);
-    GetViewAccessibility().SetName(footer.subtitle.empty()
-                                       ? footer.title
-                                       : footer.title + u" — " + footer.subtitle);
+  void StateChanged(ButtonState old_state) override {
+    views::LabelButton::StateChanged(old_state);
+    UpdateBackground();
+  }
+
+ private:
+  void UpdateBackground() {
+    const bool active =
+        GetState() == STATE_HOVERED || GetState() == STATE_PRESSED;
+    SetBackground(views::CreateRoundedRectBackground(
+        active ? ui::kColorSysSurface2 : ui::kColorSysSurface1,
+        kPanelChipButtonCornerRadius));
   }
 };
 
-BEGIN_METADATA(MahoLocationBarUtilityPanelSecuritySummaryView)
+BEGIN_METADATA(PanelChipButton)
 END_METADATA
+
+void DisableSubpixelRenderingRecursive(views::View* root) {
+  if (!root) return;
+  if (auto* label = views::AsViewClass<views::Label>(root)) {
+    label->SetSubpixelRenderingEnabled(false);
+  }
+  for (views::View* child : root->children()) {
+    DisableSubpixelRenderingRecursive(child);
+  }
+}
 
 }  // namespace
 
@@ -535,6 +589,8 @@ MahoLocationBarUtilityPanelView::MahoLocationBarUtilityPanelView(
   set_close_on_deactivate(true);
   set_margins(gfx::Insets());
   set_fixed_width(kPanelWidth);
+  set_shadow(views::BubbleBorder::NO_SHADOW);
+  SetBackgroundColor(SkColorSetARGB(0, 0, 0, 0));
 
   contents_view_ = SetContentsView(std::make_unique<views::View>());
   contents_view_->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
@@ -544,12 +600,11 @@ MahoLocationBarUtilityPanelView::MahoLocationBarUtilityPanelView(
       views::BoxLayout::Orientation::kVertical,
       gfx::Insets(kPanelOuterPadding), kPanelSectionSpacing));
 
-  contents_view_->SetBackground(views::CreateRoundedRectBackground(
-      ui::kColorSysSurface2, kPanelCornerRadius));
   contents_view_->SetBorder(views::CreateRoundedRectBorder(
       1, kPanelCornerRadius, ui::kColorSysSurfaceVariant));
 
   BuildContents();
+  DisableSubpixelRenderingRecursive(contents_view_);
 
   if (model_.owning_browser) {
     if (auto* bridge = MahoExtensionStateBridge::FromProfile(
@@ -589,6 +644,7 @@ views::Widget* MahoLocationBarUtilityPanelView::Show(
   views::Widget* widget = views::BubbleDialogDelegate::CreateBubble(
       std::move(bubble));
   if (widget) {
+    ApplyVibrancyToUtilityPanel(widget);
     widget->Show();
     widget->widget_delegate()->GetContentsView()->RequestFocus();
   }
@@ -614,16 +670,19 @@ void MahoLocationBarUtilityPanelView::AddZone(const MahoUtilityPanelZone& zone) 
     return;
   }
 
-  AddZoneHeader(zone.header_label, zone.header_trailing_action, contents_view_);
+  auto* zone_container = contents_view_->AddChildView(std::make_unique<views::View>());
+  zone_container->SetLayoutManager(std::make_unique<views::BoxLayout>(
+      views::BoxLayout::Orientation::kVertical, gfx::Insets(), 0));
+  AddZoneHeader(zone.header_label, zone.header_trailing_action, zone_container);
   switch (zone.style) {
     case MahoUtilityPanelZoneStyle::kToolbarRow:
-      AddToolbarRowZone(zone, contents_view_);
+      AddToolbarRowZone(zone, zone_container);
       return;
     case MahoUtilityPanelZoneStyle::kChipRow:
-      AddChipRowZone(zone, contents_view_);
+      AddChipRowZone(zone, zone_container);
       return;
     case MahoUtilityPanelZoneStyle::kSettingsList:
-      AddSettingsListZone(zone, contents_view_);
+      AddSettingsListZone(zone, zone_container);
       return;
   }
 }
@@ -656,25 +715,28 @@ void MahoLocationBarUtilityPanelView::AddZoneHeader(
 
     auto* header = container->AddChildView(std::make_unique<views::Label>(
         header_label, views::style::CONTEXT_LABEL,
-        views::style::STYLE_BODY_4_MEDIUM));
+        views::style::STYLE_BODY_3_MEDIUM));
     header->SetAutoColorReadabilityEnabled(false);
-    header->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
+    header->SetEnabledColor(ui::kColorSysOnSurface);
     header->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     layout->SetFlexForView(header, 1);
-    auto* trailing_button = container->AddChildView(std::make_unique<views::MdTextButton>(
+    auto* trailing_button = container->AddChildView(std::make_unique<PanelChipButton>(
         base::BindRepeating(&MahoLocationBarUtilityPanelView::OnManageButtonClicked,
                             base::Unretained(this), *trailing_action),
-        trailing_action->title));
-    trailing_button->SetStyle(ui::ButtonStyle::kText);
+        trailing_action->title,
+        /*icon=*/nullptr,
+        /*icon_size=*/0,
+        /*text_uses_accent=*/true,
+        /*accessible_name=*/std::u16string()));
     RegisterActionViewForTesting(*trailing_action, trailing_button);
   } else {
     auto* header = parent_view->AddChildView(std::make_unique<views::Label>(
         header_label, views::style::CONTEXT_LABEL,
-        views::style::STYLE_BODY_4_MEDIUM));
+        views::style::STYLE_BODY_3_MEDIUM));
     header->SetBorder(views::CreateEmptyBorder(
         gfx::Insets::TLBR(kZoneHeaderTopPadding, 2, kZoneHeaderBottomPadding, 2)));
     header->SetAutoColorReadabilityEnabled(false);
-    header->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
+    header->SetEnabledColor(ui::kColorSysOnSurface);
     header->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   }
 }
@@ -741,7 +803,7 @@ void MahoLocationBarUtilityPanelView::AddSettingsListZone(
   auto* section = parent_view->AddChildView(std::make_unique<views::View>());
   auto* layout = section->SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical, gfx::Insets(),
-      0));
+      4));
   layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
@@ -817,23 +879,38 @@ void MahoLocationBarUtilityPanelView::AddFooterSummary() {
   footer->SetBorder(
       views::CreateEmptyBorder(gfx::Insets::TLBR(kFooterTopPadding, 0, 0, 0)));
   auto* footer_layout = footer->SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 0));
+      views::BoxLayout::Orientation::kHorizontal, gfx::Insets(),
+      kToolbarIconSpacing));
   footer_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
 
-  auto* security_summary = footer->AddChildView(
-      std::make_unique<MahoLocationBarUtilityPanelSecuritySummaryView>(
-          model_.footer));
-  footer_layout->SetFlexForView(security_summary, 1);
+  footer->AddChildView(std::make_unique<PanelChipButton>(
+      base::BindRepeating(
+          &MahoLocationBarUtilityPanelView::OnSecuritySummaryClicked,
+          weak_factory_.GetWeakPtr()),
+      model_.footer.title,
+      model_.footer.icon,
+      kFooterIconSize,
+      /*text_uses_accent=*/false,
+      /*accessible_name=*/std::u16string()))
+      ->SetEnabled(
+          model_.footer.data_state ==
+              MahoLocationBarUtilityPanelDataState::kLive &&
+          model_.footer.security_level !=
+              static_cast<int>(security_state::NONE));
 
-  auto* ellipsis = footer->AddChildView(std::make_unique<views::Label>(u"…"));
-  ellipsis->SetAutoColorReadabilityEnabled(false);
-  ellipsis->SetEnabledColor(ui::kColorSysOnSurfaceSubtle);
-  ellipsis->SetTextStyle(views::style::STYLE_BODY_3);
-  ellipsis->SetPreferredSize(gfx::Size(kFooterEllipsisSize, kFooterHeight));
-  ellipsis->SetHorizontalAlignment(gfx::ALIGN_RIGHT);
-  ellipsis->SetCanProcessEventsWithinSubtree(false);
-  ellipsis->SetEnabled(false);
+  auto* spacer = footer->AddChildView(std::make_unique<views::View>());
+  footer_layout->SetFlexForView(spacer, 1);
+
+  footer->AddChildView(std::make_unique<PanelChipButton>(
+      base::BindRepeating(
+          &MahoLocationBarUtilityPanelView::OnEllipsisMenuClicked,
+          weak_factory_.GetWeakPtr()),
+      std::u16string(),
+      &maho_lucide_icons::kEllipsisIcon,
+      kPanelChipButtonDefaultIconSize,
+      /*text_uses_accent=*/false,
+      /*accessible_name=*/u"More"));
 }
 
 void MahoLocationBarUtilityPanelView::RegisterActionViewForTesting(
@@ -850,6 +927,62 @@ void MahoLocationBarUtilityPanelView::OnMenuClosed(int generation) {
   }
   context_menu_runner_.reset();
   current_menu_model_.reset();
+}
+
+void MahoLocationBarUtilityPanelView::OnSecuritySummaryClicked() {
+  if (!model_.owning_browser) {
+    return;
+  }
+  auto* web_contents =
+      model_.owning_browser->tab_strip_model()->GetActiveWebContents();
+  if (!web_contents) {
+    return;
+  }
+  content::NavigationEntry* entry =
+      web_contents->GetController().GetVisibleEntry();
+  if (!entry) {
+    return;
+  }
+  scoped_refptr<net::X509Certificate> cert = entry->GetSSL().certificate;
+  if (!cert) {
+    return;
+  }
+  gfx::NativeWindow parent = web_contents->GetTopLevelNativeWindow();
+#if BUILDFLAG(IS_MAC)
+  if (auto* mojo_window = remote_cocoa::GetWindowMojoInterface(parent)) {
+    mojo_window->ShowCertificateViewer(cert);
+    if (views::Widget* widget = GetWidget(); widget && !widget->IsClosed()) {
+      widget->Close();
+    }
+    return;
+  }
+#endif
+  ShowCertificateViewer(web_contents, parent, cert.get());
+}
+
+void MahoLocationBarUtilityPanelView::OnEllipsisMenuClicked() {
+  if (!model_.owning_browser) {
+    return;
+  }
+  auto* web_contents =
+      model_.owning_browser->tab_strip_model()->GetActiveWebContents();
+  if (!web_contents) {
+    return;
+  }
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](base::WeakPtr<content::WebContents> wc) {
+            if (!wc) {
+              return;
+            }
+            ShowPageInfoDialog(wc.get(), PageInfoClosingCallback(),
+                               bubble_anchor_util::Anchor::kLocationBar);
+          },
+          web_contents->GetWeakPtr()));
+  if (views::Widget* widget = GetWidget(); widget && !widget->IsClosed()) {
+    widget->Close();
+  }
 }
 
 void MahoLocationBarUtilityPanelView::OnManageButtonClicked(

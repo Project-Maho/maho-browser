@@ -4153,14 +4153,66 @@ pub unsafe extern "C" fn maho_core_set_shortcut(
         Ok(()) => CString::new(r#"{"success":true}"#)
             .map(CString::into_raw)
             .unwrap_or(ptr::null_mut()),
-        Err(conflict) => match serde_json::to_string(&conflict) {
-            Ok(conflict_json) => CString::new(format!(r#"{{"error":{}}}"#, conflict_json))
+        Err(err) => {
+            let json = match err {
+                maho_types::keyboard::SetShortcutError::Conflict(ref c) => {
+                    serde_json::json!({
+                        "error": {
+                            "existingAction": c.existing_action,
+                            "conflict": c
+                        }
+                    })
+                }
+                maho_types::keyboard::SetShortcutError::Reserved => {
+                    serde_json::json!({
+                        "error": {
+                            "existingAction": "reserved",
+                            "reserved": true
+                        }
+                    })
+                }
+                maho_types::keyboard::SetShortcutError::Invalid => {
+                    serde_json::json!({
+                        "error": {
+                            "existingAction": "invalid",
+                            "invalid": true
+                        }
+                    })
+                }
+            };
+            CString::new(json.to_string())
                 .map(CString::into_raw)
-                .unwrap_or(ptr::null_mut()),
-            Err(_) => ptr::null_mut(),
-        },
+                .unwrap_or(ptr::null_mut())
+        }
     }
 
+    }, ptr::null_mut())
+}
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `key_combo_json` must be
+/// a valid NUL-terminated C string. Caller must free returned string with `maho_string_free`.
+/// Returns null on null input, invalid UTF-8, if import is active, or if no conflict is found.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_check_conflict(
+    ptr: *mut MahoCore,
+    key_combo_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!({
+        if ptr.is_null() || key_combo_json.is_null() {
+            return ptr::null_mut();
+        }
+        if import_gate::is_active() { return ptr::null_mut(); }
+        let core = &*ptr;
+        let combo_str = match CStr::from_ptr(key_combo_json).to_str() {
+            Ok(s) => s,
+            Err(_) => return ptr::null_mut(),
+        };
+        match core.check_shortcut_conflict_json(combo_str) {
+            Some(action) => CString::new(action)
+                .map(CString::into_raw)
+                .unwrap_or(ptr::null_mut()),
+            None => ptr::null_mut(),
+        }
     }, ptr::null_mut())
 }
 
@@ -4227,6 +4279,46 @@ pub unsafe extern "C" fn maho_core_toggle_shortcut(
 }
 
 /// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. Caller must free the returned string
+/// with `maho_string_free`. Returns null on null input or if import is active.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_export_shortcuts(ptr: *mut MahoCore) -> *mut c_char {
+    ffi_safe!({
+        if ptr.is_null() {
+            return ptr::null_mut();
+        }
+        if import_gate::is_active() { return ptr::null_mut(); }
+        let core = &*ptr;
+        let json = core.export_shortcuts_json();
+        CString::new(json)
+            .map(CString::into_raw)
+            .unwrap_or(ptr::null_mut())
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `json_data` must be a
+/// valid NUL-terminated C string. Returns true on success, false on failure or null input or if import is active.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_import_shortcuts(
+    ptr: *mut MahoCore,
+    json_data: *const c_char,
+) -> bool {
+    ffi_safe!({
+        if ptr.is_null() || json_data.is_null() {
+            return false;
+        }
+        if import_gate::is_active() { return false; }
+        let core = &mut *ptr;
+        let json_str = match CStr::from_ptr(json_data).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        core.import_shortcuts_json(json_str).is_ok()
+    }, false)
+}
+
+/// # Safety
 /// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `key_combo_json` must be
 /// a valid NUL-terminated C string. Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
@@ -4254,6 +4346,34 @@ pub unsafe extern "C" fn maho_core_resolve_shortcut(
     }
 
     }, ptr::null_mut())
+}
+
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore`. Returns true on success, false on failure or if import is active.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_sync_shortcuts_to_relay(ptr: *mut MahoCore) -> bool {
+    ffi_safe!({
+        if ptr.is_null() {
+            return false;
+        }
+        if import_gate::is_active() { return false; }
+        let core = &mut *ptr;
+        core.sync_shortcuts_to_relay().is_ok()
+    }, false)
+}
+
+/// # Safety
+/// `ptr` must be a valid `*mut MahoCore`. Returns true on success, false on failure or if import is active.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_sync_shortcuts_from_relay(ptr: *mut MahoCore) -> bool {
+    ffi_safe!({
+        if ptr.is_null() {
+            return false;
+        }
+        if import_gate::is_active() { return false; }
+        let core = &mut *ptr;
+        core.sync_shortcuts_from_relay().is_ok()
+    }, false)
 }
 
 /// # Safety
@@ -5072,7 +5192,7 @@ pub unsafe extern "C" fn maho_core_create_profile(
         Ok(s) => s.to_string(),
         Err(_) => return ptr::null_mut(),
     };
-    let profile = core.create_profile(name_str);
+    let profile = core.create_profile_persisted(name_str);
     to_json_cstring(&profile)
 
     }, ptr::null_mut())
