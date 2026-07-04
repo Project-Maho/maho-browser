@@ -9,9 +9,12 @@
 #include <string>
 #include <vector>
 
+#if !BUILDFLAG(IS_WIN)
 #include <sys/types.h>
+#endif
 
 #include "base/sequence_checker.h"
+#include "build/build_config.h"
 #include "maho/browser/mcp/maho_mcp_json_rpc.h"
 
 namespace maho {
@@ -24,6 +27,11 @@ namespace maho {
 //   kClosed — terminal; no further processing.
 //
 // Thread-safety: all methods must be called on the same sequence (IO thread).
+//
+// Platform notes:
+//   - POSIX: peer authentication via SO_PEERCRED / LOCAL_PEERCRED uid check.
+//   - Windows: peer authentication handled externally by Named Pipe DACL;
+//     the session trusts that the transport layer has already verified the peer.
 class MahoMcpSession {
  public:
   enum class State {
@@ -32,16 +40,22 @@ class MahoMcpSession {
     kClosed,
   };
 
+#if BUILDFLAG(IS_WIN)
+  // On Windows, peer authentication is enforced by the Named Pipe DACL.
+  // The session trusts that only authenticated peers can connect.
+  MahoMcpSession();
+#else
   // |peer_uid| is the UID of the connected client (from SO_PEERCRED /
   // LOCAL_PEERCRED). The session will reject the handshake if the peer UID
   // does not match the browser's UID.
   explicit MahoMcpSession(uid_t peer_uid);
+#endif
   ~MahoMcpSession();
 
   MahoMcpSession(const MahoMcpSession&) = delete;
   MahoMcpSession& operator=(const MahoMcpSession&) = delete;
 
-  // Feed raw socket data. Returns any responses to write back (each is a
+  // Feed raw socket/pipe data. Returns any responses to write back (each is a
   // complete nd-JSON line). May transition state to kClosed.
   std::vector<std::string> ProcessData(const std::string& data);
 
@@ -54,7 +68,9 @@ class MahoMcpSession {
                           std::vector<std::string>& responses);
 
   State state_ = State::kAwaitingInitialize;
+#if !BUILDFLAG(IS_WIN)
   uid_t peer_uid_;
+#endif
   MahoMcpJsonRpc framer_;
 
   SEQUENCE_CHECKER(sequence_checker_);

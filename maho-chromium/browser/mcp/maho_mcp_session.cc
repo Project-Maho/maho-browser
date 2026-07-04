@@ -4,7 +4,9 @@
 
 #include "maho/browser/mcp/maho_mcp_session.h"
 
+#if !BUILDFLAG(IS_WIN)
 #include <unistd.h>
+#endif
 
 #include <string>
 #include <vector>
@@ -22,9 +24,15 @@ constexpr char kServerVersion[] = "0.4.1";
 
 }  // namespace
 
+#if BUILDFLAG(IS_WIN)
+MahoMcpSession::MahoMcpSession() {
+  DETACH_FROM_SEQUENCE(sequence_checker_);
+}
+#else
 MahoMcpSession::MahoMcpSession(uid_t peer_uid) : peer_uid_(peer_uid) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
 }
+#endif
 
 MahoMcpSession::~MahoMcpSession() = default;
 
@@ -37,13 +45,15 @@ std::vector<std::string> MahoMcpSession::ProcessData(const std::string& data) {
     return responses;
   }
 
-  // Check peer UID on first data.
+#if !BUILDFLAG(IS_WIN)
+  // Check peer UID on first data (POSIX only; Windows uses DACL).
   if (peer_uid_ != getuid()) {
     LOG(WARNING) << "MCP: Rejecting connection from UID " << peer_uid_
                  << " (browser UID: " << getuid() << ")";
     state_ = State::kClosed;
     return responses;
   }
+#endif
 
   framer_.AppendData(data);
 

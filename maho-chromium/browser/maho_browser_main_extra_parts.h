@@ -16,6 +16,7 @@ struct MahoCore;
 
 namespace maho {
 class MahoMcpSocketServer;
+class MahoMcpPipeServer;
 }  // namespace maho
 
 class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts {
@@ -39,7 +40,9 @@ class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts {
   std::unique_ptr<maho::MahoRoutinesScheduler> routines_scheduler_;
   base::CallbackListSubscription session_restored_subscription_;
 
-#if !BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN)
+  std::unique_ptr<maho::MahoMcpPipeServer> mcp_pipe_server_;
+#else
   std::unique_ptr<maho::MahoMcpSocketServer> mcp_socket_server_;
 #endif
 };

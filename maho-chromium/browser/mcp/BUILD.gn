@@ -10,14 +10,33 @@ source_set("maho_mcp") {
     "maho_mcp_json_rpc.h",
     "maho_mcp_session.cc",
     "maho_mcp_session.h",
-    "maho_mcp_socket_server.cc",
-    "maho_mcp_socket_server.h",
   ]
+
+  if (!is_win) {
+    sources += [
+      "maho_mcp_socket_server.cc",
+      "maho_mcp_socket_server.h",
+    ]
+  }
+
+  if (is_win) {
+    sources += [
+      "maho_mcp_pipe_server_win.cc",
+      "maho_mcp_pipe_server_win.h",
+    ]
+  }
 
   deps = [
     "//base",
     "//net",
   ]
+
+  if (is_win) {
+    libs = [
+      "advapi32.lib",
+      "userenv.lib",
+    ]
+  }
 }
 
 source_set("unittests") {
@@ -26,8 +45,15 @@ source_set("unittests") {
   sources = [
     "maho_mcp_json_rpc_unittest.cc",
     "maho_mcp_session_unittest.cc",
-    "maho_mcp_socket_server_unittest.cc",
   ]
+
+  if (!is_win) {
+    sources += [ "maho_mcp_socket_server_unittest.cc" ]
+  }
+
+  if (is_win) {
+    sources += [ "maho_mcp_pipe_server_win_unittest.cc" ]
+  }
 
   deps = [
     ":maho_mcp",

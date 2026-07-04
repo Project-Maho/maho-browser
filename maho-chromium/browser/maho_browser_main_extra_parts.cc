@@ -11,7 +11,9 @@
 #include "base/functional/bind.h"
 #include "build/build_config.h"
 
-#if !BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN)
+#include "maho/browser/mcp/maho_mcp_pipe_server_win.h"
+#else
 #include "maho/browser/mcp/maho_mcp_socket_server.h"
 #endif
 #include "chrome/browser/profiles/profile.h"
@@ -230,7 +232,10 @@ void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
         SessionRestore::RegisterOnSessionRestoredCallback(
             base::BindRepeating(&OnSessionRestoreFinished));
 
-#if !BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN)
+    mcp_pipe_server_ = std::make_unique<maho::MahoMcpPipeServer>();
+    mcp_pipe_server_->Start();
+#else
     mcp_socket_server_ =
         std::make_unique<maho::MahoMcpSocketServer>(storage_path_);
     mcp_socket_server_->Start();
@@ -239,7 +244,9 @@ void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
 }
 
 void MahoBrowserMainExtraParts::PostMainMessageLoopRun() {
-#if !BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN)
+  mcp_pipe_server_.reset();
+#else
   mcp_socket_server_.reset();
 #endif
 
