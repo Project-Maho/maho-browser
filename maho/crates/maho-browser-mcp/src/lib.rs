@@ -2,7 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-//! Maho Browser MCP client-side types and utilities.
-//!
-//! This crate currently serves as the host for integration tests that
-//! exercise the browser's MCP transport layer (UDS + JSON-RPC 2.0).
+//! Maho Browser MCP — stdio→UDS bridge exposing browser tools to AI agents.
+#![warn(missing_docs)]
+
+pub mod client;
+pub mod error;
+pub mod paths;
+pub mod protocol;
+pub mod server;
