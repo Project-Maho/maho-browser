@@ -1,0 +1,12 @@
+[package]
+name = "maho-browser-mcp"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["net", "io-util", "rt", "macros"] }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
