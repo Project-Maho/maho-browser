@@ -13,6 +13,7 @@
 
 #if BUILDFLAG(IS_WIN)
 #include "maho/browser/mcp/maho_mcp_pipe_server_win.h"
+#include "maho/browser/mcp/maho_mcp_session_token_win.h"
 #else
 #include "maho/browser/mcp/maho_mcp_socket_server.h"
 #endif
@@ -233,7 +234,16 @@ void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
             base::BindRepeating(&OnSessionRestoreFinished));
 
 #if BUILDFLAG(IS_WIN)
-    mcp_pipe_server_ = std::make_unique<maho::MahoMcpPipeServer>();
+    mcp_session_token_ = maho::MahoMcpSessionToken::Create();
+    if (mcp_session_token_) {
+      base::FilePath token_path =
+          maho::MahoMcpSessionToken::GetSessionTokenPath();
+      if (!token_path.empty()) {
+        mcp_session_token_->WriteEncryptedToDisk(token_path);
+      }
+    }
+    mcp_pipe_server_ =
+        std::make_unique<maho::MahoMcpPipeServer>(mcp_session_token_.get());
     mcp_pipe_server_->Start();
 #else
     mcp_socket_server_ =
@@ -246,6 +256,7 @@ void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
 void MahoBrowserMainExtraParts::PostMainMessageLoopRun() {
 #if BUILDFLAG(IS_WIN)
   mcp_pipe_server_.reset();
+  mcp_session_token_.reset();
 #else
   mcp_socket_server_.reset();
 #endif

@@ -98,6 +98,10 @@ pub struct InitializeParams {
     pub protocol_version: String,
     /// Information about the connecting client.
     pub client_info: ClientInfo,
+    /// DPAPI session token (base64-encoded, Windows only).
+    /// When present, the server validates against its in-memory token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_token: Option<String>,
 }
 
 /// Client identification sent during initialization.
@@ -148,6 +152,290 @@ pub struct ToolDescriptor {
     pub description: String,
     /// JSON Schema describing the tool's input parameters.
     pub input_schema: Value,
+}
+
+// ---------------------------------------------------------------------------
+// Tab tools (Wave 2.2)
+// ---------------------------------------------------------------------------
+
+/// A single browser tab entry.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TabInfo {
+    /// Browser-internal tab ID.
+    pub id: i64,
+    /// Tab title.
+    pub title: String,
+    /// Tab URL.
+    pub url: String,
+    /// Whether this tab is the currently active/foreground tab.
+    pub is_active: bool,
+}
+
+/// Result for `browser_tab_list`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TabListResult {
+    /// All open tabs.
+    pub tabs: Vec<TabInfo>,
+}
+
+/// Parameters for `browser_tab_get`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TabGetParams {
+    /// Tab ID to retrieve.
+    pub tab_id: i64,
+}
+
+/// Parameters for `browser_navigate`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NavigateParams {
+    /// Optional tab ID. If absent, navigates the active tab.
+    pub tab_id: Option<i64>,
+    /// URL to navigate to.
+    pub url: String,
+}
+
+/// Parameters for `browser_tab_close`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TabCloseParams {
+    /// Tab ID to close.
+    pub tab_id: i64,
+}
+
+/// Parameters for `browser_tab_new`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TabNewParams {
+    /// Optional URL to open in the new tab. Defaults to about:blank.
+    pub url: Option<String>,
+}
+
+/// Result for `browser_tab_new`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TabNewResult {
+    /// The newly created tab.
+    pub tab: TabInfo,
+}
+
+// ---------------------------------------------------------------------------
+// History + Bookmark tools (Wave 2.3)
+// ---------------------------------------------------------------------------
+
+/// A history entry.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HistoryEntry {
+    /// Page URL.
+    pub url: String,
+    /// Page title.
+    pub title: String,
+    /// ISO 8601 datetime of last visit.
+    pub visited_at: String,
+    /// Number of total visits to this URL.
+    pub visit_count: i64,
+}
+
+/// Parameters for `browser_history_search`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistorySearchParams {
+    /// Text query to search history titles/URLs.
+    pub query: Option<String>,
+    /// Only include entries visited within this many seconds ago.
+    pub since_seconds: Option<i64>,
+    /// Filter to a specific domain.
+    pub domain: Option<String>,
+    /// Maximum results to return (default: 20).
+    pub limit: Option<i64>,
+}
+
+/// Result for `browser_history_search`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HistorySearchResult {
+    /// Matching history entries.
+    pub entries: Vec<HistoryEntry>,
+}
+
+/// A bookmark entry.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Bookmark {
+    /// Bookmark ID.
+    pub id: i64,
+    /// Bookmark title.
+    pub title: String,
+    /// Bookmark URL.
+    pub url: String,
+    /// Optional folder path.
+    pub folder: Option<String>,
+}
+
+/// Parameters for `browser_bookmarks_search`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BookmarksSearchParams {
+    /// Search query for bookmark titles/URLs.
+    pub query: String,
+}
+
+/// Result for `browser_bookmarks_search`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BookmarksSearchResult {
+    /// Matching bookmarks.
+    pub bookmarks: Vec<Bookmark>,
+}
+
+/// Parameters for `browser_bookmark_create`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BookmarkCreateParams {
+    /// Bookmark title.
+    pub title: String,
+    /// Bookmark URL.
+    pub url: String,
+    /// Optional folder to place the bookmark in.
+    pub folder: Option<String>,
+}
+
+/// Result for `browser_bookmark_create`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BookmarkCreateResult {
+    /// The created bookmark.
+    pub bookmark: Bookmark,
+}
+
+// ---------------------------------------------------------------------------
+// Page content typed extractors (Wave 2.4 — OQ-2: NO evaluate_js)
+// ---------------------------------------------------------------------------
+
+/// Result for `browser_page_content`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PageContentResult {
+    /// Extracted text content.
+    pub text: String,
+    /// Page URL.
+    pub url: String,
+    /// Page title.
+    pub title: String,
+    /// Whether content was redacted (e.g., sensitive fields masked).
+    pub redacted: bool,
+}
+
+/// Parameters for `browser_page_text`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageTextParams {
+    /// Optional tab ID. Defaults to the active tab.
+    pub tab_id: Option<i64>,
+}
+
+/// Result for `browser_page_text`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PageTextResult {
+    /// Plain text of the page.
+    pub text: String,
+}
+
+/// Parameters for `browser_search_in_page`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchInPageParams {
+    /// Text query to search for within the current page.
+    pub query: String,
+    /// Optional tab ID. Defaults to the active tab.
+    pub tab_id: Option<i64>,
+}
+
+/// Result for `browser_search_in_page`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SearchInPageResult {
+    /// Number of matches found.
+    pub match_count: i64,
+    /// Index of current active match (0-based), or -1 if none.
+    pub active_match_index: i64,
+}
+
+/// Parameters for `browser_page_context`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageContextParams {
+    /// Optional tab ID. Defaults to the active tab.
+    pub tab_id: Option<i64>,
+}
+
+/// Result for `browser_page_context` — structured extraction.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PageContextResult {
+    /// Page URL.
+    pub url: String,
+    /// Page title.
+    pub title: String,
+    /// Structured text content (headings, body, etc.).
+    pub content: String,
+    /// Meta description if available.
+    pub meta_description: Option<String>,
+    /// Detected language.
+    pub language: Option<String>,
+}
+
+/// Parameters for `page_query_selector`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuerySelectorParams {
+    /// CSS selector to query.
+    pub selector: String,
+    /// Optional tab ID. Defaults to the active tab.
+    pub tab_id: Option<i64>,
+}
+
+/// Result for `page_query_selector` — returns an opaque ref handle.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct QuerySelectorResult {
+    /// Opaque reference ID for subsequent `page_get_text` / `page_get_attribute` calls.
+    pub ref_id: String,
+    /// Text content of the matched element (may be None if empty).
+    pub text: Option<String>,
+    /// HTML tag name.
+    pub tag: String,
+}
+
+/// Parameters for `page_get_text`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetTextParams {
+    /// Reference ID from a previous `page_query_selector` call.
+    pub ref_id: String,
+}
+
+/// Result for `page_get_text`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GetTextResult {
+    /// Text content of the referenced element.
+    pub text: String,
+}
+
+/// Parameters for `page_get_attribute`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetAttributeParams {
+    /// Reference ID from a previous `page_query_selector` call.
+    pub ref_id: String,
+    /// Attribute name to retrieve.
+    pub attribute: String,
+}
+
+/// Result for `page_get_attribute`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GetAttributeResult {
+    /// Attribute value, or None if not present.
+    pub value: Option<String>,
+}
+
+/// Parameters for `page_wait_for_selector`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WaitForSelectorParams {
+    /// CSS selector to wait for.
+    pub selector: String,
+    /// Timeout in milliseconds (default: 5000).
+    pub timeout_ms: Option<u64>,
+    /// Whether to wait for the element to be visible (default: false).
+    pub visible: Option<bool>,
+}
+
+/// Result for `page_wait_for_selector`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WaitForSelectorResult {
+    /// Whether the selector was found within the timeout.
+    pub found: bool,
+    /// Opaque reference ID if found.
+    pub ref_id: Option<String>,
 }
 
 #[cfg(test)]
@@ -221,13 +509,16 @@ mod tests {
                 name: "maho-browser-mcp".to_string(),
                 version: "0.1.0".to_string(),
             },
+            auth_token: None,
         };
         let val = serde_json::to_value(&params).unwrap();
         assert_eq!(val["protocolVersion"], "2025-03-26");
         assert_eq!(val["clientInfo"]["name"], "maho-browser-mcp");
+        assert!(val.get("authToken").is_none());
 
         let back: InitializeParams = serde_json::from_value(val).unwrap();
         assert_eq!(back.protocol_version, "2025-03-26");
+        assert!(back.auth_token.is_none());
     }
 
     #[test]
@@ -277,5 +568,113 @@ mod tests {
         assert!(!serialized.contains("\"id\""));
         let val: Value = serde_json::from_str(&serialized).unwrap();
         assert!(val.get("id").is_none());
+    }
+
+    #[test]
+    fn tab_info_roundtrip() {
+        let tab = TabInfo {
+            id: 1,
+            title: "GitHub".to_string(),
+            url: "https://github.com".to_string(),
+            is_active: true,
+        };
+        let val = serde_json::to_value(&tab).unwrap();
+        assert_eq!(val["id"], 1);
+        assert_eq!(val["is_active"], true);
+        let back: TabInfo = serde_json::from_value(val).unwrap();
+        assert_eq!(back, tab);
+    }
+
+    #[test]
+    fn tab_list_result_roundtrip() {
+        let result = TabListResult {
+            tabs: vec![
+                TabInfo { id: 1, title: "A".into(), url: "https://a.com".into(), is_active: true },
+                TabInfo { id: 2, title: "B".into(), url: "https://b.com".into(), is_active: false },
+            ],
+        };
+        let val = serde_json::to_value(&result).unwrap();
+        assert_eq!(val["tabs"].as_array().unwrap().len(), 2);
+        let back: TabListResult = serde_json::from_value(val).unwrap();
+        assert_eq!(back, result);
+    }
+
+    #[test]
+    fn navigate_params_roundtrip() {
+        let params = NavigateParams { tab_id: Some(5), url: "https://x.com".into() };
+        let val = serde_json::to_value(&params).unwrap();
+        assert_eq!(val["tab_id"], 5);
+        let back: NavigateParams = serde_json::from_value(val).unwrap();
+        assert_eq!(back.url, "https://x.com");
+    }
+
+    #[test]
+    fn history_entry_roundtrip() {
+        let entry = HistoryEntry {
+            url: "https://rust-lang.org".into(),
+            title: "Rust".into(),
+            visited_at: "2026-07-01T10:00:00Z".into(),
+            visit_count: 42,
+        };
+        let val = serde_json::to_value(&entry).unwrap();
+        assert_eq!(val["visit_count"], 42);
+        let back: HistoryEntry = serde_json::from_value(val).unwrap();
+        assert_eq!(back, entry);
+    }
+
+    #[test]
+    fn bookmark_roundtrip() {
+        let bm = Bookmark {
+            id: 10,
+            title: "Docs".into(),
+            url: "https://docs.rs".into(),
+            folder: Some("Dev".into()),
+        };
+        let val = serde_json::to_value(&bm).unwrap();
+        assert_eq!(val["folder"], "Dev");
+        let back: Bookmark = serde_json::from_value(val).unwrap();
+        assert_eq!(back, bm);
+    }
+
+    #[test]
+    fn page_content_result_roundtrip() {
+        let result = PageContentResult {
+            text: "Hello world".into(),
+            url: "https://example.com".into(),
+            title: "Example".into(),
+            redacted: true,
+        };
+        let val = serde_json::to_value(&result).unwrap();
+        assert_eq!(val["redacted"], true);
+        let back: PageContentResult = serde_json::from_value(val).unwrap();
+        assert_eq!(back, result);
+    }
+
+    #[test]
+    fn query_selector_result_roundtrip() {
+        let result = QuerySelectorResult {
+            ref_id: "ref_abc123".into(),
+            text: Some("Click me".into()),
+            tag: "button".into(),
+        };
+        let val = serde_json::to_value(&result).unwrap();
+        assert_eq!(val["ref_id"], "ref_abc123");
+        assert_eq!(val["tag"], "button");
+        let back: QuerySelectorResult = serde_json::from_value(val).unwrap();
+        assert_eq!(back, result);
+    }
+
+    #[test]
+    fn wait_for_selector_params_roundtrip() {
+        let params = WaitForSelectorParams {
+            selector: "#main".into(),
+            timeout_ms: Some(3000),
+            visible: Some(true),
+        };
+        let val = serde_json::to_value(&params).unwrap();
+        assert_eq!(val["timeout_ms"], 3000);
+        assert_eq!(val["visible"], true);
+        let back: WaitForSelectorParams = serde_json::from_value(val).unwrap();
+        assert_eq!(back.selector, "#main");
     }
 }

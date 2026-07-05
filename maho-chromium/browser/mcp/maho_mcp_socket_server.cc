@@ -12,12 +12,15 @@
 #include <string>
 #include <utility>
 
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/posix/eintr_wrapper.h"
 #include "maho/browser/mcp/maho_mcp_session.h"
 #include "net/base/io_buffer.h"
+#include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/base/net_errors.h"
 #include "net/socket/unix_domain_server_socket_posix.h"
 
@@ -44,6 +47,13 @@ bool MahoMcpSocketServer::AuthenticateClient(
   // Accept only connections from the same UID as the browser process.
   return credentials.user_id == getuid();
 }
+
+MahoMcpSocketServer::ActiveConnection::ActiveConnection() = default;
+MahoMcpSocketServer::ActiveConnection::~ActiveConnection() = default;
+MahoMcpSocketServer::ActiveConnection::ActiveConnection(ActiveConnection&&) =
+    default;
+MahoMcpSocketServer::ActiveConnection&
+MahoMcpSocketServer::ActiveConnection::operator=(ActiveConnection&&) = default;
 
 MahoMcpSocketServer::MahoMcpSocketServer(const base::FilePath& user_data_dir)
     : user_data_dir_(user_data_dir),
@@ -193,8 +203,31 @@ void MahoMcpSocketServer::OnReadComplete(size_t connection_index, int result) {
   for (const auto& response : responses) {
     auto write_buf =
         base::MakeRefCounted<net::StringIOBuffer>(response);
+    static const net::NetworkTrafficAnnotationTag kAnnotation =
+        net::DefineNetworkTrafficAnnotation("maho_mcp_local_uds", R"(
+            semantics {
+              sender: "Maho MCP Socket Server"
+              description:
+                "Writes JSON-RPC responses back to a local Unix domain socket "
+                "client (maho mcp / CLI) that has authenticated via "
+                "SO_PEERCRED/LOCAL_PEERCRED. Local IPC only — no network "
+                "traffic leaves the machine."
+              trigger:
+                "An authenticated local MCP client sends a tool call over "
+                "the maho.sock UDS."
+              data:
+                "JSON-RPC responses containing tool results (tab info, "
+                "history entries, page content). Credentials are redacted "
+                "by the credential firewall before egress."
+              destination: LOCAL
+            }
+            policy {
+              cookies_allowed: NO
+              setting: "Disabled by default; toggled via maho settings."
+              policy_exception_justification: "Local IPC only."
+            })");
     conn.socket->Write(write_buf.get(), response.size(),
-                       base::DoNothing(), TRAFFIC_ANNOTATION_FOR_TESTS);
+                       base::DoNothing(), kAnnotation);
   }
 
   if (conn.session->state() == MahoMcpSession::State::kClosed) {
@@ -229,8 +262,11 @@ void MahoMcpSocketServer::CleanupStaleSocket() {
   struct sockaddr_un addr;
   memset(&addr, 0, sizeof(addr));
   addr.sun_family = AF_UNIX;
-  strncpy(addr.sun_path, socket_path_.value().c_str(),
-          sizeof(addr.sun_path) - 1);
+  const std::string& path = socket_path_.value();
+  const size_t copy_len =
+      std::min(path.size(), sizeof(addr.sun_path) - 1);
+  base::span(addr.sun_path).first(copy_len).copy_from(
+      base::span(path).first(copy_len));
 
   int rv = HANDLE_EINTR(
       connect(sock_fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)));

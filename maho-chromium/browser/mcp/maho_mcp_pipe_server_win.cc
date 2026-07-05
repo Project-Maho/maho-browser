@@ -18,6 +18,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "maho/browser/mcp/maho_mcp_session.h"
+#include "maho/browser/mcp/maho_mcp_session_token_win.h"
 
 namespace maho {
 
@@ -92,7 +93,8 @@ std::wstring MahoMcpPipeServer::GetCurrentUserSidString() {
   return result;
 }
 
-MahoMcpPipeServer::MahoMcpPipeServer() : pipe_name_(ComputePipeName()) {}
+MahoMcpPipeServer::MahoMcpPipeServer(MahoMcpSessionToken* session_token)
+    : pipe_name_(ComputePipeName()), session_token_(session_token) {}
 
 MahoMcpPipeServer::~MahoMcpPipeServer() {
   Stop();
@@ -255,7 +257,7 @@ void MahoMcpPipeServer::OnClientConnected() {
   // Transfer the connected pipe handle to a new connection.
   auto conn = std::make_unique<PipeConnection>();
   conn->pipe_handle = std::move(listen_handle_);
-  conn->session = std::make_unique<MahoMcpSession>();
+  conn->session = std::make_unique<MahoMcpSession>(session_token_);
   conn->read_buffer.resize(kReadBufferSize);
 
   // Create read event for this connection.

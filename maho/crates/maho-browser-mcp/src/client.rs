@@ -89,12 +89,14 @@ impl BrowserClient {
         };
 
         // Perform handshake.
+        let auth_token = Self::load_auth_token();
         let init_params = InitializeParams {
             protocol_version: "2025-03-26".to_string(),
             client_info: ClientInfo {
                 name: "maho-browser-mcp".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
+            auth_token,
         };
         let result_value = client
             .call("initialize", serde_json::to_value(&init_params)?)
@@ -158,6 +160,28 @@ impl BrowserClient {
         let mut writer = self.writer.into_inner();
         writer.shutdown().await?;
         Ok(())
+    }
+
+    /// Load the DPAPI session token on Windows, base64-encode it.
+    /// Returns None on non-Windows or if the token cannot be loaded.
+    fn load_auth_token() -> Option<String> {
+        #[cfg(windows)]
+        {
+            use base64::Engine as _;
+            match crate::win_token::load_session_token() {
+                Ok(token) => {
+                    Some(base64::engine::general_purpose::STANDARD.encode(&token))
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to load session token: {e}");
+                    None
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
     }
 
     async fn write_message<T: serde::Serialize>(&self, msg: &T) -> Result<()> {

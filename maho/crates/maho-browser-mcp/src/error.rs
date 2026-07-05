@@ -5,6 +5,7 @@
 //! Error types for the MCP bridge layer.
 
 use std::io;
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Errors that can occur in the MCP bridge between the stdio-facing
@@ -52,6 +53,18 @@ pub enum McpBridgeError {
     /// The handler (read loop) has been closed.
     #[error("handler closed")]
     HandlerClosed,
+
+    /// Failed to read the DPAPI session token file.
+    #[error("token file read failed at {path}: {source}")]
+    TokenFileRead {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    /// Failed to decrypt the session token (DPAPI).
+    #[error("token decrypt failed: {0}")]
+    TokenDecrypt(String),
 }
 
 /// Convenience result alias for MCP bridge operations.

@@ -9,15 +9,21 @@
 #include <string>
 #include <vector>
 
+#include "build/build_config.h"
+
 #if !BUILDFLAG(IS_WIN)
 #include <sys/types.h>
 #endif
 
+#include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
-#include "build/build_config.h"
 #include "maho/browser/mcp/maho_mcp_json_rpc.h"
 
 namespace maho {
+
+#if BUILDFLAG(IS_WIN)
+class MahoMcpSessionToken;
+#endif
 
 // Per-connection MCP session state machine.
 //
@@ -30,8 +36,8 @@ namespace maho {
 //
 // Platform notes:
 //   - POSIX: peer authentication via SO_PEERCRED / LOCAL_PEERCRED uid check.
-//   - Windows: peer authentication handled externally by Named Pipe DACL;
-//     the session trusts that the transport layer has already verified the peer.
+//   - Windows: peer authentication via Named Pipe DACL (transport layer) +
+//     DPAPI session token validation during initialize handshake.
 class MahoMcpSession {
  public:
   enum class State {
@@ -41,9 +47,10 @@ class MahoMcpSession {
   };
 
 #if BUILDFLAG(IS_WIN)
-  // On Windows, peer authentication is enforced by the Named Pipe DACL.
-  // The session trusts that only authenticated peers can connect.
-  MahoMcpSession();
+  // On Windows, constructs a session that validates the client's auth token
+  // against |session_token| during the initialize handshake. The pointer must
+  // outlive this session. Pass nullptr to skip token validation (testing only).
+  explicit MahoMcpSession(MahoMcpSessionToken* session_token);
 #else
   // |peer_uid| is the UID of the connected client (from SO_PEERCRED /
   // LOCAL_PEERCRED). The session will reject the handshake if the peer UID
@@ -66,9 +73,13 @@ class MahoMcpSession {
                         std::vector<std::string>& responses);
   void HandleActiveMethod(const McpJsonRpcMessage& msg,
                           std::vector<std::string>& responses);
+  void HandleToolCall(const McpJsonRpcMessage& msg,
+                      std::vector<std::string>& responses);
 
   State state_ = State::kAwaitingInitialize;
-#if !BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_WIN)
+  raw_ptr<MahoMcpSessionToken> session_token_;
+#else
   uid_t peer_uid_;
 #endif
   MahoMcpJsonRpc framer_;

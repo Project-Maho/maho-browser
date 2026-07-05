@@ -5,6 +5,8 @@
 #ifndef MAHO_BROWSER_MCP_MAHO_MCP_PIPE_SERVER_WIN_H_
 #define MAHO_BROWSER_MCP_MAHO_MCP_PIPE_SERVER_WIN_H_
 
+#include "build/build_config.h"
+
 #if BUILDFLAG(IS_WIN)
 
 #include <windows.h>
@@ -13,15 +15,16 @@
 #include <string>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/win/object_watcher.h"
 #include "base/win/scoped_handle.h"
-#include "build/build_config.h"
 
 namespace maho {
 
 class MahoMcpSession;
+class MahoMcpSessionToken;
 
 // Windows Named Pipe server for the Maho MCP (Model Context Protocol).
 //
@@ -31,12 +34,12 @@ class MahoMcpSession;
 // Uses overlapped I/O with base::win::ObjectWatcher for async accept and read.
 //
 // Lifecycle:
-//   1. Construct (no args — pipe name derived from current username).
+//   1. Construct with a session token pointer (owned externally).
 //   2. Call Start() to create pipe + begin accepting.
 //   3. Destructor closes all pipe handles.
 class MahoMcpPipeServer : public base::win::ObjectWatcher::Delegate {
  public:
-  MahoMcpPipeServer();
+  explicit MahoMcpPipeServer(MahoMcpSessionToken* session_token);
   ~MahoMcpPipeServer() override;
 
   MahoMcpPipeServer(const MahoMcpPipeServer&) = delete;
@@ -79,6 +82,9 @@ class MahoMcpPipeServer : public base::win::ObjectWatcher::Delegate {
   static std::wstring SanitizeUsername(const std::wstring& username);
 
   std::wstring pipe_name_;
+
+  // Session token for DPAPI authentication (not owned).
+  raw_ptr<MahoMcpSessionToken> session_token_;
 
   // Listening pipe state.
   base::win::ScopedHandle listen_handle_;

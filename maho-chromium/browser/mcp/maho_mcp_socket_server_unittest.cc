@@ -10,6 +10,7 @@
 
 #include <string>
 
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/run_loop.h"
@@ -42,7 +43,10 @@ class MahoMcpSocketServerTest : public testing::Test {
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
     std::string path = server_->socket_path().value();
-    strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
+    const size_t copy_len =
+        std::min(path.size(), sizeof(addr.sun_path) - 1);
+    base::span(addr.sun_path).first(copy_len).copy_from(
+        base::span(path).first(copy_len));
 
     if (connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) !=
         0) {

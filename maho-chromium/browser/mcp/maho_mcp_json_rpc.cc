@@ -13,9 +13,14 @@
 
 namespace maho {
 
+McpJsonRpcMessage::McpJsonRpcMessage() = default;
+McpJsonRpcMessage::~McpJsonRpcMessage() = default;
+McpJsonRpcMessage::McpJsonRpcMessage(McpJsonRpcMessage&&) = default;
+McpJsonRpcMessage& McpJsonRpcMessage::operator=(McpJsonRpcMessage&&) = default;
+
 namespace {
 
-std::string SerializeResponse(base::Value::Dict response) {
+std::string SerializeResponse(base::DictValue response) {
   response.Set("jsonrpc", "2.0");
   std::string output;
   base::JSONWriter::Write(base::Value(std::move(response)), &output);
@@ -65,7 +70,7 @@ std::string MahoMcpJsonRpc::BuildSuccessResponse(
     const std::optional<base::Value>& id,
     base::Value result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  base::Value::Dict response;
+  base::DictValue response;
   response.Set("id", CloneId(id));
   response.Set("result", std::move(result));
   return SerializeResponse(std::move(response));
@@ -76,11 +81,11 @@ std::string MahoMcpJsonRpc::BuildErrorResponse(
     int code,
     const std::string& message) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  base::Value::Dict error;
+  base::DictValue error;
   error.Set("code", code);
   error.Set("message", message);
 
-  base::Value::Dict response;
+  base::DictValue response;
   response.Set("id", CloneId(id));
   response.Set("error", std::move(error));
   return SerializeResponse(std::move(response));
@@ -102,9 +107,9 @@ void MahoMcpJsonRpc::ProcessLine(const std::string& line) {
       base::JSONReader::Read(line, base::JSON_PARSE_RFC);
   if (!parsed.has_value() || !parsed->is_dict()) {
     // -32700 Parse error.
-    base::Value::Dict error_response;
+    base::DictValue error_response;
     error_response.Set("id", base::Value());
-    base::Value::Dict error;
+    base::DictValue error;
     error.Set("code", -32700);
     error.Set("message", "Parse error");
     error_response.Set("error", std::move(error));
@@ -122,9 +127,9 @@ void MahoMcpJsonRpc::ProcessLine(const std::string& line) {
     if (auto* id_val = dict.Find("id")) {
       id = id_val->Clone();
     }
-    base::Value::Dict error_response;
+    base::DictValue error_response;
     error_response.Set("id", CloneId(id));
-    base::Value::Dict error;
+    base::DictValue error;
     error.Set("code", -32600);
     error.Set("message", "Invalid Request");
     error_response.Set("error", std::move(error));
@@ -139,9 +144,9 @@ void MahoMcpJsonRpc::ProcessLine(const std::string& line) {
     if (auto* id_val = dict.Find("id")) {
       id = id_val->Clone();
     }
-    base::Value::Dict error_response;
+    base::DictValue error_response;
     error_response.Set("id", CloneId(id));
-    base::Value::Dict error;
+    base::DictValue error;
     error.Set("code", -32600);
     error.Set("message", "Invalid Request");
     error_response.Set("error", std::move(error));

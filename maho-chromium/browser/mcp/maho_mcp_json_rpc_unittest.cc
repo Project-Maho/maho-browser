@@ -118,8 +118,8 @@ TEST_F(MahoMcpJsonRpcTest, ValidRequestResponseRoundtrip) {
   EXPECT_TRUE(message->params->is_dict());
 
   // Build a success response.
-  base::Value::Dict result;
-  result.Set("tools", base::Value::List());
+  base::DictValue result;
+  result.Set("tools", base::ListValue());
   std::string response =
       framer_.BuildSuccessResponse(message->id, base::Value(std::move(result)));
 

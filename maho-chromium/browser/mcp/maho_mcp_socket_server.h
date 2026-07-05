@@ -13,10 +13,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "net/socket/stream_socket.h"
-
-namespace net {
-class UnixDomainServerSocket;
-}  // namespace net
+#include "net/socket/unix_domain_server_socket_posix.h"
 
 namespace maho {
 
@@ -60,6 +57,11 @@ class MahoMcpSocketServer {
 
  private:
   struct ActiveConnection {
+    ActiveConnection();
+    ~ActiveConnection();
+    ActiveConnection(ActiveConnection&&);
+    ActiveConnection& operator=(ActiveConnection&&);
+
     std::unique_ptr<net::StreamSocket> socket;
     std::unique_ptr<MahoMcpSession> session;
   };

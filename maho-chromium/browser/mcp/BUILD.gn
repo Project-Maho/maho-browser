@@ -23,17 +23,22 @@ source_set("maho_mcp") {
     sources += [
       "maho_mcp_pipe_server_win.cc",
       "maho_mcp_pipe_server_win.h",
+      "maho_mcp_session_token_win.cc",
+      "maho_mcp_session_token_win.h",
     ]
   }
 
   deps = [
     "//base",
+    "//crypto",
     "//net",
   ]
 
   if (is_win) {
     libs = [
       "advapi32.lib",
+      "bcrypt.lib",
+      "crypt32.lib",
       "userenv.lib",
     ]
   }
@@ -52,13 +57,17 @@ source_set("unittests") {
   }
 
   if (is_win) {
-    sources += [ "maho_mcp_pipe_server_win_unittest.cc" ]
+    sources += [
+      "maho_mcp_pipe_server_win_unittest.cc",
+      "maho_mcp_session_token_win_unittest.cc",
+    ]
   }
 
   deps = [
     ":maho_mcp",
     "//base",
     "//base/test:test_support",
+    "//crypto",
     "//net",
     "//net:test_support",
     "//testing/gtest",

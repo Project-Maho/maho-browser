@@ -16,6 +16,11 @@ namespace maho {
 
 // A parsed JSON-RPC 2.0 message (request or notification).
 struct McpJsonRpcMessage {
+  McpJsonRpcMessage();
+  ~McpJsonRpcMessage();
+  McpJsonRpcMessage(McpJsonRpcMessage&&);
+  McpJsonRpcMessage& operator=(McpJsonRpcMessage&&);
+
   std::string method;
   std::optional<base::Value> id;      // Absent for notifications.
   std::optional<base::Value> params;  // Object or array, may be absent.
