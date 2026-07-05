@@ -620,6 +620,20 @@ BuildShortcutsOnCoreSequence() {
         }
       }
     }
+    shortcut->default_key_combo = maho_settings::mojom::MojoKeyCombo::New();
+    const base::DictValue* default_combo_dict = dict->FindDict("defaultKeyCombo");
+    if (default_combo_dict) {
+      if (const std::string* key = default_combo_dict->FindString("key")) {
+        shortcut->default_key_combo->key = *key;
+      }
+      if (const base::ListValue* modifiers = default_combo_dict->FindList("modifiers")) {
+        for (const auto& mod : *modifiers) {
+          if (mod.is_string()) {
+            shortcut->default_key_combo->modifiers.push_back(mod.GetString());
+          }
+        }
+      }
+    }
     shortcut->is_custom = is_custom.value_or(false);
     shortcut->enabled = enabled.value_or(true);
     shortcuts.push_back(std::move(shortcut));
@@ -3135,5 +3149,29 @@ void MahoSettingsPageHandler::GetBillingPortalUrl(GetBillingPortalUrlCallback ca
           },
           std::move(url_loader), std::move(callback)),
       /*max_body_size=*/16384);
+}
+
+void MahoSettingsPageHandler::GetBuyCreditsUrl(
+    int32_t pack_size_usd,
+    GetBuyCreditsUrlCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  std::string checkout_url;
+  switch (pack_size_usd) {
+    case 10:
+      checkout_url = "https://maho.lemonsqueezy.com/buy/credit-pack-10";
+      break;
+    case 50:
+      checkout_url = "https://maho.lemonsqueezy.com/buy/credit-pack-50";
+      break;
+    case 100:
+      checkout_url = "https://maho.lemonsqueezy.com/buy/credit-pack-100";
+      break;
+    default:
+      checkout_url = "";
+      break;
+  }
+
+  std::move(callback).Run(checkout_url);
 }
 

@@ -3038,6 +3038,7 @@ name = "maho-browser-mcp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "directories",
  "rmcp",
  "schemars",
@@ -3048,6 +3049,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

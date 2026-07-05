@@ -4349,31 +4349,45 @@ pub unsafe extern "C" fn maho_core_resolve_shortcut(
 }
 
 /// # Safety
-/// `ptr` must be a valid `*mut MahoCore`. Returns true on success, false on failure or if import is active.
+/// `ptr` must be a valid `*mut MahoCore`. Returns JSON status string (`{"success":true}` or
+/// `{"error":"..."}`) or null on null input/import active. Caller must free with `maho_string_free`.
 #[no_mangle]
-pub unsafe extern "C" fn maho_core_sync_shortcuts_to_relay(ptr: *mut MahoCore) -> bool {
+pub unsafe extern "C" fn maho_core_sync_shortcuts_to_relay(ptr: *mut MahoCore) -> *mut c_char {
     ffi_safe!({
         if ptr.is_null() {
-            return false;
+            return ptr::null_mut();
         }
-        if import_gate::is_active() { return false; }
+        if import_gate::is_active() { return ptr::null_mut(); }
         let core = &mut *ptr;
-        core.sync_shortcuts_to_relay().is_ok()
-    }, false)
+        let json = match core.sync_shortcuts_to_relay() {
+            Ok(()) => r#"{"success":true}"#.to_string(),
+            Err(e) => serde_json::json!({"error": e}).to_string(),
+        };
+        CString::new(json)
+            .map(CString::into_raw)
+            .unwrap_or(ptr::null_mut())
+    }, ptr::null_mut())
 }
 
 /// # Safety
-/// `ptr` must be a valid `*mut MahoCore`. Returns true on success, false on failure or if import is active.
+/// `ptr` must be a valid `*mut MahoCore`. Returns JSON status string (`{"success":true}` or
+/// `{"error":"..."}`) or null on null input/import active. Caller must free with `maho_string_free`.
 #[no_mangle]
-pub unsafe extern "C" fn maho_core_sync_shortcuts_from_relay(ptr: *mut MahoCore) -> bool {
+pub unsafe extern "C" fn maho_core_sync_shortcuts_from_relay(ptr: *mut MahoCore) -> *mut c_char {
     ffi_safe!({
         if ptr.is_null() {
-            return false;
+            return ptr::null_mut();
         }
-        if import_gate::is_active() { return false; }
+        if import_gate::is_active() { return ptr::null_mut(); }
         let core = &mut *ptr;
-        core.sync_shortcuts_from_relay().is_ok()
-    }, false)
+        let json = match core.sync_shortcuts_from_relay() {
+            Ok(()) => r#"{"success":true}"#.to_string(),
+            Err(e) => serde_json::json!({"error": e}).to_string(),
+        };
+        CString::new(json)
+            .map(CString::into_raw)
+            .unwrap_or(ptr::null_mut())
+    }, ptr::null_mut())
 }
 
 /// # Safety

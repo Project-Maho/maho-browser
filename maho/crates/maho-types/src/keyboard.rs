@@ -20,13 +20,15 @@ pub struct ShortcutBinding {
     pub label: String,
     pub category: ShortcutCategory,
     pub key_combo: KeyCombo,
+    #[serde(default)]
+    pub default_key_combo: KeyCombo,
     pub is_custom: bool,
     pub enabled: bool,
     #[serde(default)]
     pub updated_at: u64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyCombo {
     pub key: String,
@@ -76,6 +78,7 @@ impl ShortcutBinding {
             action: action.to_string(),
             label: label.to_string(),
             category,
+            default_key_combo: key_combo.clone(),
             key_combo,
             is_custom: false,
             enabled: true,

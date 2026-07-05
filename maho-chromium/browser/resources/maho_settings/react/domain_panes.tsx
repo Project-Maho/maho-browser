@@ -13,6 +13,7 @@ import {
 } from '@ui/dialog';
 import {useShortcutInterceptor} from './use_shortcut_interceptor.js';
 import {ShortcutsPane} from './shortcuts/index.js';
+import {openCheckoutOverlay} from '../../maho_common/react/lemonsqueezy.js';
 import {
   Card,
   CardContent,
@@ -948,6 +949,8 @@ function BillingPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
   const error = state.billingError;
   const loading = state.billingLoading;
   const invoices = state.invoices;
+  const [purchaseError, setPurchaseError] = useState<string | null>(null);
+  const [purchasingSize, setPurchasingSize] = useState<10 | 50 | 100 | null>(null);
 
   useEffect(() => {
     void store.refreshAccountStatus();
@@ -959,6 +962,46 @@ function BillingPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
       void store.refreshInvoices();
     }
   }, [account?.signedIn, store]);
+
+  useEffect(() => {
+    if (!account?.signedIn) {
+      return undefined;
+    }
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void store.refreshBilling();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [account?.signedIn, store]);
+
+  const handleBuyCredits = async (packSize: 10 | 50 | 100) => {
+    setPurchaseError(null);
+    setPurchasingSize(packSize);
+    try {
+      const checkoutUrl = await store.getBuyCreditsUrl(packSize);
+      if (!checkoutUrl) {
+        setPurchaseError('Unable to generate a checkout URL. Please try again.');
+        return;
+      }
+      await openCheckoutOverlay({
+        checkoutUrl,
+        onSuccess: () => {
+          void store.refreshBilling();
+          void store.refreshInvoices();
+        },
+        onError: (err) => {
+          console.warn('[maho-settings] LemonSqueezy overlay failed, using fallback', err);
+        },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setPurchaseError(`Purchase failed: ${message}`);
+    } finally {
+      setPurchasingSize(null);
+    }
+  };
 
   const openBillingPortal = async () => {
     try {
@@ -1118,6 +1161,62 @@ function BillingPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
                 ) : null}
               </div>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-border/70 bg-card/95 shadow-sm">
+          <CardHeader className="pb-4">
+            <CardTitle>Buy Credits</CardTitle>
+            <CardDescription>
+              Prepaid credit packs that never expire. Overflow when your subscription ceiling is reached, or standalone if you have no subscription.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-3">
+              {([10, 50, 100] as const).map((packSize) => {
+                const isFeatured = packSize === 50;
+                const isPurchasing = purchasingSize === packSize;
+                const isDisabled = purchasingSize !== null;
+                return (
+                  <button
+                    key={packSize}
+                    type="button"
+                    disabled={isDisabled}
+                    onClick={() => void handleBuyCredits(packSize)}
+                    className={cn(
+                      'flex flex-col items-start gap-1 rounded-xl border p-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60',
+                      isFeatured
+                        ? 'border-foreground bg-foreground text-background hover:opacity-90'
+                        : 'border-border/70 bg-background/60 hover:border-foreground',
+                    )}
+                  >
+                    <span className="text-2xl font-semibold tracking-tight">
+                      ${packSize}
+                    </span>
+                    <span className="text-xs opacity-80">
+                      {packSize === 10
+                        ? 'Starter pack'
+                        : packSize === 50
+                        ? 'Best value'
+                        : 'Power-user pack'}
+                    </span>
+                    {isPurchasing ? (
+                      <span className="text-xs opacity-70">Opening…</span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+            {purchaseError ? (
+              <Alert className="border-destructive/60 bg-destructive/10 text-destructive shadow-sm" variant="destructive">
+                <AlertCircle className="size-4" />
+                <AlertTitle>Purchase failed</AlertTitle>
+                <AlertDescription>{purchaseError}</AlertDescription>
+              </Alert>
+            ) : null}
+            <p className="text-xs text-muted-foreground">
+              Credits are consumed at a 30% markup over usage cost. Credits never expire. See ADR 0010 for details.
+            </p>
           </CardContent>
         </Card>
 

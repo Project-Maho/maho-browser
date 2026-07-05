@@ -346,7 +346,6 @@ export class MahoSettingsStore {
       }));
       return;
     }
-
     this.patch(state => ({
       ...state,
       invoicesError: '',
@@ -367,6 +366,11 @@ export class MahoSettingsStore {
         invoicesLoading: false,
       }));
     }
+  }
+
+  async getBuyCreditsUrl(packSizeUsd: 10 | 50 | 100): Promise<string> {
+    const {checkoutUrl} = await this.pageHandler.getBuyCreditsUrl(packSizeUsd);
+    return checkoutUrl;
   }
 
   isSaving(key: string): boolean {

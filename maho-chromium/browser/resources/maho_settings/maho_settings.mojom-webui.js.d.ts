@@ -46,6 +46,7 @@ export interface ShortcutBinding {
   keyCombo: MojoKeyCombo;
   isCustom: boolean;
   enabled: boolean;
+  defaultKeyCombo: MojoKeyCombo;
 }
 
 export interface SetShortcutResult {

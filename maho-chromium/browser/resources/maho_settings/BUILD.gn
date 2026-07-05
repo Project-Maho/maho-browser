@@ -52,6 +52,7 @@ action("bundle_react") {
     "../maho_common/react/bundle_guard.mjs",
     "../maho_common/react/store_utils.ts",
     "../maho_common/react/use_mojo.ts",
+    "../maho_common/react/lemonsqueezy.ts",
   ]
   outputs = [ "$target_gen_dir/app_bundle.js" ]
   args = [

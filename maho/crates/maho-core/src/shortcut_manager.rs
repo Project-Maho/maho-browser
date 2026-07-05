@@ -93,20 +93,21 @@ impl ShortcutManager {
     }
 
     pub fn reset_shortcut(&mut self, action: &str) {
-        if let Some(default_binding) = self.defaults.iter().find(|b| b.action == action) {
-            if let Some(binding) = self.bindings.iter_mut().find(|b| b.action == action) {
-                binding.key_combo = default_binding.key_combo.clone();
-                binding.is_custom = false;
-                binding.updated_at = Self::get_now_secs();
-            }
+        if let Some(binding) = self.bindings.iter_mut().find(|b| b.action == action) {
+            binding.key_combo = binding.default_key_combo.clone();
+            binding.is_custom = false;
+            binding.updated_at = Self::get_now_secs();
         }
     }
 
     pub fn reset_all_shortcuts(&mut self) {
         let now = Self::get_now_secs();
-        self.bindings = self.defaults.clone();
         for b in &mut self.bindings {
-            b.updated_at = now;
+            if b.is_custom {
+                b.key_combo = b.default_key_combo.clone();
+                b.is_custom = false;
+                b.updated_at = now;
+            }
         }
     }
 
@@ -137,6 +138,10 @@ impl ShortcutManager {
             binding.enabled = enabled;
             binding.updated_at = updated_at;
         }
+    }
+
+    pub fn get_default_binding(&self, action: &str) -> Option<&ShortcutBinding> {
+        self.defaults.iter().find(|b| b.action == action)
     }
 
     pub fn find_binding_by_key_combo(&self, key_combo: &KeyCombo) -> Option<&ShortcutBinding> {
@@ -246,6 +251,18 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
         "Previous Tab",
         tabs.clone(),
         KeyCombo::new("arrowup", vec![primary_modifier(), KeyModifier::Alt]),
+    ));
+    bindings.push(ShortcutBinding::new(
+        "mru_tab_switch_next",
+        "Next Tab (MRU)",
+        tabs.clone(),
+        KeyCombo::new("tab", vec![KeyModifier::Ctrl]),
+    ));
+    bindings.push(ShortcutBinding::new(
+        "mru_tab_switch_prev",
+        "Previous Tab (MRU)",
+        tabs.clone(),
+        KeyCombo::new("tab", vec![KeyModifier::Ctrl, KeyModifier::Shift]),
     ));
     bindings.push(ShortcutBinding::new(
         "clear_unpinned_tabs",

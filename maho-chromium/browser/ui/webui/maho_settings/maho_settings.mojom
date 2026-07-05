@@ -45,6 +45,7 @@ struct ShortcutBinding {
   MojoKeyCombo key_combo;
   bool is_custom;
   bool enabled;
+  MojoKeyCombo default_key_combo;
 };
 
 struct SetShortcutResult {
@@ -307,6 +308,11 @@ interface PageHandler {
 
   // GetBillingPortalUrl retrieves a customer portal link from the relay.
   GetBillingPortalUrl() => (string url);
+
+  // Returns the LemonSqueezy checkout URL for buying a credit pack.
+  // pack_size_usd must be 10, 50, or 100 (matches ADR 0010 variants 4001/4002/4003).
+  // Returns empty string for unsupported pack sizes.
+  GetBuyCreditsUrl(int32 pack_size_usd) => (string checkout_url);
 };
 
 interface Page {

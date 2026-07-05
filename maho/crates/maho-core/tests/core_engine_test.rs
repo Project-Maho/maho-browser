@@ -70,6 +70,33 @@ fn shortcut_manager_reset_all() {
 }
 
 #[test]
+fn shortcut_default_key_combo_immutable_after_override() {
+    let mut core = MahoCore::new();
+    let json = core.get_all_shortcuts_json();
+    let bindings: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+    let original = bindings.iter().find(|b| b["action"] == "new_tab").unwrap();
+    let original_default = original["defaultKeyCombo"].clone();
+    let original_key = original["keyCombo"].clone();
+    assert_eq!(original_default, original_key);
+
+    let key_combo = r#"{"key":"p","modifiers":["meta","shift"]}"#;
+    let result = core.set_shortcut_json("new_tab", key_combo);
+    assert!(result.is_ok());
+
+    let json = core.get_all_shortcuts_json();
+    let bindings: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+    let overridden = bindings.iter().find(|b| b["action"] == "new_tab").unwrap();
+    assert_eq!(overridden["keyCombo"]["key"], "p");
+    assert_eq!(overridden["defaultKeyCombo"], original_default);
+
+    core.reset_shortcut("new_tab");
+    let json = core.get_all_shortcuts_json();
+    let bindings: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+    let reset = bindings.iter().find(|b| b["action"] == "new_tab").unwrap();
+    assert_eq!(reset["keyCombo"], reset["defaultKeyCombo"]);
+}
+
+#[test]
 fn shortcut_manager_select_tab_1_through_9() {
     let core = MahoCore::new();
     let json = core.get_all_shortcuts_json();
@@ -657,28 +684,127 @@ mod persistence_tests {
         let bindings: Vec<serde_json::Value> =
             serde_json::from_str(&shortcuts_json).expect("should parse shortcuts JSON");
 
-        assert!(bindings.len() >= 54, "Expected at least 54 shortcuts, got {}", bindings.len());
-
-        let spot_checks = vec![
+        let expected_actions = vec![
+            "navigate_back",
+            "navigate_forward",
+            "reload_tab",
+            "hard_reload",
+            "stop_loading",
             "command_bar",
             "new_tab",
             "close_tab",
+            "restore_tab",
+            "pin_tab",
+            "duplicate_tab",
+            "next_tab",
+            "prev_tab",
+            "mru_tab_switch_next",
+            "mru_tab_switch_prev",
+            "clear_unpinned_tabs",
+            "copy_url",
+            "copy_url_markdown",
+            "select_tab_1",
+            "select_tab_2",
+            "select_tab_3",
+            "select_tab_4",
+            "select_tab_5",
+            "select_tab_6",
+            "select_tab_7",
+            "select_tab_8",
+            "select_tab_9",
+            "next_space",
+            "prev_space",
             "new_space",
+            "select_space_1",
+            "select_space_2",
+            "select_space_3",
+            "select_space_4",
+            "select_space_5",
+            "select_space_6",
+            "select_space_7",
+            "select_space_8",
+            "select_space_9",
             "toggle_sidebar",
             "ai_panel",
             "find_in_page",
+            "fullscreen",
+            "minimize",
+            "new_window",
+            "little_arc",
+            "close_window",
             "add_split_view",
             "remove_split_view",
-            "select_tab_1",
-            "select_space_1",
+            "next_split_view",
+            "prev_split_view",
+            "show_archive",
+            "open_downloads",
+            "settings",
+            "open_history",
+            "open_bookmarks",
+            "new_note",
+            "zoom_in",
+            "zoom_out",
+            "reset_zoom",
+            "toggle_dev_tools",
+            "view_source",
+            "js_console",
+            "open_boost_editor",
+            "open_atc_rules",
         ];
 
-        for action in spot_checks {
+        assert_eq!(
+            bindings.len(),
+            expected_actions.len(),
+            "Expected {} shortcuts, got {}",
+            expected_actions.len(),
+            bindings.len()
+        );
+
+        for action in &expected_actions {
             assert!(
-                bindings.iter().any(|b| b["action"] == action),
+                bindings.iter().any(|b| b["action"] == *action),
                 "Missing action in registry: {}",
                 action
             );
         }
+    }
+
+    #[test]
+    fn shortcut_export_import_envelope_round_trip() {
+        let temp_dir = temp_dir();
+        let mut core = create_persisted_core(&temp_dir);
+
+        let exported = core.export_shortcuts_json();
+        let envelope: serde_json::Value =
+            serde_json::from_str(&exported).expect("export should be valid JSON");
+
+        assert_eq!(envelope["version"], 1);
+        let platform = envelope["platform"].as_str().unwrap();
+        assert!(
+            ["macos", "windows", "linux"].contains(&platform),
+            "unexpected platform: {}",
+            platform
+        );
+        let exported_at = envelope["exportedAt"].as_str().unwrap();
+        chrono::DateTime::parse_from_rfc3339(exported_at)
+            .expect("exportedAt should be valid ISO 8601 / RFC 3339");
+        assert!(envelope["shortcuts"].as_array().unwrap().len() > 0);
+
+        let combo_json = r#"{"key":"p","modifiers":["meta","shift"]}"#;
+        core.set_shortcut_json("new_tab", combo_json).unwrap();
+
+        let modified_export = core.export_shortcuts_json();
+        let import_result = core.import_shortcuts_json(&modified_export);
+        assert!(import_result.is_ok());
+
+        let after_import = core.get_all_shortcuts_json();
+        let after_bindings: Vec<serde_json::Value> =
+            serde_json::from_str(&after_import).unwrap();
+        let new_tab_binding = after_bindings
+            .iter()
+            .find(|b| b["action"] == "new_tab")
+            .expect("new_tab should exist after import");
+        assert_eq!(new_tab_binding["keyCombo"]["key"], "p");
+        assert!(new_tab_binding["isCustom"].as_bool().unwrap());
     }
 }

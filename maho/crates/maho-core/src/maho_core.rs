@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -895,6 +895,9 @@ pub struct MahoCore {
     backup_manager: BackupManager,
     reading_list_manager: ReadingListManager,
     shortcut_manager: ShortcutManager,
+    /// Suppresses `trigger_sync_shortcuts_to_relay_async` fanout during batch operations
+    /// (e.g. import). The caller re-enables and fires ONE coalesced trigger post-loop.
+    sync_trigger_suppressed: Cell<bool>,
     account_manager: AccountManager,
     split_view_config: Option<SplitViewConfig>,
     sync_manager: Option<crate::sync_manager::SyncManager>,
@@ -1144,6 +1147,7 @@ impl MahoCore {
             backup_manager: BackupManager::new(),
             reading_list_manager: ReadingListManager::new(),
             shortcut_manager: ShortcutManager::new(),
+            sync_trigger_suppressed: Cell::new(false),
             account_manager: AccountManager::new(),
             split_view_config: None,
             sync_manager: None,
@@ -5536,8 +5540,22 @@ impl MahoCore {
     }
 
     pub fn get_all_shortcuts_json(&self) -> String {
-        serde_json::to_string(self.shortcut_manager.get_all_bindings())
-            .unwrap_or_else(|_| "[]".to_string())
+        let mut list = Vec::new();
+        for b in self.shortcut_manager.get_all_bindings() {
+            let default_b = self.shortcut_manager.get_default_binding(&b.action);
+            let default_combo = default_b.map(|d| d.key_combo.clone());
+            list.push(serde_json::json!({
+                "action": b.action,
+                "label": b.label,
+                "category": b.category,
+                "keyCombo": b.key_combo,
+                "isCustom": b.is_custom,
+                "enabled": b.enabled,
+                "updated_at": b.updated_at,
+                "defaultKeyCombo": default_combo
+            }));
+        }
+        serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string())
     }
 
     pub fn get_shortcuts_by_category_json(&self, category_json: &str) -> String {
@@ -5611,6 +5629,9 @@ impl MahoCore {
     }
 
     pub fn trigger_sync_shortcuts_to_relay_async(&self) {
+        if self.sync_trigger_suppressed.get() {
+            return;
+        }
         if let Some(ref sm) = self.sync_manager {
             let server_url = sm.config().server_url.clone();
             let room_id = sm.config().sync_key.clone().unwrap_or_default();
@@ -5724,7 +5745,17 @@ impl MahoCore {
             return Err("Invalid shortcuts import format: missing shortcuts array".to_string());
         };
 
+        self.sync_trigger_suppressed.set(true);
         for binding in bindings {
+            if binding.updated_at > 0 {
+                let local_opt = self.shortcut_manager.get_all_bindings().iter()
+                    .find(|b| b.action == binding.action).cloned();
+                if let Some(local_b) = local_opt {
+                    if binding.updated_at <= local_b.updated_at {
+                        continue;
+                    }
+                }
+            }
             if binding.is_custom {
                 let _ = self.set_shortcut_persisted(&binding.action, binding.key_combo);
             } else {
@@ -5732,6 +5763,8 @@ impl MahoCore {
             }
             self.toggle_shortcut_persisted(&binding.action, binding.enabled);
         }
+        self.sync_trigger_suppressed.set(false);
+        self.trigger_sync_shortcuts_to_relay_async();
         Ok(())
     }
 
@@ -5745,6 +5778,7 @@ impl MahoCore {
             return Err("Invalid shortcuts import format: missing shortcuts array".to_string());
         };
 
+        self.sync_trigger_suppressed.set(true);
         for incoming_b in bindings {
             let local_opt = self.shortcut_manager.get_all_bindings().iter().find(|b| b.action == incoming_b.action).cloned();
             if let Some(local_b) = local_opt {
@@ -5768,6 +5802,8 @@ impl MahoCore {
                 }
             }
         }
+        self.sync_trigger_suppressed.set(false);
+        self.trigger_sync_shortcuts_to_relay_async();
         Ok(())
     }
 

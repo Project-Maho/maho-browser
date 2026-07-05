@@ -9,7 +9,7 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "baseUrl": ".",
-    "ignoreDeprecations": "5.0",
+    "ignoreDeprecations": "6.0",
     "lib": [
       "DOM",
       "DOM.Iterable",
@@ -45,6 +45,9 @@
       ],
       "@radix-ui/react-dropdown-menu": [
         "../../../../../website/node_modules/@radix-ui/react-dropdown-menu/dist/index.d.ts"
+      ],
+      "@radix-ui/react-context-menu": [
+        "../../../../../website/node_modules/@radix-ui/react-context-menu/dist/index.d.ts"
       ],
       "@radix-ui/react-checkbox": [
         "../../../../../website/node_modules/@radix-ui/react-checkbox/dist/index.d.ts"
