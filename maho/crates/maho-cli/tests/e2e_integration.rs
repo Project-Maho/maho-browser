@@ -520,9 +520,10 @@ async fn test_whoami_without_login() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_help_shows_signup_subcommand() {
+async fn test_help_shows_auth_group_with_signup() {
     let tmp = TempDir::new().unwrap();
 
+    // Top-level --help shows the auth group
     let output = maho_cmd(tmp.path())
         .args(["--help"])
         .output()
@@ -531,7 +532,20 @@ async fn test_help_shows_signup_subcommand() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("signup"),
-        "--help should show signup subcommand, got: {stdout}"
+        stdout.contains("auth"),
+        "--help should show auth group, got: {stdout}"
+    );
+
+    // `maho auth --help` shows signup as a nested command
+    let output2 = maho_cmd(tmp.path())
+        .args(["auth", "--help"])
+        .output()
+        .expect("failed to run maho auth --help");
+
+    assert!(output2.status.success());
+    let stdout2 = String::from_utf8_lossy(&output2.stdout);
+    assert!(
+        stdout2.contains("signup"),
+        "maho auth --help should show signup subcommand, got: {stdout2}"
     );
 }
