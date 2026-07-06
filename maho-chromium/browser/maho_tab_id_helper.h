@@ -20,6 +20,7 @@ class MahoTabIdHelper
 
   // Set the next stable ID to be assigned to a new WebContents.
   static void SetPendingRestoredTabId(const std::string& id);
+  static std::string PopPendingRestoredTabIdForTesting();
 
   // Replace the ID with a previously persisted value (session restore).
   void SetRestoredTabId(const std::string& id);

@@ -21,32 +21,31 @@ class MahoMcpSessionToken;
 }  // namespace maho
 
 class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts {
- public:
-  MahoBrowserMainExtraParts();
-  MahoBrowserMainExtraParts(const MahoBrowserMainExtraParts&) = delete;
-  MahoBrowserMainExtraParts& operator=(const MahoBrowserMainExtraParts&) = delete;
-  ~MahoBrowserMainExtraParts() override;
+  public:
+   MahoBrowserMainExtraParts();
+   MahoBrowserMainExtraParts(const MahoBrowserMainExtraParts&) = delete;
+   MahoBrowserMainExtraParts& operator=(const MahoBrowserMainExtraParts&) = delete;
+   ~MahoBrowserMainExtraParts() override;
 
-  MahoCore* GetCore() const { return core_; }
+   MahoCore* GetCore() const { return core_; }
 
- private:
-  void PostEarlyInitialization() override;
-  void PostProfileInit(Profile* profile, bool is_initial_profile) override;
-  void PostMainMessageLoopRun() override;
+  private:
+   void PostEarlyInitialization() override;
+   void PostProfileInit(Profile* profile, bool is_initial_profile) override;
+   void PostMainMessageLoopRun() override;
 
-  base::FilePath storage_path_;
-  RAW_PTR_EXCLUSION MahoCore* core_ = nullptr;
+   base::FilePath storage_path_;
+   RAW_PTR_EXCLUSION MahoCore* core_ = nullptr;
 
-  std::unique_ptr<maho::MahoExtensionStateBridge> extension_state_bridge_;
-  std::unique_ptr<maho::MahoRoutinesScheduler> routines_scheduler_;
-  base::CallbackListSubscription session_restored_subscription_;
+   std::unique_ptr<maho::MahoExtensionStateBridge> extension_state_bridge_;
+   std::unique_ptr<maho::MahoRoutinesScheduler> routines_scheduler_;
 
-#if BUILDFLAG(IS_WIN)
-  std::unique_ptr<maho::MahoMcpSessionToken> mcp_session_token_;
-  std::unique_ptr<maho::MahoMcpPipeServer> mcp_pipe_server_;
-#else
-  std::unique_ptr<maho::MahoMcpSocketServer> mcp_socket_server_;
-#endif
-};
+ #if BUILDFLAG(IS_WIN)
+   std::unique_ptr<maho::MahoMcpSessionToken> mcp_session_token_;
+   std::unique_ptr<maho::MahoMcpPipeServer> mcp_pipe_server_;
+ #else
+   std::unique_ptr<maho::MahoMcpSocketServer> mcp_socket_server_;
+ #endif
+ };
 
 #endif  // MAHO_BROWSER_MAHO_BROWSER_MAIN_EXTRA_PARTS_H_

@@ -26,4 +26,6 @@ pub mod tab;
 pub mod traits;
 pub mod llm;
 
+pub use events::shell_event_kind::ShellEventKind;
+
 

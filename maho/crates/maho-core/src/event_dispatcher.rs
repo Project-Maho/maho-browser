@@ -53,6 +53,7 @@ pub trait TabManagerInterface {
     fn to_tab_view_model(&self, tab: &Tab) -> TabViewModel;
     fn is_tab_loading(&self, tab_id: &TabId) -> bool;
     fn update_tab_security(&mut self, tab_id: &TabId, is_secure: bool);
+    fn update_tab_scroll_position(&mut self, tab_id: &TabId, x: f64, y: f64);
     fn is_tab_secure(&self, tab_id: &TabId) -> bool;
     fn close_other_tabs(&mut self, space_id: &SpaceId, tab_id: &TabId) -> Vec<TabId>;
     fn close_tabs_to_right(&mut self, space_id: &SpaceId, tab_id: &TabId) -> Vec<TabId>;
@@ -293,10 +294,19 @@ impl EventDispatcher {
                         // making the next close_tab event hit the 2nd-close (delete) path
                         // instead of the 1st-close (suspend) path.
                         if !matches!(existing.state, maho_types::tab::TabLifecycleState::Active) {
-                            tab_mgr.activate_tab(&explicit_id);
+                            tab_mgr.restore_to_active(&explicit_id);
                         }
                         existing
                     } else {
+                        // On session-restore path this branch should now be dead for
+                        // tabs that existed before the restart. Reaching it means the
+                        // save-side (Phase 2) or restore-side (Phase 3) hook is broken.
+                        // Log so we detect regressions in the field.
+                        eprintln!(
+                            "[maho] CreateTab with unknown explicit_id={} — session-restore \
+                             propagation may have failed",
+                            explicit_id
+                        );
                         tab_mgr.create_tab_with_id(explicit_id, space_id.clone(), resolved_url, parent_id, window_id)
                     }
                 } else {
@@ -1117,6 +1127,10 @@ impl EventDispatcher {
                         ..Default::default()
                     },
                 }]
+            }
+            ShellEvent::UpdateTabScrollPosition { tab_id, x, y } => {
+                tab_mgr.update_tab_scroll_position(&tab_id, x, y);
+                vec![]
             }
             ShellEvent::TabUrlUpdated { tab_id, url } => {
                 tab_mgr.update_tab_url(&tab_id, url.clone());

@@ -78,8 +78,11 @@ void DispatchShellEventLocal(
   maho::core::HandleEvent(core, json.c_str());
   const double he_ms = maho_perf_t.Elapsed().InMillisecondsF();
   base::ElapsedTimer notify_t;
+  const bool is_structural = (kind == "create_tab" || kind == "close_tab" ||
+                               kind == "reorder_tab" || kind == "move_tab" ||
+                               kind == "pin_tab" || kind == "unpin_tab");
   if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
-    bridge->NotifyChanged();
+    bridge->NotifyChanged(is_structural);
   }
   LOG(INFO) << "[MAHO_PERF] DispatchShellEventLocal kind=" << kind
             << " HandleEvent=" << he_ms

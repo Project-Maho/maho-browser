@@ -16,6 +16,10 @@
 
 namespace maho {
 
+void MahoSpaceProfileBridge::Observer::OnSpaceProfileBridgeChanged(bool is_structural) {
+  OnSpaceProfileBridgeChanged();
+}
+
 MahoSpaceProfileBridge* MahoSpaceProfileBridge::GetInstance() {
   static base::NoDestructor<MahoSpaceProfileBridge> instance;
   return instance.get();
@@ -133,10 +137,10 @@ void MahoSpaceProfileBridge::SetActiveSpaceId(Browser* browser,
   }
 }
 
-void MahoSpaceProfileBridge::NotifyChanged() {
+void MahoSpaceProfileBridge::NotifyChanged(bool is_structural) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   for (Observer& observer : observers_) {
-    observer.OnSpaceProfileBridgeChanged();
+    observer.OnSpaceProfileBridgeChanged(is_structural);
   }
 }
 

@@ -35,6 +35,7 @@
 #include "maho/browser/updates/maho_update_manager.h"
 #include "chrome/browser/sessions/session_restore.h"
 #include "maho/browser/maho_tab_id_helper.h"
+#include "maho/browser/maho_tab_id_session_helper.h"
 #include "maho/browser/ui/theme/maho_color_mixer.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/third_party/maho/maho_bridge.h"
@@ -124,56 +125,6 @@ void PopulateBridgeFromCore(MahoCore* core) {
             << bridge->GetRegisteredSpaceCount() << " spaces";
 }
 
-void OnSessionRestoreFinished(Profile* profile, int num_tabs_restored) {
-  LOG(INFO) << "Session restore finished. Restored " << num_tabs_restored << " tabs.";
-  
-  MahoCore* core = maho::GetCore();
-  if (!core) {
-    return;
-  }
-  
-  char* json_str = maho_core_get_tab_view_models(core);
-  if (!json_str) {
-    return;
-  }
-  std::string json(json_str);
-  maho_string_free(json_str);
-
-  std::optional<base::Value> parsed =
-      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_list()) {
-    return;
-  }
-
-  std::set<std::string> core_tab_ids;
-  for (const auto& item : parsed->GetList()) {
-    const auto* dict = item.GetIfDict();
-    if (dict) {
-      const std::string* id = dict->FindString("id");
-      if (id) {
-        core_tab_ids.insert(*id);
-      }
-    }
-  }
-
-  std::set<std::string> live_tab_ids =
-      maho::MahoTabRegistry::GetLiveTabIdsForProfile(profile);
-  int live_tab_count = live_tab_ids.size();
-
-  int restored_count = 0;
-  int suspended_count = 0;
-  for (const auto& tab_id : core_tab_ids) {
-    if (live_tab_ids.count(tab_id)) {
-      restored_count++;
-    } else {
-      suspended_count++;
-    }
-  }
-
-  LOG(INFO) << "Reconciliation: " << core_tab_ids.size()
-            << " LMDB tabs, " << restored_count << " restored, "
-            << suspended_count << " suspended (live count: " << live_tab_count << ")";
-}
 
 }  // namespace
 
@@ -218,6 +169,8 @@ void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
     extension_state_bridge_ =
         std::make_unique<maho::MahoExtensionStateBridge>(profile);
 
+    maho::MahoTabIdSessionHelper::GetForProfile(profile);
+
     maho::MahoUpdateManager::GetInstance()->Initialize(profile);
 
     // If user hasn't explicitly set the value, override the default to LAST
@@ -228,10 +181,6 @@ void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
       SessionStartupPref::SetStartupPref(profile,
           SessionStartupPref(SessionStartupPref::LAST));
     }
-
-    session_restored_subscription_ =
-        SessionRestore::RegisterOnSessionRestoredCallback(
-            base::BindRepeating(&OnSessionRestoreFinished));
 
     // MCP server uses net::UnixDomainServerSocket (POSIX) or Windows overlapped
     // I/O via base::win::ObjectWatcher; both require an IO message pump, so

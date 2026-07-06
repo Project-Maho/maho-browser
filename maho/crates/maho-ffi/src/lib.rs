@@ -125,6 +125,31 @@ pub unsafe extern "C" fn maho_core_get_tab_view_models(ptr: *mut MahoCore) -> *m
 }
 
 /// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `tab_id` must be a valid NUL-terminated C string.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_tab_snapshot_by_id(
+    ptr: *mut MahoCore,
+    tab_id: *const c_char,
+) -> *mut c_char {
+    ffi_safe!({
+
+    if ptr.is_null() || tab_id.is_null() {
+        return ptr::null_mut();
+    }
+    if import_gate::is_active() { return ptr::null_mut(); }
+    let core = &*ptr;
+    let tab_id_str = CStr::from_ptr(tab_id).to_str().unwrap_or("");
+    match core.get_tab_snapshot_json(&maho_types::identifiers::TabId::new(tab_id_str)) {
+        Some(json) => CString::new(json).unwrap().into_raw(),
+        None => ptr::null_mut(),
+    }
+
+    }, ptr::null_mut())
+}
+
+/// # Safety
 /// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `tab_id` must be a
 /// valid NUL-terminated C string. Returns `false` on null pointer, invalid UTF-8, or
 /// when an import is in progress (per `import_gate`).

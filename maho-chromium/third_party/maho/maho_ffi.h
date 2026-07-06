@@ -89,6 +89,14 @@ char *maho_core_get_tab_view_models(struct MahoCore *ptr);
 
 /**
  * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `tab_id` must be a valid NUL-terminated C string.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_get_tab_snapshot_by_id(struct MahoCore *ptr, const char *tab_id);
+
+/**
+ * # Safety
  * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `tab_id` must be a
  * valid NUL-terminated C string. Returns `false` on null pointer, invalid UTF-8, or
  * when an import is in progress (per `import_gate`).

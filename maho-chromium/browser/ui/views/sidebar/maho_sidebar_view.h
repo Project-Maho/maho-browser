@@ -12,6 +12,7 @@
 #include "base/callback_list.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/timer/timer.h"
 #include "base/values.h"
 #include "base/functional/callback_forward.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
@@ -107,6 +108,11 @@ class MahoSidebarView
   bool IsPositionInWindowCaption(const gfx::Point& point) const;
 
   void ScheduleRefreshAll();
+  // T5: Coalesced cosmetic refresh — debounces title/URL/favicon updates so
+  // rapid-fire cosmetic events collapse into a single UpdateTabList() pass.
+  // Structural changes (create/close/reorder) cancel any pending cosmetic
+  // refresh and go through the full ScheduleRefreshAll() path.
+  void ScheduleCosmeticRefresh();
   // Test-only accessors for live browser tests. Keep minimal.
   MahoSidebarFavoritesGridView* favorites_view_for_testing() {
     return favorites_view_;
@@ -174,6 +180,10 @@ class MahoSidebarView
       const std::string& active_space_id_json);
   void OnFavoritesModelReady(MahoSidebarFavoritesModel favorites_model);
   void RefreshAll();
+  // Applies the coalesced cosmetic refresh when |cosmetic_refresh_timer_|
+  // fires. Structural changes cancel the timer before this runs, preventing
+  // stale partial updates after a tab strip structural change.
+  void ApplyCosmeticRefresh();
   void ApplyViewState(const MahoSidebarViewStateModel& model);
   void UpdateTopBar(const MahoSidebarTopBarModel& model);
   void UpdateSearch(const MahoSidebarSearchModel& model);
@@ -190,6 +200,7 @@ class MahoSidebarView
 
   TabStripModel* tab_strip_model() const;
 
+  void OnSpaceProfileBridgeChanged(bool is_structural) override;
   void OnSpaceProfileBridgeChanged() override;
 
   void OnTabStripModelChanged(
@@ -245,6 +256,7 @@ class MahoSidebarView
 
   bool refresh_scheduled_ = false;
   bool needs_re_refresh_ = false;
+  base::OneShotTimer cosmetic_refresh_timer_;
   std::set<content::WebContents*> recently_registered_contents_;
   base::ScopedObservation<translate::ContentTranslateDriver,
                          translate::ContentTranslateDriver::TranslationObserver>

@@ -28,6 +28,7 @@ class MahoSpaceProfileBridge : public BrowserCollectionObserver {
  public:
   class Observer : public base::CheckedObserver {
    public:
+    virtual void OnSpaceProfileBridgeChanged(bool is_structural);
     virtual void OnSpaceProfileBridgeChanged() = 0;
 
    protected:
@@ -48,7 +49,7 @@ class MahoSpaceProfileBridge : public BrowserCollectionObserver {
 
   void SetActiveSpaceId(const std::string& space_id);
   void SetActiveSpaceId(Browser* browser, const std::string& space_id);
-  void NotifyChanged();
+  void NotifyChanged(bool is_structural = true);
 
   void SetLastActiveTab(const std::string& space_id,
                        const std::string& tab_id);

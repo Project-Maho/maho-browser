@@ -617,7 +617,13 @@ void DispatchShellEvent(
     LOG(ERROR) << "[folder-state-debug] handle_event updates=" << updates;
   }
   if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
-    bridge->NotifyChanged();
+    const bool is_structural = !(kind == "tab_title_updated" || 
+                                 kind == "tab_url_updated" ||
+                                 kind == "tab_favicon_updated" ||
+                                 kind == "tab_loading_state_changed" ||
+                                 kind == "update_tab_scroll_position" ||
+                                 kind == "update_tab_preview");
+    bridge->NotifyChanged(is_structural);
   }
   MahoBoostInjectionHandler::OnCoreUpdatesJson(updates);
 }
@@ -651,13 +657,19 @@ void DispatchShellEventEx(
   }
   std::string updates = maho::core::HandleEvent(core, json.c_str());
   if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
-    bridge->NotifyChanged();
+    const bool is_structural = !(kind == "tab_title_updated" || 
+                                 kind == "tab_url_updated" ||
+                                 kind == "tab_favicon_updated" ||
+                                 kind == "tab_loading_state_changed" ||
+                                 kind == "update_tab_scroll_position" ||
+                                 kind == "update_tab_preview");
+    bridge->NotifyChanged(is_structural);
   }
   MahoBoostInjectionHandler::OnCoreUpdatesJson(updates);
 }
 
 void DispatchShellEventDict(const std::string& kind,
-                            base::DictValue dict) {
+                             base::DictValue dict) {
   dict.Set("kind", kind);
   std::string json;
   base::JSONWriter::Write(dict, &json);
@@ -670,7 +682,13 @@ void DispatchShellEventDict(const std::string& kind,
   }
   std::string updates = maho::core::HandleEvent(core, json.c_str());
   if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
-    bridge->NotifyChanged();
+    const bool is_structural = !(kind == "tab_title_updated" || 
+                                 kind == "tab_url_updated" ||
+                                 kind == "tab_favicon_updated" ||
+                                 kind == "tab_loading_state_changed" ||
+                                 kind == "update_tab_scroll_position" ||
+                                 kind == "update_tab_preview");
+    bridge->NotifyChanged(is_structural);
   }
   MahoBoostInjectionHandler::OnCoreUpdatesJson(updates);
 }

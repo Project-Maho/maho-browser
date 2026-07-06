@@ -298,6 +298,18 @@ impl TabLifecycleManager {
         self.tabs.get(tab_id)
     }
 
+    pub fn get_tab_snapshot_json(&self, tab_id: &TabId) -> Option<String> {
+        let tab = self.tabs.get(tab_id)?;
+        let snapshot = serde_json::json!({
+            "id": tab_id.as_ref(),
+            "url": tab.url.0.clone(),
+            "title": tab.title.clone(),
+            "isPinned": tab.is_pinned,
+            "scrollPosition": { "x": tab.scroll_position.x, "y": tab.scroll_position.y }
+        });
+        Some(snapshot.to_string())
+    }
+
     pub fn get_tabs_by_space(&self, space_id: &SpaceId) -> Vec<&Tab> {
         self.tabs
             .values()
@@ -1080,6 +1092,12 @@ impl TabLifecycleManager {
     pub fn update_tab_security(&mut self, tab_id: &TabId, is_secure: bool) {
         if self.tabs.contains_key(tab_id) {
             self.security_states.insert(tab_id.clone(), is_secure);
+        }
+    }
+
+    pub fn update_tab_scroll_position(&mut self, tab_id: &TabId, x: f64, y: f64) {
+        if let Some(tab) = self.tabs.get_mut(tab_id) {
+            tab.scroll_position = ScrollPosition { x, y };
         }
     }
 

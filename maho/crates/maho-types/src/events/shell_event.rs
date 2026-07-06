@@ -450,6 +450,11 @@ pub enum ShellEvent {
         tab_id: TabId,
         is_secure: bool,
     },
+    UpdateTabScrollPosition {
+        tab_id: TabId,
+        x: f64,
+        y: f64,
+    },
 
     // History/Bookmarks/Permissions/Zoom/Download/Print/PiP/DevTools/Reader (8)
     SearchHistory {
@@ -826,6 +831,7 @@ impl ShellEvent {
                 | Self::TabLoadingChanged { .. }
                 | Self::TabNavigationStateChanged { .. }
                 | Self::TabSecurityChanged { .. }
+                | Self::UpdateTabScrollPosition { .. }
         )
     }
 

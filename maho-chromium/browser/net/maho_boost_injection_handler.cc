@@ -11,6 +11,7 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/trace_event/trace_event.h"
 #include "base/values.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
@@ -204,6 +205,7 @@ MahoBoostInjectionHandler::~MahoBoostInjectionHandler() {
 
 void MahoBoostInjectionHandler::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
+  TRACE_EVENT0("browser", "BoostInjection.DidFinishNavigation");
   if (!navigation_handle->HasCommitted() ||
       navigation_handle->IsErrorPage() ||
       !navigation_handle->GetURL().SchemeIsHTTPOrHTTPS()) {
@@ -214,6 +216,8 @@ void MahoBoostInjectionHandler::DidFinishNavigation(
     return;
   }
 
+  LOG(INFO) << "[MAHO_PERF] BoostInjection.DidFinishNavigation url="
+            << navigation_handle->GetURL().spec();
   content_script_injected_ = false;
   StopPolling();
 

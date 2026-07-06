@@ -645,6 +645,9 @@ void MahoSidebarView::OpenWebUIInNewTab(const GURL& url) {
 }
 
 void MahoSidebarView::ScheduleRefreshAll() {
+  // Any full-rebuild request supersedes a pending cosmetic patch: the full
+  // rebuild will already emit fresh titles/URLs/favicons.
+  cosmetic_refresh_timer_.Stop();
   if (refresh_scheduled_) {
     needs_re_refresh_ = true;
     return;
@@ -904,12 +907,42 @@ void MahoSidebarView::OnTabGroupChanged(const TabGroupChange& change) {
   ScheduleRefreshAll();
 }
 
+void MahoSidebarView::OnSpaceProfileBridgeChanged(bool is_structural) {
+  if (is_structural) {
+    OnSpaceProfileBridgeChanged();
+  } else {
+    LOG(INFO) << "[MAHO_PERF] NotifyChanged cosmetic_skipped_rebuild=true";
+    ScheduleCosmeticRefresh();
+  }
+}
+
 void MahoSidebarView::OnSpaceProfileBridgeChanged() {
+  // Structural change preempts any pending cosmetic refresh so we don't apply
+  // stale title/URL patches on top of a freshly-rebuilt tab list.
+  cosmetic_refresh_timer_.Stop();
   if (footer_view_) {
     UpdateFooter(state_adapter_.BuildFooterModel(browser_));
   }
   UpdateSpacesPaneActions();
   ScheduleRefreshAll();
+}
+
+void MahoSidebarView::ScheduleCosmeticRefresh() {
+  // 16ms debounce: coalesces bursts of title/URL/favicon updates from rapid
+  // navigation into a single UpdateTabList() pass at frame boundary.
+  constexpr base::TimeDelta kCosmeticDebounce = base::Milliseconds(16);
+  cosmetic_refresh_timer_.Start(
+      FROM_HERE, kCosmeticDebounce,
+      base::BindOnce(&MahoSidebarView::ApplyCosmeticRefresh,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void MahoSidebarView::ApplyCosmeticRefresh() {
+  base::ElapsedTimer t;
+  auto model = state_adapter_.BuildViewStateModel(browser_);
+  UpdateTabList(model.tab_list);
+  LOG(INFO) << "[MAHO_PERF] ApplyCosmeticRefresh="
+            << t.Elapsed().InMillisecondsF() << "ms";
 }
 
 bool MahoSidebarView::GetDropFormats(

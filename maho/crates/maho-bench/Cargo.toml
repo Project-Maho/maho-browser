@@ -34,3 +34,7 @@ harness = false
 [[bench]]
 name = "command_search"
 harness = false
+
+[[bench]]
+name = "tab_snapshot_lookup"
+harness = false

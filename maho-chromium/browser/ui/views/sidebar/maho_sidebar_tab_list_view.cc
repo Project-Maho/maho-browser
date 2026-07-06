@@ -12,6 +12,7 @@
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/timer/elapsed_timer.h"
+#include "base/trace_event/trace_event.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
@@ -56,6 +57,7 @@
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_id_helper.h"
+#include "maho/browser/maho_tab_preview_capture.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_dnd_events.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
@@ -3553,6 +3555,8 @@ struct PersistedTabInfo {
   std::string url;
   std::string title;
   bool is_pinned = false;
+  double scroll_x = 0.0;
+  double scroll_y = 0.0;
 };
 
 std::optional<PersistedTabInfo> QueryTabFromCore(const std::string& tab_id) {
@@ -3560,7 +3564,8 @@ std::optional<PersistedTabInfo> QueryTabFromCore(const std::string& tab_id) {
   if (!core) {
     return std::nullopt;
   }
-  char* json_str = maho_core_get_tab_view_models(core);
+  // O(1) single-tab lookup — replaces O(N) maho_core_get_tab_view_models scan
+  char* json_str = maho_core_get_tab_snapshot_by_id(core, tab_id.c_str());
   if (!json_str) {
     return std::nullopt;
   }
@@ -3569,28 +3574,20 @@ std::optional<PersistedTabInfo> QueryTabFromCore(const std::string& tab_id) {
 
   std::optional<base::Value> parsed =
       base::JSONReader::Read(json, base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_list()) {
+  if (!parsed || !parsed->is_dict()) {
     return std::nullopt;
   }
 
-  for (const auto& item : parsed->GetList()) {
-    const auto* dict = item.GetIfDict();
-    if (!dict) {
-      continue;
-    }
-    const std::string* id = dict->FindString("id");
-    if (id && *id == tab_id) {
-      const std::string* url = dict->FindString("url");
-      const std::string* title = dict->FindString("title");
-      std::optional<bool> is_pinned = dict->FindBool("isPinned");
-      PersistedTabInfo info;
-      if (url) info.url = *url;
-      if (title) info.title = *title;
-      if (is_pinned) info.is_pinned = *is_pinned;
-      return info;
-    }
+  const auto& dict = parsed->GetDict();
+  PersistedTabInfo info;
+  if (const std::string* url = dict.FindString("url")) info.url = *url;
+  if (const std::string* title = dict.FindString("title")) info.title = *title;
+  if (auto is_pinned = dict.FindBool("isPinned")) info.is_pinned = *is_pinned;
+  if (const auto* scroll = dict.FindDict("scrollPosition")) {
+    if (auto x = scroll->FindDouble("x")) info.scroll_x = *x;
+    if (auto y = scroll->FindDouble("y")) info.scroll_y = *y;
   }
-  return std::nullopt;
+  return info;
 }
 
 }  // namespace
@@ -3605,13 +3602,18 @@ void MahoSidebarTabListView::ActivateTabById(const std::string& tab_id) {
 }
 
 void MahoSidebarTabListView::WakeSuspendedTab(const std::string& tab_id) {
+  TRACE_EVENT1("browser", "WakeSuspendedTab", "tab_id", tab_id);
   base::ElapsedTimer maho_perf_t;
   LOG(INFO) << "[MAHO_PERF] WakeSuspendedTab START tab_id=" << tab_id;
 
+  TRACE_EVENT_INSTANT0("browser", "WakeSuspendedTab.QueryStart",
+                       TRACE_EVENT_SCOPE_THREAD);
   base::ElapsedTimer query_t;
   auto persisted = QueryTabFromCore(tab_id);
-  LOG(INFO) << "[MAHO_PERF]   QueryTabFromCore="
-            << query_t.Elapsed().InMillisecondsF() << "ms";
+  const double query_ms = query_t.Elapsed().InMillisecondsF();
+  TRACE_EVENT_INSTANT1("browser", "WakeSuspendedTab.QueryEnd",
+                       TRACE_EVENT_SCOPE_THREAD, "ms", query_ms);
+  LOG(INFO) << "[MAHO_PERF]   QueryTabFromCore=" << query_ms << "ms";
   if (!persisted) {
     LOG(INFO) << "[MAHO_PERF] WakeSuspendedTab END(no_persisted) "
               << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
@@ -3620,23 +3622,36 @@ void MahoSidebarTabListView::WakeSuspendedTab(const std::string& tab_id) {
 
   MahoTabIdHelper::SetPendingRestoredTabId(tab_id);
 
+  TRACE_EVENT_INSTANT0("browser", "WakeSuspendedTab.NavigateStart",
+                       TRACE_EVENT_SCOPE_THREAD);
   base::ElapsedTimer nav_t;
   NavigateParams params(browser_, GURL(persisted->url),
                         ui::PAGE_TRANSITION_AUTO_BOOKMARK);
   params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
   Navigate(&params);
-  LOG(INFO) << "[MAHO_PERF]   Navigate()="
-            << nav_t.Elapsed().InMillisecondsF() << "ms";
+  const double navigate_ms = nav_t.Elapsed().InMillisecondsF();
+  TRACE_EVENT_INSTANT1("browser", "WakeSuspendedTab.NavigateEnd",
+                       TRACE_EVENT_SCOPE_THREAD, "ms", navigate_ms);
+  LOG(INFO) << "[MAHO_PERF]   Navigate()=" << navigate_ms << "ms";
 
-  if (persisted->is_pinned && params.navigated_or_inserted_contents) {
-    TabStripModel* model = browser_->tab_strip_model();
-    int new_idx = model->GetIndexOfWebContents(params.navigated_or_inserted_contents);
-    if (new_idx != TabStripModel::kNoTab && !model->IsTabPinned(new_idx)) {
-      model->SetTabPinned(new_idx, true);
+  if (params.navigated_or_inserted_contents) {
+    MahoTabWakeHelper::CreateForWebContents(
+        params.navigated_or_inserted_contents, tab_id,
+        persisted->scroll_x, persisted->scroll_y);
+
+    if (persisted->is_pinned) {
+      TabStripModel* model = browser_->tab_strip_model();
+      int new_idx = model->GetIndexOfWebContents(params.navigated_or_inserted_contents);
+      if (new_idx != TabStripModel::kNoTab && !model->IsTabPinned(new_idx)) {
+        model->SetTabPinned(new_idx, true);
+      }
     }
   }
-  LOG(INFO) << "[MAHO_PERF] WakeSuspendedTab END total="
-            << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
+  const double total_ms = maho_perf_t.Elapsed().InMillisecondsF();
+  LOG(INFO) << "[MAHO_PERF] WakeSuspendedTab BREAKDOWN"
+            << " query=" << query_ms << "ms"
+            << " navigate=" << navigate_ms << "ms"
+            << " total=" << total_ms << "ms";
 }
 
 void MahoSidebarTabListView::CloseTab(int tab_index) {
@@ -3942,22 +3957,23 @@ void MahoSidebarTabListView::ExecuteCommand(int command_id, int event_flags) {
   }
 
   std::vector<int> indices_to_close;
+  std::vector<std::string> unresolved_tab_ids;
   indices_to_close.reserve(parsed->GetList().size());
-  int unresolved = 0;
   for (const auto& v : parsed->GetList()) {
     if (!v.is_string()) {
       continue;
     }
-    const int idx = ResolveTabStripIndexForTabId(v.GetString());
+    const std::string& tab_id = v.GetString();
+    const int idx = ResolveTabStripIndexForTabId(tab_id);
     if (idx >= 0 && model->ContainsIndex(idx)) {
       indices_to_close.push_back(idx);
     } else {
-      unresolved++;
+      unresolved_tab_ids.push_back(tab_id);
     }
   }
   LOG(INFO) << "[maho-clear] candidates=" << parsed->GetList().size()
             << " resolved=" << indices_to_close.size()
-            << " unresolved=" << unresolved;
+            << " unresolved=" << unresolved_tab_ids.size();
   std::sort(indices_to_close.rbegin(), indices_to_close.rend());
   for (int idx : indices_to_close) {
     if (!model->ContainsIndex(idx)) {
@@ -3967,6 +3983,13 @@ void MahoSidebarTabListView::ExecuteCommand(int command_id, int event_flags) {
         idx,
         TabCloseTypes::CLOSE_USER_GESTURE |
             TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
+  }
+  // Sidebar-only tabs (not backed by a live WebContents in TabStripModel)
+  // must be removed via the shell-event path so Rust tab table + sidebar
+  // stay in sync. Without this, Clear silently skips 100% of stale tabs
+  // for users who keep their tabs in the sidebar without opening them.
+  for (const std::string& tab_id : unresolved_tab_ids) {
+    maho::DispatchShellEvent("close_tab", {{"tab_id", tab_id}});
   }
 }
 

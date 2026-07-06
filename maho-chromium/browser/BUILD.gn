@@ -501,6 +501,7 @@ source_set("maho_browser_main_extra_parts") {
     ":maho_core_holder",
     ":maho_extension_state_bridge",
     ":maho_routines_scheduler",
+    ":maho_tab_id_helper",
     ":maho_tab_registry",
     ":maho_theme_support",
     "//base",
@@ -703,11 +704,14 @@ source_set("maho_theme_io_unittests") {
   sources = [
     "ui/theme/maho_space_theme_io_unittest.cc",
     "ui/notifications/maho_notification_overlay_unittest.cc",
+    "maho_tab_id_helper_unittest.cc",
   ]
   deps = [
+    ":maho_tab_id_helper",
     ":maho_theme_support",
     "//base",
     "//base/test:test_support",
+    "//chrome/test:test_support",
     "//testing/gtest",
     "//ui/views:test_support",
   ]
