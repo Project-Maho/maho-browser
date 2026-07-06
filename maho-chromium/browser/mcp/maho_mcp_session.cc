@@ -14,8 +14,15 @@
 #include <vector>
 
 #include "base/base64.h"
+#include "base/json/json_writer.h"
 #include "base/logging.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
+#include "base/uuid.h"
 #include "base/values.h"
+#include "maho/browser/mcp/maho_mcp_firewall.h"
+#include "maho/browser/mcp/maho_mcp_lease_registry.h"
+#include "url/gurl.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "maho/browser/mcp/maho_mcp_session_token_win.h"
@@ -32,17 +39,170 @@ constexpr char kServerVersion[] = "0.4.1";
 }  // namespace
 
 #if BUILDFLAG(IS_WIN)
-MahoMcpSession::MahoMcpSession(MahoMcpSessionToken* session_token)
-    : session_token_(session_token) {
+MahoMcpSession::MahoMcpSession(MahoMcpSessionToken* session_token,
+                               MahoMcpLeaseRegistry* lease_registry)
+    : session_token_(session_token),
+      lease_registry_(lease_registry),
+      session_id_(base::Uuid::GenerateRandomV4().AsLowercaseString()) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
 }
 #else
-MahoMcpSession::MahoMcpSession(uid_t peer_uid) : peer_uid_(peer_uid) {
+MahoMcpSession::MahoMcpSession(uid_t peer_uid,
+                               MahoMcpLeaseRegistry* lease_registry)
+    : peer_uid_(peer_uid),
+      lease_registry_(lease_registry),
+      session_id_(base::Uuid::GenerateRandomV4().AsLowercaseString()) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
 }
 #endif
 
 MahoMcpSession::~MahoMcpSession() = default;
+
+bool MahoMcpSession::IsHostAllowed(std::string_view host) const {
+  if (host.empty() || allowed_domains_.empty()) {
+    return false;
+  }
+  const std::string host_lc = base::ToLowerASCII(host);
+  for (const std::string& entry : allowed_domains_) {
+    const std::string entry_lc = base::ToLowerASCII(entry);
+    // Exact match.
+    if (host_lc == entry_lc) {
+      return true;
+    }
+    // Wildcard match: "*.example.com" matches "sub.example.com" and
+    // implicitly "example.com" itself.
+    static constexpr std::string_view kWildcard = "*.";
+    if (base::StartsWith(entry_lc, kWildcard)) {
+      const std::string bare = entry_lc.substr(kWildcard.size());
+      if (host_lc == bare) {
+        return true;
+      }
+      const std::string suffix = "." + bare;
+      if (host_lc.size() > suffix.size() &&
+          base::EndsWith(host_lc, suffix)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool MahoMcpSession::HandleAcquireLease(
+    const McpJsonRpcMessage& msg,
+    const base::DictValue* arguments,
+    std::vector<std::string>& responses) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!lease_registry_) {
+    responses.push_back(framer_.BuildErrorResponse(
+        msg.id, -32001, "Lease feature disabled"));
+    return true;
+  }
+  if (!arguments) {
+    responses.push_back(framer_.BuildErrorResponse(
+        msg.id, -32602, "Invalid params: tab_id required"));
+    return true;
+  }
+  std::optional<int> tab_id = arguments->FindInt("tab_id");
+  if (!tab_id.has_value()) {
+    responses.push_back(framer_.BuildErrorResponse(
+        msg.id, -32602, "Invalid params: tab_id must be integer"));
+    return true;
+  }
+  const int ttl_seconds = arguments->FindInt("ttl_seconds").value_or(60);
+  const bool force_steal =
+      arguments->FindBool("force_steal").value_or(false);
+  auto result = lease_registry_->Acquire(
+      static_cast<int64_t>(*tab_id), session_id_,
+      base::Seconds(ttl_seconds), force_steal);
+  if (!result.ok) {
+    base::DictValue data;
+    data.Set("previous_holder", result.previous_holder);
+    data.Set("tab_id", *tab_id);
+    responses.push_back(framer_.BuildErrorResponse(
+        msg.id, -32000, result.message));
+    return true;
+  }
+  base::DictValue out;
+  out.Set("acquired", true);
+  out.Set("session_id", session_id_);
+  out.Set("tab_id", *tab_id);
+  out.Set("expires_in_seconds",
+          static_cast<int>((result.expires_at - base::TimeTicks::Now())
+                               .InSeconds()));
+  responses.push_back(framer_.BuildSuccessResponse(
+      msg.id, base::Value(std::move(out))));
+  return true;
+}
+
+bool MahoMcpSession::HandleHeartbeatLease(
+    const McpJsonRpcMessage& msg,
+    const base::DictValue* arguments,
+    std::vector<std::string>& responses) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!lease_registry_) {
+    responses.push_back(framer_.BuildErrorResponse(
+        msg.id, -32001, "Lease feature disabled"));
+    return true;
+  }
+  if (!arguments) {
+    responses.push_back(framer_.BuildErrorResponse(
+        msg.id, -32602, "Invalid params: tab_id required"));
+    return true;
+  }
+  std::optional<int> tab_id = arguments->FindInt("tab_id");
+  if (!tab_id.has_value()) {
+    responses.push_back(framer_.BuildErrorResponse(
+        msg.id, -32602, "Invalid params: tab_id must be integer"));
+    return true;
+  }
+  const int ttl_seconds = arguments->FindInt("ttl_seconds").value_or(60);
+  base::TimeTicks expires = lease_registry_->Heartbeat(
+      static_cast<int64_t>(*tab_id), session_id_,
+      base::Seconds(ttl_seconds));
+  if (expires.is_null()) {
+    responses.push_back(framer_.BuildErrorResponse(
+        msg.id, -32000,
+        "Not lease holder or lease expired"));
+    return true;
+  }
+  base::DictValue out;
+  out.Set("heartbeat", true);
+  out.Set("expires_in_seconds",
+          static_cast<int>((expires - base::TimeTicks::Now()).InSeconds()));
+  responses.push_back(framer_.BuildSuccessResponse(
+      msg.id, base::Value(std::move(out))));
+  return true;
+}
+
+bool MahoMcpSession::HandleReleaseLease(
+    const McpJsonRpcMessage& msg,
+    const base::DictValue* arguments,
+    std::vector<std::string>& responses) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!lease_registry_) {
+    responses.push_back(framer_.BuildErrorResponse(
+        msg.id, -32001, "Lease feature disabled"));
+    return true;
+  }
+  if (!arguments) {
+    responses.push_back(framer_.BuildErrorResponse(
+        msg.id, -32602, "Invalid params: tab_id required"));
+    return true;
+  }
+  std::optional<int> tab_id = arguments->FindInt("tab_id");
+  if (!tab_id.has_value()) {
+    responses.push_back(framer_.BuildErrorResponse(
+        msg.id, -32602, "Invalid params: tab_id must be integer"));
+    return true;
+  }
+  const bool released =
+      lease_registry_->Release(static_cast<int64_t>(*tab_id), session_id_);
+  base::DictValue out;
+  out.Set("released", released);
+  responses.push_back(framer_.BuildSuccessResponse(
+      msg.id, base::Value(std::move(out))));
+  return true;
+}
 
 std::vector<std::string> MahoMcpSession::ProcessData(const std::string& data) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -273,6 +433,40 @@ void MahoMcpSession::HandleActiveMethod(const McpJsonRpcMessage& msg,
       t.Set("description", "Wait for a selector to appear");
       tools.Append(base::Value(std::move(t)));
     }
+    {
+      base::DictValue t;
+      t.Set("name", "browser_set_allowed_domains");
+      t.Set("description",
+            "Set the session-scoped allowlist of domains for "
+            "browser_navigate and browser_tab_new(url=...). "
+            "Supports wildcards like '*.example.com'.");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "browser_acquire_lease");
+      t.Set("description",
+            "Acquire exclusive lease on a tab. Args: tab_id (int), "
+            "ttl_seconds (int, 10-300, default 60), force_steal "
+            "(bool, default false).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "browser_heartbeat_lease");
+      t.Set("description",
+            "Extend an existing lease. Args: tab_id (int), "
+            "ttl_seconds (int, 10-300, default 60). Must be the "
+            "current lease holder.");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "browser_release_lease");
+      t.Set("description",
+            "Release a lease held by this session. Args: tab_id (int).");
+      tools.Append(base::Value(std::move(t)));
+    }
 
     result.Set("tools", std::move(tools));
 
@@ -332,8 +526,9 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
   if (*tool_name == "browser_tab_list") {
     base::DictValue result;
     result.Set("tabs", base::ListValue());
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
-        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result)));
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
     responses.push_back(std::move(resp));
     return;
   }
@@ -350,8 +545,9 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     result.Set("title", "");
     result.Set("url", "");
     result.Set("is_active", false);
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
-        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result)));
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
     responses.push_back(std::move(resp));
     return;
   }
@@ -363,11 +559,93 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       responses.push_back(std::move(err));
       return;
     }
+    // D1: allowed_domains enforcement.
+    const std::string& url_str = *arguments->FindString("url");
+    const GURL nav_url(url_str);
+    if (!nav_url.is_valid()) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: url is not a valid GURL");
+      responses.push_back(std::move(err));
+      return;
+    }
+    if (!IsHostAllowed(nav_url.host())) {
+      base::DictValue data;
+      data.Set("host", std::string(nav_url.host()));
+      if (allowed_domains_.empty()) {
+        data.Set("status", "domain_approval_required");
+      } else {
+        data.Set("status", "domain_not_allowed");
+      }
+      base::DictValue error;
+      error.Set("code", -32000);
+      error.Set("message",
+                allowed_domains_.empty()
+                    ? "Set allowed domains before navigating "
+                      "(call browser_set_allowed_domains)"
+                    : "Navigation blocked: host not in allowed_domains");
+      error.Set("data", std::move(data));
+      base::DictValue response;
+      response.Set("id", msg.id ? msg.id->Clone() : base::Value());
+      response.Set("error", std::move(error));
+      std::string out;
+      base::JSONWriter::Write(base::Value(std::move(response)), &out);
+      out.push_back('\n');
+      responses.push_back(std::move(out));
+      return;
+    }
     base::DictValue result;
     result.Set("navigated", true);
     std::string resp =
         framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result)));
     responses.push_back(std::move(resp));
+    return;
+  }
+
+  if (*tool_name == "browser_set_allowed_domains") {
+    if (!arguments) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: domains list required");
+      responses.push_back(std::move(err));
+      return;
+    }
+    const base::ListValue* domains = arguments->FindList("domains");
+    if (!domains) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: domains must be a list of strings");
+      responses.push_back(std::move(err));
+      return;
+    }
+    std::set<std::string> new_set;
+    for (const auto& d : *domains) {
+      if (!d.is_string()) {
+        std::string err = framer_.BuildErrorResponse(
+            msg.id, -32602, "Invalid params: domains entries must be strings");
+        responses.push_back(std::move(err));
+        return;
+      }
+      new_set.insert(base::ToLowerASCII(d.GetString()));
+    }
+    allowed_domains_ = std::move(new_set);
+    base::DictValue result;
+    result.Set("count", static_cast<int>(allowed_domains_.size()));
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result)));
+    responses.push_back(std::move(resp));
+    return;
+  }
+
+  if (*tool_name == "browser_acquire_lease") {
+    HandleAcquireLease(msg, arguments, responses);
+    return;
+  }
+
+  if (*tool_name == "browser_heartbeat_lease") {
+    HandleHeartbeatLease(msg, arguments, responses);
+    return;
+  }
+
+  if (*tool_name == "browser_release_lease") {
+    HandleReleaseLease(msg, arguments, responses);
     return;
   }
 
@@ -381,6 +659,26 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
   }
 
   if (*tool_name == "browser_tab_new") {
+    if (arguments && arguments->FindString("url")) {
+      const std::string& url_str = *arguments->FindString("url");
+      const GURL nav_url(url_str);
+      if (!nav_url.is_valid()) {
+        std::string err = framer_.BuildErrorResponse(
+            msg.id, -32602, "Invalid params: url is not a valid GURL");
+        responses.push_back(std::move(err));
+        return;
+      }
+      if (!IsHostAllowed(nav_url.host())) {
+        std::string err = framer_.BuildErrorResponse(
+            msg.id, -32000,
+            allowed_domains_.empty()
+                ? "Set allowed domains before opening a new tab with url "
+                  "(call browser_set_allowed_domains)"
+                : "New tab blocked: host not in allowed_domains");
+        responses.push_back(std::move(err));
+        return;
+      }
+    }
     base::DictValue tab;
     tab.Set("id", 0);
     tab.Set("title", "New Tab");
@@ -390,8 +688,9 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     tab.Set("is_active", true);
     base::DictValue result;
     result.Set("tab", std::move(tab));
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
-        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result)));
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
     responses.push_back(std::move(resp));
     return;
   }
@@ -399,8 +698,9 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
   if (*tool_name == "browser_history_search") {
     base::DictValue result;
     result.Set("entries", base::ListValue());
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
-        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result)));
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
     responses.push_back(std::move(resp));
     return;
   }
@@ -414,8 +714,9 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     }
     base::DictValue result;
     result.Set("bookmarks", base::ListValue());
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
-        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result)));
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
     responses.push_back(std::move(resp));
     return;
   }
@@ -438,8 +739,9 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     }
     base::DictValue result;
     result.Set("bookmark", std::move(bookmark));
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
-        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result)));
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
     responses.push_back(std::move(resp));
     return;
   }
@@ -450,8 +752,9 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     result.Set("url", "");
     result.Set("title", "");
     result.Set("redacted", false);
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
-        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result)));
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
     responses.push_back(std::move(resp));
     return;
   }
@@ -459,8 +762,9 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
   if (*tool_name == "browser_page_text") {
     base::DictValue result;
     result.Set("text", "");
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
-        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result)));
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
     responses.push_back(std::move(resp));
     return;
   }
@@ -475,8 +779,9 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     base::DictValue result;
     result.Set("match_count", 0);
     result.Set("active_match_index", -1);
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
-        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result)));
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
     responses.push_back(std::move(resp));
     return;
   }
@@ -486,8 +791,9 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     result.Set("url", "");
     result.Set("title", "");
     result.Set("content", "");
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
-        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result)));
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
     responses.push_back(std::move(resp));
     return;
   }
@@ -502,8 +808,9 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     base::DictValue result;
     result.Set("ref_id", "ref_stub_0");
     result.Set("tag", "div");
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
-        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result)));
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
     responses.push_back(std::move(resp));
     return;
   }
@@ -517,8 +824,9 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     }
     base::DictValue result;
     result.Set("text", "");
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
-        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result)));
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
     responses.push_back(std::move(resp));
     return;
   }
@@ -532,8 +840,9 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       return;
     }
     base::DictValue result;
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
-        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result)));
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
     responses.push_back(std::move(resp));
     return;
   }
@@ -547,8 +856,9 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     }
     base::DictValue result;
     result.Set("found", false);
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
-        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result)));
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
     responses.push_back(std::move(resp));
     return;
   }
