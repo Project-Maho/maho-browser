@@ -23,5 +23,5 @@ const directionMap = {
 ---
 
 <div class:list={[`mask-fade-${directionMap[fadeDirection]}`, Astro.props.class]}>
-  <img src={src} alt={alt} width={width} height={height} loading="lazy" />
+  <img src={src} alt={alt} width={width} height={height} loading="lazy" decoding="async" />
 </div>

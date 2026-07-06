@@ -52,6 +52,9 @@ export function HeroSection({ config }: HeroSectionProps) {
                     alt="Maho Browser interface showing a sidebar with multiple Spaces for organizing projects, AI conversation thread, and split-view tabs"
                     width={1200}
                     height={800}
+                    loading="eager"
+                    fetchPriority="high"
+                    decoding="async"
                     className="w-full h-auto object-cover"
                   />
                 </div>

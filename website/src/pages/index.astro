@@ -20,14 +20,25 @@ const ld = {
       '@id': `${siteUrl}/#organization`,
       name: 'Maho',
       url: siteUrl,
-      logo: absoluteUrl('/logo.svg')
+      logo: absoluteUrl('/logo.svg'),
+      sameAs: ['https://github.com/Project-Maho'],
+      foundingDate: '2026',
+      founder: { '@type': 'Person', name: 'Indosaram' },
     },
     {
       '@type': 'WebSite',
       '@id': `${siteUrl}/#website`,
       name: 'Maho',
       url: siteUrl,
-      publisher: { '@id': `${siteUrl}/#organization` }
+      publisher: { '@id': `${siteUrl}/#organization` },
+      potentialAction: {
+        '@type': 'SearchAction',
+        target: {
+          '@type': 'EntryPoint',
+          urlTemplate: 'https://maho.app/?q={search_term_string}',
+        },
+        'query-input': 'required name=search_term_string',
+      },
     },
     {
       '@type': 'SoftwareApplication',

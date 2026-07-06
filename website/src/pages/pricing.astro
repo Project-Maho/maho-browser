@@ -142,6 +142,16 @@ const ld = {
     },
   ],
 };
+
+const ldFaq = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: faqs.map((faq) => ({
+    '@type': 'Question',
+    name: faq.question,
+    acceptedAnswer: { '@type': 'Answer', text: faq.answer },
+  })),
+};
 ---
 
 <BaseLayout
@@ -150,6 +160,7 @@ const ld = {
   ogImage="/og/pricing.png"
 >
   <JSONLD data={ld} />
+  <script is:inline type="application/ld+json" set:html={JSON.stringify(ldFaq)} />
   <div class="min-h-screen bg-background text-foreground">
     <Nav />
     <main id="main" class="container-marketing pad-x-ladder marketing-scope pt-32 pb-24">

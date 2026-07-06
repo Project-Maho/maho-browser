@@ -4,9 +4,13 @@
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Footer from '../components/Footer.astro';
 import Nav from '../components/Nav.astro';
+import { getSiteUrl } from '../lib/site';
+
+const { absoluteUrl } = getSiteUrl(Astro);
+const description = "Terms of Service for Maho Browser and Mail. Free tier, Pro $5/mo, Max $20/mo subscriptions, PAYG credits, and BYOK usage terms.";
 ---
 
-<BaseLayout title="Terms of Service — Maho" description="Terms of Service for Maho Browser and Mail. Free tier, Pro $5/mo, Max $20/mo subscriptions, PAYG credits, and BYOK usage terms.">
+<BaseLayout title="Terms of Service — Maho" description={description}>
   <div class="min-h-screen bg-background text-foreground">
     <Nav />
     <main id="main" class="max-w-3xl mx-auto px-6 pt-32 pb-24">
@@ -85,4 +89,12 @@ import Nav from '../components/Nav.astro';
     </main>
     <Footer />
   </div>
+  <script is:inline type="application/ld+json" set:html={JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    "name": "Terms of Service — Maho",
+    "description": description,
+    "url": absoluteUrl('/terms'),
+    "isPartOf": { "@type": "WebSite", "@id": "https://maho.app/#website" },
+  })} />
 </BaseLayout>

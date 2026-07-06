@@ -12,6 +12,25 @@ import { getSiteUrl } from '../lib/site';
 const { absoluteUrl } = getSiteUrl(Astro);
 const title = "Join the waitlist — Maho";
 const description = "Get early access to Maho — the proprietary, privacy-first browser and email client. We'll email you when builds are ready for your platform.";
+
+const faqs = [
+  {
+    question: "When will macOS builds ship?",
+    answer: "We don't have a fixed date yet. When we do, waitlist members hear first. We won't announce a date until we're confident we can hit it.",
+  },
+  {
+    question: "Why macOS first?",
+    answer: "It's our primary development platform and where we can move fastest. Linux follows once the core is stable, then Windows. Mobile comes after desktop.",
+  },
+  {
+    question: "Is Maho free?",
+    answer: "Yes. No subscription, no payment processor, no trial timer. AI features use your own API key (BYOK), so the model bill goes to your provider, not to us.",
+  },
+  {
+    question: "Can I unsubscribe?",
+    answer: "Every email includes an unsubscribe link. One click, immediate removal, no confirmation page.",
+  },
+];
 ---
 
 <BaseLayout title={title} description={description}>
@@ -113,33 +132,14 @@ const description = "Get early access to Maho — the proprietary, privacy-first
       <section aria-labelledby="faq-heading">
         <h2 id="faq-heading" class="text-2xl font-medium mb-6">Questions</h2>
         <div class="space-y-8">
-          <div>
-            <h3 class="font-medium mb-2">When will macOS builds ship?</h3>
-            <p class="text-muted-foreground text-sm leading-relaxed">
-              We don't have a fixed date yet. When we do, waitlist members hear first. We won't announce a date until we're confident we can hit it.
-            </p>
-          </div>
-
-          <div>
-            <h3 class="font-medium mb-2">Why macOS first?</h3>
-            <p class="text-muted-foreground text-sm leading-relaxed">
-              It's our primary development platform and where we can move fastest. Linux follows once the core is stable, then Windows. Mobile comes after desktop.
-            </p>
-          </div>
-
-          <div>
-            <h3 class="font-medium mb-2">Is Maho free?</h3>
-            <p class="text-muted-foreground text-sm leading-relaxed">
-              Yes. No subscription, no payment processor, no trial timer. AI features use your own API key (BYOK), so the model bill goes to your provider, not to us.
-            </p>
-          </div>
-
-          <div>
-            <h3 class="font-medium mb-2">Can I unsubscribe?</h3>
-            <p class="text-muted-foreground text-sm leading-relaxed">
-              Every email includes an unsubscribe link. One click, immediate removal, no confirmation page.
-            </p>
-          </div>
+          {faqs.map((faq) => (
+            <div>
+              <h3 class="font-medium mb-2">{faq.question}</h3>
+              <p class="text-muted-foreground text-sm leading-relaxed">
+                {faq.answer}
+              </p>
+            </div>
+          ))}
         </div>
       </section>
 
@@ -153,6 +153,15 @@ const description = "Get early access to Maho — the proprietary, privacy-first
     "name": title,
     "description": description,
     "url": absoluteUrl('/waitlist')
+  })} />
+  <script is:inline type="application/ld+json" set:html={JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": faqs.map((faq) => ({
+      "@type": "Question",
+      "name": faq.question,
+      "acceptedAnswer": { "@type": "Answer", "text": faq.answer },
+    })),
   })} />
 
   <script is:inline define:vars={{ PUBLIC_RELAY_URL: import.meta.env.PUBLIC_RELAY_URL }}>

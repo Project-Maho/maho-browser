@@ -25,8 +25,28 @@ export default defineConfig({
             { label: 'GUI Guide', link: '/mail/gui' },
             { label: 'MCP Server', link: '/mail/mcp' },
             { label: 'CLI Reference', autogenerate: { directory: 'cli' } },
-            { label: 'API Reference', autogenerate: { directory: 'api' } }
+            {
+              label: 'API Reference',
+              items: [
+                { label: 'Overview', link: '/api/' },
+                { label: 'list_accounts', link: '/api/list-accounts/' },
+                { label: 'list_folders', link: '/api/list-folders/' },
+                { label: 'list_emails', link: '/api/list-emails/' },
+                { label: 'get_email', link: '/api/get-email/' },
+                { label: 'search_emails', link: '/api/search-emails/' },
+                { label: 'list_thread', link: '/api/list-thread/' },
+              ],
+            },
           ]
+        },
+        {
+          label: 'API',
+          items: [
+            {
+              label: 'Agent Protocol',
+              autogenerate: { directory: 'api/agent-protocol' },
+            },
+          ],
         },
       ],
       plugins: [
@@ -44,6 +64,7 @@ export default defineConfig({
     sitemap({
       // Per-route priority and changefreq.
       // Order matters — first matching rule wins via early-return in serialize().
+      // TODO: filter future-dated blog posts from sitemap (requires reading blog frontmatter date at build time)
       serialize(item) {
         const url = item.url;
 

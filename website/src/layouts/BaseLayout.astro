@@ -3,6 +3,7 @@ import '../styles/global.css';
 import '../styles/marketing.css';
 import '@fontsource-variable/geist';
 import '@fontsource-variable/geist-mono';
+import '@fontsource/instrument-serif';
 
 interface Props {
   title: string;
@@ -33,10 +34,16 @@ const ogImageUrl = new URL(ogImage ?? '/og-image.png', Astro.site).href;
     <meta name="twitter:title" content={title} />
     <meta name="twitter:description" content={description} />
     <meta name="twitter:image" content={ogImageUrl} />
+    <meta name="twitter:image:alt" content={ogImage ? `${title} — Maho` : "Maho — private browser and email"} />
+    {/* TODO: add twitter:site when @handle is confirmed */}
+    <meta property="og:image:alt" content={ogImage ? `${title} — Maho` : "Maho — private browser and email"} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:locale" content="en_US" />
+    <meta name="theme-color" content="#0a0a0a" />
     <link rel="canonical" href={canonicalUrl.href} />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
-    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
+    <link rel="apple-touch-icon" href="/logo.svg" />
+    <link rel="alternate" type="application/rss+xml" title="Maho Blog RSS" href="/blog/rss.xml" />
     <script is:inline>
       var t=localStorage.getItem("maho-theme")||localStorage.getItem("starlight-theme");if(t==="light"){document.documentElement.classList.replace("dark","light")}if(t){localStorage.setItem("maho-theme",t);localStorage.setItem("starlight-theme",t)}
     </script>

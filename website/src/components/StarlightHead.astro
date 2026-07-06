@@ -34,7 +34,11 @@ if (isBlogPost && Astro.site) {
   const authors = rawAuthors.map((a: any) => {
     const name = typeof a === 'string' ? a : a?.name;
     if (!name) return null;
-    const person: Record<string, unknown> = { '@type': 'Person', name };
+    const person: Record<string, unknown> = {
+      '@type': 'Person',
+      name,
+      url: new URL('/about', Astro.site).href,
+    };
     if (typeof a === 'object' && a?.url) person.url = a.url;
     return person;
   }).filter(Boolean);
