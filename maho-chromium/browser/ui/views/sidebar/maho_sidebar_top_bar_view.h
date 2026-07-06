@@ -37,6 +37,7 @@ class MahoSidebarTopBarView : public views::View {
 
   void Update(const MahoSidebarTopBarModel& model);
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
+  void AddedToWidget() override;
 
   views::View* leading_cluster_for_testing() { return leading_cluster_; }
   views::View* nav_cluster_for_testing() { return nav_cluster_; }
@@ -56,6 +57,13 @@ class MahoSidebarTopBarView : public views::View {
  private:
   void ApplyChromeSpacing();
   void UpdateButtonImages();
+  // Rewrites BoxLayout `inside_border_insets` so the action-icon row's
+  // cross-axis center matches the runtime traffic-light center from
+  // GetTrafficLightCenterYInView(). No-op on non-macOS or when NSWindow is
+  // unavailable (unit tests, popup/devtools windows). Idempotent: only
+  // invalidates layout on inset change, so does not loop with
+  // OnBoundsChanged.
+  void MaybeUpdateDynamicTopInset();
   void UpdateButtonState(views::ImageButton* button,
                          bool enabled,
                          const gfx::VectorIcon& icon,

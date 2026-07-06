@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <string_view>
 
 #include "base/functional/bind.h"
@@ -20,6 +21,7 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
+#include "maho/browser/ui/views/sidebar/maho_traffic_light_geometry.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/common/referrer.h"
@@ -231,7 +233,34 @@ void MahoSidebarTopBarView::Update(const MahoSidebarTopBarModel& model) {
 void MahoSidebarTopBarView::OnBoundsChanged(
     const gfx::Rect& previous_bounds) {
   views::View::OnBoundsChanged(previous_bounds);
+  MaybeUpdateDynamicTopInset();
   ApplyChromeSpacing();
+}
+
+void MahoSidebarTopBarView::AddedToWidget() {
+  views::View::AddedToWidget();
+  MaybeUpdateDynamicTopInset();
+}
+
+void MahoSidebarTopBarView::MaybeUpdateDynamicTopInset() {
+  auto* layout = static_cast<views::BoxLayout*>(GetLayoutManager());
+  if (!layout) {
+    return;
+  }
+  std::optional<int> measured_center_y = GetTrafficLightCenterYInView(this);
+  if (!measured_center_y.has_value()) {
+    return;
+  }
+  const int desired_top_inset =
+      std::max(0, *measured_center_y -
+                      sidebar_layout::kTopBarTrafficLightAlignmentHeightDp / 2);
+  const gfx::Insets current = layout->inside_border_insets();
+  if (current.top() == desired_top_inset) {
+    return;
+  }
+  layout->set_inside_border_insets(gfx::Insets::TLBR(
+      desired_top_inset, current.left(), current.bottom(), current.right()));
+  InvalidateLayout();
 }
 
 bool MahoSidebarTopBarView::IsPositionInWindowCaption(

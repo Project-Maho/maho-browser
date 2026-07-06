@@ -121,7 +121,14 @@ source_set("maho_sidebar_core") {
     "maho_sidebar_update_notification_view.h",
     "maho_sidebar_view.cc",
     "maho_sidebar_view.h",
+    "maho_traffic_light_geometry.h",
   ]
+
+  if (is_mac) {
+    sources += [ "maho_traffic_light_geometry_mac.mm" ]
+  } else {
+    sources += [ "maho_traffic_light_geometry_stub.cc" ]
+  }
 
   deps = [
     ":maho_sidebar_downloads",
