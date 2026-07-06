@@ -123,6 +123,10 @@ export class MahoAiStore {
       if (this.state.currentSessionId) {
         await this.resumeSession(this.state.currentSessionId);
       }
+
+      void this.fetchCreditBalance().catch(err => {
+        console.warn('[maho-ai] initial credit balance fetch failed', err);
+      });
     } catch (error) {
       this.patch(state => {
         state.booting = false;
@@ -614,6 +618,25 @@ export class MahoAiStore {
           this.applyAISettings(info);
         });
 
+    this.bindCreditBalanceRefresh();
+  }
+
+  private creditBalanceRefreshTimer: ReturnType<typeof setTimeout> | undefined =
+      undefined;
+
+  private bindCreditBalanceRefresh(): void {
+    const scheduleRefresh = () => {
+      if (this.creditBalanceRefreshTimer !== undefined) {
+        clearTimeout(this.creditBalanceRefreshTimer);
+      }
+      this.creditBalanceRefreshTimer = setTimeout(() => {
+        this.creditBalanceRefreshTimer = undefined;
+        this.fetchCreditBalance().catch(err => {
+          console.warn('[maho-ai] credit balance refresh failed', err);
+        });
+      }, 500);
+    };
+    window.addEventListener('focus', scheduleRefresh);
   }
 
   async refreshAISettings(): Promise<void> {

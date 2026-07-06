@@ -61,6 +61,18 @@ MahoAIUI::MahoAIUI(content::WebUI* web_ui)
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::TrustedTypes,
       "trusted-types default static-types;");
+  // LemonSqueezy overlay checkout (P1-A): allow loading lemon.js from LS CDN,
+  // embedding the LS checkout iframe, and connecting to the LS API for signed
+  // checkout URL creation.
+  source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::ScriptSrc,
+      "script-src chrome://resources 'self' https://app.lemonsqueezy.com;");
+  source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::FrameSrc,
+      "frame-src https://maho.lemonsqueezy.com https://lemonsqueezy.com;");
+  source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::ConnectSrc,
+      "connect-src 'self' https://api.lemonsqueezy.com;");
 }
 
 MahoAIUI::~MahoAIUI() = default;

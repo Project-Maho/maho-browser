@@ -35,6 +35,7 @@ fn maho_cmd_with_token(config_dir: &std::path::Path, token: &str) -> Command {
     .unwrap();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_maho"));
     cmd.env("MAHO_CONFIG_DIR", config_dir);
+    cmd.env("MAHO_CLI_TEST", "1");
     cmd.stdin(std::process::Stdio::null());
     cmd
 }
@@ -42,6 +43,7 @@ fn maho_cmd_with_token(config_dir: &std::path::Path, token: &str) -> Command {
 fn maho_cmd_no_token(config_dir: &std::path::Path) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_maho"));
     cmd.env("MAHO_CONFIG_DIR", config_dir);
+    cmd.env("MAHO_CLI_TEST", "1");
     cmd.stdin(std::process::Stdio::null());
     cmd
 }
@@ -90,6 +92,30 @@ async fn test_buy_credits_amount_10_prints_url() {
     assert!(
         stdout.contains("$10"),
         "stdout should mention $10, got: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_buy_credits_suppresses_browser_open_messages_in_test_env() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = maho_cmd_no_token(tmp.path())
+        .args(["buy-credits", "--amount", "50"])
+        .output()
+        .expect("failed to run maho buy-credits");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Checkout URL:"),
+        "URL header should print even with MAHO_CLI_TEST set, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("Opened in Maho Browser"),
+        "Maho-Browser open status must be suppressed when MAHO_CLI_TEST is set, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("Opened in your default browser"),
+        "default-browser open status must be suppressed when MAHO_CLI_TEST is set, got: {stdout}"
     );
 }
 

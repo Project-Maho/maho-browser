@@ -36,6 +36,8 @@
 #include "maho/browser/ui/webui/maho_ai/maho_ai_prefs_registration.h"
 #include "maho/browser/maho_ai_popup_lifetime_tracker.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
+#include "maho/browser/ui/webui/maho_account_prefs.h"
+#include "base/strings/escape.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/third_party/maho/maho_bridge.h"
 #include "maho/browser/maho_space_profile_bridge.h"
@@ -2206,6 +2208,18 @@ void MahoAIPageHandler::GetBuyCreditsUrl(
     default:
       checkout_url = "";
       break;
+  }
+
+  // Append custom_data.user_id (ADR 0010 §Webhook Handling) so the relay's
+  // LS webhook handler can attribute the purchase to the correct account.
+  // Reads prefs synchronously via account_prefs::kRelayUserId.
+  if (!checkout_url.empty() && prefs_) {
+    const std::string user_id =
+        prefs_->GetString(maho::account_prefs::kRelayUserId);
+    if (!user_id.empty()) {
+      checkout_url += "?checkout[custom][user_id]=";
+      checkout_url += base::EscapeQueryParamValue(user_id, /*use_plus=*/false);
+    }
   }
 
   std::move(callback).Run(checkout_url);

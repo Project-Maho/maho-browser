@@ -212,12 +212,21 @@ async fn cmd_balance(relay_url: &str) -> Result<()> {
 }
 
 fn cmd_buy_credits(amount: &str) -> Result<()> {
-    println!("Opening LemonSqueezy checkout for ${amount} pack in your browser...");
     let url = credits::checkout_url_for_pack(amount);
+    println!("Opening LemonSqueezy checkout for ${amount} pack...");
     println!("Checkout URL: {url}");
-    if let Err(e) = open::that(url) {
-        eprintln!("Could not open browser automatically: {e}");
-        eprintln!("Please open the URL above manually.");
+    match credits::open_checkout_url(url) {
+        Ok(credits::OpenOutcome::OpenedInMahoBrowser) => {
+            println!("Opened in Maho Browser.");
+        }
+        Ok(credits::OpenOutcome::OpenedInSystemBrowser) => {
+            println!("Opened in your default browser.");
+        }
+        Ok(credits::OpenOutcome::SkippedForTest) => {}
+        Err(e) => {
+            eprintln!("Could not open browser automatically: {e}");
+            eprintln!("Please open the URL above manually.");
+        }
     }
     println!("Once your purchase completes, run `maho balance` to verify your new balance.");
     Ok(())
