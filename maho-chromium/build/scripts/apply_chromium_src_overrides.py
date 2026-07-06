@@ -82,6 +82,30 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '      </message>\n'
             ),
             description="Add Maho transient notification string resources",
+            guard='"IDS_MAHO_TOAST_LINK_COPIED"',
+        ),
+        Replacement(
+            old=(
+                '      <message name="IDS_MAHO_EXPORT_THEME_FAILED_MESSAGE" desc="Maho: Message for theme export failure dialog.">\n'
+                '        Could not export space theme to the selected file.\n'
+                '      </message>\n'
+            ),
+            new=(
+                '      <message name="IDS_MAHO_EXPORT_THEME_FAILED_MESSAGE" desc="Maho: Message for theme export failure dialog.">\n'
+                '        Could not export space theme to the selected file.\n'
+                '      </message>\n'
+                '      <message name="IDS_MAHO_CTRL_TAB_MORE_AFFORDANCE_COUNT" desc="Maho: Label shown in the Ctrl+Tab overlay for the +N more affordance card. [ICU Syntax]">\n'
+                '        {NUM_MORE, plural, =1 {+1 more} other {+# more}}\n'
+                '      </message>\n'
+                '      <message name="IDS_MAHO_CTRL_TAB_MORE_AFFORDANCE_HINT" desc="Maho: Hint text under the +N more affordance in the Ctrl+Tab overlay describing what activating it does.">\n'
+                '        Search all\n'
+                '      </message>\n'
+            ),
+            description=(
+                "Add Ctrl+Tab MRU switcher string resources for the +N more "
+                "affordance count and hint"
+            ),
+            guard='"IDS_MAHO_CTRL_TAB_MORE_AFFORDANCE_COUNT"',
         ),
     ],
     # ── parse_html_subset.ts ──────────────────────────────────────────────────
@@ -224,6 +248,63 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "command palette retry"
             ),
             guard='#include "base/task/single_thread_task_runner.h"',
+        ),
+        Replacement(
+            old=(
+                '    case IDC_SELECT_NEXT_TAB:\n'
+                '      base::RecordAction(base::UserMetricsAction("Accel_SelectNextTab"));\n'
+                '      SelectNextTab(\n'
+                '          browser_,\n'
+                '          TabStripUserGestureDetails(\n'
+                '              TabStripUserGestureDetails::GestureType::kKeyboard, time_stamp));\n'
+                '      break;\n'
+                '    case IDC_SELECT_PREVIOUS_TAB:\n'
+                '      base::RecordAction(base::UserMetricsAction("Accel_SelectPreviousTab"));\n'
+                '      SelectPreviousTab(\n'
+                '          browser_,\n'
+                '          TabStripUserGestureDetails(\n'
+                '              TabStripUserGestureDetails::GestureType::kKeyboard, time_stamp));\n'
+                '      break;\n'
+            ),
+            new=(
+                '    case IDC_SELECT_NEXT_TAB: {\n'
+                '      base::RecordAction(base::UserMetricsAction("Accel_SelectNextTab"));\n'
+                '      auto* maho_browser_view =\n'
+                '          BrowserView::GetBrowserViewForBrowser(browser_);\n'
+                '      if (maho_browser_view &&\n'
+                '          maho_browser_view->MaybeHandleMruTabSwitch(/*forward=*/true)) {\n'
+                '        break;\n'
+                '      }\n'
+                '      SelectNextTab(\n'
+                '          browser_,\n'
+                '          TabStripUserGestureDetails(\n'
+                '              TabStripUserGestureDetails::GestureType::kKeyboard, time_stamp));\n'
+                '      break;\n'
+                '    }\n'
+                '    case IDC_SELECT_PREVIOUS_TAB: {\n'
+                '      base::RecordAction(base::UserMetricsAction("Accel_SelectPreviousTab"));\n'
+                '      auto* maho_browser_view =\n'
+                '          BrowserView::GetBrowserViewForBrowser(browser_);\n'
+                '      if (maho_browser_view &&\n'
+                '          maho_browser_view->MaybeHandleMruTabSwitch(/*forward=*/false)) {\n'
+                '        break;\n'
+                '      }\n'
+                '      SelectPreviousTab(\n'
+                '          browser_,\n'
+                '          TabStripUserGestureDetails(\n'
+                '              TabStripUserGestureDetails::GestureType::kKeyboard, time_stamp));\n'
+                '      break;\n'
+                '    }\n'
+            ),
+            description=(
+                "Route Ctrl+Tab / Ctrl+Shift+Tab through Maho MRU tab switcher "
+                "before Chromium's positional SelectNextTab/SelectPreviousTab. "
+                "BrowserView::MaybeHandleMruTabSwitch returns true when the "
+                "MRU switcher handled the command (pref enabled + at least "
+                "two tabs); otherwise fall through to the upstream positional "
+                "behavior."
+            ),
+            guard="MaybeHandleMruTabSwitch(/*forward=*/true)",
         ),
         Replacement(
             old=(
@@ -840,12 +921,67 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             new=(
                 '      "//maho/browser/ui/tab_preview/maho_tab_preview_controller.cc",\n'
                 '      "//maho/browser/ui/tab_preview/maho_tab_preview_controller.h",\n'
+                '      "//maho/browser/maho_tab_preview_capture.cc",\n'
+                '      "//maho/browser/maho_tab_preview_capture.h",\n'
+                '      "//maho/browser/maho_tab_id_session_helper.cc",\n'
+                '      "//maho/browser/maho_tab_id_session_helper.h",\n'
                 '      "//maho/browser/ui/views/sidebar/maho_sidebar_state_models.cc",\n'
                 '      "//maho/browser/ui/views/sidebar/maho_sidebar_state_models.h",\n'
                 '      "//maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.cc",\n'
             ),
             description="Include Maho tab preview controller sources in Chromium browser UI build",
             guard='      "//maho/browser/ui/tab_preview/maho_tab_preview_controller.cc",\n',
+        ),
+        Replacement(
+            old='      "//maho/browser/ui/views/spaces_overlay:maho_spaces_overlay",\n',
+            new=(
+                '      "//maho/browser/ui/views/spaces_overlay:maho_spaces_overlay",\n'
+                '      "//maho/browser/ui/tabs:maho_mru_tab_tracker",\n'
+            ),
+            description=(
+                "Add MahoMruTabTracker source_set dep to chrome/browser/ui:ui "
+                "so browser_view.cc can include maho/browser/ui/tabs/maho_mru_tab_tracker.h"
+            ),
+            guard='"//maho/browser/ui/tabs:maho_mru_tab_tracker"',
+        ),
+        Replacement(
+            old='      "//maho/browser/ui/tabs:maho_mru_tab_tracker",\n',
+            new=(
+                '      "//maho/browser/ui/tabs:maho_mru_tab_tracker",\n'
+                '      "//maho/browser/ui/tabs:maho_ctrl_tab_switcher_controller",\n'
+            ),
+            description=(
+                "Add MahoCtrlTabSwitcherController source_set dep to "
+                "chrome/browser/ui:ui so browser_view.cc can include the "
+                "controller header and manage its lifetime"
+            ),
+            guard='"//maho/browser/ui/tabs:maho_ctrl_tab_switcher_controller"',
+        ),
+    ],
+    "chrome/browser/prefs/browser_prefs.cc": [
+        Replacement(
+            old='#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n',
+            new=(
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n'
+                '#include "maho/browser/ui/tabs/maho_ctrl_tab_prefs.h"\n'
+            ),
+            description=(
+                "Include maho_ctrl_tab_prefs.h in browser_prefs.cc for pref "
+                "registration of Ctrl+Tab MRU switcher settings"
+            ),
+            guard='#include "maho/browser/ui/tabs/maho_ctrl_tab_prefs.h"',
+        ),
+        Replacement(
+            old='  maho::sidebar_prefs::RegisterProfilePrefs(registry);\n',
+            new=(
+                '  maho::sidebar_prefs::RegisterProfilePrefs(registry);\n'
+                '  maho::ctrl_tab_prefs::RegisterProfilePrefs(registry);\n'
+            ),
+            description=(
+                "Register Ctrl+Tab MRU switcher prefs (mru_order, scope, "
+                "max_visible) alongside the other Maho profile prefs"
+            ),
+            guard="maho::ctrl_tab_prefs::RegisterProfilePrefs",
         ),
     ],
     "chrome/browser/ui/views/frame/browser_view.h": [
@@ -869,6 +1005,40 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard="MaybeShowPendingMahoCommandOverlayForNewTab",
         ),
         Replacement(
+            old="class MahoCommandOverlayController;\n",
+            new=(
+                "class MahoCommandOverlayController;\n"
+                "class MahoCtrlTabSwitcherController;\n"
+                "class MahoMruTabTracker;\n"
+            ),
+            description=(
+                "Forward-declare MahoMruTabTracker and "
+                "MahoCtrlTabSwitcherController so BrowserView can own both "
+                "for the Ctrl+Tab MRU switcher feature"
+            ),
+            guard="class MahoCtrlTabSwitcherController;",
+        ),
+        Replacement(
+            old=(
+                "  void ShowMahoCommandOverlayForSearch(const std::string& initial_text);\n"
+            ),
+            new=(
+                "  void ShowMahoCommandOverlayForSearch(const std::string& initial_text);\n"
+                "\n"
+                "  // Routes Ctrl+Tab / Ctrl+Shift+Tab through the Maho MRU tab\n"
+                "  // switcher when the pref is enabled and at least two tabs\n"
+                "  // exist. Returns true when the MRU switcher handled the\n"
+                "  // command; the caller must skip the upstream positional\n"
+                "  // SelectNextTab/SelectPreviousTab in that case.\n"
+                "  bool MaybeHandleMruTabSwitch(bool forward);\n"
+            ),
+            description=(
+                "Declare BrowserView::MaybeHandleMruTabSwitch for the Ctrl+Tab "
+                "MRU tab switcher hook"
+            ),
+            guard="bool MaybeHandleMruTabSwitch(bool forward);",
+        ),
+        Replacement(
             old=(
                 "  std::unique_ptr<maho::MahoCommandOverlayController>\n"
                 "      maho_command_overlay_controller_;\n"
@@ -888,9 +1058,202 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             guard="pending_maho_command_overlay_new_tab_",
         ),
+        Replacement(
+            old=(
+                "  std::unique_ptr<maho::MahoCommandOverlayController>\n"
+                "      maho_command_overlay_controller_;\n"
+                "  std::unique_ptr<maho::MahoSpacesOverlayController>\n"
+                "      maho_spaces_overlay_controller_;\n"
+                "  bool pending_maho_command_overlay_new_tab_ = false;\n"
+            ),
+            new=(
+                "  std::unique_ptr<maho::MahoCommandOverlayController>\n"
+                "      maho_command_overlay_controller_;\n"
+                "  std::unique_ptr<maho::MahoSpacesOverlayController>\n"
+                "      maho_spaces_overlay_controller_;\n"
+                "  bool pending_maho_command_overlay_new_tab_ = false;\n"
+                "  std::unique_ptr<maho::MahoMruTabTracker> maho_mru_tab_tracker_;\n"
+            ),
+            description=(
+                "Own MahoMruTabTracker on BrowserView for the Ctrl+Tab MRU "
+                "switcher feature"
+            ),
+            guard="maho_mru_tab_tracker_",
+        ),
+        Replacement(
+            old=(
+                "  bool pending_maho_command_overlay_new_tab_ = false;\n"
+                "  std::unique_ptr<maho::MahoMruTabTracker> maho_mru_tab_tracker_;\n"
+            ),
+            new=(
+                "  bool pending_maho_command_overlay_new_tab_ = false;\n"
+                "  std::unique_ptr<maho::MahoMruTabTracker> maho_mru_tab_tracker_;\n"
+                "  std::unique_ptr<maho::MahoCtrlTabSwitcherController>\n"
+                "      maho_ctrl_tab_switcher_controller_;\n"
+            ),
+            description=(
+                "Own MahoCtrlTabSwitcherController on BrowserView (Phase 3 "
+                "wiring; the controller drives the overlay state machine and "
+                "commits tab activation on Ctrl release)"
+            ),
+            guard="maho_ctrl_tab_switcher_controller_",
+        ),
     ],
     # ── browser_view.cc ───────────────────────────────────────────────────────
     "chrome/browser/ui/views/frame/browser_view.cc": [
+        Replacement(
+            old='#include "maho/browser/ui/views/command/maho_command_overlay_controller.h"\n',
+            new=(
+                '#include "maho/browser/ui/views/command/maho_command_overlay_controller.h"\n'
+                '#include "maho/browser/ui/tabs/maho_mru_tab_tracker.h"\n'
+                '#include "maho/browser/maho_tab_id_session_helper.h"\n'
+                '#include "maho/browser/maho_tab_preview_capture.h"\n'
+            ),
+            description=(
+                "Include MahoMruTabTracker header in browser_view.cc for the "
+                "Ctrl+Tab MRU switcher feature"
+            ),
+            guard='#include "maho/browser/maho_tab_id_session_helper.h"',
+        ),
+        Replacement(
+            old='#include "maho/browser/ui/tabs/maho_mru_tab_tracker.h"\n',
+            new=(
+                '#include "maho/browser/ui/tabs/maho_mru_tab_tracker.h"\n'
+                '#include "maho/browser/ui/tabs/maho_ctrl_tab_switcher_controller.h"\n'
+            ),
+            description=(
+                "Include MahoCtrlTabSwitcherController header in browser_view.cc"
+            ),
+            guard='#include "maho/browser/ui/tabs/maho_ctrl_tab_switcher_controller.h"',
+        ),
+        Replacement(
+            old=(
+                "    maho_create_space_blank_view_ =\n"
+                "        AddChildView(std::make_unique<MahoCreateSpaceBlankView>());\n"
+                "    maho_create_space_blank_view_->SetVisible(false);\n"
+                "  }\n"
+            ),
+            new=(
+                "    maho_create_space_blank_view_ =\n"
+                "        AddChildView(std::make_unique<MahoCreateSpaceBlankView>());\n"
+                "    maho_create_space_blank_view_->SetVisible(false);\n"
+                "\n"
+                "    if (auto* strip = browser_->tab_strip_model()) {\n"
+                "      maho_mru_tab_tracker_ =\n"
+                "          std::make_unique<maho::MahoMruTabTracker>(strip);\n"
+                "    }\n"
+                "  }\n"
+            ),
+            description=(
+                "Initialize MahoMruTabTracker in BrowserView constructor for "
+                "normal browser windows; the tracker observes the TabStripModel "
+                "for MRU ordering from window creation onward"
+            ),
+            guard="maho_mru_tab_tracker_ =",
+        ),
+        Replacement(
+            old=(
+                "    if (auto* strip = browser_->tab_strip_model()) {\n"
+                "      maho_mru_tab_tracker_ =\n"
+                "          std::make_unique<maho::MahoMruTabTracker>(strip);\n"
+                "    }\n"
+                "  }\n"
+            ),
+            new=(
+                "    if (auto* strip = browser_->tab_strip_model()) {\n"
+                "      maho_mru_tab_tracker_ =\n"
+                "          std::make_unique<maho::MahoMruTabTracker>(strip);\n"
+                "      maho_ctrl_tab_switcher_controller_ =\n"
+                "          std::make_unique<maho::MahoCtrlTabSwitcherController>(\n"
+                "              this, maho_mru_tab_tracker_.get());\n"
+                "    }\n"
+                "    if (browser_->profile()) {\n"
+                "      maho::MahoTabIdSessionHelper::GetForProfile(browser_->profile());\n"
+                "      maho::MahoTabPreviewCapture::GetInstance();\n"
+                "    }\n"
+                "  }\n"
+            ),
+            description=(
+                "Initialize MahoCtrlTabSwitcherController alongside the tracker "
+                "in the BrowserView constructor; controller lifetime is tied "
+                "to the browser window"
+            ),
+            guard="maho_ctrl_tab_switcher_controller_ =",
+        ),
+        Replacement(
+            old=(
+                "maho::MahoCommandOverlayController*\n"
+                "BrowserView::GetOrCreateMahoCommandOverlayController() {\n"
+            ),
+            new=(
+                "bool BrowserView::MaybeHandleMruTabSwitch(bool forward) {\n"
+                "  if (!maho_ctrl_tab_switcher_controller_) {\n"
+                "    return false;\n"
+                "  }\n"
+                "  return maho_ctrl_tab_switcher_controller_->HandleAdvance(forward);\n"
+                "}\n"
+                "\n"
+                "maho::MahoCommandOverlayController*\n"
+                "BrowserView::GetOrCreateMahoCommandOverlayController() {\n"
+            ),
+            description=(
+                "Implement BrowserView::MaybeHandleMruTabSwitch delegating to "
+                "MahoCtrlTabSwitcherController::HandleAdvance which owns the "
+                "full state machine (200ms fast-path, overlay show/close, "
+                "cursor advance, Ctrl-release commit)"
+            ),
+            guard="bool BrowserView::MaybeHandleMruTabSwitch",
+        ),
+        Replacement(
+            old=(
+                "bool BrowserView::MaybeHandleMruTabSwitch(bool forward) {\n"
+                "  // Phase 1 stub: if the tracker has at least two live tabs,\n"
+                "  // activate MRU[1] (the previously active tab) directly. This\n"
+                "  // gives us basic Ctrl+Tab MRU behavior end-to-end while the\n"
+                "  // overlay controller and state machine land in later phases.\n"
+                "  //\n"
+                "  // TODO(maho): route this through MahoCtrlTabSwitcherController\n"
+                "  // once Phase 3 lands (200ms delay + preview overlay + Ctrl\n"
+                "  // keyup commit).\n"
+                "  if (!maho_mru_tab_tracker_) {\n"
+                "    return false;\n"
+                "  }\n"
+                "  std::vector<content::WebContents*> mru =\n"
+                "      maho_mru_tab_tracker_->GetMruList();\n"
+                "  if (mru.size() < 2) {\n"
+                "    return false;\n"
+                "  }\n"
+                "  content::WebContents* target = forward ? mru[1] : mru.back();\n"
+                "  TabStripModel* strip = browser_->tab_strip_model();\n"
+                "  if (!strip) {\n"
+                "    return false;\n"
+                "  }\n"
+                "  const int index = strip->GetIndexOfWebContents(target);\n"
+                "  if (index == TabStripModel::kNoTab) {\n"
+                "    return false;\n"
+                "  }\n"
+                "  strip->ActivateTabAt(\n"
+                "      index,\n"
+                "      TabStripUserGestureDetails(\n"
+                "          TabStripUserGestureDetails::GestureType::kKeyboard));\n"
+                "  return true;\n"
+                "}\n"
+            ),
+            new=(
+                "bool BrowserView::MaybeHandleMruTabSwitch(bool forward) {\n"
+                "  if (!maho_ctrl_tab_switcher_controller_) {\n"
+                "    return false;\n"
+                "  }\n"
+                "  return maho_ctrl_tab_switcher_controller_->HandleAdvance(forward);\n"
+                "}\n"
+            ),
+            description=(
+                "Migrate MaybeHandleMruTabSwitch body from Phase 1 stub to "
+                "Phase 3 controller delegation (existing chromium/src trees "
+                "still have the stub applied)"
+            ),
+            idempotent=True,
+        ),
         Replacement(
             old=(
                 "  void OnThemeChanged() override {\n"
@@ -1532,6 +1895,54 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     # ── session_restore.cc ───────────────────────────────────────────────────
     "chrome/browser/sessions/session_restore.cc": [
         Replacement(
+            old='#include "chrome/browser/sessions/session_restore.h"\n',
+            new=(
+                '#include "chrome/browser/sessions/session_restore.h"\n'
+                '#include "maho/browser/maho_tab_id_helper.h"\n'
+            ),
+            description="Add MahoTabIdHelper include to session_restore.cc",
+        ),
+        Replacement(
+            old=(
+                "    RecordAppLaunchForTab(browser, tab, selected_index);\n"
+                "\n"
+                "    WebContents* web_contents;\n"
+                "    if (disposition == WindowOpenDisposition::CURRENT_TAB) {"
+            ),
+            new=(
+                "    {\n"
+                "      auto it = tab.extra_data.find(MahoTabIdHelper::kExtraDataKey);\n"
+                "      if (it != tab.extra_data.end() && !it->second.empty()) {\n"
+                "        MahoTabIdHelper::SetPendingRestoredTabId(it->second);\n"
+                "      }\n"
+                "    }\n"
+                "    RecordAppLaunchForTab(browser, tab, selected_index);\n"
+                "\n"
+                "    WebContents* web_contents;\n"
+                "    if (disposition == WindowOpenDisposition::CURRENT_TAB) {"
+            ),
+            description="Set pending restored tab ID before foreign tab restoration",
+        ),
+        Replacement(
+            old=(
+                "    RecordAppLaunchForTab(browser, tab, selected_index);\n"
+                "\n"
+                "    // Associate sessionStorage (if any) to the restored tab."
+            ),
+            new=(
+                "    {\n"
+                "      auto it = tab.extra_data.find(MahoTabIdHelper::kExtraDataKey);\n"
+                "      if (it != tab.extra_data.end() && !it->second.empty()) {\n"
+                "        MahoTabIdHelper::SetPendingRestoredTabId(it->second);\n"
+                "      }\n"
+                "    }\n"
+                "    RecordAppLaunchForTab(browser, tab, selected_index);\n"
+                "\n"
+                "    // Associate sessionStorage (if any) to the restored tab."
+            ),
+            description="Set pending restored tab ID before session tab restoration",
+        ),
+        Replacement(
             old=(
                 "      if (startup_tabs_.empty() ||\n"
                 "          (startup_tabs_.size() == 1 && whats_new::IsEnabled() &&\n"
@@ -1713,6 +2124,17 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '      "//maho/browser/ui/views/sidebar:interactive_tests",\n'
             ),
             description="Include Maho sidebar interactive tests in Chromium interactive_ui_tests deps",
+        ),
+        Replacement(
+            old='      "//maho/browser/ui/views/spaces_overlay:unit_tests",\n',
+            new=(
+                '      "//maho/browser/ui/views/spaces_overlay:unit_tests",\n'
+                '      "//maho/browser/ui/tabs:unit_tests",\n'
+            ),
+            description=(
+                "Include MahoMruTabTracker unit tests in Chromium unit_tests"
+            ),
+            guard='"//maho/browser/ui/tabs:unit_tests"',
         ),
     ],
     "chrome/browser/ui/views/page_action/page_action_properties_provider.cc": [

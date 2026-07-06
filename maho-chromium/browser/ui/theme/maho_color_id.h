@@ -26,6 +26,8 @@
   E_CPONLY(kMahoColorContentBorder) \
   E_CPONLY(kMahoColorCardBackground) \
   E_CPONLY(kMahoColorCardBorder) \
+  E_CPONLY(kMahoColorCtrlTabOverlayBackground) \
+  E_CPONLY(kMahoColorCtrlTabAccent) \
   E_CPONLY(kMahoColorTitlebarGlass) \
   E_CPONLY(kMahoColorTitlebarEdge) \
   E_CPONLY(kMahoColorTitlebarControlTint) \

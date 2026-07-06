@@ -61,6 +61,12 @@ void AddWindowAndSurfaceColors(ui::ColorMixer& mixer, bool dark_mode) {
   mixer[kMahoColorCardBorder] = {dark_mode
       ? SkColorSetARGB(255, 60, 56, 85)
       : SkColorSetARGB(184, 194, 199, 222)};
+  mixer[kMahoColorCtrlTabOverlayBackground] = {dark_mode
+      ? SkColorSetARGB(240, 24, 24, 27)
+      : SkColorSetARGB(240, 246, 247, 252)};
+  mixer[kMahoColorCtrlTabAccent] = {dark_mode
+      ? SkColorSetARGB(255, 110, 169, 255)
+      : SkColorSetARGB(255, 42, 130, 245)};
   mixer[kMahoColorTitlebarGlass] = {dark_mode
       ? kTitlebarGlassDark
       : kTitlebarGlassLight};

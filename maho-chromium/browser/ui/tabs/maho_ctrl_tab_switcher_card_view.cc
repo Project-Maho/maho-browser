@@ -1,0 +1,169 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+
+#include "maho/browser/ui/tabs/maho_ctrl_tab_switcher_card_view.h"
+
+#include <utility>
+
+#include "base/functional/bind.h"
+#include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/ui/thumbnails/thumbnail_image.h"
+#include "chrome/browser/ui/thumbnails/thumbnail_tab_helper.h"
+#include "content/public/browser/web_contents.h"
+#include "maho/browser/ui/theme/maho_color_id.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/models/image_model.h"
+#include "ui/color/color_provider.h"
+#include "ui/gfx/canvas.h"
+#include "ui/gfx/geometry/insets.h"
+#include "ui/gfx/geometry/size.h"
+#include "ui/gfx/image/image.h"
+#include "ui/views/background.h"
+#include "ui/views/border.h"
+#include "ui/views/controls/image_view.h"
+#include "ui/views/controls/label.h"
+#include "ui/views/layout/box_layout.h"
+#include "ui/views/layout/box_layout_view.h"
+
+namespace maho {
+
+namespace {
+
+constexpr int kThumbnailWidth =
+    MahoCtrlTabSwitcherCardView::kCardWidth - 12;
+constexpr int kThumbnailHeight = 120;
+constexpr int kBorderRadius = 10;
+constexpr int kBorderThickness = 2;
+constexpr int kFooterHeight = 36;
+constexpr int kFaviconSize = 16;
+
+SkColor CardBackgroundColor(const ui::ColorProvider* colors, bool selected) {
+  if (!colors) {
+    return selected ? SkColorSetARGB(0xFF, 0x2A, 0x2A, 0x2E)
+                    : SkColorSetARGB(0xE0, 0x1F, 0x1F, 0x22);
+  }
+  const SkColor base = colors->GetColor(kMahoColorCardBackground);
+  return selected ? base
+                  : SkColorSetA(base, SkAlphaMul(SkColorGetA(base), 0xE0));
+}
+
+SkColor CardBorderColor(const ui::ColorProvider* colors, bool selected) {
+  if (!colors) {
+    return selected ? SkColorSetARGB(0xFF, 0x6E, 0xA9, 0xFF)
+                    : SkColorSetARGB(0x40, 0xFF, 0xFF, 0xFF);
+  }
+  return selected ? colors->GetColor(kMahoColorCtrlTabAccent)
+                  : colors->GetColor(kMahoColorCardBorder);
+}
+
+}  // namespace
+
+MahoCtrlTabSwitcherCardView::MahoCtrlTabSwitcherCardView(
+    content::WebContents* web_contents,
+    bool selected)
+    : web_contents_(web_contents ? web_contents->GetWeakPtr()
+                                  : base::WeakPtr<content::WebContents>()),
+      selected_(selected) {
+  SetPreferredSize(gfx::Size(kCardWidth, kCardHeight));
+  BuildContents();
+  UpdateBorder();
+  AttachThumbnail();
+}
+
+MahoCtrlTabSwitcherCardView::~MahoCtrlTabSwitcherCardView() = default;
+
+void MahoCtrlTabSwitcherCardView::SetSelected(bool selected) {
+  if (selected == selected_) {
+    return;
+  }
+  selected_ = selected;
+  UpdateBorder();
+  SchedulePaint();
+}
+
+void MahoCtrlTabSwitcherCardView::OnThemeChanged() {
+  views::View::OnThemeChanged();
+  UpdateBorder();
+}
+
+void MahoCtrlTabSwitcherCardView::BuildContents() {
+  auto* box = SetLayoutManager(std::make_unique<views::BoxLayout>(
+      views::BoxLayout::Orientation::kVertical, gfx::Insets(6), 4));
+  box->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kStretch);
+
+  thumbnail_view_ = AddChildView(std::make_unique<views::ImageView>());
+  thumbnail_view_->SetImageSize(
+      gfx::Size(kThumbnailWidth, kThumbnailHeight));
+  thumbnail_view_->SetHorizontalAlignment(
+      views::ImageView::Alignment::kCenter);
+  thumbnail_view_->SetVerticalAlignment(views::ImageView::Alignment::kCenter);
+  thumbnail_view_->SetBackground(views::CreateRoundedRectBackground(
+      SkColorSetARGB(0x60, 0x30, 0x30, 0x33), kBorderRadius - 2));
+
+  auto* footer = AddChildView(std::make_unique<views::BoxLayoutView>());
+  footer->SetOrientation(views::BoxLayout::Orientation::kHorizontal);
+  footer->SetInsideBorderInsets(gfx::Insets::TLBR(0, 4, 0, 4));
+  footer->SetBetweenChildSpacing(6);
+  footer->SetCrossAxisAlignment(
+      views::BoxLayout::CrossAxisAlignment::kCenter);
+  footer->SetPreferredSize(gfx::Size(kThumbnailWidth, kFooterHeight));
+
+  favicon_view_ = footer->AddChildView(std::make_unique<views::ImageView>());
+  favicon_view_->SetImageSize(gfx::Size(kFaviconSize, kFaviconSize));
+
+  std::u16string title;
+  if (web_contents_) {
+    title = web_contents_->GetTitle();
+    if (title.empty()) {
+      title = base::UTF8ToUTF16(web_contents_->GetLastCommittedURL().spec());
+    }
+  }
+
+  title_label_ = footer->AddChildView(
+      std::make_unique<views::Label>(title, views::style::CONTEXT_LABEL,
+                                     views::style::STYLE_PRIMARY));
+  title_label_->SetElideBehavior(gfx::ELIDE_TAIL);
+  title_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+  title_label_->SetEnabledColor(SkColorSetRGB(0xEA, 0xEA, 0xEA));
+  footer->SetFlexForView(title_label_, 1);
+}
+
+void MahoCtrlTabSwitcherCardView::AttachThumbnail() {
+  if (!web_contents_) {
+    return;
+  }
+  auto* helper = ThumbnailTabHelper::FromWebContents(web_contents_.get());
+  if (!helper) {
+    return;
+  }
+  thumbnail_source_ = helper->thumbnail();
+  if (!thumbnail_source_) {
+    return;
+  }
+  thumbnail_subscription_ = thumbnail_source_->Subscribe();
+  thumbnail_subscription_->SetUncompressedImageCallback(base::BindRepeating(
+      &MahoCtrlTabSwitcherCardView::OnThumbnailReady,
+      weak_factory_.GetWeakPtr()));
+  thumbnail_source_->RequestThumbnailImage();
+}
+
+void MahoCtrlTabSwitcherCardView::OnThumbnailReady(gfx::ImageSkia image) {
+  if (!thumbnail_view_) {
+    return;
+  }
+  thumbnail_view_->SetImage(ui::ImageModel::FromImageSkia(image));
+}
+
+void MahoCtrlTabSwitcherCardView::UpdateBorder() {
+  const ui::ColorProvider* colors = GetColorProvider();
+  SetBackground(views::CreateRoundedRectBackground(
+      CardBackgroundColor(colors, selected_), kBorderRadius));
+  SetBorder(views::CreateRoundedRectBorder(
+      kBorderThickness, kBorderRadius,
+      CardBorderColor(colors, selected_)));
+}
+
+BEGIN_METADATA(MahoCtrlTabSwitcherCardView)
+END_METADATA
+
+}  // namespace maho

@@ -31,6 +31,28 @@
 //    IsMahoArcLayoutActive() and kMahoArcToolbarButtonProvider is enabled, so
 //    that ToolbarButtonProvider::From(browser_) resolves before the CHECK.
 //
+// 4. Ctrl+Tab MRU tab switcher (see maho/browser/ui/tabs/):
+//
+//    a. Forward-declare `class MahoMruTabTracker;` near other maho:: forward
+//       declarations.
+//
+//    b. Public method declaration adjacent to the existing Maho command
+//       overlay helpers:
+//
+//         bool MaybeHandleMruTabSwitch(bool forward);
+//
+//       Returns true when the MRU switcher handled Ctrl+Tab /
+//       Ctrl+Shift+Tab; the caller in BrowserCommandController must skip
+//       upstream SelectNextTab / SelectPreviousTab in that case.
+//
+//    c. Private member storage next to the other Maho controllers:
+//
+//         std::unique_ptr<maho::MahoMruTabTracker> maho_mru_tab_tracker_;
+//
+//       Eagerly initialized in the BrowserView constructor for normal
+//       browser windows so the TabStripModelObserver starts recording
+//       MRU order from window creation onward.
+//
 // This mirrors the BrowserView-owned/lazy-created controller pattern already
 // used for Maho command overlay hosting.
 

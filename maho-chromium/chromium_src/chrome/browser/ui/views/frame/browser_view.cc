@@ -208,6 +208,29 @@
 //    This resolves Maho-registered shortcuts (e.g. ⌘S → toggle_sidebar)
 //    via Rust maho_core_resolve_shortcut() before Chromium's accelerator table.
 //
+// 13. Ctrl+Tab MRU tab switcher wiring (see maho/browser/ui/tabs/):
+//
+//     a. #include "maho/browser/ui/tabs/maho_mru_tab_tracker.h" alongside the
+//        existing maho command overlay controller include.
+//
+//     b. In the BrowserView constructor's `if (GetIsNormalType())` block,
+//        after `maho_create_space_blank_view_->SetVisible(false);`, initialize
+//        the tracker eagerly:
+//
+//          maho_mru_tab_tracker_ =
+//              std::make_unique<maho::MahoMruTabTracker>(browser_.get());
+//
+//        Eager init ensures the TabStripModelObserver is registered before
+//        the first tab activation event.
+//
+//     c. Implement `bool BrowserView::MaybeHandleMruTabSwitch(bool forward)`
+//        just above `GetOrCreateMahoCommandOverlayController()`. Phase 1
+//        stub: activates MRU[1] directly when at least two tabs exist;
+//        returns false otherwise so the upstream positional
+//        SelectNextTab/SelectPreviousTab handles the command. Phase 3 will
+//        route this through MahoCtrlTabSwitcherController for the full
+//        200ms-delay + preview overlay + Ctrl-release state machine.
+//
 // ---- Call-site inventory for GetOrCreateMahoSplitViewController() ----
 //
 // The split-view command actions route through this accessor so split-view
