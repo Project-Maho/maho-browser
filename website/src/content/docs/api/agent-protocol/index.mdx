@@ -1,0 +1,111 @@
+---
+title: Agent Protocol
+description: Local, private IPC surface for AI agents to control the Maho browser. UDS on macOS/Linux, Named Pipes on Windows. Never the network.
+sidebar:
+  order: 1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The Maho Agent Protocol is the local IPC surface Maho exposes so an AI agent can drive the browser. It is not a cloud API. It does not open a network socket. It does not use HTTP. It runs over a Unix domain socket on macOS and Linux, or a Named Pipe on Windows, and it only accepts connections from the same operating-system user that launched Maho.
+
+If you are building an agent that reads a tab, opens a page, or extracts structured content from the page you are looking at, this is the surface you are talking to.
+
+## What it is
+
+Maho ships an MCP (Model Context Protocol) server inside the browser process. The server speaks JSON-RPC 2.0 over a length-prefixed framing layer. An agent connects, calls `initialize`, and then invokes tools like `browser_tab_list`, `browser_navigate`, or `page_get_text`.
+
+The `maho mcp` CLI is a thin stdio bridge for MCP clients that only speak stdio (Claude Desktop, Codex, most first-generation agent frameworks). It forwards bytes between stdio and the local socket. It does no parsing. It does no authentication of its own. The browser is where the actual protocol lives.
+
+## What it is not
+
+- Not a network API. There is no TCP listener. There is no HTTPS endpoint. If you need remote control, you need to build your own remote layer on top and take responsibility for it.
+- Not a JavaScript execution surface. Maho does not expose an eval-style primitive that runs arbitrary code in the page's origin, by design. Content is extracted through typed accessors (`page_get_text`, `page_query_selector`, `page_get_attribute`, `page_wait_for_selector`) so that the browser can enforce redaction on everything that leaves the process.
+- Not shared across users. Peer credentials are checked on every connection. Another user on the same machine cannot connect to your browser, even on a multi-user desktop.
+- Not telemetry. Nothing about your tools, tabs, pages, or navigation is sent anywhere. The protocol lives entirely on your machine.
+
+## Architecture
+
+```
++----------------+     stdio      +----------------+     UDS / Named Pipe    +---------------------+
+|  Agent client  |  <---------->  |   maho mcp     |  <-------------------->  |  MahoMcpSocketServer |
+| (Claude, Codex,|                | (stdio bridge) |                          |   (browser process)  |
+|  custom, etc.) |                +----------------+                          +----------+----------+
++----------------+                                                                       |
+                                                                                          v
+                                                                          +---------------------------+
+                                                                          |     MahoMcpSession        |
+                                                                          |  (per-connection state,   |
+                                                                          |   lease, allowed domains) |
+                                                                          +-------------+-------------+
+                                                                                        |
+                                                                                        v
+                                                                          +---------------------------+
+                                                                          |      Tool executor        |
+                                                                          |  (dispatch to Chrome APIs |
+                                                                          |   through 4-vector        |
+                                                                          |   firewall on egress)     |
+                                                                          +---------------------------+
+```
+
+Everything past the socket is inside the browser process. There is no separate daemon and no helper binary that outlives the browser. When Maho quits, the socket is gone.
+
+## Transport
+
+<Aside type="note" title="Same-user only">
+Maho refuses connections from any UID that does not match the browser's own. On Windows the equivalent check uses a DPAPI-encrypted session token stored in a user-only DACL directory. See [Authentication](/api/agent-protocol/authentication/).
+</Aside>
+
+- **macOS**: `~/Library/Application Support/Maho/maho.sock`
+- **Linux**: `$XDG_STATE_HOME/maho/maho.sock` (falls back to `~/.local/state/maho/maho.sock` if `XDG_STATE_HOME` is unset)
+- **Windows**: `\\.\pipe\maho-browser-<username>`
+
+The framing is 4-byte big-endian length prefix followed by that many bytes of UTF-8 JSON. Each frame is one JSON-RPC message. Responses are matched to requests by `id`.
+
+## Quick start
+
+1. Install Maho. The MCP server starts with the browser and is available as soon as the main window is open.
+2. Point your MCP client at the `maho mcp` command. For clients that read a JSON config file, add:
+
+   ```json
+   {
+     "mcpServers": {
+       "maho": {
+         "command": "maho",
+         "args": ["mcp"]
+       }
+     }
+   }
+   ```
+
+3. In your agent client, run any tool. `browser_tab_list` is a good first call because it needs no permissions past the initial handshake.
+
+Full config examples for Claude Desktop, Codex, and a raw Python client live on the [Examples](/api/agent-protocol/examples/) page.
+
+## What agents can do
+
+- Read the tab structure: [tabs](/api/agent-protocol/tools/tabs/).
+- Navigate with an allowlist: [navigation](/api/agent-protocol/tools/navigation/).
+- Extract page content through typed accessors: [content](/api/agent-protocol/tools/content/).
+- Take structured snapshots and screenshots (in development): [capture](/api/agent-protocol/tools/capture/).
+- Hold a per-tab lease so two agents cannot race each other: see [security](/api/agent-protocol/security/).
+
+## What agents cannot do
+
+- Run arbitrary JavaScript in the page.
+- Read fields the credential firewall marks as sensitive (passwords, auth headers, autofill values, URL fragments with tokens). See [security](/api/agent-protocol/security/) for the four vectors.
+- Navigate to a domain the user has not approved for the session.
+- Take a tab another agent already holds a lease on, unless they force-steal (which the previous holder observes).
+
+## Zero-cost, zero-telemetry
+
+The Agent Protocol is bundled with Maho. There is no subscription, no cloud dependency, and no separate account. The browser does not phone home to tell anyone that you connected an agent, or which agent, or which tools it called.
+
+If you audit the traffic on your machine while an agent is running you will see traffic from the pages the agent visits and nothing else that Maho itself introduces.
+
+## Where to go next
+
+- [Authentication](/api/agent-protocol/authentication/) for the handshake and the peer-credential check.
+- [Tools reference](/api/agent-protocol/tools/) for the full tool list.
+- [Security model](/api/agent-protocol/security/) for the redaction rules, lease semantics, and domain policy.
+- [Examples](/api/agent-protocol/examples/) for working configs and a minimal custom client.

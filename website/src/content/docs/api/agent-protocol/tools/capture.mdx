@@ -1,0 +1,128 @@
+---
+title: Capture
+description: Structured snapshots, screenshots, and network capture. Reserved surface, delivered incrementally.
+sidebar:
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="In development">
+Everything on this page is a reserved surface that is landing incrementally. Tool names and argument shapes may change until the corresponding wave ships. Do not depend on these responses in production yet. When a tool ships, this page loses its "in development" marker for that section.
+</Aside>
+
+Capture covers three related surfaces:
+
+- Accessibility snapshots and semantic actions (`browser_click`, `browser_type`, `browser_select`).
+- Screenshots of the full viewport or a specific element.
+- Network capture as a HAR archive, gated by the credential firewall.
+
+## Accessibility surface (in development)
+
+The accessibility snapshot produces a structured, ref-based representation of the page suitable for LLMs. Every actionable node comes back with a stable `@ref` that the semantic action tools consume.
+
+### `browser_accessibility_snapshot` (in development)
+
+Return a compact accessibility tree of the current tab. Non-interactive nodes are elided by default. Every actionable node includes a `@ref`.
+
+Planned shape:
+
+```json
+{
+  "url": "https://example.com/signup",
+  "tree": [
+    { "ref": "@ref_a1", "role": "heading", "level": 1, "name": "Create account" },
+    { "ref": "@ref_a2", "role": "textbox", "name": "Email",    "required": true },
+    { "ref": "@ref_a3", "role": "textbox", "name": "Password", "required": true, "sensitive": true },
+    { "ref": "@ref_a4", "role": "button",  "name": "Sign up" }
+  ]
+}
+```
+
+Nodes marked `sensitive: true` are still enumerated so the agent can find them, but their `value` is redacted anywhere it would otherwise appear.
+
+### `browser_click` (in development)
+
+Click an actionable node.
+
+Planned parameters: `tab_id`, `ref`.
+
+### `browser_type` (in development)
+
+Type text into a text input.
+
+Planned parameters: `tab_id`, `ref`, `text`, and an optional `submit` boolean that presses Enter after typing.
+
+### `browser_select` (in development)
+
+Choose an option in a `<select>` element.
+
+Planned parameters: `tab_id`, `ref`, `value`.
+
+The action tools all take a `@ref` from a prior `browser_accessibility_snapshot` (or `page_query_selector`). Freeform coordinate clicks are not supported.
+
+## Screenshots (in development)
+
+Two shapes, matching the two things agents ask for.
+
+### `browser_screenshot_full` (in development)
+
+Screenshot the full viewport of a tab.
+
+Planned parameters: `tab_id`, optional `format` (`png` default, `jpeg`, `webp`), optional `quality` for lossy formats.
+
+Response is a base64-encoded image plus a `mime_type`. Suitable for direct handoff to vision-capable models.
+
+### `browser_screenshot_element` (in development)
+
+Screenshot a specific element referenced by `@ref`.
+
+Planned parameters: `tab_id`, `ref`, and the same format options as `browser_screenshot_full`.
+
+## Network capture (in development)
+
+The network surface produces standard HAR archives. Because HAR bodies and headers routinely leak secrets, this surface is behind the credential firewall from the first byte.
+
+<Aside type="caution" title="Firewall-gated">
+The HAR export runs a header pass, a URL pass, and a body pass through the firewall before returning. `Authorization`, `Cookie`, and `Set-Cookie` are unconditionally redacted. Request bodies detected as JSON with fields matching the configured sensitive-key list are redacted too.
+</Aside>
+
+### `browser_network_start_capture` (in development)
+
+Begin recording network activity for a tab.
+
+Planned parameters: `tab_id`, optional `include_response_bodies` (default `false`), optional `max_entries`.
+
+### `browser_network_get_har` (in development)
+
+Return the current HAR archive.
+
+Planned response:
+
+```json
+{
+  "har": {
+    "log": {
+      "version": "1.2",
+      "creator": { "name": "Maho", "version": "0.1.0" },
+      "entries": []
+    }
+  },
+  "entry_count": 42,
+  "truncated": false
+}
+```
+
+### `browser_network_stop_capture` (in development)
+
+Stop recording and discard the buffered HAR.
+
+## Availability
+
+The Agent Protocol's tool list is discoverable at runtime with the standard MCP `tools/list` method. If a tool on this page appears in that list, it is shipped. If it does not, treat it as "in development" and check back after the corresponding release.
+
+For the currently shipped tool surface see:
+
+- [Tabs](/api/agent-protocol/tools/tabs/)
+- [Navigation](/api/agent-protocol/tools/navigation/)
+- [Content](/api/agent-protocol/tools/content/)

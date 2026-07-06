@@ -15,6 +15,10 @@ source_set("maho_mcp") {
     "maho_mcp_json_rpc.h",
     "maho_mcp_lease_registry.cc",
     "maho_mcp_lease_registry.h",
+    "maho_mcp_network_observer.cc",
+    "maho_mcp_network_observer.h",
+    "maho_mcp_screenshot_handler.cc",
+    "maho_mcp_screenshot_handler.h",
     "maho_mcp_session.cc",
     "maho_mcp_session.h",
   ]
@@ -39,8 +43,11 @@ source_set("maho_mcp") {
     "//base",
     "//crypto",
     "//net",
+    "//skia",
     "//third_party/re2",
     "//ui/accessibility",
+    "//ui/gfx/codec",
+    "//ui/gfx/geometry",
     "//url",
   ]
 
@@ -62,6 +69,8 @@ source_set("unittests") {
     "maho_mcp_firewall_unittest.cc",
     "maho_mcp_json_rpc_unittest.cc",
     "maho_mcp_lease_registry_unittest.cc",
+    "maho_mcp_network_observer_unittest.cc",
+    "maho_mcp_screenshot_handler_unittest.cc",
     "maho_mcp_session_unittest.cc",
   ]
 
@@ -83,8 +92,11 @@ source_set("unittests") {
     "//crypto",
     "//net",
     "//net:test_support",
+    "//skia",
     "//testing/gtest",
     "//ui/accessibility",
+    "//ui/gfx/codec",
+    "//ui/gfx/geometry",
   ]
 }
 
@@ -138,5 +150,37 @@ test("maho_mcp_accessibility_handler_test") {
     "//base/test:test_support",
     "//testing/gtest",
     "//ui/accessibility",
+  ]
+}
+
+test("maho_mcp_screenshot_handler_test") {
+  sources = [
+    "maho_mcp_firewall_test_main.cc",
+    "maho_mcp_screenshot_handler_unittest.cc",
+  ]
+  deps = [
+    ":maho_mcp",
+    "//base",
+    "//base/test:test_support",
+    "//skia",
+    "//testing/gtest",
+    "//ui/accessibility",
+    "//ui/gfx/codec",
+    "//ui/gfx/geometry",
+  ]
+}
+
+test("maho_mcp_network_observer_test") {
+  sources = [
+    "maho_mcp_firewall_test_main.cc",
+    "maho_mcp_network_observer_unittest.cc",
+  ]
+  deps = [
+    ":maho_mcp",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+    "//third_party/re2",
+    "//url",
   ]
 }

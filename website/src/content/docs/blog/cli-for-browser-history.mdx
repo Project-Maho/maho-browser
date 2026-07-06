@@ -2,6 +2,7 @@
 title: "A CLI for your browser history"
 description: "Search and pipe your Maho browser history from the command line. Real query examples, schema notes, and a handful of one-liners worth keeping around."
 date: 2026-11-10
+updatedAt: 2026-07-06
 tags:
   - browser
   - how-to
@@ -64,7 +65,7 @@ The store is a SQLite file. The CLI reads it through a small library that handle
 
 For more on what the file looks like at rest and how it is encrypted, see the [browser history encryption explainer](/blog/browser-history-encryption-explained/).
 
-## Query 1: last seven days, by domain
+## Query 1: last seven days, grouped by domain
 
 The first query is the one that pays for the CLI by itself.
 
@@ -72,19 +73,23 @@ The first query is the one that pays for the CLI by itself.
 maho history list --since 7d --domain
 ```
 
-Output:
+```template
+## github.com
+  2026-06-29 09:14  Pull Request #482 — fix tab leak on close
+  https://github.com/...
+  2026-06-30 11:02  Pull Request #490 — add lease heartbeat
+  https://github.com/...
 
-```
-2147  github.com
-1832  news.ycombinator.com
-1124  app.linear.app
- 941  google.com
- 612  vercel.com
- 487  notion.so
- ...
+## news.ycombinator.com
+  2026-06-28 08:31  Ask HN: How do you manage dotfiles?
+  https://news.ycombinator.com/item?id=...
+
+## app.linear.app
+  2026-06-29 14:55  Linear – My Issues
+  https://app.linear.app/team/issues
 ```
 
-A count and a domain, one per line, sorted by count. The flag `--since 7d` accepts the usual short forms: `1h`, `30m`, `7d`, `4w`, or an ISO date for the cut.
+Each domain gets a `## domain` header. Under it, each visit shows the timestamp, title, and URL, two lines per entry. The `--since` flag accepts short forms: `1h`, `30m`, `7d`, `4w`, or an ISO date for the cut.
 
 This is the query that tells you what the past week looked like. It is honest in a way that makes some weeks uncomfortable. If you have ever wondered whether you really spent that much time on a specific site, this query answers it.
 
@@ -94,54 +99,80 @@ Two related forms worth knowing.
 maho history list --since 24h --domain --limit 5
 ```
 
-Top five domains in the last day. Useful as a quick report.
+Top entries from the last day, limited to five domain groups. Useful as a quick report.
 
 ```bash
 maho history list --since 7d --space work --domain
 ```
 
-Same query scoped to the work space. If you keep your work tabs in one space and your reading in another, this is the version of the query that gives you actual work data without your morning HN reading drowning it out.
+Same query scoped to the work space. If you keep your work tabs in one space and your reading in another, this is the version of the query that gives you actual work data without your morning reading drowning it out.
 
-## Query 2: anything you visited from a Slack link
+## Query 2: search by title or URL substring
 
-The second query is one most browsers cannot answer at all. It uses the referrer.
+The second query is for finding something specific you remember visiting.
 
 ```bash
-maho history search --referrer-domain slack.com --since 30d --format json
+maho history search --title-substring "release notes" --since 30d
 ```
 
-Output:
-
-```json
-[
-  {"id": 14123, "url": "https://github.com/maho/...", "title": "PR #482", "ts": 1761456720, "space": "work"},
-  {"id": 14217, "url": "https://www.notion.so/...", "title": "Q4 plan", "ts": 1761482101, "space": "work"},
-  ...
-]
+```template
+2026-06-15 10:22  Astro 5.0 Release Notes
+  https://astro.build/blog/astro-5/
+2026-06-20 14:07  Starlight 0.28 Release Notes
+  https://starlight.astro.build/changelog/
 ```
 
-This is the "what did the team share with me this month" query. Slack messages with links are easy to lose track of in Slack itself. Once they have been clicked, they live in the history with the Slack referrer. The CLI surfaces them.
+Each match prints as a two-line block: timestamp and title on the first line, URL indented on the second. The default format is readable for eyeballing. Pass `--json` at the global level for machine-readable output:
 
-The `search` subcommand is the one to use when you want filters beyond a time window. It takes `--url-substring`, `--title-substring`, `--referrer-domain`, `--space`, and `--since`. All of them combine with AND.
+```bash
+maho --json history search --title-substring "release notes" --since 30d
+```
 
-A small ergonomic note: `--format json` returns a JSON array, one record per element. `--format ndjson` returns NDJSON for streaming. The default human format is a simple two-line block per record (URL, then title and time). The default is fine for eyeballing. Pick a JSON format when you are piping to `jq`.
+```template
+{
+  "entries": [
+    {"id": 14123, "url": "https://astro.build/blog/astro-5/", "title": "Astro 5.0 Release Notes", "visited_at": "2026-06-15T10:22:00Z"},
+    {"id": 14217, "url": "https://starlight.astro.build/changelog/", "title": "Starlight 0.28 Release Notes", "visited_at": "2026-06-20T14:07:00Z"}
+  ]
+}
+```
+
+The `search` subcommand also takes `--url-substring`, `--referrer-domain`, and `--space`. All filters combine with AND. To find everything you clicked from a Slack link in the last month:
+
+```bash
+maho history search --referrer-domain slack.com --since 30d
+```
+
+That is the "what did the team share with me this month" query. Slack messages with links are easy to lose track of in Slack itself. Once they have been clicked, they live in the history with the Slack referrer.
 
 ## Query 3: pipe to fzf for live search
 
 The third query is the one you keep in your shell config.
 
 ```bash
-maho history search --since 30d --format tsv | fzf --with-nth=2.. | awk '{print $1}' | xargs maho open
+maho --json history search --since 30d \
+  | jq -r '.entries[] | "\(.id)\t\(.url)\t\(.title)"' \
+  | fzf --with-nth=2..
 ```
 
-What this does, in order. List visits from the last 30 days as tab-separated values, with `id` first, then URL, then title. Pipe to `fzf` for a fuzzy live search, hiding the id column from the picker but keeping it in the output. Take the chosen line. Pull the id with `awk`. Hand the id to `maho open`, which reopens the page in the foreground browser.
+What this does, in order. Search the last 30 days and get JSON. Transform each record with `jq` into a tab-separated line with id first (hidden from the picker), then URL and title. Pipe to `fzf` for fuzzy live search. The result is the full selected line including the id.
 
-The result is a one-keystroke way to fuzzy-search the last month of your browsing and reopen anything. It is faster than the history panel and faster than a search engine, because it is searching only what you have already seen.
+The full pipeline to pick a result and open it in a new tab:
+
+```bash
+maho --json history search --since 30d \
+  | jq -r '.entries[] | "\(.id)\t\(.url)\t\(.title)"' \
+  | fzf --with-nth=2.. \
+  | cut -f2 \
+  | xargs -I{} maho tab navigate 1 --url {}
+```
+
+This is faster than the history panel and faster than a search engine, because it is searching only what you have already seen.
 
 A short alias is worth setting:
 
 ```bash
-alias h='maho history search --since 30d --format tsv | fzf --with-nth=2.. | awk "{print \$1}" | xargs maho open'
+alias h='maho --json history search --since 30d | jq -r '"'"'.entries[] | "\(.id)\t\(.url)\t\(.title)"'"'"' | fzf --with-nth=2.. | cut -f2'
 ```
 
 After that, `h` from the terminal is a small superpower.
@@ -175,3 +206,7 @@ The import is idempotent. Records that are already in the local store are skippe
 ## Get notified
 
 A browser history that is just a database, and a CLI that treats it like one, is a small thing that changes how you work. If you want it on your machine when the beta opens, [get notified](/waitlist).
+
+---
+
+*Updated 2026-07-06: rewritten to match shipped `maho` CLI syntax.*

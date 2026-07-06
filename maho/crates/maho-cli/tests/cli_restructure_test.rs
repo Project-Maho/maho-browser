@@ -132,31 +132,27 @@ fn deprecated_balance_prints_warning_to_stderr() {
 }
 
 #[test]
-fn tab_stub_exits_with_code_2() {
+fn tab_info_exits_with_error_when_no_browser() {
     let output = maho_cmd()
-        .args(["tab", "info"])
+        .args(["--socket-path", "/tmp/nonexistent-maho-cli-test.sock", "tab", "info"])
         .output()
         .expect("failed to run maho tab info");
 
     assert_eq!(
         output.status.code(),
-        Some(2),
-        "stub commands should exit with code 2"
+        Some(1),
+        "tab info should exit with code 1 when no browser running"
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("not implemented yet"),
-        "stub should print 'not implemented yet', got:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("Task 3.2"),
-        "stub should reference the task number, got:\n{stderr}"
+        stderr.contains("Browser not running") || stderr.contains("socket connect failed"),
+        "should indicate browser not running, got:\n{stderr}"
     );
 }
 
 #[test]
-fn headless_stub_exits_with_code_2() {
+fn headless_exits_with_error_when_no_browser() {
     let output = maho_cmd()
         .args(["headless", "--url", "https://example.com", "--extract", "title"])
         .output()
@@ -164,18 +160,14 @@ fn headless_stub_exits_with_code_2() {
 
     assert_eq!(
         output.status.code(),
-        Some(2),
-        "headless stub should exit with code 2"
+        Some(1),
+        "headless should exit with code 1 when no browser running"
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("not implemented yet"),
-        "headless stub should print 'not implemented yet', got:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("Task 3.3"),
-        "headless stub should reference Task 3.3, got:\n{stderr}"
+        stderr.contains("no running browser") || stderr.contains("Browser not running"),
+        "headless should indicate no browser, got:\n{stderr}"
     );
 }
 

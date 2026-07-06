@@ -1,0 +1,126 @@
+---
+title: Tools reference
+description: Full catalog of Maho Agent Protocol tools organized by category. Tabs, navigation, content, capture, and session control.
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Every tool below is a standard MCP tool invocation. Call it with `tools/call` and pass the tool name plus its arguments. Responses are JSON. Content-bearing responses pass through the [credential firewall](/api/agent-protocol/security/#credential-firewall) before they reach your client.
+
+## Categories
+
+### Tabs
+
+Read and manage the tab list.
+
+- `browser_tab_list` — list open tabs
+- `browser_tab_get` — get details for one tab
+- `browser_tab_new` — open a new tab
+- `browser_tab_close` — close a tab
+
+See [Tabs](/api/agent-protocol/tools/tabs/).
+
+### Navigation
+
+Move a tab to a URL, subject to the allowed-domains policy.
+
+- `browser_navigate` — navigate a tab to a URL
+- `browser_set_allowed_domains` — set the session-scoped allowlist
+
+See [Navigation](/api/agent-protocol/tools/navigation/).
+
+### Content
+
+Structured, typed extractors. No arbitrary JavaScript, no DOM eval surface.
+
+- `browser_page_content` — full page content
+- `browser_page_text` — visible text only
+- `browser_search_in_page` — regex search over page text
+- `browser_page_context` — high-level page summary (title, URL, byline, reading time)
+- `page_query_selector` — resolve a CSS selector to a node reference
+- `page_get_text` — read the text of a resolved node
+- `page_get_attribute` — read an attribute of a resolved node
+- `page_wait_for_selector` — wait until a selector resolves
+
+See [Content](/api/agent-protocol/tools/content/).
+
+<Aside type="caution" title="No arbitrary JavaScript surface">
+Maho does not expose a JavaScript execution tool. This is a deliberate lockdown, not a missing feature. Any generic eval-style tool call returns `-32601 method not found`.
+</Aside>
+
+### History and bookmarks
+
+Read local user data.
+
+- `browser_history_search` — search the history database
+- `browser_bookmarks_search` — search bookmarks by title, URL, or tag
+- `browser_bookmark_create` — create a bookmark
+
+### Capture (in development)
+
+Structured snapshots and screenshots. Reserved surface, delivered incrementally.
+
+- `browser_accessibility_snapshot` (in development)
+- `browser_click`, `browser_type`, `browser_select` (in development, `@ref` based)
+- `browser_screenshot_full`, `browser_screenshot_element` (in development)
+- `browser_network_start_capture`, `browser_network_get_har`, `browser_network_stop_capture` (in development, firewall-gated)
+
+See [Capture](/api/agent-protocol/tools/capture/) for status and expected shape.
+
+### Session control
+
+Coordinate access when more than one agent is connected.
+
+- `browser_acquire_lease` — take exclusive control of a tab
+- `browser_heartbeat_lease` — keep the lease alive
+- `browser_release_lease` — hand it back
+
+The lease semantics live in the [security model](/api/agent-protocol/security/#per-tab-lease) since they are inseparable from the force-steal event delivery.
+
+## Response shape
+
+MCP wraps tool results in a `content` array. The Maho server always returns exactly one content item of type `text`, with a JSON string as the value. This is the shape MCP clients expect:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 42,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"tabs\":[{\"id\":\"tab_1a2b\",\"title\":\"Example\",\"url\":\"https://example.com/\",\"active\":true}]}"
+      }
+    ],
+    "isError": false
+  }
+}
+```
+
+Errors are returned either as JSON-RPC errors (protocol-level) or as content with `isError: true` (tool-level).
+
+## Error codes
+
+The Agent Protocol uses standard JSON-RPC error codes plus a Maho-specific range for policy failures.
+
+| Code | Name | Meaning |
+|------|------|---------|
+| `-32700` | `parse_error` | Malformed JSON. |
+| `-32600` | `invalid_request` | Not a valid JSON-RPC 2.0 request. |
+| `-32601` | `method_not_found` | Unknown tool. Also returned for any eval-style JavaScript execution primitive. |
+| `-32602` | `invalid_params` | Missing or wrong-typed parameters. |
+| `-32603` | `internal_error` | Server-side failure. |
+| `-32001` | `not_authenticated` | Handshake not completed. |
+| `-32002` | `authentication_failed` | Peer credential or session token failure. |
+| `-32010` | `domain_approval_required` | Navigation target is not in `allowed_domains`. |
+| `-32011` | `lease_conflict` | Another session holds the tab lease. |
+| `-32012` | `lease_expired` | The lease TTL elapsed without a heartbeat. |
+| `-32020` | `tool_disabled` | Tool exists but the user has disabled it in settings. |
+
+## Where to go next
+
+- Per-category pages linked above.
+- [Examples](/api/agent-protocol/examples/) for full working sessions.
+- [Security](/api/agent-protocol/security/) for the redaction and lease rules that shape every response.

@@ -1,0 +1,11 @@
+Tab: GitHub - nicola/maho: Maho Browser
+  ID: 1
+  URL: https://github.com/nicola/maho
+  Status: complete
+  Active: ✓
+
+Tab: Example Domain
+  ID: 2
+  URL: https://example.com/
+  Status: complete
+  Active: 

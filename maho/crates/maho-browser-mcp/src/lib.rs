@@ -7,7 +7,11 @@
 
 pub mod client;
 pub mod error;
+pub mod firewall;
 pub mod paths;
 pub mod protocol;
+pub mod redacted;
 pub mod server;
 pub mod win_token;
+
+pub use redacted::Redacted;

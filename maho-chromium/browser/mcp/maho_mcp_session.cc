@@ -23,6 +23,7 @@
 #include "maho/browser/mcp/maho_mcp_accessibility_handler.h"
 #include "maho/browser/mcp/maho_mcp_firewall.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
+#include "maho/browser/mcp/maho_mcp_network_observer.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_WIN)
@@ -466,6 +467,51 @@ void MahoMcpSession::HandleActiveMethod(const McpJsonRpcMessage& msg,
       t.Set("name", "browser_release_lease");
       t.Set("description",
             "Release a lease held by this session. Args: tab_id (int).");
+      tools.Append(base::Value(std::move(t)));
+    }
+
+    // Screenshot tools (Wave 4.2)
+    {
+      base::DictValue t;
+      t.Set("name", "browser_screenshot_full");
+      t.Set("description",
+            "Capture full-page screenshot as PNG with password field "
+            "redaction. Args: tab_id (int, optional).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "browser_screenshot_element");
+      t.Set("description",
+            "Capture element screenshot by @ref label as PNG with "
+            "password field redaction. Args: ref (int), "
+            "tab_id (int, optional).");
+      tools.Append(base::Value(std::move(t)));
+    }
+
+    // Network capture tools (Wave 4.4)
+    {
+      base::DictValue t;
+      t.Set("name", "browser_network_start_capture");
+      t.Set("description",
+            "Start capturing network requests for a tab. "
+            "Args: tab_id (int, optional).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "browser_network_stop_capture");
+      t.Set("description",
+            "Stop capturing network requests and return final HAR 1.2. "
+            "Args: tab_id (int, optional).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "browser_network_get_har");
+      t.Set("description",
+            "Get current HAR 1.2 capture without stopping. "
+            "Args: tab_id (int, optional).");
       tools.Append(base::Value(std::move(t)));
     }
 
@@ -988,6 +1034,91 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
         framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
+    responses.push_back(std::move(resp));
+    return;
+  }
+
+  if (*tool_name == "browser_screenshot_full") {
+    // Stub: In the real browser, we'd call
+    // MahoMcpScreenshotHandler::CaptureFullPage with the RenderWidgetHostView
+    // bitmap and AXTree. For session-level testing, return a minimal 1x1 PNG.
+    base::DictValue result;
+    result.Set("content_type", "image/png");
+    // 1x1 black PNG (stub — real implementation captures from surface).
+    result.Set("data", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
+    responses.push_back(std::move(resp));
+    return;
+  }
+
+  if (*tool_name == "browser_screenshot_element") {
+    if (!arguments || !arguments->FindInt("ref")) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: ref required");
+      responses.push_back(std::move(err));
+      return;
+    }
+    int ref = arguments->FindInt("ref").value();
+    auto it = ref_to_ax_id_.find(ref);
+    if (it == ref_to_ax_id_.end()) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32000, "Unknown ref: call browser_accessibility_snapshot first");
+      responses.push_back(std::move(err));
+      return;
+    }
+    base::DictValue result;
+    result.Set("content_type", "image/png");
+    result.Set("data", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
+    result.Set("ref", ref);
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
+    responses.push_back(std::move(resp));
+    return;
+  }
+
+  // Network capture tools (Wave 4.4)
+  if (*tool_name == "browser_network_start_capture") {
+    if (!network_observer_) {
+      network_observer_ = std::make_unique<MahoMcpNetworkObserver>();
+    }
+    network_observer_->StartCapture();
+    base::DictValue result;
+    result.Set("capturing", true);
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
+    responses.push_back(std::move(resp));
+    return;
+  }
+
+  if (*tool_name == "browser_network_stop_capture") {
+    if (!network_observer_ || !network_observer_->is_capturing()) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32000, "No active capture to stop");
+      responses.push_back(std::move(err));
+      return;
+    }
+    network_observer_->StopCapture();
+    auto har = network_observer_->GetHar();
+    std::string resp = framer_.BuildSuccessResponse(
+        msg.id, base::Value(std::move(har).take()));
+    responses.push_back(std::move(resp));
+    return;
+  }
+
+  if (*tool_name == "browser_network_get_har") {
+    if (!network_observer_) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32000, "No capture started");
+      responses.push_back(std::move(err));
+      return;
+    }
+    auto har = network_observer_->GetHar();
+    std::string resp = framer_.BuildSuccessResponse(
+        msg.id, base::Value(std::move(har).take()));
     responses.push_back(std::move(resp));
     return;
   }

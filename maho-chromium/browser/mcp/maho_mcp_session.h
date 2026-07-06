@@ -22,6 +22,7 @@
 #include "base/sequence_checker.h"
 #include "maho/browser/mcp/maho_mcp_json_rpc.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
+#include "maho/browser/mcp/maho_mcp_network_observer.h"
 #include "ui/accessibility/ax_node_id_forward.h"
 
 namespace maho {
@@ -115,6 +116,9 @@ class MahoMcpSession {
 
   // Per-session ref table for accessibility interactions.
   RefTable ref_to_ax_id_;
+
+  // Per-session network capture observer (Wave 4.4).
+  std::unique_ptr<MahoMcpNetworkObserver> network_observer_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 };

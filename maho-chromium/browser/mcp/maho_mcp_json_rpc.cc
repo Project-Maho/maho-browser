@@ -10,6 +10,7 @@
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/values.h"
+#include "maho/browser/mcp/maho_mcp_firewall.h"
 
 namespace maho {
 
@@ -70,6 +71,9 @@ std::string MahoMcpJsonRpc::BuildSuccessResponse(
     const std::optional<base::Value>& id,
     base::Value result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // 4-vector credential firewall (OQ-4): every tool response passes through
+  // MahoMcpFirewall::RedactAll before egress. Single chokepoint = no bypass.
+  MahoMcpFirewall::RedactAll(result);
   base::DictValue response;
   response.Set("id", CloneId(id));
   response.Set("result", std::move(result));

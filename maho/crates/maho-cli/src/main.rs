@@ -1,10 +1,11 @@
 mod auth;
+mod browser;
 mod byok;
 mod chat;
 mod credits;
 pub mod config;
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 
 use config::CliConfig;
@@ -469,6 +470,14 @@ pub struct HeadlessArgs {
     /// Skip URLs already in this file (resume)
     #[arg(long)]
     pub skip_completed: Option<String>,
+
+    /// Auto-launch Maho.app if browser is not running
+    #[arg(long)]
+    pub launch: bool,
+
+    /// Keep browser running after CLI exits (only with --launch)
+    #[arg(long)]
+    pub keep_alive: bool,
 }
 
 #[derive(Subcommand)]
@@ -506,20 +515,25 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+    let socket_path = cli.socket_path;
+    let json_output = cli.json;
+    let relay_url = cli.relay_url;
+    let proxy_url = cli.proxy_url;
+    let command = cli.command;
 
-    match cli.command {
+    match command {
         // ─── Auth group ───────────────────────────────────────────────────
         Commands::Auth { command } => match command {
             AuthCommands::Login {
                 signup,
                 email,
                 password,
-            } => cmd_login(&cli.relay_url, signup, email, password).await,
+            } => cmd_login(&relay_url, signup, email, password).await,
             AuthCommands::Signup { email, password } => {
-                cmd_login(&cli.relay_url, true, email, password).await
+                cmd_login(&relay_url, true, email, password).await
             }
             AuthCommands::Logout => cmd_logout(),
-            AuthCommands::Whoami => cmd_whoami(&cli.relay_url).await,
+            AuthCommands::Whoami => cmd_whoami(&relay_url).await,
             AuthCommands::ConfigShow => cmd_config_show(),
         },
 
@@ -533,33 +547,35 @@ async fn main() -> Result<()> {
                 byok::send_byok(&provider, &key, &message).await
             } else {
                 let cfg = CliConfig::load()?;
-                chat::send_chat(&cli.proxy_url, &cfg, &message).await
+                chat::send_chat(&proxy_url, &cfg, &message).await
             }
         }
 
         // ─── Billing group ────────────────────────────────────────────────
         Commands::Billing { command } => match command {
-            BillingCommands::Balance => cmd_balance(&cli.relay_url).await,
+            BillingCommands::Balance => cmd_balance(&relay_url).await,
             BillingCommands::BuyCredits { amount } => cmd_buy_credits(&amount),
         },
 
-        // ─── Tab group (stubs — Task 3.2) ─────────────────────────────────
-        Commands::Tab { .. } => stub_not_implemented("Task 3.2"),
+        // ─── Tab group ──────────────────────────────────────────────────────
+        Commands::Tab { command } => cmd_tab(command, socket_path.as_deref(), json_output).await,
 
-        // ─── History group (stubs — Task 3.2) ─────────────────────────────
-        Commands::History { .. } => stub_not_implemented("Task 3.2"),
+        // ─── History group ────────────────────────────────────────────────────
+        Commands::History { command } => cmd_history(command, socket_path.as_deref(), json_output).await,
 
-        // ─── Bookmarks group (stubs — Task 3.2) ───────────────────────────
-        Commands::Bookmarks { .. } => stub_not_implemented("Task 3.2"),
+        // ─── Bookmarks group ──────────────────────────────────────────────────
+        Commands::Bookmarks { command } => cmd_bookmarks(command, socket_path.as_deref(), json_output).await,
 
         // ─── Page group (stubs — Task 3.2) ────────────────────────────────
         Commands::Page { .. } => stub_not_implemented("Task 3.2"),
 
-        // ─── Headless (stub — Task 3.3) ───────────────────────────────────
-        Commands::Headless(_) => stub_not_implemented("Task 3.3"),
+        // ─── Headless ─────────────────────────────────────────────────────
+        Commands::Headless(args) => cmd_headless(args, socket_path.as_deref(), json_output).await,
 
         // ─── Browser group (stub — Task 3.4) ──────────────────────────────
-        Commands::Browser { .. } => stub_not_implemented("Task 3.4"),
+        Commands::Browser { command } => match command {
+            BrowserCommands::Repl => cmd_repl(socket_path.as_deref(), json_output).await,
+        },
 
         // ─── MCP server (stub — Task 5.x) ────────────────────────────────
         Commands::Mcp => stub_not_implemented("Task 5.x"),
@@ -577,11 +593,11 @@ async fn main() -> Result<()> {
             password,
         } => {
             deprecation_warning("login", "auth login");
-            cmd_login(&cli.relay_url, signup, email, password).await
+            cmd_login(&relay_url, signup, email, password).await
         }
         Commands::Signup { email, password } => {
             deprecation_warning("signup", "auth signup");
-            cmd_login(&cli.relay_url, true, email, password).await
+            cmd_login(&relay_url, true, email, password).await
         }
         Commands::Logout => {
             deprecation_warning("logout", "auth logout");
@@ -589,7 +605,7 @@ async fn main() -> Result<()> {
         }
         Commands::Whoami => {
             deprecation_warning("whoami", "auth whoami");
-            cmd_whoami(&cli.relay_url).await
+            cmd_whoami(&relay_url).await
         }
         Commands::Config { action } => {
             deprecation_warning("config show", "auth config-show");
@@ -599,7 +615,7 @@ async fn main() -> Result<()> {
         }
         Commands::Balance => {
             deprecation_warning("balance", "billing balance");
-            cmd_balance(&cli.relay_url).await
+            cmd_balance(&relay_url).await
         }
         Commands::BuyCredits { amount } => {
             deprecation_warning("buy-credits", "billing buy-credits");
@@ -755,4 +771,829 @@ fn format_date_from_epoch_days(days: i64, hour: u8, min: u8) -> String {
 
 fn is_leap(y: i32) -> bool {
     (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+}
+
+// ─── Tab command handlers ─────────────────────────────────────────────────────
+
+async fn cmd_tab(command: TabCommands, socket_path: Option<&str>, json_output: bool) -> Result<()> {
+    match command {
+        TabCommands::Info => {
+            let client = browser::connect(socket_path).await?;
+            let result = browser::send_tool_call(&client, "browser_tab_list", serde_json::json!({})).await?;
+            let tabs = result.get("tabs").and_then(|t| t.as_array());
+            let active = tabs
+                .and_then(|arr| arr.iter().find(|t| t.get("is_active") == Some(&serde_json::Value::Bool(true))));
+
+            match active {
+                Some(tab) => {
+                    if json_output {
+                        println!("{}", serde_json::to_string_pretty(tab)?);
+                    } else {
+                        println!("id: {}", tab.get("id").and_then(|v| v.as_i64()).unwrap_or(0));
+                        println!("title: {}", tab.get("title").and_then(|v| v.as_str()).unwrap_or(""));
+                        println!("url: {}", tab.get("url").and_then(|v| v.as_str()).unwrap_or(""));
+                        println!("active: true");
+                    }
+                }
+                None => {
+                    eprintln!("No active tab found.");
+                    std::process::exit(1);
+                }
+            }
+            Ok(())
+        }
+        TabCommands::List { .. } => {
+            let client = browser::connect(socket_path).await?;
+            let result = browser::send_tool_call(&client, "browser_tab_list", serde_json::json!({})).await?;
+
+            if json_output {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+                return Ok(());
+            }
+
+            let tabs = result.get("tabs").and_then(|t| t.as_array());
+            if let Some(tabs) = tabs {
+                println!("{:<4} {:<40} {:<60} {}", "ID", "TITLE", "URL", "ACTIVE");
+                for tab in tabs {
+                    let id = tab.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let title = tab.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                    let url = tab.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                    let active = tab.get("is_active").and_then(|v| v.as_bool()).unwrap_or(false);
+                    println!(
+                        "{:<4} {:<40} {:<60} {}",
+                        id,
+                        browser::truncate(title, 40),
+                        browser::truncate(url, 60),
+                        if active { "*" } else { "" }
+                    );
+                }
+            }
+            Ok(())
+        }
+        TabCommands::Get { tab_id } => {
+            let client = browser::connect(socket_path).await?;
+            let result = browser::send_tool_call(
+                &client,
+                "browser_tab_get",
+                serde_json::json!({ "tab_id": tab_id.parse::<i64>().unwrap_or(0) }),
+            ).await?;
+
+            if json_output {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("id: {}", result.get("id").and_then(|v| v.as_i64()).unwrap_or(0));
+                println!("title: {}", result.get("title").and_then(|v| v.as_str()).unwrap_or(""));
+                println!("url: {}", result.get("url").and_then(|v| v.as_str()).unwrap_or(""));
+                println!("active: {}", result.get("is_active").and_then(|v| v.as_bool()).unwrap_or(false));
+            }
+            Ok(())
+        }
+        TabCommands::Close { tab_id } => {
+            let client = browser::connect(socket_path).await?;
+            let result = browser::send_tool_call(
+                &client,
+                "browser_tab_close",
+                serde_json::json!({ "tab_id": tab_id.parse::<i64>().unwrap_or(0) }),
+            ).await?;
+
+            if json_output {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("Tab {} closed.", tab_id);
+            }
+            Ok(())
+        }
+        TabCommands::New { url, space } => {
+            let client = browser::connect(socket_path).await?;
+            let mut args = serde_json::json!({});
+            if let Some(u) = &url {
+                args["url"] = serde_json::Value::String(u.clone());
+            }
+            if let Some(s) = &space {
+                args["space"] = serde_json::Value::String(s.clone());
+            }
+            let result = browser::send_tool_call(&client, "browser_tab_new", args).await?;
+
+            if json_output {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                let tab = result.get("tab").unwrap_or(&result);
+                let id = tab.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+                let tab_url = tab.get("url").and_then(|v| v.as_str()).unwrap_or("about:blank");
+                println!("New tab {id}: {tab_url}");
+            }
+            Ok(())
+        }
+        TabCommands::Navigate { tab_id, url } => {
+            let client = browser::connect(socket_path).await?;
+            let result = browser::send_tool_call(
+                &client,
+                "browser_navigate",
+                serde_json::json!({ "tab_id": tab_id.parse::<i64>().unwrap_or(0), "url": url }),
+            ).await?;
+
+            if json_output {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("Navigated tab {} to {}", tab_id, url);
+            }
+            Ok(())
+        }
+        TabCommands::Read { format, selection, tab } => {
+            let client = browser::connect(socket_path).await?;
+            let tool = if selection { "browser_page_text" } else { "browser_page_content" };
+            let mut args = serde_json::json!({ "format": format });
+            if let Some(t) = &tab {
+                args["tab_id"] = serde_json::Value::Number(
+                    serde_json::Number::from(t.parse::<i64>().unwrap_or(0)),
+                );
+            }
+            if selection {
+                args["selection_only"] = serde_json::Value::Bool(true);
+            }
+            let result = browser::send_tool_call(&client, tool, args).await?;
+
+            if json_output {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                let text = result.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                print!("{text}");
+            }
+            Ok(())
+        }
+        TabCommands::Annotate { title, tab } => {
+            let client = browser::connect(socket_path).await?;
+            let mut input = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)?;
+            let mut args = serde_json::json!({ "content": input });
+            if let Some(t) = &title {
+                args["title"] = serde_json::Value::String(t.clone());
+            }
+            if let Some(t) = &tab {
+                args["tab_id"] = serde_json::Value::Number(
+                    serde_json::Number::from(t.parse::<i64>().unwrap_or(0)),
+                );
+            }
+            let result = browser::send_tool_call(&client, "browser_tab_annotate", args).await?;
+
+            if json_output {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("Annotation saved.");
+            }
+            Ok(())
+        }
+        TabCommands::Write { format, tab } => {
+            let client = browser::connect(socket_path).await?;
+            let mut input = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)?;
+            let mut args = serde_json::json!({ "content": input, "format": format });
+            if let Some(t) = &tab {
+                args["tab_id"] = serde_json::Value::Number(
+                    serde_json::Number::from(t.parse::<i64>().unwrap_or(0)),
+                );
+            }
+            let result = browser::send_tool_call(&client, "browser_tab_write", args).await?;
+
+            if json_output {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("Content written to tab.");
+            }
+            Ok(())
+        }
+        TabCommands::LeaseAcquire { ttl, tab } => {
+            let client = browser::connect(socket_path).await?;
+            let mut args = serde_json::json!({ "ttl": ttl });
+            if let Some(t) = &tab {
+                args["tab_id"] = serde_json::Value::Number(
+                    serde_json::Number::from(t.parse::<i64>().unwrap_or(0)),
+                );
+            }
+            let result = browser::send_tool_call(&client, "browser_tab_lease_acquire", args).await?;
+
+            if json_output {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                let lease_id = result.get("lease_id").and_then(|v| v.as_str()).unwrap_or("unknown");
+                println!("Lease acquired: {lease_id}");
+            }
+            Ok(())
+        }
+        TabCommands::LeaseRelease { tab } => {
+            let client = browser::connect(socket_path).await?;
+            let mut args = serde_json::json!({});
+            if let Some(t) = &tab {
+                args["tab_id"] = serde_json::Value::Number(
+                    serde_json::Number::from(t.parse::<i64>().unwrap_or(0)),
+                );
+            }
+            let result = browser::send_tool_call(&client, "browser_tab_lease_release", args).await?;
+
+            if json_output {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("Lease released.");
+            }
+            Ok(())
+        }
+        TabCommands::LeaseHeartbeat { tab } => {
+            let client = browser::connect(socket_path).await?;
+            let mut args = serde_json::json!({});
+            if let Some(t) = &tab {
+                args["tab_id"] = serde_json::Value::Number(
+                    serde_json::Number::from(t.parse::<i64>().unwrap_or(0)),
+                );
+            }
+            let result = browser::send_tool_call(&client, "browser_tab_lease_heartbeat", args).await?;
+
+            if json_output {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("Heartbeat sent.");
+            }
+            Ok(())
+        }
+    }
+}
+
+// ─── History command handlers ─────────────────────────────────────────────────
+
+async fn cmd_history(command: HistoryCommands, socket_path: Option<&str>, json_output: bool) -> Result<()> {
+    match command {
+        HistoryCommands::List { since, domain, limit, .. } => {
+            let client = browser::connect(socket_path).await?;
+
+            let since_seconds = match &since {
+                Some(s) => Some(browser::parse_duration_to_seconds(s)?),
+                None => None,
+            };
+
+            let domain_filter: Option<String> = if domain {
+                None // group-by-domain mode, no filter
+            } else {
+                None
+            };
+
+            let args = serde_json::json!({
+                "query": null,
+                "since_seconds": since_seconds,
+                "domain": domain_filter,
+                "limit": limit.unwrap_or(50),
+            });
+
+            let result = browser::send_tool_call(&client, "browser_history_search", args).await?;
+
+            if json_output {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+                return Ok(());
+            }
+
+            let entries = result.get("entries").and_then(|e| e.as_array());
+            if let Some(entries) = entries {
+                if domain {
+                    // Group by domain
+                    let mut grouped: std::collections::BTreeMap<String, Vec<&serde_json::Value>> =
+                        std::collections::BTreeMap::new();
+                    for entry in entries {
+                        let url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                        let d = browser::extract_domain(url).to_string();
+                        grouped.entry(d).or_default().push(entry);
+                    }
+                    for (d, items) in &grouped {
+                        println!("## {d}");
+                        for entry in items {
+                            let ts = entry.get("visited_at").and_then(|v| v.as_str()).unwrap_or("");
+                            let title = entry.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                            let url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                            println!("  {ts} {title}");
+                            println!("  {url}");
+                        }
+                    }
+                } else {
+                    for entry in entries {
+                        let ts = entry.get("visited_at").and_then(|v| v.as_str()).unwrap_or("");
+                        let title = entry.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                        let url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                        println!("{ts}  {title}");
+                        println!("  {url}");
+                    }
+                }
+            }
+            Ok(())
+        }
+        HistoryCommands::Search { url_substring, title_substring, since, .. } => {
+            let client = browser::connect(socket_path).await?;
+
+            let query = url_substring
+                .as_deref()
+                .or(title_substring.as_deref())
+                .unwrap_or("");
+
+            let since_seconds = match &since {
+                Some(s) => Some(browser::parse_duration_to_seconds(s)?),
+                None => None,
+            };
+
+            let args = serde_json::json!({
+                "query": query,
+                "since_seconds": since_seconds,
+            });
+
+            let result = browser::send_tool_call(&client, "browser_history_search", args).await?;
+
+            if json_output {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+                return Ok(());
+            }
+
+            let entries = result.get("entries").and_then(|e| e.as_array());
+            if let Some(entries) = entries {
+                for entry in entries {
+                    let ts = entry.get("visited_at").and_then(|v| v.as_str()).unwrap_or("");
+                    let title = entry.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                    let url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                    println!("{ts}  {title}");
+                    println!("  {url}");
+                }
+            }
+            Ok(())
+        }
+        _ => stub_not_implemented("Task 3.2 — history export/import"),
+    }
+}
+
+// ─── Bookmarks command handlers ───────────────────────────────────────────────
+
+async fn cmd_bookmarks(command: BookmarkCommands, socket_path: Option<&str>, json_output: bool) -> Result<()> {
+    match command {
+        BookmarkCommands::List { .. } => {
+            let client = browser::connect(socket_path).await?;
+            let result = browser::send_tool_call(
+                &client,
+                "browser_bookmarks_search",
+                serde_json::json!({ "query": "" }),
+            ).await?;
+
+            if json_output {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+                return Ok(());
+            }
+
+            let bookmarks = result.get("bookmarks").and_then(|b| b.as_array());
+            if let Some(bookmarks) = bookmarks {
+                for bm in bookmarks {
+                    let title = bm.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                    let url = bm.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                    println!("{title}");
+                    println!("  {url}");
+                }
+            }
+            Ok(())
+        }
+        BookmarkCommands::Search { query, .. } => {
+            let client = browser::connect(socket_path).await?;
+            let result = browser::send_tool_call(
+                &client,
+                "browser_bookmarks_search",
+                serde_json::json!({ "query": query }),
+            ).await?;
+
+            if json_output {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+                return Ok(());
+            }
+
+            let bookmarks = result.get("bookmarks").and_then(|b| b.as_array());
+            if let Some(bookmarks) = bookmarks {
+                for bm in bookmarks {
+                    let title = bm.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                    let url = bm.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                    println!("{title}");
+                    println!("  {url}");
+                }
+            }
+            Ok(())
+        }
+        BookmarkCommands::Create { url, title, folder } => {
+            let client = browser::connect(socket_path).await?;
+            let result = browser::send_tool_call(
+                &client,
+                "browser_bookmark_create",
+                serde_json::json!({ "title": title, "url": url, "folder": folder }),
+            ).await?;
+
+            if json_output {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("Bookmark created: {title}");
+                println!("  {url}");
+            }
+            Ok(())
+        }
+    }
+}
+
+// ─── Headless command handler ─────────────────────────────────────────────────
+
+fn find_maho_binary() -> Option<std::path::PathBuf> {
+    if let Ok(p) = std::env::var("MAHO_APP_PATH") {
+        let path = std::path::PathBuf::from(&p);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    let candidates = [
+        "/Applications/Maho.app/Contents/MacOS/Maho",
+        "chromium/src/out/Default/Maho.app/Contents/MacOS/Maho",
+    ];
+    for c in &candidates {
+        let path = std::path::PathBuf::from(c);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+struct SpawnedBrowser {
+    child: std::process::Child,
+}
+
+impl SpawnedBrowser {
+    fn spawn(binary: &std::path::Path) -> Result<Self> {
+        let child = std::process::Command::new(binary)
+            .args(["--headless=new", "--no-first-run", "--no-default-browser-check"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .with_context(|| format!("failed to spawn browser: {}", binary.display()))?;
+        Ok(Self { child })
+    }
+
+    fn terminate(&mut self) {
+        use nix::sys::signal::{Signal, kill};
+        use nix::unistd::Pid;
+
+        let pid = Pid::from_raw(self.child.id() as i32);
+        let _ = kill(pid, Signal::SIGTERM);
+
+        for _ in 0..50 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            if let Ok(Some(_)) = self.child.try_wait() {
+                return;
+            }
+        }
+        let _ = kill(pid, Signal::SIGKILL);
+        let _ = self.child.wait();
+    }
+}
+
+async fn wait_for_socket(socket_path: Option<&str>, timeout_ms: u64) -> Result<maho_browser_mcp::client::BrowserClient> {
+    let effective_timeout = std::env::var("MAHO_SOCKET_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(timeout_ms);
+    let polls = effective_timeout / 200;
+    for _ in 0..polls {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        if let Ok(client) = browser::connect(socket_path).await {
+            return Ok(client);
+        }
+    }
+    bail!("browser socket did not appear within {}s", effective_timeout / 1000)
+}
+
+async fn cmd_headless(args: HeadlessArgs, socket_path: Option<&str>, _json_output: bool) -> Result<()> {
+    let url = match &args.url {
+        Some(u) => u.clone(),
+        None => {
+            if args.batch.is_some() {
+                return stub_not_implemented("Task 4.3 — batch headless");
+            }
+            eprintln!("Error: --url or --batch is required");
+            std::process::exit(1);
+        }
+    };
+
+    let mut spawned: Option<SpawnedBrowser> = None;
+
+    let client = match browser::connect(socket_path).await {
+        Ok(c) => c,
+        Err(_) if args.launch => {
+            let binary = find_maho_binary().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Cannot find Maho.app binary. Set MAHO_APP_PATH env var or install Maho.app to /Applications."
+                )
+            })?;
+            eprintln!("Launching browser: {}", binary.display());
+            spawned = Some(SpawnedBrowser::spawn(&binary)?);
+
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            if let Ok(Some(status)) = spawned.as_mut().unwrap().child.try_wait() {
+                bail!("browser binary exited immediately with status: {status}");
+            }
+
+            wait_for_socket(socket_path, 15000).await?
+        }
+        Err(e) => {
+            eprintln!("Browser not running. Use --launch to auto-start Maho.app.");
+            return Err(e);
+        }
+    };
+
+    let result = run_headless_extraction(&client, &url, &args).await;
+
+    if let Some(ref mut browser) = spawned {
+        if !args.keep_alive {
+            browser.terminate();
+        }
+    }
+
+    result
+}
+
+async fn run_headless_extraction(
+    client: &maho_browser_mcp::client::BrowserClient,
+    url: &str,
+    args: &HeadlessArgs,
+) -> Result<()> {
+    let new_tab_result = browser::send_tool_call(
+        client,
+        "browser_tab_new",
+        serde_json::json!({ "url": url }),
+    ).await?;
+
+    let tab_id = new_tab_result
+        .get("tab")
+        .and_then(|t| t.get("id"))
+        .and_then(|id| id.as_i64())
+        .unwrap_or(0);
+
+    let mut loaded = false;
+    for _ in 0..20 {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let tab_info = browser::send_tool_call(
+            client,
+            "browser_tab_get",
+            serde_json::json!({ "tab_id": tab_id }),
+        ).await?;
+        let status = tab_info.get("status").and_then(|s| s.as_str()).unwrap_or("complete");
+        if status != "loading" {
+            loaded = true;
+            break;
+        }
+    }
+
+    if !loaded {
+        eprintln!("Warning: page did not finish loading within 10s");
+    }
+
+    let extractors: Vec<&str> = args.extract.split(',').map(|s| s.trim()).collect();
+    for extractor in &extractors {
+        match *extractor {
+            "title" => {
+                let info = browser::send_tool_call(
+                    client,
+                    "browser_tab_get",
+                    serde_json::json!({ "tab_id": tab_id }),
+                ).await?;
+                let title = info.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                println!("{title}");
+            }
+            "text" => {
+                let result = browser::send_tool_call(
+                    client,
+                    "browser_page_text",
+                    serde_json::json!({ "tab_id": tab_id }),
+                ).await?;
+                let text = result.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                println!("{text}");
+            }
+            "links" => {
+                let result = browser::send_tool_call(
+                    client,
+                    "browser_page_context",
+                    serde_json::json!({ "tab_id": tab_id }),
+                ).await?;
+                if let Some(links) = result.get("links").and_then(|l| l.as_array()) {
+                    for link in links {
+                        if let Some(href) = link.as_str() {
+                            println!("{href}");
+                        } else if let Some(href) = link.get("href").and_then(|h| h.as_str()) {
+                            println!("{href}");
+                        }
+                    }
+                }
+            }
+            "meta" => {
+                let result = browser::send_tool_call(
+                    client,
+                    "browser_page_context",
+                    serde_json::json!({ "tab_id": tab_id }),
+                ).await?;
+                if let Some(desc) = result.get("meta_description").and_then(|v| v.as_str()) {
+                    println!("description: {desc}");
+                }
+                if let Some(lang) = result.get("language").and_then(|v| v.as_str()) {
+                    println!("language: {lang}");
+                }
+                if let Some(title) = result.get("title").and_then(|v| v.as_str()) {
+                    println!("title: {title}");
+                }
+            }
+            "html" => {
+                let result = browser::send_tool_call(
+                    client,
+                    "browser_page_content",
+                    serde_json::json!({ "tab_id": tab_id }),
+                ).await?;
+                let text = result.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                println!("{text}");
+            }
+            other => {
+                eprintln!("Unknown extractor: {other}. Valid: title, text, links, meta, html");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    let _ = browser::send_tool_call(
+        client,
+        "browser_tab_close",
+        serde_json::json!({ "tab_id": tab_id }),
+    ).await;
+
+    Ok(())
+}
+
+// ─── REPL command handler ─────────────────────────────────────────────────────
+
+const REPL_HELP: &str = "\
+Commands:
+  tabs                  List open tabs
+  tab info              Show active tab info
+  navigate <url>        Navigate active tab to URL
+  text                  Get page text (truncated)
+  screenshot            Save full-page screenshot to /tmp
+  snapshot              Accessibility snapshot (JSON)
+  click <ref>           Click element by ref number
+  type <ref> <text>     Type text into element
+  help                  Show this help
+  .quit / .exit         Exit REPL
+";
+
+async fn cmd_repl(socket_path: Option<&str>, _json_output: bool) -> Result<()> {
+    let client = browser::connect(socket_path).await?;
+
+    let history_dir = dirs_path();
+    std::fs::create_dir_all(&history_dir).ok();
+    let history_file = history_dir.join("repl_history");
+
+    let config = rustyline::config::Config::builder()
+        .auto_add_history(true)
+        .build();
+    let mut rl = rustyline::DefaultEditor::with_config(config)?;
+    let _ = rl.load_history(&history_file);
+
+    loop {
+        let line = match rl.readline("maho> ") {
+            Ok(l) => l,
+            Err(rustyline::error::ReadlineError::Interrupted) => continue,
+            Err(rustyline::error::ReadlineError::Eof) => break,
+            Err(e) => {
+                eprintln!("readline error: {e}");
+                break;
+            }
+        };
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed == ".quit" || trimmed == ".exit" {
+            break;
+        }
+
+        if let Err(e) = handle_repl_line(&client, trimmed).await {
+            eprintln!("error: {e}");
+        }
+    }
+
+    let _ = rl.save_history(&history_file);
+    Ok(())
+}
+
+fn dirs_path() -> std::path::PathBuf {
+    std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join(".maho")
+}
+
+async fn handle_repl_line(client: &maho_browser_mcp::client::BrowserClient, line: &str) -> Result<()> {
+    let parts: Vec<&str> = line.splitn(3, ' ').collect();
+    let cmd = parts[0];
+
+    match cmd {
+        "help" => {
+            print!("{REPL_HELP}");
+        }
+        "tabs" => {
+            let result = browser::send_tool_call(client, "browser_tab_list", serde_json::json!({})).await?;
+            if let Some(tabs) = result.get("tabs").and_then(|t| t.as_array()) {
+                println!("{:<4} {:<40} {:<60} {}", "ID", "TITLE", "URL", "ACTIVE");
+                for tab in tabs {
+                    let id = tab.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let title = tab.get("title").and_then(|v| v.as_str()).unwrap_or("");
+                    let url = tab.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                    let active = tab.get("is_active").and_then(|v| v.as_bool()).unwrap_or(false);
+                    println!(
+                        "{:<4} {:<40} {:<60} {}",
+                        id,
+                        browser::truncate(title, 40),
+                        browser::truncate(url, 60),
+                        if active { "*" } else { "" }
+                    );
+                }
+            }
+        }
+        "tab" if parts.get(1) == Some(&"info") => {
+            let result = browser::send_tool_call(client, "browser_tab_list", serde_json::json!({})).await?;
+            let tabs = result.get("tabs").and_then(|t| t.as_array());
+            let active = tabs
+                .and_then(|arr| arr.iter().find(|t| t.get("is_active") == Some(&serde_json::Value::Bool(true))));
+            if let Some(tab) = active {
+                println!("id: {}", tab.get("id").and_then(|v| v.as_i64()).unwrap_or(0));
+                println!("title: {}", tab.get("title").and_then(|v| v.as_str()).unwrap_or(""));
+                println!("url: {}", tab.get("url").and_then(|v| v.as_str()).unwrap_or(""));
+                println!("active: true");
+            } else {
+                println!("No active tab.");
+            }
+        }
+        "navigate" => {
+            let url = parts.get(1).unwrap_or(&"");
+            if url.is_empty() {
+                println!("Usage: navigate <url>");
+                return Ok(());
+            }
+            browser::send_tool_call(client, "browser_navigate", serde_json::json!({ "url": *url })).await?;
+            println!("ok");
+        }
+        "text" => {
+            let result = browser::send_tool_call(client, "browser_page_text", serde_json::json!({})).await?;
+            let text = result.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            println!("{}", browser::truncate(text, 2000));
+        }
+        "screenshot" => {
+            let result = browser::send_tool_call(client, "browser_screenshot_full", serde_json::json!({})).await?;
+            let data = result.get("data").and_then(|v| v.as_str()).unwrap_or("");
+            if data.is_empty() {
+                println!("No screenshot data received.");
+                return Ok(());
+            }
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD.decode(data)?;
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let path = format!("/tmp/maho-repl-{ts}.png");
+            std::fs::write(&path, &bytes)?;
+            println!("{path}");
+        }
+        "snapshot" => {
+            let result = browser::send_tool_call(client, "browser_accessibility_snapshot", serde_json::json!({})).await?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        "click" => {
+            let ref_str = parts.get(1).unwrap_or(&"");
+            let ref_num: i64 = ref_str.parse().unwrap_or(-1);
+            if ref_num < 0 {
+                println!("Usage: click <ref>");
+                return Ok(());
+            }
+            browser::send_tool_call(client, "browser_click", serde_json::json!({ "ref": ref_num })).await?;
+            println!("ok");
+        }
+        "type" => {
+            let ref_str = parts.get(1).unwrap_or(&"");
+            let text = parts.get(2).unwrap_or(&"");
+            let ref_num: i64 = ref_str.parse().unwrap_or(-1);
+            if ref_num < 0 || text.is_empty() {
+                println!("Usage: type <ref> <text>");
+                return Ok(());
+            }
+            browser::send_tool_call(client, "browser_type", serde_json::json!({ "ref": ref_num, "text": *text })).await?;
+            println!("ok");
+        }
+        other => {
+            println!("unknown command: {other}");
+            println!("Type 'help' for available commands.");
+        }
+    }
+    Ok(())
 }

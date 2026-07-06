@@ -1,0 +1,225 @@
+---
+title: Tabs
+description: Read and manage the tab list through the Agent Protocol. browser_tab_list, browser_tab_get, browser_tab_new, browser_tab_close.
+sidebar:
+  order: 1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The tabs surface is the entry point for most agent workflows. It is intentionally small: enumerate what is open, look up one tab, open a new one, close one. Everything else (navigation, content, capture) lives in its own surface.
+
+Tab identifiers are opaque strings (`tab_1a2b`), stable for the lifetime of the tab. Do not parse them, and do not persist them across browser restarts.
+
+## `browser_tab_list`
+
+List all open tabs in the current profile.
+
+### Parameters
+
+None.
+
+### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "browser_tab_list",
+    "arguments": {}
+  }
+}
+```
+
+### Response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"tabs\":[{\"id\":\"tab_1a2b\",\"title\":\"Example Domain\",\"url\":\"https://example.com/\",\"active\":true,\"window_id\":\"win_9c\"},{\"id\":\"tab_3c4d\",\"title\":\"News\",\"url\":\"https://news.example.com/\",\"active\":false,\"window_id\":\"win_9c\"}]}"
+      }
+    ],
+    "isError": false
+  }
+}
+```
+
+The `text` field is a JSON-encoded string. Parse it to get:
+
+```json
+{
+  "tabs": [
+    { "id": "tab_1a2b", "title": "Example Domain", "url": "https://example.com/", "active": true, "window_id": "win_9c" },
+    { "id": "tab_3c4d", "title": "News",           "url": "https://news.example.com/", "active": false, "window_id": "win_9c" }
+  ]
+}
+```
+
+<Aside type="note" title="Firewall pass-through">
+URLs and titles pass through the credential firewall before egress. A tab URL with an `access_token` fragment or query parameter comes back with that field redacted to `[REDACTED]`.
+</Aside>
+
+### Errors
+
+| Code | When |
+|------|------|
+| `-32001` | Session has not called `initialize`. |
+| `-32603` | Internal profile lookup failure. |
+
+---
+
+## `browser_tab_get`
+
+Get details for a single tab by ID.
+
+### Parameters
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `tab_id` | string | yes | Opaque tab identifier from `browser_tab_list`. |
+
+### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/call",
+  "params": {
+    "name": "browser_tab_get",
+    "arguments": { "tab_id": "tab_1a2b" }
+  }
+}
+```
+
+### Response
+
+```json
+{
+  "tab": {
+    "id": "tab_1a2b",
+    "title": "Example Domain",
+    "url": "https://example.com/",
+    "active": true,
+    "window_id": "win_9c",
+    "audible": false,
+    "muted": false,
+    "loading": false
+  }
+}
+```
+
+### Errors
+
+| Code | When |
+|------|------|
+| `-32602` | `tab_id` missing or not a string. |
+| `-32603` | Tab exists but is in an intermediate state (rare, retry). |
+| `-32020` | Tab not found. |
+
+---
+
+## `browser_tab_new`
+
+Open a new tab. Optionally navigate it to a URL immediately.
+
+### Parameters
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `url` | string | no | Initial URL. Must be in the session's allowed domains, or the tab opens on the new-tab page. |
+| `active` | boolean | no | Focus the new tab. Default: `true`. |
+| `window_id` | string | no | Target window. Default: the currently focused window. |
+
+### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "tools/call",
+  "params": {
+    "name": "browser_tab_new",
+    "arguments": {
+      "url": "https://example.com/",
+      "active": true
+    }
+  }
+}
+```
+
+### Response
+
+```json
+{
+  "tab": {
+    "id": "tab_5e6f",
+    "title": "Example Domain",
+    "url": "https://example.com/",
+    "active": true,
+    "window_id": "win_9c",
+    "loading": true
+  }
+}
+```
+
+### Errors
+
+| Code | When |
+|------|------|
+| `-32010` | `url` provided but not in `allowed_domains`. Set the allowlist first with [`browser_set_allowed_domains`](/api/agent-protocol/tools/navigation/#browser_set_allowed_domains). |
+| `-32602` | `url` present but not a valid URL, or `window_id` refers to a closed window. |
+
+---
+
+## `browser_tab_close`
+
+Close a tab.
+
+### Parameters
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `tab_id` | string | yes | Tab to close. |
+
+### Request
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "method": "tools/call",
+  "params": {
+    "name": "browser_tab_close",
+    "arguments": { "tab_id": "tab_5e6f" }
+  }
+}
+```
+
+### Response
+
+```json
+{ "closed": true, "tab_id": "tab_5e6f" }
+```
+
+### Errors
+
+| Code | When |
+|------|------|
+| `-32011` | Another session holds an active lease on `tab_id`. Release or steal first (see [security](/api/agent-protocol/security/#per-tab-lease)). |
+| `-32020` | Tab not found. |
+
+Closing the last tab in a window closes the window. Closing the last window prompts the user rather than quitting the browser silently.
+
+## Notes
+
+- Tab IDs are opaque. Do not synthesize them or reuse them across browser launches.
+- `active` on `browser_tab_new` reflects intent: if the user is interacting with the browser at the moment the tab opens, focus may still land on their tab.
+- These four tools together are enough to build a task-runner that opens N tabs, drives them one at a time, and cleans up. Add a per-tab lease if two agents may be racing.

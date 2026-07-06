@@ -33,3 +33,28 @@ anyhow = { workspace = true }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }
 base64 = "0.22"
+
+# Integration tests — each requires a running browser, all tests are #[ignore]d.
+[[test]]
+name = "mcp_tools_test"
+path = "tests/integration/mcp_tools_test.rs"
+
+[[test]]
+name = "security_test"
+path = "tests/integration/security_test.rs"
+
+[[test]]
+name = "lease_test"
+path = "tests/integration/lease_test.rs"
+
+[[test]]
+name = "allowed_domains_test"
+path = "tests/integration/allowed_domains_test.rs"
+
+[[test]]
+name = "headless_test"
+path = "tests/integration/headless_test.rs"
+
+[[test]]
+name = "repl_test"
+path = "tests/integration/repl_test.rs"

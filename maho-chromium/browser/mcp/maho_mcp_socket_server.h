@@ -10,8 +10,11 @@
 #include <vector>
 
 #include "base/files/file_path.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
+#include "maho/browser/mcp/maho_mcp_lease_registry.h"
+#include "net/base/io_buffer.h"
 #include "net/socket/stream_socket.h"
 #include "net/socket/unix_domain_server_socket_posix.h"
 
@@ -64,6 +67,7 @@ class MahoMcpSocketServer {
 
     std::unique_ptr<net::StreamSocket> socket;
     std::unique_ptr<MahoMcpSession> session;
+    scoped_refptr<net::IOBufferWithSize> read_buf;
   };
 
   static bool AuthenticateClient(
@@ -78,6 +82,7 @@ class MahoMcpSocketServer {
 
   base::FilePath user_data_dir_;
   base::FilePath socket_path_;
+  std::unique_ptr<MahoMcpLeaseRegistry> lease_registry_;
   std::unique_ptr<net::UnixDomainServerSocket> server_socket_;
   std::unique_ptr<net::StreamSocket> accepted_socket_;
   std::vector<ActiveConnection> sessions_;

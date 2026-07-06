@@ -1,0 +1,18 @@
+History (last 7 days)
+─────────────────────────────────
+
+Today
+  10:32  Example Domain
+         https://example.com/
+  10:15  Rust Programming Language
+         https://www.rust-lang.org/
+
+Yesterday
+  18:44  GitHub: Let's build from here
+         https://github.com/
+  14:02  Stack Overflow
+         https://stackoverflow.com/
+
+Jul 2
+  09:11  Hacker News
+         https://news.ycombinator.com/

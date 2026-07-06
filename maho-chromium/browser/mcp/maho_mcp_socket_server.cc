@@ -167,14 +167,14 @@ void MahoMcpSocketServer::ReadFromConnection(size_t connection_index) {
   }
 
   auto& conn = sessions_[connection_index];
-  auto buf = base::MakeRefCounted<net::IOBufferWithSize>(kReadBufferSize);
+  conn.read_buf = base::MakeRefCounted<net::IOBufferWithSize>(kReadBufferSize);
 
   int rv = conn.socket->Read(
-      buf.get(), kReadBufferSize,
+      conn.read_buf.get(), kReadBufferSize,
       base::BindOnce(&MahoMcpSocketServer::OnReadComplete,
                      weak_factory_.GetWeakPtr(), connection_index));
   if (rv == net::ERR_IO_PENDING) {
-    return;  // Will be called back.
+    return;
   }
   OnReadComplete(connection_index, rv);
 }
@@ -187,21 +187,18 @@ void MahoMcpSocketServer::OnReadComplete(size_t connection_index, int result) {
   }
 
   if (result <= 0) {
-    // Connection closed or error.
     RemoveConnection(connection_index);
     return;
   }
 
   auto& conn = sessions_[connection_index];
-  auto buf = base::MakeRefCounted<net::IOBufferWithSize>(result);
+  if (!conn.read_buf) {
+    RemoveConnection(connection_index);
+    return;
+  }
 
-  // Re-read the data: we need the actual data from the read callback.
-  // In practice, the Chromium net stack passes the buffer back, but since
-  // our Read call used a local buf that's still alive, we need to re-read.
-  // For correctness with Chromium's async model, we should store the buffer.
-  // This simplified implementation re-reads.
-  // TODO(mcp): Use stored buffer from pending read for production robustness.
-  std::string data(result, '\0');
+  std::string data(conn.read_buf->data(), result);
+  conn.read_buf.reset();
 
   auto responses = conn.session->ProcessData(data);
   for (const auto& response : responses) {

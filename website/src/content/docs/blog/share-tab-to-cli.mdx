@@ -2,6 +2,7 @@
 title: "Share a tab to the terminal (and back) with Maho"
 description: "Tutorial. Pipe the current tab into a shell, run something, send a result back. The tab as a unix object. Two integration paths, real shell examples."
 date: 2026-10-27
+updatedAt: 2026-07-06
 tags:
   - browser
   - how-to
@@ -51,11 +52,21 @@ Test the install:
 
 ```sh
 $ maho version
-maho-cli 0.4.1
+```
+
+```template
+maho 0.5.0
+```
+
+```sh
 $ maho tab info
-title:  How browsers handle paste
-url:    https://example.com/articles/paste
-selected: false
+```
+
+```template
+id: 4
+title: How browsers handle paste
+url: https://example.com/articles/paste
+active: true
 ```
 
 If `maho tab info` returns the active tab, you are wired up.
@@ -66,7 +77,10 @@ The basic operation is `maho tab read`. By default it returns the readable conte
 
 ```sh
 $ maho tab read | wc -w
-   1844
+```
+
+```template
+    1844
 ```
 
 That is the article you are looking at, in words, in your terminal. No extension installed.
@@ -77,10 +91,13 @@ That is the article you are looking at, in words, in your terminal. No extension
 
 `--format text` returns plaintext, the same content `wc` saw above without the Markdown formatting.
 
-`--format json` returns a small object: title, url, byline, content (Markdown), word_count, reading_time. This is the one to pipe to `jq`.
+Pass `--json` at the global level to get a JSON envelope with title, url, and text in one object:
 
 ```sh
-$ maho tab read --format json | jq '{title, words: .word_count}'
+$ maho --json tab read | jq '{title, words: (.text | split(" ") | length)}'
+```
+
+```template
 {
   "title": "How browsers handle paste",
   "words": 1844
@@ -91,10 +108,13 @@ $ maho tab read --format json | jq '{title, words: .word_count}'
 
 ```sh
 $ maho tab read --selection
+```
+
+```template
 A tab is a document. A document can be piped...
 ```
 
-`--tab N` reads a specific tab by index instead of the active one. `maho tab list` prints the index, title, and URL of each open tab in the focused window.
+`maho tab list` prints the id, title, and URL of each open tab in the focused window, in aligned columns. Pass `--tab N` to `maho tab read` to target a specific tab by id instead of the active one.
 
 That is enough surface to compose. A few real examples in a moment.
 
@@ -108,7 +128,10 @@ Reading is half the job. The other half is putting something back in front of yo
 
 ```sh
 $ echo "## Word count\n\n1,844 words, ~7 min read." | maho tab annotate
-annotation: created (id=ann_3a91)
+```
+
+```template
+Annotation saved.
 ```
 
 Round-trip example. Read the article, summarize it with a local model, attach the summary back:
@@ -127,6 +150,10 @@ The summary lands in the side panel of the tab you are reading. It is anchored t
 $ pandoc draft.md -t html | maho tab write --format html
 ```
 
+```template
+Content written to tab.
+```
+
 Writes a rendered preview of `draft.md` into the current tab. Useful when you want a "what would this look like in a browser" view without spinning up a static server.
 
 ![A tab with a CLI-generated annotation in the side panel](/assets/blog/share-tab-to-cli/body-2.png)
@@ -139,20 +166,28 @@ Three of these we use multiple times a week.
 
 ```sh
 $ maho tab read --format text | wc -w
-   1623
+```
+
+```template
+    1623
 ```
 
 Run on the live preview. If it is short, you know before you ship.
 
-**JSON inspection.** API documentation pages often paste a JSON example. Select it on the page, and:
+**Inspect the tab list.** Before targeting a specific tab, check what is open:
 
 ```sh
-$ maho tab read --selection | jq '.endpoints[] | .path'
-"/v1/messages"
-"/v1/runs"
+$ maho tab list
 ```
 
-No copy, no paste, no accidental whitespace.
+```template
+ID   TITLE                                    URL                                                          ACTIVE
+4    How browsers handle paste                https://example.com/articles/paste                           *
+7    Linear – My Issues                       https://app.linear.app/team/issues                           
+12   maho CLI reference                       https://maho.app/cli/                                        
+```
+
+Pick a tab id, then pass `--tab N` to any `maho tab read` or `maho tab annotate` call.
 
 **Quick conversion to a local format.** A research page in Markdown into a Word doc for a colleague:
 
@@ -169,3 +204,7 @@ Each of those is two minutes saved per occurrence. Multiplied across a week of w
 The CLI helper ships with the Maho browser preview. The MCP tool surface ships at the same time. Docs come with the build.
 
 [Get early access](/waitlist).
+
+---
+
+*Updated 2026-07-06: rewritten to match shipped `maho` CLI syntax.*
