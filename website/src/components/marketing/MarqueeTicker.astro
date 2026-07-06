@@ -1,0 +1,25 @@
+---
+interface Props {
+  items: string[];
+  speed?: 'slow' | 'medium' | 'fast';
+  class?: string;
+}
+
+const speedDurations: Record<NonNullable<Props['speed']>, string> = {
+  slow: '60s',
+  medium: '40s',
+  fast: '25s',
+};
+
+const { items, speed = 'medium', class: className } = Astro.props;
+
+const content = items.join(' · ');
+const duration = speedDurations[speed];
+---
+
+<div class="marquee-viewport" class:list={[className]}>
+  <div class="marquee-track" style={`--marquee-duration: ${duration}`}>
+    <span>{content}</span>
+    <span aria-hidden="true">{content}</span>
+  </div>
+</div>

@@ -1,3 +1,4 @@
+#![allow(clippy::field_reassign_with_default)]
 mod common;
 
 use common::spawn_test_server_with_config;

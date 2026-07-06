@@ -79,6 +79,7 @@ pub struct AppState {
     pub ip_rooms: DashMap<IpAddr, DashSet<String>>,
     pub signup_rate_limiter: FixedWindowRateLimiter,
     pub login_rate_limiter: FixedWindowRateLimiter,
+    pub waitlist_rate_limiter: FixedWindowRateLimiter,
 }
 
 async fn health() -> &'static str {
@@ -119,6 +120,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .nest("/sync", sync::routes::router())
         .nest("/billing", crate::billing::router())
         .nest("/api/v1/shortcuts", crate::shortcuts::router())
+        .nest("/waitlist", crate::waitlist::router())
         .route("/ws", get(ws_upgrade))
         .with_state(state)
 }
@@ -130,6 +132,7 @@ pub async fn run(config: RelayConfig, db: DatabaseConnection) -> Result<(), Box<
         rooms: RoomManager::new(config.max_connections_per_room),
         signup_rate_limiter: FixedWindowRateLimiter::new(config.signup_rate_limit_per_ip_per_minute),
         login_rate_limiter: FixedWindowRateLimiter::new(config.login_rate_limit_per_ip_per_minute),
+        waitlist_rate_limiter: FixedWindowRateLimiter::new(crate::waitlist::RATE_LIMIT_PER_MINUTE),
         config,
         db,
         ip_connections: DashMap::new(),

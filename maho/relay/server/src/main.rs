@@ -7,6 +7,7 @@ mod storage;
 mod sync;
 mod billing;
 mod shortcuts;
+mod waitlist;
 
 use config::RelayConfig;
 

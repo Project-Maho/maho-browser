@@ -16,6 +16,7 @@ Standalone Rust workspace for the Maho sync relay server. It accepts authenticat
 | Server runtime | `server/src/main.rs` | startup, WAL setup, pruning, `server::run()` |
 | WebSocket behavior | `server/src/server.rs`, `server/src/handler.rs` | upgrade flow, auth, message forwarding |
 | HTTP auth | `server/src/auth/` | signup/login/logout/refresh/device routes |
+| Waitlist signups | `server/src/waitlist.rs` | Public `POST /waitlist` for marketing site (no auth); IP-hashed, 5/min rate limit, idempotent dedupe |
 | Persistence | `server/src/storage.rs`, `entity/` | SeaORM reads/writes and models |
 | Room lifecycle | `server/src/room.rs` | in-memory peer and room tracking |
 | Schema changes | `migration/` | SQLite migrations only |

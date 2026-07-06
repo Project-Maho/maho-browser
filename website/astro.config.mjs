@@ -36,6 +36,8 @@ export default defineConfig({
           rss: true,
         }),
       ],
+      // ⚠️ marketing.css is intentionally NOT here — it loads via BaseLayout.astro only.
+      // Adding it here would leak marketing styles into Starlight docs pages.
       customCss: ['./src/styles/global.css'],
     }),
     react(),

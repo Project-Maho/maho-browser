@@ -5,6 +5,7 @@
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Nav from '../components/Nav.astro';
 import LandingPage from '../components/LandingPage';
+import SocialProofSection from '../components/landing/SocialProofSection.astro';
 import Footer from '../components/Footer.astro';
 import JSONLD from '../components/JSONLD.astro';
 import { getSiteUrl } from '../lib/site';
@@ -44,11 +45,12 @@ const ld = {
 };
 ---
 
-<BaseLayout title="Maho — Browser and Mail for modern work" description="Maho Browser and Maho Mail help you work with more focus, better tools, and software that respects your data.">
+<BaseLayout title="Maho — Browser and Mail for modern work" description="Maho Browser and Maho Mail help you work with more focus, better tools, and software that respects your data." ogImage="/og/home.png">
   <JSONLD data={ld} />
   <main id="main" class="min-h-screen bg-background text-foreground">
     <Nav activeProduct="browser" />
     <LandingPage product="browser" />
+    <SocialProofSection />
     <Footer />
   </main>
 </BaseLayout>

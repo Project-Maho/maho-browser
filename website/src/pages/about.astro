@@ -6,6 +6,8 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import JSONLD from '../components/JSONLD.astro';
+import PressBadge from '../components/marketing/PressBadge.astro';
+import ScrollReveal from '../components/motion/ScrollReveal';
 import { getSiteUrl } from '../lib/site';
 
 const { siteUrl, absoluteUrl } = getSiteUrl(Astro);
@@ -28,69 +30,140 @@ const ld = {
 <BaseLayout
   title="About Maho — Built by One Developer, Direct Accountability"
   description="Maho is built and maintained by a single developer — not a startup, not a team. Learn why, how to reach the person behind the code, and how Maho stays funded."
+  ogImage="/og/about.png"
 >
   <JSONLD data={ld} />
   <div class="min-h-screen bg-background text-foreground">
     <Nav />
-    <main id="main" class="max-w-3xl mx-auto px-6 pt-32 pb-24">
-      <header class="mb-16">
-        <p class="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground mb-4">
-          About
-        </p>
-        <h1 class="heading-serif text-4xl sm:text-5xl mb-4">
-          Built by one person.
-        </h1>
-        <p class="text-lg text-muted-foreground leading-relaxed">
-          Maho is developed and maintained by an individual developer &mdash; not a team, not a startup, not a venture-backed company. This page exists so you know who&rsquo;s behind the software you&rsquo;re trusting with your browsing and your email.
-        </p>
-      </header>
+    <main id="main" class="pt-24 sm:pt-28 md:pt-32">
+      <div class="container-marketing pad-x-ladder section-rhythm">
+        <div class="mx-auto max-w-5xl">
+          <ScrollReveal client:visible variant="fade" className="max-w-3xl">
+            <header class="mb-16 sm:mb-20">
+              <p class="mb-4 font-mono text-xs uppercase tracking-mono-loose text-muted-foreground">
+                About
+              </p>
+              <div class="mb-6">
+                <PressBadge text="Solo developer" />
+              </div>
+              <h1 class="heading-serif mb-4 text-4xl sm:text-5xl">
+                Built by one person.
+              </h1>
+              <p class="text-lg leading-relaxed text-muted-foreground">
+                Maho is developed and maintained by an individual developer &mdash; not a team, not a startup, not a venture-backed company. This page exists so you know who&rsquo;s behind the software you&rsquo;re trusting with your browsing and your email.
+              </p>
+            </header>
+          </ScrollReveal>
 
-      <section class="space-y-6 text-muted-foreground leading-relaxed mb-16">
-        <h2 class="heading-serif text-2xl sm:text-3xl text-foreground mb-3">Why one person</h2>
-        <p>
-          Browsers are usually built by 200-person teams at the largest tech companies. Maho takes a different bet: a tight, opinionated, well-architected browser maintained by a single accountable person can move faster, ship more honestly, and stay closer to its users than a committee can.
-        </p>
-        <p>
-          The tradeoffs are real. There is no support team. There is no enterprise sales function. There is no marketing budget. What there is, is direct line to the person making every architectural decision &mdash; and a product that doesn&rsquo;t answer to a board.
-        </p>
+          <div class="border-y border-border">
+            <ScrollReveal
+              client:visible
+              as="section"
+              variant="fade"
+              className="grid gap-5 py-10 md:grid-cols-[8rem_minmax(0,1fr)] md:gap-10"
+            >
+              <p class="font-mono text-xs uppercase tracking-mono-loose text-muted-foreground md:pt-2">
+                Founder
+              </p>
+              <div class="space-y-6 leading-relaxed text-muted-foreground">
+                <div>
+                  <h2 class="heading-serif mb-3 text-2xl text-foreground sm:text-3xl">Why one person</h2>
+                  <p>
+                    Browsers are usually built by 200-person teams at the largest tech companies. Maho takes a different bet: a tight, opinionated, well-architected browser maintained by a single accountable person can move faster, ship more honestly, and stay closer to its users than a committee can.
+                  </p>
+                </div>
+                <p>
+                  The tradeoffs are real. There is no support team. There is no enterprise sales function. There is no marketing budget. What there is, is direct line to the person making every architectural decision &mdash; and a product that doesn&rsquo;t answer to a board.
+                </p>
+              </div>
+            </ScrollReveal>
 
-        <h2 class="heading-serif text-2xl sm:text-3xl text-foreground pt-6 mb-3">How to reach me</h2>
-        <p>
-          For any question &mdash; product, pricing, privacy, security disclosure, partnership &mdash; you can email <a href="mailto:hello@maho.app" class="underline text-foreground hover:opacity-80 transition-opacity">hello@maho.app</a>. Real human response, usually within a day or two.
-        </p>
-        <p>
-          For security vulnerabilities specifically, please use the same address with subject prefix <code class="text-foreground text-sm bg-card px-1.5 py-0.5 rounded">[security]</code>. I take disclosures seriously and will acknowledge receipt within 48 hours.
-        </p>
+            <ScrollReveal
+              client:visible
+              as="section"
+              variant="fade"
+              className="grid gap-5 border-t border-border py-10 md:grid-cols-[8rem_minmax(0,1fr)] md:gap-10"
+            >
+              <p class="font-mono text-xs uppercase tracking-mono-loose text-muted-foreground md:pt-2">
+                Contact
+              </p>
+              <div class="space-y-6 leading-relaxed text-muted-foreground">
+                <div>
+                  <h2 class="heading-serif mb-3 text-2xl text-foreground sm:text-3xl">How to reach me</h2>
+                  <p>
+                    For any question &mdash; product, pricing, privacy, security disclosure, partnership &mdash; you can email <a href="mailto:hello@maho.app" class="underline text-foreground transition-opacity hover:opacity-80">hello@maho.app</a>. Real human response, usually within a day or two.
+                  </p>
+                </div>
+                <p>
+                  For security vulnerabilities specifically, please use the same address with subject prefix <code class="rounded bg-card px-1.5 py-0.5 text-sm text-foreground">[security]</code>. I take disclosures seriously and will acknowledge receipt within 48 hours.
+                </p>
+              </div>
+            </ScrollReveal>
 
-        <h2 class="heading-serif text-2xl sm:text-3xl text-foreground pt-6 mb-3">How Maho stays funded</h2>
-        <p>
-          Maho is free to use with BYOK (bring your own API key) &mdash; that path stays free forever. The development is sustained by <a href="/pricing" class="underline text-foreground hover:opacity-80 transition-opacity">Maho Pro and Maho Max</a>, managed-AI subscriptions for people who want premium models without managing API keys. There are no ads, no data sales, and no cut of your API spend.
-        </p>
-        <p>
-          If subscriptions don&rsquo;t cover costs, Maho doesn&rsquo;t continue. That&rsquo;s honest. It&rsquo;s also why the business model is on every page that matters &mdash; you should know how the lights are kept on for the software you depend on.
-        </p>
+            <ScrollReveal
+              client:visible
+              as="section"
+              variant="fade"
+              className="grid gap-5 border-t border-border py-10 md:grid-cols-[8rem_minmax(0,1fr)] md:gap-10"
+            >
+              <p class="font-mono text-xs uppercase tracking-mono-loose text-muted-foreground md:pt-2">
+                Funding
+              </p>
+              <div class="space-y-6 leading-relaxed text-muted-foreground">
+                <div>
+                  <h2 class="heading-serif mb-3 text-2xl text-foreground sm:text-3xl">How Maho stays funded</h2>
+                  <p>
+                    Maho is free to use with BYOK (bring your own API key) &mdash; that path stays free forever. The development is sustained by <a href="/pricing" class="underline text-foreground transition-opacity hover:opacity-80">Maho Pro and Maho Max</a>, managed-AI subscriptions for people who want premium models without managing API keys. There are no ads, no data sales, and no cut of your API spend.
+                  </p>
+                </div>
+                <p>
+                  If subscriptions don&rsquo;t cover costs, Maho doesn&rsquo;t continue. That&rsquo;s honest. It&rsquo;s also why the business model is on every page that matters &mdash; you should know how the lights are kept on for the software you depend on.
+                </p>
+              </div>
+            </ScrollReveal>
 
-        <h2 class="heading-serif text-2xl sm:text-3xl text-foreground pt-6 mb-3">What this means for you</h2>
-        <p>
-          Maho is proprietary software, not open source. That means you can&rsquo;t fork it or audit the source code. To compensate, the architecture is documented in the <a href="/blog" class="underline text-foreground hover:opacity-80 transition-opacity">engineering blog</a>, the network behavior is verifiable on your own device, and the person who wrote the code is reachable at the email above.
-        </p>
-        <p>
-          That&rsquo;s the deal. A browser that respects you, built by someone who answers their own email.
-        </p>
-      </section>
+            <ScrollReveal
+              client:visible
+              as="section"
+              variant="fade"
+              className="grid gap-5 border-t border-border py-10 md:grid-cols-[8rem_minmax(0,1fr)] md:gap-10"
+            >
+              <p class="font-mono text-xs uppercase tracking-mono-loose text-muted-foreground md:pt-2">
+                Trust
+              </p>
+              <div class="space-y-6 leading-relaxed text-muted-foreground">
+                <div>
+                  <h2 class="heading-serif mb-3 text-2xl text-foreground sm:text-3xl">What this means for you</h2>
+                  <p>
+                    Maho is proprietary software, not open source. That means you can&rsquo;t fork it or audit the source code. To compensate, the architecture is documented in the <a href="/blog" class="underline text-foreground transition-opacity hover:opacity-80">engineering blog</a>, the network behavior is verifiable on your own device, and the person who wrote the code is reachable at the email above.
+                  </p>
+                </div>
+                <p>
+                  That&rsquo;s the deal. A browser that respects you, built by someone who answers their own email.
+                </p>
+              </div>
+            </ScrollReveal>
+          </div>
 
-      <section class="border border-border rounded-lg p-8 bg-card text-center">
-        <h2 class="heading-serif text-3xl sm:text-4xl mb-4">Try the browser.</h2>
-        <p class="text-muted-foreground text-sm leading-relaxed max-w-lg mx-auto mb-6">
-          Free forever. macOS today. iPhone and Android in development.
-        </p>
-        <a
-          href="/download"
-          class="inline-flex items-center justify-center rounded-full bg-foreground text-background px-6 py-3 text-sm font-medium hover:opacity-90 transition"
-        >
-          Download for macOS
-        </a>
-      </section>
+          <ScrollReveal
+            client:visible
+            as="section"
+            variant="fade"
+            className="mt-16 rounded-squircle-lg border border-border bg-card p-8 text-center squircle-enhanced sm:p-10"
+          >
+            <h2 class="heading-serif mb-4 text-3xl sm:text-4xl">Try the browser.</h2>
+            <p class="mx-auto mb-6 max-w-lg text-sm leading-relaxed text-muted-foreground">
+              Free forever. macOS today. iPhone and Android in development.
+            </p>
+            <a
+              href="/download"
+              class="inline-flex items-center justify-center rounded-full bg-foreground px-6 py-3 text-sm font-medium text-background transition hover:opacity-90"
+            >
+              Download for macOS
+            </a>
+          </ScrollReveal>
+        </div>
+      </div>
     </main>
     <Footer />
   </div>

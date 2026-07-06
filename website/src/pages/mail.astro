@@ -5,6 +5,7 @@
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Nav from '../components/Nav.astro';
 import LandingPage from '../components/LandingPage';
+import SocialProofSection from '../components/landing/SocialProofSection.astro';
 import Footer from '../components/Footer.astro';
 import JSONLD from '../components/JSONLD.astro';
 import { getSiteUrl } from '../lib/site';
@@ -27,11 +28,12 @@ const ld = {
 };
 ---
 
-<BaseLayout title="Maho Mail — One client. Three interfaces." description="Desktop app, CLI, and MCP server in one email client. Built for developers and AI agents.">
+<BaseLayout title="Maho Mail — One client. Three interfaces." description="Desktop app, CLI, and MCP server in one email client. Built for developers and AI agents." ogImage="/og/mail.png">
   <JSONLD data={ld} />
   <main id="main" class="min-h-screen bg-background text-foreground">
     <Nav activeProduct="mail" />
     <LandingPage product="mail" />
+    <SocialProofSection />
     <Footer />
   </main>
 </BaseLayout>

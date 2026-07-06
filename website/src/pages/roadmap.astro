@@ -6,6 +6,7 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import JSONLD from '../components/JSONLD.astro';
+import ScrollReveal from '../components/motion/ScrollReveal';
 import { getSiteUrl } from '../lib/site';
 
 const { siteUrl, absoluteUrl } = getSiteUrl(Astro);
@@ -50,6 +51,7 @@ const ld = {
 <BaseLayout
   title="Roadmap — Maho"
   description="What Maho has shipped, what is being built, and what is under consideration. Updated as plans change."
+  ogImage="/og/roadmap.png"
 >
   <JSONLD data={ld} />
   <div class="min-h-screen bg-background text-foreground">
@@ -67,46 +69,67 @@ const ld = {
         </p>
       </header>
 
-      <section aria-labelledby="shipped-heading" class="mb-16">
+      <section aria-labelledby="shipped-heading" class="section-rhythm !pt-0">
         <div class="flex items-center gap-3 mb-6">
           <span class="inline-block w-2 h-2 rounded-full bg-foreground" aria-hidden="true"></span>
-          <h2 id="shipped-heading" class="heading-serif text-2xl sm:text-3xl">Shipped</h2>
+          <h2
+            id="shipped-heading"
+            class="rounded-squircle-sm border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground font-mono uppercase tracking-mono-loose"
+          >
+            Shipped
+          </h2>
         </div>
         <ul class="space-y-4">
           {shipped.map((item) => (
             <li class="border-l-2 border-muted-foreground/20 pl-6 py-2">
-              <p class="text-foreground font-medium mb-1">{item.title}</p>
-              <p class="text-sm text-muted-foreground leading-relaxed">{item.detail}</p>
+              <ScrollReveal client:visible variant="slide" thresholdRatio={0.2}>
+                <p class="text-foreground font-medium mb-1">{item.title}</p>
+                <p class="text-sm text-muted-foreground leading-relaxed">{item.detail}</p>
+              </ScrollReveal>
             </li>
           ))}
         </ul>
       </section>
 
-      <section aria-labelledby="building-heading" class="mb-16">
+      <section aria-labelledby="building-heading" class="section-rhythm border-t border-border">
         <div class="flex items-center gap-3 mb-6">
           <span class="inline-block w-2 h-2 rounded-full border border-foreground" aria-hidden="true"></span>
-          <h2 id="building-heading" class="heading-serif text-2xl sm:text-3xl">Building</h2>
+          <h2
+            id="building-heading"
+            class="rounded-squircle-sm border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground font-mono uppercase tracking-mono-loose"
+          >
+            Building
+          </h2>
         </div>
         <ul class="space-y-4">
           {building.map((item) => (
             <li class="border-l-2 border-muted-foreground/20 pl-6 py-2">
-              <p class="text-foreground font-medium mb-1">{item.title}</p>
-              <p class="text-sm text-muted-foreground leading-relaxed">{item.detail}</p>
+              <ScrollReveal client:visible variant="slide" thresholdRatio={0.2}>
+                <p class="text-foreground font-medium mb-1">{item.title}</p>
+                <p class="text-sm text-muted-foreground leading-relaxed">{item.detail}</p>
+              </ScrollReveal>
             </li>
           ))}
         </ul>
       </section>
 
-      <section aria-labelledby="considering-heading" class="mb-16">
+      <section aria-labelledby="considering-heading" class="section-rhythm border-t border-border">
         <div class="flex items-center gap-3 mb-6">
           <span class="inline-block w-2 h-2 rounded-full border border-muted-foreground" aria-hidden="true"></span>
-          <h2 id="considering-heading" class="heading-serif text-2xl sm:text-3xl">Considering</h2>
+          <h2
+            id="considering-heading"
+            class="rounded-squircle-sm border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground font-mono uppercase tracking-mono-loose"
+          >
+            Considering
+          </h2>
         </div>
         <ul class="space-y-4">
           {considering.map((item) => (
             <li class="border-l-2 border-muted-foreground/20 pl-6 py-2">
-              <p class="text-foreground font-medium mb-1">{item.title}</p>
-              <p class="text-sm text-muted-foreground leading-relaxed">{item.detail}</p>
+              <ScrollReveal client:visible variant="slide" thresholdRatio={0.2}>
+                <p class="text-foreground font-medium mb-1">{item.title}</p>
+                <p class="text-sm text-muted-foreground leading-relaxed">{item.detail}</p>
+              </ScrollReveal>
             </li>
           ))}
         </ul>

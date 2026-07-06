@@ -1,7 +1,11 @@
 ---
+// biome-ignore-all assist/source/organizeImports: Astro component imports stay grouped for readability.
+// biome-ignore-all lint/correctness/noUnusedImports: Astro frontmatter imports are referenced in the template.
+// biome-ignore-all lint/correctness/noUnusedVariables: Astro frontmatter variables are referenced in the template.
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Nav from '../../components/Nav.astro';
 import Footer from '../../components/Footer.astro';
+import ScrollReveal from '../../components/motion/ScrollReveal';
 import { getSiteUrl } from '../../lib/site';
 
 const { siteUrl, absoluteUrl } = getSiteUrl(Astro);
@@ -77,8 +81,8 @@ const schema = {
 <BaseLayout title={title} description={description}>
   <script is:inline type="application/ld+json" set:html={JSON.stringify(schema)} />
   <Nav />
-  <main id="main" class="min-h-screen bg-background text-foreground">
-    <section class="relative flex flex-col justify-center px-6 pt-32 pb-24 bg-background text-foreground">
+  <main id="main" class="min-h-screen bg-background text-foreground marketing-scope">
+    <section class="relative flex flex-col justify-center pad-x-ladder pt-32 pb-24 bg-background text-foreground">
       <div class="max-w-6xl mx-auto">
         <nav aria-label="Breadcrumb" class="text-sm text-muted-foreground mb-8">
           <a href="/" class="hover:text-foreground transition-colors">Home</a>
@@ -94,31 +98,33 @@ const schema = {
       </div>
     </section>
 
-    <section class="py-24 px-6 border-t border-border">
+    <section class="section-rhythm pad-x-ladder border-t border-border">
       <div class="max-w-6xl mx-auto">
         <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-          {comparisons.map((c) => (
-            <a
-              href={`/compare/${c.slug}`}
-              class="group block border border-border rounded-lg p-6 hover:border-muted-foreground transition-colors"
-            >
-              <h2 class="text-lg font-medium text-foreground mb-2 group-hover:underline">
-                Maho Mail vs {c.name}
-              </h2>
-              <p class="text-sm text-muted-foreground mb-4">{c.tagline}</p>
-              <p class="text-xs text-muted-foreground">{c.differentiator}</p>
-            </a>
+          {comparisons.map((c, index) => (
+            <ScrollReveal client:visible variant="fade" delayMs={index * 80} className="h-full">
+              <a
+                href={`/compare/${c.slug}`}
+                class="group block h-full border border-border rounded-lg p-6 hover:border-muted-foreground transition-colors"
+              >
+                <h2 class="text-lg font-medium text-foreground mb-2 tracking-display group-hover:underline">
+                  Maho Mail vs {c.name}
+                </h2>
+                <p class="text-sm text-muted-foreground mb-4 leading-relaxed">{c.tagline}</p>
+                <p class="text-xs text-muted-foreground leading-relaxed">{c.differentiator}</p>
+              </a>
+            </ScrollReveal>
           ))}
         </div>
       </div>
     </section>
 
-    <section class="py-24 px-6 border-t border-border">
+    <section class="section-rhythm pad-x-ladder border-t border-border">
       <div class="max-w-6xl mx-auto text-center">
-        <h2 class="heading-serif text-4xl sm:text-5xl mb-6">
+        <h2 class="heading-serif tracking-display text-4xl sm:text-5xl mb-6">
           Make email programmable.
         </h2>
-        <p class="text-muted-foreground mb-8 max-w-xl mx-auto">
+        <p class="text-muted-foreground leading-relaxed mb-8 max-w-xl mx-auto">
           GUI for humans. CLI for developers. MCP for agents.
         </p>
         <a

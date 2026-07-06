@@ -7,3 +7,4 @@ pub mod auth;
 pub mod storage;
 pub mod billing;
 pub mod shortcuts;
+pub mod waitlist;

@@ -6,6 +6,7 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
 import Footer from '../../components/Footer.astro';
 import Nav from '../../components/Nav.astro';
 import JSONLD from '../../components/JSONLD.astro';
+import ScrollReveal from '../../components/motion/ScrollReveal';
 import { getSiteUrl } from '../../lib/site';
 
 const { siteUrl, absoluteUrl } = getSiteUrl(Astro);
@@ -64,11 +65,12 @@ const ld = {
 };
 ---
 
-<BaseLayout title="Maho vs Aside Browser - Comparison" description="Two takes on the AI browser. Maho pairs steered AI with cross-device Spaces and BYOK pricing. Aside leads on autonomous agent benchmarks. An honest comparison.">
+<BaseLayout title="Maho vs Aside Browser - Comparison" description="Two takes on the AI browser. Maho pairs steered AI with cross-device Spaces and BYOK pricing. Aside leads on autonomous agent benchmarks. An honest comparison." ogImage="/og/compare-aside.png">
   <JSONLD data={ld} />
   <div class="min-h-screen bg-background text-foreground">
     <Nav />
-    <main id="main" class="max-w-4xl mx-auto px-6 pt-32 pb-24">
+    <main id="main" class="container-marketing pad-x-ladder pt-32 pb-24">
+      <div class="mx-auto max-w-4xl">
 
       <!-- §1 Hero -->
       <header class="mb-16 text-center">
@@ -80,25 +82,25 @@ const ld = {
       </header>
 
       <!-- §2 Intro paragraph -->
-      <section class="mb-16">
+      <section class="section-rhythm !pt-0">
         <p class="text-muted-foreground leading-relaxed max-w-3xl mx-auto">
           Both browsers are Chromium forks. Both target AI-assisted workflows. They disagree on almost everything else: how AI should be priced, how many devices it should run on, and how much autonomy an agent should have. This is an honest comparison.
         </p>
       </section>
 
       <!-- §3 The 30-second answer -->
-      <section aria-labelledby="tldr-heading" class="mb-20">
-        <h2 id="tldr-heading" class="text-2xl font-medium mb-6">The 30-second answer</h2>
+      <section aria-labelledby="tldr-heading" class="section-rhythm !pt-0">
+        <h2 id="tldr-heading" class="tracking-display text-2xl font-medium mb-6">The 30-second answer</h2>
         <div class="overflow-x-auto border border-border rounded-lg bg-card">
           <table class="w-full min-w-[640px] text-left border-collapse text-sm">
             <thead>
               <tr class="border-b border-border bg-background">
-                <th class="p-4 font-semibold text-foreground"></th>
-                <th class="p-4 font-semibold text-foreground">Aside</th>
-                <th class="p-4 font-semibold text-foreground">Maho</th>
+                <th class="p-4 text-xs font-mono font-semibold uppercase tracking-mono-loose text-foreground"></th>
+                <th class="p-4 text-xs font-mono font-semibold uppercase tracking-mono-loose text-foreground">Aside</th>
+                <th class="p-4 text-xs font-mono font-semibold uppercase tracking-mono-loose text-foreground">Maho</th>
               </tr>
             </thead>
-            <tbody class="divide-y divide-border">
+            <ScrollReveal client:visible as="tbody" variant="fade" className="divide-y divide-border">
               <tr>
                 <td class="p-4 font-medium text-foreground">Best at</td>
                 <td class="p-4 text-muted-foreground">Autonomous agent tasks across logged-in websites</td>
@@ -134,33 +136,33 @@ const ld = {
                 <td class="p-4 text-muted-foreground">Cloud sync database</td>
                 <td class="p-4 text-muted-foreground">E2E encrypted relay, cross-device</td>
               </tr>
-            </tbody>
+            </ScrollReveal>
           </table>
         </div>
       </section>
 
       <!-- §4 Where Aside leads — reframe section -->
-      <section aria-labelledby="aside-leads-heading" class="mb-20">
-        <h2 id="aside-leads-heading" class="text-2xl font-medium mb-6">Where Aside leads — and why benchmarks are the wrong measure</h2>
-        <div class="space-y-4 text-muted-foreground leading-relaxed">
-          <p>
+      <section aria-labelledby="aside-leads-heading" class="section-rhythm !pt-0">
+        <h2 id="aside-leads-heading" class="tracking-display text-2xl font-medium mb-6">Where Aside leads — and why benchmarks are the wrong measure</h2>
+        <div class="space-y-4 text-muted-foreground">
+          <p class="leading-relaxed">
             Aside ranks #1 on three browser agent benchmarks. We're not going to pretend otherwise. If your mental model is "AI does work for me while I'm not looking," Aside leads.
           </p>
-          <p class="font-medium text-foreground">
+          <p class="font-medium leading-relaxed text-foreground">
             We think that's the wrong mental model.
           </p>
-          <p>
+          <p class="leading-relaxed">
             Autonomous agent products in 2025–26 share a documented failure surface — not specific to Aside, but inherent to the paradigm Aside leads. The category has produced agents that bought the wrong flight, replied to a boss with hallucinated context, and leaked credentials to a phishing page that looked official. Benchmarks measure task completion under sanitized conditions. They don't measure what happens when something goes wrong in your actual life.
           </p>
-          <p>
+          <p class="leading-relaxed">
             Maho's answer isn't a worse agent. It's a different question: what would AI look like if it ran when you asked, on data you saw, with consent every step? That's a different product. The rest of this page is about that product.
           </p>
         </div>
       </section>
 
       <!-- §5 Where Maho wins -->
-      <section aria-labelledby="maho-wins-heading" class="mb-20 space-y-12">
-        <h2 id="maho-wins-heading" class="text-2xl font-medium mb-6">Where Maho wins</h2>
+      <section aria-labelledby="maho-wins-heading" class="section-rhythm !pt-0 space-y-12">
+        <h2 id="maho-wins-heading" class="tracking-display text-2xl font-medium mb-6">Where Maho wins</h2>
 
         <div>
           <h3 class="text-lg font-medium mb-2">Cross-platform from day one</h3>
@@ -199,18 +201,18 @@ const ld = {
       </section>
 
       <!-- §6 Detailed comparison table -->
-      <section aria-labelledby="detailed-comparison-heading" class="mb-20">
-        <h2 id="detailed-comparison-heading" class="text-2xl font-medium mb-6">Detailed comparison</h2>
+      <section aria-labelledby="detailed-comparison-heading" class="section-rhythm !pt-0">
+        <h2 id="detailed-comparison-heading" class="tracking-display text-2xl font-medium mb-6">Detailed comparison</h2>
         <div class="overflow-x-auto border border-border rounded-lg bg-card">
           <table class="w-full min-w-[640px] text-left border-collapse text-sm">
             <thead>
               <tr class="border-b border-border bg-background">
-                <th class="p-4 font-semibold text-foreground">Feature</th>
-                <th class="p-4 font-semibold text-foreground">Aside Browser</th>
-                <th class="p-4 font-semibold text-foreground">Maho Browser</th>
+                <th class="p-4 text-xs font-mono font-semibold uppercase tracking-mono-loose text-foreground">Feature</th>
+                <th class="p-4 text-xs font-mono font-semibold uppercase tracking-mono-loose text-foreground">Aside Browser</th>
+                <th class="p-4 text-xs font-mono font-semibold uppercase tracking-mono-loose text-foreground">Maho Browser</th>
               </tr>
             </thead>
-            <tbody class="divide-y divide-border">
+            <ScrollReveal client:visible as="tbody" variant="fade" className="divide-y divide-border">
               <tr>
                 <td class="p-4 font-medium text-foreground">Source</td>
                 <td class="p-4 text-muted-foreground">Proprietary</td>
@@ -326,14 +328,14 @@ const ld = {
                 <td class="p-4 text-muted-foreground">2024 (YC F25)</td>
                 <td class="p-4 text-muted-foreground">2025 (individual developer)</td>
               </tr>
-            </tbody>
+            </ScrollReveal>
           </table>
         </div>
       </section>
 
       <!-- §7 Use-case picker -->
-      <section aria-labelledby="pick-heading" class="mb-20">
-        <h2 id="pick-heading" class="text-2xl font-medium mb-6">Which one is right for you?</h2>
+      <section aria-labelledby="pick-heading" class="section-rhythm !pt-0">
+        <h2 id="pick-heading" class="tracking-display text-2xl font-medium mb-6">Which one is right for you?</h2>
         <div class="grid gap-8 md:grid-cols-2">
           <div class="border border-border rounded-lg p-6 bg-card">
             <h3 class="text-lg font-medium mb-3">Pick Aside if</h3>
@@ -351,8 +353,8 @@ const ld = {
       </section>
 
       <!-- §8 FAQ -->
-      <section aria-labelledby="faq-heading" class="mb-20">
-        <h2 id="faq-heading" class="text-2xl font-medium mb-6">Frequently asked questions</h2>
+      <section aria-labelledby="faq-heading" class="section-rhythm !pt-0">
+        <h2 id="faq-heading" class="tracking-display text-2xl font-medium mb-6">Frequently asked questions</h2>
         <dl class="space-y-6">
           <div>
             <dt class="font-medium text-foreground mb-1">Is Maho a fork of Aside?</dt>
@@ -378,15 +380,18 @@ const ld = {
       </section>
 
       <!-- §9 Final CTA -->
-      <section class="text-center border border-border rounded-lg p-8 bg-card">
-        <h2 class="heading-serif text-3xl sm:text-4xl mb-4">Try Maho. It's free.</h2>
-        <p class="text-muted-foreground text-sm leading-relaxed max-w-lg mx-auto mb-6">
-          Start at $0 with BYOK, move to Pro for $5 or Max for $20 when you want managed AI.
-        </p>
-        <a href="/download" class="inline-flex items-center justify-center rounded-md bg-foreground text-background px-6 py-3 text-sm font-medium hover:opacity-90 transition">
-          Download Maho
-        </a>
+      <section class="section-rhythm !pt-0">
+        <div class="text-center border border-border rounded-lg p-8 bg-card">
+          <h2 class="heading-serif tracking-display text-3xl sm:text-4xl mb-4">Try Maho. It's free.</h2>
+          <p class="text-muted-foreground text-sm leading-relaxed max-w-lg mx-auto mb-6">
+            Start at $0 with BYOK, move to Pro for $5 or Max for $20 when you want managed AI.
+          </p>
+          <a href="/download" class="inline-flex items-center justify-center rounded-md bg-foreground text-background px-6 py-3 text-sm font-medium hover:opacity-90 transition">
+            Download Maho
+          </a>
+        </div>
       </section>
+      </div>
     </main>
     <Footer />
   </div>

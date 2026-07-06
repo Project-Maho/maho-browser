@@ -1,0 +1,12 @@
+---
+export interface Props {
+  radius?: 'sm' | 'md' | 'lg' | 'xl';
+  class?: string;
+}
+
+const { radius = 'md' } = Astro.props as Props;
+---
+
+<div class:list={['rounded-squircle-' + radius, 'squircle-enhanced', Astro.props.class]}>
+  <slot />
+</div>

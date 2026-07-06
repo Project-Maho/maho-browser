@@ -7,6 +7,12 @@
 ## OVERVIEW
 Maho Browser monorepo: Rust core crates + Chromium overlay fork + native shells (macOS/iOS/Android). Also includes Maho Mail (Tauri) and Maho Website (Astro). Brave-style architecture — `maho-chromium` patches upstream Chromium, `maho` crates provide backend logic via FFI bridge.
 
+## LICENSING & DISTRIBUTION
+- **Maho is CLOSED-SOURCE / PROPRIETARY.** This monorepo (browser, mail, relay, native shells) is NOT open source. Do NOT introduce OSS-claim language ("open source", "MIT licensed", "auditable source", "View on GitHub for source code", etc.) into marketing copy, docs, or WebUI strings.
+- **Public source repositories do NOT exist for this codebase.** Never link to a public source repo URL for Maho itself. Any `github.com/*/maho*` link outside of upstream dependency references is wrong by default.
+- **Downloads are distributed via a separate PUBLIC GitHub RELEASE-ONLY repository** (release binaries + release notes only, no source). This repo hosts `.dmg` / `.exe` / `.AppImage` / `.apk` and equivalent artifacts. When wiring download URLs (e.g. `website/src/pages/download.astro`), point to the release-only repo's `/releases` path, NOT to any main-source-tree URL.
+- Upstream dependency GitHub links (Chromium, Lucide, Fontsource, etc.) are fine — they refer to third-party OSS, not to Maho's source.
+
 ## STRUCTURE
 ```
 maho-workspace/

@@ -1,0 +1,53 @@
+---
+// biome-ignore-all assist/source/organizeImports: Astro component imports stay grouped for readability.
+// biome-ignore-all lint/correctness/noUnusedImports: Astro frontmatter imports are referenced in the template.
+// biome-ignore-all lint/correctness/noUnusedVariables: Astro frontmatter variables are referenced in the template.
+import MarqueeTicker from '../marketing/MarqueeTicker.astro';
+import PressBadge from '../marketing/PressBadge.astro';
+import ScrollReveal from '../motion/ScrollReveal';
+
+interface Props {
+  tickerItems?: string[];
+  testimonialBadges?: string[];
+  eyebrow?: string;
+}
+
+const defaultTickerItems = [
+  'SHIPPING SOON',
+  'PRIVACY-FIRST',
+  'MACOS 12+',
+  'YOUR AI · YOUR DATA · YOUR BROWSER',
+  'FREE FOREVER',
+];
+
+const {
+  tickerItems = defaultTickerItems,
+  testimonialBadges = [],
+  eyebrow = 'In the works',
+} = Astro.props;
+
+const normalizedTickerItems = tickerItems.filter((item): item is string => item.trim().length > 0);
+const normalizedTestimonialBadges = testimonialBadges.filter((item): item is string => item.trim().length > 0);
+const shouldRender = normalizedTickerItems.length > 0 || normalizedTestimonialBadges.length > 0;
+---
+
+{shouldRender && (
+  <ScrollReveal client:visible variant="fade">
+    <section class="section-rhythm border-t border-border">
+      <div class="max-w-6xl mx-auto pad-x-ladder">
+        <p class="font-mono uppercase tracking-mono-loose text-xs text-muted-foreground mb-6 text-center">{eyebrow}</p>
+        {normalizedTickerItems.length > 0 && <MarqueeTicker items={normalizedTickerItems} speed="slow" />}
+        {normalizedTestimonialBadges.length > 0 && (
+          <div class="flex flex-wrap gap-3 justify-center mt-8">
+            {normalizedTestimonialBadges.map((text) => <PressBadge text={text} />)}
+          </div>
+        )}
+        {/* Testimonial placeholder — activate when press coverage lands
+        <div class="flex flex-wrap gap-3 justify-center mt-8">
+          <PressBadge text="Coming soon" />
+        </div>
+        */}
+      </div>
+    </section>
+  </ScrollReveal>
+)}

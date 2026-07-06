@@ -41,14 +41,51 @@ website/
 ## COMMANDS
 ```bash
 bun run dev                                  # Astro dev server (port 5555)
-bun run build                                # Build static site → dist/
+bun run build                                # Build static site → dist/ (runs OG generator first)
 SITE_URL=https://staging.maho.app bun run build   # Override domain for staging/preview
 bun run preview                              # Preview built site locally
 ```
 
+## BUILD-TIME ENVIRONMENT VARIABLES
+All `PUBLIC_*` and site-config env vars are **baked into the static JS at build time** via Astro's `import.meta.env` / `define:vars`. They are NOT read at runtime by the browser. Consequence: each deploy needs the correct values present in the shell when `bun run build` runs.
+
+| Var | Purpose | Prod value | Local default |
+|-----|---------|------------|---------------|
+| `SITE_URL` | Canonical origin used in JSON-LD, canonical `<link>`, sitemap, OG URLs | `https://maho.app` | `https://maho.app` |
+| `PUBLIC_RELAY_URL` | Relay backend origin for waitlist form (`POST /waitlist`) | e.g. `https://relay.maho.app` | falls back to `http://localhost:8080` if unset |
+
+**IMPORTANT**: This project uses **Direct Upload** (no Git integration; Cloudflare does NOT build on their servers). Env vars set in the Cloudflare Dashboard are IGNORED for Direct Upload deploys. Values must be present in the LOCAL shell at build time.
+
+### Option A — inline on the command
+```bash
+PUBLIC_RELAY_URL=https://relay.maho.app bun run --cwd website build
+bunx wrangler pages deploy website/dist --project-name=maho-website
+```
+
+### Option B — persistent `.env` file (gitignored)
+```
+# website/.env
+PUBLIC_RELAY_URL=https://relay.maho.app
+SITE_URL=https://maho.app
+```
+Astro auto-loads `.env` at build time. Ensure `.env` is in `.gitignore`.
+
+### Verifying they baked correctly
+After a build, grep the compiled script:
+```bash
+grep -o "const PUBLIC_RELAY_URL = [^;]*" website/dist/waitlist/index.html
+# Correct:   const PUBLIC_RELAY_URL = "https://relay.maho.app"
+# Wrong:     const PUBLIC_RELAY_URL = undefined
+```
+
 ## DEPLOY
 ```bash
-wrangler pages deploy dist --project-name=maho-website --branch=main --commit-dirty=true
+# 1. Build with correct env vars
+PUBLIC_RELAY_URL=https://relay.maho.app bun run --cwd website build
+
+# 2. Deploy the built dist/
+bunx wrangler pages deploy website/dist --project-name=maho-website --branch=main --commit-dirty=true
+
 # Production URL: https://maho-website.pages.dev
 # Cloudflare project: maho-website (b1c1bfc4...)
 ```

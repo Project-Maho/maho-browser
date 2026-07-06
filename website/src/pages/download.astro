@@ -5,15 +5,35 @@
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
+import CtaButton from '../components/marketing/CtaButton';
+import SquircleBox from '../components/marketing/SquircleBox.astro';
+import ScrollReveal from '../components/motion/ScrollReveal';
 import JSONLD from '../components/JSONLD.astro';
 
 // Phase 1: redirect to GitHub Releases until self-hosted CDN is live.
 // Owner decision pending on §5.4 of revision plan.
-const releaseUrl = "https://github.com/nicepkg/maho/releases";
-const mailReleaseUrl = "https://github.com/aspect-apps/maho-mail/releases";
+const releaseUrl = "https://github.com/Project-Maho/release/releases";
+const mailReleaseUrl = "https://github.com/Project-Maho/release/releases";
 const productParam = Astro.url.searchParams.get("product");
 const target = productParam === "mail" ? mailReleaseUrl : releaseUrl;
 const productLabel = productParam === "mail" ? "Maho Mail" : "Maho";
+const installSteps = [
+  {
+    label: 'Step 1',
+    title: 'Open the DMG',
+    detail: 'Double-click the downloaded file in your Downloads folder.'
+  },
+  {
+    label: 'Step 2',
+    title: 'Drag to Applications',
+    detail: `Drag the ${productLabel} icon into your Applications folder.`
+  },
+  {
+    label: 'Step 3',
+    title: 'Launch',
+    detail: `Open ${productLabel} from Applications or Spotlight. First launch sets up sync.`
+  }
+];
 
 const ld = {
   '@context': 'https://schema.org',
@@ -21,7 +41,7 @@ const ld = {
   name: 'Maho',
   applicationCategory: 'BrowserApplication',
   operatingSystem: 'macOS 12 or later',
-  downloadUrl: 'https://github.com/nicepkg/maho/releases',
+  downloadUrl: 'https://github.com/Project-Maho/release/releases',
   offers: {
     '@type': 'Offer',
     price: '0',
@@ -30,7 +50,7 @@ const ld = {
 };
 ---
 
-<BaseLayout title={`Download ${productLabel} for macOS — Maho`} description={`Download ${productLabel} for macOS 12+. Free forever. iPhone and Android in development.`}>
+<BaseLayout title={`Download ${productLabel} for macOS — Maho`} description={`Download ${productLabel} for macOS 12+. Free forever. iPhone and Android in development.`} ogImage="/og/download.png">
   <JSONLD data={ld} />
   <meta http-equiv="refresh" content={`0; url=${target}`} slot="head" />
   <script is:inline define:vars={{ target }}>
@@ -46,29 +66,20 @@ const ld = {
       <p class="text-muted-foreground leading-relaxed text-lg mb-8">
         Redirecting you to the latest {productLabel} release. If nothing happens within a few seconds:
       </p>
-      <a
-        href={target}
-        class="inline-flex items-center justify-center rounded-full bg-foreground text-background px-6 py-3 text-sm font-medium hover:opacity-90 transition mb-12"
-      >
-        Download {productLabel} manually
-      </a>
+      <CtaButton client:load href={target} variant="primary" className="mb-12">
+        Download now
+      </CtaButton>
 
-      <div class="grid grid-cols-1 sm:grid-cols-3 gap-6 mt-16 text-left">
-        <div class="rounded-lg border border-border p-6 bg-card">
-          <p class="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground mb-3">Step 1</p>
-          <p class="text-sm text-foreground font-medium mb-2">Open the DMG</p>
-          <p class="text-xs text-muted-foreground leading-relaxed">Double-click the downloaded file in your Downloads folder.</p>
-        </div>
-        <div class="rounded-lg border border-border p-6 bg-card">
-          <p class="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground mb-3">Step 2</p>
-          <p class="text-sm text-foreground font-medium mb-2">Drag to Applications</p>
-          <p class="text-xs text-muted-foreground leading-relaxed">Drag the {productLabel} icon into your Applications folder.</p>
-        </div>
-        <div class="rounded-lg border border-border p-6 bg-card">
-          <p class="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground mb-3">Step 3</p>
-          <p class="text-sm text-foreground font-medium mb-2">Launch</p>
-          <p class="text-xs text-muted-foreground leading-relaxed">Open {productLabel} from Applications or Spotlight. First launch sets up sync.</p>
-        </div>
+      <div class="mt-16 grid grid-cols-1 gap-6 text-left sm:grid-cols-3">
+        {installSteps.map((step, index) => (
+          <ScrollReveal client:visible variant="slide" delayMs={index * 100} className="h-full">
+            <SquircleBox radius="lg" class="h-full border border-border bg-card p-6">
+              <p class="mb-3 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">{step.label}</p>
+              <p class="mb-2 text-sm font-medium text-foreground">{step.title}</p>
+              <p class="text-xs leading-relaxed text-muted-foreground">{step.detail}</p>
+            </SquircleBox>
+          </ScrollReveal>
+        ))}
       </div>
 
       <p class="text-xs text-muted-foreground mt-16 leading-relaxed">

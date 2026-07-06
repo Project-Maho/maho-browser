@@ -28,11 +28,11 @@ function isActive(path: string): boolean {
       <div class="hidden sm:block">
         <ThemeToggle client:load />
       </div>
-      <a href="/download" class="inline-flex items-center gap-2 px-3 sm:px-4 py-1.5 rounded-full bg-foreground text-background text-sm font-medium hover:opacity-90 transition-opacity whitespace-nowrap">
+      <a href="/download" class="inline-flex items-center gap-2 px-3 sm:px-4 py-1.5 rounded-full bg-foreground text-background text-sm font-medium hover:opacity-90 transition-opacity whitespace-nowrap motion-safe-scale">
         Download
       </a>
       <details class="md:hidden relative" data-mobile-menu>
-        <summary class="cursor-pointer list-none p-2 -mr-2 text-muted-foreground hover:text-foreground transition-colors" aria-label="Toggle menu">
+        <summary class="cursor-pointer list-none p-2 -mr-2 text-muted-foreground hover:text-foreground transition-colors" aria-label="Toggle menu" style="touch-action: manipulation">
           <svg data-menu-icon-closed xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <line x1="3" y1="6" x2="21" y2="6"></line>
             <line x1="3" y1="12" x2="21" y2="12"></line>

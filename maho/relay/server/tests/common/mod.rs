@@ -30,6 +30,7 @@ async fn build_app(config: RelayConfig) -> Router {
         rooms: RoomManager::new(config.max_connections_per_room),
         signup_rate_limiter: FixedWindowRateLimiter::new(config.signup_rate_limit_per_ip_per_minute),
         login_rate_limiter: FixedWindowRateLimiter::new(config.login_rate_limit_per_ip_per_minute),
+        waitlist_rate_limiter: FixedWindowRateLimiter::new(maho_relay::waitlist::RATE_LIMIT_PER_MINUTE),
         config,
         db,
         ip_connections: DashMap::new(),

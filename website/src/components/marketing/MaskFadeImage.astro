@@ -1,0 +1,27 @@
+---
+interface Props {
+  src: string;
+  alt: string;
+  class?: string;
+  width?: number;
+  height?: number;
+  fadeDirection?: 'bottom' | 'top' | 'left' | 'right';
+}
+
+const { src, alt, width, height, fadeDirection = 'bottom' } = Astro.props as Props;
+
+if (width === undefined || height === undefined) {
+  throw new Error('MaskFadeImage requires width and height props to prevent CLS.');
+}
+
+const directionMap = {
+  bottom: 'b',
+  top: 't',
+  left: 'l',
+  right: 'r',
+} as const;
+---
+
+<div class:list={[`mask-fade-${directionMap[fadeDirection]}`, Astro.props.class]}>
+  <img src={src} alt={alt} width={width} height={height} loading="lazy" />
+</div>
