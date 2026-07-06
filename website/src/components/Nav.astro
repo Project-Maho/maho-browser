@@ -16,7 +16,10 @@ function isActive(path: string): boolean {
 <nav class="fixed top-0 left-0 right-0 z-50 bg-background/80 backdrop-blur-sm" aria-label="Main navigation">
   <div class="max-w-6xl mx-auto px-6 flex h-16 items-center justify-between gap-3 sm:gap-4">
     <div class="flex items-center gap-3 sm:gap-4 min-w-0">
-      <a href="/" class="text-sm font-medium text-foreground shrink-0">Maho</a>
+      <a href="/" class="flex items-center gap-2 text-sm font-medium text-foreground shrink-0" aria-label="Maho home">
+        <img src="/logo.svg" alt="" width="24" height="24" class="w-6 h-6" aria-hidden="true" />
+        <span>Maho</span>
+      </a>
       <ProductSwitcher client:load activeProduct={activeProduct} />
     </div>
     <div class="hidden md:flex items-center gap-6">
