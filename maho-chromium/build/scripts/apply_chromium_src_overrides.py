@@ -2361,6 +2361,18 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             description="Assert CMD+SHIFT+Y and CMD+Y both resolve to IDC_SHOW_HISTORY",
         ),
     ],
+    "base/trace_event/builtin_categories.h": [
+        Replacement(
+            old='    perfetto::Category("media").SetTags("video"),\n',
+            new=(
+                '    perfetto::Category("maho").SetDescription(\n'
+                '      "Traces for Maho-specific events (sidebar, ai, spaces, tab preview)."),\n'
+                '    perfetto::Category("media").SetTags("video"),\n'
+            ),
+            description="Register 'maho' Perfetto category for TRACE_EVENT calls in maho code",
+            guard='perfetto::Category("maho")',
+        ),
+    ],
 }
 
 

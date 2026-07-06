@@ -165,11 +165,52 @@ def apply_tracked_chromium_overrides(platform):
     )
 
 
+_LUCIDE_GENERATE_SCRIPT = os.path.join(_SCRIPT_DIR, 'lucide_icons', 'generate.py')
+
+
+def run_lucide_icon_check(skip):
+    """Run the Lucide icon consistency check (generate.py --check).
+
+    Ensures .icon files match the manifest. Aborts build on drift.
+    """
+    if skip:
+        print('warning: Lucide icon check skipped (--skip-lucide-check)')
+        return
+
+    if not os.path.isfile(_LUCIDE_GENERATE_SCRIPT):
+        print('warning: Lucide icon generator not found, skipping check')
+        return
+
+    print('Checking Lucide icon consistency...')
+    result = subprocess.run(
+        [sys.executable, _LUCIDE_GENERATE_SCRIPT, '--check'],
+        cwd=_WORKSPACE_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print('error: Lucide icon files have drifted from manifest.', file=sys.stderr)
+        print(result.stdout, file=sys.stderr)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
+        print(
+            '\nTo fix: run `python3 maho-chromium/build/scripts/lucide_icons/generate.py --write`',
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    print('  Lucide icons OK.')
+
+
 def main():
     parser = argparse.ArgumentParser(description='Build maho-core and Chromium with one shared lock.')
     parser.add_argument('--target', help='Explicit Rust target triple for the prebuilt build.')
     parser.add_argument('--skip-rust', action='store_true', help='Skip the Rust prebuilt step.')
     parser.add_argument('--skip-chromium', action='store_true', help='Skip the Chromium app build step.')
+    parser.add_argument(
+        '--skip-lucide-check',
+        action='store_true',
+        help='Skip the Lucide icon consistency check (emergency bypass).',
+    )
     parser.add_argument(
         '--platform',
         choices=('mac', 'win', 'linux'),
@@ -207,6 +248,7 @@ def main():
     platform = args.platform
     out_dir = args.out_dir
     with build_lock():
+        run_lucide_icon_check(args.skip_lucide_check)
         if not args.skip_rust:
             build_maho_core.build_rust_prebuilt(args.target)
         if not args.skip_chromium:

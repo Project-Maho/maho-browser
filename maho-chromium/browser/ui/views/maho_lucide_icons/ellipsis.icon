@@ -2,8 +2,11 @@
 // Source: Lucide "ellipsis" (ISC license)
 
 CANVAS_DIMENSIONS, 24,
-ROUND_RECT, 3, 10, 4, 4, 2,
+STROKE, 2,
+CIRCLE, 12, 12, 1,
 NEW_PATH,
-ROUND_RECT, 10, 10, 4, 4, 2,
+STROKE, 2,
+CIRCLE, 19, 12, 1,
 NEW_PATH,
-ROUND_RECT, 17, 10, 4, 4, 2,
+STROKE, 2,
+CIRCLE, 5, 12, 1,

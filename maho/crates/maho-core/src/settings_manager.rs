@@ -73,6 +73,7 @@ impl SettingsManager {
                     },
                 ],
                 pinned_close_behavior: PinnedCloseBehavior::Switch,
+                auto_delete_empty_folders_on_tidy: true,
             },
             appearance: AppearanceSettings {
                 theme: Theme::System,
@@ -148,6 +149,9 @@ impl SettingsManager {
             }
             if let Some(behavior) = general.pinned_close_behavior {
                 self.settings.general.pinned_close_behavior = behavior;
+            }
+            if let Some(v) = general.auto_delete_empty_folders_on_tidy {
+                self.settings.general.auto_delete_empty_folders_on_tidy = v;
             }
         }
         if let Some(appearance) = changes.appearance {

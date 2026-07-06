@@ -918,6 +918,28 @@ mod tests {
             "folder in space_a should NOT have parent from space_b"
         );
     }
+
+    #[test]
+    fn remove_empty_folders_in_space_deletes_only_empty() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+        let tab_id = TabId::generate();
+
+        let empty_folder = manager.create_folder(&space_id, "Empty", false, None).unwrap();
+        let full_folder = manager.create_folder(&space_id, "Full", false, None).unwrap();
+
+        manager.add_tab_to_space(&space_id, tab_id.clone(), None);
+        manager.add_tab_to_folder(&space_id, &full_folder.id, tab_id.clone());
+
+        let removed = manager.remove_empty_folders_in_space(&space_id);
+
+        assert_eq!(removed, vec![empty_folder.id.clone()]);
+        let space = manager.spaces.get(&space_id).unwrap();
+        assert!(!space.folders.iter().any(|f| f.id == empty_folder.id));
+        assert!(space.folders.iter().any(|f| f.id == full_folder.id));
+        assert!(!space.root_order.contains(&RootItem::Folder(empty_folder.id)));
+        assert!(space.root_order.contains(&RootItem::Folder(full_folder.id)));
+    }
 }
 
 impl std::fmt::Display for SpaceUpdateError {
@@ -2015,6 +2037,28 @@ impl SpaceManager {
             .values()
             .map(|s| (s.id.clone(), s.atc_rules.clone()))
             .collect()
+    }
+
+    /// Remove all folders in the given space whose `tab_ids` is empty.
+    /// Returns the list of removed folder IDs so callers can emit updates.
+    pub fn remove_empty_folders_in_space(&mut self, space_id: &SpaceId) -> Vec<FolderId> {
+        let space = match self.spaces.get(space_id) {
+            Some(s) => s,
+            None => return vec![],
+        };
+
+        let empty_ids: Vec<FolderId> = space
+            .folders
+            .iter()
+            .filter(|f| f.tab_ids.is_empty())
+            .map(|f| f.id.clone())
+            .collect();
+
+        for folder_id in &empty_ids {
+            self.delete_folder(space_id, folder_id);
+        }
+
+        empty_ids
     }
 }
 

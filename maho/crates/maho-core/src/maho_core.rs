@@ -1298,6 +1298,7 @@ impl MahoCore {
                 .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
             lmdb.put("tabs", &tabs_json)
                 .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+            self.tab_preview_manager.persist_to_storage(lmdb);
         }
 
         if dirty & LMDB_DIRTY_SPACES != 0 {
@@ -1407,6 +1408,8 @@ impl MahoCore {
             for tab in tabs {
                 self.tab_manager.restore_tab(tab);
             }
+            let tab_ids: Vec<maho_types::identifiers::TabId> = self.tab_manager.get_all_tabs().iter().map(|t| t.id.clone()).collect();
+            self.tab_preview_manager.load_from_storage(lmdb, &tab_ids);
         }
 
         let active_space_id: maho_types::identifiers::SpaceId = if let Some(active_data) = lmdb
@@ -3088,6 +3091,12 @@ impl MahoCore {
                             updates.push(CoreUpdate::FolderCreated { folder: folder_vm });
                         }
                     }
+                    if self.settings_manager.get_settings().general.auto_delete_empty_folders_on_tidy {
+                        let removed = self.space_manager.remove_empty_folders_in_space(space_id);
+                        for folder_id in removed {
+                            updates.push(CoreUpdate::FolderDeleted { folder_id });
+                        }
+                    }
                     return updates;
                 }
                 return vec![];
@@ -3654,6 +3663,10 @@ impl MahoCore {
         }
 
         updates
+    }
+
+    pub fn get_tab_snapshot_json(&self, tab_id: &TabId) -> Option<String> {
+        self.tab_manager.get_tab_snapshot_json(tab_id)
     }
 
     pub fn get_tab_view_models(&self) -> Vec<TabViewModel> {
@@ -6857,6 +6870,10 @@ impl TabManagerInterface for TabLifecycleManager {
 
     fn update_tab_security(&mut self, tab_id: &TabId, is_secure: bool) {
         self.update_tab_security(tab_id, is_secure)
+    }
+
+    fn update_tab_scroll_position(&mut self, tab_id: &TabId, x: f64, y: f64) {
+        self.update_tab_scroll_position(tab_id, x, y)
     }
 
     fn is_tab_secure(&self, tab_id: &TabId) -> bool {

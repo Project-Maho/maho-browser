@@ -54,7 +54,7 @@ maho-chromium/
 | Maho-core FFI bridge | `third_party/maho/maho_bridge.cc` + `maho_ffi.h` |
 | Build config | `build/config/args_{mac,linux,win}.gn` |
 | Mojo interfaces | `browser/ui/webui/maho_{feature}/maho_{feature}.mojom` |
-| Native Views icons (C++) | `browser/ui/views/maho_lucide_icons/` — Lucide-backed `aggregate_vector_icons` GN target. Use via `ui::ImageModel::FromVectorIcon(maho_lucide_icons::kFooIcon, color, size)`. See `../docs/icon-system.md`. |
+| Native Views icons (C++) | `browser/ui/views/maho_lucide_icons/` — Lucide-backed `aggregate_vector_icons` GN target. Use via `ui::ImageModel::FromVectorIcon(maho_lucide_icons::kFooIcon, color, size)`. See `../docs/icon-system.md`. **Never hand-edit `.icon` files.** To update Lucide icons: bump `lucide_version` in `browser/ui/views/maho_lucide_icons/manifest.json` and run `python3 build/scripts/lucide_icons/generate.py --write`. The build (`build_maho.py`) runs `--check` automatically and fails if manifest and files drift. |
 | WebUI icons (lucide-react) | `lucide-react` is the canonical icon library for React-based WebUI surfaces. Traditional SVG files inside `icons/` are deprecated for new surfaces. |
 
 ## CONVENTIONS

@@ -182,6 +182,14 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
       options: PINNED_CLOSE_BEHAVIOR_OPTIONS,
     },
   },
+  {
+    key: 'tabs.auto_delete_empty_folders_on_tidy',
+    metadata: {
+      label: 'Automatically remove empty folders after Tab Tidy',
+      description: 'When Tab Tidy runs, folders that end up with zero tabs are deleted.',
+      control: 'toggle',
+    },
+  },
 ];
 
 export const SETTING_METADATA: Record<string, SettingMetadata> = Object.fromEntries(

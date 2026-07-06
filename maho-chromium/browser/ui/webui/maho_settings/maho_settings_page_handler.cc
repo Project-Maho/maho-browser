@@ -12,6 +12,7 @@
 #include "base/files/file_util.h"
 #include "base/files/file_path.h"
 #include "base/json/json_reader.h"
+#include "base/strings/escape.h"
 #include "base/json/json_writer.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/string_number_conversions.h"
@@ -1560,6 +1561,15 @@ bool MahoSettingsPageHandler::HandleFfiSetting(const std::string& key,
     base::JSONWriter::Write(base::Value(std::move(settings)), &json);
     maho_core_update_settings(core, json.c_str());
     handled = true;
+  } else if (key == "tabs.auto_delete_empty_folders_on_tidy") {
+    base::DictValue settings;
+    base::DictValue general;
+    general.Set("autoDeleteEmptyFoldersOnTidy", value == "true");
+    settings.Set("general", std::move(general));
+    std::string json;
+    base::JSONWriter::Write(base::Value(std::move(settings)), &json);
+    maho_core_update_settings(core, json.c_str());
+    handled = true;
   }
 
   if (needs_color_reset) {
@@ -1633,6 +1643,10 @@ void MahoSettingsPageHandler::AppendFfiSettings(
     if (const std::string* pinned_close =
             general->FindString("pinnedCloseBehavior")) {
       add("tabs.pinned_close_behavior", *pinned_close);
+    }
+    if (auto auto_delete = general->FindBool("autoDeleteEmptyFoldersOnTidy")) {
+      add("tabs.auto_delete_empty_folders_on_tidy",
+          *auto_delete ? "true" : "false");
     }
   }
 
@@ -3170,6 +3184,18 @@ void MahoSettingsPageHandler::GetBuyCreditsUrl(
     default:
       checkout_url = "";
       break;
+  }
+
+  // Append custom_data.user_id (ADR 0010 §Webhook Handling) so the relay's
+  // LS webhook handler can attribute the purchase to the correct account.
+  // Reads prefs synchronously via account_prefs::kRelayUserId.
+  if (!checkout_url.empty() && profile_ && profile_->GetPrefs()) {
+    const std::string user_id =
+        profile_->GetPrefs()->GetString(maho::account_prefs::kRelayUserId);
+    if (!user_id.empty()) {
+      checkout_url += "?checkout[custom][user_id]=";
+      checkout_url += base::EscapeQueryParamValue(user_id, /*use_plus=*/false);
+    }
   }
 
   std::move(callback).Run(checkout_url);

@@ -113,6 +113,8 @@ pub struct GeneralSettings {
     pub site_search_entries: Vec<SiteSearchEntry>,
     #[serde(default = "default_pinned_close_behavior")]
     pub pinned_close_behavior: PinnedCloseBehavior,
+    #[serde(default = "default_true")]
+    pub auto_delete_empty_folders_on_tidy: bool,
 }
 
 fn default_archive_timeout() -> f64 {
@@ -303,6 +305,8 @@ pub struct GeneralSettingsUpdate {
     pub site_search_entries: Option<Vec<SiteSearchEntry>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pinned_close_behavior: Option<PinnedCloseBehavior>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_delete_empty_folders_on_tidy: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
