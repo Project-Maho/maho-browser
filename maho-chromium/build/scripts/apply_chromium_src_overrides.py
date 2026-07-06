@@ -1891,6 +1891,24 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "zero tabs"
             ),
         ),
+        Replacement(
+            old=(
+                "    return {StartupTabs({StartupTab(chrome::ChromeUINewTabURLAsGURL())}),\n"
+                "            launch_result};\n"
+                "  }"
+            ),
+            new=(
+                "    if (is_post_crash_launch) {\n"
+                "      // Maho zero-tab: crash recovery should NOT inject a synthetic NTP.\n"
+                "      return {StartupTabs(), launch_result};\n"
+                "    }\n"
+                "    return {StartupTabs({StartupTab(chrome::ChromeUINewTabURLAsGURL())}),\n"
+                "            launch_result};\n"
+                "  }"
+            ),
+            description="Maho zero-tab: crash recovery should NOT inject a synthetic NTP",
+            guard="Maho zero-tab: crash recovery should NOT inject",
+        ),
     ],
     # ── session_restore.cc ───────────────────────────────────────────────────
     "chrome/browser/sessions/session_restore.cc": [
@@ -1916,12 +1934,32 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "        MahoTabIdHelper::SetPendingRestoredTabId(it->second);\n"
                 "      }\n"
                 "    }\n"
+                "    // Maho zero-tab: skip chrome://newtab and about:blank restored tabs so\n"
+                "    // legacy sessions do not resurrect these synthetic URLs. Real user tabs\n"
+                "    // (youtube.com, etc.) restore normally.\n"
+                "    {\n"
+                "      const auto& navs = tab.navigations;\n"
+                "      if (!navs.empty()) {\n"
+                "        const int idx = std::clamp(tab.current_navigation_index, 0,\n"
+                "                                   static_cast<int>(navs.size()) - 1);\n"
+                "        const GURL& url = navs[idx].virtual_url();\n"
+                "        if (url.spec() == \"about:blank\" ||\n"
+                "            (url.SchemeIs(\"chrome\") && url.host() == \"newtab\")) {\n"
+                "          return nullptr;\n"
+                "        }\n"
+                "      }\n"
+                "    }\n"
                 "    RecordAppLaunchForTab(browser, tab, selected_index);\n"
                 "\n"
                 "    WebContents* web_contents;\n"
                 "    if (disposition == WindowOpenDisposition::CURRENT_TAB) {"
             ),
             description="Set pending restored tab ID before foreign tab restoration",
+            guard=(
+                "        if (url.spec() == \"about:blank\" ||\n"
+                "            (url.SchemeIs(\"chrome\") && url.host() == \"newtab\")) {\n"
+                "          return nullptr;"
+            ),
         ),
         Replacement(
             old=(
@@ -1936,11 +1974,39 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "        MahoTabIdHelper::SetPendingRestoredTabId(it->second);\n"
                 "      }\n"
                 "    }\n"
+                "    // Maho zero-tab: skip chrome://newtab and about:blank restored tabs so\n"
+                "    // legacy sessions do not resurrect these synthetic URLs. Real user tabs\n"
+                "    // (youtube.com, etc.) restore normally. If the filtered tab was the\n"
+                "    // selected tab we still Show() the browser (with no active tab) so the\n"
+                "    // post-loop DCHECK(did_show_browser) at session_restore.cc:~840 holds;\n"
+                "    // Maho's Browser::TabStripEmpty patch keeps the empty window alive.\n"
+                "    {\n"
+                "      const auto& navs = tab.navigations;\n"
+                "      if (!navs.empty()) {\n"
+                "        const int idx = std::clamp(tab.current_navigation_index, 0,\n"
+                "                                   static_cast<int>(navs.size()) - 1);\n"
+                "        const GURL& url = navs[idx].virtual_url();\n"
+                "        if (url.spec() == \"about:blank\" ||\n"
+                "            (url.SchemeIs(\"chrome\") && url.host() == \"newtab\")) {\n"
+                "          if (is_selected_tab && browser != browser_ &&\n"
+                "              browser && browser->window()) {\n"
+                "            browser->window()->Show();\n"
+                "            browser->set_is_session_restore(false);\n"
+                "            did_show_browser = true;\n"
+                "          }\n"
+                "          return;\n"
+                "        }\n"
+                "      }\n"
+                "    }\n"
                 "    RecordAppLaunchForTab(browser, tab, selected_index);\n"
                 "\n"
                 "    // Associate sessionStorage (if any) to the restored tab."
             ),
             description="Set pending restored tab ID before session tab restoration",
+            guard=(
+                "          if (is_selected_tab && browser != browser_ &&\n"
+                "              browser && browser->window()) {"
+            ),
         ),
         Replacement(
             old=(
@@ -1959,6 +2025,13 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "      // produces no tabbed browser.  If |startup_tabs_| already contains real\n"
                 "      // URLs (e.g. command-line URLs) append them; otherwise leave the window\n"
                 "      // open with zero tabs so the Maho empty-window UX can take over.\n"
+                "      startup_tabs_.erase(\n"
+                "          std::remove_if(startup_tabs_.begin(), startup_tabs_.end(),\n"
+                "              [](const StartupTab& t) {\n"
+                "                return t.url.spec() == \"about:blank\" ||\n"
+                "                       (t.url.SchemeIs(\"chrome\") && t.url.host() == \"newtab\");\n"
+                "              }),\n"
+                "          startup_tabs_.end());\n"
                 "      if (!startup_tabs_.empty()) {\n"
                 "        AppendURLsToBrowser(browser, startup_tabs_);\n"
                 "      }"
@@ -1969,6 +2042,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "that a returning-user session restore with no restored tabs starts with a "
                 "zero-tab window instead of an unwanted chrome://newtab"
             ),
+            guard="startup_tabs_.erase(",
         ),
     ],
     # ── chrome_content_browser_client.cc ─────────────────────────────────────

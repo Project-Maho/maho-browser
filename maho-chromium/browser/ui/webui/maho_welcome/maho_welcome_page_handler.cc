@@ -472,8 +472,6 @@ void MahoWelcomePageHandler::FinishOnboarding() {
     params.creation_source = Browser::CreationSource::kStartupCreator;
     Browser* main_browser = Browser::Create(params);
     DVLOG(1) << "[MahoFinish] step3b main_browser=" << main_browser;
-    chrome::AddTabAt(main_browser, GURL(), -1, /*foreground=*/true);
-    DVLOG(1) << "[MahoFinish] step3c NTP added";
     main_browser->window()->Show();
     DVLOG(1) << "[MahoFinish] step4 window shown";
 
