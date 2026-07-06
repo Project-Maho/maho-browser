@@ -24,6 +24,10 @@
 #include "maho/browser/mcp/maho_mcp_firewall.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
 #include "maho/browser/mcp/maho_mcp_network_observer.h"
+#include "base/run_loop.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/timer/timer.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_WIN)
@@ -38,7 +42,27 @@ constexpr char kMcpProtocolVersion[] = "2025-03-26";
 constexpr char kServerName[] = "maho-browser";
 constexpr char kServerVersion[] = "0.4.1";
 
+MahoMcpBrowserDelegate* g_browser_delegate = nullptr;
+
+bool TabExists(int tab_id, const std::vector<MahoMcpSession::TabInfo>& fallback_tabs) {
+  if (tab_id == 0) return true;
+  if (g_browser_delegate) {
+    for (const auto& t : g_browser_delegate->GetTabList()) {
+      if (t.id == tab_id) return true;
+    }
+  } else {
+    for (const auto& t : fallback_tabs) {
+      if (t.id == tab_id) return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace
+
+void MahoMcpSession::SetBrowserDelegate(MahoMcpBrowserDelegate* delegate) {
+  g_browser_delegate = delegate;
+}
 
 #if BUILDFLAG(IS_WIN)
 MahoMcpSession::MahoMcpSession(MahoMcpSessionToken* session_token,
@@ -47,6 +71,13 @@ MahoMcpSession::MahoMcpSession(MahoMcpSessionToken* session_token,
       lease_registry_(lease_registry),
       session_id_(base::Uuid::GenerateRandomV4().AsLowercaseString()) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
+  TabInfo default_tab;
+  default_tab.id = 0;
+  default_tab.title = "New Tab";
+  default_tab.url = "about:blank";
+  default_tab.is_active = true;
+  tabs_.push_back(std::move(default_tab));
+  active_tab_id_ = 0;
 }
 #else
 MahoMcpSession::MahoMcpSession(uid_t peer_uid,
@@ -55,10 +86,43 @@ MahoMcpSession::MahoMcpSession(uid_t peer_uid,
       lease_registry_(lease_registry),
       session_id_(base::Uuid::GenerateRandomV4().AsLowercaseString()) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
+  TabInfo default_tab;
+  default_tab.id = 0;
+  default_tab.title = "New Tab";
+  default_tab.url = "about:blank";
+  default_tab.is_active = true;
+  tabs_.push_back(std::move(default_tab));
+  active_tab_id_ = 0;
 }
 #endif
 
 MahoMcpSession::~MahoMcpSession() = default;
+
+MahoMcpSession::ConsoleMessage::ConsoleMessage() = default;
+MahoMcpSession::ConsoleMessage::~ConsoleMessage() = default;
+MahoMcpSession::ConsoleMessage::ConsoleMessage(const ConsoleMessage&) = default;
+MahoMcpSession::ConsoleMessage::ConsoleMessage(ConsoleMessage&&) noexcept = default;
+MahoMcpSession::ConsoleMessage& MahoMcpSession::ConsoleMessage::operator=(const ConsoleMessage&) = default;
+MahoMcpSession::ConsoleMessage& MahoMcpSession::ConsoleMessage::operator=(ConsoleMessage&&) noexcept = default;
+
+MahoMcpSession::TabInfo::TabInfo() = default;
+MahoMcpSession::TabInfo::~TabInfo() = default;
+MahoMcpSession::TabInfo::TabInfo(const TabInfo&) = default;
+MahoMcpSession::TabInfo::TabInfo(TabInfo&&) noexcept = default;
+MahoMcpSession::TabInfo& MahoMcpSession::TabInfo::operator=(const TabInfo&) = default;
+MahoMcpSession::TabInfo& MahoMcpSession::TabInfo::operator=(TabInfo&&) noexcept = default;
+
+void MahoMcpSession::AddConsoleMessageForTesting(int tab_id, ConsoleMessage message) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (message.message.size() > 4096) {
+    message.message.resize(4096);
+  }
+  auto& buffer = console_buffers_[tab_id];
+  if (buffer.size() >= 500) {
+    buffer.erase(buffer.begin());
+  }
+  buffer.push_back(std::move(message));
+}
 
 bool MahoMcpSession::IsHostAllowed(std::string_view host) const {
   if (host.empty() || allowed_domains_.empty()) {
@@ -548,6 +612,62 @@ void MahoMcpSession::HandleActiveMethod(const McpJsonRpcMessage& msg,
             "Args: ref (int), value (string), tab_id (int, optional).");
       tools.Append(base::Value(std::move(t)));
     }
+    {
+      base::DictValue t;
+      t.Set("name", "browser_console_messages");
+      t.Set("description",
+            "Retrieve console messages. Args: tab_id (int, optional), "
+            "level_filter (list of strings, optional), since_timestamp_ms "
+            "(int, optional), limit (int, optional, default 100).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "browser_wait_for_navigation");
+      t.Set("description",
+            "Wait for navigation to complete or time out. Args: tab_id (int, optional), "
+            "timeout_ms (int, optional, default 30000).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "browser_scroll");
+      t.Set("description",
+            "Scroll the main viewport or an element. Args: tab_id (int, optional), "
+            "direction (string: 'up'|'down'|'left'|'right'), pixels (int, optional, default 300), "
+            "ref (int, optional).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "browser_hover");
+      t.Set("description",
+            "Hover mouse over element by ref. Args: ref (int), tab_id (int, optional).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "browser_key_press");
+      t.Set("description",
+            "Press a keyboard key. Args: tab_id (int, optional), key (string), "
+            "modifiers (list of strings, optional).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "browser_tab_switch");
+      t.Set("description",
+            "Activate a specific tab by ID. Args: tab_id (int).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "browser_set_viewport_size");
+      t.Set("description",
+            "Set viewport size. Args: tab_id (int, optional), width_px (int), "
+            "height_px (int).");
+      tools.Append(base::Value(std::move(t)));
+    }
 
     result.Set("tools", std::move(tools));
 
@@ -605,8 +725,28 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
   const base::DictValue* arguments = params.FindDict("arguments");
 
   if (*tool_name == "browser_tab_list") {
+    base::ListValue list;
+    if (g_browser_delegate) {
+      for (const auto& t : g_browser_delegate->GetTabList()) {
+        base::DictValue tab;
+        tab.Set("id", t.id);
+        tab.Set("title", t.title);
+        tab.Set("url", t.url);
+        tab.Set("is_active", t.is_active);
+        list.Append(std::move(tab));
+      }
+    } else {
+      for (const auto& t : tabs_) {
+        base::DictValue tab;
+        tab.Set("id", t.id);
+        tab.Set("title", t.title);
+        tab.Set("url", t.url);
+        tab.Set("is_active", t.is_active);
+        list.Append(std::move(tab));
+      }
+    }
     base::DictValue result;
-    result.Set("tabs", base::ListValue());
+    result.Set("tabs", std::move(list));
     auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
         framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
@@ -621,11 +761,40 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       responses.push_back(std::move(err));
       return;
     }
+    int target_id = arguments->FindInt("tab_id").value();
     base::DictValue result;
-    result.Set("id", arguments->FindInt("tab_id").value());
-    result.Set("title", "");
-    result.Set("url", "");
-    result.Set("is_active", false);
+    bool found_real = false;
+    if (g_browser_delegate) {
+      for (const auto& t : g_browser_delegate->GetTabList()) {
+        if (t.id == target_id) {
+          result.Set("id", t.id);
+          result.Set("title", t.title);
+          result.Set("url", t.url);
+          result.Set("is_active", t.is_active);
+          found_real = true;
+          break;
+        }
+      }
+    }
+    if (!found_real) {
+      const TabInfo* found = nullptr;
+      for (const auto& t : tabs_) {
+        if (t.id == target_id) {
+          found = &t;
+          break;
+        }
+      }
+      if (!found) {
+        std::string err = framer_.BuildErrorResponse(
+            msg.id, -32000, "Unknown tab_id");
+        responses.push_back(std::move(err));
+        return;
+      }
+      result.Set("id", found->id);
+      result.Set("title", found->title);
+      result.Set("url", found->url);
+      result.Set("is_active", found->is_active);
+    }
     auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
         framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
@@ -673,6 +842,18 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       out.push_back('\n');
       responses.push_back(std::move(out));
       return;
+    }
+    
+    if (g_browser_delegate) {
+      g_browser_delegate->Navigate(active_tab_id_, nav_url);
+    }
+    
+    // Update active tab URL
+    for (auto& t : tabs_) {
+      if (t.id == active_tab_id_) {
+        t.url = url_str;
+        t.title = nav_url.host();
+      }
     }
     base::DictValue result;
     result.Set("navigated", true);
@@ -731,6 +912,33 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
   }
 
   if (*tool_name == "browser_tab_close") {
+    if (!arguments || !arguments->FindInt("tab_id")) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: tab_id required");
+      responses.push_back(std::move(err));
+      return;
+    }
+    int target_id = arguments->FindInt("tab_id").value();
+    auto it = std::remove_if(tabs_.begin(), tabs_.end(), [target_id](const TabInfo& t) {
+      return t.id == target_id;
+    });
+    if (it == tabs_.end()) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32000, "Unknown tab_id");
+      responses.push_back(std::move(err));
+      return;
+    }
+    tabs_.erase(it, tabs_.end());
+    
+    // If the closed tab was active, activate another tab if available
+    if (active_tab_id_ == target_id) {
+      if (!tabs_.empty()) {
+        tabs_[0].is_active = true;
+        active_tab_id_ = tabs_[0].id;
+      } else {
+        active_tab_id_ = -1;
+      }
+    }
     base::DictValue result;
     result.Set("closed", true);
     std::string resp =
@@ -760,13 +968,31 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
         return;
       }
     }
+    int new_id = 0;
+    for (const auto& t : tabs_) {
+      if (t.id >= new_id) {
+        new_id = t.id + 1;
+      }
+    }
+    for (auto& t : tabs_) {
+      t.is_active = false;
+    }
+    std::string url_str = arguments && arguments->FindString("url")
+                              ? *arguments->FindString("url")
+                              : "about:blank";
+    TabInfo new_tab;
+    new_tab.id = new_id;
+    new_tab.title = url_str == "about:blank" ? "New Tab" : GURL(url_str).host();
+    new_tab.url = url_str;
+    new_tab.is_active = true;
+    tabs_.push_back(new_tab);
+    active_tab_id_ = new_id;
+
     base::DictValue tab;
-    tab.Set("id", 0);
-    tab.Set("title", "New Tab");
-    tab.Set("url", arguments && arguments->FindString("url")
-                       ? *arguments->FindString("url")
-                       : "about:blank");
-    tab.Set("is_active", true);
+    tab.Set("id", new_tab.id);
+    tab.Set("title", new_tab.title);
+    tab.Set("url", new_tab.url);
+    tab.Set("is_active", new_tab.is_active);
     base::DictValue result;
     result.Set("tab", std::move(tab));
     auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
@@ -1119,6 +1345,377 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     auto har = network_observer_->GetHar();
     std::string resp = framer_.BuildSuccessResponse(
         msg.id, base::Value(std::move(har).take()));
+    responses.push_back(std::move(resp));
+    return;
+  }
+
+  if (*tool_name == "browser_console_messages") {
+    int tab_id = arguments && arguments->FindInt("tab_id") ? arguments->FindInt("tab_id").value() : active_tab_id_;
+    int limit = arguments && arguments->FindInt("limit") ? arguments->FindInt("limit").value() : 100;
+    std::optional<int64_t> since_timestamp_ms;
+    if (arguments && arguments->FindDouble("since_timestamp_ms")) {
+      since_timestamp_ms = static_cast<int64_t>(arguments->FindDouble("since_timestamp_ms").value());
+    } else if (arguments && arguments->FindInt("since_timestamp_ms")) {
+      since_timestamp_ms = static_cast<int64_t>(arguments->FindInt("since_timestamp_ms").value());
+    }
+    
+    std::set<std::string> level_filter;
+    if (arguments && arguments->FindList("level_filter")) {
+      for (const auto& item : *arguments->FindList("level_filter")) {
+        if (item.is_string()) {
+          level_filter.insert(item.GetString());
+        }
+      }
+    }
+    
+    base::ListValue msgs;
+    bool truncated = false;
+    bool exists = TabExists(tab_id, tabs_);
+    if (g_browser_delegate && exists) {
+      int count = 0;
+      for (const auto& msg_entry : g_browser_delegate->GetConsoleMessages(tab_id)) {
+        if (!level_filter.empty() && level_filter.find(msg_entry.level) == level_filter.end()) {
+          continue;
+        }
+        if (since_timestamp_ms.has_value() && msg_entry.timestamp_ms <= since_timestamp_ms.value()) {
+          continue;
+        }
+        if (count >= limit) {
+          truncated = true;
+          break;
+        }
+        base::DictValue entry;
+        entry.Set("level", msg_entry.level);
+        entry.Set("message", msg_entry.message);
+        entry.Set("source_url", msg_entry.source_url);
+        entry.Set("line", msg_entry.line);
+        entry.Set("timestamp_ms", static_cast<double>(msg_entry.timestamp_ms));
+        msgs.Append(std::move(entry));
+        count++;
+      }
+    } else {
+      auto it = console_buffers_.find(tab_id);
+      if (it != console_buffers_.end()) {
+        int count = 0;
+        for (const auto& msg_entry : it->second) {
+          if (!level_filter.empty() && level_filter.find(msg_entry.level) == level_filter.end()) {
+            continue;
+          }
+          if (since_timestamp_ms.has_value() && msg_entry.timestamp_ms <= since_timestamp_ms.value()) {
+            continue;
+          }
+          if (count >= limit) {
+            truncated = true;
+            break;
+          }
+          base::DictValue entry;
+          entry.Set("level", msg_entry.level);
+          entry.Set("message", msg_entry.message);
+          entry.Set("source_url", msg_entry.source_url);
+          entry.Set("line", msg_entry.line);
+          entry.Set("timestamp_ms", static_cast<double>(msg_entry.timestamp_ms));
+          msgs.Append(std::move(entry));
+          count++;
+        }
+      }
+    }
+    
+    base::DictValue result;
+    result.Set("messages", std::move(msgs));
+    result.Set("truncated", truncated);
+    
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
+    responses.push_back(std::move(resp));
+    return;
+  }
+
+  if (*tool_name == "browser_wait_for_navigation") {
+    int tab_id = arguments && arguments->FindInt("tab_id") ? arguments->FindInt("tab_id").value() : active_tab_id_;
+    int64_t since_ms = 0;
+    if (arguments) {
+      if (arguments->FindDouble("since_timestamp_ms")) {
+        since_ms = static_cast<int64_t>(arguments->FindDouble("since_timestamp_ms").value());
+      } else if (arguments->FindInt("since_timestamp_ms")) {
+        since_ms = static_cast<int64_t>(arguments->FindInt("since_timestamp_ms").value());
+      }
+    }
+
+    base::DictValue result;
+    bool got_event = false;
+    if (g_browser_delegate) {
+      auto events = g_browser_delegate->GetNavigationEvents(tab_id, since_ms);
+      if (!events.empty()) {
+        const auto& ev = events.back();
+        result.Set("navigated", true);
+        result.Set("url", ev.url);
+        result.Set("title", ev.title);
+        result.Set("status_code", ev.status_code);
+        result.Set("timestamp_ms", static_cast<double>(ev.timestamp_ms));
+        got_event = true;
+      }
+    }
+    if (!got_event && g_browser_delegate) {
+      int target_tab = (tab_id == 0) ? active_tab_id_ : tab_id;
+      for (const auto& t : g_browser_delegate->GetTabList()) {
+        if ((tab_id == 0 && t.is_active) || t.id == target_tab) {
+          result.Set("navigated", false);
+          result.Set("url", t.url);
+          result.Set("title", t.title);
+          result.Set("status_code", 200);
+          result.Set("timestamp_ms",
+                     static_cast<double>(
+                         base::Time::Now().InMillisecondsSinceUnixEpoch()));
+          got_event = true;
+          break;
+        }
+      }
+    }
+    if (!got_event) {
+      const TabInfo* found = nullptr;
+      for (const auto& t : tabs_) {
+        if (t.id == tab_id) {
+          found = &t;
+          break;
+        }
+      }
+      if (found) {
+        result.Set("navigated", false);
+        result.Set("url", found->url);
+        result.Set("title", found->title);
+        result.Set("status_code", 200);
+        result.Set("timestamp_ms",
+                   static_cast<double>(
+                       base::Time::Now().InMillisecondsSinceUnixEpoch()));
+      } else {
+        result.Set("timeout", true);
+        result.Set("last_url", "");
+      }
+    }
+
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
+    responses.push_back(std::move(resp));
+    return;
+  }
+
+  if (*tool_name == "browser_tab_switch") {
+    if (!arguments || !arguments->FindInt("tab_id")) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: tab_id required");
+      responses.push_back(std::move(err));
+      return;
+    }
+    int target_id = arguments->FindInt("tab_id").value();
+    bool found = false;
+    int previous_active_id = active_tab_id_;
+    
+    if (TabExists(target_id, tabs_)) {
+      found = true;
+      if (g_browser_delegate) {
+        g_browser_delegate->ActivateTab(target_id);
+      }
+    } else {
+      for (const auto& t : tabs_) {
+        if (t.id == target_id) {
+          found = true;
+          break;
+        }
+      }
+    }
+    
+    if (!found) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32000, "Unknown tab_id");
+      responses.push_back(std::move(err));
+      return;
+    }
+    for (auto& t : tabs_) {
+      t.is_active = (t.id == target_id);
+    }
+    active_tab_id_ = target_id;
+    base::DictValue result;
+    result.Set("activated", true);
+    result.Set("previous_tab_id", previous_active_id);
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
+    responses.push_back(std::move(resp));
+    return;
+  }
+
+  if (*tool_name == "browser_set_viewport_size") {
+    if (!arguments || !arguments->FindInt("width_px") || !arguments->FindInt("height_px")) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: width_px and height_px required");
+      responses.push_back(std::move(err));
+      return;
+    }
+    int width = arguments->FindInt("width_px").value();
+    int height = arguments->FindInt("height_px").value();
+    if (width < 100 || width > 4096 || height < 100 || height > 4096) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: dimensions out of bounds (100-4096)");
+      responses.push_back(std::move(err));
+      return;
+    }
+    viewport_width_ = width;
+    viewport_height_ = height;
+    
+    int tab_id = arguments->FindInt("tab_id").value_or(active_tab_id_);
+    if (g_browser_delegate) {
+      g_browser_delegate->SetViewportSize(tab_id, width, height);
+    }
+    
+    base::DictValue result;
+    result.Set("width", width);
+    result.Set("height", height);
+    result.Set("device_scale_factor", 1.0);
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
+    responses.push_back(std::move(resp));
+    return;
+  }
+
+  if (*tool_name == "browser_scroll") {
+    if (!arguments || !arguments->FindString("direction")) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: direction required");
+      responses.push_back(std::move(err));
+      return;
+    }
+    std::string direction = *arguments->FindString("direction");
+    int pixels = arguments->FindInt("pixels").value_or(300);
+    std::optional<int> ref = arguments->FindInt("ref");
+    
+    if (direction != "up" && direction != "down" && direction != "left" && direction != "right") {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: unknown direction");
+      responses.push_back(std::move(err));
+      return;
+    }
+    
+    int tab_id = arguments->FindInt("tab_id").value_or(active_tab_id_);
+    std::optional<ui::AXNodeID> ax_id;
+    if (ref.has_value()) {
+      auto it = ref_to_ax_id_.find(ref.value());
+      if (it == ref_to_ax_id_.end()) {
+        std::string err = framer_.BuildErrorResponse(
+            msg.id, -32000, "Unknown ref: call browser_accessibility_snapshot first");
+        responses.push_back(std::move(err));
+        return;
+      }
+      ax_id = it->second;
+    }
+    
+    if (g_browser_delegate) {
+      g_browser_delegate->Scroll(tab_id, direction, pixels, ax_id);
+    }
+    
+    int& current_scroll_y = scroll_y_positions_[tab_id];
+    if (direction == "down") {
+      current_scroll_y += pixels;
+    } else if (direction == "up") {
+      current_scroll_y = std::max(0, current_scroll_y - pixels);
+    }
+    
+    base::DictValue result;
+    result.Set("scrolled", true);
+    result.Set("new_scroll_y", current_scroll_y);
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
+    responses.push_back(std::move(resp));
+    return;
+  }
+
+  if (*tool_name == "browser_hover") {
+    if (!arguments || !arguments->FindInt("ref")) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: ref required");
+      responses.push_back(std::move(err));
+      return;
+    }
+    int ref = arguments->FindInt("ref").value();
+    auto it = ref_to_ax_id_.find(ref);
+    if (it == ref_to_ax_id_.end()) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32000, "Unknown ref: call browser_accessibility_snapshot first");
+      responses.push_back(std::move(err));
+      return;
+    }
+    
+    int tab_id = arguments->FindInt("tab_id").value_or(active_tab_id_);
+    if (g_browser_delegate) {
+      g_browser_delegate->Hover(tab_id, it->second);
+    }
+    
+    base::DictValue result;
+    result.Set("hovered", true);
+    result.Set("ref", ref);
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
+    responses.push_back(std::move(resp));
+    return;
+  }
+
+  if (*tool_name == "browser_key_press") {
+    if (!arguments || !arguments->FindString("key")) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: key required");
+      responses.push_back(std::move(err));
+      return;
+    }
+    std::string key = *arguments->FindString("key");
+    const base::ListValue* modifiers = arguments->FindList("modifiers");
+    
+    bool valid_key = (key.size() == 1) || 
+                     (key == "Enter" || key == "Tab" || key == "Escape" || key == "Backspace" ||
+                      key == "Delete" || key == "ArrowUp" || key == "ArrowDown" || key == "ArrowLeft" ||
+                      key == "ArrowRight" || key == "Home" || key == "End" || key == "PageUp" ||
+                      key == "PageDown" || (key[0] == 'F' && key.size() > 1 && key.size() <= 3));
+    if (!valid_key) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: unknown key");
+      responses.push_back(std::move(err));
+      return;
+    }
+    
+    std::vector<std::string> mod_list;
+    if (modifiers) {
+      for (const auto& mod : *modifiers) {
+        if (!mod.is_string()) {
+          std::string err = framer_.BuildErrorResponse(
+              msg.id, -32602, "Invalid params: modifiers must be list of strings");
+          responses.push_back(std::move(err));
+          return;
+        }
+        std::string mod_str = mod.GetString();
+        if (mod_str != "shift" && mod_str != "ctrl" && mod_str != "alt" && mod_str != "meta") {
+          std::string err = framer_.BuildErrorResponse(
+              msg.id, -32602, "Invalid params: unknown modifier: " + mod_str);
+          responses.push_back(std::move(err));
+          return;
+        }
+        mod_list.push_back(mod_str);
+      }
+    }
+    
+    int tab_id = arguments->FindInt("tab_id").value_or(active_tab_id_);
+    if (g_browser_delegate) {
+      g_browser_delegate->KeyPress(tab_id, key, mod_list);
+    }
+    
+    base::DictValue result;
+    result.Set("key_pressed", true);
+    result.Set("key", key);
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
     responses.push_back(std::move(resp));
     return;
   }

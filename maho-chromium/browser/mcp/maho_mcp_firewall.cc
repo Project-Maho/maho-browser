@@ -60,6 +60,27 @@ bool MatchesAnyLowercase(std::string_view needle,
   return false;
 }
 
+bool IsCredentialDictKey(std::string_view key) {
+  std::string lower(key);
+  std::transform(lower.begin(), lower.end(), lower.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+  if (lower == "key") {
+    return false;
+  }
+  if (lower.find("key") != std::string::npos && 
+      (lower.find("api") != std::string::npos ||
+       lower.find("access") != std::string::npos ||
+       lower.find("secret") != std::string::npos ||
+       lower.find("private") != std::string::npos ||
+       lower.find("auth") != std::string::npos ||
+       lower.find("token") != std::string::npos)) {
+    return true;
+  }
+  static const base::NoDestructor<re2::RE2> kDictKeyPattern(
+      "(?i)(auth|token|secret|session|password)");
+  return re2::RE2::PartialMatch(std::string(key), *kDictKeyPattern);
+}
+
 }  // namespace
 
 // static
@@ -201,7 +222,31 @@ std::string MahoMcpFirewall::RedactUrl(std::string_view url) {
 }
 
 // static
+std::string MahoMcpFirewall::RedactString(std::string_view raw) {
+  std::string out(raw);
+
+  // Redact JWT: eyJ[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+ -> [REDACTED_JWT]
+  static const base::NoDestructor<re2::RE2> kJwtPattern(
+      R"(eyJ[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+)");
+  re2::RE2::GlobalReplace(&out, *kJwtPattern, "[REDACTED_JWT]");
+
+  // Redact Bearer: (?i)Bearer\s+[a-zA-Z0-9_\-\.]+ -> Bearer [REDACTED]
+  static const base::NoDestructor<re2::RE2> kBearerPattern(
+      R"((?i)Bearer\s+[a-zA-Z0-9_\-\.]+)");
+  re2::RE2::GlobalReplace(&out, *kBearerPattern, "Bearer [REDACTED]");
+
+  // Existing URL scrub also applied
+  out = RedactUrl(out);
+
+  return out;
+}
+
+// static
 void MahoMcpFirewall::RedactAll(base::Value& value) {
+  if (value.is_string()) {
+    value = base::Value(RedactString(value.GetString()));
+    return;
+  }
   if (base::DictValue* dict = value.GetIfDict()) {
     for (auto pair : *dict) {
       const std::string& key = pair.first;
@@ -219,6 +264,12 @@ void MahoMcpFirewall::RedactAll(base::Value& value) {
       if (base::EqualsCaseInsensitiveASCII(key, "html") && child.is_string()) {
         child = base::Value(RedactPasswordFields(child.GetString()));
         continue;
+      }
+      if (child.is_string()) {
+        if (IsCredentialDictKey(key)) {
+          child = base::Value(kRedacted);
+          continue;
+        }
       }
       RedactAll(child);
     }

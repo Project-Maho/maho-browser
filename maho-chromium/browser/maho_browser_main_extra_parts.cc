@@ -34,8 +34,22 @@
 #include "maho/browser/maho_tab_registry.h"
 #include "maho/browser/updates/maho_update_manager.h"
 #include "chrome/browser/sessions/session_restore.h"
+#include "base/strings/utf_string_conversions.h"
 #include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/maho_tab_id_session_helper.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "components/sessions/content/session_tab_helper.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/render_widget_host_view.h"
+#include "content/public/browser/web_contents.h"
+#include "base/synchronization/waitable_event.h"
+#include "maho/browser/mcp/maho_mcp_console_capture.h"
+#include "maho/browser/mcp/maho_mcp_input_synthesizer.h"
+#include "maho/browser/mcp/maho_mcp_navigation_tracker.h"
+#include "maho/browser/mcp/maho_mcp_session.h"
 #include "maho/browser/ui/theme/maho_color_mixer.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/third_party/maho/maho_bridge.h"
@@ -160,12 +174,242 @@ void MahoBrowserMainExtraParts::PostEarlyInitialization() {
       base::BindRepeating(&AddMahoColorMixers));
 }
 
+namespace {
+
+class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
+ public:
+  ~MahoMcpBrowserDelegateImpl() override = default;
+
+  std::vector<maho::MahoMcpSession::TabInfo> GetTabList() override {
+    std::vector<maho::MahoMcpSession::TabInfo> list;
+    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+        [&list](BrowserWindowInterface* browser) {
+          if (browser && browser->GetTabStripModel()) {
+            TabStripModel* model = browser->GetTabStripModel();
+            for (int i = 0; i < model->count(); ++i) {
+              content::WebContents* wc = model->GetWebContentsAt(i);
+              if (wc) {
+                sessions::SessionTabHelper* helper =
+                    sessions::SessionTabHelper::FromWebContents(wc);
+                if (helper) {
+                  maho::MahoMcpSession::TabInfo t;
+                  t.id = helper->session_id().id();
+                  t.title = base::UTF16ToUTF8(wc->GetTitle());
+                  t.url = wc->GetLastCommittedURL().spec();
+                  t.is_active = (wc->GetVisibility() == content::Visibility::VISIBLE);
+                  list.push_back(t);
+                }
+              }
+            }
+          }
+          return true;
+        });
+    return list;
+  }
+
+  content::WebContents* GetActiveWebContents() {
+    content::WebContents* active_wc = nullptr;
+    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+        [&active_wc](BrowserWindowInterface* browser) {
+          if (browser && browser->GetTabStripModel()) {
+            active_wc = browser->GetTabStripModel()->GetActiveWebContents();
+            if (active_wc) {
+              return false;
+            }
+          }
+          return true;
+        });
+    return active_wc;
+  }
+
+  content::WebContents* GetWebContentsForTabId(int tab_id) {
+    content::WebContents* match = nullptr;
+    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+        [&match, tab_id](BrowserWindowInterface* browser) {
+          if (browser && browser->GetTabStripModel()) {
+            TabStripModel* model = browser->GetTabStripModel();
+            for (int i = 0; i < model->count(); ++i) {
+              content::WebContents* c = model->GetWebContentsAt(i);
+              if (c) {
+                sessions::SessionTabHelper* helper =
+                    sessions::SessionTabHelper::FromWebContents(c);
+                if (helper && helper->session_id().id() == tab_id) {
+                  match = c;
+                  return false;
+                }
+              }
+            }
+          }
+          return true;
+        });
+    return match;
+  }
+
+  std::vector<maho::MahoMcpSession::ConsoleMessage> GetConsoleMessages(int tab_id) override {
+    std::vector<maho::MahoMcpSession::ConsoleMessage> list;
+    content::WebContents* wc = (tab_id == 0) ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
+    if (wc) {
+      maho::MahoMcpConsoleCapture::CreateForWebContents(wc);
+      maho::MahoMcpConsoleCapture* capture = maho::MahoMcpConsoleCapture::FromWebContents(wc);
+      if (capture) {
+        for (const auto& msg : capture->messages()) {
+          maho::MahoMcpSession::ConsoleMessage m;
+          m.level = msg.level;
+          m.message = msg.message;
+          m.source_url = msg.source_url;
+          m.line = msg.line;
+          m.timestamp_ms = msg.timestamp_ms;
+          list.push_back(m);
+        }
+      }
+    }
+    return list;
+  }
+
+  std::vector<maho::MahoMcpSession::NavigationEvent> GetNavigationEvents(
+      int tab_id, int64_t since_ms) override {
+    std::vector<maho::MahoMcpSession::NavigationEvent> list;
+    content::WebContents* wc = (tab_id == 0)
+                                   ? GetActiveWebContents()
+                                   : GetWebContentsForTabId(tab_id);
+    if (wc) {
+      maho::MahoMcpNavigationTracker::CreateForWebContents(wc);
+      maho::MahoMcpNavigationTracker* tracker =
+          maho::MahoMcpNavigationTracker::FromWebContents(wc);
+      if (tracker) {
+        for (const auto& ev : tracker->events()) {
+          if (ev.timestamp_ms > since_ms) {
+            maho::MahoMcpSession::NavigationEvent out;
+            out.url = ev.url;
+            out.title = ev.title;
+            out.status_code = ev.status_code;
+            out.timestamp_ms = ev.timestamp_ms;
+            list.push_back(std::move(out));
+          }
+        }
+      }
+    }
+    return list;
+  }
+
+  bool Scroll(int tab_id,
+              const std::string& direction,
+              int pixels,
+              std::optional<ui::AXNodeID> ax_id) override {
+    content::GetUIThreadTaskRunner({})->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            [](MahoMcpBrowserDelegateImpl* delegate, int id, std::string dir, int px, std::optional<ui::AXNodeID> ax) {
+              content::WebContents* wc = (id == 0) ? delegate->GetActiveWebContents() : delegate->GetWebContentsForTabId(id);
+              if (wc) {
+                maho::MahoMcpInputSynthesizer::Scroll(wc, dir, px, ax);
+              }
+            },
+            base::Unretained(this), tab_id, direction, pixels, ax_id));
+    return true;
+  }
+
+  bool Hover(int tab_id, ui::AXNodeID ax_id) override {
+    content::GetUIThreadTaskRunner({})->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            [](MahoMcpBrowserDelegateImpl* delegate, int id, ui::AXNodeID ax) {
+              content::WebContents* wc = (id == 0) ? delegate->GetActiveWebContents() : delegate->GetWebContentsForTabId(id);
+              if (wc) {
+                maho::MahoMcpInputSynthesizer::Hover(wc, ax);
+              }
+            },
+            base::Unretained(this), tab_id, ax_id));
+    return true;
+  }
+
+  bool KeyPress(int tab_id,
+                const std::string& key,
+                const std::vector<std::string>& modifiers) override {
+    content::GetUIThreadTaskRunner({})->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            [](MahoMcpBrowserDelegateImpl* delegate, int id, std::string k, std::vector<std::string> mods) {
+              content::WebContents* wc = (id == 0) ? delegate->GetActiveWebContents() : delegate->GetWebContentsForTabId(id);
+              if (wc) {
+                maho::MahoMcpInputSynthesizer::KeyPress(wc, k, mods);
+              }
+            },
+            base::Unretained(this), tab_id, key, modifiers));
+    return true;
+  }
+
+  bool ActivateTab(int tab_id) override {
+    content::GetUIThreadTaskRunner({})->PostTask(
+        FROM_HERE,
+        base::BindOnce([](int target_id) {
+          ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+              [target_id](BrowserWindowInterface* browser) {
+                if (browser && browser->GetTabStripModel()) {
+                  TabStripModel* model = browser->GetTabStripModel();
+                  for (int i = 0; i < model->count(); ++i) {
+                    content::WebContents* c = model->GetWebContentsAt(i);
+                    if (c) {
+                      sessions::SessionTabHelper* helper =
+                          sessions::SessionTabHelper::FromWebContents(c);
+                      if (helper && helper->session_id().id() == target_id) {
+                        model->ActivateTabAt(i, TabStripUserGestureDetails(
+                            TabStripUserGestureDetails::GestureType::kOther));
+                        return false;
+                      }
+                    }
+                  }
+                }
+                return true;
+              });
+        }, tab_id));
+    return true;
+  }
+
+  bool Navigate(int tab_id, const GURL& url) override {
+    content::GetUIThreadTaskRunner({})->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            [](MahoMcpBrowserDelegateImpl* delegate, int id, const GURL& nav_url) {
+              content::WebContents* wc = (id == 0) ? delegate->GetActiveWebContents() : delegate->GetWebContentsForTabId(id);
+              if (wc) {
+                content::NavigationController::LoadURLParams params(nav_url);
+                params.transition_type = ui::PageTransitionFromInt(
+                    ui::PAGE_TRANSITION_TYPED | ui::PAGE_TRANSITION_FROM_ADDRESS_BAR);
+                wc->GetController().LoadURLWithParams(params);
+              }
+            },
+            base::Unretained(this), tab_id, url));
+    return true;
+  }
+
+  bool SetViewportSize(int tab_id, int width, int height) override {
+    content::GetUIThreadTaskRunner({})->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            [](MahoMcpBrowserDelegateImpl* delegate, int id, int w, int h) {
+              content::WebContents* wc = (id == 0) ? delegate->GetActiveWebContents() : delegate->GetWebContentsForTabId(id);
+              if (wc && wc->GetRenderWidgetHostView()) {
+                wc->GetRenderWidgetHostView()->SetSize(gfx::Size(w, h));
+              }
+            },
+            base::Unretained(this), tab_id, width, height));
+    return true;
+  }
+};
+
+}  // namespace
+
 void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
                                                  bool is_initial_profile) {
   if (!is_initial_profile) {
     return;
   }
   if (profile && !profile->IsOffTheRecord()) {
+    // Register MCP browser delegate
+    static MahoMcpBrowserDelegateImpl mcp_delegate;
+    maho::MahoMcpSession::SetBrowserDelegate(&mcp_delegate);
+
     extension_state_bridge_ =
         std::make_unique<maho::MahoExtensionStateBridge>(profile);
 

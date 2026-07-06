@@ -8,6 +8,9 @@
 
 #include "base/json/json_reader.h"
 #include "base/values.h"
+#include "base/strings/stringprintf.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/test/task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace maho {
@@ -254,6 +257,241 @@ TEST_F(MahoMcpSessionAllowedDomainsTest, TabNewWithoutUrlUnaffected) {
       R"("params":{"name":"browser_tab_new",)"
       R"("arguments":{}}})" "\n");
   ASSERT_TRUE(resp.GetDict().FindDict("result"));
+}
+
+class MahoMcpSessionNewFeaturesTest : public MahoMcpSessionAllowedDomainsTest {
+ protected:
+  void SetUp() override {
+    MahoMcpSessionAllowedDomainsTest::SetUp();
+    InitializeSession();
+  }
+  base::test::TaskEnvironment task_environment_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+};
+
+TEST_F(MahoMcpSessionNewFeaturesTest, ConsoleMessages_RingBuffer_HoldsUpToLimit) {
+  for (int i = 0; i < 501; ++i) {
+    MahoMcpSession::ConsoleMessage msg;
+    msg.level = "log";
+    msg.message = "message " + std::to_string(i);
+    msg.source_url = "https://example.com";
+    msg.line = i;
+    msg.timestamp_ms = 1000 + i;
+    session_->AddConsoleMessageForTesting(0, std::move(msg));
+  }
+
+  base::Value resp = CallTool(
+      R"({"jsonrpc":"2.0","method":"tools/call","id":2,)"
+      R"("params":{"name":"browser_console_messages",)"
+      R"("arguments":{"tab_id":0,"limit":500}}})" "\n");
+      
+  const auto* result = resp.GetDict().FindDict("result");
+  ASSERT_TRUE(result);
+  const auto* messages = result->FindList("messages");
+  ASSERT_TRUE(messages);
+  EXPECT_EQ(messages->size(), 500u);
+  const auto* first_msg = (*messages)[0].GetIfDict();
+  ASSERT_TRUE(first_msg);
+  EXPECT_EQ(*first_msg->FindString("message"), "message 1");
+}
+
+TEST_F(MahoMcpSessionNewFeaturesTest, ConsoleMessages_LevelFilter_ReturnsMatchingOnly) {
+  {
+    MahoMcpSession::ConsoleMessage msg;
+    msg.level = "log";
+    msg.message = "log message";
+    session_->AddConsoleMessageForTesting(0, std::move(msg));
+  }
+  {
+    MahoMcpSession::ConsoleMessage msg;
+    msg.level = "error";
+    msg.message = "error message";
+    session_->AddConsoleMessageForTesting(0, std::move(msg));
+  }
+
+  base::Value resp = CallTool(
+      R"({"jsonrpc":"2.0","method":"tools/call","id":2,)"
+      R"("params":{"name":"browser_console_messages",)"
+      R"("arguments":{"tab_id":0,"level_filter":["error"]}}})" "\n");
+      
+  const auto* result = resp.GetDict().FindDict("result");
+  ASSERT_TRUE(result);
+  const auto* messages = result->FindList("messages");
+  ASSERT_TRUE(messages);
+  EXPECT_EQ(messages->size(), 1u);
+  const auto* first_msg = (*messages)[0].GetIfDict();
+  ASSERT_TRUE(first_msg);
+  EXPECT_EQ(*first_msg->FindString("message"), "error message");
+}
+
+TEST_F(MahoMcpSessionNewFeaturesTest, ConsoleMessages_SinceTimestamp_ReturnsAfterCutoff) {
+  for (int i = 0; i < 3; ++i) {
+    MahoMcpSession::ConsoleMessage msg;
+    msg.level = "log";
+    msg.message = "message " + std::to_string(i);
+    msg.timestamp_ms = 1000 + i;
+    session_->AddConsoleMessageForTesting(0, std::move(msg));
+  }
+
+  base::Value resp = CallTool(
+      R"({"jsonrpc":"2.0","method":"tools/call","id":2,)"
+      R"("params":{"name":"browser_console_messages",)"
+      R"("arguments":{"tab_id":0,"since_timestamp_ms":1001}}})" "\n");
+      
+  const auto* result = resp.GetDict().FindDict("result");
+  ASSERT_TRUE(result);
+  const auto* messages = result->FindList("messages");
+  ASSERT_TRUE(messages);
+  EXPECT_EQ(messages->size(), 1u);
+  const auto* first_msg = (*messages)[0].GetIfDict();
+  ASSERT_TRUE(first_msg);
+  EXPECT_EQ(*first_msg->FindString("message"), "message 2");
+}
+
+TEST_F(MahoMcpSessionNewFeaturesTest, ConsoleMessages_Firewall_ScrubsAuthorizationInMessage) {
+  MahoMcpSession::ConsoleMessage msg;
+  msg.level = "log";
+  msg.message = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMiIsInVzZXIiOiJhZG1pbiJ9.signature";
+  session_->AddConsoleMessageForTesting(0, std::move(msg));
+
+  base::Value resp = CallTool(
+      R"({"jsonrpc":"2.0","method":"tools/call","id":2,)"
+      R"("params":{"name":"browser_console_messages",)"
+      R"("arguments":{"tab_id":0}}})" "\n");
+      
+  const auto* result = resp.GetDict().FindDict("result");
+  ASSERT_TRUE(result);
+  const auto* messages = result->FindList("messages");
+  ASSERT_TRUE(messages);
+  ASSERT_EQ(messages->size(), 1u);
+  const auto* first_msg = (*messages)[0].GetIfDict();
+  ASSERT_TRUE(first_msg);
+  EXPECT_EQ(*first_msg->FindString("message"), "Bearer [REDACTED_JWT]");
+}
+
+TEST_F(MahoMcpSessionNewFeaturesTest, ConsoleMessages_Firewall_ScrubsAccessTokenInUrl) {
+  MahoMcpSession::ConsoleMessage msg;
+  msg.level = "log";
+  msg.message = "Loaded resource";
+  msg.source_url = "https://example.com/api?access_token=super-secret-token";
+  session_->AddConsoleMessageForTesting(0, std::move(msg));
+
+  base::Value resp = CallTool(
+      R"({"jsonrpc":"2.0","method":"tools/call","id":2,)"
+      R"("params":{"name":"browser_console_messages",)"
+      R"("arguments":{"tab_id":0}}})" "\n");
+      
+  const auto* result = resp.GetDict().FindDict("result");
+  ASSERT_TRUE(result);
+  const auto* messages = result->FindList("messages");
+  ASSERT_TRUE(messages);
+  ASSERT_EQ(messages->size(), 1u);
+  const auto* first_msg = (*messages)[0].GetIfDict();
+  ASSERT_TRUE(first_msg);
+  EXPECT_EQ(*first_msg->FindString("source_url"), "https://example.com/api?access_token=[REDACTED]");
+}
+
+TEST_F(MahoMcpSessionNewFeaturesTest, WaitForNavigation_ReturnsImmediately) {
+  base::Value resp = CallTool(
+      R"({"jsonrpc":"2.0","method":"tools/call","id":2,)"
+      R"("params":{"name":"browser_wait_for_navigation",)"
+      R"("arguments":{"tab_id":0}}})" "\n");
+      
+  const auto* result = resp.GetDict().FindDict("result");
+  ASSERT_TRUE(result);
+  EXPECT_EQ(*result->FindString("url"), "about:blank");
+}
+
+TEST_F(MahoMcpSessionNewFeaturesTest, WaitForNavigation_TimesOutForUnknownTab) {
+  base::Value resp = CallTool(
+      R"({"jsonrpc":"2.0","method":"tools/call","id":2,)"
+      R"("params":{"name":"browser_wait_for_navigation",)"
+      R"("arguments":{"tab_id":999}}})" "\n");
+      
+  const auto* result = resp.GetDict().FindDict("result");
+  ASSERT_TRUE(result);
+  EXPECT_TRUE(result->FindBool("timeout").value());
+}
+
+TEST_F(MahoMcpSessionNewFeaturesTest, TabSwitch_UpdatesActiveTab) {
+  (void)CallTool(
+      R"({"jsonrpc":"2.0","method":"tools/call","id":2,)"
+      R"("params":{"name":"browser_set_allowed_domains",)"
+      R"("arguments":{"domains":["example.com"]}}})" "\n");
+
+  base::Value new_tab_resp = CallTool(
+      R"({"jsonrpc":"2.0","method":"tools/call","id":3,)"
+      R"("params":{"name":"browser_tab_new",)"
+      R"("arguments":{"url":"https://example.com/"}}})" "\n");
+  const auto* new_tab_result = new_tab_resp.GetDict().FindDict("result");
+  ASSERT_TRUE(new_tab_result);
+  const auto* tab = new_tab_result->FindDict("tab");
+  ASSERT_TRUE(tab);
+  int new_tab_id = tab->FindInt("id").value();
+
+  base::Value switch_resp = CallTool(
+      R"({"jsonrpc":"2.0","method":"tools/call","id":4,)"
+      R"("params":{"name":"browser_tab_switch",)"
+      R"("arguments":{"tab_id":0}}})" "\n");
+  const auto* switch_result = switch_resp.GetDict().FindDict("result");
+  ASSERT_TRUE(switch_result);
+  EXPECT_TRUE(switch_result->FindBool("activated").value());
+  EXPECT_EQ(switch_result->FindInt("previous_tab_id").value(), new_tab_id);
+
+  base::Value get_resp = CallTool(
+      R"({"jsonrpc":"2.0","method":"tools/call","id":5,)"
+      R"("params":{"name":"browser_tab_get",)"
+      R"("arguments":{"tab_id":0}}})" "\n");
+  const auto* get_result = get_resp.GetDict().FindDict("result");
+  ASSERT_TRUE(get_result);
+  EXPECT_TRUE(get_result->FindBool("is_active").value());
+}
+
+TEST_F(MahoMcpSessionNewFeaturesTest, SetViewportSize_ValidAndOutOfBounds) {
+  base::Value resp1 = CallTool(
+      R"({"jsonrpc":"2.0","method":"tools/call","id":2,)"
+      R"("params":{"name":"browser_set_viewport_size",)"
+      R"("arguments":{"width_px":375,"height_px":667}}})" "\n");
+  const auto* r1 = resp1.GetDict().FindDict("result");
+  ASSERT_TRUE(r1);
+  EXPECT_EQ(r1->FindInt("width").value(), 375);
+  EXPECT_EQ(r1->FindInt("height").value(), 667);
+
+  base::Value resp2 = CallTool(
+      R"({"jsonrpc":"2.0","method":"tools/call","id":3,)"
+      R"("params":{"name":"browser_set_viewport_size",)"
+      R"("arguments":{"width_px":99,"height_px":667}}})" "\n");
+  const auto* error = resp2.GetDict().FindDict("error");
+  ASSERT_TRUE(error);
+  EXPECT_EQ(error->FindInt("code").value(), -32602);
+}
+
+TEST_F(MahoMcpSessionNewFeaturesTest, InteractiveTools_Scroll_Hover_KeyPress) {
+  base::Value scroll_resp = CallTool(
+      R"({"jsonrpc":"2.0","method":"tools/call","id":2,)"
+      R"("params":{"name":"browser_scroll",)"
+      R"("arguments":{"direction":"down","pixels":200}}})" "\n");
+  const auto* scroll_result = scroll_resp.GetDict().FindDict("result");
+  ASSERT_TRUE(scroll_result);
+  EXPECT_TRUE(scroll_result->FindBool("scrolled").value());
+  EXPECT_EQ(scroll_result->FindInt("new_scroll_y").value(), 200);
+
+  base::Value key_resp = CallTool(
+      R"({"jsonrpc":"2.0","method":"tools/call","id":3,)"
+      R"("params":{"name":"browser_key_press",)"
+      R"("arguments":{"key":"Enter","modifiers":["shift"]}}})" "\n");
+  const auto* key_result = key_resp.GetDict().FindDict("result");
+  ASSERT_TRUE(key_result);
+  EXPECT_TRUE(key_result->FindBool("key_pressed").value());
+  EXPECT_EQ(*key_result->FindString("key"), "Enter");
+
+  base::Value invalid_key_resp = CallTool(
+      R"({"jsonrpc":"2.0","method":"tools/call","id":4,)"
+      R"("params":{"name":"browser_key_press",)"
+      R"("arguments":{"key":"InvalidKeyName"}}})" "\n");
+  const auto* key_error = invalid_key_resp.GetDict().FindDict("error");
+  ASSERT_TRUE(key_error);
+  EXPECT_EQ(key_error->FindInt("code").value(), -32602);
 }
 
 }  // namespace

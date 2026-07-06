@@ -211,6 +211,39 @@ TEST(MahoMcpFirewallTest, RedactAll_NestedDictTraversal) {
   EXPECT_EQ(html->find("deep_secret"), std::string::npos);
 }
 
+TEST(MahoMcpFirewallTest, RedactString_JwtToken_Redacted) {
+  std::string raw = "Here is my token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c and it is secret.";
+  std::string out = MahoMcpFirewall::RedactString(raw);
+  EXPECT_EQ(out, "Here is my token: [REDACTED_JWT] and it is secret.");
+}
+
+TEST(MahoMcpFirewallTest, RedactString_BearerHeaderInLog_Redacted) {
+  std::string raw = "Authorization failed: Bearer xyz123.abc_def";
+  std::string out = MahoMcpFirewall::RedactString(raw);
+  EXPECT_EQ(out, "Authorization failed: Bearer [REDACTED]");
+}
+
+TEST(MahoMcpFirewallTest, RedactString_NoPatternMatch_PassThrough) {
+  std::string raw = "This is a normal log message without any credentials.";
+  std::string out = MahoMcpFirewall::RedactString(raw);
+  EXPECT_EQ(out, raw);
+}
+
+TEST(MahoMcpFirewallTest, RedactAll_CredentialShapedKeys) {
+  base::DictValue dict;
+  dict.Set("token", "secret_value");
+  dict.Set("password", "my_password");
+  dict.Set("message", "Bearer xyz123.abc");
+  
+  base::Value wrapped(std::move(dict));
+  MahoMcpFirewall::RedactAll(wrapped);
+  
+  const base::DictValue& redacted = wrapped.GetDict();
+  EXPECT_EQ(*redacted.FindString("token"), "[REDACTED]");
+  EXPECT_EQ(*redacted.FindString("password"), "[REDACTED]");
+  EXPECT_EQ(*redacted.FindString("message"), "Bearer [REDACTED]");
+}
+
 TEST(MahoMcpFirewallTest, Wrap_AppliesAllVectors) {
   base::DictValue payload;
   payload.Set("url", "https://example.com/cb?access_token=leaked");

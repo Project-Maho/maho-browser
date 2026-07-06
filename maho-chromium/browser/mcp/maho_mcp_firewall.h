@@ -98,6 +98,9 @@ class MahoMcpFirewall {
   // from |url|. Returns the sanitized URL.
   static std::string RedactUrl(std::string_view url);
 
+  // Redact JWT patterns and Bearer tokens in raw string.
+  static std::string RedactString(std::string_view raw);
+
   // Convenience: apply all four vectors to a JSON payload representing a
   // typed tool result. Recursively traverses dicts/lists.
   static void RedactAll(base::Value& value);

@@ -18,18 +18,28 @@
 #include <sys/types.h>
 #endif
 
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
+#include "base/time/time.h"
 #include "maho/browser/mcp/maho_mcp_json_rpc.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
 #include "maho/browser/mcp/maho_mcp_network_observer.h"
 #include "ui/accessibility/ax_node_id_forward.h"
+
+class GURL;
+
+namespace content {
+class WebContents;
+}
 
 namespace maho {
 
 #if BUILDFLAG(IS_WIN)
 class MahoMcpSessionToken;
 #endif
+
+class MahoMcpBrowserDelegate;
 
 // Per-connection MCP session state machine.
 //
@@ -46,6 +56,7 @@ class MahoMcpSessionToken;
 //     DPAPI session token validation during initialize handshake.
 class MahoMcpSession {
  public:
+  static void SetBrowserDelegate(MahoMcpBrowserDelegate* delegate);
   enum class State {
     kAwaitingInitialize,
     kActive,
@@ -74,6 +85,44 @@ class MahoMcpSession {
   std::vector<std::string> ProcessData(const std::string& data);
 
   State state() const { return state_; }
+
+  struct ConsoleMessage {
+    ConsoleMessage();
+    ~ConsoleMessage();
+    ConsoleMessage(const ConsoleMessage&);
+    ConsoleMessage(ConsoleMessage&&) noexcept;
+    ConsoleMessage& operator=(const ConsoleMessage&);
+    ConsoleMessage& operator=(ConsoleMessage&&) noexcept;
+
+    std::string level;
+    std::string message;
+    std::string source_url;
+    int line = 0;
+    int64_t timestamp_ms = 0;
+  };
+
+  struct TabInfo {
+    TabInfo();
+    ~TabInfo();
+    TabInfo(const TabInfo&);
+    TabInfo(TabInfo&&) noexcept;
+    TabInfo& operator=(const TabInfo&);
+    TabInfo& operator=(TabInfo&&) noexcept;
+
+    int id = 0;
+    std::string title;
+    std::string url;
+    bool is_active = false;
+  };
+
+  struct NavigationEvent {
+    std::string url;
+    std::string title;
+    int status_code = 200;
+    int64_t timestamp_ms = 0;
+  };
+
+  void AddConsoleMessageForTesting(int tab_id, ConsoleMessage message);
 
   // Ref table for accessibility snapshot @ref labels.
   // Populated by browser_accessibility_snapshot, consumed by
@@ -120,7 +169,42 @@ class MahoMcpSession {
   // Per-session network capture observer (Wave 4.4).
   std::unique_ptr<MahoMcpNetworkObserver> network_observer_;
 
+  // Map of tab_id (int) -> ring buffer of console messages
+  std::unordered_map<int, std::vector<ConsoleMessage>> console_buffers_;
+
+  // Tabs storage
+  std::vector<TabInfo> tabs_;
+  int active_tab_id_ = 0;
+
+  // Viewport dimensions
+  int viewport_width_ = 800;
+  int viewport_height_ = 600;
+
+  // Map of tab_id -> scroll_y
+  std::unordered_map<int, int> scroll_y_positions_;
+
   SEQUENCE_CHECKER(sequence_checker_);
+};
+
+class MahoMcpBrowserDelegate {
+ public:
+  virtual ~MahoMcpBrowserDelegate() = default;
+  virtual std::vector<MahoMcpSession::TabInfo> GetTabList() = 0;
+  virtual std::vector<MahoMcpSession::ConsoleMessage> GetConsoleMessages(int tab_id) = 0;
+  virtual std::vector<MahoMcpSession::NavigationEvent> GetNavigationEvents(
+      int tab_id, int64_t since_ms) = 0;
+  
+  virtual bool Scroll(int tab_id,
+                       const std::string& direction,
+                       int pixels,
+                       std::optional<ui::AXNodeID> ax_id) = 0;
+  virtual bool Hover(int tab_id, ui::AXNodeID ax_id) = 0;
+  virtual bool KeyPress(int tab_id,
+                        const std::string& key,
+                        const std::vector<std::string>& modifiers) = 0;
+  virtual bool ActivateTab(int tab_id) = 0;
+  virtual bool Navigate(int tab_id, const GURL& url) = 0;
+  virtual bool SetViewportSize(int tab_id, int width, int height) = 0;
 };
 
 }  // namespace maho

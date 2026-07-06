@@ -504,6 +504,7 @@ source_set("maho_browser_main_extra_parts") {
     ":maho_tab_id_helper",
     ":maho_tab_registry",
     ":maho_theme_support",
+    ":maho_mcp_integration",
     "//base",
     "//chrome/browser:main_extra_parts",
     "//chrome/browser/profiles:profile",
@@ -586,6 +587,25 @@ source_set("maho_tab_registry") {
     "//maho/third_party/maho:maho_bridge",
     "//maho/third_party/maho:maho_ffi_headers",
     "//url",
+  ]
+}
+
+source_set("maho_mcp_integration") {
+  sources = [
+    "mcp/maho_mcp_console_capture.cc",
+    "mcp/maho_mcp_console_capture.h",
+    "mcp/maho_mcp_input_synthesizer.cc",
+    "mcp/maho_mcp_input_synthesizer.h",
+    "mcp/maho_mcp_navigation_tracker.cc",
+    "mcp/maho_mcp_navigation_tracker.h",
+  ]
+  deps = [
+    "//maho/browser/mcp:maho_mcp",
+    "//base",
+    "//content/public/browser",
+    "//third_party/blink/public/common",
+    "//ui/accessibility",
+    "//ui/events",
   ]
 }
 

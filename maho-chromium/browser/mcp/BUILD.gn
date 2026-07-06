@@ -184,3 +184,32 @@ test("maho_mcp_network_observer_test") {
     "//url",
   ]
 }
+
+test("maho_mcp_console_capture_test") {
+  sources = [
+    "maho_mcp_console_capture_unittest.cc",
+    "maho_mcp_firewall_test_main.cc",
+  ]
+  deps = [
+    "//maho/browser:maho_mcp_integration",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+    "//third_party/blink/public/common",
+  ]
+}
+
+test("maho_mcp_input_synthesizer_test") {
+  sources = [
+    "maho_mcp_firewall_test_main.cc",
+    "maho_mcp_input_synthesizer_unittest.cc",
+  ]
+  deps = [
+    "//maho/browser:maho_mcp_integration",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+    "//third_party/blink/public/common",
+    "//ui/events",
+  ]
+}

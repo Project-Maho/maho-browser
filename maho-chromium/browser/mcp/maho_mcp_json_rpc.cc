@@ -38,7 +38,9 @@ base::Value CloneId(const std::optional<base::Value>& id) {
 
 }  // namespace
 
-MahoMcpJsonRpc::MahoMcpJsonRpc() = default;
+MahoMcpJsonRpc::MahoMcpJsonRpc() {
+  DETACH_FROM_SEQUENCE(sequence_checker_);
+}
 MahoMcpJsonRpc::~MahoMcpJsonRpc() = default;
 
 void MahoMcpJsonRpc::AppendData(const std::string& data) {

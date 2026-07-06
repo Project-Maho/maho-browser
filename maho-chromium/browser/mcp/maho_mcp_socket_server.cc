@@ -18,6 +18,8 @@
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/posix/eintr_wrapper.h"
+#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
 #include "maho/browser/mcp/maho_mcp_session.h"
 #include "net/base/io_buffer.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
@@ -200,7 +202,23 @@ void MahoMcpSocketServer::OnReadComplete(size_t connection_index, int result) {
   std::string data(conn.read_buf->data(), result);
   conn.read_buf.reset();
 
-  auto responses = conn.session->ProcessData(data);
+  MahoMcpSession* session_ptr = conn.session.get();
+  content::GetUIThreadTaskRunner({})->PostTaskAndReplyWithResult(
+      FROM_HERE,
+      base::BindOnce(&MahoMcpSession::ProcessData,
+                     base::Unretained(session_ptr), data),
+      base::BindOnce(&MahoMcpSocketServer::OnResponsesReady,
+                     weak_factory_.GetWeakPtr(), connection_index));
+}
+
+void MahoMcpSocketServer::OnResponsesReady(
+    size_t connection_index,
+    std::vector<std::string> responses) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (connection_index >= sessions_.size()) {
+    return;
+  }
+  auto& conn = sessions_[connection_index];
   for (const auto& response : responses) {
     auto write_buf =
         base::MakeRefCounted<net::StringIOBuffer>(response);

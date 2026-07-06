@@ -76,6 +76,8 @@ class MahoMcpSocketServer {
   void DoAccept();
   void OnAcceptComplete(int result);
   void OnReadComplete(size_t connection_index, int result);
+  void OnResponsesReady(size_t connection_index,
+                        std::vector<std::string> responses);
   void ReadFromConnection(size_t connection_index);
   void RemoveConnection(size_t connection_index);
   void CleanupStaleSocket();
