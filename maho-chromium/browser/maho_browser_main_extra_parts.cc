@@ -233,6 +233,11 @@ void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
         SessionRestore::RegisterOnSessionRestoredCallback(
             base::BindRepeating(&OnSessionRestoreFinished));
 
+    // MCP server uses net::UnixDomainServerSocket (POSIX) or Windows overlapped
+    // I/O via base::win::ObjectWatcher; both require an IO message pump, so
+    // Start() must run on the IO thread. Construct on UI, bounce Start() to
+    // IO. Destruction is also posted to IO in PostMainMessageLoopRun so every
+    // access to the SEQUENCE_CHECKER-guarded state stays on that sequence.
 #if BUILDFLAG(IS_WIN)
     mcp_session_token_ = maho::MahoMcpSessionToken::Create();
     if (mcp_session_token_) {
@@ -244,21 +249,41 @@ void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
     }
     mcp_pipe_server_ =
         std::make_unique<maho::MahoMcpPipeServer>(mcp_session_token_.get());
-    mcp_pipe_server_->Start();
+    content::GetIOThreadTaskRunner({})->PostTask(
+        FROM_HERE,
+        base::BindOnce(base::IgnoreResult(&maho::MahoMcpPipeServer::Start),
+                       base::Unretained(mcp_pipe_server_.get())));
 #else
     mcp_socket_server_ =
         std::make_unique<maho::MahoMcpSocketServer>(storage_path_);
-    mcp_socket_server_->Start();
+    content::GetIOThreadTaskRunner({})->PostTask(
+        FROM_HERE,
+        base::BindOnce(base::IgnoreResult(&maho::MahoMcpSocketServer::Start),
+                       base::Unretained(mcp_socket_server_.get())));
 #endif
   }
 }
 
 void MahoBrowserMainExtraParts::PostMainMessageLoopRun() {
 #if BUILDFLAG(IS_WIN)
-  mcp_pipe_server_.reset();
-  mcp_session_token_.reset();
+  if (mcp_pipe_server_) {
+    content::GetIOThreadTaskRunner({})->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            [](std::unique_ptr<maho::MahoMcpPipeServer> server,
+               std::unique_ptr<maho::MahoMcpSessionToken> token) {
+              server.reset();
+            },
+            std::move(mcp_pipe_server_),
+            std::move(mcp_session_token_)));
+  } else {
+    mcp_session_token_.reset();
+  }
 #else
-  mcp_socket_server_.reset();
+  if (mcp_socket_server_) {
+    content::GetIOThreadTaskRunner({})->DeleteSoon(
+        FROM_HERE, std::move(mcp_socket_server_));
+  }
 #endif
 
   ProfileManager* manager = g_browser_process->profile_manager();

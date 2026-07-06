@@ -57,7 +57,10 @@ MahoMcpSocketServer::ActiveConnection::operator=(ActiveConnection&&) = default;
 
 MahoMcpSocketServer::MahoMcpSocketServer(const base::FilePath& user_data_dir)
     : user_data_dir_(user_data_dir),
-      socket_path_(ComputeSocketPath(user_data_dir)) {}
+      socket_path_(ComputeSocketPath(user_data_dir)),
+      lease_registry_(std::make_unique<MahoMcpLeaseRegistry>()) {
+  DETACH_FROM_SEQUENCE(sequence_checker_);
+}
 
 MahoMcpSocketServer::~MahoMcpSocketServer() {
   Stop();
@@ -141,7 +144,8 @@ void MahoMcpSocketServer::OnAcceptComplete(int result) {
   // Create a new session for this connection.
   // Note: peer UID was already checked by AuthenticateClient callback,
   // but we pass it to the session for double-checking during handshake.
-  auto session = std::make_unique<MahoMcpSession>(getuid());
+  auto session = std::make_unique<MahoMcpSession>(getuid(),
+                                                  lease_registry_.get());
 
   ActiveConnection conn;
   conn.socket = std::move(accepted_socket_);
@@ -247,14 +251,13 @@ void MahoMcpSocketServer::RemoveConnection(size_t connection_index) {
 }
 
 void MahoMcpSocketServer::CleanupStaleSocket() {
-  if (!base::PathExists(socket_path_)) {
+  struct stat statbuf;
+  if (::stat(socket_path_.value().c_str(), &statbuf) != 0) {
     return;
   }
 
-  // Try connecting to see if someone else holds it.
   int sock_fd = socket(AF_UNIX, SOCK_STREAM, 0);
   if (sock_fd < 0) {
-    // Cannot create socket — just try to unlink.
     unlink(socket_path_.value().c_str());
     return;
   }

@@ -94,7 +94,9 @@ std::wstring MahoMcpPipeServer::GetCurrentUserSidString() {
 }
 
 MahoMcpPipeServer::MahoMcpPipeServer(MahoMcpSessionToken* session_token)
-    : pipe_name_(ComputePipeName()), session_token_(session_token) {}
+    : pipe_name_(ComputePipeName()), session_token_(session_token) {
+  DETACH_FROM_SEQUENCE(sequence_checker_);
+}
 
 MahoMcpPipeServer::~MahoMcpPipeServer() {
   Stop();
