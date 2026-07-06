@@ -3,11 +3,18 @@
 # found in the LICENSE file.
 
 import("//build/config/features.gni")
+import("//testing/test.gni")
 
 source_set("maho_mcp") {
   sources = [
+    "maho_mcp_accessibility_handler.cc",
+    "maho_mcp_accessibility_handler.h",
+    "maho_mcp_firewall.cc",
+    "maho_mcp_firewall.h",
     "maho_mcp_json_rpc.cc",
     "maho_mcp_json_rpc.h",
+    "maho_mcp_lease_registry.cc",
+    "maho_mcp_lease_registry.h",
     "maho_mcp_session.cc",
     "maho_mcp_session.h",
   ]
@@ -32,6 +39,9 @@ source_set("maho_mcp") {
     "//base",
     "//crypto",
     "//net",
+    "//third_party/re2",
+    "//ui/accessibility",
+    "//url",
   ]
 
   if (is_win) {
@@ -48,7 +58,10 @@ source_set("unittests") {
   testonly = true
 
   sources = [
+    "maho_mcp_accessibility_handler_unittest.cc",
+    "maho_mcp_firewall_unittest.cc",
     "maho_mcp_json_rpc_unittest.cc",
+    "maho_mcp_lease_registry_unittest.cc",
     "maho_mcp_session_unittest.cc",
   ]
 
@@ -71,5 +84,59 @@ source_set("unittests") {
     "//net",
     "//net:test_support",
     "//testing/gtest",
+    "//ui/accessibility",
+  ]
+}
+
+test("maho_mcp_firewall_test") {
+  sources = [
+    "maho_mcp_firewall_test_main.cc",
+    "maho_mcp_firewall_unittest.cc",
+  ]
+  deps = [
+    ":maho_mcp",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
+test("maho_mcp_session_test") {
+  sources = [
+    "maho_mcp_firewall_test_main.cc",
+    "maho_mcp_session_unittest.cc",
+  ]
+  deps = [
+    ":maho_mcp",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
+test("maho_mcp_lease_registry_test") {
+  sources = [
+    "maho_mcp_firewall_test_main.cc",
+    "maho_mcp_lease_registry_unittest.cc",
+  ]
+  deps = [
+    ":maho_mcp",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
+test("maho_mcp_accessibility_handler_test") {
+  sources = [
+    "maho_mcp_accessibility_handler_unittest.cc",
+    "maho_mcp_firewall_test_main.cc",
+  ]
+  deps = [
+    ":maho_mcp",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+    "//ui/accessibility",
   ]
 }

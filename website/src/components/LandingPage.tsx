@@ -4,11 +4,12 @@ import { HeroSection, type HeroConfig } from "./landing/HeroSection";
 import { PricingSection, type PricingConfig, type PricingTier } from "./landing/PricingSection";
 import { ProductGallerySection } from "./landing/ProductGallerySection";
 import { WhySection, type WhyConfig } from "./landing/WhySection";
+import type { OptimizedImageData } from "../types/images";
 
 type Product = "browser" | "mail";
 
 type ProductContent = {
-  hero: HeroConfig;
+  hero: Omit<HeroConfig, "heroImage">;
   why: WhyConfig;
   featuresBadge: string;
   featuresHeadline: string;
@@ -17,12 +18,19 @@ type ProductContent = {
   finalCta: FinalCtaConfig;
 };
 
+export type GalleryItemMeta = {
+  title: string;
+  eyebrow: string;
+  alt: string;
+  className?: string;
+};
+
 const browserDownloadUrl = "/download";
 const mailDownloadUrl = "/download?product=mail";
 
 const content: Record<Product, ProductContent> = {
   browser: {
-    hero: { headline: "Your AI.\nYour data.\nYour browser.", subheadline: "Spaces, AI assistance, and end-to-end sync — without metered credits or surveillance. macOS today, more soon.", primaryCta: { label: "Download for macOS", href: browserDownloadUrl }, heroImage: "/assets/images/sidebar-target-prototype-verified.png", microCta: "Free, macOS 12+. iPhone and Android in development." },
+    hero: { headline: "Your AI.\nYour data.\nYour browser.", subheadline: "Spaces, AI assistance, and end-to-end sync — without metered credits or surveillance. macOS today, more soon.", primaryCta: { label: "Download for macOS", href: browserDownloadUrl }, microCta: "Free, macOS 12+. iPhone and Android in development." },
     why: { badge: "Why Maho", headline: "Browsers weren't built\nfor how you work.", body: "Dozens of tabs. No context. Every browser treats tabs as a flat list. Maho organizes your web into Spaces — persistent workspaces that keep your projects, research, and routines separate and focused." },
     featuresBadge: "Features",
     featuresHeadline: "Everything you need.",
@@ -73,13 +81,39 @@ const content: Record<Product, ProductContent> = {
   },
 };
 
-export function LandingPage({ product = "browser" }: { product?: Product }) {
+/** Static gallery metadata (titles/alts). Images are injected by the parent .astro page. */
+export const browserGalleryMeta: GalleryItemMeta[] = [
+  { title: "Spaces sidebar", eyebrow: "Organize", alt: "Maho Browser showing a multi-surface spaces and favorites sidebar prototype across mobile and desktop layouts.", className: "md:col-span-2 lg:col-span-2" },
+  { title: "Command bar", eyebrow: "Navigate", alt: "Maho Browser command bar showing URL input with contextual suggestions and tab actions." },
+  { title: "AI actions", eyebrow: "Assist", alt: "Maho Browser command bar showing AI-oriented contextual suggestions and deep-link actions." },
+  { title: "Built-in passwords", eyebrow: "Protect", alt: "Maho Browser settings showing the built-in password manager and provider controls.", className: "md:col-span-2 lg:col-span-2" },
+];
+
+export type LandingPageProps = {
+  product?: Product;
+  heroImage?: OptimizedImageData;
+  galleryImages?: OptimizedImageData[];
+};
+
+export function LandingPage({ product = "browser", heroImage, galleryImages }: LandingPageProps) {
   const page = content[product];
+
+  const heroConfig: HeroConfig = {
+    ...page.hero,
+    heroImage,
+  };
+
+  const galleryItems = product === "browser" && galleryImages
+    ? browserGalleryMeta.map((meta, i) => ({
+        ...meta,
+        image: galleryImages[i],
+      }))
+    : undefined;
 
   return (
     <>
-      <HeroSection config={page.hero} />
-      {product === "browser" && <ProductGallerySection />}
+      <HeroSection config={heroConfig} />
+      {product === "browser" && galleryItems && <ProductGallerySection items={galleryItems} />}
       <WhySection config={page.why} />
       <FeaturesSection
         badge={page.featuresBadge}

@@ -1,53 +1,19 @@
 import { ScrollReveal } from "../motion/ScrollReveal";
+import type { OptimizedImageData } from "../../types/images";
 
 type GalleryItem = {
   title: string;
   eyebrow: string;
   alt: string;
-  src: string;
-  width: number;
-  height: number;
+  image: OptimizedImageData;
   className?: string;
 };
 
-const galleryItems: GalleryItem[] = [
-  {
-    title: "Spaces sidebar",
-    eyebrow: "Organize",
-    alt: "Maho Browser showing a multi-surface spaces and favorites sidebar prototype across mobile and desktop layouts.",
-    src: "/assets/images/sidebar-target-prototype-final-verified.png",
-    width: 1385,
-    height: 1890,
-    className: "md:col-span-2 lg:col-span-2",
-  },
-  {
-    title: "Command bar",
-    eyebrow: "Navigate",
-    alt: "Maho Browser command bar showing URL input with contextual suggestions and tab actions.",
-    src: "/assets/images/command-bar-mockup-final-qa.png",
-    width: 1200,
-    height: 1077,
-  },
-  {
-    title: "AI actions",
-    eyebrow: "Assist",
-    alt: "Maho Browser command bar showing AI-oriented contextual suggestions and deep-link actions.",
-    src: "/assets/images/pixel-perfect-mockup-qa.png",
-    width: 1200,
-    height: 1077,
-  },
-  {
-    title: "Built-in passwords",
-    eyebrow: "Protect",
-    alt: "Maho Browser settings showing the built-in password manager and provider controls.",
-    src: "/assets/images/maho-passwords-built-in.png",
-    width: 1440,
-    height: 1000,
-    className: "md:col-span-2 lg:col-span-2",
-  },
-];
+type ProductGallerySectionProps = {
+  items: GalleryItem[];
+};
 
-export function ProductGallerySection() {
+export function ProductGallerySection({ items }: ProductGallerySectionProps) {
   return (
     <section className="section-rhythm pad-x-ladder border-t border-border bg-background text-foreground">
       <ScrollReveal variant="slide">
@@ -67,9 +33,9 @@ export function ProductGallerySection() {
           </div>
 
           <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
-            {galleryItems.map((item, index) => (
+            {items.map((item, index) => (
               <ScrollReveal
-                key={item.src}
+                key={item.image.src}
                 variant="fade"
                 delayMs={index * 80}
                 className={item.className}
@@ -89,10 +55,12 @@ export function ProductGallerySection() {
 
                   <div className="rounded-squircle-md squircle-enhanced overflow-hidden border border-border/70 bg-background">
                     <img
-                      src={item.src}
+                      src={item.image.src}
+                      srcSet={item.image.srcSet || undefined}
+                      sizes="(min-width: 1024px) 33vw, (min-width: 768px) 50vw, 100vw"
                       alt={item.alt}
-                      width={item.width}
-                      height={item.height}
+                      width={item.image.width}
+                      height={item.image.height}
                       loading="lazy"
                       decoding="async"
                       className="mask-fade-b block h-auto w-full"

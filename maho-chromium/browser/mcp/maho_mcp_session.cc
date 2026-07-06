@@ -20,6 +20,7 @@
 #include "base/strings/string_util.h"
 #include "base/uuid.h"
 #include "base/values.h"
+#include "maho/browser/mcp/maho_mcp_accessibility_handler.h"
 #include "maho/browser/mcp/maho_mcp_firewall.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
 #include "url/gurl.h"
@@ -468,6 +469,40 @@ void MahoMcpSession::HandleActiveMethod(const McpJsonRpcMessage& msg,
       tools.Append(base::Value(std::move(t)));
     }
 
+    // Accessibility tools (Wave 4.1)
+    {
+      base::DictValue t;
+      t.Set("name", "browser_accessibility_snapshot");
+      t.Set("description",
+            "Get accessibility tree snapshot with @ref labels on "
+            "interactive elements. Args: tab_id (int, optional).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "browser_click");
+      t.Set("description",
+            "Click an element by its @ref label from the accessibility "
+            "snapshot. Args: ref (int), tab_id (int, optional).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "browser_type");
+      t.Set("description",
+            "Type text into an element by its @ref label. "
+            "Args: ref (int), text (string), tab_id (int, optional).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "browser_select");
+      t.Set("description",
+            "Select a value on a <select> element by its @ref label. "
+            "Args: ref (int), value (string), tab_id (int, optional).");
+      tools.Append(base::Value(std::move(t)));
+    }
+
     result.Set("tools", std::move(tools));
 
     if (msg.id.has_value()) {
@@ -856,6 +891,100 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     }
     base::DictValue result;
     result.Set("found", false);
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
+    responses.push_back(std::move(resp));
+    return;
+  }
+
+  if (*tool_name == "browser_accessibility_snapshot") {
+    // Stub: In the real browser, we'd get the AXTree from WebContents.
+    // For the session-level handler, we produce an empty snapshot and
+    // clear the ref table (real tree walk deferred to browser integration).
+    ref_to_ax_id_.clear();
+    base::DictValue result;
+    result.Set("role", "WebArea");
+    result.Set("children", base::ListValue());
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
+    responses.push_back(std::move(resp));
+    return;
+  }
+
+  if (*tool_name == "browser_click") {
+    if (!arguments || !arguments->FindInt("ref")) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: ref required");
+      responses.push_back(std::move(err));
+      return;
+    }
+    int ref = arguments->FindInt("ref").value();
+    auto it = ref_to_ax_id_.find(ref);
+    if (it == ref_to_ax_id_.end()) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32000, "Unknown ref: call browser_accessibility_snapshot first");
+      responses.push_back(std::move(err));
+      return;
+    }
+    base::DictValue result;
+    result.Set("clicked", true);
+    result.Set("ref", ref);
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
+    responses.push_back(std::move(resp));
+    return;
+  }
+
+  if (*tool_name == "browser_type") {
+    if (!arguments || !arguments->FindInt("ref") ||
+        !arguments->FindString("text")) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: ref and text required");
+      responses.push_back(std::move(err));
+      return;
+    }
+    int ref = arguments->FindInt("ref").value();
+    auto it = ref_to_ax_id_.find(ref);
+    if (it == ref_to_ax_id_.end()) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32000, "Unknown ref: call browser_accessibility_snapshot first");
+      responses.push_back(std::move(err));
+      return;
+    }
+    base::DictValue result;
+    result.Set("typed", true);
+    result.Set("ref", ref);
+    result.Set("text", *arguments->FindString("text"));
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
+    responses.push_back(std::move(resp));
+    return;
+  }
+
+  if (*tool_name == "browser_select") {
+    if (!arguments || !arguments->FindInt("ref") ||
+        !arguments->FindString("value")) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32602, "Invalid params: ref and value required");
+      responses.push_back(std::move(err));
+      return;
+    }
+    int ref = arguments->FindInt("ref").value();
+    auto it = ref_to_ax_id_.find(ref);
+    if (it == ref_to_ax_id_.end()) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32000, "Unknown ref: call browser_accessibility_snapshot first");
+      responses.push_back(std::move(err));
+      return;
+    }
+    base::DictValue result;
+    result.Set("selected", true);
+    result.Set("ref", ref);
+    result.Set("value", *arguments->FindString("value"));
     auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
         framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());

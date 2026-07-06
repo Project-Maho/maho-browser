@@ -1,11 +1,12 @@
 import { ScrollReveal } from "../motion/ScrollReveal";
 import { CtaButton } from "../marketing/CtaButton";
+import type { OptimizedImageData } from "../../types/images";
 
 export type HeroConfig = {
   headline: string;
   subheadline: string;
   primaryCta: { label: string; href: string };
-  heroImage?: string;
+  heroImage?: OptimizedImageData;
   microCta?: string;
 };
 
@@ -43,15 +44,17 @@ export function HeroSection({ config }: HeroSectionProps) {
               <p className="mt-4 text-sm leading-relaxed text-muted-foreground">{config.microCta}</p>
             )}
           </div>
-          {hasHeroImage && (
+          {hasHeroImage && config.heroImage && (
             <ScrollReveal variant="fade" className="hidden lg:block">
               <div className="motion-safe-scale relative overflow-hidden rounded-lg border border-border bg-card shadow-2xl">
                 <div className="mask-fade-b">
                   <img
-                    src={config.heroImage}
+                    src={config.heroImage.src}
+                    srcSet={config.heroImage.srcSet || undefined}
+                    sizes="(min-width: 1024px) 50vw, 100vw"
                     alt="Maho Browser interface showing a sidebar with multiple Spaces for organizing projects, AI conversation thread, and split-view tabs"
-                    width={1200}
-                    height={800}
+                    width={config.heroImage.width}
+                    height={config.heroImage.height}
                     loading="eager"
                     fetchPriority="high"
                     decoding="async"

@@ -6,7 +6,10 @@
 #define MAHO_BROWSER_MCP_MAHO_MCP_SESSION_H_
 
 #include <memory>
+#include <set>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "build/build_config.h"
@@ -18,6 +21,8 @@
 #include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
 #include "maho/browser/mcp/maho_mcp_json_rpc.h"
+#include "maho/browser/mcp/maho_mcp_lease_registry.h"
+#include "ui/accessibility/ax_node_id_forward.h"
 
 namespace maho {
 
@@ -48,14 +53,15 @@ class MahoMcpSession {
 
 #if BUILDFLAG(IS_WIN)
   // On Windows, constructs a session that validates the client's auth token
-  // against |session_token| during the initialize handshake. The pointer must
-  // outlive this session. Pass nullptr to skip token validation (testing only).
-  explicit MahoMcpSession(MahoMcpSessionToken* session_token);
+  // against |session_token| during the initialize handshake. |lease_registry|
+  // may be nullptr for testing; otherwise it must outlive this session.
+  explicit MahoMcpSession(MahoMcpSessionToken* session_token,
+                          MahoMcpLeaseRegistry* lease_registry = nullptr);
 #else
-  // |peer_uid| is the UID of the connected client (from SO_PEERCRED /
-  // LOCAL_PEERCRED). The session will reject the handshake if the peer UID
-  // does not match the browser's UID.
-  explicit MahoMcpSession(uid_t peer_uid);
+  // |peer_uid| is the UID of the connected client. |lease_registry| may be
+  // nullptr for testing; otherwise it must outlive this session.
+  explicit MahoMcpSession(uid_t peer_uid,
+                          MahoMcpLeaseRegistry* lease_registry = nullptr);
 #endif
   ~MahoMcpSession();
 
@@ -68,6 +74,13 @@ class MahoMcpSession {
 
   State state() const { return state_; }
 
+  // Ref table for accessibility snapshot @ref labels.
+  // Populated by browser_accessibility_snapshot, consumed by
+  // browser_click/browser_type/browser_select.
+  using RefTable = std::unordered_map<int, ui::AXNodeID>;
+  RefTable& ref_table() { return ref_to_ax_id_; }
+  const RefTable& ref_table() const { return ref_to_ax_id_; }
+
  private:
   void HandleInitialize(const McpJsonRpcMessage& msg,
                         std::vector<std::string>& responses);
@@ -76,13 +89,32 @@ class MahoMcpSession {
   void HandleToolCall(const McpJsonRpcMessage& msg,
                       std::vector<std::string>& responses);
 
+  bool IsHostAllowed(std::string_view host) const;
+
+  bool HandleAcquireLease(const McpJsonRpcMessage& msg,
+                          const base::DictValue* arguments,
+                          std::vector<std::string>& responses);
+  bool HandleHeartbeatLease(const McpJsonRpcMessage& msg,
+                            const base::DictValue* arguments,
+                            std::vector<std::string>& responses);
+  bool HandleReleaseLease(const McpJsonRpcMessage& msg,
+                          const base::DictValue* arguments,
+                          std::vector<std::string>& responses);
+
   State state_ = State::kAwaitingInitialize;
 #if BUILDFLAG(IS_WIN)
   raw_ptr<MahoMcpSessionToken> session_token_;
 #else
   uid_t peer_uid_;
 #endif
+  raw_ptr<MahoMcpLeaseRegistry> lease_registry_;
+  std::string session_id_;
   MahoMcpJsonRpc framer_;
+
+  std::set<std::string> allowed_domains_;
+
+  // Per-session ref table for accessibility interactions.
+  RefTable ref_to_ax_id_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 };

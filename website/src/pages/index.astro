@@ -9,8 +9,65 @@ import SocialProofSection from '../components/landing/SocialProofSection.astro';
 import Footer from '../components/Footer.astro';
 import JSONLD from '../components/JSONLD.astro';
 import { getSiteUrl } from '../lib/site';
+import { getImage } from 'astro:assets';
+
+import heroImageSrc from '../assets/images/sidebar-target-prototype-verified.png';
+import gallery1Src from '../assets/images/sidebar-target-prototype-final-verified.png';
+import gallery2Src from '../assets/images/command-bar-mockup-final-qa.png';
+import gallery3Src from '../assets/images/pixel-perfect-mockup-qa.png';
+import gallery4Src from '../assets/images/maho-passwords-built-in.png';
 
 const { siteUrl, absoluteUrl } = getSiteUrl(Astro);
+
+// Generate optimized WebP versions with responsive srcsets
+const heroOptimized = await getImage({
+  src: heroImageSrc,
+  format: 'webp',
+  widths: [640, 960, 1200, 1600],
+  sizes: '(min-width: 1024px) 50vw, 100vw',
+});
+
+const gallery1Optimized = await getImage({
+  src: gallery1Src,
+  format: 'webp',
+  widths: [640, 960, 1385],
+  sizes: '(min-width: 1024px) 33vw, (min-width: 768px) 50vw, 100vw',
+});
+
+const gallery2Optimized = await getImage({
+  src: gallery2Src,
+  format: 'webp',
+  widths: [640, 960, 1200],
+  sizes: '(min-width: 1024px) 33vw, (min-width: 768px) 50vw, 100vw',
+});
+
+const gallery3Optimized = await getImage({
+  src: gallery3Src,
+  format: 'webp',
+  widths: [640, 960, 1200],
+  sizes: '(min-width: 1024px) 33vw, (min-width: 768px) 50vw, 100vw',
+});
+
+const gallery4Optimized = await getImage({
+  src: gallery4Src,
+  format: 'webp',
+  widths: [640, 960, 1440],
+  sizes: '(min-width: 1024px) 33vw, (min-width: 768px) 50vw, 100vw',
+});
+
+const heroImage = {
+  src: heroOptimized.src,
+  srcSet: heroOptimized.srcSet.attribute,
+  width: heroImageSrc.width,
+  height: heroImageSrc.height,
+};
+
+const galleryImages = [
+  { src: gallery1Optimized.src, srcSet: gallery1Optimized.srcSet.attribute, width: gallery1Src.width, height: gallery1Src.height },
+  { src: gallery2Optimized.src, srcSet: gallery2Optimized.srcSet.attribute, width: gallery2Src.width, height: gallery2Src.height },
+  { src: gallery3Optimized.src, srcSet: gallery3Optimized.srcSet.attribute, width: gallery3Src.width, height: gallery3Src.height },
+  { src: gallery4Optimized.src, srcSet: gallery4Optimized.srcSet.attribute, width: gallery4Src.width, height: gallery4Src.height },
+];
 
 const ld = {
   '@context': 'https://schema.org',
@@ -60,7 +117,7 @@ const ld = {
   <JSONLD data={ld} />
   <main id="main" class="min-h-screen bg-background text-foreground">
     <Nav activeProduct="browser" />
-    <LandingPage product="browser" />
+    <LandingPage product="browser" heroImage={heroImage} galleryImages={galleryImages} />
     <SocialProofSection />
     <Footer />
   </main>
