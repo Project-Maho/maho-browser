@@ -1,6 +1,17 @@
 use maho_types::account::{AccountInfo, AuthState, SyncState, UserTier};
 use serde::{Serialize, Deserialize};
 
+/// FNV-1a hash over raw bytes. Endian-independent, deterministic across
+/// architectures. Used for device_id_hash tiebreaks in LWW sync ordering.
+pub fn fnv1a_bytes(bytes: &[u8]) -> u32 {
+    let mut hash: u32 = 0x811c9dc5;
+    for &b in bytes {
+        hash ^= b as u32;
+        hash = hash.wrapping_mul(0x01000193);
+    }
+    hash
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PersistedAccount {
     pub account: Option<AccountInfo>,
@@ -67,15 +78,7 @@ impl AccountManager {
     }
 
     pub fn device_id_hash(&self) -> u32 {
-        // FNV-1a hash over the 16-byte UUID.
-        // Endian-independent (byte-wise), better collision distribution than XOR of u32 chunks.
-        let bytes = self.device_id.as_bytes();
-        let mut hash: u32 = 0x811c9dc5;
-        for &b in bytes {
-            hash ^= b as u32;
-            hash = hash.wrapping_mul(0x01000193);
-        }
-        hash
+        fnv1a_bytes(self.device_id.as_bytes())
     }
 
     pub fn begin_sign_in(

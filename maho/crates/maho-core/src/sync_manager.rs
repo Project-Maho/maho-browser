@@ -18,14 +18,14 @@ pub struct SyncManager {
     devices: HashMap<DeviceId, DeviceInfo>,
     received_tabs: Vec<ReceivedTab>,
     outgoing_messages: Vec<SyncMessage>,
-    encryption_key: Option<crate::sync_crypto::EncryptionKey>,
+    pub(crate) encryption_key: Option<crate::sync_crypto::EncryptionKey>,
     pending_pushes: Vec<SyncEntity>,
     // Audit finding H12: bounded LRU cap prevents unbounded growth over
     // long-running sync sessions. Capacity chosen as 10k — large enough that
     // even high-churn workspaces won't see eviction pressure under normal
     // operation; small enough to bound memory.
     entity_versions: lru::LruCache<String, (u64, u32)>,
-    last_pulled_versions: HashMap<SyncEntityType, u64>,
+    pub(crate) last_pulled_versions: HashMap<SyncEntityType, u64>,
     sent_entities: Vec<i64>,
 }
 
@@ -169,18 +169,7 @@ impl SyncManager {
             ));
             return false;
         }
-        let entity_type_str = match entity.entity_type {
-            SyncEntityType::Space => "space",
-            SyncEntityType::Tab => "tab",
-            SyncEntityType::Bookmark => "bookmark",
-            SyncEntityType::Note => "note",
-            SyncEntityType::Boost => "boost",
-            SyncEntityType::ReadingListItem => "readinglistitem",
-            SyncEntityType::SearchEngine => "searchengine",
-            SyncEntityType::Shortcut => "shortcut",
-            SyncEntityType::Memory => "memory",
-            SyncEntityType::Extension => "extension",
-        };
+        let entity_type_str = entity.entity_type.as_str();
         let cache_key = format!("{}:{}", entity_type_str, entity.entity_id);
 
         let local_version = if let Some(version_pair) = self.entity_versions.get(&cache_key) {
@@ -316,19 +305,7 @@ impl SyncManager {
                 }
             }
             SyncMessage::Ack { entity_id, entity_type, version, device_id } => {
-                let entity_type_str = match entity_type {
-                    SyncEntityType::Space => "space",
-                    SyncEntityType::Tab => "tab",
-                    SyncEntityType::Bookmark => "bookmark",
-                    SyncEntityType::Note => "note",
-                    SyncEntityType::Boost => "boost",
-                    SyncEntityType::ReadingListItem => "readinglistitem",
-                    SyncEntityType::SearchEngine => "searchengine",
-                    SyncEntityType::Shortcut => "shortcut",
-                    SyncEntityType::Memory => "memory",
-                    SyncEntityType::Extension => "extension",
-                };
-                let key = format!("{}:{}", entity_type_str, entity_id);
+                let key = format!("{}:{}", entity_type.as_str(), entity_id);
                 self.entity_versions.put(key, (version, device_id));
             }
             SyncMessage::EntityPull { .. } => {
@@ -798,6 +775,14 @@ mod tests {
         let sent_ids = sm.drain_sent_entities();
         assert_eq!(sent_ids, vec![42]);
     }
+
+    #[test]
+    fn test_is_leader() {
+        let mut sm = SyncManager::new(default_config());
+        assert!(!sm.is_leader());
+        sm.set_status(SyncStatus::Synced);
+        assert!(sm.is_leader());
+    }
 }
 
 impl SyncManager {
@@ -809,4 +794,28 @@ impl SyncManager {
             self.config.disabled_entity_types.insert(entity_type);
         }
     }
+
+    pub fn is_leader(&self) -> bool {
+        if self.status != SyncStatus::Synced && self.status != SyncStatus::Syncing {
+            return false;
+        }
+        let local_hash = hash_device_id(&self.config.device_id);
+        let mut min_hash = local_hash;
+        for dev in self.devices.values() {
+            let dev_hash = hash_device_id(&dev.id);
+            if dev_hash < min_hash {
+                min_hash = dev_hash;
+            }
+        }
+        min_hash == local_hash
+    }
+}
+
+fn hash_device_id(device_id: &str) -> u32 {
+    let bytes = if let Ok(uuid) = uuid::Uuid::parse_str(device_id) {
+        uuid.into_bytes().to_vec()
+    } else {
+        device_id.as_bytes().to_vec()
+    };
+    crate::account_manager::fnv1a_bytes(&bytes)
 }

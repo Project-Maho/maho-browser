@@ -37,10 +37,26 @@ pub struct SqliteStorage {
 
 impl SqliteStorage {
     pub fn open(path: &str) -> Result<Self, StorageError> {
-        let conn = Connection::open(path)?;
+        let conn = Connection::open(path).map_err(|e| {
+            eprintln!("[SqliteStorage::open] FAIL at Connection::open({path}): {e}");
+            e
+        })?;
         let storage = Self { conn, path: path.to_string() };
-        storage.initialize_schema()?;
-        storage.run_migrations()?;
+        storage.initialize_schema().map_err(|e| {
+            eprintln!(
+                "[SqliteStorage::open] FAIL at initialize_schema() for {path}: {e}. \
+                 Likely cause: schema mismatch with an old DB. \
+                 To reset, move the DB aside: mv \"{path}\" \"{path}.bak\" and relaunch."
+            );
+            e
+        })?;
+        storage.run_migrations().map_err(|e| {
+            eprintln!(
+                "[SqliteStorage::open] FAIL at run_migrations() for {path}: {e}. \
+                 A schema migration query failed. Same reset instruction as above applies."
+            );
+            e
+        })?;
         Ok(storage)
     }
 
@@ -2336,6 +2352,28 @@ impl SqliteStorage {
         Ok(())
     }
 
+    pub fn load_all_memories(&self) -> Result<Vec<(String, String, String, Option<String>, String, f64, Option<String>)>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, fact, source, session_id, categories, importance, metadata FROM memory_facts",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, f64>(5)?,
+                row.get::<_, Option<String>>(6)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
     // === Memory blocks ===
 
     pub fn upsert_memory_block(
@@ -2452,6 +2490,13 @@ impl SqliteStorage {
         content: &str,
         url_context: Option<&str>,
     ) -> Result<(), StorageError> {
+        // Ensure the parent conversations row exists to satisfy the
+        // conversation_turns.session_id FOREIGN KEY constraint. Idempotent via
+        // INSERT OR IGNORE: no-op when the row already exists.
+        self.conn.execute(
+            "INSERT OR IGNORE INTO conversations (id) VALUES (?1)",
+            rusqlite::params![session_id],
+        )?;
         self.conn.execute(
             "INSERT OR IGNORE INTO conversation_turns \
              (id, session_id, role, content, url_context) \
@@ -2550,6 +2595,14 @@ impl SqliteStorage {
         Ok(affected > 0)
     }
 
+    pub fn delete_conversation_turn(&self, id: &str) -> Result<bool, StorageError> {
+        let affected = self.conn.execute(
+            "DELETE FROM conversation_turns WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
+        Ok(affected > 0)
+    }
+
     pub fn rename_conversation(&self, id: &str, title: &str) -> Result<bool, StorageError> {
         let affected = self.conn.execute(
             "UPDATE conversations SET title = ?1, updated_at = datetime('now') WHERE id = ?2",
@@ -2566,6 +2619,10 @@ impl SqliteStorage {
         url_context: Option<&str>,
     ) -> Result<bool, StorageError> {
         let id = uuid::Uuid::new_v4().to_string();
+        self.conn.execute(
+            "INSERT OR IGNORE INTO conversations (id) VALUES (?1)",
+            rusqlite::params![session_id],
+        )?;
         self.conn.execute(
             "INSERT INTO conversation_turns (id, session_id, role, content, url_context) \
              VALUES (?1, ?2, ?3, ?4, ?5)",

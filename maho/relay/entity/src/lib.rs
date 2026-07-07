@@ -7,3 +7,4 @@ pub mod processed_events;
 pub mod consumed_bypass_tokens;
 pub mod credits;
 pub mod waitlist_signups;
+pub mod snapshots;

@@ -104,6 +104,41 @@ pub enum SyncEntityType {
     Shortcut,
     Memory,
     Extension,
+    BookmarkFolder,
+    CssMod,
+    Easel,
+    Conversation,
+    ConversationTurn,
+    AutofillAddress,
+    AutofillPayment,
+    Settings,
+    SharedCollection,
+}
+
+impl SyncEntityType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SyncEntityType::Space => "space",
+            SyncEntityType::Tab => "tab",
+            SyncEntityType::Bookmark => "bookmark",
+            SyncEntityType::BookmarkFolder => "bookmarkfolder",
+            SyncEntityType::Note => "note",
+            SyncEntityType::Boost => "boost",
+            SyncEntityType::ReadingListItem => "readinglistitem",
+            SyncEntityType::SearchEngine => "searchengine",
+            SyncEntityType::Shortcut => "shortcut",
+            SyncEntityType::Memory => "memory",
+            SyncEntityType::Extension => "extension",
+            SyncEntityType::CssMod => "cssmod",
+            SyncEntityType::Easel => "easel",
+            SyncEntityType::Conversation => "conversation",
+            SyncEntityType::ConversationTurn => "conversationturn",
+            SyncEntityType::AutofillAddress => "autofilladdress",
+            SyncEntityType::AutofillPayment => "autofillpayment",
+            SyncEntityType::Settings => "settings",
+            SyncEntityType::SharedCollection => "sharedcollection",
+        }
+    }
 }
 
 /// A versioned entity for LWW sync

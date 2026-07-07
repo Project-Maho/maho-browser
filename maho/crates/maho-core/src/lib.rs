@@ -33,6 +33,7 @@ pub mod space_manager;
 pub mod sync_crypto;
 pub mod sync_manager;
 pub mod sync_models;
+pub mod snapshot;
 pub mod tab_lifecycle;
 pub mod tab_preview_manager;
 pub mod oscrypt;

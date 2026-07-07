@@ -1125,6 +1125,16 @@ impl SpaceManager {
         }
         self.is_restoring = false;
     }
+    pub fn upsert_space(&mut self, mut space: Space) {
+        if space.root_order.is_empty() {
+            space.root_order = Self::synthesize_root_order(&space);
+        }
+        let id = space.id.clone();
+        if !self.space_order.contains(&id) {
+            self.space_order.push(id.clone());
+        }
+        self.spaces.insert(id, space);
+    }
 
     fn synthesize_root_order(space: &Space) -> Vec<RootItem> {
         let mut root_order = Vec::with_capacity(space.tab_order.len() + space.folders.len());

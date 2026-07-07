@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use maho_types::common::DateTime;
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BookmarkId(pub String);
 
 impl BookmarkId {
@@ -14,7 +14,7 @@ impl BookmarkId {
     }
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BookmarkFolder {
     pub id: String,
     pub name: String,
@@ -22,7 +22,7 @@ pub struct BookmarkFolder {
     pub created_at: DateTime,
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Bookmark {
     pub id: BookmarkId,
     pub title: String,

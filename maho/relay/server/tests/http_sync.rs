@@ -214,3 +214,88 @@ async fn test_sync_room_isolation_by_device() {
     let other_json: serde_json::Value = other_device_pull.json().await.unwrap();
     assert!(other_json["messages"].as_array().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn test_snapshot_flow() {
+    let config = RelayConfig {
+        open_registration: true,
+        ..RelayConfig::default()
+    };
+    let addr = spawn_test_server_with_config(config).await;
+    let base = format!("http://{}", addr);
+    let client = reqwest::Client::new();
+
+    let token = signup(&client, &base, "snap@example.com", "My Phone").await;
+
+    // 1. GET non-existent snapshot -> 404
+    let get_resp = client
+        .get(format!("{}/sync/snapshots", base))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(get_resp.status(), StatusCode::NOT_FOUND);
+
+    // 2. HEAD non-existent snapshot -> 404
+    let head_resp = client
+        .head(format!("{}/sync/snapshots", base))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(head_resp.status(), StatusCode::NOT_FOUND);
+
+    // 3. POST snapshot
+    let blob = base64::engine::general_purpose::STANDARD.encode(b"my-snapshot-data");
+    let upload_resp = client
+        .post(format!("{}/sync/snapshots", base))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&json!({
+            "hlc_ts_ceiling": 10000,
+            "creator_device_id": 999,
+            "blob": blob
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(upload_resp.status(), StatusCode::OK);
+
+    // 4. GET snapshot -> 200
+    let get_resp2 = client
+        .get(format!("{}/sync/snapshots", base))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(get_resp2.status(), StatusCode::OK);
+    let body: serde_json::Value = get_resp2.json().await.unwrap();
+    assert_eq!(body["hlc_ts_ceiling"], 10000);
+    assert_eq!(body["creator_device_id"], 999);
+    assert_eq!(body["blob"], blob);
+
+    // 5. HEAD snapshot -> 200 with headers
+    let head_resp2 = client
+        .head(format!("{}/sync/snapshots", base))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(head_resp2.status(), StatusCode::OK);
+    let headers = head_resp2.headers();
+    assert_eq!(headers.get("X-Hlc-Ts-Ceiling").unwrap().to_str().unwrap(), "10000");
+    assert_eq!(headers.get("X-Creator-Device-Id").unwrap().to_str().unwrap(), "999");
+
+    // 6. POST older snapshot -> 409 Conflict
+    let upload_resp_conflict = client
+        .post(format!("{}/sync/snapshots", base))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&json!({
+            "hlc_ts_ceiling": 5000,
+            "creator_device_id": 999,
+            "blob": blob
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(upload_resp_conflict.status(), StatusCode::CONFLICT);
+}

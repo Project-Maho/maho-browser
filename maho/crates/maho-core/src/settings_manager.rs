@@ -116,6 +116,10 @@ impl SettingsManager {
         &self.settings
     }
 
+    pub fn restore_settings(&mut self, settings: Settings) {
+        self.settings = settings;
+    }
+
     pub fn update_settings(&mut self, changes: SettingsUpdate) -> &Settings {
         if let Some(general) = changes.general {
             if let Some(engine) = general.default_search_engine {

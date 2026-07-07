@@ -6779,11 +6779,7 @@ pub unsafe extern "C" fn maho_core_create_conversation(
     } else {
         CStr::from_ptr(model).to_str().ok()
     };
-    if let Some(ref storage) = core.storage_ref() {
-        storage.create_conversation(id_str, title_opt, space_opt, model_opt).is_ok()
-    } else {
-        false
-    }
+    core.create_conversation_persisted(id_str, title_opt, space_opt, model_opt)
 
     }, false)
 }
@@ -6877,7 +6873,7 @@ pub unsafe extern "C" fn maho_core_save_conversation_message(
     }
     // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
     if import_gate::is_active() { return false; }
-    let core = &*core;
+    let core = &mut *core;
     let sid = match CStr::from_ptr(session_id).to_str() {
         Ok(s) => s,
         Err(_) => return false,
@@ -6895,12 +6891,7 @@ pub unsafe extern "C" fn maho_core_save_conversation_message(
     } else {
         CStr::from_ptr(url_context).to_str().ok()
     };
-    if let Some(storage) = core.storage_ref() {
-        let id = uuid::Uuid::new_v4().to_string();
-        storage.insert_conversation_turn(&id, sid, role_str, content_str, url_ctx).is_ok()
-    } else {
-        false
-    }
+    core.save_conversation_message_persisted(sid, role_str, content_str, url_ctx)
 
     }, false)
 }
@@ -6922,16 +6913,12 @@ pub unsafe extern "C" fn maho_core_delete_conversation(
     }
     // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
     if import_gate::is_active() { return false; }
-    let core = &*core;
+    let core = &mut *core;
     let id_str = match CStr::from_ptr(id).to_str() {
         Ok(s) => s,
         Err(_) => return false,
     };
-    if let Some(storage) = core.storage_ref() {
-        storage.delete_conversation(id_str).unwrap_or(false)
-    } else {
-        false
-    }
+    core.delete_conversation_persisted(id_str)
 
     }, false)
 }
@@ -6954,7 +6941,7 @@ pub unsafe extern "C" fn maho_core_rename_conversation(
     }
     // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
     if import_gate::is_active() { return false; }
-    let core = &*core;
+    let core = &mut *core;
     let id_str = match CStr::from_ptr(id).to_str() {
         Ok(s) => s,
         Err(_) => return false,
@@ -6963,11 +6950,7 @@ pub unsafe extern "C" fn maho_core_rename_conversation(
         Ok(s) => s,
         Err(_) => return false,
     };
-    if let Some(storage) = core.storage_ref() {
-        storage.rename_conversation(id_str, title_str).unwrap_or(false)
-    } else {
-        false
-    }
+    core.rename_conversation_persisted(id_str, title_str)
 
     }, false)
 }

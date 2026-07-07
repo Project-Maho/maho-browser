@@ -906,6 +906,10 @@ pub struct MahoCore {
     sharing_manager: SharingManager,
     memory_manager: MemoryManager,
     persist_throttle: RefCell<PersistThrottle>,
+    sync_push_count: Cell<usize>,
+    sync_last_snapshot_time: Cell<chrono::DateTime<chrono::Utc>>,
+    sync_startup_time: Cell<chrono::DateTime<chrono::Utc>>,
+    sync_last_upload_attempt: Cell<chrono::DateTime<chrono::Utc>>,
 }
 
 impl Default for MahoCore {
@@ -1155,6 +1159,10 @@ impl MahoCore {
             sharing_manager: SharingManager::new(),
             memory_manager: MemoryManager::new(),
             persist_throttle: RefCell::new(PersistThrottle::new()),
+            sync_push_count: Cell::new(0),
+            sync_last_snapshot_time: Cell::new(chrono::Utc::now() - chrono::Duration::hours(6)),
+            sync_startup_time: Cell::new(chrono::Utc::now()),
+            sync_last_upload_attempt: Cell::new(chrono::Utc::now() - chrono::Duration::hours(1)), // Initialize to 1 hour ago so first upload is allowed
         };
 
         core
@@ -1217,6 +1225,7 @@ impl MahoCore {
     pub fn with_storage(mut self, path: &str) -> Self {
         match maho_storage::sqlite::SqliteStorage::open(path) {
             Ok(storage) => {
+                eprintln!("[MahoCore::with_storage] OK: opened SQLite storage at {path}");
                 self.storage = Some(storage);
                 if let Some(ref storage) = self.storage {
                     if let Ok(Some(json)) = storage.get_setting("browser_settings") {
@@ -1243,7 +1252,11 @@ impl MahoCore {
                     self.memory_manager.start_browsing_summary_loop();
                 }
             }
-            Err(_) => {
+            Err(e) => {
+                eprintln!(
+                    "[MahoCore::with_storage] FAIL: SqliteStorage::open({path}) returned Err: {e}. \
+                     Storage will remain None; AI settings, agent sessions, and memory features will NOT persist."
+                );
                 self.storage = None;
             }
         }
@@ -1255,7 +1268,12 @@ impl MahoCore {
             Ok(storage) => {
                 self.lmdb_storage = Some(storage);
             }
-            Err(_) => {
+            Err(e) => {
+                eprintln!(
+                    "[MahoCore::with_lmdb_storage] FAIL: LmdbStorage::open({}) returned Err: {e}. \
+                     LMDB storage will remain None; tab/space state will NOT persist across restarts.",
+                    path.display()
+                );
                 self.lmdb_storage = None;
             }
         }
@@ -1946,17 +1964,27 @@ impl MahoCore {
     }
 
     pub fn add_bookmark(&mut self, url: &str, title: &str, folder_id: Option<&str>) {
+        let bm = self.bookmark_manager.add_bookmark(
+            title.to_string(),
+            url.to_string(),
+            folder_id.map(String::from),
+            None,
+        );
+        let id_str = bm.id.0.clone();
         if let Some(ref storage) = self.storage {
-            let id = uuid::Uuid::new_v4().to_string();
-            let now = chrono::Utc::now().to_rfc3339();
-            let _ = storage.save_bookmark(&id, url, title, folder_id, &now);
+            let _ = storage.save_bookmark(&id_str, url, title, folder_id, &bm.created_at.0);
+        }
+        if let Ok(payload) = serde_json::to_string(&bm) {
+            self.push_sync_entity(SyncEntityType::Bookmark, id_str, payload, false);
         }
     }
 
     pub fn remove_bookmark(&mut self, bookmark_id: &str) {
+        self.bookmark_manager.remove_bookmark(bookmark_id);
         if let Some(ref storage) = self.storage {
             let _ = storage.delete_bookmark(bookmark_id);
         }
+        self.push_sync_entity(SyncEntityType::Bookmark, bookmark_id.to_string(), "{}".to_string(), true);
     }
 
     pub fn move_bookmark(&mut self, bookmark_id: &str, folder_id: Option<&str>) {
@@ -1964,6 +1992,11 @@ impl MahoCore {
             .move_bookmark(bookmark_id, folder_id.map(String::from));
         if let Some(ref storage) = self.storage {
             let _ = storage.move_bookmark(bookmark_id, folder_id);
+        }
+        if let Some(bm) = self.bookmark_manager.get_all_bookmarks().iter().find(|b| b.id.0 == bookmark_id).cloned() {
+            if let Ok(payload) = serde_json::to_string(&bm) {
+                self.push_sync_entity(SyncEntityType::Bookmark, bookmark_id.to_string(), payload, false);
+            }
         }
     }
 
@@ -2062,6 +2095,9 @@ impl MahoCore {
     pub fn create_note_persisted(&mut self, linked_tab: Option<TabId>, content: String) -> Note {
         let note = self.note_manager.create_note(linked_tab, content);
         self.persist_note(&note);
+        if let Ok(payload) = serde_json::to_string(&note) {
+            self.push_sync_entity(SyncEntityType::Note, note.id.as_ref().to_string(), payload, false);
+        }
         note
     }
 
@@ -2069,6 +2105,9 @@ impl MahoCore {
         self.note_manager.update_note(note_id, content);
         if let Some(note) = self.note_manager.get_note(note_id) {
             self.persist_note(note);
+            if let Ok(payload) = serde_json::to_string(note) {
+                self.push_sync_entity(SyncEntityType::Note, note_id.as_ref().to_string(), payload, false);
+            }
         }
     }
 
@@ -2077,12 +2116,16 @@ impl MahoCore {
         if let Some(ref storage) = self.storage {
             let _ = storage.delete_note(note_id.as_ref());
         }
+        self.push_sync_entity(SyncEntityType::Note, note_id.as_ref().to_string(), "{}".to_string(), true);
         note
     }
 
     pub fn create_boost_persisted(&mut self, domain: String, name: String) -> Boost {
         let boost = self.boost_manager.create(domain, name);
         self.persist_boost(&boost);
+        if let Ok(payload) = serde_json::to_string(&boost) {
+            self.push_sync_entity(SyncEntityType::Boost, boost.id.as_ref().to_string(), payload, false);
+        }
         boost
     }
 
@@ -2090,6 +2133,9 @@ impl MahoCore {
         self.boost_manager.update(boost_id, changes);
         if let Some(boost) = self.boost_manager.get_boost(boost_id) {
             self.persist_boost(boost);
+            if let Ok(payload) = serde_json::to_string(boost) {
+                self.push_sync_entity(SyncEntityType::Boost, boost_id.as_ref().to_string(), payload, false);
+            }
         }
     }
 
@@ -2098,6 +2144,7 @@ impl MahoCore {
         if let Some(ref storage) = self.storage {
             let _ = storage.delete_boost(boost_id.as_ref());
         }
+        self.push_sync_entity(SyncEntityType::Boost, boost_id.as_ref().to_string(), "{}".to_string(), true);
         boost
     }
 
@@ -2246,6 +2293,9 @@ impl MahoCore {
                 email: added.email.as_deref(),
             });
         }
+        if let Ok(payload) = serde_json::to_string(&added) {
+            self.push_sync_entity(SyncEntityType::AutofillAddress, added.id.clone(), payload, false);
+        }
         added
     }
 
@@ -2255,6 +2305,7 @@ impl MahoCore {
             if let Some(ref storage) = self.storage {
                 let _ = storage.delete_autofill_address(id);
             }
+            self.push_sync_entity(SyncEntityType::AutofillAddress, id.to_string(), "{}".to_string(), true);
         }
         deleted
     }
@@ -2272,6 +2323,9 @@ impl MahoCore {
                 &added.expiry,
             );
         }
+        if let Ok(payload) = serde_json::to_string(&added) {
+            self.push_sync_entity(SyncEntityType::AutofillPayment, added.id.clone(), payload, false);
+        }
         added
     }
 
@@ -2281,6 +2335,7 @@ impl MahoCore {
             if let Some(ref storage) = self.storage {
                 let _ = storage.delete_autofill_payment(id);
             }
+            self.push_sync_entity(SyncEntityType::AutofillPayment, id.to_string(), "{}".to_string(), true);
         }
         deleted
     }
@@ -2318,6 +2373,9 @@ impl MahoCore {
                 Some(&tags_json),
             );
         }
+        if let Ok(payload) = serde_json::to_string(&item) {
+            self.push_sync_entity(SyncEntityType::ReadingListItem, item.id.clone(), payload, false);
+        }
         item
     }
 
@@ -2329,6 +2387,7 @@ impl MahoCore {
         if let Some(ref storage) = self.storage {
             let _ = storage.delete_reading_list_item(id);
         }
+        self.push_sync_entity(SyncEntityType::ReadingListItem, id.to_string(), "{}".to_string(), true);
         item
     }
 
@@ -2339,6 +2398,11 @@ impl MahoCore {
                 let now = maho_types::common::DateTime::now();
                 let _ = storage.update_reading_list_read_status(id, true, Some(&now.0));
             }
+            if let Some(item) = self.reading_list_manager.get_all_items().iter().find(|i| i.id == id).cloned() {
+                if let Ok(payload) = serde_json::to_string(&item) {
+                    self.push_sync_entity(SyncEntityType::ReadingListItem, id.to_string(), payload, false);
+                }
+            }
         }
         result
     }
@@ -2348,6 +2412,11 @@ impl MahoCore {
         if result {
             if let Some(ref storage) = self.storage {
                 let _ = storage.update_reading_list_read_status(id, false, None);
+            }
+            if let Some(item) = self.reading_list_manager.get_all_items().iter().find(|i| i.id == id).cloned() {
+                if let Ok(payload) = serde_json::to_string(&item) {
+                    self.push_sync_entity(SyncEntityType::ReadingListItem, id.to_string(), payload, false);
+                }
             }
         }
         result
@@ -2367,6 +2436,9 @@ impl MahoCore {
     pub fn create_easel_persisted(&mut self, name: &str) -> maho_types::easel::Easel {
         let easel = self.easel_manager.create_easel(name.to_string());
         self.persist_easel(&easel);
+        if let Ok(payload) = serde_json::to_string(&easel) {
+            self.push_sync_entity(SyncEntityType::Easel, easel.id.to_string(), payload, false);
+        }
         easel
     }
 
@@ -2377,6 +2449,7 @@ impl MahoCore {
             if let Some(ref storage) = self.storage {
                 let _ = storage.delete_easel(id);
             }
+            self.push_sync_entity(SyncEntityType::Easel, id.to_string(), "{}".to_string(), true);
         }
         removed
     }
@@ -2405,6 +2478,9 @@ impl MahoCore {
         if updated {
             if let Some(easel) = self.easel_manager.get_easel(&easel_id) {
                 self.persist_easel(easel);
+                if let Ok(payload) = serde_json::to_string(easel) {
+                    self.push_sync_entity(SyncEntityType::Easel, id.to_string(), payload, false);
+                }
             }
         } else {
             self.emit_error("update_easel", "EASEL_NOT_FOUND", "Easel not found");
@@ -2420,6 +2496,12 @@ impl MahoCore {
 
     pub fn create_shared_collection(&mut self, space_id: &str, name: &str) -> Option<String> {
         let collection = self.sharing_manager.create_collection(space_id, name);
+        if let Some(ref storage) = self.storage {
+            let _ = storage.save_shared_collection(&collection);
+        }
+        if let Ok(payload) = serde_json::to_string(&collection) {
+            self.push_sync_entity(SyncEntityType::SharedCollection, collection.id.clone(), payload, false);
+        }
         match serde_json::to_string(&collection) {
             Ok(json) => Some(json),
             Err(_) => {
@@ -2447,6 +2529,11 @@ impl MahoCore {
             if let Some(ref storage) = self.storage {
                 let _ = storage.update_shared_collection_permission(collection_id, permission);
             }
+            if let Some(col) = self.sharing_manager.get_all_for_storage().iter().find(|c| c.id == collection_id).cloned() {
+                if let Ok(payload) = serde_json::to_string(col) {
+                    self.push_sync_entity(SyncEntityType::SharedCollection, collection_id.to_string(), payload, false);
+                }
+            }
         } else {
             self.emit_error(
                 "update_share_permissions",
@@ -2462,6 +2549,7 @@ impl MahoCore {
         if let Some(ref storage) = self.storage {
             let _ = storage.delete_shared_collection(collection_id);
         }
+        self.push_sync_entity(SyncEntityType::SharedCollection, collection_id.to_string(), "{}".to_string(), true);
     }
 
     pub fn get_shared_collections(&self) -> Option<String> {
@@ -2471,7 +2559,18 @@ impl MahoCore {
 
     pub fn join_shared_collection(&mut self, share_link: &str) -> bool {
         let joined = self.sharing_manager.join_collection(share_link);
-        if !joined {
+        if joined {
+            if let Some(id) = share_link.split('/').next_back() {
+                if let Some(col) = self.sharing_manager.get_all_for_storage().iter().find(|c| c.id == id).cloned() {
+                    if let Some(ref storage) = self.storage {
+                        let _ = storage.save_shared_collection(col);
+                    }
+                    if let Ok(payload) = serde_json::to_string(col) {
+                        self.push_sync_entity(SyncEntityType::SharedCollection, id.to_string(), payload, false);
+                    }
+                }
+            }
+        } else {
             self.emit_error(
                 "join_shared_collection",
                 "JOIN_FAILED",
@@ -2580,6 +2679,7 @@ impl MahoCore {
     pub fn handle_event(&mut self, event: ShellEvent) -> Vec<CoreUpdate> {
         let dirty_bits = Self::event_dirty_flags(&event);
         let urgent = Self::event_persist_is_urgent(&event);
+        let event_cloned = event.clone();
         let result = self.handle_event_inner(event);
         if dirty_bits != 0 {
             if urgent {
@@ -2588,7 +2688,113 @@ impl MahoCore {
                 self.persist_throttle.borrow_mut().pending_bits |= dirty_bits;
             }
         }
+        self.post_dispatch_sync(&event_cloned, &result);
         result
+    }
+
+    fn post_dispatch_sync(&mut self, event: &ShellEvent, result: &[CoreUpdate]) {
+        for update in result {
+            match update {
+                CoreUpdate::TabCreated { tab } => {
+                    self.push_tab_sync(&tab.id);
+                }
+                CoreUpdate::TabUpdated { tab_id, .. } => {
+                    self.push_tab_sync(tab_id);
+                }
+                CoreUpdate::TabClosed { tab_id, .. } => {
+                    self.push_sync_entity(SyncEntityType::Tab, tab_id.to_string(), "{}".to_string(), true);
+                }
+                CoreUpdate::SpaceCreated { space } => {
+                    self.push_space_sync(&space.id);
+                }
+                CoreUpdate::SpaceUpdated { space_id, .. } => {
+                    self.push_space_sync(space_id);
+                }
+                CoreUpdate::SpaceDeleted { space_id } => {
+                    self.push_sync_entity(SyncEntityType::Space, space_id.to_string(), "{}".to_string(), true);
+                }
+                CoreUpdate::ActiveSpaceChanged { space_id, .. } => {
+                    self.push_space_sync(space_id);
+                }
+                CoreUpdate::SpaceConfigUpdated { space_id, .. } => {
+                    self.push_space_sync(space_id);
+                }
+                CoreUpdate::TabOrderChanged { space_id, .. } => {
+                    self.push_space_sync(space_id);
+                }
+                CoreUpdate::SpaceOrderChanged { order } => {
+                    for space_id in order {
+                        self.push_space_sync(space_id);
+                    }
+                }
+                CoreUpdate::FolderCreated { folder } => {
+                    let all_spaces: Vec<SpaceId> = self.space_manager.get_all_spaces().iter().map(|s| s.id.clone()).collect();
+                    for sid in all_spaces {
+                        if let Some(space) = self.space_manager.get_space(&sid) {
+                            if space.folders.iter().any(|f| f.id == folder.id) {
+                                self.push_space_sync(&sid);
+                                break;
+                            }
+                        }
+                    }
+                }
+                CoreUpdate::FolderUpdated { folder_id, .. } => {
+                    let all_spaces: Vec<SpaceId> = self.space_manager.get_all_spaces().iter().map(|s| s.id.clone()).collect();
+                    for sid in all_spaces {
+                        if let Some(space) = self.space_manager.get_space(&sid) {
+                            if space.folders.iter().any(|f| f.id == *folder_id) {
+                                self.push_space_sync(&sid);
+                                break;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        match event {
+            ShellEvent::PinTab { tab_id }
+            | ShellEvent::UnpinTab { tab_id }
+            | ShellEvent::MuteTab { tab_id }
+            | ShellEvent::UnmuteTab { tab_id }
+            | ShellEvent::FreezeTab { tab_id }
+            | ShellEvent::UnfreezeTab { tab_id }
+            | ShellEvent::SuspendTab { tab_id }
+            | ShellEvent::SetZoom { tab_id, .. }
+            | ShellEvent::ResetZoom { tab_id }
+            | ShellEvent::SetTabCustomTitle { tab_id, .. }
+            | ShellEvent::ResetPinnedTab { tab_id }
+            | ShellEvent::SetTabParent { tab_id, .. } => {
+                self.push_tab_sync(tab_id);
+            }
+            ShellEvent::MoveTab { tab_id, .. } => {
+                self.push_tab_sync(tab_id);
+                if let Some(space_id) = self.tab_manager.get_tab(tab_id).map(|t| t.space_id.clone()) {
+                    self.push_space_sync(&space_id);
+                }
+            }
+            ShellEvent::MoveTabToSpace { tab_id, target_space_id, .. } => {
+                self.push_tab_sync(tab_id);
+                self.push_space_sync(target_space_id);
+            }
+            ShellEvent::MoveTabToRoot { tab_id, space_id, .. }
+            | ShellEvent::MoveTabToFolder { tab_id, space_id, .. }
+            | ShellEvent::RemoveTabFromFolder { tab_id, space_id, .. } => {
+                self.push_tab_sync(tab_id);
+                self.push_space_sync(space_id);
+            }
+            ShellEvent::CreateFolder { space_id, .. }
+            | ShellEvent::RenameFolder { space_id, .. }
+            | ShellEvent::DeleteFolder { space_id, .. }
+            | ShellEvent::ReorderFolder { space_id, .. }
+            | ShellEvent::ReorderTabInFolder { space_id, .. }
+            | ShellEvent::ReorderRootItem { space_id, .. }
+            | ShellEvent::ApplyTidyTabs { space_id, .. } => {
+                self.push_space_sync(space_id);
+            }
+            _ => {}
+        }
     }
 
     // ActivateTab fires on every sidebar click and only mutates a timestamp on
@@ -2816,10 +3022,18 @@ impl MahoCore {
                     user_id.clone(),
                     device_id.clone(),
                 );
-                if access_token.is_some() {
+                if let Some(ref tok) = access_token {
                     account.auth_state = AuthState::Authenticated;
                     self.account_manager
                         .set_auth_state(AuthState::Authenticated);
+                    if let Some(ref storage) = self.storage {
+                        if let Err(e) = storage.set_setting("auth:access_token", tok) {
+                            eprintln!(
+                                "[auth] Failed to persist access_token; sync snapshot upload/download will fail: {}",
+                                e
+                            );
+                        }
+                    }
                 }
                 return vec![
                     CoreUpdate::AccountChanged {
@@ -2832,8 +3046,13 @@ impl MahoCore {
             }
             ShellEvent::SignOut => {
                 self.account_manager.sign_out();
-                // Memory: wipe all user-scoped memory data on sign-out
                 if let Some(ref storage) = self.storage {
+                    if let Err(e) = storage.set_setting("auth:access_token", "") {
+                        eprintln!(
+                            "[auth] Failed to clear access_token on sign-out; stale token may remain in storage: {}",
+                            e
+                        );
+                    }
                     let _ = storage.delete_all_memories();
                     let _ = self.memory_manager.rebuild_index(storage);
                 }
@@ -2896,6 +3115,9 @@ impl MahoCore {
                 if let Some(storage) = &self.storage {
                     let _ = storage.save_css_mod(&css_mod);
                 }
+                if let Ok(payload) = serde_json::to_string(&css_mod) {
+                    self.push_sync_entity(SyncEntityType::CssMod, css_mod.id.clone(), payload, false);
+                }
                 return vec![];
             }
             ShellEvent::ToggleCssMod { mod_id } => {
@@ -2903,6 +3125,9 @@ impl MahoCore {
                     if let Some(m) = self.css_mod_manager.get_mod(mod_id) {
                         if let Some(storage) = &self.storage {
                             let _ = storage.save_css_mod(m);
+                        }
+                        if let Ok(payload) = serde_json::to_string(m) {
+                            self.push_sync_entity(SyncEntityType::CssMod, mod_id.clone(), payload, false);
                         }
                     }
                 }
@@ -2913,6 +3138,7 @@ impl MahoCore {
                 if let Some(storage) = &self.storage {
                     let _ = storage.delete_css_mod(mod_id);
                 }
+                self.push_sync_entity(SyncEntityType::CssMod, mod_id.clone(), "{}".to_string(), true);
                 return vec![];
             }
             ShellEvent::UpdateCssMod { mod_id, css } => {
@@ -2920,6 +3146,9 @@ impl MahoCore {
                 if let Some(updated) = self.css_mod_manager.update_mod_css(mod_id, css.clone(), &now) {
                     if let Some(storage) = &self.storage {
                         let _ = storage.save_css_mod(updated);
+                    }
+                    if let Ok(payload) = serde_json::to_string(updated) {
+                        self.push_sync_entity(SyncEntityType::CssMod, mod_id.clone(), payload, false);
                     }
                 }
                 return vec![];
@@ -3058,6 +3287,9 @@ impl MahoCore {
                     if let Ok(json) = serde_json::to_string(&settings) {
                         let _ = storage.set_setting("browser_settings", &json);
                     }
+                }
+                if let Ok(payload) = serde_json::to_string(&settings) {
+                    self.push_sync_entity(SyncEntityType::Settings, "global_settings".to_string(), payload, false);
                 }
                 return vec![CoreUpdate::SettingsChanged { settings }];
             }
@@ -3938,6 +4170,9 @@ impl MahoCore {
                 let _ = storage.set_setting("browser_settings", &json);
             }
         }
+        if let Ok(payload) = serde_json::to_string(&settings) {
+            self.push_sync_entity(SyncEntityType::Settings, "global_settings".to_string(), payload, false);
+        }
     }
 
     // === Profile Methods ===
@@ -4380,6 +4615,7 @@ impl MahoCore {
             return false;
         }
 
+        let space_id_opt = self.tab_manager.get_tab(tab_id).map(|t| t.space_id.clone());
         self.tab_manager.favorite_tab(tab_id);
 
         // Strip the now-favorited tab from EVERY space's root_order, not just
@@ -4399,19 +4635,30 @@ impl MahoCore {
         self.enforce_residency_for_tab(tab_id);
 
         self.persist_lmdb_now_partial(LMDB_DIRTY_TABS | LMDB_DIRTY_SPACES);
+        
+        self.push_tab_sync(tab_id);
+        if let Some(ref space_id) = space_id_opt {
+            self.push_space_sync(space_id);
+        }
         true
     }
 
     pub fn unfavorite_tab(&mut self, tab_id: &TabId) {
         self.tab_manager.unfavorite_tab(tab_id);
 
-        if let Some(space_id) = self.tab_manager.get_tab(tab_id).map(|t| t.space_id.clone()) {
-            if !self.space_manager.is_tab_in_folder(&space_id, tab_id) {
-                self.space_manager.add_tab_to_root_order_if_absent(&space_id, tab_id);
+        let space_id_opt = self.tab_manager.get_tab(tab_id).map(|t| t.space_id.clone());
+        if let Some(ref space_id) = space_id_opt {
+            if !self.space_manager.is_tab_in_folder(space_id, tab_id) {
+                self.space_manager.add_tab_to_root_order_if_absent(space_id, tab_id);
             }
         }
 
         self.enforce_residency_for_tab(tab_id);
+        
+        self.push_tab_sync(tab_id);
+        if let Some(ref space_id) = space_id_opt {
+            self.push_space_sync(space_id);
+        }
     }
 
     fn enforce_residency_for_tab(&mut self, tab_id: &TabId) {
@@ -5010,6 +5257,9 @@ impl MahoCore {
                 engine.is_default,
             );
         }
+        if let Ok(payload) = serde_json::to_string(&engine) {
+            self.push_sync_entity(SyncEntityType::SearchEngine, engine.id.clone(), payload, false);
+        }
     }
 
     pub fn remove_search_engine_persisted(&mut self, id: &str) {
@@ -5017,6 +5267,7 @@ impl MahoCore {
         if let Some(ref storage) = self.storage {
             let _ = storage.delete_search_engine(id);
         }
+        self.push_sync_entity(SyncEntityType::SearchEngine, id.to_string(), "{}".to_string(), true);
     }
 
     pub fn set_default_search_engine_persisted(&mut self, id: &str) -> bool {
@@ -5146,6 +5397,9 @@ impl MahoCore {
                 &folder.created_at.0,
             );
         }
+        if let Ok(payload) = serde_json::to_string(&folder) {
+            self.push_sync_entity(SyncEntityType::BookmarkFolder, folder.id.clone(), payload, false);
+        }
         folder
     }
 
@@ -5159,6 +5413,7 @@ impl MahoCore {
                 let _ = storage.delete_bookmark_folder(folder_id);
             }
         }
+        self.push_sync_entity(SyncEntityType::BookmarkFolder, folder_id.to_string(), "{}".to_string(), true);
         folder
     }
 
@@ -5286,17 +5541,35 @@ impl MahoCore {
         let note_id = maho_types::identifiers::NoteId::new(note_id_str);
         let tab_id = maho_types::identifiers::TabId::new(tab_id_str);
         self.note_manager.link_note_to_tab(&note_id, tab_id);
+        if let Some(note) = self.note_manager.get_note(&note_id) {
+            self.persist_note(note);
+            if let Ok(payload) = serde_json::to_string(note) {
+                self.push_sync_entity(SyncEntityType::Note, note_id_str.to_string(), payload, false);
+            }
+        }
     }
 
     pub fn link_note_to_url(&mut self, note_id_str: &str, url: &str) {
         let note_id = maho_types::identifiers::NoteId::new(note_id_str);
         self.note_manager
             .link_note_to_url(&note_id, url.to_string());
+        if let Some(note) = self.note_manager.get_note(&note_id) {
+            self.persist_note(note);
+            if let Ok(payload) = serde_json::to_string(note) {
+                self.push_sync_entity(SyncEntityType::Note, note_id_str.to_string(), payload, false);
+            }
+        }
     }
 
     pub fn unlink_note_from_tab(&mut self, note_id_str: &str) {
         let note_id = maho_types::identifiers::NoteId::new(note_id_str);
         self.note_manager.unlink_note_from_tab(&note_id);
+        if let Some(note) = self.note_manager.get_note(&note_id) {
+            self.persist_note(note);
+            if let Ok(payload) = serde_json::to_string(note) {
+                self.push_sync_entity(SyncEntityType::Note, note_id_str.to_string(), payload, false);
+            }
+        }
     }
 
     pub fn get_linked_tab_id(&self, note_id_str: &str) -> Option<String> {
@@ -6217,10 +6490,33 @@ impl MahoCore {
         serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_string())
     }
 
+    pub fn push_tab_sync(&mut self, tab_id: &TabId) {
+        if let Some(tab) = self.tab_manager.get_tab(tab_id) {
+            if let Ok(payload) = serde_json::to_string(tab) {
+                self.push_sync_entity(SyncEntityType::Tab, tab.id.to_string(), payload, false);
+            }
+        }
+    }
+
+    pub fn push_space_sync(&mut self, space_id: &SpaceId) {
+        if let Some(space) = self.space_manager.get_space(space_id) {
+            if let Ok(payload) = serde_json::to_string(space) {
+                self.push_sync_entity(SyncEntityType::Space, space.id.to_string(), payload, false);
+            }
+        }
+    }
+
     // === Sync Methods ===
 
     pub fn start_sync(&mut self, server_url: &str, room_id: &str) {
         use crate::sync_models::SyncConfig;
+        let mut disabled = std::collections::HashSet::new();
+        disabled.insert(SyncEntityType::AutofillAddress);
+        disabled.insert(SyncEntityType::AutofillPayment);
+        disabled.insert(SyncEntityType::Conversation);
+        disabled.insert(SyncEntityType::ConversationTurn);
+        disabled.insert(SyncEntityType::Settings);
+
         let config = SyncConfig {
             server_url: server_url.to_string(),
             sync_key: Some(room_id.to_string()),
@@ -6228,7 +6524,7 @@ impl MahoCore {
             device_name: std::env::var("HOSTNAME").unwrap_or_else(|_| "Maho Device".to_string()),
             auto_sync: true,
             sync_interval_secs: 30,
-            disabled_entity_types: std::collections::HashSet::new(),
+            disabled_entity_types: disabled,
         };
         let mut sm = crate::sync_manager::SyncManager::new(config);
         if let Some(ref s) = self.storage {
@@ -6236,6 +6532,7 @@ impl MahoCore {
                 crate::sync_models::SyncEntityType::Space,
                 crate::sync_models::SyncEntityType::Tab,
                 crate::sync_models::SyncEntityType::Bookmark,
+                crate::sync_models::SyncEntityType::BookmarkFolder,
                 crate::sync_models::SyncEntityType::Note,
                 crate::sync_models::SyncEntityType::Boost,
                 crate::sync_models::SyncEntityType::ReadingListItem,
@@ -6243,19 +6540,16 @@ impl MahoCore {
                 crate::sync_models::SyncEntityType::Shortcut,
                 crate::sync_models::SyncEntityType::Memory,
                 crate::sync_models::SyncEntityType::Extension,
+                crate::sync_models::SyncEntityType::CssMod,
+                crate::sync_models::SyncEntityType::Easel,
+                crate::sync_models::SyncEntityType::Conversation,
+                crate::sync_models::SyncEntityType::ConversationTurn,
+                crate::sync_models::SyncEntityType::AutofillAddress,
+                crate::sync_models::SyncEntityType::AutofillPayment,
+                crate::sync_models::SyncEntityType::Settings,
+                crate::sync_models::SyncEntityType::SharedCollection,
             ] {
-                let entity_type_str = match entity_type {
-                    crate::sync_models::SyncEntityType::Space => "space",
-                    crate::sync_models::SyncEntityType::Tab => "tab",
-                    crate::sync_models::SyncEntityType::Bookmark => "bookmark",
-                    crate::sync_models::SyncEntityType::Note => "note",
-                    crate::sync_models::SyncEntityType::Boost => "boost",
-                    crate::sync_models::SyncEntityType::ReadingListItem => "readinglistitem",
-                    crate::sync_models::SyncEntityType::SearchEngine => "searchengine",
-                    crate::sync_models::SyncEntityType::Shortcut => "shortcut",
-                    crate::sync_models::SyncEntityType::Memory => "memory",
-                    crate::sync_models::SyncEntityType::Extension => "extension",
-                };
+                let entity_type_str = entity_type.as_str();
                 if let Ok(version) = s.get_sync_last_pulled_version(entity_type_str) {
                     sm.set_last_pulled_version(entity_type.clone(), version);
                 }
@@ -6268,6 +6562,7 @@ impl MahoCore {
     }
 
     pub fn stop_sync(&mut self) {
+        self.trigger_async_snapshot_upload();
         self.sync_manager = None;
     }
 
@@ -6428,6 +6723,7 @@ impl MahoCore {
         if let Some(ref mut sm) = self.sync_manager {
             sm.set_encryption_key(encryption_key);
         }
+        let _ = self.bootstrap_sync_join_flow(&room_id);
         serde_json::json!({
             "success": true,
             "deviceId": self.sync_manager.as_ref().map(|sm| sm.config().device_id.clone()).unwrap_or_default()
@@ -6462,6 +6758,625 @@ impl MahoCore {
         }
     }
 
+    fn create_sync_entity(
+        &self,
+        entity_type: SyncEntityType,
+        entity_id: String,
+        payload_json: String,
+        modified_at: i64,
+    ) -> crate::sync_models::SyncEntity {
+        let type_str = entity_type.as_str();
+        
+        let (version, device_id) = if let Some(ref s) = self.storage {
+            match s.get_entity_version(type_str, &entity_id) {
+                Ok(Some((hlc_ts, dev_id))) => (hlc_ts, dev_id),
+                _ => ((modified_at * 1000) as u64, self.account_manager.device_id_hash()),
+            }
+        } else {
+            ((modified_at * 1000) as u64, self.account_manager.device_id_hash())
+        };
+
+        crate::sync_models::SyncEntity {
+            entity_type,
+            entity_id,
+            version,
+            device_id,
+            schema_version: 1,
+            modified_at,
+            payload_json,
+            deleted: false,
+            queue_row_id: None,
+        }
+    }
+
+    pub fn build_snapshot(&self) -> Result<Vec<u8>, String> {
+        let mut snap = crate::snapshot::Snapshot {
+            schema_version: 1,
+            hlc_ts_ceiling: 0,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            creator_device_id: self.account_manager.device_id_hash(),
+            entities: std::collections::HashMap::new(),
+        };
+        
+        let parse_dt = |dt_str: &str| -> i64 {
+            chrono::DateTime::parse_from_rfc3339(dt_str).map(|d| d.timestamp()).unwrap_or_else(|_| {
+                dt_str.parse::<i64>().unwrap_or(0)
+            })
+        };
+
+        let is_disabled = |et: SyncEntityType| -> bool {
+            if let Some(ref sm) = self.sync_manager {
+                sm.config().disabled_entity_types.contains(&et)
+            } else {
+                false
+            }
+        };
+        
+        let mut hlc_ts_ceiling = 0u64;
+        let mut entities = std::collections::HashMap::new();
+
+        // Spaces
+        let mut spaces = Vec::new();
+        if !is_disabled(SyncEntityType::Space) {
+            for space in self.space_manager.get_all_spaces() {
+                let payload = serde_json::to_string(space).map_err(|e| e.to_string())?;
+                let sync_ent = self.create_sync_entity(SyncEntityType::Space, space.id.to_string(), payload, chrono::Utc::now().timestamp());
+                hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
+                spaces.push(sync_ent);
+            }
+        }
+        entities.insert("Space".to_string(), spaces);
+
+        // Tabs
+        let mut tabs = Vec::new();
+        if !is_disabled(SyncEntityType::Tab) {
+            for tab in self.tab_manager.get_all_tabs() {
+                let payload = serde_json::to_string(tab).map_err(|e| e.to_string())?;
+                let sync_ent = self.create_sync_entity(SyncEntityType::Tab, tab.id.to_string(), payload, parse_dt(&tab.created_at.0));
+                hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
+                tabs.push(sync_ent);
+            }
+        }
+        entities.insert("Tab".to_string(), tabs);
+
+        // Bookmarks
+        let mut bookmarks = Vec::new();
+        if !is_disabled(SyncEntityType::Bookmark) {
+            for bm in self.bookmark_manager.get_all_bookmarks() {
+                let payload = serde_json::to_string(bm).map_err(|e| e.to_string())?;
+                let sync_ent = self.create_sync_entity(SyncEntityType::Bookmark, bm.id.0.clone(), payload, parse_dt(&bm.created_at.0));
+                hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
+                bookmarks.push(sync_ent);
+            }
+        }
+        entities.insert("Bookmark".to_string(), bookmarks);
+
+        // BookmarkFolders
+        let mut bookmark_folders = Vec::new();
+        if !is_disabled(SyncEntityType::BookmarkFolder) {
+            for folder in self.bookmark_manager.get_folders() {
+                let payload = serde_json::to_string(folder).map_err(|e| e.to_string())?;
+                let sync_ent = self.create_sync_entity(SyncEntityType::BookmarkFolder, folder.id.to_string(), payload, parse_dt(&folder.created_at.0));
+                hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
+                bookmark_folders.push(sync_ent);
+            }
+        }
+        entities.insert("BookmarkFolder".to_string(), bookmark_folders);
+
+        // Notes
+        let mut notes = Vec::new();
+        if !is_disabled(SyncEntityType::Note) {
+            for note in self.note_manager.get_all_notes() {
+                let payload = serde_json::to_string(note).map_err(|e| e.to_string())?;
+                let sync_ent = self.create_sync_entity(SyncEntityType::Note, note.id.to_string(), payload, parse_dt(&note.created_at.0));
+                hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
+                notes.push(sync_ent);
+            }
+        }
+        entities.insert("Note".to_string(), notes);
+
+        // Boosts
+        let mut boosts = Vec::new();
+        if !is_disabled(SyncEntityType::Boost) {
+            for boost in self.boost_manager.get_all_boosts() {
+                let payload = serde_json::to_string(boost).map_err(|e| e.to_string())?;
+                let sync_ent = self.create_sync_entity(SyncEntityType::Boost, boost.id.to_string(), payload, parse_dt(&boost.created_at.0));
+                hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
+                boosts.push(sync_ent);
+            }
+        }
+        entities.insert("Boost".to_string(), boosts);
+
+        // ReadingListItems
+        let mut reading_list = Vec::new();
+        if !is_disabled(SyncEntityType::ReadingListItem) {
+            for item in self.reading_list_manager.get_all_items() {
+                let payload = serde_json::to_string(item).map_err(|e| e.to_string())?;
+                let sync_ent = self.create_sync_entity(SyncEntityType::ReadingListItem, item.id.to_string(), payload, parse_dt(&item.added_at.0));
+                hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
+                reading_list.push(sync_ent);
+            }
+        }
+        entities.insert("ReadingListItem".to_string(), reading_list);
+
+        // SearchEngines
+        let mut search_engines = Vec::new();
+        if !is_disabled(SyncEntityType::SearchEngine) {
+            if let Some(ref storage) = self.storage {
+                if let Ok(engines_raw) = storage.load_search_engines() {
+                    for (id, name, url_template, shortcut, icon_url, is_default) in engines_raw {
+                        let se = maho_types::search_engine::SearchEngine {
+                            id: id.clone(),
+                            name,
+                            url_template,
+                            shortcut,
+                            icon_url,
+                            is_default,
+                        };
+                        let payload = serde_json::to_string(&se).map_err(|e| e.to_string())?;
+                        let sync_ent = self.create_sync_entity(SyncEntityType::SearchEngine, id, payload, chrono::Utc::now().timestamp());
+                        hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
+                        search_engines.push(sync_ent);
+                    }
+                }
+            }
+        }
+        entities.insert("SearchEngine".to_string(), search_engines);
+
+        // Shortcuts
+        let mut shortcuts = Vec::new();
+        if !is_disabled(SyncEntityType::Shortcut) {
+            if let Some(ref storage) = self.storage {
+                if let Ok(shortcuts_raw) = storage.load_shortcuts() {
+                    for (action, key_combo_json, enabled, _version) in shortcuts_raw {
+                        let payload = serde_json::json!({
+                            "action": action,
+                            "keyCombo": serde_json::from_str::<serde_json::Value>(&key_combo_json).unwrap_or(serde_json::Value::Null),
+                            "enabled": enabled
+                        }).to_string();
+                        let sync_ent = self.create_sync_entity(SyncEntityType::Shortcut, action, payload, chrono::Utc::now().timestamp());
+                        hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
+                        shortcuts.push(sync_ent);
+                    }
+                }
+            }
+        }
+        entities.insert("Shortcut".to_string(), shortcuts);
+
+        // Memories
+        let mut memories = Vec::new();
+        if !is_disabled(SyncEntityType::Memory) {
+            if let Some(ref storage) = self.storage {
+                if let Ok(memories_raw) = storage.load_all_memories() {
+                    for (id, fact, source, session_id, categories, importance, metadata) in memories_raw {
+                        let payload = serde_json::json!({
+                            "id": id,
+                            "fact": fact,
+                            "source": source,
+                            "session_id": session_id,
+                            "categories": categories,
+                            "importance": importance,
+                            "metadata": metadata
+                        }).to_string();
+                        let sync_ent = self.create_sync_entity(SyncEntityType::Memory, id, payload, chrono::Utc::now().timestamp());
+                        hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
+                        memories.push(sync_ent);
+                    }
+                }
+            }
+        }
+        entities.insert("Memory".to_string(), memories);
+
+        // Extensions
+        let mut extensions = Vec::new();
+        if !is_disabled(SyncEntityType::Extension) {
+            for ext in self.get_installed_extensions() {
+                let payload = serde_json::to_string(&ext).map_err(|e| e.to_string())?;
+                let sync_ent = self.create_sync_entity(SyncEntityType::Extension, ext.id.clone(), payload, chrono::Utc::now().timestamp());
+                hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
+                extensions.push(sync_ent);
+            }
+        }
+        entities.insert("Extension".to_string(), extensions);
+
+        // CssMods
+        let mut css_mods = Vec::new();
+        if !is_disabled(SyncEntityType::CssMod) {
+            for css_mod in self.css_mod_manager.get_all_mods() {
+                let payload = serde_json::to_string(css_mod).map_err(|e| e.to_string())?;
+                let sync_ent = self.create_sync_entity(SyncEntityType::CssMod, css_mod.id.clone(), payload, css_mod.created_at.parse::<i64>().unwrap_or(0));
+                hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
+                css_mods.push(sync_ent);
+            }
+        }
+        entities.insert("CssMod".to_string(), css_mods);
+
+        // Easels
+        let mut easels = Vec::new();
+        if !is_disabled(SyncEntityType::Easel) {
+            for easel in self.easel_manager.get_all_easels() {
+                let payload = serde_json::to_string(easel).map_err(|e| e.to_string())?;
+                let sync_ent = self.create_sync_entity(SyncEntityType::Easel, easel.id.to_string(), payload, chrono::Utc::now().timestamp());
+                hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
+                easels.push(sync_ent);
+            }
+        }
+        entities.insert("Easel".to_string(), easels);
+
+        // Conversations & ConversationTurns
+        let mut conversations = Vec::new();
+        let mut conversation_turns = Vec::new();
+        if !is_disabled(SyncEntityType::Conversation) {
+            if let Some(ref storage) = self.storage {
+                if let Ok(convs) = storage.list_conversations(999999) {
+                    for conv in convs {
+                        let payload = serde_json::to_string(&conv).map_err(|e| e.to_string())?;
+                        let sync_ent = self.create_sync_entity(SyncEntityType::Conversation, conv.id.clone(), payload, parse_dt(&conv.created_at));
+                        hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
+                        conversations.push(sync_ent);
+
+                        if let Ok(turns) = storage.get_conversation_messages(&conv.id) {
+                            for turn in turns {
+                                let payload = serde_json::to_string(&turn).map_err(|e| e.to_string())?;
+                                let sync_ent = self.create_sync_entity(SyncEntityType::ConversationTurn, turn.id.clone(), payload, parse_dt(&turn.created_at));
+                                hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
+                                conversation_turns.push(sync_ent);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        entities.insert("Conversation".to_string(), conversations);
+        entities.insert("ConversationTurn".to_string(), conversation_turns);
+
+        // AutofillAddress
+        let mut autofill_addresses = Vec::new();
+        if !is_disabled(SyncEntityType::AutofillAddress) {
+            if let Some(ref storage) = self.storage {
+                if let Ok(addresses_raw) = storage.load_autofill_addresses() {
+                    for (id, name, street, city, state, zip, country, phone, email) in addresses_raw {
+                        let addr = maho_types::autofill::AutofillAddress {
+                            id: id.clone(), name, street, city, state, zip, country, phone, email
+                        };
+                        let payload = serde_json::to_string(&addr).map_err(|e| e.to_string())?;
+                        let sync_ent = self.create_sync_entity(SyncEntityType::AutofillAddress, id, payload, chrono::Utc::now().timestamp());
+                        hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
+                        autofill_addresses.push(sync_ent);
+                    }
+                }
+            }
+        }
+        entities.insert("AutofillAddress".to_string(), autofill_addresses);
+
+        // AutofillPayment
+        let mut autofill_payments = Vec::new();
+        if !is_disabled(SyncEntityType::AutofillPayment) {
+            if let Some(ref storage) = self.storage {
+                if let Ok(payments_raw) = storage.load_autofill_payments() {
+                    for (id, card_name, last_four, expiry) in payments_raw {
+                        let payment = maho_types::autofill::AutofillPayment {
+                            id: id.clone(), card_name, last_four, expiry
+                        };
+                        let payload = serde_json::to_string(&payment).map_err(|e| e.to_string())?;
+                        let sync_ent = self.create_sync_entity(SyncEntityType::AutofillPayment, id, payload, chrono::Utc::now().timestamp());
+                        hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
+                        autofill_payments.push(sync_ent);
+                    }
+                }
+            }
+        }
+        entities.insert("AutofillPayment".to_string(), autofill_payments);
+
+        // Settings
+        let mut settings_list = Vec::new();
+        if !is_disabled(SyncEntityType::Settings) {
+            let settings = self.settings_manager.get_settings();
+            let payload = serde_json::to_string(settings).map_err(|e| e.to_string())?;
+            let sync_ent = self.create_sync_entity(SyncEntityType::Settings, "global_settings".to_string(), payload, chrono::Utc::now().timestamp());
+            hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
+            settings_list.push(sync_ent);
+        }
+        entities.insert("Settings".to_string(), settings_list);
+
+        // SharedCollection
+        let mut shared_collections = Vec::new();
+        if !is_disabled(SyncEntityType::SharedCollection) {
+            if let Some(ref storage) = self.storage {
+                if let Ok(collections_raw) = storage.get_all_shared_collections() {
+                    for col in collections_raw {
+                        let payload = serde_json::to_string(&col).map_err(|e| e.to_string())?;
+                        let sync_ent = self.create_sync_entity(SyncEntityType::SharedCollection, col.id.clone(), payload, chrono::Utc::now().timestamp());
+                        hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
+                        shared_collections.push(sync_ent);
+                    }
+                }
+            }
+        }
+        entities.insert("SharedCollection".to_string(), shared_collections);
+
+        snap.hlc_ts_ceiling = hlc_ts_ceiling;
+        snap.entities = entities;
+
+        let snap_json = serde_json::to_vec(&snap).map_err(|e| e.to_string())?;
+
+        let sync_key_opt = self.sync_manager.as_ref().and_then(|sm| sm.encryption_key.as_ref());
+        match sync_key_opt {
+            Some(key) => {
+                let encrypted = crate::sync_crypto::encrypt_update(&snap_json, key).map_err(|e| e.to_string())?;
+                Ok(encrypted)
+            }
+            None => Err("Encryption key is not set".to_string()),
+        }
+    }
+
+    pub fn apply_snapshot(&mut self, encrypted_blob: &[u8]) -> Result<(), String> {
+        let sync_key_opt = self.sync_manager.as_ref().and_then(|sm| sm.encryption_key.as_ref());
+        let decrypted_bytes = match sync_key_opt {
+            Some(key) => crate::sync_crypto::decrypt_update(encrypted_blob, key).map_err(|e| e.to_string())?,
+            None => return Err("Encryption key is not set".to_string()),
+        };
+
+        let snap: crate::snapshot::Snapshot = serde_json::from_slice(&decrypted_bytes).map_err(|e| e.to_string())?;
+        let mut ordered_entities = Vec::new();
+        
+        let type_keys = vec![
+            "Space",
+            "Tab",
+            "BookmarkFolder",
+            "Bookmark",
+            "Note",
+            "Boost",
+            "ReadingListItem",
+            "SearchEngine",
+            "Shortcut",
+            "Extension",
+            "Memory",
+            "CssMod",
+            "Easel",
+            "Conversation",
+            "ConversationTurn",
+            "AutofillAddress",
+            "AutofillPayment",
+            "Settings",
+            "SharedCollection",
+        ];
+
+        for key in type_keys {
+            if let Some(list) = snap.entities.get(key) {
+                ordered_entities.extend(list.clone());
+            }
+        }
+
+        let applied = self.apply_sync_remote_entities(ordered_entities);
+        println!("[sync] Applied {} entities from snapshot", applied.len());
+
+        if let Some(ref mut sm) = self.sync_manager {
+            let ceiling = snap.hlc_ts_ceiling;
+            for t in &[
+                SyncEntityType::Space,
+                SyncEntityType::Tab,
+                SyncEntityType::Bookmark,
+                SyncEntityType::BookmarkFolder,
+                SyncEntityType::Note,
+                SyncEntityType::Boost,
+                SyncEntityType::ReadingListItem,
+                SyncEntityType::SearchEngine,
+                SyncEntityType::Shortcut,
+                SyncEntityType::Memory,
+                SyncEntityType::Extension,
+                SyncEntityType::CssMod,
+                SyncEntityType::Easel,
+                SyncEntityType::Conversation,
+                SyncEntityType::ConversationTurn,
+                SyncEntityType::AutofillAddress,
+                SyncEntityType::AutofillPayment,
+                SyncEntityType::Settings,
+                SyncEntityType::SharedCollection,
+            ] {
+                let last_pulled = sm.last_pulled_versions.entry(t.clone()).or_insert(0);
+                *last_pulled = (*last_pulled).max(ceiling);
+                if let Some(ref s) = self.storage {
+                    if let Err(e) = s.set_sync_last_pulled_version(t.as_str(), *last_pulled) {
+                        eprintln!(
+                            "[sync] Failed to persist last_pulled_version for {}: {}",
+                            t.as_str(), e
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn push_sync_entity(&mut self, entity_type: SyncEntityType, id: String, payload_json: String, deleted: bool) {
+        if let Some(ref sm) = self.sync_manager {
+            if sm.config().disabled_entity_types.contains(&entity_type) {
+                return; // Disabled entity type, skip sync push!
+            }
+        }
+
+        match self.next_hlc_ts() {
+            Ok(version) => {
+                let sync_entity = crate::sync_models::SyncEntity {
+                    entity_type,
+                    entity_id: id,
+                    version,
+                    device_id: self.account_manager.device_id_hash(),
+                    schema_version: 1,
+                    modified_at: chrono::Utc::now().timestamp(),
+                    payload_json,
+                    deleted,
+                    queue_row_id: None,
+                };
+                self.sync_push_entity_persisted(sync_entity);
+
+                // Increment push count and run scheduled check
+                let count = self.sync_push_count.get() + 1;
+                self.sync_push_count.set(count);
+
+                let time_since_last = chrono::Utc::now() - self.sync_last_snapshot_time.get();
+                let exceeds_time = time_since_last >= chrono::Duration::hours(6);
+                let exceeds_count = count >= 500;
+
+                if exceeds_time || exceeds_count {
+                    let is_leader = self.sync_manager.as_ref().map(|sm| sm.is_leader()).unwrap_or(false);
+                    let startup_grace_passed = chrono::Utc::now() - self.sync_startup_time.get() >= chrono::Duration::minutes(5);
+                    let dedup_window_passed = chrono::Utc::now() - self.sync_last_upload_attempt.get() >= chrono::Duration::minutes(30);
+
+                    if is_leader && startup_grace_passed && dedup_window_passed {
+                        println!("[sync] Triggering scheduled snapshot upload (exceeds_time={}, exceeds_count={})", exceeds_time, exceeds_count);
+                        self.trigger_async_snapshot_upload();
+                        self.sync_push_count.set(0);
+                        self.sync_last_snapshot_time.set(chrono::Utc::now());
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "[sync] Skipping push for {:?} id '{}': HLC failure: {}",
+                    entity_type, id, e
+                );
+            }
+        }
+    }
+
+    pub fn trigger_async_snapshot_upload(&self) {
+        let Some(ref sm) = self.sync_manager else { return; };
+        if !sm.is_leader() {
+            return;
+        }
+        let room_id = match sm.config().sync_key.as_ref() {
+            Some(key) => key.clone(),
+            None => return,
+        };
+        let server_url = sm.config().server_url.clone();
+        let rest_url = server_url.replace("wss://", "https://").replace("ws://", "http://");
+        let snapshot_endpoint = format!("{}/sync/snapshots", rest_url);
+        let client = crate::http::shared_http_client();
+        let token = if let Some(ref storage) = self.storage {
+            storage.get_setting("auth:access_token").ok().flatten().filter(|s| !s.is_empty()).unwrap_or_else(|| room_id.clone())
+        } else {
+            room_id.clone()
+        };
+
+        let encrypted_blob = match self.build_snapshot() {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("[sync] Failed to build snapshot for upload: {}", e);
+                return;
+            }
+        };
+
+        // Preflight size check: relay caps at 100 MB. Base64 inflates ~4/3× on the wire,
+        // so a 75 MB encrypted blob becomes ~100 MB base64. Fail early with a clear log
+        // instead of round-tripping to the relay for a 413.
+        const MAX_ENCRYPTED_BLOB_BYTES: usize = 75 * 1024 * 1024;
+        if encrypted_blob.len() > MAX_ENCRYPTED_BLOB_BYTES {
+            eprintln!(
+                "[sync] Snapshot blob {} bytes exceeds client preflight cap {} bytes; skipping upload",
+                encrypted_blob.len(),
+                MAX_ENCRYPTED_BLOB_BYTES
+            );
+            return;
+        }
+
+        use base64::Engine;
+        let base64_blob = base64::engine::general_purpose::STANDARD.encode(&encrypted_blob);
+        let hlc_ts_ceiling = self.last_hlc_ts.get() as i64;
+        let creator_device_id = self.account_manager.device_id_hash() as i64;
+
+        let json_body = serde_json::json!({
+            "hlc_ts_ceiling": hlc_ts_ceiling,
+            "creator_device_id": creator_device_id,
+            "blob": base64_blob
+        });
+
+        self.sync_last_upload_attempt.set(chrono::Utc::now());
+
+        std::thread::spawn(move || {
+            let result = match tokio::runtime::Handle::try_current() {
+                Ok(h) => h.block_on(async {
+                    client.post(&snapshot_endpoint)
+                        .header("Authorization", format!("Bearer {}", token))
+                        .json(&json_body)
+                        .send()
+                        .await
+                }),
+                Err(_) => crate::memory_manager::get_runtime().block_on(async {
+                    client.post(&snapshot_endpoint)
+                        .header("Authorization", format!("Bearer {}", token))
+                        .json(&json_body)
+                        .send()
+                        .await
+                }),
+            };
+            match result {
+                Ok(resp) if resp.status().is_success() => {
+                    println!("[sync] Snapshot uploaded successfully to relay!");
+                }
+                Ok(resp) => eprintln!("[sync] Upload failed with status: {}", resp.status()),
+                Err(e) => eprintln!("[sync] Upload HTTP request failed: {:?}", e),
+            }
+        });
+    }
+
+
+
+    pub fn bootstrap_sync_join_flow(&mut self, room_id: &str) -> Result<(), String> {
+        let Some(ref sm) = self.sync_manager else { return Ok(()); };
+        let server_url = sm.config().server_url.clone();
+        let rest_url = server_url.replace("wss://", "https://").replace("ws://", "http://");
+        let snapshot_endpoint = format!("{}/sync/snapshots", rest_url);
+        let client = crate::http::shared_http_client();
+        let room_id = room_id.to_string();
+        let token = if let Some(ref storage) = self.storage {
+            storage.get_setting("auth:access_token").ok().flatten().filter(|s| !s.is_empty()).unwrap_or_else(|| room_id.clone())
+        } else {
+            room_id.clone()
+        };
+
+        let download_fut = async {
+            match client.head(&snapshot_endpoint).header("Authorization", format!("Bearer {}", token)).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    match client.get(&snapshot_endpoint).header("Authorization", format!("Bearer {}", token)).send().await {
+                        Ok(resp) => resp.json::<serde_json::Value>().await.map_err(|e| format!("JSON download failed: {:?}", e)),
+                        Err(e) => Err(format!("Download request failed: {:?}", e)),
+                    }
+                }
+                Ok(resp) => Err(format!("No snapshot exists on relay (status: {})", resp.status())),
+                Err(e) => Err(format!("Head request failed: {:?}", e)),
+            }
+        };
+
+        let result = match tokio::runtime::Handle::try_current() {
+            Ok(h) => h.block_on(download_fut),
+            Err(_) => crate::memory_manager::get_runtime().block_on(download_fut),
+        };
+
+        match result {
+            Ok(json_val) => {
+                let base64_blob = json_val["blob"].as_str().ok_or_else(|| "Missing blob field in snapshot response".to_string())?;
+                use base64::Engine;
+                let encrypted_bytes = base64::engine::general_purpose::STANDARD.decode(base64_blob).map_err(|e| format!("Base64 decode failed: {:?}", e))?;
+                
+                println!("[sync] Snapshot found on relay, applying...");
+                if let Err(e) = self.apply_snapshot(&encrypted_bytes) {
+                    eprintln!("[sync] Failed to apply snapshot: {:?}", e);
+                    Err(e)
+                } else {
+                    println!("[sync] Snapshot applied successfully!");
+                    Ok(())
+                }
+            }
+            Err(e) => {
+                println!("[sync] Join bootstrap: {}", e);
+                Err(e)
+            }
+        }
+    }
+
     /// Apply a batch of remote sync entities. Returns the list of actually-applied entities.
     pub fn apply_sync_remote_entities(
         &mut self,
@@ -6480,58 +7395,331 @@ impl MahoCore {
             None => return Vec::new(),
         };
 
+        let mut updates = Vec::new();
+
         for entity in &applied {
-            if entity.entity_type == SyncEntityType::Extension {
-                if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&entity.payload_json) {
-                    if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
-                        let enabled = payload.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
-                        let deleted = entity.deleted;
+            match entity.entity_type {
+                SyncEntityType::Extension => {
+                    if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&entity.payload_json) {
+                        if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
+                            let enabled = payload.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+                            let deleted = entity.deleted;
 
-                        if let Some(ext) = self.extension_bridge.extensions.get_mut(id) {
-                            if ext.enabled != enabled {
-                                ext.enabled = enabled;
+                            if let Some(ext) = self.extension_bridge.extensions.get_mut(id) {
+                                if ext.enabled != enabled {
+                                    ext.enabled = enabled;
+                                }
                             }
-                        }
 
-                        if let Some(ref cb) = self.extension_bridge.sync_callback {
-                            cb(id, enabled, deleted);
+                            if let Some(ref cb) = self.extension_bridge.sync_callback {
+                                cb(id, enabled, deleted);
+                            }
                         }
                     }
                 }
-            } else if entity.entity_type == SyncEntityType::Shortcut {
-                if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&entity.payload_json) {
-                    if let Some(action) = payload.get("action").and_then(|v| v.as_str()) {
-                        if entity.deleted {
-                            self.shortcut_manager.reset_shortcut(action);
-                            if let Some(ref storage) = self.storage {
-                                let _ = storage.delete_shortcut(action);
-                            }
-                        } else {
-                            if let Some(key_combo_val) = payload.get("keyCombo") {
-                                if let Ok(key_combo) = serde_json::from_value::<maho_types::keyboard::KeyCombo>(key_combo_val.clone()) {
-                                    let _ = self.shortcut_manager.set_shortcut(action, key_combo.clone());
-                                    let enabled = self.shortcut_manager.get_all_bindings().iter().find(|b| b.action == action).map(|b| b.enabled).unwrap_or(true);
-                                    self.shortcut_manager.restore_shortcut_state(action, key_combo.clone(), enabled, entity.version);
-                                    if let Some(ref storage) = self.storage {
-                                        if let Ok(json) = serde_json::to_string(&key_combo) {
-                                            let _ = storage.save_shortcut(action, &json, entity.version);
+                SyncEntityType::Shortcut => {
+                    if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&entity.payload_json) {
+                        if let Some(action) = payload.get("action").and_then(|v| v.as_str()) {
+                            if entity.deleted {
+                                self.shortcut_manager.reset_shortcut(action);
+                                if let Some(ref storage) = self.storage {
+                                    let _ = storage.delete_shortcut(action);
+                                }
+                            } else {
+                                if let Some(key_combo_val) = payload.get("keyCombo") {
+                                    if let Ok(key_combo) = serde_json::from_value::<maho_types::keyboard::KeyCombo>(key_combo_val.clone()) {
+                                        let _ = self.shortcut_manager.set_shortcut(action, key_combo.clone());
+                                        let enabled = self.shortcut_manager.get_all_bindings().iter().find(|b| b.action == action).map(|b| b.enabled).unwrap_or(true);
+                                        self.shortcut_manager.restore_shortcut_state(action, key_combo.clone(), enabled, entity.version);
+                                        if let Some(ref storage) = self.storage {
+                                            if let Ok(json) = serde_json::to_string(&key_combo) {
+                                                let _ = storage.save_shortcut(action, &json, entity.version);
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            if let Some(enabled) = payload.get("enabled").and_then(|v| v.as_bool()) {
-                                let key_combo = self.shortcut_manager.get_all_bindings().iter().find(|b| b.action == action).map(|b| b.key_combo.clone()).unwrap_or_else(|| maho_types::keyboard::KeyCombo::new("", vec![]));
-                                self.shortcut_manager.restore_shortcut_state(action, key_combo, enabled, entity.version);
-                                if let Some(ref storage) = self.storage {
-                                    let _ = storage.save_shortcut_enabled(action, enabled, entity.version);
+                                if let Some(enabled) = payload.get("enabled").and_then(|v| v.as_bool()) {
+                                    let key_combo = self.shortcut_manager.get_all_bindings().iter().find(|b| b.action == action).map(|b| b.key_combo.clone()).unwrap_or_else(|| maho_types::keyboard::KeyCombo::new("", vec![]));
+                                    self.shortcut_manager.restore_shortcut_state(action, key_combo, enabled, entity.version);
+                                    if let Some(ref storage) = self.storage {
+                                        let _ = storage.save_shortcut_enabled(action, enabled, entity.version);
+                                    }
                                 }
                             }
+                        }
+                    }
+                }
+                SyncEntityType::Space => {
+                    if entity.deleted {
+                        let space_id = maho_types::identifiers::SpaceId::new(&entity.entity_id);
+                        self.space_manager.delete_space(&space_id);
+                    } else if let Ok(space) = serde_json::from_str::<maho_types::space::Space>(&entity.payload_json) {
+                        self.space_manager.upsert_space(space);
+                    }
+                    let favorited_tab_ids: std::collections::HashSet<maho_types::identifiers::TabId> = self.tab_manager.get_all_favorite_tabs().iter().map(|t| t.id.clone()).collect();
+                    self.space_manager.strip_favorited_tabs_from_root_orders(&favorited_tab_ids);
+                }
+                SyncEntityType::Tab => {
+                    if entity.deleted {
+                        let tab_id = maho_types::identifiers::TabId::new(&entity.entity_id);
+                        self.tab_manager.close_tab(&tab_id);
+                    } else if let Ok(tab) = serde_json::from_str::<maho_types::tab::Tab>(&entity.payload_json) {
+                        let is_favorite = tab.is_favorite;
+                        let tab_id = tab.id.clone();
+                        self.tab_manager.restore_tab(tab);
+                        if is_favorite {
+                            let mut favorited_tab_ids = std::collections::HashSet::new();
+                            favorited_tab_ids.insert(tab_id);
+                            self.space_manager.strip_favorited_tabs_from_root_orders(&favorited_tab_ids);
+                        }
+                    }
+                }
+                SyncEntityType::Bookmark => {
+                    if entity.deleted {
+                        self.bookmark_manager.remove_bookmark(&entity.entity_id);
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.delete_bookmark(&entity.entity_id);
+                        }
+                    } else if let Ok(bm) = serde_json::from_str::<crate::bookmark_manager::Bookmark>(&entity.payload_json) {
+                        self.bookmark_manager.restore_bookmark(bm.clone());
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.save_bookmark(
+                                &bm.id.0,
+                                &bm.url,
+                                &bm.title,
+                                bm.folder_id.as_deref(),
+                                &bm.created_at.0,
+                            );
+                        }
+                    }
+                }
+                SyncEntityType::BookmarkFolder => {
+                    if entity.deleted {
+                        self.bookmark_manager.delete_folder(&entity.entity_id);
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.delete_bookmark_folder(&entity.entity_id);
+                        }
+                    } else if let Ok(folder) = serde_json::from_str::<crate::bookmark_manager::BookmarkFolder>(&entity.payload_json) {
+                        self.bookmark_manager.restore_folder(folder.clone());
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.save_bookmark_folder(
+                                &folder.id,
+                                &folder.name,
+                                folder.parent_id.as_deref(),
+                                &folder.created_at.0,
+                            );
+                        }
+                    }
+                }
+                SyncEntityType::Note => {
+                    if entity.deleted {
+                        let note_id = maho_types::identifiers::NoteId::new(&entity.entity_id);
+                        self.note_manager.delete_note(&note_id);
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.delete_note(&entity.entity_id);
+                        }
+                    } else if let Ok(note) = serde_json::from_str::<maho_types::note::Note>(&entity.payload_json) {
+                        self.note_manager.restore_note(note.clone());
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.save_note(
+                                note.id.as_ref(),
+                                note.linked_tab_id.as_ref().map(|tab_id| tab_id.as_ref()),
+                                note.linked_url.as_ref().map(|url| url.as_ref()),
+                                &note.content,
+                                note.created_at.as_ref(),
+                                note.updated_at.as_ref(),
+                            );
+                        }
+                    }
+                }
+                SyncEntityType::Boost => {
+                    if entity.deleted {
+                        let boost_id = maho_types::identifiers::BoostId::new(&entity.entity_id);
+                        self.boost_manager.delete(&boost_id);
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.delete_boost(&entity.entity_id);
+                        }
+                    } else if let Ok(boost) = serde_json::from_str::<maho_types::boost::Boost>(&entity.payload_json) {
+                        self.boost_manager.restore_boost(boost.clone());
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.save_boost(&boost);
+                        }
+                    }
+                }
+                SyncEntityType::ReadingListItem => {
+                    if entity.deleted {
+                        self.reading_list_manager.remove_item(&entity.entity_id);
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.delete_reading_list_item(&entity.entity_id);
+                        }
+                    } else if let Ok(item) = serde_json::from_str::<crate::reading_list_manager::ReadingListItem>(&entity.payload_json) {
+                        self.reading_list_manager.insert_item(item.clone());
+                        if let Some(ref storage) = self.storage {
+                            let tags_json = serde_json::to_string(&item.tags).unwrap_or_default();
+                            let _ = storage.save_reading_list_item(
+                                &item.id,
+                                &item.url,
+                                &item.title,
+                                item.excerpt.as_deref(),
+                                item.site_name.as_deref(),
+                                item.favicon_url.as_deref(),
+                                item.preview_image_url.as_deref(),
+                                &item.added_at.0,
+                                item.read_at.as_ref().map(|d| d.0.as_str()),
+                                item.is_read,
+                                item.estimated_read_minutes,
+                                Some(&tags_json),
+                            );
+                        }
+                    }
+                }
+                SyncEntityType::SearchEngine => {
+                    if entity.deleted {
+                        self.command_bar.remove_search_engine(&entity.entity_id);
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.delete_search_engine(&entity.entity_id);
+                        }
+                    } else if let Ok(se) = serde_json::from_str::<maho_types::search_engine::SearchEngine>(&entity.payload_json) {
+                        self.command_bar.add_search_engine(se.clone());
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.save_search_engine(
+                                &se.id,
+                                &se.name,
+                                &se.url_template,
+                                se.shortcut.as_deref(),
+                                se.icon_url.as_deref(),
+                                se.is_default,
+                            );
+                        }
+                    }
+                    updates.push(CoreUpdate::SearchEnginesUpdated { engines: self.command_bar.get_search_engines() });
+                }
+                SyncEntityType::Memory => {
+                    if entity.deleted {
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.delete_memory(&entity.entity_id);
+                            let _ = self.memory_manager.rebuild_index(storage);
+                        }
+                    } else if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&entity.payload_json) {
+                        if let Some(fact) = payload.get("fact").and_then(|v| v.as_str()) {
+                            let id = entity.entity_id.clone();
+                            let source = payload.get("source").and_then(|v| v.as_str()).unwrap_or("");
+                            let session_id = payload.get("session_id").and_then(|v| v.as_str());
+                            let categories = payload.get("categories").and_then(|v| v.as_str()).unwrap_or("");
+                            let importance = payload.get("importance").and_then(|v| v.as_f64()).unwrap_or(0.5);
+                            let metadata = payload.get("metadata").and_then(|v| v.as_str());
+                            
+                            if let Some(ref storage) = self.storage {
+                                let _ = storage.insert_memory(&id, fact, source, session_id, categories, importance, metadata);
+                                self.memory_manager.embed_fact(id, fact.to_string());
+                            }
+                        }
+                    }
+                }
+                SyncEntityType::CssMod => {
+                    if entity.deleted {
+                        self.css_mod_manager.uninstall_mod(&entity.entity_id);
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.delete_css_mod(&entity.entity_id);
+                        }
+                    } else if let Ok(css_mod) = serde_json::from_str::<maho_types::css_mod::CssMod>(&entity.payload_json) {
+                        self.css_mod_manager.install_mod(css_mod.clone());
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.save_css_mod(&css_mod);
+                        }
+                    }
+                }
+                SyncEntityType::Easel => {
+                    if entity.deleted {
+                        let easel_id = maho_types::identifiers::EaselId::new(&entity.entity_id);
+                        self.easel_manager.delete_easel(&easel_id);
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.delete_easel(&entity.entity_id);
+                        }
+                    } else if let Ok(easel) = serde_json::from_str::<maho_types::easel::Easel>(&entity.payload_json) {
+                        self.easel_manager.restore_easel(easel.clone());
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.save_easel(&easel);
+                        }
+                    }
+                }
+                SyncEntityType::Conversation => {
+                    if entity.deleted {
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.delete_conversation(&entity.entity_id);
+                        }
+                    } else if let Ok(conv) = serde_json::from_str::<maho_types::chat::Conversation>(&entity.payload_json) {
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.create_conversation(&conv.id, conv.title.as_deref(), conv.space_id.as_deref(), conv.model.as_deref());
+                        }
+                    }
+                }
+                SyncEntityType::ConversationTurn => {
+                    if entity.deleted {
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.delete_conversation_turn(&entity.entity_id);
+                        }
+                    } else if let Ok(turn) = serde_json::from_str::<maho_types::chat::ConversationTurn>(&entity.payload_json) {
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.insert_conversation_turn(&turn.id, &turn.session_id, &turn.role, &turn.content, turn.url_context.as_deref());
+                        }
+                    }
+                }
+                SyncEntityType::AutofillAddress => {
+                    if entity.deleted {
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.delete_autofill_address(&entity.entity_id);
+                        }
+                    } else if let Ok(addr) = serde_json::from_str::<maho_types::autofill::AutofillAddress>(&entity.payload_json) {
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.save_autofill_address(maho_storage::sqlite::AutofillAddressParams {
+                                id: &addr.id,
+                                name: &addr.name,
+                                street: &addr.street,
+                                city: &addr.city,
+                                state: &addr.state,
+                                zip: &addr.zip,
+                                country: &addr.country,
+                                phone: addr.phone.as_deref(),
+                                email: addr.email.as_deref(),
+                            });
+                        }
+                    }
+                }
+                SyncEntityType::AutofillPayment => {
+                    if entity.deleted {
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.delete_autofill_payment(&entity.entity_id);
+                        }
+                    } else if let Ok(pay) = serde_json::from_str::<maho_types::autofill::AutofillPayment>(&entity.payload_json) {
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.save_autofill_payment(&pay.id, &pay.card_name, &pay.last_four, &pay.expiry);
+                        }
+                    }
+                }
+                SyncEntityType::Settings => {
+                    if !entity.deleted {
+                        if let Ok(settings) = serde_json::from_str::<maho_types::settings::Settings>(&entity.payload_json) {
+                            self.settings_manager.restore_settings(settings);
+                            updates.push(CoreUpdate::SettingsChanged { settings: self.settings_manager.get_settings().clone() });
+                        }
+                    }
+                }
+                SyncEntityType::SharedCollection => {
+                    if entity.deleted {
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.delete_shared_collection(&entity.entity_id);
+                        }
+                    } else if let Ok(col) = serde_json::from_str::<maho_types::sharing::SharedCollection>(&entity.payload_json) {
+                        if let Some(ref storage) = self.storage {
+                            let _ = storage.save_shared_collection(&col);
                         }
                     }
                 }
             }
         }
 
+        self.emit_updates(updates);
         applied
     }
 
@@ -6558,20 +7746,9 @@ impl MahoCore {
     pub fn sync_push_entity_persisted(&mut self, mut entity: SyncEntity) {
         // Persist to SQLite queue first
         if let Some(ref storage) = self.storage {
-            let entity_type_str = match entity.entity_type {
-                crate::sync_models::SyncEntityType::Space => "space",
-                crate::sync_models::SyncEntityType::Tab => "tab",
-                crate::sync_models::SyncEntityType::Bookmark => "bookmark",
-                crate::sync_models::SyncEntityType::Note => "note",
-                crate::sync_models::SyncEntityType::Boost => "boost",
-                crate::sync_models::SyncEntityType::ReadingListItem => "readinglistitem",
-                crate::sync_models::SyncEntityType::SearchEngine => "searchengine",
-                crate::sync_models::SyncEntityType::Shortcut => "shortcut",
-                crate::sync_models::SyncEntityType::Memory => "memory",
-                crate::sync_models::SyncEntityType::Extension => "extension",
-            };
+            let entity_type_str = entity.entity_type.as_str();
             if let Ok(row_id) = storage.enqueue_sync_entity(
-                &entity_type_str,
+                entity_type_str,
                 &entity.entity_id,
                 entity.version,
                 entity.modified_at,
@@ -6596,7 +7773,13 @@ impl MahoCore {
         let entries = storage.load_pending_sync_entities()
             .map_err(|e| PersistenceError::Storage(e.to_string()))?;
         for (id, entity_type_str, entity_id, version, modified_at, payload_json, deleted) in entries {
-            let entity_type = parse_sync_entity_type(&entity_type_str);
+            let entity_type = match parse_sync_entity_type(&entity_type_str) {
+                Some(et) => et,
+                None => {
+                    eprintln!("[sync] Skipping unknown pending entity type '{}'", entity_type_str);
+                    continue;
+                }
+            };
             let entity = SyncEntity {
                 entity_type,
                 entity_id,
@@ -6618,6 +7801,7 @@ impl MahoCore {
     fn handle_memory_result(&mut self, result: MemoryResult, updates: &mut Vec<CoreUpdate>) {
         match result {
             MemoryResult::FactsExtracted { session_id, facts } => {
+                let mut facts_to_push = Vec::new();
                 if let Some(ref storage) = self.storage {
                     let mut new_ids = Vec::new();
                     for fact in &facts {
@@ -6628,12 +7812,26 @@ impl MahoCore {
                             &categories, fact.importance as f64, None,
                         );
                         self.memory_manager.embed_fact(id.clone(), fact.fact.clone());
-                        new_ids.push(id);
+                        new_ids.push(id.clone());
+
+                        let payload = serde_json::json!({
+                            "id": id,
+                            "fact": fact.fact,
+                            "source": "chat",
+                            "session_id": session_id,
+                            "categories": categories,
+                            "importance": fact.importance as f64,
+                            "metadata": serde_json::Value::Null,
+                        }).to_string();
+                        facts_to_push.push((id, payload));
                     }
                     updates.push(CoreUpdate::MemoryFactsExtracted {
                         session_id,
                         fact_count: facts.len(),
                     });
+                }
+                for (id, payload) in facts_to_push {
+                    self.push_sync_entity(SyncEntityType::Memory, id, payload, false);
                 }
             }
             MemoryResult::EmbeddingsReady { fact_id, embedding } => {
@@ -6726,15 +7924,105 @@ impl MahoCore {
         let deleted = storage.delete_memory(id).unwrap_or(false);
         if deleted {
             let _ = self.memory_manager.rebuild_index(storage);
+            self.push_sync_entity(SyncEntityType::Memory, id.to_string(), "{}".to_string(), true);
         }
         deleted
     }
 
     pub fn clear_all_memories(&mut self) -> bool {
         let Some(ref storage) = self.storage else { return false; };
+        let memories_to_delete = storage.load_all_memories().unwrap_or_default();
         let ok = storage.delete_all_memories().is_ok();
         if ok {
             let _ = self.memory_manager.rebuild_index(storage);
+            for (id, _, _, _, _, _, _) in memories_to_delete {
+                self.push_sync_entity(SyncEntityType::Memory, id, "{}".to_string(), true);
+            }
+        }
+        ok
+    }
+
+    pub fn create_conversation_persisted(&mut self, id: &str, title: Option<&str>, space_id: Option<&str>, model: Option<&str>) -> bool {
+        let mut payload_opt = None;
+        let mut ok = false;
+        if let Some(ref storage) = self.storage {
+            ok = storage.create_conversation(id, title, space_id, model).is_ok();
+            if ok {
+                if let Ok(convs) = storage.list_conversations(999999) {
+                    if let Some(conv) = convs.iter().find(|c| c.id == id) {
+                        payload_opt = serde_json::to_string(conv).ok();
+                    }
+                }
+            }
+        }
+        if let Some(payload) = payload_opt {
+            self.push_sync_entity(SyncEntityType::Conversation, id.to_string(), payload, false);
+        }
+        ok
+    }
+
+    pub fn save_conversation_message_persisted(&mut self, session_id: &str, role: &str, content: &str, url_context: Option<&str>) -> bool {
+        let mut payload_opt = None;
+        let mut id_opt = None;
+        let mut ok = false;
+        if let Some(ref storage) = self.storage {
+            let id = uuid::Uuid::new_v4().to_string();
+            ok = storage.insert_conversation_turn(&id, session_id, role, content, url_context).is_ok();
+            if ok {
+                if let Ok(turns) = storage.get_conversation_messages(session_id) {
+                    if let Some(turn) = turns.iter().find(|t| t.id == id) {
+                        payload_opt = serde_json::to_string(turn).ok();
+                        id_opt = Some(id);
+                    }
+                }
+            }
+        }
+        if let (Some(id), Some(payload)) = (id_opt, payload_opt) {
+            self.push_sync_entity(SyncEntityType::ConversationTurn, id, payload, false);
+        }
+        ok
+    }
+
+    pub fn delete_conversation_persisted(&mut self, id: &str) -> bool {
+        let mut turn_ids = Vec::new();
+        if let Some(ref storage) = self.storage {
+            if let Ok(turns) = storage.get_conversation_messages(id) {
+                for turn in turns {
+                    turn_ids.push(turn.id.clone());
+                }
+            }
+        }
+        for turn_id in &turn_ids {
+            self.push_sync_entity(SyncEntityType::ConversationTurn, turn_id.clone(), "{}".to_string(), true);
+        }
+        let mut ok = false;
+        if let Some(ref storage) = self.storage {
+            for turn_id in &turn_ids {
+                let _ = storage.delete_conversation_turn(turn_id);
+            }
+            ok = storage.delete_conversation(id).unwrap_or(false);
+        }
+        if ok {
+            self.push_sync_entity(SyncEntityType::Conversation, id.to_string(), "{}".to_string(), true);
+        }
+        ok
+    }
+
+    pub fn rename_conversation_persisted(&mut self, id: &str, title: &str) -> bool {
+        let mut payload_opt = None;
+        let mut ok = false;
+        if let Some(ref storage) = self.storage {
+            ok = storage.rename_conversation(id, title).unwrap_or(false);
+            if ok {
+                if let Ok(convs) = storage.list_conversations(999999) {
+                    if let Some(conv) = convs.iter().find(|c| c.id == id) {
+                        payload_opt = serde_json::to_string(conv).ok();
+                    }
+                }
+            }
+        }
+        if let Some(payload) = payload_opt {
+            self.push_sync_entity(SyncEntityType::Conversation, id.to_string(), payload, false);
         }
         ok
     }
@@ -6822,19 +8110,28 @@ impl MahoCore {
     }
 }
 
-fn parse_sync_entity_type(s: &str) -> SyncEntityType {
-    match s {
-        "Space" => SyncEntityType::Space,
-        "Tab" => SyncEntityType::Tab,
-        "Bookmark" => SyncEntityType::Bookmark,
-        "Note" => SyncEntityType::Note,
-        "Boost" => SyncEntityType::Boost,
-        "ReadingListItem" => SyncEntityType::ReadingListItem,
-        "SearchEngine" => SyncEntityType::SearchEngine,
-        "Shortcut" => SyncEntityType::Shortcut,
-        "Memory" => SyncEntityType::Memory,
-        "Extension" => SyncEntityType::Extension,
-        _ => SyncEntityType::Tab, // fallback
+fn parse_sync_entity_type(s: &str) -> Option<SyncEntityType> {
+    match s.to_lowercase().as_str() {
+        "space" => Some(SyncEntityType::Space),
+        "tab" => Some(SyncEntityType::Tab),
+        "bookmark" => Some(SyncEntityType::Bookmark),
+        "bookmarkfolder" => Some(SyncEntityType::BookmarkFolder),
+        "note" => Some(SyncEntityType::Note),
+        "boost" => Some(SyncEntityType::Boost),
+        "readinglistitem" => Some(SyncEntityType::ReadingListItem),
+        "searchengine" => Some(SyncEntityType::SearchEngine),
+        "shortcut" => Some(SyncEntityType::Shortcut),
+        "memory" => Some(SyncEntityType::Memory),
+        "extension" => Some(SyncEntityType::Extension),
+        "cssmod" => Some(SyncEntityType::CssMod),
+        "easel" => Some(SyncEntityType::Easel),
+        "conversation" => Some(SyncEntityType::Conversation),
+        "conversationturn" => Some(SyncEntityType::ConversationTurn),
+        "autofilladdress" => Some(SyncEntityType::AutofillAddress),
+        "autofillpayment" => Some(SyncEntityType::AutofillPayment),
+        "settings" => Some(SyncEntityType::Settings),
+        "sharedcollection" => Some(SyncEntityType::SharedCollection),
+        _ => None,
     }
 }
 

@@ -773,6 +773,61 @@ pub async fn admin_set_credit_balance<T: ConnectionTrait>(
     Ok(())
 }
 
+use maho_relay_entity::snapshots;
+
+pub async fn get_snapshot(
+    db: &DatabaseConnection,
+    room_id: &str,
+) -> Result<Option<snapshots::Model>, DbErr> {
+    snapshots::Entity::find_by_id(room_id.to_string())
+        .one(db)
+        .await
+}
+
+pub async fn save_snapshot(
+    db: &DatabaseConnection,
+    room_id: &str,
+    hlc_ts_ceiling: i64,
+    creator_device_id: i64,
+    blob: Vec<u8>,
+) -> Result<(), DbErr> {
+    let now = chrono::Utc::now().timestamp();
+    let existing = snapshots::Entity::find_by_id(room_id.to_string())
+        .one(db)
+        .await?;
+
+    if let Some(snap) = existing {
+        if hlc_ts_ceiling <= snap.hlc_ts_ceiling {
+            return Err(DbErr::Custom("Snapshot is not newer than existing".to_string()));
+        }
+        let mut am: snapshots::ActiveModel = snap.into();
+        am.hlc_ts_ceiling = Set(hlc_ts_ceiling);
+        am.created_at = Set(now);
+        am.creator_device_id = Set(creator_device_id);
+        am.blob = Set(blob);
+        am.update(db).await?;
+    } else {
+        snapshots::ActiveModel {
+            room_id: Set(room_id.to_string()),
+            hlc_ts_ceiling: Set(hlc_ts_ceiling),
+            created_at: Set(now),
+            creator_device_id: Set(creator_device_id),
+            blob: Set(blob),
+        }
+        .insert(db)
+        .await?;
+    }
+
+    let cutoff_time = now - 24 * 3600;
+    message::Entity::delete_many()
+        .filter(message::Column::RoomId.eq(room_id.to_string()))
+        .filter(message::Column::CreatedAt.lt(cutoff_time))
+        .exec(db)
+        .await?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
