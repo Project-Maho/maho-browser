@@ -123,7 +123,7 @@ const SETTINGS_SECTION_TITLE_CLASS = 'text-2xl font-semibold tracking-tight';
 const SETTINGS_SECTION_DESCRIPTION_CLASS = 'text-sm leading-6 text-muted-foreground';
 const SETTINGS_CARDS_GRID_CLASS = 'grid gap-4 p-4 md:grid-cols-2 md:p-5';
 const SIDEBAR_BUTTON_CLASS =
-    'h-auto w-full justify-start border border-transparent px-3 py-2.5 text-left text-sm font-medium text-foreground shadow-none [&:not([aria-current=page])]:hover:border-border/60 [&:not([aria-current=page])]:hover:bg-background/80 aria-[current=page]:translate-x-px aria-[current=page]:border-border aria-[current=page]:bg-accent aria-[current=page]:text-accent-foreground aria-[current=page]:shadow-sm';
+    'h-auto w-full justify-start border border-transparent px-3 py-2.5 text-left text-sm font-medium text-foreground shadow-none [&:not([aria-current=page])]:hover:border-border/60 [&:not([aria-current=page])]:hover:bg-background/80 [&:not([aria-current=page])]:hover:text-foreground aria-[current=page]:translate-x-px aria-[current=page]:border-border aria-[current=page]:bg-accent aria-[current=page]:text-accent-foreground aria-[current=page]:shadow-sm';
 const SIDEBAR_BUTTON_TEXT_CLASS = 'flex min-w-0 flex-1';
 const SIDEBAR_BUTTON_LABEL_CLASS = 'truncate';
 const BROWSER_SHELL_CLASS = 'min-w-0 overflow-hidden rounded-xl border border-border bg-background/50 shadow-inner';
