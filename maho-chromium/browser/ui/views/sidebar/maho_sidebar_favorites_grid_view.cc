@@ -9,6 +9,7 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <set>
 
 #include "base/containers/flat_map.h"
@@ -56,6 +57,8 @@
 #include "ui/compositor/layer_tree_owner.h"
 #include "ui/gfx/animation/tween.h"
 #include "ui/gfx/canvas.h"
+#include "ui/gfx/color_analysis.h"
+#include "ui/color/color_variant.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/size.h"
@@ -306,6 +309,27 @@ class FavoriteTileButton : public views::Button,
     UpdateAppearance();
   }
 
+  void SetActiveBorderColor(SkColor color) {
+    if (has_active_border_color_ && active_border_color_ == color) {
+      return;
+    }
+    active_border_color_ = color;
+    has_active_border_color_ = true;
+    if (is_active_) {
+      UpdateAppearance();
+    }
+  }
+
+  void ClearActiveBorderColor() {
+    if (!has_active_border_color_) {
+      return;
+    }
+    has_active_border_color_ = false;
+    if (is_active_) {
+      UpdateAppearance();
+    }
+  }
+
   void WriteDragDataForView(views::View* sender,
                             const gfx::Point& press_pt,
                             ui::OSExchangeData* data) override {
@@ -417,7 +441,17 @@ class FavoriteTileButton : public views::Button,
     }
     SetBackground(views::CreateRoundedRectBackground(
         bg, sidebar_layout::kFavoriteTileCornerRadiusDp));
-    SetBorder(nullptr);
+    // 1dp inset reserved unconditionally to prevent icon jitter on active toggle.
+    if (is_active_) {
+      ui::ColorVariant border_color =
+          has_active_border_color_
+              ? ui::ColorVariant(active_border_color_)
+              : ui::ColorVariant(kMahoColorSelectionHighlight);
+      SetBorder(views::CreateRoundedRectBorder(
+          1, sidebar_layout::kFavoriteTileCornerRadiusDp, border_color));
+    } else {
+      SetBorder(views::CreateEmptyBorder(gfx::Insets(1)));
+    }
   }
 
   base::RepeatingCallback<void(const std::string&)> drag_done_callback_;
@@ -426,6 +460,8 @@ class FavoriteTileButton : public views::Button,
   std::string dragging_tab_id_;
   size_t tile_index_ = 0;
   bool is_active_ = false;
+  bool has_active_border_color_ = false;
+  SkColor active_border_color_ = SK_ColorTRANSPARENT;
 };
 
 struct FavoriteTileSpec {
@@ -482,6 +518,35 @@ views::Label* AddPlaceholderLabel(views::View* parent, std::u16string text) {
   label->SetTextStyle(views::style::STYLE_BODY_3);
   label->SetSubpixelRenderingEnabled(false);
   return parent->AddChildView(std::move(label));
+}
+
+std::optional<SkColor> ExtractDominantColor(const ui::ImageModel& fav) {
+  if (fav.IsEmpty() || !fav.IsImage()) {
+    return std::nullopt;
+  }
+  const SkBitmap bitmap = fav.GetImage().AsBitmap();
+  if (bitmap.drawsNothing() || bitmap.width() <= 0 || bitmap.height() <= 0) {
+    return std::nullopt;
+  }
+  // Ask for vibrant profiles in order of preference: normal → dark → light.
+  // Prominent-color extraction returns the actual dominant hue per profile
+  // (unlike k-means which averages Google's four colors into orange).
+  gfx::Rect region(0, 0, bitmap.width(), bitmap.height());
+  const std::vector<color_utils::ColorProfile> profiles = {
+      {color_utils::LumaRange::NORMAL, color_utils::SaturationRange::VIBRANT},
+      {color_utils::LumaRange::DARK, color_utils::SaturationRange::VIBRANT},
+      {color_utils::LumaRange::LIGHT, color_utils::SaturationRange::VIBRANT},
+      {color_utils::LumaRange::NORMAL, color_utils::SaturationRange::ANY},
+  };
+  const auto swatches = color_utils::CalculateProminentColorsOfBitmap(
+      bitmap, profiles, &region,
+      base::BindRepeating([](const SkColor&) { return true; }));
+  for (const auto& swatch : swatches) {
+    if (SkColorGetA(swatch.color) != 0) {
+      return swatch.color;
+    }
+  }
+  return std::nullopt;
 }
 
 }  // namespace
@@ -726,10 +791,15 @@ void MahoSidebarFavoritesGridView::Update(
         }
       }
 
-      tile_icons_[index]->SetImage(std::move(fav));
+      tile_icons_[index]->SetImage(fav);
       tile_icons_[index]->SetImageSize(
           gfx::Size(sidebar_layout::kFavoriteGlyphSizeDp,
                     sidebar_layout::kFavoriteGlyphSizeDp));
+      if (auto color = ExtractDominantColor(fav); color.has_value()) {
+        tile_btn->SetActiveBorderColor(*color);
+      } else {
+        tile_btn->ClearActiveBorderColor();
+      }
       if (tile_glyph_containers_[index]) {
         tile_glyph_containers_[index]->SetBackground(nullptr);
         tile_glyph_containers_[index]->SetBorder(nullptr);
@@ -772,15 +842,24 @@ void MahoSidebarFavoritesGridView::OnFaviconLoaded(
   if (index >= tile_urls_.size() || tile_urls_[index] != requested_url) {
     return;
   }
+  ui::ImageModel fav;
   if (!result.image.IsEmpty()) {
-    tile_icons_[index]->SetImage(ui::ImageModel::FromImage(result.image));
+    fav = ui::ImageModel::FromImage(result.image);
   } else {
-    tile_icons_[index]->SetImage(ui::ImageModel::FromVectorIcon(
-        vector_icons::kGlobeIcon));
+    fav = ui::ImageModel::FromVectorIcon(vector_icons::kGlobeIcon);
   }
+  tile_icons_[index]->SetImage(fav);
   tile_icons_[index]->SetImageSize(
       gfx::Size(sidebar_layout::kFavoriteGlyphSizeDp,
                 sidebar_layout::kFavoriteGlyphSizeDp));
+  if (index < tile_views_.size() && tile_views_[index]) {
+    auto* tile_btn = static_cast<FavoriteTileButton*>(tile_views_[index].get());
+    if (auto color = ExtractDominantColor(fav); color.has_value()) {
+      tile_btn->SetActiveBorderColor(*color);
+    } else {
+      tile_btn->ClearActiveBorderColor();
+    }
+  }
 }
 
 MahoSidebarFavoritesGridView::LayoutSpec
@@ -1326,16 +1405,24 @@ bool MahoSidebarFavoritesGridView::ActivateFavoriteByIndex(size_t index) {
   if (index >= favorite_count_ || index >= tile_tab_ids_.size()) {
     return false;
   }
-  const std::string& tab_id = tile_tab_ids_[index];
-  if (tab_id.empty()) {
-    return false;
-  }
   auto* sidebar_view = FindSidebarViewAncestor(this);
   if (!sidebar_view) {
     return false;
   }
-  sidebar_view->ActivateTabById(tab_id);
-  return true;
+  const std::string& tab_id = tile_tab_ids_[index];
+  if (!tab_id.empty()) {
+    sidebar_view->ActivateTabById(tab_id);
+    return true;
+  }
+  if (browser_ && index < tile_urls_.size() && tile_urls_[index].is_valid()) {
+    browser_->OpenURL(
+        content::OpenURLParams(tile_urls_[index], content::Referrer(),
+                               WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                               ui::PAGE_TRANSITION_AUTO_BOOKMARK, false),
+        /*navigation_handle_callback=*/{});
+    return true;
+  }
+  return false;
 }
 
 void MahoSidebarFavoritesGridView::ShowTileContextMenu(

@@ -841,6 +841,9 @@ void MahoSidebarView::OnTabStripModelChanged(
   if (change.type() == TabStripModelChange::kSelectionOnly &&
       selection.active_tab_changed() && tab_list_view_) {
     tab_list_view_->UpdateActiveTabHighlightOnly(get_new_active_tab_id());
+    if (favorites_view_) {
+      UpdateFavorites(state_adapter_.BuildFavoritesModel(browser_));
+    }
     LOG(INFO) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged END(fast_select) "
               << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
     return;
@@ -851,6 +854,9 @@ void MahoSidebarView::OnTabStripModelChanged(
     const std::string new_active_tab_id = get_new_active_tab_id();
     if (tab_list_view_->HasTabInLastModel(new_active_tab_id)) {
       tab_list_view_->UpdateActiveTabHighlightOnly(new_active_tab_id);
+      if (favorites_view_) {
+        UpdateFavorites(state_adapter_.BuildFavoritesModel(browser_));
+      }
       LOG(INFO) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged END(fast_wake) "
                 << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
       return;
@@ -941,6 +947,7 @@ void MahoSidebarView::ApplyCosmeticRefresh() {
   base::ElapsedTimer t;
   auto model = state_adapter_.BuildViewStateModel(browser_);
   UpdateTabList(model.tab_list);
+  UpdateFavorites(model.favorites);
   LOG(INFO) << "[MAHO_PERF] ApplyCosmeticRefresh="
             << t.Elapsed().InMillisecondsF() << "ms";
 }

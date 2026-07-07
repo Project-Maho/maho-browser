@@ -78,9 +78,12 @@ void DispatchShellEventLocal(
   maho::core::HandleEvent(core, json.c_str());
   const double he_ms = maho_perf_t.Elapsed().InMillisecondsF();
   base::ElapsedTimer notify_t;
-  const bool is_structural = (kind == "create_tab" || kind == "close_tab" ||
-                               kind == "reorder_tab" || kind == "move_tab" ||
-                               kind == "pin_tab" || kind == "unpin_tab");
+  const bool is_structural = !(kind == "tab_title_updated" ||
+                                kind == "tab_url_updated" ||
+                                kind == "tab_favicon_updated" ||
+                                kind == "tab_loading_state_changed" ||
+                                kind == "update_tab_scroll_position" ||
+                                kind == "update_tab_preview");
   if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
     bridge->NotifyChanged(is_structural);
   }
