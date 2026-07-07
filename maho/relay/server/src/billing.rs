@@ -250,6 +250,7 @@ pub async fn lemonsqueezy_webhook(
             anniversary_reset_day,
             has_payment,
             customer_id_str,
+            Some(created_at_sec),
         ).await {
             return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to update user subscription: {e}")).into_response();
         }

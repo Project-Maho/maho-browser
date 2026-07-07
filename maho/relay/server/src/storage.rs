@@ -198,6 +198,7 @@ where
         verification_token_expires_at: Set(None),
         has_payment_method: Set(false),
         lemonsqueezy_customer_id: Set(None),
+        subscription_event_at: Set(None),
     }
     .insert(db)
     .await
@@ -456,14 +457,18 @@ pub async fn update_user_subscription<T>(
     anniversary_reset_day: Option<i32>,
     has_payment_method: Option<bool>,
     customer_id: Option<String>,
+    event_created_at: Option<i64>,
 ) -> Result<(), DbErr>
 where
     T: ConnectionTrait,
 {
     if let Some(user) = users::Entity::find_by_id(user_id).one(db).await? {
-        if let (Some(new_start), Some(old_start)) = (period_start_at, user.period_start_at) {
-            if new_start < old_start {
-                tracing::warn!("Rejecting out-of-order webhook update for user {}: old start = {}, new = {}", user_id, old_start, new_start);
+        if let (Some(new_event), Some(old_event)) = (event_created_at, user.subscription_event_at) {
+            if new_event < old_event {
+                tracing::warn!(
+                    "Rejecting out-of-order webhook update for user {}: old event = {}, new = {}",
+                    user_id, old_event, new_event
+                );
                 return Ok(());
             }
         }
@@ -473,6 +478,9 @@ where
         active.subscription_expires_at = Set(expires_at);
         active.period_start_at = Set(period_start_at);
         active.anniversary_reset_day = Set(anniversary_reset_day);
+        if let Some(ev) = event_created_at {
+            active.subscription_event_at = Set(Some(ev));
+        }
         if let Some(hpm) = has_payment_method {
             active.has_payment_method = Set(hpm);
         }
