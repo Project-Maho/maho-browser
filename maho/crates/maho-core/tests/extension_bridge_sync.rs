@@ -152,12 +152,15 @@ fn test_extension_sync_push_and_callback() {
         entity_type: SyncEntityType::Extension,
         entity_id: "ext-sync-test".to_string(),
         version: 9999, // newer version to trigger LWW update
+        device_id: 0,
+        schema_version: 1,
         modified_at: 12345678,
         payload_json: serde_json::json!({
             "id": "ext-sync-test",
             "enabled": false,
         }).to_string(),
         deleted: false,
+        queue_row_id: None,
     };
 
     let applied = core.apply_sync_remote_entities(vec![remote_entity]);

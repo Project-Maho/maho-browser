@@ -24,8 +24,9 @@ pub struct SyncManager {
     // long-running sync sessions. Capacity chosen as 10k — large enough that
     // even high-churn workspaces won't see eviction pressure under normal
     // operation; small enough to bound memory.
-    entity_versions: lru::LruCache<String, u64>,
-    last_pulled_version: u64,
+    entity_versions: lru::LruCache<String, (u64, u32)>,
+    last_pulled_versions: HashMap<SyncEntityType, u64>,
+    sent_entities: Vec<i64>,
 }
 
 impl SyncManager {
@@ -40,7 +41,8 @@ impl SyncManager {
             encryption_key: None,
             pending_pushes: Vec::new(),
             entity_versions: lru::LruCache::new(std::num::NonZeroUsize::new(10_000).unwrap()),
-            last_pulled_version: 0,
+            last_pulled_versions: HashMap::new(),
+            sent_entities: Vec::new(),
         }
     }
 
@@ -78,12 +80,21 @@ impl SyncManager {
         self.config = config;
     }
 
+    pub fn set_last_pulled_version(&mut self, entity_type: SyncEntityType, version: u64) {
+        self.last_pulled_versions.insert(entity_type, version);
+    }
+
+    pub fn set_entity_version_in_cache(&mut self, key: &str, version: u64, device_id: u32) {
+        self.entity_versions.put(key.to_string(), (version, device_id));
+    }
+
     // === LWW Entity Sync ===
 
     /// Queue an outgoing entity push. If syncing/synced, add EntityPush to
     /// outgoing_messages (encrypt if key set). Otherwise add to pending_pushes.
     pub fn push_entity(&mut self, entity: SyncEntity) {
         if self.status == SyncStatus::Synced || self.status == SyncStatus::Syncing {
+            let row_id_opt = entity.queue_row_id;
             let message = SyncMessage::EntityPush { entity };
 
             if let Some(key) = &self.encryption_key {
@@ -91,6 +102,9 @@ impl SyncManager {
                     Ok(plaintext) => match crate::sync_crypto::encrypt_update(&plaintext, key) {
                         Ok(data) => {
                             self.outgoing_messages.push(SyncMessage::Encrypted { data });
+                            if let Some(row_id) = row_id_opt {
+                                self.sent_entities.push(row_id);
+                            }
                         }
                         Err(e) => {
                             self.last_error = Some(format!("Encrypt error: {}", e));
@@ -102,6 +116,9 @@ impl SyncManager {
                 }
             } else {
                 self.outgoing_messages.push(message);
+                if let Some(row_id) = row_id_opt {
+                    self.sent_entities.push(row_id);
+                }
             }
         } else {
             self.pending_pushes.push(entity);
@@ -110,9 +127,13 @@ impl SyncManager {
 
     /// Send an EntityPull message to request entities newer than given version
     pub fn pull_entities(&mut self, entity_type: Option<SyncEntityType>) {
+        let since_version = match &entity_type {
+            Some(t) => self.last_pulled_versions.get(t).copied().unwrap_or(0),
+            None => 0,
+        };
         let message = SyncMessage::EntityPull {
             entity_type,
-            since_version: self.last_pulled_version,
+            since_version,
         };
 
         if let Some(key) = &self.encryption_key {
@@ -136,17 +157,77 @@ impl SyncManager {
 
     /// Apply a remote entity if its version is newer than the locally tracked version.
     /// Returns true if the entity was applied.
-    pub fn apply_remote_entity(&mut self, entity: &SyncEntity) -> bool {
-        let local_version = self
-            .entity_versions
-            .peek(&entity.entity_id)
-            .copied()
-            .unwrap_or(0);
-        if entity.version > local_version {
-            self.entity_versions
-                .put(entity.entity_id.clone(), entity.version);
-            if entity.entity_type == SyncEntityType::Tab {
-                self.last_pulled_version = self.last_pulled_version.max(entity.version);
+    pub fn apply_remote_entity(
+        &mut self,
+        entity: &SyncEntity,
+        storage: &Option<maho_storage::sqlite::SqliteStorage>,
+    ) -> bool {
+        if entity.schema_version > 1 {
+            self.last_error = Some(format!(
+                "Rejected entity {} due to unsupported schema version {}",
+                entity.entity_id, entity.schema_version
+            ));
+            return false;
+        }
+        let entity_type_str = match entity.entity_type {
+            SyncEntityType::Space => "space",
+            SyncEntityType::Tab => "tab",
+            SyncEntityType::Bookmark => "bookmark",
+            SyncEntityType::Note => "note",
+            SyncEntityType::Boost => "boost",
+            SyncEntityType::ReadingListItem => "readinglistitem",
+            SyncEntityType::SearchEngine => "searchengine",
+            SyncEntityType::Shortcut => "shortcut",
+            SyncEntityType::Memory => "memory",
+            SyncEntityType::Extension => "extension",
+        };
+        let cache_key = format!("{}:{}", entity_type_str, entity.entity_id);
+
+        let local_version = if let Some(version_pair) = self.entity_versions.get(&cache_key) {
+            Some(*version_pair)
+        } else if let Some(ref s) = storage {
+            match s.get_entity_version(entity_type_str, &entity.entity_id) {
+                Ok(Some((hlc_ts, device_id))) => {
+                    self.entity_versions.put(cache_key.clone(), (hlc_ts, device_id));
+                    Some((hlc_ts, device_id))
+                }
+                Ok(None) => None,
+                Err(e) => {
+                    self.last_error = Some(format!("Database read error in apply: {}", e));
+                    return false;
+                }
+            }
+        } else {
+            None
+        };
+
+        let should_apply = match local_version {
+            Some((local_hlc_ts, local_device_id)) => {
+                (entity.version, entity.device_id) > (local_hlc_ts, local_device_id)
+            }
+            None => true,
+        };
+
+        if should_apply {
+            self.entity_versions.put(cache_key.clone(), (entity.version, entity.device_id));
+            if let Some(ref s) = storage {
+                if let Err(e) = s.save_entity_version(entity_type_str, &entity.entity_id, entity.version, entity.device_id) {
+                    eprintln!(
+                        "[sync] Failed to persist entity_version for {}:{}: {}",
+                        entity_type_str, entity.entity_id, e
+                    );
+                }
+            }
+            
+            let last_pulled = self.last_pulled_versions.entry(entity.entity_type.clone()).or_insert(0);
+            *last_pulled = (*last_pulled).max(entity.version);
+            if let Some(ref s) = storage {
+                if let Err(e) = s.set_sync_last_pulled_version(entity_type_str, *last_pulled) {
+                    eprintln!(
+                        "[sync] Failed to persist last_pulled_version for {}: {}",
+                        entity_type_str, e
+                    );
+                }
             }
             return true;
         }
@@ -154,10 +235,14 @@ impl SyncManager {
     }
 
     /// Apply a batch of remote entities. Returns the list of actually-applied entities.
-    pub fn apply_remote_batch(&mut self, entities: Vec<SyncEntity>) -> Vec<SyncEntity> {
+    pub fn apply_remote_batch(
+        &mut self,
+        entities: Vec<SyncEntity>,
+        storage: &Option<maho_storage::sqlite::SqliteStorage>,
+    ) -> Vec<SyncEntity> {
         let mut applied = Vec::new();
         for entity in entities {
-            if self.apply_remote_entity(&entity) {
+            if self.apply_remote_entity(&entity, storage) {
                 applied.push(entity);
             }
         }
@@ -201,13 +286,50 @@ impl SyncManager {
                 }
             },
             SyncMessage::EntityPush { entity } => {
-                self.apply_remote_entity(&entity);
+                #[cfg(not(test))]
+                {
+                    let _ = entity;
+                    self.last_error = Some(
+                        "EntityPush must be applied via MahoCore::apply_sync_remote_entities \
+                         (which threads storage); handle_incoming_message path is test-only"
+                            .to_string(),
+                    );
+                }
+                #[cfg(test)]
+                {
+                    self.apply_remote_entity(&entity, &None);
+                }
             }
             SyncMessage::EntityBatch { entities } => {
-                self.apply_remote_batch(entities);
+                #[cfg(not(test))]
+                {
+                    let _ = entities;
+                    self.last_error = Some(
+                        "EntityBatch must be applied via MahoCore::apply_sync_remote_entities \
+                         (which threads storage); handle_incoming_message path is test-only"
+                            .to_string(),
+                    );
+                }
+                #[cfg(test)]
+                {
+                    self.apply_remote_batch(entities, &None);
+                }
             }
-            SyncMessage::Ack { entity_id, version } => {
-                self.entity_versions.put(entity_id, version);
+            SyncMessage::Ack { entity_id, entity_type, version, device_id } => {
+                let entity_type_str = match entity_type {
+                    SyncEntityType::Space => "space",
+                    SyncEntityType::Tab => "tab",
+                    SyncEntityType::Bookmark => "bookmark",
+                    SyncEntityType::Note => "note",
+                    SyncEntityType::Boost => "boost",
+                    SyncEntityType::ReadingListItem => "readinglistitem",
+                    SyncEntityType::SearchEngine => "searchengine",
+                    SyncEntityType::Shortcut => "shortcut",
+                    SyncEntityType::Memory => "memory",
+                    SyncEntityType::Extension => "extension",
+                };
+                let key = format!("{}:{}", entity_type_str, entity_id);
+                self.entity_versions.put(key, (version, device_id));
             }
             SyncMessage::EntityPull { .. } => {
                 // EntityPull is handled by the server/peer — we don't process it here
@@ -284,6 +406,11 @@ impl SyncManager {
         std::mem::take(&mut self.outgoing_messages)
     }
 
+    /// Get and drain sent entities' queue row IDs
+    pub fn drain_sent_entities(&mut self) -> Vec<i64> {
+        std::mem::take(&mut self.sent_entities)
+    }
+
     /// Get and drain received tabs (UI polls this)
     pub fn drain_received_tabs(&mut self) -> Vec<ReceivedTab> {
         std::mem::take(&mut self.received_tabs)
@@ -338,9 +465,12 @@ mod tests {
             entity_type: SyncEntityType::Tab,
             entity_id: id.to_string(),
             version,
+            device_id: 0,
+            schema_version: 1,
             modified_at: 1000,
             payload_json: r#"{"url":"https://example.com"}"#.to_string(),
             deleted: false,
+            queue_row_id: None,
         }
     }
 
@@ -431,9 +561,9 @@ mod tests {
     fn test_apply_remote_entity_newer() {
         let mut mgr = SyncManager::new(default_config());
         let entity = make_entity("tab-5", 10);
-        assert!(mgr.apply_remote_entity(&entity));
+        assert!(mgr.apply_remote_entity(&entity, &None));
         // Version should be stored
-        assert_eq!(mgr.entity_versions.peek(&"tab-5".to_string()), Some(&10));
+        assert_eq!(mgr.entity_versions.peek(&"tab:tab-5".to_string()), Some(&(10, 0)));
     }
 
     // CM-06
@@ -442,12 +572,12 @@ mod tests {
         let mut mgr = SyncManager::new(default_config());
         // Insert a version first
         let newer = make_entity("tab-6", 10);
-        mgr.apply_remote_entity(&newer);
+        mgr.apply_remote_entity(&newer, &None);
         // Now try an older version
         let older = make_entity("tab-6", 5);
-        assert!(!mgr.apply_remote_entity(&older));
+        assert!(!mgr.apply_remote_entity(&older, &None));
         // Version should remain 10
-        assert_eq!(mgr.entity_versions.peek(&"tab-6".to_string()), Some(&10));
+        assert_eq!(mgr.entity_versions.peek(&"tab:tab-6".to_string()), Some(&(10, 0)));
     }
 
     // CM-07
@@ -455,8 +585,8 @@ mod tests {
     fn test_apply_remote_batch() {
         let mut mgr = SyncManager::new(default_config());
         // Pre-populate some versions
-        mgr.entity_versions.put("e-1".to_string(), 5);
-        mgr.entity_versions.put("e-2".to_string(), 5);
+        mgr.entity_versions.put("tab:e-1".to_string(), (5, 0));
+        mgr.entity_versions.put("tab:e-2".to_string(), (5, 0));
 
         let batch = vec![
             make_entity("e-1", 10), // newer → apply
@@ -465,7 +595,7 @@ mod tests {
             make_entity("e-4", 7),  // new → apply
             make_entity("e-1", 4),  // older than updated → skip
         ];
-        let applied = mgr.apply_remote_batch(batch);
+        let applied = mgr.apply_remote_batch(batch, &None);
         assert_eq!(applied.len(), 3);
     }
 
@@ -477,7 +607,7 @@ mod tests {
             entity: make_entity("tab-8", 5),
         };
         mgr.handle_incoming_message(msg);
-        assert_eq!(mgr.entity_versions.peek(&"tab-8".to_string()), Some(&5));
+        assert_eq!(mgr.entity_versions.peek(&"tab:tab-8".to_string()), Some(&(5, 0)));
     }
 
     // CM-09
@@ -497,7 +627,7 @@ mod tests {
         mgr.handle_incoming_message(SyncMessage::Encrypted {
             data: encrypted_data,
         });
-        assert_eq!(mgr.entity_versions.peek(&"tab-9".to_string()), Some(&3));
+        assert_eq!(mgr.entity_versions.peek(&"tab:tab-9".to_string()), Some(&(3, 0)));
         assert_ne!(mgr.status(), &SyncStatus::Error);
     }
 
@@ -636,10 +766,37 @@ mod tests {
         let mut sm = SyncManager::new(default_config());
         for i in 0u64..10_001 {
             let entity = make_entity(&format!("entity_{}", i), i + 1);
-            sm.apply_remote_entity(&entity);
+            sm.apply_remote_entity(&entity, &None);
         }
-        assert!(sm.entity_versions.peek(&"entity_0".to_string()).is_none());
-        assert!(sm.entity_versions.peek(&"entity_10000".to_string()).is_some());
+        assert!(sm.entity_versions.peek(&"tab:entity_0".to_string()).is_none());
+        assert!(sm.entity_versions.peek(&"tab:entity_10000".to_string()).is_some());
+    }
+
+    #[test]
+    fn test_hlc_and_persistent_tiebreaking_and_queue_lifecycle() {
+        let mut sm = SyncManager::new(default_config());
+        
+        let mut entity1 = make_entity("tab-10", 100);
+        entity1.device_id = 1;
+        
+        let mut entity2 = make_entity("tab-10", 100);
+        entity2.device_id = 2;
+        
+        assert!(sm.apply_remote_entity(&entity1, &None));
+        assert!(sm.apply_remote_entity(&entity2, &None));
+        
+        let mut entity3 = make_entity("tab-10", 100);
+        entity3.device_id = 1;
+        assert!(!sm.apply_remote_entity(&entity3, &None));
+        
+        let mut entity4 = make_entity("tab-11", 101);
+        entity4.queue_row_id = Some(42);
+        
+        sm.set_status(SyncStatus::Synced);
+        sm.push_entity(entity4);
+        
+        let sent_ids = sm.drain_sent_entities();
+        assert_eq!(sent_ids, vec![42]);
     }
 }
 

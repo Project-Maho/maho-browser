@@ -4373,47 +4373,7 @@ pub unsafe extern "C" fn maho_core_resolve_shortcut(
     }, ptr::null_mut())
 }
 
-/// # Safety
-/// `ptr` must be a valid `*mut MahoCore`. Returns JSON status string (`{"success":true}` or
-/// `{"error":"..."}`) or null on null input/import active. Caller must free with `maho_string_free`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_core_sync_shortcuts_to_relay(ptr: *mut MahoCore) -> *mut c_char {
-    ffi_safe!({
-        if ptr.is_null() {
-            return ptr::null_mut();
-        }
-        if import_gate::is_active() { return ptr::null_mut(); }
-        let core = &mut *ptr;
-        let json = match core.sync_shortcuts_to_relay() {
-            Ok(()) => r#"{"success":true}"#.to_string(),
-            Err(e) => serde_json::json!({"error": e}).to_string(),
-        };
-        CString::new(json)
-            .map(CString::into_raw)
-            .unwrap_or(ptr::null_mut())
-    }, ptr::null_mut())
-}
 
-/// # Safety
-/// `ptr` must be a valid `*mut MahoCore`. Returns JSON status string (`{"success":true}` or
-/// `{"error":"..."}`) or null on null input/import active. Caller must free with `maho_string_free`.
-#[no_mangle]
-pub unsafe extern "C" fn maho_core_sync_shortcuts_from_relay(ptr: *mut MahoCore) -> *mut c_char {
-    ffi_safe!({
-        if ptr.is_null() {
-            return ptr::null_mut();
-        }
-        if import_gate::is_active() { return ptr::null_mut(); }
-        let core = &mut *ptr;
-        let json = match core.sync_shortcuts_from_relay() {
-            Ok(()) => r#"{"success":true}"#.to_string(),
-            Err(e) => serde_json::json!({"error": e}).to_string(),
-        };
-        CString::new(json)
-            .map(CString::into_raw)
-            .unwrap_or(ptr::null_mut())
-    }, ptr::null_mut())
-}
 
 /// # Safety
 /// `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `density` must be a
@@ -5626,6 +5586,40 @@ pub unsafe extern "C" fn maho_core_check_pinned_navigation(
     }
 
     }, ptr::null_mut())
+}
+
+/// Acknowledge a sync entity.
+/// `entity_type` is the sync entity type name ("tab", "bookmark", etc.).
+/// `entity_id` is the entity ID.
+/// `version` is the HLC timestamp version.
+///
+/// # Safety
+/// `ptr`, `entity_type`, `entity_id` must be valid C strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_ack_sync_entity(
+    ptr: *mut MahoCore,
+    entity_type: *const c_char,
+    entity_id: *const c_char,
+    version: u64,
+) {
+    ffi_safe!({
+
+    if ptr.is_null() || entity_type.is_null() || entity_id.is_null() {
+        return;
+    }
+    if import_gate::is_active() { return; }
+    let core = &mut *ptr;
+    let type_str = match CStr::from_ptr(entity_type).to_str() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let id_str = match CStr::from_ptr(entity_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    core.ack_sync_entity(type_str, id_str, version);
+
+    }, ())
 }
 
 /// Apply incoming entity batch from server.
@@ -7313,14 +7307,25 @@ pub unsafe extern "C" fn maho_agent_create_session(
 ) -> *mut MahoAgentSession {
     ffi_safe!({
         if core.is_null() || session_id.is_null() {
+            eprintln!(
+                "[maho_agent_create_session] FAIL: null pointer args (core_null={}, session_id_null={})",
+                core.is_null(),
+                session_id.is_null(),
+            );
             return std::ptr::null_mut();
         }
         // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
-        if import_gate::is_active() { return ptr::null_mut(); }
+        if import_gate::is_active() {
+            eprintln!("[maho_agent_create_session] FAIL: import_gate is active (data import in progress)");
+            return ptr::null_mut();
+        }
         let core = &*core;
         let sid = match CStr::from_ptr(session_id).to_str() {
             Ok(s) => s.to_string(),
-            Err(_) => return std::ptr::null_mut(),
+            Err(e) => {
+                eprintln!("[maho_agent_create_session] FAIL: session_id is not valid UTF-8: {e}");
+                return std::ptr::null_mut();
+            }
         };
         
         let workspace_path = if workspace_root.is_null() {
@@ -7334,12 +7339,24 @@ pub unsafe extern "C" fn maho_agent_create_session(
 
         let db_path = match core.sqlite_db_path() {
             Some(p) => p,
-            None => return std::ptr::null_mut(),
+            None => {
+                eprintln!(
+                    "[maho_agent_create_session] FAIL: core.sqlite_db_path() is None \
+                     (MahoCore was initialized without SQLite storage; session_id={sid})"
+                );
+                return std::ptr::null_mut();
+            }
         };
         
         let storage = match maho_storage::sqlite::SqliteStorage::open(db_path) {
             Ok(s) => s,
-            Err(_) => return std::ptr::null_mut(),
+            Err(e) => {
+                eprintln!(
+                    "[maho_agent_create_session] FAIL: SqliteStorage::open failed \
+                     (db_path={db_path:?}, session_id={sid}): {e}"
+                );
+                return std::ptr::null_mut();
+            }
         };
         
         let agent_storage = MutexAgentStorage(Arc::new(Mutex::new(storage)));
@@ -7419,7 +7436,13 @@ pub unsafe extern "C" fn maho_agent_create_session(
         
         let isolation = match SessionRuntime::new() {
             Ok(i) => Arc::new(i),
-            Err(_) => return std::ptr::null_mut(),
+            Err(e) => {
+                eprintln!(
+                    "[maho_agent_create_session] FAIL: SessionRuntime::new() failed \
+                     (Tokio runtime build error; session_id={sid}): {e}"
+                );
+                return std::ptr::null_mut();
+            }
         };
         
         Box::into_raw(Box::new(MahoAgentSession {

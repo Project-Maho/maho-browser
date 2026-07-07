@@ -1,9 +1,17 @@
 use maho_types::account::{AccountInfo, AuthState, SyncState, UserTier};
+use serde::{Serialize, Deserialize};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PersistedAccount {
+    pub account: Option<AccountInfo>,
+    pub device_id: uuid::Uuid,
+}
 
 #[derive(Debug)]
 pub struct AccountManager {
     account: Option<AccountInfo>,
     sync_state: SyncState,
+    device_id: uuid::Uuid,
 }
 
 impl Default for AccountManager {
@@ -17,7 +25,57 @@ impl AccountManager {
         Self {
             account: None,
             sync_state: SyncState::Idle,
+            device_id: uuid::Uuid::nil(),
         }
+    }
+
+    pub fn load_or_create(&mut self, data: Option<&[u8]>) -> (PersistedAccount, bool) {
+        let mut dirty = false;
+        let mut persisted = if let Some(d) = data {
+            if let Ok(mut p) = serde_json::from_slice::<PersistedAccount>(d) {
+                if p.device_id.is_nil() {
+                    p.device_id = uuid::Uuid::new_v4();
+                    dirty = true;
+                }
+                p
+            } else {
+                dirty = true;
+                PersistedAccount {
+                    account: None,
+                    device_id: uuid::Uuid::new_v4(),
+                }
+            }
+        } else {
+            dirty = true;
+            PersistedAccount {
+                account: None,
+                device_id: uuid::Uuid::new_v4(),
+            }
+        };
+
+        if let Some(ref mut acc) = persisted.account {
+            acc.device_id = Some(persisted.device_id.to_string());
+        }
+
+        self.account = persisted.account.clone();
+        self.device_id = persisted.device_id;
+        (persisted, dirty)
+    }
+
+    pub fn device_id(&self) -> uuid::Uuid {
+        self.device_id
+    }
+
+    pub fn device_id_hash(&self) -> u32 {
+        // FNV-1a hash over the 16-byte UUID.
+        // Endian-independent (byte-wise), better collision distribution than XOR of u32 chunks.
+        let bytes = self.device_id.as_bytes();
+        let mut hash: u32 = 0x811c9dc5;
+        for &b in bytes {
+            hash ^= b as u32;
+            hash = hash.wrapping_mul(0x01000193);
+        }
+        hash
     }
 
     pub fn begin_sign_in(
@@ -27,12 +85,23 @@ impl AccountManager {
         user_id: Option<String>,
         device_id: Option<String>,
     ) -> AccountInfo {
+        let actual_device_id = if let Some(d) = device_id {
+            if let Ok(u) = uuid::Uuid::parse_str(&d) {
+                self.device_id = u;
+            }
+            d
+        } else {
+            if self.device_id.is_nil() {
+                self.device_id = uuid::Uuid::new_v4();
+            }
+            self.device_id.to_string()
+        };
         let account = AccountInfo {
             user_id: user_id.unwrap_or_else(|| email.clone()),
             email,
             display_name,
             avatar_url: None,
-            device_id,
+            device_id: Some(actual_device_id),
             sync_enabled: false,
             auth_state: AuthState::Authenticating,
             tier: UserTier::Free,
@@ -42,7 +111,17 @@ impl AccountManager {
         account
     }
 
-    pub fn sign_in(&mut self, account: AccountInfo) -> AccountInfo {
+    pub fn sign_in(&mut self, mut account: AccountInfo) -> AccountInfo {
+        if account.device_id.is_none() {
+            if self.device_id.is_nil() {
+                self.device_id = uuid::Uuid::new_v4();
+            }
+            account.device_id = Some(self.device_id.to_string());
+        } else if let Some(ref d) = account.device_id {
+            if let Ok(u) = uuid::Uuid::parse_str(d) {
+                self.device_id = u;
+            }
+        }
         self.account = Some(account.clone());
         account
     }

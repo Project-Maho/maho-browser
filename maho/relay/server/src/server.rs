@@ -10,7 +10,7 @@ use axum::routing::get;
 use axum::Router;
 use dashmap::mapref::entry::Entry;
 use dashmap::{DashMap, DashSet};
-use sea_orm::{ConnectionTrait, DatabaseConnection};
+use sea_orm::DatabaseConnection;
 use tokio::net::TcpListener;
 
 use crate::auth;
@@ -109,17 +109,11 @@ async fn ws_upgrade(
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
-    let db = state.db.clone();
-    tokio::spawn(async move {
-        let _ = db.execute_unprepared("CREATE TABLE IF NOT EXISTS shortcuts (room_id TEXT, action TEXT, key_combo_json TEXT, enabled INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (room_id, action));").await;
-    });
-
     Router::new()
         .route("/health", get(health))
         .nest("/auth", auth::routes::router())
         .nest("/sync", sync::routes::router())
         .nest("/billing", crate::billing::router())
-        .nest("/api/v1/shortcuts", crate::shortcuts::router())
         .nest("/waitlist", crate::waitlist::router())
         .route("/ws", get(ws_upgrade))
         .with_state(state)

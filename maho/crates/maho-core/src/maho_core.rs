@@ -2,12 +2,13 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-const LMDB_DIRTY_TABS: u8 = 0b00001;
-const LMDB_DIRTY_SPACES: u8 = 0b00010;
-const LMDB_DIRTY_ACTIVE_SPACE: u8 = 0b00100;
-const LMDB_DIRTY_PROFILES: u8 = 0b01000;
-const LMDB_DIRTY_ACTIVE_PROFILE: u8 = 0b10000;
-const LMDB_DIRTY_ALL: u8 = 0b11111;
+const LMDB_DIRTY_TABS: u8 = 0b000001;
+const LMDB_DIRTY_SPACES: u8 = 0b000010;
+const LMDB_DIRTY_ACTIVE_SPACE: u8 = 0b000100;
+const LMDB_DIRTY_PROFILES: u8 = 0b001000;
+const LMDB_DIRTY_ACTIVE_PROFILE: u8 = 0b010000;
+const LMDB_DIRTY_ACCOUNT: u8 = 0b100000;
+const LMDB_DIRTY_ALL: u8 = 0b111111;
 
 const PERSIST_THROTTLE_MS: u64 = 50;
 
@@ -895,13 +896,10 @@ pub struct MahoCore {
     backup_manager: BackupManager,
     reading_list_manager: ReadingListManager,
     shortcut_manager: ShortcutManager,
-    /// Suppresses `trigger_sync_shortcuts_to_relay_async` fanout during batch operations
-    /// (e.g. import). The caller re-enables and fires ONE coalesced trigger post-loop.
-    sync_trigger_suppressed: Cell<bool>,
+    last_hlc_ts: Cell<u64>,
     account_manager: AccountManager,
     split_view_config: Option<SplitViewConfig>,
     sync_manager: Option<crate::sync_manager::SyncManager>,
-    sync_device_id: String,
     llm_manager: LLMManager,
     mcp_manager: McpManager,
     skills_manager: SkillsManager,
@@ -1147,17 +1145,10 @@ impl MahoCore {
             backup_manager: BackupManager::new(),
             reading_list_manager: ReadingListManager::new(),
             shortcut_manager: ShortcutManager::new(),
-            sync_trigger_suppressed: Cell::new(false),
+            last_hlc_ts: Cell::new(0),
             account_manager: AccountManager::new(),
             split_view_config: None,
             sync_manager: None,
-            sync_device_id: format!(
-                "{:x}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos()
-            ),
             llm_manager: LLMManager::new(),
             mcp_manager: McpManager::new(),
             skills_manager: SkillsManager::new(),
@@ -1333,6 +1324,17 @@ impl MahoCore {
                 .map_err(|e| PersistenceError::Storage(e.to_string()))?;
         }
 
+        if dirty & LMDB_DIRTY_ACCOUNT != 0 {
+            let persisted = crate::account_manager::PersistedAccount {
+                account: self.account_manager.get_account().cloned(),
+                device_id: self.account_manager.device_id(),
+            };
+            let account_json = serde_json::to_vec(&persisted)
+                .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+            lmdb.put("account", &account_json)
+                .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+        }
+
         Ok(())
     }
 
@@ -1473,6 +1475,17 @@ impl MahoCore {
                 .restore_profiles(profiles, active_profile_id);
         }
 
+        let account_data = lmdb
+            .get("account")
+            .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+        let (persisted, dirty) = self.account_manager.load_or_create(account_data.as_deref());
+        if dirty {
+            let serialized = serde_json::to_vec(&persisted)
+                .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+            lmdb.put("account", &serialized)
+                .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+        }
+
         self.load_persisted_data()?;
 
         if is_first_run {
@@ -1488,6 +1501,21 @@ impl MahoCore {
             Some(s) => s,
             None => return Ok(()),
         };
+
+        // Initialize HLC logical clock cache
+        let last_hlc = match storage.get_last_hlc_ts() {
+            Ok(ts) => ts,
+            Err(e) => {
+                eprintln!("[sync] Failed to load last HLC timestamp, defaulting to 0: {}", e);
+                0
+            }
+        };
+        self.last_hlc_ts.set(last_hlc);
+
+        // Prune acknowledged sync entities older than 24 hours
+        if let Err(e) = storage.prune_acked_sync_entities() {
+            eprintln!("[sync] Failed to prune acknowledged sync entities: {}", e);
+        }
 
         // Load notes
         if let Ok(notes_data) = storage.load_notes() {
@@ -1703,9 +1731,6 @@ impl MahoCore {
                 self.bookmark_manager.restore_folder(folder);
             }
         }
-
-        // Load pending sync queue entries
-        let _ = self.load_sync_queue();
 
         Ok(())
     }
@@ -2644,6 +2669,10 @@ impl MahoCore {
             ShellEvent::UpdateProfile { .. } => LMDB_DIRTY_PROFILES,
 
             ShellEvent::SwitchProfile { .. } => LMDB_DIRTY_ACTIVE_PROFILE,
+
+            ShellEvent::SignIn { .. }
+            | ShellEvent::SignOut
+            | ShellEvent::ToggleSync => LMDB_DIRTY_ACCOUNT,
 
             _ => 0,
         }
@@ -4519,15 +4548,28 @@ impl MahoCore {
                     "cws_url": cws_url,
                     "enabled": ext.enabled,
                 });
-                let sync_entity = SyncEntity {
-                    entity_type: SyncEntityType::Extension,
-                    entity_id: ext.id.clone(),
-                    version: chrono::Utc::now().timestamp_millis() as u64,
-                    modified_at: chrono::Utc::now().timestamp(),
-                    payload_json: payload.to_string(),
-                    deleted: false,
-                };
-                self.sync_push_entity_persisted(sync_entity);
+                match self.next_hlc_ts() {
+                    Ok(version) => {
+                        let sync_entity = SyncEntity {
+                            entity_type: SyncEntityType::Extension,
+                            entity_id: ext.id.clone(),
+                            version,
+                            device_id: self.account_manager.device_id_hash(),
+                            schema_version: 1,
+                            modified_at: chrono::Utc::now().timestamp(),
+                            payload_json: payload.to_string(),
+                            deleted: false,
+                            queue_row_id: None,
+                        };
+                        self.sync_push_entity_persisted(sync_entity);
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[sync] Skipping extension push for '{}': HLC failure: {}",
+                            ext.id, e
+                        );
+                    }
+                }
             }
         }
 
@@ -5614,15 +5656,28 @@ impl MahoCore {
                 "keyCombo": binding.key_combo,
                 "enabled": binding.enabled,
             });
-            let sync_entity = crate::sync_models::SyncEntity {
-                entity_type: crate::sync_models::SyncEntityType::Shortcut,
-                entity_id: action.to_string(),
-                version: chrono::Utc::now().timestamp_millis() as u64,
-                modified_at: chrono::Utc::now().timestamp(),
-                payload_json: payload.to_string(),
-                deleted: false,
-            };
-            self.sync_push_entity_persisted(sync_entity);
+            match self.next_hlc_ts() {
+                Ok(version) => {
+                    let sync_entity = crate::sync_models::SyncEntity {
+                        entity_type: crate::sync_models::SyncEntityType::Shortcut,
+                        entity_id: action.to_string(),
+                        version,
+                        device_id: self.account_manager.device_id_hash(),
+                        schema_version: 1,
+                        modified_at: chrono::Utc::now().timestamp(),
+                        payload_json: payload.to_string(),
+                        deleted: false,
+                        queue_row_id: None,
+                    };
+                    self.sync_push_entity_persisted(sync_entity);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[sync] Skipping shortcut push for '{}': HLC failure: {}",
+                        action, e
+                    );
+                }
+            }
         }
     }
 
@@ -5630,36 +5685,27 @@ impl MahoCore {
         let payload = serde_json::json!({
             "action": action,
         });
-        let sync_entity = crate::sync_models::SyncEntity {
-            entity_type: crate::sync_models::SyncEntityType::Shortcut,
-            entity_id: action.to_string(),
-            version: chrono::Utc::now().timestamp_millis() as u64,
-            modified_at: chrono::Utc::now().timestamp(),
-            payload_json: payload.to_string(),
-            deleted: true,
-        };
-        self.sync_push_entity_persisted(sync_entity);
-    }
-
-    pub fn trigger_sync_shortcuts_to_relay_async(&self) {
-        if self.sync_trigger_suppressed.get() {
-            return;
-        }
-        if let Some(ref sm) = self.sync_manager {
-            let server_url = sm.config().server_url.clone();
-            let room_id = sm.config().sync_key.clone().unwrap_or_default();
-            if room_id.is_empty() { return; }
-            let shortcuts_json = self.get_all_shortcuts_json();
-            
-            crate::memory_manager::get_runtime().spawn(async move {
-                let client = crate::http::shared_http_client();
-                let url = format!("{}/api/v1/shortcuts", server_url.trim_end_matches('/'));
-                let _ = client.put(&url)
-                    .header("Authorization", format!("Bearer {}", room_id))
-                    .json(&serde_json::json!({ "json_data": shortcuts_json }))
-                    .send()
-                    .await;
-            });
+        match self.next_hlc_ts() {
+            Ok(version) => {
+                let sync_entity = crate::sync_models::SyncEntity {
+                    entity_type: crate::sync_models::SyncEntityType::Shortcut,
+                    entity_id: action.to_string(),
+                    version,
+                    device_id: self.account_manager.device_id_hash(),
+                    schema_version: 1,
+                    modified_at: chrono::Utc::now().timestamp(),
+                    payload_json: payload.to_string(),
+                    deleted: true,
+                    queue_row_id: None,
+                };
+                self.sync_push_entity_persisted(sync_entity);
+            }
+            Err(e) => {
+                eprintln!(
+                    "[sync] Skipping shortcut deletion push for '{}': HLC failure: {}",
+                    action, e
+                );
+            }
         }
     }
 
@@ -5670,7 +5716,6 @@ impl MahoCore {
             let _ = storage.save_shortcut_enabled(action, enabled, updated_at);
         }
         self.push_shortcut_sync(action);
-        self.trigger_sync_shortcuts_to_relay_async();
     }
 
     pub fn set_shortcut_persisted(
@@ -5689,7 +5734,6 @@ impl MahoCore {
                 }
             }
             self.push_shortcut_sync(action);
-            self.trigger_sync_shortcuts_to_relay_async();
         }
         result
     }
@@ -5700,7 +5744,6 @@ impl MahoCore {
             let _ = storage.delete_shortcut(action);
         }
         self.push_shortcut_sync_deleted(action);
-        self.trigger_sync_shortcuts_to_relay_async();
     }
 
     pub fn reset_all_shortcuts_persisted(&mut self) {
@@ -5712,7 +5755,6 @@ impl MahoCore {
         for action in actions {
             self.push_shortcut_sync_deleted(&action);
         }
-        self.trigger_sync_shortcuts_to_relay_async();
     }
 
     pub fn resolve_shortcut_json(&self, key_combo_json: &str) -> Option<String> {
@@ -5758,7 +5800,6 @@ impl MahoCore {
             return Err("Invalid shortcuts import format: missing shortcuts array".to_string());
         };
 
-        self.sync_trigger_suppressed.set(true);
         for binding in bindings {
             if binding.updated_at > 0 {
                 let local_opt = self.shortcut_manager.get_all_bindings().iter()
@@ -5776,8 +5817,6 @@ impl MahoCore {
             }
             self.toggle_shortcut_persisted(&binding.action, binding.enabled);
         }
-        self.sync_trigger_suppressed.set(false);
-        self.trigger_sync_shortcuts_to_relay_async();
         Ok(())
     }
 
@@ -5791,7 +5830,6 @@ impl MahoCore {
             return Err("Invalid shortcuts import format: missing shortcuts array".to_string());
         };
 
-        self.sync_trigger_suppressed.set(true);
         for incoming_b in bindings {
             let local_opt = self.shortcut_manager.get_all_bindings().iter().find(|b| b.action == incoming_b.action).cloned();
             if let Some(local_b) = local_opt {
@@ -5815,8 +5853,6 @@ impl MahoCore {
                 }
             }
         }
-        self.sync_trigger_suppressed.set(false);
-        self.trigger_sync_shortcuts_to_relay_async();
         Ok(())
     }
 
@@ -6188,103 +6224,114 @@ impl MahoCore {
         let config = SyncConfig {
             server_url: server_url.to_string(),
             sync_key: Some(room_id.to_string()),
-            device_id: self.sync_device_id.clone(),
+            device_id: self.sync_device_id(),
             device_name: std::env::var("HOSTNAME").unwrap_or_else(|_| "Maho Device".to_string()),
             auto_sync: true,
             sync_interval_secs: 30,
             disabled_entity_types: std::collections::HashSet::new(),
         };
-        let sm = crate::sync_manager::SyncManager::new(config);
+        let mut sm = crate::sync_manager::SyncManager::new(config);
+        if let Some(ref s) = self.storage {
+            for entity_type in &[
+                crate::sync_models::SyncEntityType::Space,
+                crate::sync_models::SyncEntityType::Tab,
+                crate::sync_models::SyncEntityType::Bookmark,
+                crate::sync_models::SyncEntityType::Note,
+                crate::sync_models::SyncEntityType::Boost,
+                crate::sync_models::SyncEntityType::ReadingListItem,
+                crate::sync_models::SyncEntityType::SearchEngine,
+                crate::sync_models::SyncEntityType::Shortcut,
+                crate::sync_models::SyncEntityType::Memory,
+                crate::sync_models::SyncEntityType::Extension,
+            ] {
+                let entity_type_str = match entity_type {
+                    crate::sync_models::SyncEntityType::Space => "space",
+                    crate::sync_models::SyncEntityType::Tab => "tab",
+                    crate::sync_models::SyncEntityType::Bookmark => "bookmark",
+                    crate::sync_models::SyncEntityType::Note => "note",
+                    crate::sync_models::SyncEntityType::Boost => "boost",
+                    crate::sync_models::SyncEntityType::ReadingListItem => "readinglistitem",
+                    crate::sync_models::SyncEntityType::SearchEngine => "searchengine",
+                    crate::sync_models::SyncEntityType::Shortcut => "shortcut",
+                    crate::sync_models::SyncEntityType::Memory => "memory",
+                    crate::sync_models::SyncEntityType::Extension => "extension",
+                };
+                if let Ok(version) = s.get_sync_last_pulled_version(entity_type_str) {
+                    sm.set_last_pulled_version(entity_type.clone(), version);
+                }
+            }
+        }
         self.sync_manager = Some(sm);
-        let _ = self.sync_shortcuts_from_relay();
+        if let Err(e) = self.load_sync_queue() {
+            eprintln!("Failed to load sync queue: {}", e);
+        }
     }
 
     pub fn stop_sync(&mut self) {
         self.sync_manager = None;
     }
 
-    pub fn sync_shortcuts_to_relay(&mut self) -> Result<(), String> {
-        let (server_url, room_id) = match &self.sync_manager {
-            Some(sm) => (sm.config().server_url.clone(), sm.config().sync_key.clone().unwrap_or_default()),
-            None => return Ok(()),
-        };
-        if room_id.is_empty() {
-            return Ok(());
-        }
-
-        let client = crate::http::shared_http_client();
-        let shortcuts_json = self.get_all_shortcuts_json();
-
-        let url = format!("{}/api/v1/shortcuts", server_url.trim_end_matches('/'));
-        let rt = crate::memory_manager::get_runtime();
-        let res = rt.block_on(async {
-            client.put(&url)
-                .header("Authorization", format!("Bearer {}", room_id))
-                .json(&serde_json::json!({ "json_data": shortcuts_json }))
-                .send()
-                .await
-        });
-
-        match res {
-            Ok(resp) if resp.status().is_success() => Ok(()),
-            Ok(resp) => Err(format!("Server returned error status: {}", resp.status())),
-            Err(e) => Err(e.to_string()),
+    pub fn set_sync_status(&mut self, status: crate::sync_models::SyncStatus) {
+        if let Some(ref mut sm) = self.sync_manager {
+            let becoming_active = matches!(
+                status,
+                crate::sync_models::SyncStatus::Synced | crate::sync_models::SyncStatus::Syncing
+            );
+            sm.set_status(status);
+            if becoming_active {
+                sm.flush_offline_queue();
+            }
         }
     }
 
-    pub fn sync_shortcuts_from_relay(&mut self) -> Result<(), String> {
-        let (server_url, room_id) = match &self.sync_manager {
-            Some(sm) => (sm.config().server_url.clone(), sm.config().sync_key.clone().unwrap_or_default()),
-            None => return Ok(()),
-        };
-        if room_id.is_empty() {
-            return Ok(());
+    pub fn sync_device_id(&self) -> String {
+        self.account_manager.device_id().to_string()
+    }
+
+    pub fn next_hlc_ts(&self) -> Result<u64, String> {
+        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+        let last_hlc = self.last_hlc_ts.get();
+        let new_hlc = std::cmp::max(now_ms, last_hlc.checked_add(1).ok_or("HLC logical clock overflow")?);
+        if let Some(ref s) = self.storage {
+            s.set_last_hlc_ts(new_hlc).map_err(|e| e.to_string())?;
         }
+        self.last_hlc_ts.set(new_hlc);
+        Ok(new_hlc)
+    }
 
-        let client = crate::http::shared_http_client();
-        let url = format!("{}/api/v1/shortcuts", server_url.trim_end_matches('/'));
-        let rt = crate::memory_manager::get_runtime();
-        let res = rt.block_on(async {
-            client.get(&url)
-                .header("Authorization", format!("Bearer {}", room_id))
-                .send()
-                .await
-        });
-
-        let resp = match res {
-            Ok(resp) if resp.status().is_success() => resp,
-            Ok(resp) => return Err(format!("Server returned error status: {}", resp.status())),
-            Err(e) => return Err(e.to_string()),
-        };
-
-        #[derive(serde::Deserialize)]
-        struct GetShortcutsResponse {
-            json_data: String,
+    pub fn update_hlc_ts_on_receive(&self, received_hlc: u64) -> Result<(), String> {
+        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+        let now_ms = std::cmp::max(now_ms, 1577836800000); // 2020-01-01 floor
+        let limit = now_ms.checked_add(3600000).ok_or("HLC limit overflow")?;
+        if received_hlc > limit {
+            return Err(format!("Received HLC timestamp {} exceeds limit {}", received_hlc, limit));
         }
-
-        let body: GetShortcutsResponse = rt.block_on(async {
-            resp.json::<GetShortcutsResponse>().await
-        }).map_err(|e: reqwest::Error| e.to_string())?;
-        self.merge_shortcuts_json(&body.json_data).map_err(|e| e.to_string())?;
+        let local_hlc = self.last_hlc_ts.get();
+        let new_hlc = std::cmp::max(std::cmp::max(local_hlc, received_hlc), now_ms)
+            .checked_add(1).ok_or("HLC logical clock overflow")?;
+        if let Some(ref s) = self.storage {
+            s.set_last_hlc_ts(new_hlc).map_err(|e| e.to_string())?;
+        }
+        self.last_hlc_ts.set(new_hlc);
         Ok(())
     }
 
-    pub fn set_sync_status(&mut self, status: crate::sync_models::SyncStatus) {
-        if let Some(ref mut sm) = self.sync_manager {
-            sm.set_status(status);
-        }
-    }
-
     pub fn set_account_auth_error(&mut self, message: String) -> Option<AccountInfo> {
-        self.account_manager.mark_auth_error(message)
+        let res = self.account_manager.mark_auth_error(message);
+        self.persist_lmdb_now_partial(LMDB_DIRTY_ACCOUNT);
+        res
     }
 
     pub fn refresh_account_token(&mut self) -> Option<AccountInfo> {
-        self.account_manager.refresh_token()
+        let res = self.account_manager.refresh_token();
+        self.persist_lmdb_now_partial(LMDB_DIRTY_ACCOUNT);
+        res
     }
 
     pub fn set_account_auth_state(&mut self, auth_state: AuthState) -> Option<AccountInfo> {
-        self.account_manager.set_auth_state(auth_state)
+        let res = self.account_manager.set_auth_state(auth_state);
+        self.persist_lmdb_now_partial(LMDB_DIRTY_ACCOUNT);
+        res
     }
 
     pub fn get_account_state_json(&self) -> String {
@@ -6393,13 +6440,43 @@ impl MahoCore {
         }
     }
 
+    pub fn ack_sync_entity(
+        &mut self,
+        entity_type_str: &str,
+        entity_id: &str,
+        version: u64,
+    ) {
+        let type_lower = entity_type_str.to_lowercase();
+        let device_id = self.account_manager.device_id_hash();
+        if let Some(ref mut sm) = self.sync_manager {
+            let key = format!("{}:{}", type_lower, entity_id);
+            sm.set_entity_version_in_cache(&key, version, device_id);
+        }
+        if let Some(ref storage) = self.storage {
+            if let Err(e) = storage.ack_sync_entity_by_key(&type_lower, entity_id, version) {
+                eprintln!(
+                    "[sync] Failed to ack sync entity {}:{} v{}: {}",
+                    type_lower, entity_id, version, e
+                );
+            }
+        }
+    }
+
     /// Apply a batch of remote sync entities. Returns the list of actually-applied entities.
     pub fn apply_sync_remote_entities(
         &mut self,
         entities: Vec<crate::sync_models::SyncEntity>,
     ) -> Vec<crate::sync_models::SyncEntity> {
+        let mut valid_entities = Vec::new();
+        for entity in entities {
+            if let Err(e) = self.update_hlc_ts_on_receive(entity.version) {
+                eprintln!("Rejected remote entity {} due to invalid HLC: {}", entity.entity_id, e);
+                continue;
+            }
+            valid_entities.push(entity);
+        }
         let applied = match &mut self.sync_manager {
-            Some(sm) => sm.apply_remote_batch(entities),
+            Some(sm) => sm.apply_remote_batch(valid_entities, &self.storage),
             None => return Vec::new(),
         };
 
@@ -6460,25 +6537,49 @@ impl MahoCore {
 
     /// Get and drain pending outgoing sync messages.
     pub fn drain_sync_outgoing(&mut self) -> Vec<crate::sync_models::SyncMessage> {
-        match &mut self.sync_manager {
+        let msgs = match &mut self.sync_manager {
             Some(sm) => sm.drain_outgoing_messages(),
             None => Vec::new(),
+        };
+        if let Some(ref mut sm) = self.sync_manager {
+            let sent_ids = sm.drain_sent_entities();
+            if !sent_ids.is_empty() {
+                if let Some(ref storage) = self.storage {
+                    if let Err(e) = storage.mark_sync_entities_sent(&sent_ids) {
+                        eprintln!("Failed to mark sync entities sent in DB: {}", e);
+                    }
+                }
+            }
         }
+        msgs
     }
 
     /// Push an entity through sync, persisting to queue if storage available
-    pub fn sync_push_entity_persisted(&mut self, entity: SyncEntity) {
+    pub fn sync_push_entity_persisted(&mut self, mut entity: SyncEntity) {
         // Persist to SQLite queue first
         if let Some(ref storage) = self.storage {
-            let entity_type_str = format!("{:?}", entity.entity_type);
-            let _ = storage.enqueue_sync_entity(
+            let entity_type_str = match entity.entity_type {
+                crate::sync_models::SyncEntityType::Space => "space",
+                crate::sync_models::SyncEntityType::Tab => "tab",
+                crate::sync_models::SyncEntityType::Bookmark => "bookmark",
+                crate::sync_models::SyncEntityType::Note => "note",
+                crate::sync_models::SyncEntityType::Boost => "boost",
+                crate::sync_models::SyncEntityType::ReadingListItem => "readinglistitem",
+                crate::sync_models::SyncEntityType::SearchEngine => "searchengine",
+                crate::sync_models::SyncEntityType::Shortcut => "shortcut",
+                crate::sync_models::SyncEntityType::Memory => "memory",
+                crate::sync_models::SyncEntityType::Extension => "extension",
+            };
+            if let Ok(row_id) = storage.enqueue_sync_entity(
                 &entity_type_str,
                 &entity.entity_id,
                 entity.version,
                 entity.modified_at,
                 &entity.payload_json,
                 entity.deleted,
-            );
+            ) {
+                entity.queue_row_id = Some(row_id);
+            }
         }
         // Then push to in-memory sync manager
         if let Some(ref mut sm) = self.sync_manager {
@@ -6492,22 +6593,23 @@ impl MahoCore {
             Some(s) => s,
             None => return Ok(()),
         };
-        if let Ok(entries) = storage.load_pending_sync_entities() {
-            for (_id, entity_type_str, entity_id, version, modified_at, payload_json, deleted) in
-                entries
-            {
-                let entity_type = parse_sync_entity_type(&entity_type_str);
-                let entity = SyncEntity {
-                    entity_type,
-                    entity_id,
-                    version,
-                    modified_at,
-                    payload_json,
-                    deleted,
-                };
-                if let Some(ref mut sm) = self.sync_manager {
-                    sm.push_entity(entity);
-                }
+        let entries = storage.load_pending_sync_entities()
+            .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+        for (id, entity_type_str, entity_id, version, modified_at, payload_json, deleted) in entries {
+            let entity_type = parse_sync_entity_type(&entity_type_str);
+            let entity = SyncEntity {
+                entity_type,
+                entity_id,
+                version,
+                device_id: self.account_manager.device_id_hash(),
+                schema_version: 1,
+                modified_at,
+                payload_json,
+                deleted,
+                queue_row_id: Some(id),
+            };
+            if let Some(ref mut sm) = self.sync_manager {
+                sm.push_entity(entity);
             }
         }
         Ok(())

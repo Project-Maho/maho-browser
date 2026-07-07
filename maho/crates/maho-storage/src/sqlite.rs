@@ -464,8 +464,37 @@ impl SqliteStorage {
                 title TEXT,
                 started_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
-            CREATE INDEX IF NOT EXISTS idx_browse_sessions_started ON browse_sessions(started_at);",
+            CREATE INDEX IF NOT EXISTS idx_browse_sessions_started ON browse_sessions(started_at);
+            CREATE TABLE IF NOT EXISTS hlc_state (
+                id INTEGER PRIMARY KEY CHECK (id = 0),
+                last_hlc_ts INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS entity_versions (
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                hlc_ts INTEGER NOT NULL,
+                device_id INTEGER NOT NULL,
+                PRIMARY KEY (entity_type, entity_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_entity_versions_type ON entity_versions(entity_type);",
         )?;
+
+        let has_acked_at: bool = self.conn.query_row(
+            "SELECT 1 FROM pragma_table_info('sync_queue') WHERE name='acked_at'",
+            [],
+            |_| Ok(true)
+        ).unwrap_or(false);
+        if !has_acked_at {
+            let _ = self.conn.execute("ALTER TABLE sync_queue ADD COLUMN acked_at INTEGER", []);
+        }
+
+        // Reset sent_at to NULL for old unacknowledged entries older than 30 days to trigger retransmission
+        let cutoff_30d = chrono::Utc::now().timestamp() - (30 * 86400);
+        let _ = self.conn.execute(
+            "UPDATE sync_queue SET sent_at = NULL WHERE sent_at IS NOT NULL AND sent_at < ?1 AND acked_at IS NULL",
+            rusqlite::params![cutoff_30d],
+        );
+
         Ok(())
     }
 
@@ -1761,7 +1790,7 @@ impl SqliteStorage {
         &self,
     ) -> Result<Vec<(i64, String, String, u64, i64, String, bool)>, StorageError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, entity_type, entity_id, version, modified_at, payload_json, deleted FROM sync_queue WHERE sent_at IS NULL ORDER BY id ASC"
+            "SELECT id, entity_type, entity_id, version, modified_at, payload_json, deleted FROM sync_queue WHERE sent_at IS NULL AND acked_at IS NULL ORDER BY id ASC"
         )?;
         let rows = stmt.query_map([], |row| {
             Ok((
@@ -1793,14 +1822,40 @@ impl SqliteStorage {
         Ok(())
     }
 
-    /// Acknowledge and remove sync queue entries (after server confirms)
+    /// Acknowledge sync queue entries (set acked_at)
     pub fn ack_sync_entities(&self, ids: &[i64]) -> Result<(), StorageError> {
+        let now = chrono::Utc::now().timestamp();
         for id in ids {
             self.conn.execute(
-                "DELETE FROM sync_queue WHERE id = ?1",
-                rusqlite::params![id],
+                "UPDATE sync_queue SET acked_at = ?1 WHERE id = ?2",
+                rusqlite::params![now, id],
             )?;
         }
+        Ok(())
+    }
+
+    /// Acknowledge a sync queue entry by entity type, id and version
+    pub fn ack_sync_entity_by_key(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+        version: u64,
+    ) -> Result<(), StorageError> {
+        let now = chrono::Utc::now().timestamp();
+        self.conn.execute(
+            "UPDATE sync_queue SET acked_at = ?1 WHERE entity_type = ?2 AND entity_id = ?3 AND version = ?4",
+            rusqlite::params![now, entity_type, entity_id, version],
+        )?;
+        Ok(())
+    }
+
+    /// Prune acknowledged sync queue entries older than 24h
+    pub fn prune_acked_sync_entities(&self) -> Result<(), StorageError> {
+        let cutoff = chrono::Utc::now().timestamp() - 86400; // 24 hours ago
+        self.conn.execute(
+            "DELETE FROM sync_queue WHERE acked_at IS NOT NULL AND acked_at < ?1",
+            rusqlite::params![cutoff],
+        )?;
         Ok(())
     }
 
@@ -1826,6 +1881,56 @@ impl SqliteStorage {
         self.conn.execute(
             "INSERT OR REPLACE INTO sync_state (entity_type, last_pulled_version) VALUES (?1, ?2)",
             rusqlite::params![entity_type, version],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_last_hlc_ts(&self) -> Result<u64, StorageError> {
+        let ts: u64 = self
+            .conn
+            .query_row(
+                "SELECT last_hlc_ts FROM hlc_state WHERE id = 0",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        Ok(ts)
+    }
+
+    pub fn set_last_hlc_ts(&self, ts: u64) -> Result<(), StorageError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO hlc_state (id, last_hlc_ts) VALUES (0, ?1)",
+            rusqlite::params![ts],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_entity_version(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+    ) -> Result<Option<(u64, u32)>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT hlc_ts, device_id FROM entity_versions WHERE entity_type = ?1 AND entity_id = ?2",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![entity_type, entity_id])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some((row.get::<_, u64>(0)?, row.get::<_, u32>(1)?)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn save_entity_version(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+        hlc_ts: u64,
+        device_id: u32,
+    ) -> Result<(), StorageError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO entity_versions (entity_type, entity_id, hlc_ts, device_id) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![entity_type, entity_id, hlc_ts, device_id],
         )?;
         Ok(())
     }

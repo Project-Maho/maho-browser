@@ -112,10 +112,20 @@ pub enum SyncEntityType {
 pub struct SyncEntity {
     pub entity_type: SyncEntityType,
     pub entity_id: String,
-    pub version: u64,
+    pub version: u64, // HLC timestamp
+    #[serde(default)]
+    pub device_id: u32,
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u8,
     pub modified_at: i64,
     pub payload_json: String,
     pub deleted: bool,
+    #[serde(skip)]
+    pub queue_row_id: Option<i64>,
+}
+
+fn default_schema_version() -> u8 {
+    1
 }
 
 /// Messages exchanged between devices via the sync relay
@@ -138,7 +148,9 @@ pub enum SyncMessage {
     /// Server acknowledges an entity push
     Ack {
         entity_id: String,
+        entity_type: SyncEntityType,
         version: u64,
+        device_id: u32,
     },
     /// Send a tab to another device
     SendTab {
