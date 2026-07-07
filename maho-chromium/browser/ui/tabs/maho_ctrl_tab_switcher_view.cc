@@ -96,9 +96,7 @@ MahoCtrlTabSwitcherView::MahoCtrlTabSwitcherView(
     more_container->AddChildView(std::move(hint));
 
     more_affordance_view_ = AddChildView(std::move(more_container));
-    more_affordance_view_->SetBackground(views::CreateRoundedRectBackground(
-        SkColorSetARGB(0xE0, 0x1F, 0x1F, 0x22),
-        kMoreAffordanceBorderRadius));
+    more_affordance_view_->SetBackground(nullptr);
     more_affordance_view_->SetBorder(views::CreateRoundedRectBorder(
         kMoreAffordanceBorderThickness,
         kMoreAffordanceBorderRadius, kMoreAffordanceUnselectedBorder));
@@ -166,16 +164,15 @@ void MahoCtrlTabSwitcherView::OnThemeChanged() {
 }
 
 void MahoCtrlTabSwitcherView::UpdateThemeColors() {
-  const ui::ColorProvider* colors = GetColorProvider();
-  if (!colors) {
-    return;
-  }
+  // Hardcoded translucent gray matching the command palette's visual
+  // language (kMahoColorCommandBarBackground) with alpha for a floating
+  // overlay feel — deliberately theme-independent so the switcher stays
+  // consistent across space themes.
   SetBackground(views::CreateRoundedRectBackground(
-      colors->GetColor(kMahoColorCtrlTabOverlayBackground),
-      kOverlayBorderRadius));
+      SkColorSetARGB(0xB0, 0x17, 0x19, 0x20), kOverlayBorderRadius));
   SetBorder(views::CreateRoundedRectBorder(
       1, kOverlayBorderRadius,
-      colors->GetColor(kMahoColorCardBorder)));
+      SkColorSetARGB(0x22, 0xFF, 0xFF, 0xFF)));
 }
 
 BEGIN_METADATA(MahoCtrlTabSwitcherView)

@@ -40,22 +40,14 @@ constexpr int kFooterHeight = 36;
 constexpr int kFaviconSize = 16;
 constexpr int kFallbackFaviconSize = 48;
 
-SkColor CardBackgroundColor(const ui::ColorProvider* colors, bool selected) {
-  if (!colors) {
-    return selected ? SkColorSetARGB(0xFF, 0x2A, 0x2A, 0x2E)
-                    : SkColorSetARGB(0xE0, 0x1F, 0x1F, 0x22);
-  }
-  const SkColor base = colors->GetColor(kMahoColorCardBackground);
-  return selected ? base : SkColorSetA(base, 0xE0);
+SkColor CardBackgroundColor(bool selected) {
+  return selected ? SkColorSetARGB(0x33, 0xFF, 0xFF, 0xFF)
+                  : SK_ColorTRANSPARENT;
 }
 
-SkColor CardBorderColor(const ui::ColorProvider* colors, bool selected) {
-  if (!colors) {
-    return selected ? SkColorSetARGB(0xFF, 0x6E, 0xA9, 0xFF)
-                    : SkColorSetARGB(0x40, 0xFF, 0xFF, 0xFF);
-  }
-  return selected ? colors->GetColor(kMahoColorCtrlTabAccent)
-                  : colors->GetColor(kMahoColorCardBorder);
+SkColor CardBorderColor(bool selected) {
+  return selected ? SkColorSetARGB(0xFF, 0x6E, 0xA9, 0xFF)
+                  : SkColorSetARGB(0x00, 0x00, 0x00, 0x00);
 }
 
 gfx::Image GetFaviconFromWebContents(content::WebContents* wc) {
@@ -111,26 +103,15 @@ void MahoCtrlTabSwitcherCardView::BuildContents() {
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
   thumbnail_view_ = AddChildView(std::make_unique<views::ImageView>());
+  thumbnail_view_->SetPreferredSize(
+      gfx::Size(kThumbnailWidth, kThumbnailHeight));
   thumbnail_view_->SetImageSize(
       gfx::Size(kThumbnailWidth, kThumbnailHeight));
   thumbnail_view_->SetHorizontalAlignment(
       views::ImageView::Alignment::kCenter);
   thumbnail_view_->SetVerticalAlignment(views::ImageView::Alignment::kCenter);
   thumbnail_view_->SetBackground(views::CreateRoundedRectBackground(
-      SkColorSetARGB(0x60, 0x30, 0x30, 0x33), kBorderRadius - 2));
-
-  // Immediate fallback: show large favicon in the thumbnail slot while the
-  // page-thumbnail bytes are being decoded (or captured for the first time).
-  // Once OnThumbnailReady arrives, the favicon is replaced by the real
-  // page snapshot.
-  content::WebContents* wc = web_contents_.get();
-  gfx::Image favicon_image = GetFaviconFromWebContents(wc);
-  if (!favicon_image.IsEmpty()) {
-    thumbnail_view_->SetImage(
-        ui::ImageModel::FromImage(favicon_image));
-    thumbnail_view_->SetImageSize(
-        gfx::Size(kFallbackFaviconSize, kFallbackFaviconSize));
-  }
+      SkColorSetARGB(0x24, 0xFF, 0xFF, 0xFF), kBorderRadius - 2));
 
   auto* footer = AddChildView(std::make_unique<views::BoxLayoutView>());
   footer->SetOrientation(views::BoxLayout::Orientation::kHorizontal);
@@ -142,7 +123,17 @@ void MahoCtrlTabSwitcherCardView::BuildContents() {
 
   favicon_view_ = footer->AddChildView(std::make_unique<views::ImageView>());
   favicon_view_->SetImageSize(gfx::Size(kFaviconSize, kFaviconSize));
+
+  content::WebContents* wc = web_contents_.get();
+  gfx::Image favicon_image = GetFaviconFromWebContents(wc);
   if (!favicon_image.IsEmpty()) {
+    // Render favicon centered inside the fixed-size thumbnail slot; the
+    // thumbnail_view_ preferred size stays at kThumbnailWidth×kThumbnailHeight
+    // so the card layout does not shift when the real page thumbnail
+    // arrives later.
+    thumbnail_view_->SetImageSize(
+        gfx::Size(kFallbackFaviconSize, kFallbackFaviconSize));
+    thumbnail_view_->SetImage(ui::ImageModel::FromImage(favicon_image));
     favicon_view_->SetImage(ui::ImageModel::FromImage(favicon_image));
   }
 
@@ -198,12 +189,10 @@ void MahoCtrlTabSwitcherCardView::OnThumbnailReady(gfx::ImageSkia image) {
 }
 
 void MahoCtrlTabSwitcherCardView::UpdateBorder() {
-  const ui::ColorProvider* colors = GetColorProvider();
   SetBackground(views::CreateRoundedRectBackground(
-      CardBackgroundColor(colors, selected_), kBorderRadius));
+      CardBackgroundColor(selected_), kBorderRadius));
   SetBorder(views::CreateRoundedRectBorder(
-      kBorderThickness, kBorderRadius,
-      CardBorderColor(colors, selected_)));
+      kBorderThickness, kBorderRadius, CardBorderColor(selected_)));
 }
 
 BEGIN_METADATA(MahoCtrlTabSwitcherCardView)
