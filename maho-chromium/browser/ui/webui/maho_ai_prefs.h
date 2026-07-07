@@ -34,6 +34,11 @@ inline constexpr char kByokOpenAIEncryptedB64[] = "maho.ai.byok.openai.encrypted
 inline constexpr char kByokAnthropicEncryptedB64[] = "maho.ai.byok.anthropic.encrypted_b64";
 inline constexpr char kAgentToolGrants[] = "maho.ai.extensions.agent_tool_grants";
 
+// One-time migration flag: true once macOS defaults have been copied into
+// Chromium prefs. Prevents re-migration on subsequent launches.
+inline constexpr char kSettingsMigratedFromMacOSDefaults[] =
+    "maho.ai.settings_migrated_from_macos_defaults";
+
 }  // namespace maho::ai_prefs
 
 #endif  // MAHO_BROWSER_UI_WEBUI_MAHO_AI_PREFS_H_

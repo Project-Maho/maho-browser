@@ -8,7 +8,6 @@
 #include "base/json/json_writer.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
-#include "base/strings/sys_string_conversions.h"
 #include "components/prefs/pref_service.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -16,27 +15,15 @@
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/cpp/simple_url_loader_stream_consumer.h"
 
-#if defined(__APPLE__)
-#include <CoreFoundation/CoreFoundation.h>
-#endif
-
 namespace {
 
-// Maximum accumulated size for full_text and arguments_json in a single
-// streaming response.  Mirrors ConversationTask::kMaxAccumulatedBytes (H13).
 constexpr size_t kMaxLlmResponseBytes = 2 * 1024 * 1024;  // 2 MB
 
 const char kMahoAiApiKeyPref[] = "maho.ai.api_key";
-const char kMahoAiEndpointPref[] = "maho.ai.endpoint";
+const char kMahoAiEndpointPref[] = "maho.ai.base_url";
 const char kMahoAiModelPref[] = "maho.ai.model";
-const char kOpenAIEndpoint[] = "https://api.openai.com/v1/chat/completions";
-const char kMahoAiLocalServerEndpointPref[] = "maho.ai.localServer.endpoint";
-const char kMahoAiLocalServerModelPref[] = "maho.ai.localServer.model";
-const char kMahoAiCustomEndpointPref[] = "maho.ai.custom.endpoint";
-const char kMahoAiCustomModelPref[] = "maho.ai.custom.model";
 const char kMahoAiProviderPref[] = "maho.ai.provider";
-const char kMahoAiLocalServerProvider[] = "Local Server";
-const char kMahoAiLegacyCustomProvider[] = "Custom";
+const char kOpenAIEndpoint[] = "https://api.openai.com/v1/chat/completions";
 const char kDefaultLocalServerEndpoint[] = "http://localhost:11434/v1";
 
 constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
@@ -57,70 +44,8 @@ constexpr net::NetworkTrafficAnnotationTag kTrafficAnnotation =
       }
     )");
 
-struct LocalServerConfig {
-  std::string endpoint;
-  std::string model;
-};
-
-bool IsLocalServerProvider(const std::string& provider) {
-  return provider == kMahoAiLocalServerProvider ||
-         provider == kMahoAiLegacyCustomProvider;
-}
-
-std::string GetMacOSAppDefaultsString(const char* key) {
-#if defined(__APPLE__)
-  auto key_ref = base::SysUTF8ToCFStringRef(key);
-  CFPropertyListRef value_ref =
-      CFPreferencesCopyAppValue(key_ref.get(), CFSTR("com.maho.browser"));
-  if (!value_ref) {
-    return std::string();
-  }
-  if (CFGetTypeID(value_ref) != CFStringGetTypeID()) {
-    CFRelease(value_ref);
-    return std::string();
-  }
-  std::string value =
-      base::SysCFStringRefToUTF8(static_cast<CFStringRef>(value_ref));
-  CFRelease(value_ref);
-  return value;
-#else
-  return std::string();
-#endif
-}
-
-std::optional<LocalServerConfig> GetLocalServerConfig() {
-  const std::string provider = GetMacOSAppDefaultsString(kMahoAiProviderPref);
-  if (!IsLocalServerProvider(provider)) {
-    return std::nullopt;
-  }
-
-  std::string endpoint =
-      GetMacOSAppDefaultsString(kMahoAiLocalServerEndpointPref);
-  if (endpoint.empty()) {
-    endpoint = GetMacOSAppDefaultsString(kMahoAiCustomEndpointPref);
-  }
-  if (endpoint.empty()) {
-    endpoint = kDefaultLocalServerEndpoint;
-  }
-
-  std::string model = GetMacOSAppDefaultsString(kMahoAiLocalServerModelPref);
-  if (model.empty()) {
-    model = GetMacOSAppDefaultsString(kMahoAiCustomModelPref);
-  }
-  if (model.empty()) {
-    return std::nullopt;
-  }
-
-  return LocalServerConfig{.endpoint = std::move(endpoint),
-                           .model = std::move(model)};
-}
-
 std::string GetConfiguredApiKey(PrefService* prefs) {
-  std::string api_key = prefs->GetString(kMahoAiApiKeyPref);
-  if (!api_key.empty()) {
-    return api_key;
-  }
-  return GetMacOSAppDefaultsString(kMahoAiApiKeyPref);
+  return prefs->GetString(kMahoAiApiKeyPref);
 }
 
 void AppendChatCompletionsPath(GURL* url) {
@@ -312,29 +237,33 @@ class OpenAICompatibleProviderTransport final
  public:
   bool HasConfiguredCredential(PrefService* prefs) const override {
     return !GetConfiguredApiKey(prefs).empty() ||
-           GetLocalServerConfig().has_value();
+           !prefs->GetString(kMahoAiEndpointPref).empty() ||
+           prefs->GetString(kMahoAiProviderPref) == "local-server";
   }
 
   std::optional<std::string> ResolveEndpoint(
       const MahoAiLlmClient::CompletionRequest& request,
       PrefService* prefs) const override {
-    const std::optional<LocalServerConfig> local_server_config =
-        GetLocalServerConfig();
-    const std::string endpoint_pref = prefs->GetString(kMahoAiEndpointPref);
-    return request.endpoint.value_or(local_server_config.has_value()
-                                         ? local_server_config->endpoint
-                                         : endpoint_pref);
+    if (request.endpoint.has_value()) {
+      return request.endpoint;
+    }
+    const std::string endpoint = prefs->GetString(kMahoAiEndpointPref);
+    if (!endpoint.empty()) {
+      return endpoint;
+    }
+    if (prefs->GetString(kMahoAiProviderPref) == "local-server") {
+      return std::string(kDefaultLocalServerEndpoint);
+    }
+    return std::nullopt;
   }
 
   std::optional<std::string> ResolveModel(
       const MahoAiLlmClient::CompletionRequest& request,
       PrefService* prefs) const override {
-    const std::optional<LocalServerConfig> local_server_config =
-        GetLocalServerConfig();
-    const std::string model_pref = prefs->GetString(kMahoAiModelPref);
-    const std::string model = request.model.value_or(
-        local_server_config.has_value() ? local_server_config->model
-                                        : model_pref);
+    if (request.model.has_value()) {
+      return request.model;
+    }
+    const std::string model = prefs->GetString(kMahoAiModelPref);
     if (model.empty()) {
       return std::nullopt;
     }
@@ -377,39 +306,37 @@ class ProviderAdapterV2Transport final
  public:
   bool HasConfiguredCredential(PrefService* prefs) const override {
     return !GetConfiguredApiKey(prefs).empty() ||
-           GetLocalServerConfig().has_value();
+           !prefs->GetString(kMahoAiEndpointPref).empty() ||
+           prefs->GetString(kMahoAiProviderPref) == "local-server";
   }
 
   std::optional<std::string> ResolveEndpoint(
       const MahoAiLlmClient::CompletionRequest& request,
       PrefService* prefs) const override {
-    const std::optional<LocalServerConfig> local_server_config =
-        GetLocalServerConfig();
     if (request.endpoint.has_value()) {
       return request.endpoint;
     }
-    if (local_server_config.has_value()) {
-      return local_server_config->endpoint;
+    const std::string endpoint = prefs->GetString(kMahoAiEndpointPref);
+    if (!endpoint.empty()) {
+      return endpoint;
     }
-    const std::string endpoint_pref = prefs->GetString(kMahoAiEndpointPref);
-    return endpoint_pref.empty() ? std::optional<std::string>()
-                                 : std::optional<std::string>(endpoint_pref);
+    if (prefs->GetString(kMahoAiProviderPref) == "local-server") {
+      return std::string(kDefaultLocalServerEndpoint);
+    }
+    return std::nullopt;
   }
 
   std::optional<std::string> ResolveModel(
       const MahoAiLlmClient::CompletionRequest& request,
       PrefService* prefs) const override {
-    const std::optional<LocalServerConfig> local_server_config =
-        GetLocalServerConfig();
     if (request.model.has_value()) {
       return request.model;
     }
-    if (local_server_config.has_value()) {
-      return local_server_config->model;
+    const std::string model = prefs->GetString(kMahoAiModelPref);
+    if (model.empty()) {
+      return std::nullopt;
     }
-    const std::string model_pref = prefs->GetString(kMahoAiModelPref);
-    return model_pref.empty() ? std::optional<std::string>()
-                              : std::optional<std::string>(model_pref);
+    return model;
   }
 
   MahoAiLlmClient::RequestPlan CreateRequestPlan(

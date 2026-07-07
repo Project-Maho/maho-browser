@@ -40,9 +40,12 @@ source_set("maho_ai_client") {
   sources = [
     "ai/maho_ai_llm_client.cc",
     "ai/maho_ai_llm_client.h",
+    "ai/maho_ai_settings_migration.cc",
+    "ai/maho_ai_settings_migration.h",
   ]
   deps = [
     "//base",
+    "//chrome/browser/profiles:profile",
     "//components/prefs",
     "//net",
     "//services/network/public/cpp",
@@ -513,6 +516,8 @@ source_set("maho_browser_main_extra_parts") {
     "//maho/browser/mcp:maho_mcp",
     "//maho/browser/updates:maho_updates_lib",
     "//maho/third_party/maho:maho_bridge",
+    "//skia",
+    "//ui/accessibility",
     "//ui/color",
   ]
 }

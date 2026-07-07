@@ -28,6 +28,7 @@
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "maho/browser/extensions/maho_extension_state_bridge.h"
+#include "maho/browser/ai/maho_ai_settings_migration.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_routines_scheduler.h"
 #include "maho/browser/maho_space_profile_bridge.h"
@@ -45,11 +46,25 @@
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
+#include "base/base64.h"
+#include "base/containers/span.h"
+#include "base/run_loop.h"
 #include "base/synchronization/waitable_event.h"
+#include "components/viz/common/frame_sinks/copy_output_result.h"
+#include "content/public/browser/browser_accessibility_state.h"
+#include "content/public/browser/scoped_accessibility_mode.h"
+#include "maho/browser/mcp/maho_mcp_accessibility_handler.h"
 #include "maho/browser/mcp/maho_mcp_console_capture.h"
 #include "maho/browser/mcp/maho_mcp_input_synthesizer.h"
 #include "maho/browser/mcp/maho_mcp_navigation_tracker.h"
+#include "maho/browser/mcp/maho_mcp_screenshot_handler.h"
 #include "maho/browser/mcp/maho_mcp_session.h"
+#include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/accessibility/ax_enums.mojom-shared.h"
+#include "ui/accessibility/ax_mode.h"
+#include "ui/accessibility/ax_node.h"
+#include "ui/accessibility/ax_node_data.h"
+#include "ui/accessibility/ax_tree.h"
 #include "maho/browser/ui/theme/maho_color_mixer.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/third_party/maho/maho_bridge.h"
@@ -265,7 +280,6 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
     }
     return list;
   }
-
   std::vector<maho::MahoMcpSession::NavigationEvent> GetNavigationEvents(
       int tab_id, int64_t since_ms) override {
     std::vector<maho::MahoMcpSession::NavigationEvent> list;
@@ -290,6 +304,111 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
       }
     }
     return list;
+  }
+
+  std::string GetPageText(int tab_id) override {
+    content::WebContents* wc = (tab_id == 0)
+                                   ? GetActiveWebContents()
+                                   : GetWebContentsForTabId(tab_id);
+    if (!wc) return std::string();
+    ui::AXNode* root = wc->GetAccessibilityRootNode();
+    if (!root) return std::string();
+
+    std::string out;
+    std::vector<const ui::AXNode*> stack{root};
+    while (!stack.empty()) {
+      const ui::AXNode* node = stack.back();
+      stack.pop_back();
+      const std::string& name = node->data().GetStringAttribute(
+          ax::mojom::StringAttribute::kName);
+      const auto role = node->GetRole();
+      if (!name.empty() &&
+          (role == ax::mojom::Role::kStaticText ||
+           role == ax::mojom::Role::kInlineTextBox ||
+           role == ax::mojom::Role::kHeading ||
+           role == ax::mojom::Role::kParagraph ||
+           role == ax::mojom::Role::kLink ||
+           role == ax::mojom::Role::kButton)) {
+        if (!out.empty()) out.push_back('\n');
+        out.append(name);
+      }
+      for (auto it = node->children().rbegin();
+           it != node->children().rend(); ++it) {
+        stack.push_back(*it);
+      }
+    }
+    return out;
+  }
+
+  base::Value GetAccessibilitySnapshot(
+      int tab_id,
+      maho::MahoMcpSession::RefTable* out_refs) override {
+    content::WebContents* wc = (tab_id == 0)
+                                   ? GetActiveWebContents()
+                                   : GetWebContentsForTabId(tab_id);
+    base::DictValue empty;
+    empty.Set("role", "WebArea");
+    empty.Set("children", base::ListValue());
+    if (!wc) return base::Value(std::move(empty));
+    ui::AXNode* root = wc->GetAccessibilityRootNode();
+    if (!root) return base::Value(std::move(empty));
+    const ui::AXTree* tree = root->tree();
+    if (!tree) return base::Value(std::move(empty));
+
+    maho::MahoMcpAccessibilityHandler::RefTable local_refs;
+    base::Value snapshot =
+        maho::MahoMcpAccessibilityHandler::BuildSnapshot(*tree, local_refs);
+    if (out_refs) {
+      out_refs->clear();
+      for (const auto& pair : local_refs) {
+        out_refs->emplace(pair.first, pair.second);
+      }
+    }
+    return snapshot;
+  }
+
+  std::string CaptureFullPagePngBase64(int tab_id) override {
+    content::WebContents* wc = (tab_id == 0)
+                                   ? GetActiveWebContents()
+                                   : GetWebContentsForTabId(tab_id);
+    if (!wc) return std::string();
+    content::RenderWidgetHostView* view = wc->GetRenderWidgetHostView();
+    if (!view) return std::string();
+
+    SkBitmap captured;
+    base::RunLoop run_loop;
+    view->CopyFromSurface(
+        gfx::Rect(), gfx::Size(), base::Seconds(5),
+        base::BindOnce(
+            [](SkBitmap* out, base::OnceClosure quit,
+               const content::CopyFromSurfaceResult& res) {
+              if (res.has_value()) {
+                *out = res.value().bitmap;
+              }
+              std::move(quit).Run();
+            },
+            &captured, run_loop.QuitClosure()));
+    run_loop.Run();
+    if (captured.drawsNothing()) return std::string();
+
+    ui::AXNode* root = wc->GetAccessibilityRootNode();
+    const ui::AXTree* tree = root ? root->tree() : nullptr;
+
+    std::vector<uint8_t> png_bytes;
+    base::RunLoop encode_loop;
+    maho::MahoMcpScreenshotHandler::CaptureFullPage(
+        captured, tree,
+        base::BindOnce(
+            [](std::vector<uint8_t>* out, base::OnceClosure quit,
+               std::vector<uint8_t> png) {
+              *out = std::move(png);
+              std::move(quit).Run();
+            },
+            &png_bytes, encode_loop.QuitClosure()));
+    encode_loop.Run();
+    if (png_bytes.empty()) return std::string();
+
+    return base::Base64Encode(base::span<const uint8_t>(png_bytes));
   }
 
   bool Scroll(int tab_id,
@@ -409,9 +528,15 @@ void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
     // Register MCP browser delegate
     static MahoMcpBrowserDelegateImpl mcp_delegate;
     maho::MahoMcpSession::SetBrowserDelegate(&mcp_delegate);
+    static base::NoDestructor<std::unique_ptr<content::ScopedAccessibilityMode>>
+        g_mcp_ax_mode(
+            content::BrowserAccessibilityState::GetInstance()
+                ->CreateScopedModeForProcess(ui::kAXModeComplete));
 
     extension_state_bridge_ =
         std::make_unique<maho::MahoExtensionStateBridge>(profile);
+
+    maho::MigrateAiSettingsFromMacOSDefaults(profile);
 
     maho::MahoTabIdSessionHelper::GetForProfile(profile);
 
