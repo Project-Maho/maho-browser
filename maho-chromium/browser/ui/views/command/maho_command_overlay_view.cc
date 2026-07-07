@@ -21,10 +21,13 @@
 #include "ui/compositor/layer.h"
 #include "maho/browser/ui/views/command/maho_command_action_handler.h"
 #include "maho/browser/ui/views/command/maho_command_model.h"
-#include "maho/browser/ui/views/command/maho_command_sparkle_geometry.h"
 #include "maho/browser/ui/views/command/maho_command_result_row_view.h"
+#include "components/vector_icons/vector_icons.h"
+#include "ui/gfx/color_palette.h"
+#include "ui/gfx/paint_vector_icon.h"
 #include "maho/browser/ui/views/command/maho_command_search_engine_picker_view.h"
 #include "ui/views/controls/button/md_text_button.h"
+#include "ui/views/layout/fill_layout.h"
 #include "ui/views/animation/ink_drop.h"
 #include "base/json/json_writer.h"
 #include "base/values.h"
@@ -99,20 +102,16 @@ constexpr int kPanelPaddingSideDp = 8;
 constexpr int kFieldShellSpacingDp = 6;
 constexpr int kTopbarHorizontalInsetDp = 18;
 constexpr int kPanelBottomInsetDp = 8;
-constexpr int kSearchRowHeightDp = 36;
 constexpr int kSearchRowCornerRadiusDp = 14;
 constexpr int kSearchRowPaddingHDp = 0;
-constexpr int kSearchIconLaneWidthDp = 30;
 constexpr int kTrailingAccessoryTrailingInsetDp = 6;
-constexpr int kLeadingPageIconSizeDp = 20;
-constexpr int kSparkToInputGapDp = 8;
+// constexpr int kSparkToInputGapDp = 8;
 constexpr int kPanelSectionSpacingDp = 0;
 constexpr int kResultRowSpacingDp = 2;
 constexpr int kDividerTopGapDp = 4;
 constexpr int kDividerBottomGapDp = 2;
 constexpr int kDividerHorizontalInsetDp = 10;
 constexpr int kMaxResultsHeightDp = 420;
-constexpr int kSearchIconSizeDp = 15;
 constexpr int kTrailingAccessorySizeDp = 18;
 constexpr int kTrailingAccessoryCornerRadiusDp = 9;
 constexpr char16_t kTrailingAccessoryInfoGlyph[] = u"i";
@@ -129,9 +128,6 @@ constexpr int kNoResultsTopInsetDp = 6;
 constexpr int kNoResultsBottomInsetDp = 3;
 constexpr int kEmptyStateHorizontalInsetDp = 40;
 
-constexpr SkColor kSparkleOuterColor = SkColorSetRGB(0x73, 0x7C, 0xFF);
-constexpr SkColor kSparkleInnerColor = SkColorSetRGB(0xFF, 0xC7, 0x57);
-
 gfx::Insets EmptyStateInsets(bool compact) {
   return gfx::Insets::TLBR(
       compact ? kNoResultsTopInsetDp : kEmptyStateTopInsetDp,
@@ -140,57 +136,6 @@ gfx::Insets EmptyStateInsets(bool compact) {
       kEmptyStateHorizontalInsetDp);
 }
 
-gfx::Image DecodeAccessoryImage(const ImageData& icon) {
-  if (icon.data.empty()) {
-    return gfx::Image();
-  }
-
-  if (icon.format == "png" || icon.format == "image/png") {
-    return gfx::Image::CreateFrom1xPNGBytes(icon.data);
-  }
-
-  return gfx::Image();
-}
-
-class SearchIconView : public views::View {
- public:
-  SearchIconView() {
-    SetPreferredSize(gfx::Size(kSearchIconSizeDp, kSearchIconSizeDp));
-  }
-
-  SearchIconView(const SearchIconView&) = delete;
-  SearchIconView& operator=(const SearchIconView&) = delete;
-  ~SearchIconView() override = default;
-
-  void OnPaint(gfx::Canvas* canvas) override {
-    views::View::OnPaint(canvas);
-
-    const gfx::Rect bounds = GetContentsBounds();
-    if (bounds.IsEmpty()) {
-      return;
-    }
-
-    const gfx::RectF sparkle_rect = command_palette::MakeSparkleRect(bounds);
-    const SkPath outer_path = command_palette::BuildSparklePath(
-        sparkle_rect, command_palette::kSparkleOuterPoints);
-    const SkPath inner_path = command_palette::BuildSparklePath(
-        sparkle_rect, command_palette::kSparkleInnerPoints);
-
-    cc::PaintFlags outer_flags;
-    outer_flags.setAntiAlias(true);
-    outer_flags.setStyle(cc::PaintFlags::kFill_Style);
-    outer_flags.setColor(kSparkleOuterColor);
-    canvas->DrawPath(outer_path, outer_flags);
-
-    cc::PaintFlags inner_flags;
-    inner_flags.setAntiAlias(true);
-    inner_flags.setStyle(cc::PaintFlags::kFill_Style);
-    inner_flags.setColor(kSparkleInnerColor);
-    canvas->DrawPath(inner_path, inner_flags);
-  }
-
-  METADATA_HEADER(SearchIconView, views::View)
-};
 
 class CommandPaletteTextfield : public views::Textfield {
  public:
@@ -200,9 +145,6 @@ class CommandPaletteTextfield : public views::Textfield {
 
   METADATA_HEADER(CommandPaletteTextfield, views::Textfield)
 };
-
-BEGIN_METADATA(SearchIconView)
-END_METADATA
 
 BEGIN_METADATA(CommandPaletteTextfield)
 END_METADATA
@@ -246,58 +188,31 @@ MahoCommandOverlayView::MahoCommandOverlayView(
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
   search_row_ = field_shell_->AddChildView(std::make_unique<views::View>());
-  auto* topbar_layout =
-      search_row_->SetLayoutManager(std::make_unique<views::BoxLayout>(
-          views::BoxLayout::Orientation::kHorizontal,
-          gfx::Insets::VH(0, kTopbarHorizontalInsetDp), kSparkToInputGapDp));
-  topbar_layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kCenter);
   search_row_->SetBackground(views::CreateRoundedRectBackground(
       kMahoColorCommandBarInputFill, kSearchRowCornerRadiusDp));
   search_row_->SetBorder(views::CreateRoundedRectBorder(
       kPanelBorderWidthDp, kSearchRowCornerRadiusDp,
       kMahoColorCommandBarInputBorder));
 
-  auto* search_icon_lane = search_row_->AddChildView(std::make_unique<views::View>());
-  auto* search_icon_layout =
-      search_icon_lane->SetLayoutManager(std::make_unique<views::BoxLayout>(
-          views::BoxLayout::Orientation::kHorizontal));
-  search_icon_layout->set_main_axis_alignment(
-      views::BoxLayout::MainAxisAlignment::kCenter);
-  search_icon_layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kCenter);
-  search_icon_lane_ = search_icon_lane;
-  search_icon_lane->SetPreferredSize(
-      gfx::Size(kSearchIconLaneWidthDp, kLeadingPageIconSizeDp));
-  search_icon_lane->AddChildView(std::make_unique<SearchIconView>());
-  search_context_icon_ = search_icon_lane->AddChildView(
-      std::make_unique<views::ImageView>());
-  search_context_icon_->SetImageSize(
-      gfx::Size(kLeadingPageIconSizeDp, kLeadingPageIconSizeDp));
-  search_context_icon_->SetCanProcessEventsWithinSubtree(false);
-  search_context_icon_->SetVisible(false);
-
-  input_background_ = search_row_->AddChildView(std::make_unique<views::View>());
-  topbar_layout->SetFlexForView(input_background_, 1);
+  auto input_background = std::make_unique<views::View>();
   auto* search_layout =
-      input_background_->SetLayoutManager(std::make_unique<views::BoxLayout>(
+      input_background->SetLayoutManager(std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kHorizontal,
           gfx::Insets::VH(0, kSearchRowPaddingHDp), kModeLabelSpacingDp));
   search_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
-  input_background_->SetBackground(nullptr);
-  input_background_->SetBorder(nullptr);
+  input_background->SetBackground(nullptr);
+  input_background->SetBorder(nullptr);
 
-  textfield_ = input_background_->AddChildView(
+  textfield_ = input_background->AddChildView(
       std::make_unique<CommandPaletteTextfield>());
   textfield_->set_controller(this);
   textfield_->SetBackgroundEnabled(false);
   textfield_->SetBorder(views::CreateEmptyBorder(gfx::Insets()));
-  UpdateLayoutForMode();
-  UpdateTextfieldPresentation();
-  search_layout->SetFlexForView(textfield_, 1);
+  textfield_->SetPaintToLayer();
+  textfield_->layer()->SetFillsBoundsOpaquely(false);
 
-  mode_chip_ = input_background_->AddChildView(std::make_unique<views::View>());
+  mode_chip_ = input_background->AddChildView(std::make_unique<views::View>());
   auto* mode_chip_layout =
       mode_chip_->SetLayoutManager(std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kHorizontal,
@@ -314,6 +229,16 @@ MahoCommandOverlayView::MahoCommandOverlayView(
       u"", views::style::CONTEXT_LABEL, views::style::STYLE_BODY_5_MEDIUM));
   mode_label_->SetAutoColorReadabilityEnabled(false);
 
+  auto elements = MahoCommandResultRowView::BuildRowLayout(
+      search_row_, std::move(input_background),
+      MahoCommandResultRowView::PresentationStyle::kDefault);
+  search_icon_lane_ = elements.glyph_container;
+  input_background_ = elements.text_container->children().front().get();
+
+  UpdateLayoutForMode();
+  UpdateTextfieldPresentation();
+  search_layout->SetFlexForView(textfield_, 1);
+
   auto button = std::make_unique<views::MdTextButton>(
       base::BindRepeating(&MahoCommandOverlayView::OnSearchEngineBadgePressed,
                           base::Unretained(this)),
@@ -327,7 +252,7 @@ MahoCommandOverlayView::MahoCommandOverlayView(
   button->SetInstallFocusRingOnFocus(false);
   button->SetRequestFocusOnPress(false);
 
-  trailing_accessory_ = search_row_->AddChildView(std::move(button));
+  trailing_accessory_ = elements.content_view->AddChildView(std::move(button));
   trailing_accessory_->SetBorder(views::CreateEmptyBorder(
       gfx::Insets::TLBR(0, 0, 0, kTrailingAccessoryTrailingInsetDp)));
   trailing_accessory_->SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -343,8 +268,7 @@ MahoCommandOverlayView::MahoCommandOverlayView(
                                      views::style::CONTEXT_LABEL,
                                      views::style::STYLE_BODY_5_MEDIUM));
   trailing_accessory_label_->SetAutoColorReadabilityEnabled(false);
-  trailing_accessory_->SetVisible(mode_ != CommandOverlayMode::kAI &&
-                                  mode_ != CommandOverlayMode::kCurrentTab);
+  trailing_accessory_->SetVisible(false);
   UpdateTrailingAccessoryPresentation();
   UpdateSearchRowChrome();
 
@@ -458,58 +382,31 @@ MahoCommandOverlayView::MahoCommandOverlayView(
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
   search_row_ = field_shell_->AddChildView(std::make_unique<views::View>());
-  auto* topbar_layout =
-      search_row_->SetLayoutManager(std::make_unique<views::BoxLayout>(
-          views::BoxLayout::Orientation::kHorizontal,
-          gfx::Insets::VH(0, kTopbarHorizontalInsetDp), kSparkToInputGapDp));
-  topbar_layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kCenter);
   search_row_->SetBackground(views::CreateRoundedRectBackground(
       kMahoColorCommandBarInputFill, kSearchRowCornerRadiusDp));
   search_row_->SetBorder(views::CreateRoundedRectBorder(
       kPanelBorderWidthDp, kSearchRowCornerRadiusDp,
       kMahoColorCommandBarInputBorder));
 
-  auto* search_icon_lane = search_row_->AddChildView(std::make_unique<views::View>());
-  auto* search_icon_layout =
-      search_icon_lane->SetLayoutManager(std::make_unique<views::BoxLayout>(
-          views::BoxLayout::Orientation::kHorizontal));
-  search_icon_layout->set_main_axis_alignment(
-      views::BoxLayout::MainAxisAlignment::kCenter);
-  search_icon_layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kCenter);
-  search_icon_lane_ = search_icon_lane;
-  search_icon_lane->SetPreferredSize(
-      gfx::Size(kSearchIconLaneWidthDp, kLeadingPageIconSizeDp));
-  search_icon_lane->AddChildView(std::make_unique<SearchIconView>());
-  search_context_icon_ = search_icon_lane->AddChildView(
-      std::make_unique<views::ImageView>());
-  search_context_icon_->SetImageSize(
-      gfx::Size(kLeadingPageIconSizeDp, kLeadingPageIconSizeDp));
-  search_context_icon_->SetCanProcessEventsWithinSubtree(false);
-  search_context_icon_->SetVisible(false);
-
-  input_background_ = search_row_->AddChildView(std::make_unique<views::View>());
-  topbar_layout->SetFlexForView(input_background_, 1);
+  auto input_background = std::make_unique<views::View>();
   auto* search_layout =
-      input_background_->SetLayoutManager(std::make_unique<views::BoxLayout>(
+      input_background->SetLayoutManager(std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kHorizontal,
           gfx::Insets::VH(0, kSearchRowPaddingHDp), kModeLabelSpacingDp));
   search_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
-  input_background_->SetBackground(nullptr);
-  input_background_->SetBorder(nullptr);
+  input_background->SetBackground(nullptr);
+  input_background->SetBorder(nullptr);
 
-  textfield_ = input_background_->AddChildView(
+  textfield_ = input_background->AddChildView(
       std::make_unique<CommandPaletteTextfield>());
   textfield_->set_controller(this);
   textfield_->SetBackgroundEnabled(false);
   textfield_->SetBorder(views::CreateEmptyBorder(gfx::Insets()));
-  UpdateLayoutForMode();
-  UpdateTextfieldPresentation();
-  search_layout->SetFlexForView(textfield_, 1);
+  textfield_->SetPaintToLayer();
+  textfield_->layer()->SetFillsBoundsOpaquely(false);
 
-  mode_chip_ = input_background_->AddChildView(std::make_unique<views::View>());
+  mode_chip_ = input_background->AddChildView(std::make_unique<views::View>());
   auto* mode_chip_layout =
       mode_chip_->SetLayoutManager(std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kHorizontal,
@@ -526,6 +423,16 @@ MahoCommandOverlayView::MahoCommandOverlayView(
       u"", views::style::CONTEXT_LABEL, views::style::STYLE_BODY_5_MEDIUM));
   mode_label_->SetAutoColorReadabilityEnabled(false);
 
+  auto elements = MahoCommandResultRowView::BuildRowLayout(
+      search_row_, std::move(input_background),
+      MahoCommandResultRowView::PresentationStyle::kDefault);
+  search_icon_lane_ = elements.glyph_container;
+  input_background_ = elements.text_container->children().front().get();
+
+  UpdateLayoutForMode();
+  UpdateTextfieldPresentation();
+  search_layout->SetFlexForView(textfield_, 1);
+
   auto button = std::make_unique<views::MdTextButton>(
       base::BindRepeating(&MahoCommandOverlayView::OnSearchEngineBadgePressed,
                           base::Unretained(this)),
@@ -539,7 +446,7 @@ MahoCommandOverlayView::MahoCommandOverlayView(
   button->SetInstallFocusRingOnFocus(false);
   button->SetRequestFocusOnPress(false);
 
-  trailing_accessory_ = search_row_->AddChildView(std::move(button));
+  trailing_accessory_ = elements.content_view->AddChildView(std::move(button));
   trailing_accessory_->SetBorder(views::CreateEmptyBorder(
       gfx::Insets::TLBR(0, 0, 0, kTrailingAccessoryTrailingInsetDp)));
   trailing_accessory_->SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -555,10 +462,10 @@ MahoCommandOverlayView::MahoCommandOverlayView(
                                      views::style::CONTEXT_LABEL,
                                      views::style::STYLE_BODY_5_MEDIUM));
   trailing_accessory_label_->SetAutoColorReadabilityEnabled(false);
-  trailing_accessory_->SetVisible(mode_ != CommandOverlayMode::kAI &&
-                                  mode_ != CommandOverlayMode::kCurrentTab);
+  trailing_accessory_->SetVisible(false);
   UpdateTrailingAccessoryPresentation();
   UpdateSearchRowChrome();
+
 
   UpdateModeChipVisibility();
 
@@ -762,7 +669,7 @@ void MahoCommandOverlayView::UpdateLayoutForMode() {
   }
 
   if (search_row_) {
-    search_row_->SetPreferredSize(gfx::Size(0, kSearchRowHeightDp));
+    search_row_->SetPreferredSize(gfx::Size(0, MahoCommandResultRowView::kRowHeightDp));
   }
 
   if (textfield_) {
@@ -770,8 +677,7 @@ void MahoCommandOverlayView::UpdateLayoutForMode() {
   }
 
   if (trailing_accessory_) {
-    trailing_accessory_->SetVisible(mode_ != CommandOverlayMode::kAI &&
-                                    mode_ != CommandOverlayMode::kCommandsOnly);
+    trailing_accessory_->SetVisible(false);
   }
 
   UpdateTrailingAccessoryPresentation();
@@ -792,52 +698,95 @@ void MahoCommandOverlayView::UpdateTextfieldPresentation() {
   }
 
   gfx::FontList base = views::Textfield::GetDefaultFontList();
-  gfx::FontList medium =
-      base.Derive(0, gfx::Font::NORMAL, gfx::Font::Weight::MEDIUM);
-  textfield_->SetFontList(medium);
-  textfield_->set_placeholder_font_list(medium);
+  gfx::FontList bumped = base.DeriveWithSizeDelta(2).Derive(
+      0, gfx::Font::NORMAL, gfx::Font::Weight::MEDIUM);
+  textfield_->SetFontList(bumped);
+  textfield_->set_placeholder_font_list(bumped);
 }
 
 void MahoCommandOverlayView::UpdateSearchLeadingAccessory() {
-  if (!search_icon_lane_ || !search_context_icon_) {
+  if (!search_icon_lane_) {
     return;
   }
 
-  views::View* sparkle_view = search_icon_lane_->children().front();
-  sparkle_view->SetVisible(false);
   std::optional<ImageData> icon_to_decode;
-
+  bool use_globe_fallback = false;
   if (model_) {
-    int selected_idx = model_->selected_index();
-    if (selected_idx >= 0 && selected_idx < static_cast<int>(model_->results().size())) {
-      icon_to_decode = model_->results()[selected_idx].icon;
-    }
-    if (!icon_to_decode.has_value() && mode_ == CommandOverlayMode::kCurrentTab && !initial_url_.empty()) {
+    const std::string current_text = base::UTF16ToUTF8(textfield_->GetText());
+    if (!current_text.empty()) {
       for (const auto& result : model_->results()) {
-        if (result.execution_payload == initial_url_ && result.icon.has_value()) {
+        if (result.execution_payload == current_text && result.icon.has_value()) {
           icon_to_decode = result.icon;
           break;
         }
       }
+      if (!icon_to_decode.has_value()) {
+        use_globe_fallback = true;
+      }
+    } else {
+      int selected_idx = model_->selected_index();
+      if (selected_idx >= 0 && selected_idx < static_cast<int>(model_->results().size())) {
+        icon_to_decode = model_->results()[selected_idx].icon;
+      }
     }
   }
 
-  if (!icon_to_decode.has_value()) {
-    search_context_icon_->SetVisible(false);
+  if (icon_to_decode.has_value()) {
+    const gfx::Image context_icon = MahoCommandResultRowView::DecodeFaviconImage(*icon_to_decode);
+    if (!context_icon.IsEmpty()) {
+      if (!favicon_image_) {
+        auto* glyph_layout = search_icon_lane_->SetLayoutManager(
+            std::make_unique<views::BoxLayout>(
+                views::BoxLayout::Orientation::kHorizontal));
+        glyph_layout->set_main_axis_alignment(
+            views::BoxLayout::MainAxisAlignment::kCenter);
+        glyph_layout->set_cross_axis_alignment(
+            views::BoxLayout::CrossAxisAlignment::kCenter);
+        favicon_image_ =
+            search_icon_lane_->AddChildView(std::make_unique<views::ImageView>());
+        favicon_image_->SetCanProcessEventsWithinSubtree(false);
+        favicon_image_->SetPaintToLayer();
+        favicon_image_->layer()->SetFillsBoundsOpaquely(false);
+      }
+      favicon_image_->SetImage(
+          ui::ImageModel::FromImageSkia(context_icon.AsImageSkia()));
+      const int favicon_size = MahoCommandResultRowView::PreferredFaviconSize(
+          icon_to_decode, MahoCommandResultRowView::kGlyphIconSizeDp);
+      favicon_image_->SetImageSize(gfx::Size(favicon_size, favicon_size));
+      favicon_image_->SetPreferredSize(gfx::Size(favicon_size, favicon_size));
+      favicon_image_->SetVisible(true);
+      return;
+    }
+  }
+
+  if (use_globe_fallback) {
+    if (!favicon_image_) {
+      auto* glyph_layout = search_icon_lane_->SetLayoutManager(
+          std::make_unique<views::BoxLayout>(
+              views::BoxLayout::Orientation::kHorizontal));
+      glyph_layout->set_main_axis_alignment(
+          views::BoxLayout::MainAxisAlignment::kCenter);
+      glyph_layout->set_cross_axis_alignment(
+          views::BoxLayout::CrossAxisAlignment::kCenter);
+      favicon_image_ =
+          search_icon_lane_->AddChildView(std::make_unique<views::ImageView>());
+      favicon_image_->SetCanProcessEventsWithinSubtree(false);
+      favicon_image_->SetPaintToLayer();
+      favicon_image_->layer()->SetFillsBoundsOpaquely(false);
+    }
+    const int icon_size = MahoCommandResultRowView::kGlyphIconSizeDp;
+    const gfx::ImageSkia globe_bitmap = gfx::CreateVectorIcon(
+        vector_icons::kGlobeIcon, icon_size, gfx::kGoogleGrey700);
+    favicon_image_->SetImage(ui::ImageModel::FromImageSkia(globe_bitmap));
+    favicon_image_->SetImageSize(gfx::Size(icon_size, icon_size));
+    favicon_image_->SetPreferredSize(gfx::Size(icon_size, icon_size));
+    favicon_image_->SetVisible(true);
     return;
   }
 
-  const gfx::Image context_icon = DecodeAccessoryImage(*icon_to_decode);
-  if (context_icon.IsEmpty()) {
-    search_context_icon_->SetVisible(false);
-    return;
+  if (favicon_image_) {
+    favicon_image_->SetVisible(false);
   }
-
-  search_context_icon_->SetImage(
-      ui::ImageModel::FromImageSkia(context_icon.AsImageSkia()));
-  search_context_icon_->SetImageSize(
-      gfx::Size(kLeadingPageIconSizeDp, kLeadingPageIconSizeDp));
-  search_context_icon_->SetVisible(true);
 }
 
 void MahoCommandOverlayView::UpdateTrailingAccessoryPresentation() {
@@ -861,29 +810,8 @@ void MahoCommandOverlayView::UpdateSearchRowChrome() {
   if (!search_row_) {
     return;
   }
-
-  if (mode_ == CommandOverlayMode::kCurrentTab) {
-    search_row_->SetBackground(nullptr);
-    search_row_->SetBorder(nullptr);
-    return;
-  }
-
-  const auto* cp = GetColorProvider();
-  if (cp) {
-    search_row_->SetBackground(views::CreateRoundedRectBackground(
-        cp->GetColor(kMahoColorCommandBarInputFill),
-        kSearchRowCornerRadiusDp));
-    search_row_->SetBorder(views::CreateRoundedRectBorder(
-        kPanelBorderWidthDp, kSearchRowCornerRadiusDp,
-        cp->GetColor(kMahoColorCommandBarInputBorder)));
-    return;
-  }
-
-  search_row_->SetBackground(views::CreateRoundedRectBackground(
-      kMahoColorCommandBarInputFill, kSearchRowCornerRadiusDp));
-  search_row_->SetBorder(views::CreateRoundedRectBorder(
-      kPanelBorderWidthDp, kSearchRowCornerRadiusDp,
-      kMahoColorCommandBarInputBorder));
+  search_row_->SetBackground(nullptr);
+  search_row_->SetBorder(nullptr);
 }
 
 void MahoCommandOverlayView::OnThemeChanged() {
@@ -1239,9 +1167,18 @@ void MahoCommandOverlayView::UpdateSelection(int new_index) {
       const std::string& payload = sel.execution_payload;
       if (!payload.empty()) {
         suppress_search_ = true;
-        textfield_->SetText(std::u16string());
-        textfield_->SetText(base::UTF8ToUTF16(payload));
-        textfield_->SetSelectedRange(gfx::Range(0, 0));
+        const std::u16string new_text = base::UTF8ToUTF16(payload);
+        const gfx::Range selection(new_text.length());
+        textfield_->SetTextWithoutCaretBoundsChangeNotification(
+            new_text, selection.end());
+        constexpr size_t kPadTrailing = 30;
+        constexpr size_t kPadLeading = 10;
+        textfield_->Scroll({
+            0,
+            std::min(selection.end() + kPadTrailing, new_text.size()),
+            selection.end() - std::min(kPadLeading, selection.end())
+        });
+        textfield_->SelectAll(true);
         suppress_search_ = false;
       }
     }
@@ -1505,10 +1442,8 @@ void MahoCommandOverlayView::ApplyPlaceholderForMode() {
   switch (mode_) {
     case CommandOverlayMode::kSearch:
     case CommandOverlayMode::kNewTab:
-      textfield_->SetPlaceholderText(u"Search or Enter URL\u2026");
-      break;
     case CommandOverlayMode::kCurrentTab:
-      textfield_->SetPlaceholderText(std::u16string());
+      textfield_->SetPlaceholderText(u"Search or Enter URL\u2026");
       break;
     case CommandOverlayMode::kSiteSearch:
       textfield_->SetPlaceholderText(u"Search\u2026");

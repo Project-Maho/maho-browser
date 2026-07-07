@@ -3,6 +3,7 @@
 #include "maho/browser/ui/views/command/maho_command_result_row_view.h"
 
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
+#include "components/vector_icons/vector_icons.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -28,6 +29,7 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/color/color_provider.h"
+#include "ui/compositor/layer.h"
 #include "ui/events/event.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/codec/jpeg_codec.h"
@@ -45,68 +47,14 @@
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/style/typography.h"
+#include "ui/views/style/typography_provider.h"
+#include "ui/compositor/layer.h"
+#include "ui/gfx/color_palette.h"
+#include "ui/gfx/paint_vector_icon.h"
 
 namespace maho {
 
 namespace {
-
-int PreferredFaviconSize(const std::optional<ImageData>& icon,
-                         int glyph_icon_size) {
-  if (!icon.has_value()) {
-    return glyph_icon_size;
-  }
-
-  const int source_size = std::max(icon->width, icon->height);
-  if (source_size <= 0) {
-    return glyph_icon_size;
-  }
-
-  return std::min(glyph_icon_size, source_size);
-}
-
-gfx::Image DecodeFaviconImage(const ImageData& icon) {
-  if (icon.data.empty()) {
-    return gfx::Image();
-  }
-
-  if (icon.format == "png" || icon.format == "image/png") {
-    return gfx::Image::CreateFrom1xPNGBytes(icon.data);
-  }
-
-  if (icon.format == "jpeg" || icon.format == "jpg" ||
-      icon.format == "image/jpeg") {
-    auto bitmap = gfx::JPEGCodec::Decode(base::as_byte_span(icon.data));
-    if (bitmap.isNull()) {
-      return gfx::Image();
-    }
-    return gfx::Image::CreateFrom1xBitmap(bitmap);
-  }
-
-  if (icon.format == "webp" || icon.format == "image/webp") {
-    auto stream = std::make_unique<SkMemoryStream>(icon.data.data(),
-                                                   icon.data.size(),
-                                                   /*copyData=*/false);
-    SkCodec::Result result;
-    std::unique_ptr<SkCodec> codec = SkWebpDecoder::Decode(std::move(stream),
-                                                           &result);
-    if (!codec || result != SkCodec::kSuccess) {
-      return gfx::Image();
-    }
-
-    SkBitmap bitmap;
-    if (!bitmap.tryAllocPixels(codec->getInfo())) {
-      return gfx::Image();
-    }
-
-    if (codec->getPixels(bitmap.pixmap()) != SkCodec::kSuccess) {
-      return gfx::Image();
-    }
-
-    return gfx::Image::CreateFrom1xBitmap(bitmap);
-  }
-
-  return gfx::Image();
-}
 
 std::u16string HostCompactMetadataText(const std::u16string& subtitle_text) {
   const GURL url(base::UTF16ToUTF8(subtitle_text));
@@ -144,7 +92,6 @@ std::u16string SeededCompactMetadataText(const std::u16string& subtitle_text) {
   return subtitle_text;
 }
 
-constexpr int kDefaultRowHeightDp = 36;
 constexpr int kCurrentTabSeededRowHeightDp = 36;
 constexpr int kRowCornerRadiusDp = 10;
 constexpr int kCurrentTabSeededRowCornerRadiusDp = 6;
@@ -153,9 +100,7 @@ constexpr int kDefaultRowVerticalInsetDp = 0;
 constexpr int kCurrentTabSeededRowVerticalInsetDp = 1;
 constexpr int kDefaultRowPaddingHDp = 12;
 constexpr int kCurrentTabSeededRowPaddingHDp = 12;
-constexpr int kGlyphTileSizeDp = 30;
 constexpr int kCurrentTabSeededGlyphTileSizeDp = 20;
-constexpr int kGlyphIconSizeDp = 20;
 constexpr int kCurrentTabSeededGlyphIconSizeDp = 14;
 constexpr int kGlyphCornerRadiusDp = 0;
 constexpr int kCurrentTabSeededGlyphCornerRadiusDp = 0;
@@ -194,7 +139,7 @@ int SelectionCornerRadiusForPresentation(
              : kRowCornerRadiusDp;
 }
 
-SkColor GlyphForegroundColor(CommandSuggestionType type) {
+[[maybe_unused]] SkColor GlyphForegroundColor(CommandSuggestionType type) {
   switch (type) {
     case CommandSuggestionType::kTab:
       return SkColorSetRGB(0xEE, 0xF1, 0xF8);
@@ -224,7 +169,7 @@ SkColor GlyphForegroundColor(CommandSuggestionType type) {
   return SkColorSetRGB(0xBE, 0xC7, 0xD9);
 }
 
-void DrawLineIcon(gfx::Canvas* canvas,
+[[maybe_unused]] void DrawLineIcon(gfx::Canvas* canvas,
                   const gfx::RectF& rect,
                   CommandSuggestionType type,
                   SkColor color) {
@@ -462,7 +407,7 @@ class CommandIconView : public views::View {
 
  public:
   explicit CommandIconView(CommandSuggestionType type) : type_(type) {
-    SetPreferredSize(gfx::Size(kGlyphIconSizeDp, kGlyphIconSizeDp));
+    SetPreferredSize(gfx::Size(MahoCommandResultRowView::kGlyphIconSizeDp, MahoCommandResultRowView::kGlyphIconSizeDp));
   }
 
   void SetSelected(bool selected) {
@@ -475,22 +420,10 @@ class CommandIconView : public views::View {
 
   void OnPaint(gfx::Canvas* canvas) override {
     views::View::OnPaint(canvas);
-    const gfx::Rect bounds = GetContentsBounds();
-    if (bounds.IsEmpty()) {
-      return;
-    }
-    const gfx::RectF rect_f(bounds.x(), bounds.y(), bounds.width(),
-                            bounds.height());
-    cc::PaintFlags bg_flags;
-    bg_flags.setAntiAlias(true);
-    bg_flags.setStyle(cc::PaintFlags::kFill_Style);
-    bg_flags.setColor(GlyphForegroundColor(type_));
-    canvas->DrawRoundRect(rect_f, rect_f.width() * 0.25f, bg_flags);
-    DrawLineIcon(canvas, rect_f, type_, SK_ColorWHITE);
   }
 
  private:
-  const CommandSuggestionType type_;
+  [[maybe_unused]] const CommandSuggestionType type_;
   bool selected_ = false;
 };
 
@@ -501,6 +434,118 @@ END_METADATA
 
 BEGIN_METADATA(MahoCommandResultRowView)
 END_METADATA
+
+// static
+int MahoCommandResultRowView::PreferredFaviconSize(
+    const std::optional<ImageData>& icon,
+    int glyph_icon_size) {
+  if (!icon.has_value()) {
+    return glyph_icon_size;
+  }
+
+  const int source_size = std::max(icon->width, icon->height);
+  if (source_size <= 0) {
+    return glyph_icon_size;
+  }
+
+  return std::min(glyph_icon_size, source_size);
+}
+
+// static
+gfx::Image MahoCommandResultRowView::DecodeFaviconImage(const ImageData& icon) {
+  if (icon.data.empty()) {
+    return gfx::Image();
+  }
+
+  if (icon.format == "png" || icon.format == "image/png") {
+    return gfx::Image::CreateFrom1xPNGBytes(icon.data);
+  }
+
+  if (icon.format == "jpeg" || icon.format == "jpg" ||
+      icon.format == "image/jpeg") {
+    auto bitmap = gfx::JPEGCodec::Decode(base::as_byte_span(icon.data));
+    if (bitmap.isNull()) {
+      return gfx::Image();
+    }
+    return gfx::Image::CreateFrom1xBitmap(bitmap);
+  }
+
+  if (icon.format == "webp" || icon.format == "image/webp") {
+    auto stream = std::make_unique<SkMemoryStream>(icon.data.data(),
+                                                   icon.data.size(),
+                                                   /*copyData=*/false);
+    SkCodec::Result result;
+    std::unique_ptr<SkCodec> codec = SkWebpDecoder::Decode(std::move(stream),
+                                                           &result);
+    if (!codec || result != SkCodec::kSuccess) {
+      return gfx::Image();
+    }
+
+    SkBitmap bitmap;
+    if (!bitmap.tryAllocPixels(codec->getInfo())) {
+      return gfx::Image();
+    }
+
+    if (codec->getPixels(bitmap.pixmap()) != SkCodec::kSuccess) {
+      return gfx::Image();
+    }
+
+    return gfx::Image::CreateFrom1xBitmap(bitmap);
+  }
+
+  return gfx::Image();
+}
+
+// static
+RowLayoutElements MahoCommandResultRowView::BuildRowLayout(
+    views::View* parent,
+    std::unique_ptr<views::View> text_widget,
+    PresentationStyle presentation_style) {
+  const bool compact = presentation_style == PresentationStyle::kCurrentTabSeeded;
+
+  auto* outer_layout = parent->SetLayoutManager(std::make_unique<views::BoxLayout>(
+      views::BoxLayout::Orientation::kVertical));
+  outer_layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kStretch);
+  outer_layout->set_inside_border_insets(
+      SelectionInsetsForPresentation(presentation_style));
+
+  auto content_view_ptr = std::make_unique<views::View>();
+  auto* content_view = parent->AddChildView(std::move(content_view_ptr));
+  outer_layout->SetFlexForView(content_view, 1);
+
+  auto* row_layout = content_view->SetLayoutManager(
+      std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kHorizontal,
+          gfx::Insets::VH(0, compact ? kCurrentTabSeededRowPaddingHDp
+                                     : kDefaultRowPaddingHDp),
+          compact ? kCurrentTabSeededRowItemSpacingDp
+                  : kDefaultRowItemSpacingDp));
+  row_layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kCenter);
+
+  const int glyph_tile_size = compact ? kCurrentTabSeededGlyphTileSizeDp : kGlyphTileSizeDp;
+  auto glyph_container_ptr = std::make_unique<views::View>();
+  auto* glyph_container = content_view->AddChildView(std::move(glyph_container_ptr));
+  glyph_container->SetPreferredSize(gfx::Size(glyph_tile_size, glyph_tile_size));
+
+  auto text_container_ptr = std::make_unique<views::View>();
+  auto* text_container = content_view->AddChildView(std::move(text_container_ptr));
+  auto* text_container_layout = text_container->SetLayoutManager(
+      std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kHorizontal, gfx::Insets(),
+          kShortcutSpacingDp));
+  text_container_layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kCenter);
+  row_layout->SetFlexForView(text_container, 1);
+
+  if (text_widget) {
+    auto* text_widget_ptr = text_container->AddChildView(std::move(text_widget));
+    text_container_layout->SetFlexForView(text_widget_ptr, 1);
+  }
+
+  return {content_view, glyph_container, text_container};
+}
 
 MahoCommandResultRowView::MahoCommandResultRowView(
     const CommandSuggestion& suggestion,
@@ -525,7 +570,7 @@ MahoCommandResultRowView::MahoCommandResultRowView(
       match_ranges_(suggestion.match_ranges) {
   SetPreferredSize(gfx::Size(0, presentation_style_ == PresentationStyle::kCurrentTabSeeded
                                     ? kCurrentTabSeededRowHeightDp
-                                    : kDefaultRowHeightDp));
+                                    : kRowHeightDp));
 
   GetViewAccessibility().SetRole(ax::mojom::Role::kListBoxOption);
   {
@@ -539,54 +584,23 @@ MahoCommandResultRowView::MahoCommandResultRowView(
   GetViewAccessibility().SetSetSize(set_size_);
   GetViewAccessibility().SetIsSelected(selected_);
 
-  auto* outer_layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::Orientation::kVertical));
-  outer_layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kStretch);
-  outer_layout->set_inside_border_insets(
-      SelectionInsetsForPresentation(presentation_style_));
-
-  content_view_ = AddChildView(std::make_unique<views::View>());
-  outer_layout->SetFlexForView(content_view_, 1);
-  auto* row_layout = content_view_->SetLayoutManager(
-      std::make_unique<views::BoxLayout>(
-          views::BoxLayout::Orientation::kHorizontal,
-          gfx::Insets::VH(0, presentation_style_ == PresentationStyle::kCurrentTabSeeded
-                                 ? kCurrentTabSeededRowPaddingHDp
-                                 : kDefaultRowPaddingHDp),
-          presentation_style_ == PresentationStyle::kCurrentTabSeeded
-              ? kCurrentTabSeededRowItemSpacingDp
-              : kDefaultRowItemSpacingDp));
-  row_layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kCenter);
-
-  glyph_container_ = content_view_->AddChildView(std::make_unique<views::View>());
-  glyph_container_->SetPreferredSize(
-      gfx::Size(presentation_style_ == PresentationStyle::kCurrentTabSeeded
-                    ? kCurrentTabSeededGlyphTileSizeDp
-                    : kGlyphTileSizeDp,
-                presentation_style_ == PresentationStyle::kCurrentTabSeeded
-                    ? kCurrentTabSeededGlyphTileSizeDp
-                    : kGlyphTileSizeDp));
-  RebuildGlyph();
-
-  text_container_ = content_view_->AddChildView(std::make_unique<views::View>());
-  auto* text_container_layout = text_container_->SetLayoutManager(
-      std::make_unique<views::BoxLayout>(
-          views::BoxLayout::Orientation::kHorizontal, gfx::Insets(),
-          kShortcutSpacingDp));
-  text_container_layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kCenter);
-  row_layout->SetFlexForView(text_container_, 1);
-
-  text_stack_ = text_container_->AddChildView(std::make_unique<views::View>());
-  auto* text_layout = text_stack_->SetLayoutManager(
+  auto text_stack = std::make_unique<views::View>();
+  text_stack->SetLayoutManager(
       std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kHorizontal, gfx::Insets(),
           kCompactTextSpacingDp));
+
+  auto elements = BuildRowLayout(this, std::move(text_stack), presentation_style_);
+  content_view_ = elements.content_view;
+  glyph_container_ = elements.glyph_container;
+  text_container_ = elements.text_container;
+
+  text_stack_ = text_container_->children().front().get();
+  auto* text_layout = static_cast<views::BoxLayout*>(text_stack_->GetLayoutManager());
   text_layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kStretch);
-  text_container_layout->SetFlexForView(text_stack_, 1);
+
+  RebuildGlyph();
 
   const bool compact =
       presentation_style_ == PresentationStyle::kCurrentTabSeeded;
@@ -745,11 +759,14 @@ void MahoCommandResultRowView::ApplyTitleStyles(SkColor title_color) {
   title_label_->SetTextStyle(compact ? views::style::STYLE_BODY_5_MEDIUM
                                      : views::style::STYLE_BODY_4_MEDIUM);
   if (!compact) {
-    title_label_->SetFontList(
-        title_label_->font_list().DeriveWithSizeDelta(0));
+    const gfx::FontList& base_font = views::TypographyProvider::Get().GetFont(
+        views::style::CONTEXT_LABEL, views::style::STYLE_BODY_4_MEDIUM);
+    title_label_->SetFontList(base_font.DeriveWithSizeDelta(2));
   }
   if (compact) {
-    title_label_->SetFontList(title_label_->font_list().Derive(
+    const gfx::FontList& base_font = views::TypographyProvider::Get().GetFont(
+        views::style::CONTEXT_LABEL, views::style::STYLE_BODY_5_MEDIUM);
+    title_label_->SetFontList(base_font.Derive(
         0, gfx::Font::NORMAL, kSeededRowTitleFontWeight));
   }
 
@@ -815,16 +832,31 @@ void MahoCommandResultRowView::RebuildGlyph() {
   }
 
   uses_fallback_glyph_ = true;
-  glyph_container_->SetLayoutManager(std::make_unique<views::FillLayout>());
-  glyph_image_ = glyph_container_->AddChildView(
-      std::make_unique<CommandIconView>(suggestion_type_));
-  glyph_image_->SetCanProcessEventsWithinSubtree(false);
-  static_cast<CommandIconView*>(glyph_image_)->SetSelected(selected_);
+  auto* glyph_layout = glyph_container_->SetLayoutManager(
+      std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kHorizontal));
+  glyph_layout->set_main_axis_alignment(
+      views::BoxLayout::MainAxisAlignment::kCenter);
+  glyph_layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kCenter);
+  const int glyph_icon_size =
+      presentation_style_ == PresentationStyle::kCurrentTabSeeded
+          ? kCurrentTabSeededGlyphIconSizeDp
+          : kGlyphIconSizeDp;
+  auto* globe_view =
+      glyph_container_->AddChildView(std::make_unique<views::ImageView>());
+  const gfx::ImageSkia globe_bitmap = gfx::CreateVectorIcon(
+      vector_icons::kGlobeIcon, glyph_icon_size, gfx::kGoogleGrey700);
+  globe_view->SetImage(ui::ImageModel::FromImageSkia(globe_bitmap));
+  globe_view->SetImageSize(gfx::Size(glyph_icon_size, glyph_icon_size));
+  globe_view->SetPreferredSize(gfx::Size(glyph_icon_size, glyph_icon_size));
+  globe_view->SetCanProcessEventsWithinSubtree(false);
+  glyph_image_ = globe_view;
 }
 
 void MahoCommandResultRowView::UpdateLayout() {
   const bool compact = presentation_style_ == PresentationStyle::kCurrentTabSeeded;
-  const int row_height = compact ? kCurrentTabSeededRowHeightDp : kDefaultRowHeightDp;
+  const int row_height = compact ? kCurrentTabSeededRowHeightDp : kRowHeightDp;
   const int glyph_tile_size = compact ? kCurrentTabSeededGlyphTileSizeDp : kGlyphTileSizeDp;
   const int glyph_icon_size = compact ? kCurrentTabSeededGlyphIconSizeDp : kGlyphIconSizeDp;
   const bool show_selected_seeded_favicon_tile =
@@ -843,7 +875,7 @@ void MahoCommandResultRowView::UpdateLayout() {
                                       : favicon_size;
     favicon_image_->SetPreferredSize(
         gfx::Size(favicon_tile_size, favicon_tile_size));
-  } else {
+  } else if (glyph_image_) {
     glyph_image_->SetPreferredSize(gfx::Size(glyph_icon_size, glyph_icon_size));
   }
 

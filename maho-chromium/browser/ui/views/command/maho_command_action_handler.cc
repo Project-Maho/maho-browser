@@ -361,7 +361,7 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
     LOG(WARNING) << kShortcutTracePrefix << " execute action=command_bar";
     BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
     if (browser_view) {
-      browser_view->ShowMahoCommandOverlayForSearch(std::string());
+      browser_view->ShowMahoCommandOverlayForCurrentTab();
     } else {
       LOG(WARNING) << kShortcutTracePrefix
                    << " command_bar skipped: browser_view missing";

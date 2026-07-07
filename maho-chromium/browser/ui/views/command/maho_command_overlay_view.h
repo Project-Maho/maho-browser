@@ -153,7 +153,7 @@ class MahoCommandOverlayView : public views::View,
 
   raw_ptr<views::View> field_shell_ = nullptr;
   raw_ptr<views::View> search_icon_lane_ = nullptr;
-  raw_ptr<views::ImageView> search_context_icon_ = nullptr;
+  raw_ptr<views::ImageView> favicon_image_ = nullptr;
   raw_ptr<views::Textfield> textfield_ = nullptr;
   raw_ptr<views::View> search_row_ = nullptr;
   raw_ptr<views::View> input_background_ = nullptr;

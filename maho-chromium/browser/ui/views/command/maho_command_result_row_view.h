@@ -29,17 +29,34 @@ class View;
 
 namespace maho {
 
+struct RowLayoutElements {
+  raw_ptr<views::View> content_view = nullptr;
+  raw_ptr<views::View> glyph_container = nullptr;
+  raw_ptr<views::View> text_container = nullptr;
+};
+
 class MahoCommandResultRowView : public views::View {
   METADATA_HEADER(MahoCommandResultRowView, views::View)
 
  public:
-  using HoverCallback = base::RepeatingCallback<void(int)>;
-  using ActivateCallback = base::RepeatingCallback<void(int)>;
-
   enum class PresentationStyle {
     kDefault,
     kCurrentTabSeeded,
   };
+
+  static constexpr int kRowHeightDp = 44;
+  static constexpr int kGlyphTileSizeDp = 36;
+  static constexpr int kGlyphIconSizeDp = 24;
+
+  static RowLayoutElements BuildRowLayout(views::View* parent,
+                                          std::unique_ptr<views::View> text_widget,
+                                          PresentationStyle presentation_style);
+  static gfx::Image DecodeFaviconImage(const ImageData& icon);
+  static int PreferredFaviconSize(const std::optional<ImageData>& icon,
+                                  int glyph_icon_size);
+
+  using HoverCallback = base::RepeatingCallback<void(int)>;
+  using ActivateCallback = base::RepeatingCallback<void(int)>;
 
   MahoCommandResultRowView(const CommandSuggestion& suggestion,
                            int row_index,
@@ -81,7 +98,7 @@ class MahoCommandResultRowView : public views::View {
   void UpdateColors();
   void UpdateLayout();
 
-  const CommandSuggestionType suggestion_type_;
+  [[maybe_unused]] const CommandSuggestionType suggestion_type_;
   const bool is_tab_type_;
   const PresentationStyle presentation_style_;
   const std::u16string title_text_;

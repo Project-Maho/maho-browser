@@ -695,7 +695,10 @@ impl CommandBarEngine {
                     },
                     "newTab" => match result.suggestion.kind {
                         SuggestionType::Navigation => 0.5,
-                        SuggestionType::Search => 0.3,    // ← NEW (less than Navigation)
+                        SuggestionType::Tab => 0.4,
+                        SuggestionType::Search => 0.3,
+                        SuggestionType::History => 0.3,
+                        SuggestionType::Bookmark => 0.3,
                         SuggestionType::Action => 0.2,
                         _ => 0.0,
                     },
