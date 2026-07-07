@@ -68,7 +68,7 @@ MahoCtrlTabSwitcherView::MahoCtrlTabSwitcherView(
 
   if (has_more_affordance_) {
     const size_t remaining = tabs_.size() - visible_tabs;
-    std::u16string more_text = l10n_util::GetStringFUTF16Int(
+    std::u16string more_text = l10n_util::GetPluralStringFUTF16(
         IDS_MAHO_CTRL_TAB_MORE_AFFORDANCE_COUNT,
         static_cast<int>(remaining));
     auto more_container = std::make_unique<views::View>();

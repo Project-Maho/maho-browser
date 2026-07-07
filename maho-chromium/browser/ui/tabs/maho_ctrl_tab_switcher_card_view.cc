@@ -8,6 +8,9 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/thumbnails/thumbnail_image.h"
 #include "chrome/browser/ui/thumbnails/thumbnail_tab_helper.h"
+#include "content/public/browser/favicon_status.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
 #include "maho/browser/ui/theme/maho_color_id.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -35,6 +38,7 @@ constexpr int kBorderRadius = 10;
 constexpr int kBorderThickness = 2;
 constexpr int kFooterHeight = 36;
 constexpr int kFaviconSize = 16;
+constexpr int kFallbackFaviconSize = 48;
 
 SkColor CardBackgroundColor(const ui::ColorProvider* colors, bool selected) {
   if (!colors) {
@@ -42,8 +46,7 @@ SkColor CardBackgroundColor(const ui::ColorProvider* colors, bool selected) {
                     : SkColorSetARGB(0xE0, 0x1F, 0x1F, 0x22);
   }
   const SkColor base = colors->GetColor(kMahoColorCardBackground);
-  return selected ? base
-                  : SkColorSetA(base, SkAlphaMul(SkColorGetA(base), 0xE0));
+  return selected ? base : SkColorSetA(base, 0xE0);
 }
 
 SkColor CardBorderColor(const ui::ColorProvider* colors, bool selected) {
@@ -53,6 +56,22 @@ SkColor CardBorderColor(const ui::ColorProvider* colors, bool selected) {
   }
   return selected ? colors->GetColor(kMahoColorCtrlTabAccent)
                   : colors->GetColor(kMahoColorCardBorder);
+}
+
+gfx::Image GetFaviconFromWebContents(content::WebContents* wc) {
+  if (!wc) {
+    return gfx::Image();
+  }
+  content::NavigationEntry* entry =
+      wc->GetController().GetLastCommittedEntry();
+  if (!entry) {
+    return gfx::Image();
+  }
+  const content::FaviconStatus& favicon = entry->GetFavicon();
+  if (!favicon.valid || favicon.image.IsEmpty()) {
+    return gfx::Image();
+  }
+  return favicon.image;
 }
 
 }  // namespace
@@ -100,6 +119,19 @@ void MahoCtrlTabSwitcherCardView::BuildContents() {
   thumbnail_view_->SetBackground(views::CreateRoundedRectBackground(
       SkColorSetARGB(0x60, 0x30, 0x30, 0x33), kBorderRadius - 2));
 
+  // Immediate fallback: show large favicon in the thumbnail slot while the
+  // page-thumbnail bytes are being decoded (or captured for the first time).
+  // Once OnThumbnailReady arrives, the favicon is replaced by the real
+  // page snapshot.
+  content::WebContents* wc = web_contents_.get();
+  gfx::Image favicon_image = GetFaviconFromWebContents(wc);
+  if (!favicon_image.IsEmpty()) {
+    thumbnail_view_->SetImage(
+        ui::ImageModel::FromImage(favicon_image));
+    thumbnail_view_->SetImageSize(
+        gfx::Size(kFallbackFaviconSize, kFallbackFaviconSize));
+  }
+
   auto* footer = AddChildView(std::make_unique<views::BoxLayoutView>());
   footer->SetOrientation(views::BoxLayout::Orientation::kHorizontal);
   footer->SetInsideBorderInsets(gfx::Insets::TLBR(0, 4, 0, 4));
@@ -110,12 +142,15 @@ void MahoCtrlTabSwitcherCardView::BuildContents() {
 
   favicon_view_ = footer->AddChildView(std::make_unique<views::ImageView>());
   favicon_view_->SetImageSize(gfx::Size(kFaviconSize, kFaviconSize));
+  if (!favicon_image.IsEmpty()) {
+    favicon_view_->SetImage(ui::ImageModel::FromImage(favicon_image));
+  }
 
   std::u16string title;
-  if (web_contents_) {
-    title = web_contents_->GetTitle();
+  if (wc) {
+    title = wc->GetTitle();
     if (title.empty()) {
-      title = base::UTF8ToUTF16(web_contents_->GetLastCommittedURL().spec());
+      title = base::UTF8ToUTF16(wc->GetLastCommittedURL().spec());
     }
   }
 
@@ -129,10 +164,11 @@ void MahoCtrlTabSwitcherCardView::BuildContents() {
 }
 
 void MahoCtrlTabSwitcherCardView::AttachThumbnail() {
-  if (!web_contents_) {
+  content::WebContents* wc = web_contents_.get();
+  if (!wc) {
     return;
   }
-  auto* helper = ThumbnailTabHelper::FromWebContents(web_contents_.get());
+  auto* helper = ThumbnailTabHelper::FromWebContents(wc);
   if (!helper) {
     return;
   }
@@ -144,13 +180,20 @@ void MahoCtrlTabSwitcherCardView::AttachThumbnail() {
   thumbnail_subscription_->SetUncompressedImageCallback(base::BindRepeating(
       &MahoCtrlTabSwitcherCardView::OnThumbnailReady,
       weak_factory_.GetWeakPtr()));
-  thumbnail_source_->RequestThumbnailImage();
+  // Request cached data delivery. If a compressed JPEG is cached this fires
+  // the callback with a decoded image on a background thread and posts back
+  // to the UI thread — no fresh renderer capture required.
+  if (thumbnail_source_->has_data()) {
+    thumbnail_source_->RequestThumbnailImage();
+  }
 }
 
 void MahoCtrlTabSwitcherCardView::OnThumbnailReady(gfx::ImageSkia image) {
-  if (!thumbnail_view_) {
+  if (!thumbnail_view_ || image.isNull()) {
     return;
   }
+  thumbnail_view_->SetImageSize(
+      gfx::Size(kThumbnailWidth, kThumbnailHeight));
   thumbnail_view_->SetImage(ui::ImageModel::FromImageSkia(image));
 }
 

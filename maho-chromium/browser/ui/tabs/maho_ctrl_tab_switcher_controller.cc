@@ -165,24 +165,13 @@ bool MahoCtrlTabSwitcherController::HandleAdvance(bool forward) {
     return false;
   }
 
-  if (mru.size() == 2) {
-    content::WebContents* target = mru[1];
-    const int index = active_strip->GetIndexOfWebContents(target);
-    if (index == TabStripModel::kNoTab) {
-      return false;
-    }
-    active_strip->ActivateTabAt(
-        index, TabStripUserGestureDetails(
-                   TabStripUserGestureDetails::GestureType::kKeyboard));
-    return true;
-  }
-
   snapshot_ = ToWeakList(mru);
   forward_ = forward;
   max_visible_ = ReadMaxVisiblePref(browser_view_);
   cursor_ = forward ? 1u : snapshot_.size() - 1;
   active_strip->AddObserver(this);
-  StartPendingShow(forward);
+  InstallEventMonitor();
+  OpenOverlay();
   return true;
 }
 
@@ -323,7 +312,6 @@ void MahoCtrlTabSwitcherController::OpenOverlay() {
   params.parent = parent->GetNativeView();
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
   params.activatable = views::Widget::InitParams::Activatable::kNo;
-  params.accept_events = false;
   overlay_widget_->Init(std::move(params));
 
   overlay_view_ = overlay_widget_->SetContentsView(std::move(content_view));
