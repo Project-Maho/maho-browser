@@ -110,6 +110,7 @@ fn profile_contains_all_entity_arrays() {
                 archive_timeout_hours: 24.0,
                 site_search_entries: vec![],
                 pinned_close_behavior: PinnedCloseBehavior::Switch,
+                auto_delete_empty_folders_on_tidy: true,
             },
             privacy: PrivacySettings {
                 do_not_track: true,
@@ -315,6 +316,7 @@ fn is_tab_update() {
             created_at: DateTime::now(),
             last_active_at: DateTime::now(),
             favorite_order: None,
+            role: maho_types::tab::TabRole::Normal,
         },
     };
     assert!(tab_created.is_tab_update());
@@ -535,6 +537,7 @@ fn pinned_close_behavior_round_trips_reset_unload_switch() {
         archive_timeout_hours: 24.0,
         site_search_entries: vec![],
         pinned_close_behavior: PinnedCloseBehavior::ResetUnloadSwitch,
+        auto_delete_empty_folders_on_tidy: true,
     };
     let serialized = serde_json::to_string(&original).unwrap();
     assert!(serialized.contains("reset-unload-switch"));
