@@ -181,7 +181,7 @@ enum ShellEvent: Codable, Equatable {
     case pinTab(tabId: TabId)
     case unpinTab(tabId: TabId)
     case favoriteTab(tabId: TabId)
-    case unfavoriteTab(tabId: TabId)
+    case changeTabRole(tabId: TabId, newRole: TabRole)
     case reorderFavorite(tabId: TabId, newIndex: Int)
     case muteTab(tabId: TabId)
     case unmuteTab(tabId: TabId)
@@ -429,6 +429,7 @@ enum ShellEvent: Codable, Equatable {
         case isSecure = "is_secure"
         case limit
         case entryId = "entry_id"
+        case newRole = "new_role"
         case bookmarkId = "bookmark_id"
         case permission
         case zoomLevel = "zoom_level"
@@ -497,8 +498,10 @@ enum ShellEvent: Codable, Equatable {
             self = .unpinTab(tabId: try container.decode(TabId.self, forKey: .tabId))
         case "favorite_tab":
             self = .favoriteTab(tabId: try container.decode(TabId.self, forKey: .tabId))
-        case "unfavorite_tab":
-            self = .unfavoriteTab(tabId: try container.decode(TabId.self, forKey: .tabId))
+        case "change_tab_role":
+            self = .changeTabRole(
+                tabId: try container.decode(TabId.self, forKey: .tabId),
+                newRole: try container.decode(TabRole.self, forKey: .newRole))
         case "reorder_favorite":
             self = .reorderFavorite(
                 tabId: try container.decode(TabId.self, forKey: .tabId),
@@ -1025,9 +1028,10 @@ enum ShellEvent: Codable, Equatable {
         case .favoriteTab(let tabId):
             try container.encode("favorite_tab", forKey: .kind)
             try container.encode(tabId, forKey: .tabId)
-        case .unfavoriteTab(let tabId):
-            try container.encode("unfavorite_tab", forKey: .kind)
+        case .changeTabRole(let tabId, let newRole):
+            try container.encode("change_tab_role", forKey: .kind)
             try container.encode(tabId, forKey: .tabId)
+            try container.encode(newRole, forKey: .newRole)
         case .reorderFavorite(let tabId, let newIndex):
             try container.encode("reorder_favorite", forKey: .kind)
             try container.encode(tabId, forKey: .tabId)

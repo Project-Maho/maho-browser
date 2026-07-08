@@ -1,5 +1,49 @@
 import Foundation
 
+enum TabRole: Codable, Equatable {
+    case normal
+    case pinned
+    case favorite(order: Int)
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case order
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let type = try container.decode(String.self, forKey: .type)
+        switch type {
+        case "normal":
+            self = .normal
+        case "pinned":
+            self = .pinned
+        case "favorite":
+            let order = try container.decode(Int.self, forKey: .order)
+            self = .favorite(order: order)
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .type,
+                in: container,
+                debugDescription: "Unknown TabRole type: \(type)"
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .normal:
+            try container.encode("normal", forKey: .type)
+        case .pinned:
+            try container.encode("pinned", forKey: .type)
+        case .favorite(let order):
+            try container.encode("favorite", forKey: .type)
+            try container.encode(order, forKey: .order)
+        }
+    }
+}
+
 struct TabViewModel: Codable, Equatable {
     let id: TabId
     let spaceId: SpaceId
@@ -8,20 +52,37 @@ struct TabViewModel: Codable, Equatable {
     let url: String
     let favicon: ImageData?
     let isLoading: Bool
-    let isPinned: Bool
-    let isFavorite: Bool
-    let favoriteOrder: Int?
     let isMuted: Bool
     let isPlayingAudio: Bool
     let lifecycleState: String
     let children: [TabId]
     let createdAt: MahoDateTime
     let lastActiveAt: MahoDateTime
+    let role: TabRole
+
+    var isPinned: Bool {
+        switch role {
+        case .pinned, .favorite: return true
+        case .normal: return false
+        }
+    }
+    var isFavorite: Bool {
+        switch role {
+        case .favorite: return true
+        default: return false
+        }
+    }
+    var favoriteOrder: Int? {
+        switch role {
+        case .favorite(let order): return order
+        default: return nil
+        }
+    }
 
     private enum CodingKeys: String, CodingKey {
-        case id, spaceId, title, customTitle, url, favicon, isLoading, isPinned
-        case isFavorite, favoriteOrder, isMuted, isPlayingAudio, lifecycleState
-        case children, createdAt, lastActiveAt
+        case id, spaceId, title, customTitle, url, favicon, isLoading
+        case isMuted, isPlayingAudio, lifecycleState
+        case children, createdAt, lastActiveAt, role
     }
 }
 
@@ -193,10 +254,11 @@ struct TabStateUpdate: Codable, Equatable {
     let isFavorite: Bool?
     let favoriteOrder: Int??
     let lifecycleState: String?
+    let role: TabRole?
 
     private enum CodingKeys: String, CodingKey {
         case title, customTitle, url, favicon, isLoading, isPinned
-        case isMuted, isPlayingAudio, isFavorite, favoriteOrder, lifecycleState
+        case isMuted, isPlayingAudio, isFavorite, favoriteOrder, lifecycleState, role
     }
 }
 
