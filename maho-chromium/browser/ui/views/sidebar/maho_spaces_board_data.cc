@@ -11,8 +11,13 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
+#include "base/json/json_writer.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/third_party/maho/maho_ffi.h"
+#include "third_party/skia/include/core/SkColor.h"
+#include "third_party/skia/include/core/SkPaint.h"
+#include "third_party/skia/include/core/SkPoint.h"
+#include "third_party/skia/include/core/SkScalar.h"
 #include "url/gurl.h"
 
 namespace maho {
@@ -40,6 +45,84 @@ SpaceBoardModel::~SpaceBoardModel() = default;
 
 namespace {
 
+double NormalizeHueToDegrees(double hue) {
+  if (std::abs(hue) <= 1.0) {
+    hue *= 360.0;
+  }
+  hue = std::fmod(hue, 360.0);
+  if (hue < 0.0) {
+    hue += 360.0;
+  }
+  return hue;
+}
+
+std::string HexColorFromSkColor(SkColor color) {
+  std::array<char, 8> buffer = {};
+  snprintf(buffer.data(), buffer.size(), "#%02X%02X%02X", SkColorGetR(color),
+           SkColorGetG(color), SkColorGetB(color));
+  return std::string(buffer.data());
+}
+
+std::optional<std::string> TryHexColorFromRgbList(const base::Value* value) {
+  const auto* list = value ? value->GetIfList() : nullptr;
+  if (!list || list->size() != 3) {
+    return std::nullopt;
+  }
+  auto to_channel = [](const base::Value& channel) -> std::optional<int> {
+    if (channel.is_int()) {
+      return std::clamp(channel.GetInt(), 0, 255);
+    }
+    if (channel.is_double()) {
+      return std::clamp(static_cast<int>(channel.GetDouble()), 0, 255);
+    }
+    return std::nullopt;
+  };
+  const std::optional<int> r = to_channel((*list)[0]);
+  const std::optional<int> g = to_channel((*list)[1]);
+  const std::optional<int> b = to_channel((*list)[2]);
+  if (!r || !g || !b) {
+    return std::nullopt;
+  }
+  return HexColorFromSkColor(SkColorSetRGB(*r, *g, *b));
+}
+
+std::optional<std::string> TryHexColorFromColorDict(const base::DictValue* dict) {
+  if (!dict) {
+    return std::nullopt;
+  }
+  const std::string* raw_hex = dict->FindString("c");
+  if (raw_hex && raw_hex->size() == 7 && (*raw_hex)[0] == '#') {
+    return *raw_hex;
+  }
+  if (const base::Value* raw_rgb = dict->Find("c")) {
+    if (std::optional<std::string> from_rgb = TryHexColorFromRgbList(raw_rgb)) {
+      return from_rgb;
+    }
+  }
+
+  const std::optional<double> hue = dict->FindDouble("hue");
+  const std::optional<double> saturation = dict->FindDouble("saturation");
+  const std::optional<double> brightness = dict->FindDouble("brightness");
+  if (!hue || !saturation || !brightness) {
+    return std::nullopt;
+  }
+  SkScalar hsv[3] = {
+      static_cast<SkScalar>(NormalizeHueToDegrees(*hue)),
+      static_cast<SkScalar>(std::clamp(*saturation, 0.0, 1.0)),
+      static_cast<SkScalar>(std::clamp(*brightness, 0.0, 1.0))};
+  return HexColorFromSkColor(SkHSVToColor(hsv));
+}
+
+void MaybeAppendPaletteColor(std::vector<std::string>* palette,
+                             const std::optional<std::string>& color) {
+  if (!palette || !color || color->empty()) {
+    return;
+  }
+  if (std::find(palette->begin(), palette->end(), *color) == palette->end()) {
+    palette->push_back(*color);
+  }
+}
+
 SpaceBoardTabItem ParseTabItem(const base::DictValue& dict) {
   SpaceBoardTabItem item;
 
@@ -60,7 +143,7 @@ SpaceBoardTabItem ParseTabItem(const base::DictValue& dict) {
 
   item.is_pinned = dict.FindBool("isPinned").value_or(false);
   item.is_loading = dict.FindBool("isLoading").value_or(false);
-  item.is_favorite = dict.FindBool("isFavorite").value_or(false);
+  item.is_favorite = dict.FindBool("isFavorite").value_or(false);  // L3-EXEMPT: legacy compat
   item.is_muted = dict.FindBool("isMuted").value_or(false);
   item.is_playing_audio = dict.FindBool("isPlayingAudio").value_or(false);
 
@@ -216,6 +299,95 @@ std::u16string SpaceBoardColumnBadge(const SpaceBoardColumn& column) {
     }
   }
   return u"S";
+}
+
+MahoSpaceDisplayThemeModel::MahoSpaceDisplayThemeModel() = default;
+MahoSpaceDisplayThemeModel::MahoSpaceDisplayThemeModel(
+    const MahoSpaceDisplayThemeModel&) = default;
+MahoSpaceDisplayThemeModel::MahoSpaceDisplayThemeModel(
+    MahoSpaceDisplayThemeModel&&) = default;
+MahoSpaceDisplayThemeModel& MahoSpaceDisplayThemeModel::operator=(
+    const MahoSpaceDisplayThemeModel&) = default;
+MahoSpaceDisplayThemeModel& MahoSpaceDisplayThemeModel::operator=(
+    MahoSpaceDisplayThemeModel&&) = default;
+MahoSpaceDisplayThemeModel::~MahoSpaceDisplayThemeModel() = default;
+
+MahoSpaceDisplayThemeModel BuildMahoSpaceDisplayThemeModel(
+    const base::DictValue& space_dict) {
+  MahoSpaceDisplayThemeModel model;
+  const base::DictValue* theme_dict = space_dict.FindDict("theme");
+  if (!theme_dict) {
+    return model;
+  }
+
+  model.has_theme = true;
+  if (const std::string* type = theme_dict->FindString("type")) {
+    if (*type == "solid") {
+      model.kind = MahoSpaceDisplayThemeKind::kSolid;
+    } else if (*type == "gradient") {
+      model.kind = MahoSpaceDisplayThemeKind::kGradient;
+    } else if (*type == "zen") {
+      model.kind = MahoSpaceDisplayThemeKind::kZen;
+    }
+  }
+  model.opacity = static_cast<float>(
+      std::clamp(theme_dict->FindDouble("opacity").value_or(1.0), 0.0, 1.0));
+  model.texture = static_cast<float>(
+      std::clamp(theme_dict->FindDouble("texture").value_or(0.0), 0.0, 1.0));
+
+  if (const base::DictValue* color_dict = theme_dict->FindDict("color")) {
+    model.grain = static_cast<float>(
+        std::clamp(color_dict->FindDouble("grain").value_or(0.0), 0.0, 1.0));
+    model.primary_color = TryHexColorFromColorDict(color_dict).value_or(std::string());
+    MaybeAppendPaletteColor(&model.palette_colors, model.primary_color);
+  }
+
+  if (const base::ListValue* colors = theme_dict->FindList("gradientColors")) {
+    for (const auto& entry : *colors) {
+      const base::DictValue* color_dict = entry.GetIfDict();
+      if (!color_dict) {
+        continue;
+      }
+      std::optional<std::string> hex = TryHexColorFromColorDict(color_dict);
+      if (!hex || hex->empty()) {
+        continue;
+      }
+      MaybeAppendPaletteColor(&model.palette_colors, hex);
+      if (color_dict->FindBool("isPrimary").value_or(false)) {
+        model.primary_color = *hex;
+      } else if (model.secondary_color.empty()) {
+        model.secondary_color = *hex;
+      }
+    }
+  }
+
+  if (model.primary_color.empty() && !model.palette_colors.empty()) {
+    model.primary_color = model.palette_colors.front();
+  }
+  if (model.secondary_color.empty() && model.palette_colors.size() > 1u) {
+    model.secondary_color = model.palette_colors[1];
+  }
+
+  base::JSONWriter::Write(base::Value(theme_dict->Clone()), &model.theme_json);
+  return model;
+}
+
+std::string GetMahoSpaceDisplayPrimaryColor(
+    const MahoSpaceDisplayThemeModel& theme,
+    const std::string& fallback_color) {
+  return theme.primary_color.empty() ? fallback_color : theme.primary_color;
+}
+
+std::string GetMahoSpaceDisplaySecondaryColor(
+    const MahoSpaceDisplayThemeModel& theme,
+    const std::string& fallback_color) {
+  if (!theme.secondary_color.empty()) {
+    return theme.secondary_color;
+  }
+  if (!theme.palette_colors.empty()) {
+    return theme.palette_colors.back();
+  }
+  return GetMahoSpaceDisplayPrimaryColor(theme, fallback_color);
 }
 
 }  // namespace maho

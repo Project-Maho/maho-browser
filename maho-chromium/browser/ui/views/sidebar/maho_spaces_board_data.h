@@ -6,9 +6,44 @@
 #include <string>
 #include <vector>
 
-#include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
+#include "base/values.h"
 
 namespace maho {
+
+enum class MahoSpaceDisplayThemeKind {
+  kLegacyColor,
+  kSolid,
+  kGradient,
+  kZen,
+};
+
+struct MahoSpaceDisplayThemeModel {
+  MahoSpaceDisplayThemeModel();
+  MahoSpaceDisplayThemeModel(const MahoSpaceDisplayThemeModel&);
+  MahoSpaceDisplayThemeModel(MahoSpaceDisplayThemeModel&&);
+  MahoSpaceDisplayThemeModel& operator=(const MahoSpaceDisplayThemeModel&);
+  MahoSpaceDisplayThemeModel& operator=(MahoSpaceDisplayThemeModel&&);
+  ~MahoSpaceDisplayThemeModel();
+
+  bool has_theme = false;
+  MahoSpaceDisplayThemeKind kind = MahoSpaceDisplayThemeKind::kLegacyColor;
+  std::string theme_json;
+  std::string primary_color;
+  std::string secondary_color;
+  std::vector<std::string> palette_colors;
+  float opacity = 1.0f;
+  float texture = 0.0f;
+  float grain = 0.0f;
+};
+
+MahoSpaceDisplayThemeModel BuildMahoSpaceDisplayThemeModel(
+    const base::DictValue& space_dict);
+std::string GetMahoSpaceDisplayPrimaryColor(
+    const MahoSpaceDisplayThemeModel& theme,
+    const std::string& fallback_color);
+std::string GetMahoSpaceDisplaySecondaryColor(
+    const MahoSpaceDisplayThemeModel& theme,
+    const std::string& fallback_color);
 
 // A single tab item in a space board column. Parsed from TabViewModel JSON
 // returned by maho_core_get_space_tabs().
@@ -27,7 +62,7 @@ struct SpaceBoardTabItem {
   std::string url;
   bool is_pinned = false;
   bool is_loading = false;
-  bool is_favorite = false;
+  bool is_favorite = false;  // L3-EXEMPT: derived from role in spaces_board_data.cc
   bool is_muted = false;
   bool is_playing_audio = false;
 };

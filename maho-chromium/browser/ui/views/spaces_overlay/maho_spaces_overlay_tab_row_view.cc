@@ -2,6 +2,13 @@
 
 #include "maho_spaces_overlay_tab_row_view.h"
 
+#include "chrome/browser/favicon/favicon_service_factory.h"
+#include "chrome/browser/profiles/profile.h"
+#include "components/favicon/core/favicon_service.h"
+#include "components/favicon_base/favicon_types.h"
+#include "ui/views/controls/image_view.h"
+#include "url/gurl.h"
+
 #include <string>
 
 #include "base/strings/string_util.h"
@@ -48,6 +55,7 @@ BEGIN_METADATA(MahoSpacesOverlayTabRowView)
 END_METADATA
 
 MahoSpacesOverlayTabRowView::MahoSpacesOverlayTabRowView(
+    Profile* profile,
     const SpaceBoardTabItem& tab)
     : tab_(tab) {
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -55,6 +63,10 @@ MahoSpacesOverlayTabRowView::MahoSpacesOverlayTabRowView(
       gfx::Insets::VH(kRowPaddingVerticalDp, 0), kHeaderSpacingDp));
   layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
+
+  favicon_view_ = AddChildView(std::make_unique<views::ImageView>());
+  favicon_view_->SetPreferredSize(gfx::Size(kGlyphSizeDp, kGlyphSizeDp));
+  favicon_view_->SetVisible(false);
 
   glyph_container_ = AddChildView(std::make_unique<views::View>());
   glyph_container_->SetPreferredSize(gfx::Size(kGlyphSizeDp, kGlyphSizeDp));
@@ -70,6 +82,22 @@ MahoSpacesOverlayTabRowView::MahoSpacesOverlayTabRowView(
   glyph_label_->SetAutoColorReadabilityEnabled(false);
   glyph_label_->SetSubpixelRenderingEnabled(false);
   glyph_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+
+  // Default to showing glyph container
+  glyph_container_->SetVisible(true);
+
+  if (profile && !tab_.url.empty()) {
+    favicon::FaviconService* service =
+        FaviconServiceFactory::GetForProfile(
+            profile, ServiceAccessType::EXPLICIT_ACCESS);
+    if (service) {
+      service->GetFaviconImageForPageURL(
+          GURL(tab_.url),
+          base::BindOnce(&MahoSpacesOverlayTabRowView::OnFaviconLoaded,
+                         weak_ptr_factory_.GetWeakPtr()),
+          &cancelable_task_tracker_);
+    }
+  }
 
   auto* text_block = AddChildView(std::make_unique<views::View>());
   auto* text_layout = text_block->SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -115,7 +143,7 @@ MahoSpacesOverlayTabRowView::MahoSpacesOverlayTabRowView(
     AddStatusChip(tab_.is_muted ? u"Muted" : u"Audio");
     ++chip_count;
   }
-  if (tab_.is_favorite) {
+  if (tab_.is_favorite) {  // L3-EXEMPT: views display
     AddStatusChip(u"Saved");
     ++chip_count;
   }
@@ -128,6 +156,15 @@ MahoSpacesOverlayTabRowView::MahoSpacesOverlayTabRowView(
 }
 
 MahoSpacesOverlayTabRowView::~MahoSpacesOverlayTabRowView() = default;
+
+void MahoSpacesOverlayTabRowView::OnFaviconLoaded(
+    const favicon_base::FaviconImageResult& result) {
+  if (!result.image.IsEmpty() && favicon_view_ && glyph_container_) {
+    favicon_view_->SetImage(ui::ImageModel::FromImageSkia(result.image.AsImageSkia()));
+    favicon_view_->SetVisible(true);
+    glyph_container_->SetVisible(false);
+  }
+}
 
 void MahoSpacesOverlayTabRowView::OnThemeChanged() {
   views::View::OnThemeChanged();
