@@ -11,6 +11,7 @@
 
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
+#include "base/run_loop.h"
 #include "base/values.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/dragdrop/drop_target_event.h"
@@ -203,7 +204,8 @@ TEST_F(SidebarDnDDispatchTest,
   SidebarTabRowView row(
       target_node, ui::ImageModel(), /*browser=*/nullptr,
       MahoSidebarTabSection::kNormal, "space-1", u"Target tab",
-      NoOpPressedCallback(), NoOpPressedCallback(), base::DoNothing(),
+      NoOpPressedCallback(), NoOpPressedCallback(), NoOpPressedCallback(),
+      base::DoNothing(),
       base::BindRepeating([](const std::string&) { return -1; }),
       base::DoNothing(), base::DoNothing());
   row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
@@ -239,7 +241,8 @@ TEST_F(SidebarDnDDispatchTest,
   SidebarTabRowView row(
       target_node, ui::ImageModel(), /*browser=*/nullptr,
       MahoSidebarTabSection::kNormal, "space-1", u"Target tab",
-      NoOpPressedCallback(), NoOpPressedCallback(), base::DoNothing(),
+      NoOpPressedCallback(), NoOpPressedCallback(), NoOpPressedCallback(),
+      base::DoNothing(),
       base::BindRepeating([](const std::string&) { return -1; }),
       base::DoNothing(), base::DoNothing());
   row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
@@ -274,7 +277,8 @@ TEST_F(
   SidebarTabRowView row(
       target_node, ui::ImageModel(), /*browser=*/nullptr,
       MahoSidebarTabSection::kNormal, "space-1", u"Target tab",
-      NoOpPressedCallback(), NoOpPressedCallback(), base::DoNothing(),
+      NoOpPressedCallback(), NoOpPressedCallback(), NoOpPressedCallback(),
+      base::DoNothing(),
       base::BindRepeating([](const std::string&) { return -1; }),
       base::DoNothing(), base::DoNothing());
   row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
@@ -388,7 +392,8 @@ TEST_F(SidebarDnDDispatchTest, SameFolderTabSelfDropReturnsNoOp) {
   SidebarTabRowView row(
       target_node, ui::ImageModel(), /*browser=*/nullptr,
       MahoSidebarTabSection::kNormal, "space-1", u"Target tab",
-      NoOpPressedCallback(), NoOpPressedCallback(), base::DoNothing(),
+      NoOpPressedCallback(), NoOpPressedCallback(), NoOpPressedCallback(),
+      base::DoNothing(),
       base::BindRepeating([](const std::string&) { return -1; }),
       base::DoNothing(), base::DoNothing());
   row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
@@ -417,7 +422,8 @@ TEST_F(SidebarDnDDispatchTest,
   SidebarTabRowView row(
       target_node, ui::ImageModel(), /*browser=*/nullptr,
       MahoSidebarTabSection::kNormal, "space-1", u"Target tab",
-      NoOpPressedCallback(), NoOpPressedCallback(), base::DoNothing(),
+      NoOpPressedCallback(), NoOpPressedCallback(), NoOpPressedCallback(),
+      base::DoNothing(),
       base::BindRepeating([](const std::string&) { return -1; }),
       base::DoNothing(), base::DoNothing());
   row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
@@ -614,6 +620,8 @@ TEST_F(SidebarDnDDispatchTest, FolderRowBodyClickInvokesToggleCallback) {
   EXPECT_TRUE(folder_row_ptr->OnMousePressed(press));
   folder_row_ptr->OnMouseReleased(release);
 
+  base::RunLoop().RunUntilIdle();
+
   EXPECT_EQ(toggle_count, 1);
 }
 
@@ -649,6 +657,8 @@ TEST_F(SidebarDnDDispatchTest,
   EXPECT_TRUE(folder_row_ptr->OnMousePressed(press));
   folder_row_ptr->OnMouseReleased(release);
 
+  base::RunLoop().RunUntilIdle();
+
   EXPECT_EQ(toggle_count, 1);
 }
 
@@ -674,6 +684,8 @@ TEST_F(SidebarDnDDispatchTest, FolderRowLabelButtonClickInvokesToggleOnce) {
   views::test::ButtonTestApi(label).NotifyClick(ui::MouseEvent(
       ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
       base::TimeTicks::Now(), 0, 0));
+
+  base::RunLoop().RunUntilIdle();
 
   EXPECT_EQ(toggle_count, 1);
 }
@@ -1151,12 +1163,9 @@ TEST_F(SidebarDnDDispatchTest,
   std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
 
   ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
-  ASSERT_EQ(observer_.events.size(), 2u);
-  EXPECT_EQ(observer_.events[0].kind, "move_tab_to_root");
-  EXPECT_NE(observer_.events[0].json.find("\"folder_id\":\"old-folder\""),
-            std::string::npos);
-  EXPECT_EQ(observer_.events[1].kind, "move_tab_to_folder");
-  auto parsed = ParseJson(observer_.events[1].json);
+  ASSERT_EQ(observer_.events.size(), 1u);
+  EXPECT_EQ(observer_.events[0].kind, "move_tab_to_folder");
+  auto parsed = ParseJson(observer_.events[0].json);
   ASSERT_TRUE(parsed.has_value());
   const base::DictValue& dict = parsed->GetDict();
   EXPECT_EQ(*dict.FindString("folder_id"), "target-folder");
@@ -1503,7 +1512,8 @@ TEST_F(SidebarDnDDispatchTest, FolderOnTabBodyIsNoOp) {
   SidebarTabRowView row(
       target_node, ui::ImageModel(), /*browser=*/nullptr,
       MahoSidebarTabSection::kNormal, "space-1", u"Target tab",
-      NoOpPressedCallback(), NoOpPressedCallback(), base::DoNothing(),
+      NoOpPressedCallback(), NoOpPressedCallback(), NoOpPressedCallback(),
+      base::DoNothing(),
       base::BindRepeating([](const std::string&) { return -1; }),
       base::DoNothing(), base::DoNothing());
   row.SetBoundsRect(gfx::Rect(0, 0, 220, 30));
@@ -1525,7 +1535,8 @@ TEST_F(SidebarDnDDispatchTest,
   SidebarTabRowView row(
       target_node, ui::ImageModel(), /*browser=*/nullptr,
       MahoSidebarTabSection::kNormal, "space-1", u"Target tab",
-      NoOpPressedCallback(), NoOpPressedCallback(), base::DoNothing(),
+      NoOpPressedCallback(), NoOpPressedCallback(), NoOpPressedCallback(),
+      base::DoNothing(),
       base::BindRepeating([](const std::string&) { return -1; }),
       base::DoNothing(), base::DoNothing());
   row.SetBoundsRect(gfx::Rect(0, 0, 220, 30));
@@ -1563,7 +1574,8 @@ TEST_F(SidebarDnDDispatchTest,
   SidebarTabRowView row(
       target_node, ui::ImageModel(), /*browser=*/nullptr,
       MahoSidebarTabSection::kNormal, "space-1", u"Target tab",
-      NoOpPressedCallback(), NoOpPressedCallback(), base::DoNothing(),
+      NoOpPressedCallback(), NoOpPressedCallback(), NoOpPressedCallback(),
+      base::DoNothing(),
       base::BindRepeating([](const std::string&) { return -1; }),
       base::DoNothing(), base::DoNothing());
   row.SetBoundsRect(gfx::Rect(0, 0, 220, 30));
@@ -1601,7 +1613,8 @@ TEST_F(SidebarDnDDispatchTest,
   SidebarTabRowView row(
       target_node, ui::ImageModel(), /*browser=*/nullptr,
       MahoSidebarTabSection::kNormal, "space-1", u"Target tab",
-      NoOpPressedCallback(), NoOpPressedCallback(), base::DoNothing(),
+      NoOpPressedCallback(), NoOpPressedCallback(), NoOpPressedCallback(),
+      base::DoNothing(),
       base::BindRepeating([](const std::string&) { return -1; }),
       base::DoNothing(), base::DoNothing());
   row.SetBoundsRect(gfx::Rect(0, 0, 220, 30));
@@ -1645,7 +1658,8 @@ TEST_F(
   SidebarTabRowView row(
       target_node, ui::ImageModel(), /*browser=*/nullptr,
       MahoSidebarTabSection::kNormal, "space-1", u"Target tab",
-      NoOpPressedCallback(), NoOpPressedCallback(), base::DoNothing(),
+      NoOpPressedCallback(), NoOpPressedCallback(), NoOpPressedCallback(),
+      base::DoNothing(),
       base::BindRepeating([](const std::string&) { return -1; }),
       base::DoNothing(), base::DoNothing());
   row.SetBoundsRect(gfx::Rect(0, 0, 220, 30));
@@ -1834,7 +1848,8 @@ TEST_F(SidebarDnDDispatchTest,
   SidebarTabRowView row(
       target_node, ui::ImageModel(), /*browser=*/nullptr,
       MahoSidebarTabSection::kNormal, "space-1", u"Target",
-      NoOpPressedCallback(), NoOpPressedCallback(), base::DoNothing(),
+      NoOpPressedCallback(), NoOpPressedCallback(), NoOpPressedCallback(),
+      base::DoNothing(),
       base::BindRepeating([](const std::string&) { return -1; }),
       base::DoNothing(), base::DoNothing());
   row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
@@ -1862,8 +1877,10 @@ TEST_F(SidebarDnDDispatchTest,
       << "Callback must fire exactly once for favorites-origin tab row drop";
   EXPECT_EQ(last_accepted_id, "fav-tab");
   ASSERT_FALSE(observer_.events.empty());
-  EXPECT_EQ(observer_.events[0].kind, "unfavorite_tab");
+  EXPECT_EQ(observer_.events[0].kind, "change_tab_role");
   EXPECT_NE(observer_.events[0].json.find("\"tab_id\":\"fav-tab\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"type\":\"normal\""),
             std::string::npos);
 }
 
@@ -1873,7 +1890,8 @@ TEST_F(SidebarDnDDispatchTest,
   SidebarTabRowView row(
       target_node, ui::ImageModel(), /*browser=*/nullptr,
       MahoSidebarTabSection::kNormal, "space-1", u"Target",
-      NoOpPressedCallback(), NoOpPressedCallback(), base::DoNothing(),
+      NoOpPressedCallback(), NoOpPressedCallback(), NoOpPressedCallback(),
+      base::DoNothing(),
       base::BindRepeating([](const std::string&) { return -1; }),
       base::DoNothing(), base::DoNothing());
   row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
@@ -1897,7 +1915,7 @@ TEST_F(SidebarDnDDispatchTest,
   EXPECT_EQ(callback_count, 0)
       << "Callback must NOT fire for non-favorites-origin drops";
   for (const auto& ev : observer_.events) {
-    EXPECT_NE(ev.kind, "unfavorite_tab");
+    EXPECT_NE(ev.kind, "change_tab_role");
   }
 }
 
@@ -1933,7 +1951,7 @@ TEST_F(SidebarDnDDispatchTest,
   EXPECT_EQ(last_accepted_id, "fav-tab");
   bool found_unfavorite = false;
   for (const auto& ev : observer_.events) {
-    if (ev.kind == "unfavorite_tab") {
+    if (ev.kind == "change_tab_role") {
       found_unfavorite = true;
       EXPECT_NE(ev.json.find("\"tab_id\":\"fav-tab\""), std::string::npos);
     }
@@ -1968,7 +1986,7 @@ TEST_F(SidebarDnDDispatchTest,
   EXPECT_EQ(callback_count, 0)
       << "Callback must NOT fire for non-favorites folder row drops";
   for (const auto& ev : observer_.events) {
-    EXPECT_NE(ev.kind, "unfavorite_tab");
+    EXPECT_NE(ev.kind, "change_tab_role");
   }
 }
 
@@ -2004,7 +2022,7 @@ TEST_F(SidebarDnDDispatchTest,
   EXPECT_EQ(last_accepted_id, "fav-tab");
   bool found_unfavorite = false;
   for (const auto& ev : observer_.events) {
-    if (ev.kind == "unfavorite_tab") {
+    if (ev.kind == "change_tab_role") {
       found_unfavorite = true;
       EXPECT_NE(ev.json.find("\"tab_id\":\"fav-tab\""), std::string::npos);
     }
@@ -2039,7 +2057,7 @@ TEST_F(SidebarDnDDispatchTest,
   EXPECT_EQ(callback_count, 0)
       << "Callback must NOT fire for non-favorites list-view append drops";
   for (const auto& ev : observer_.events) {
-    EXPECT_NE(ev.kind, "unfavorite_tab");
+    EXPECT_NE(ev.kind, "change_tab_role");
   }
 }
 
@@ -2259,8 +2277,10 @@ TEST_F(SidebarDnDDispatchTest,
 
   ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
   ASSERT_EQ(observer_.events.size(), 2u);
-  EXPECT_EQ(observer_.events[0].kind, "unfavorite_tab");
+  EXPECT_EQ(observer_.events[0].kind, "change_tab_role");
   EXPECT_NE(observer_.events[0].json.find("\"tab_id\":\"fav-tab\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"type\":\"normal\""),
             std::string::npos);
   EXPECT_EQ(observer_.events[1].kind, "reorder_root_item");
 }
@@ -2290,7 +2310,9 @@ TEST_F(SidebarDnDDispatchTest,
 
   ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
   ASSERT_EQ(observer_.events.size(), 2u);
-  EXPECT_EQ(observer_.events[0].kind, "unfavorite_tab");
+  EXPECT_EQ(observer_.events[0].kind, "change_tab_role");
+  EXPECT_NE(observer_.events[0].json.find("\"type\":\"normal\""),
+            std::string::npos);
   EXPECT_EQ(observer_.events[1].kind, "reorder_root_item");
 }
 
@@ -2381,8 +2403,10 @@ TEST_F(SidebarDnDDispatchTest,
 
   ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
   ASSERT_EQ(observer_.events.size(), 2u);
-  EXPECT_EQ(observer_.events[0].kind, "unfavorite_tab");
+  EXPECT_EQ(observer_.events[0].kind, "change_tab_role");
   EXPECT_NE(observer_.events[0].json.find("\"tab_id\":\"fav-tab\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"type\":\"normal\""),
             std::string::npos);
   EXPECT_EQ(observer_.events[1].kind, "move_tab_to_folder");
   EXPECT_NE(observer_.events[1].json.find("\"tab_id\":\"fav-tab\""),
@@ -3024,21 +3048,24 @@ TEST_F(SidebarDnDDispatchTest,
   ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
 
   ASSERT_EQ(observer_.events.size(), 1u)
-      << "Exactly one event expected: unfavorite_tab only";
-  EXPECT_EQ(observer_.events[0].kind, "unfavorite_tab")
-      << "unfavorite_tab must be dispatched when a kFavorites drag completes "
+      << "Exactly one event expected: change_tab_role only";
+  EXPECT_EQ(observer_.events[0].kind, "change_tab_role")
+      << "change_tab_role must be dispatched when a kFavorites drag completes "
          "on the normal section target";
   SCOPED_TRACE(observer_.events[0].json);
   EXPECT_NE(observer_.events[0].json.find("\"tab_id\":\"fav-drop\""),
             std::string::npos)
-      << "unfavorite_tab payload must carry the tab_id of the dragged favorite";
+      << "change_tab_role payload must carry the tab_id of the dragged favorite";
+  EXPECT_NE(observer_.events[0].json.find("\"type\":\"normal\""),
+            std::string::npos);
 }
 
-// Verify the same unfavorite-first contract when the kFavorites drag drops on
-// the pinned section — the atomic sequence must be
-// [unfavorite_tab, pin_tab] in that order.
+// Verify the role-transition contract when a kFavorites drag drops on the
+// pinned section — under ADR 11 the tab stays alive and its role transitions
+// atomically from Favorite to Pinned via a single "change_tab_role" event
+// (no unfavorite_tab + pin_tab sequence).
 TEST_F(SidebarDnDDispatchTest,
-       FavoriteDragDropOnPinnedSectionDispatchesUnfavoriteBeforePin) {
+       FavoriteDragDropOnPinnedSectionDispatchesChangeTabRoleToPinned) {
   ui::OSExchangeData data;
   WriteDropData(MakeTabPayload("fav-pin", SidebarDragOrigin::kFavorites), &data);
   ui::DropTargetEvent event = MakeDropEvent(data);
@@ -3049,15 +3076,14 @@ TEST_F(SidebarDnDDispatchTest,
   std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
 
   ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
-  ASSERT_EQ(observer_.events.size(), 2u)
-      << "Exactly two events expected: unfavorite_tab then pin_tab";
-  EXPECT_EQ(observer_.events[0].kind, "unfavorite_tab")
-      << "unfavorite_tab must come before pin_tab";
+  ASSERT_EQ(observer_.events.size(), 1u)
+      << "Exactly one event expected: change_tab_role";
+  EXPECT_EQ(observer_.events[0].kind, "change_tab_role")
+      << "change_tab_role must be dispatched when a kFavorites drag completes "
+         "on the pinned section target";
   EXPECT_NE(observer_.events[0].json.find("\"tab_id\":\"fav-pin\""),
             std::string::npos);
-  EXPECT_EQ(observer_.events[1].kind, "pin_tab")
-      << "pin_tab must follow unfavorite_tab";
-  EXPECT_NE(observer_.events[1].json.find("\"tab_id\":\"fav-pin\""),
+  EXPECT_NE(observer_.events[0].json.find("\"type\":\"pinned\""),
             std::string::npos);
 }
 
@@ -3297,7 +3323,9 @@ TEST_F(SidebarDnDDispatchTest,
 
   ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
   ASSERT_EQ(observer_.events.size(), 1u);
-  EXPECT_EQ(observer_.events[0].kind, "unfavorite_tab");
+  EXPECT_EQ(observer_.events[0].kind, "change_tab_role");
+  EXPECT_NE(observer_.events[0].json.find("\"type\":\"normal\""),
+            std::string::npos);
   EXPECT_EQ(observer_.events[0].json.find("\"unpin_tab\""), std::string::npos)
       << "No spurious unpin_tab must be emitted for a favorites root tab drop";
 }
@@ -3369,13 +3397,13 @@ TEST_F(SidebarDnDDispatchTest,
   EXPECT_EQ(last_accepted_id, "fav-tab");
   bool found_unfavorite = false;
   for (const auto& ev : observer_.events) {
-    if (ev.kind == "unfavorite_tab") {
+    if (ev.kind == "change_tab_role") {
       found_unfavorite = true;
       EXPECT_NE(ev.json.find("\"tab_id\":\"fav-tab\""), std::string::npos);
     }
   }
   EXPECT_TRUE(found_unfavorite)
-      << "unfavorite_tab must be dispatched for a favorites-origin tab lane drop";
+      << "change_tab_role must be dispatched for a favorites-origin tab lane drop";
 }
 
 // A favorites-origin tab dropped on a folder-target insertion lane must invoke
@@ -3421,12 +3449,12 @@ TEST_F(SidebarDnDDispatchTest,
   EXPECT_EQ(last_accepted_id, "fav-tab");
   bool found_unfavorite = false;
   for (const auto& ev : observer_.events) {
-    if (ev.kind == "unfavorite_tab") {
+    if (ev.kind == "change_tab_role") {
       found_unfavorite = true;
     }
   }
   EXPECT_TRUE(found_unfavorite)
-      << "unfavorite_tab must be dispatched for a favorites-origin folder lane drop";
+      << "change_tab_role must be dispatched for a favorites-origin folder lane drop";
 }
 
 // A non-favorites tab dropped on a tab-target insertion lane must NOT invoke
@@ -3466,7 +3494,7 @@ TEST_F(SidebarDnDDispatchTest,
       << "Accepted callback must NOT fire for a non-favorites-origin tab "
          "dropped on an insertion lane";
   for (const auto& ev : observer_.events) {
-    EXPECT_NE(ev.kind, "unfavorite_tab");
+    EXPECT_NE(ev.kind, "change_tab_role");
   }
 }
 
@@ -3500,7 +3528,8 @@ TEST_F(
   SidebarTabRowView row(
       target_node, ui::ImageModel(), /*browser=*/nullptr,
       MahoSidebarTabSection::kNormal, "space-1", u"Target",
-      NoOpPressedCallback(), NoOpPressedCallback(), base::DoNothing(),
+      NoOpPressedCallback(), NoOpPressedCallback(), NoOpPressedCallback(),
+      base::DoNothing(),
       base::BindRepeating([](const std::string&) { return 1; }),
       base::DoNothing(), base::DoNothing());
   row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
@@ -3546,7 +3575,8 @@ TEST_F(SidebarDnDDispatchTest,
   SidebarTabRowView row(
       target_node, ui::ImageModel(), /*browser=*/nullptr,
       MahoSidebarTabSection::kNormal, "space-1", u"Target",
-      NoOpPressedCallback(), NoOpPressedCallback(), base::DoNothing(),
+      NoOpPressedCallback(), NoOpPressedCallback(), NoOpPressedCallback(),
+      base::DoNothing(),
       base::BindRepeating([](const std::string&) { return 1; }),
       base::DoNothing(), base::DoNothing());
   row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
@@ -3585,7 +3615,8 @@ TEST_F(SidebarDnDDispatchTest,
   SidebarTabRowView row(
       target_node, ui::ImageModel(), /*browser=*/nullptr,
       MahoSidebarTabSection::kNormal, "space-1", u"Target",
-      NoOpPressedCallback(), NoOpPressedCallback(), base::DoNothing(),
+      NoOpPressedCallback(), NoOpPressedCallback(), NoOpPressedCallback(),
+      base::DoNothing(),
       base::BindRepeating([](const std::string&) { return 1; }),
       base::DoNothing(), base::DoNothing());
   row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
@@ -3609,9 +3640,11 @@ TEST_F(SidebarDnDDispatchTest,
   ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
   ASSERT_FALSE(observer_.events.empty())
       << "kSplit favorites→normal drop must not be swallowed";
-  EXPECT_EQ(observer_.events[0].kind, "unfavorite_tab")
-      << "Favorites→normal row-body drop must dispatch unfavorite_tab";
+  EXPECT_EQ(observer_.events[0].kind, "change_tab_role")
+      << "Favorites→normal row-body drop must dispatch change_tab_role";
   EXPECT_NE(observer_.events[0].json.find("\"tab_id\":\"fav-tab\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"type\":\"normal\""),
             std::string::npos);
 }
 
@@ -3625,7 +3658,8 @@ TEST_F(SidebarDnDDispatchTest,
   SidebarTabRowView row(
       target_node, ui::ImageModel(), /*browser=*/nullptr,
       MahoSidebarTabSection::kPinned, "space-1", u"Target",
-      NoOpPressedCallback(), NoOpPressedCallback(), base::DoNothing(),
+      NoOpPressedCallback(), NoOpPressedCallback(), NoOpPressedCallback(),
+      base::DoNothing(),
       base::BindRepeating([](const std::string&) { return 0; }),
       base::DoNothing(), base::DoNothing());
   row.SetBoundsRect(gfx::Rect(0, 0, 220, 40));
@@ -3647,13 +3681,12 @@ TEST_F(SidebarDnDDispatchTest,
   std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
 
   ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
-  ASSERT_EQ(observer_.events.size(), 2u)
-      << "Favorites→pinned row-body drop must dispatch exactly [unfavorite_tab, pin_tab]";
-  EXPECT_EQ(observer_.events[0].kind, "unfavorite_tab");
+  ASSERT_EQ(observer_.events.size(), 1u)
+      << "Favorites→pinned row-body drop must dispatch exactly [change_tab_role]";
+  EXPECT_EQ(observer_.events[0].kind, "change_tab_role");
   EXPECT_NE(observer_.events[0].json.find("\"tab_id\":\"fav-tab\""),
             std::string::npos);
-  EXPECT_EQ(observer_.events[1].kind, "pin_tab");
-  EXPECT_NE(observer_.events[1].json.find("\"tab_id\":\"fav-tab\""),
+  EXPECT_NE(observer_.events[0].json.find("\"type\":\"pinned\""),
             std::string::npos);
 }
 
@@ -4019,8 +4052,8 @@ TEST_F(SidebarDnDDispatchTest,
          "separator rendering path introduced by the fix";
 
   views::View* divider = separator->children().front();
-  EXPECT_EQ(divider->GetPreferredSize().height(), 2)
-      << "Child divider must report a preferred height of 2dp; a zero or "
+  EXPECT_EQ(divider->GetPreferredSize().height(), 1)
+      << "Child divider must report a preferred height of 1dp; a zero or "
          "missing height would make the separator invisible without a failing "
          "pixel test";
   EXPECT_NE(divider->background(), nullptr)

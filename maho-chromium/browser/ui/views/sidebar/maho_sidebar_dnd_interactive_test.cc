@@ -486,10 +486,8 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
 
   DragViewToView(fav_tile, pinned_target);
 
-  EXPECT_TRUE(observer_.HasEvent("unfavorite_tab"))
-      << "Favorites->pinned drop must first remove the tab from favorites";
-  EXPECT_TRUE(observer_.HasEvent("pin_tab"))
-      << "Favorites->pinned is a canonical valid transition; pin_tab must fire";
+  EXPECT_TRUE(observer_.HasEvent("change_tab_role"))
+      << "Favorites->pinned drop must dispatch change_tab_role event";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,

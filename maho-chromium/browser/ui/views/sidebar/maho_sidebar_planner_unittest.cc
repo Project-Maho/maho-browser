@@ -92,8 +92,8 @@ TEST_F(SidebarPlannerTest, FavoritesToNormalEmitsUnfavoriteOnly) {
   SidebarDropPlan plan = ResolveDropPlan(SectionKind::kNormal, payload);
   EXPECT_TRUE(plan.is_valid);
   ASSERT_EQ(plan.steps.size(), 1u)
-      << "favorites -> normal must produce exactly [unfavorite_tab], no unpin";
-  EXPECT_EQ(plan.steps[0].kind, "unfavorite_tab");
+      << "favorites -> normal must produce exactly [change_tab_role_normal]";
+  EXPECT_EQ(plan.steps[0].kind, "change_tab_role_normal");
   EXPECT_EQ(plan.favorite_transition.kind,
             SidebarDropPlan::FavoriteTransition::Kind::kUnfavorite);
   EXPECT_EQ(plan.pin_transition.kind,
@@ -105,10 +105,9 @@ TEST_F(SidebarPlannerTest, FavoritesToPinnedEmitsUnfavoriteThenPin) {
       MakeTab("fav-2", SidebarDragOrigin::kFavorites);
   SidebarDropPlan plan = ResolveDropPlan(SectionKind::kPinned, payload);
   EXPECT_TRUE(plan.is_valid);
-  ASSERT_EQ(plan.steps.size(), 2u)
-      << "favorites -> pinned must produce [unfavorite_tab, pin_tab]";
-  EXPECT_EQ(plan.steps[0].kind, "unfavorite_tab");
-  EXPECT_EQ(plan.steps[1].kind, "pin_tab");
+  ASSERT_EQ(plan.steps.size(), 1u)
+      << "favorites -> pinned must produce [change_tab_role_pinned]";
+  EXPECT_EQ(plan.steps[0].kind, "change_tab_role_pinned");
   EXPECT_EQ(plan.favorite_transition.kind,
             SidebarDropPlan::FavoriteTransition::Kind::kUnfavorite);
   EXPECT_EQ(plan.pin_transition.kind,
