@@ -141,8 +141,10 @@ class MahoCommandModel : public TabStripModelObserver,
   Browser* browser() const { return browser_; }
   void RefetchCurrentQuery();
 
+  static constexpr int kMaxVisibleRows = 5;
+
   static CommandSuggestionType ParseType(const std::string& kind);
-  static void CapResults(std::vector<CommandSuggestion>& results, CommandOverlayMode mode);
+  static void CapResults(std::vector<CommandSuggestion>& results, CommandOverlayMode mode, const std::string& query = std::string());
   static void ApplyQuickActionGate(std::vector<CommandSuggestion>& results,
                                    CommandOverlayMode mode,
                                    const std::string& query);

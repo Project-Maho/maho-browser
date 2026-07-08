@@ -701,7 +701,7 @@ void MahoCommandModel::OnResults(ResultsCallback callback,
 
   ApplyQuickActionGate(results, mode_, query_);
 
-  CapResults(results, mode_);
+  CapResults(results, mode_, query_);
 
   std::string prev_key;
   if (selected_index_ >= 0 &&
@@ -930,16 +930,60 @@ void MahoCommandModel::ApplyQuickActionGate(std::vector<CommandSuggestion>& resu
 }
 
 // static
-void MahoCommandModel::CapResults(std::vector<CommandSuggestion>& results, CommandOverlayMode mode) {
-  // Phase 1: truncation-only — preserve Rust-ranked input order exactly.
-  // The previous bucket-based logic re-sorted by type, overriding the Rust
-  // ranker. Now we simply drop results beyond the display limit so that
-  // whatever order Rust produced is surfaced unchanged.
-  const size_t max_visible =
-      (mode == CommandOverlayMode::kCommandsOnly ||
-       mode == CommandOverlayMode::kSiteSearch)
-          ? 20
-          : 5;
+void MahoCommandModel::CapResults(std::vector<CommandSuggestion>& results, CommandOverlayMode mode, const std::string& query) {
+  const size_t max_visible = kMaxVisibleRows;
+
+  // Empty-query bucket mode: guarantees a tab+history+bookmark mix so recent
+  // history isn't starved when all entries share equal base fuzzy score.
+  const bool is_empty_query = query.empty();
+  const bool bucket_mode = is_empty_query &&
+                           (mode == CommandOverlayMode::kNewTab ||
+                            mode == CommandOverlayMode::kCurrentTab);
+  if (bucket_mode) {
+    constexpr size_t kTabBucket = 2;
+    constexpr size_t kHistoryBucket = 2;
+    constexpr size_t kBookmarkBucket = 1;
+    std::vector<CommandSuggestion> tabs, history, bookmarks, other, leftovers;
+    for (auto& r : results) {
+      switch (r.type) {
+        case CommandSuggestionType::kTab:
+          if (tabs.size() < kTabBucket) {
+            tabs.push_back(std::move(r));
+          } else {
+            leftovers.push_back(std::move(r));
+          }
+          break;
+        case CommandSuggestionType::kHistory:
+          if (history.size() < kHistoryBucket) {
+            history.push_back(std::move(r));
+          } else {
+            leftovers.push_back(std::move(r));
+          }
+          break;
+        case CommandSuggestionType::kBookmark:
+          if (bookmarks.size() < kBookmarkBucket) {
+            bookmarks.push_back(std::move(r));
+          } else {
+            leftovers.push_back(std::move(r));
+          }
+          break;
+        default:
+          other.push_back(std::move(r));
+          break;
+      }
+    }
+    results.clear();
+    for (auto& r : tabs) results.push_back(std::move(r));
+    for (auto& r : history) results.push_back(std::move(r));
+    for (auto& r : bookmarks) results.push_back(std::move(r));
+    for (auto& r : other) results.push_back(std::move(r));
+    for (auto& r : leftovers) results.push_back(std::move(r));
+    if (results.size() > max_visible) {
+      results.resize(max_visible);
+    }
+    return;
+  }
+
   if (results.size() > max_visible) {
     results.resize(max_visible);
   }
@@ -1049,6 +1093,8 @@ std::vector<CommandSuggestion> MahoCommandModel::GetRecentSearches() {
     s.key = "recent:" + item.GetString();
     results.push_back(std::move(s));
   }
+  if (results.size() > static_cast<size_t>(kMaxVisibleRows))
+    results.resize(kMaxVisibleRows);
   return results;
 }
 

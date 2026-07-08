@@ -12,6 +12,10 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/lru_cache.h"
+#include "base/hash/hash.h"
+#include "base/no_destructor.h"
+#include "content/public/browser/browser_thread.h"
 #include "base/containers/span.h"
 #include "base/strings/utf_string_conversions.h"
 #include "url/gurl.h"
@@ -497,6 +501,28 @@ gfx::Image MahoCommandResultRowView::DecodeFaviconImage(const ImageData& icon) {
 }
 
 // static
+gfx::ImageSkia MahoCommandResultRowView::GetOrDecodeFavicon(const ImageData& icon) {
+  DCHECK(!content::BrowserThread::IsThreadInitialized(content::BrowserThread::UI) ||
+         content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));           // UI-thread-only; no lock needed
+  if (icon.data.empty())
+    return gfx::ImageSkia();
+
+  // Cache key = hash of raw favicon bytes. Same bytes always decode identically
+  // regardless of declared format, so bytes alone uniquely key the result.
+  const uint64_t key = base::FastHash(base::as_byte_span(icon.data));
+
+  static base::NoDestructor<base::HashingLRUCache<uint64_t, gfx::ImageSkia>> cache(128);
+  auto it = cache->Get(key);
+  if (it != cache->end())
+    return it->second;
+
+  gfx::Image decoded = DecodeFaviconImage(icon);            // existing pure decoder = miss path
+  gfx::ImageSkia skia = decoded.IsEmpty() ? gfx::ImageSkia() : decoded.AsImageSkia();
+  cache->Put(key, skia);                                     // cache misses too (incl. empty) — avoids re-decoding known-bad bytes
+  return skia;
+}
+
+// static
 RowLayoutElements MahoCommandResultRowView::BuildRowLayout(
     views::View* parent,
     std::unique_ptr<views::View> text_widget,
@@ -679,6 +705,7 @@ MahoCommandResultRowView::MahoCommandResultRowView(
                                        views::style::CONTEXT_LABEL,
                                        views::style::STYLE_BODY_5));
     switch_tab_label_->SetAutoColorReadabilityEnabled(false);
+    switch_tab_label_->SetSkipSubpixelRenderingOpacityCheck(true);
 
     switch_tab_chip_ = switch_tab_container_->AddChildView(std::make_unique<views::View>());
     switch_tab_chip_->SetPreferredSize(gfx::Size(24, 24));
@@ -792,12 +819,13 @@ void MahoCommandResultRowView::SetSelected(bool selected) {
     return;
   selected_ = selected;
   GetViewAccessibility().SetIsSelected(selected_);
-  UpdateLayout();
-  UpdateColors();
+  if (presentation_style_ == PresentationStyle::kCurrentTabSeeded) {
+    UpdateLayout();          // seeded favicon tile resizes on selection
+  }
+  UpdateColors();            // background/border/title recolor (schedules paint)
   GetViewAccessibility().NotifyEvent(
       selected_ ? ax::mojom::Event::kSelectionAdd
-                : ax::mojom::Event::kSelectionRemove,
-      true);
+                : ax::mojom::Event::kSelectionRemove, true);
 }
 
 void MahoCommandResultRowView::RebuildGlyph() {
@@ -805,9 +833,9 @@ void MahoCommandResultRowView::RebuildGlyph() {
   glyph_image_ = nullptr;
   favicon_image_ = nullptr;
 
-  const gfx::Image favicon_image =
-      icon_.has_value() ? DecodeFaviconImage(*icon_) : gfx::Image();
-  if (!favicon_image.IsEmpty()) {
+  const gfx::ImageSkia favicon_skia =
+      icon_.has_value() ? GetOrDecodeFavicon(*icon_) : gfx::ImageSkia();
+  if (!favicon_skia.isNull()) {
     uses_fallback_glyph_ = false;
     auto* glyph_layout = glyph_container_->SetLayoutManager(
         std::make_unique<views::BoxLayout>(
@@ -819,7 +847,7 @@ void MahoCommandResultRowView::RebuildGlyph() {
     favicon_image_ =
         glyph_container_->AddChildView(std::make_unique<views::ImageView>());
     favicon_image_->SetImage(
-        ui::ImageModel::FromImageSkia(favicon_image.AsImageSkia()));
+        ui::ImageModel::FromImageSkia(favicon_skia));
     const int favicon_size = PreferredFaviconSize(
         icon_, presentation_style_ == PresentationStyle::kCurrentTabSeeded
                    ? kCurrentTabSeededGlyphIconSizeDp
@@ -936,11 +964,6 @@ void MahoCommandResultRowView::UpdateColors() {
     glyph_container_->SetBorder(nullptr);
     favicon_image_->SetBackground(nullptr);
     favicon_image_->SetBorder(nullptr);
-  }
-
-  if (uses_fallback_glyph_) {
-    auto* command_icon = static_cast<CommandIconView*>(glyph_image_);
-    command_icon->SetSelected(selected_);
   }
 
   const SkColor title_color =

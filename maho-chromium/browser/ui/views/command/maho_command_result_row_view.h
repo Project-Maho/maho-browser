@@ -12,6 +12,7 @@
 #include "base/memory/raw_ptr.h"
 #include "maho/browser/ui/views/command/maho_command_model.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/font.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/base/metadata/metadata_header_macros.h"
@@ -52,6 +53,7 @@ class MahoCommandResultRowView : public views::View {
                                           std::unique_ptr<views::View> text_widget,
                                           PresentationStyle presentation_style);
   static gfx::Image DecodeFaviconImage(const ImageData& icon);
+  static gfx::ImageSkia GetOrDecodeFavicon(const ImageData& icon);
   static int PreferredFaviconSize(const std::optional<ImageData>& icon,
                                   int glyph_icon_size);
 

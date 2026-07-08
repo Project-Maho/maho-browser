@@ -111,7 +111,9 @@ constexpr int kResultRowSpacingDp = 2;
 constexpr int kDividerTopGapDp = 4;
 constexpr int kDividerBottomGapDp = 2;
 constexpr int kDividerHorizontalInsetDp = 10;
-constexpr int kMaxResultsHeightDp = 420;
+constexpr int kFixedResultsHeightDp =
+    MahoCommandModel::kMaxVisibleRows * MahoCommandResultRowView::kRowHeightDp +
+    (MahoCommandModel::kMaxVisibleRows - 1) * kResultRowSpacingDp;
 constexpr int kTrailingAccessorySizeDp = 18;
 constexpr int kTrailingAccessoryCornerRadiusDp = 9;
 constexpr char16_t kTrailingAccessoryInfoGlyph[] = u"i";
@@ -228,6 +230,7 @@ MahoCommandOverlayView::MahoCommandOverlayView(
   mode_label_ = mode_chip_->AddChildView(std::make_unique<views::Label>(
       u"", views::style::CONTEXT_LABEL, views::style::STYLE_BODY_5_MEDIUM));
   mode_label_->SetAutoColorReadabilityEnabled(false);
+  mode_label_->SetSkipSubpixelRenderingOpacityCheck(true);
 
   auto elements = MahoCommandResultRowView::BuildRowLayout(
       search_row_, std::move(input_background),
@@ -268,6 +271,7 @@ MahoCommandOverlayView::MahoCommandOverlayView(
                                      views::style::CONTEXT_LABEL,
                                      views::style::STYLE_BODY_5_MEDIUM));
   trailing_accessory_label_->SetAutoColorReadabilityEnabled(false);
+  trailing_accessory_label_->SetSkipSubpixelRenderingOpacityCheck(true);
   trailing_accessory_->SetVisible(false);
   UpdateTrailingAccessoryPresentation();
   UpdateSearchRowChrome();
@@ -284,7 +288,9 @@ MahoCommandOverlayView::MahoCommandOverlayView(
   scroll_view_->SetDrawOverflowIndicator(false);
   scroll_view_->SetHorizontalScrollBarMode(
       views::ScrollView::ScrollBarMode::kDisabled);
-  scroll_view_->ClipHeightTo(0, kMaxResultsHeightDp);
+  scroll_view_->SetVerticalScrollBarMode(
+      views::ScrollView::ScrollBarMode::kHiddenButEnabled);
+  scroll_view_->ClipHeightTo(kFixedResultsHeightDp, kFixedResultsHeightDp);
   layout->SetFlexForView(scroll_view_, 1);
 
   results_container_ =
@@ -310,6 +316,7 @@ MahoCommandOverlayView::MahoCommandOverlayView(
           views::style::CONTEXT_LABEL, views::style::STYLE_BODY_5));
   hint_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
   hint_label_->SetAutoColorReadabilityEnabled(false);
+  hint_label_->SetSkipSubpixelRenderingOpacityCheck(true);
   hint_label_->SetMultiLine(true);
   hint_label_->SetBorder(views::CreateEmptyBorder(EmptyStateInsets(false)));
 
@@ -422,6 +429,7 @@ MahoCommandOverlayView::MahoCommandOverlayView(
   mode_label_ = mode_chip_->AddChildView(std::make_unique<views::Label>(
       u"", views::style::CONTEXT_LABEL, views::style::STYLE_BODY_5_MEDIUM));
   mode_label_->SetAutoColorReadabilityEnabled(false);
+  mode_label_->SetSkipSubpixelRenderingOpacityCheck(true);
 
   auto elements = MahoCommandResultRowView::BuildRowLayout(
       search_row_, std::move(input_background),
@@ -462,6 +470,7 @@ MahoCommandOverlayView::MahoCommandOverlayView(
                                      views::style::CONTEXT_LABEL,
                                      views::style::STYLE_BODY_5_MEDIUM));
   trailing_accessory_label_->SetAutoColorReadabilityEnabled(false);
+  trailing_accessory_label_->SetSkipSubpixelRenderingOpacityCheck(true);
   trailing_accessory_->SetVisible(false);
   UpdateTrailingAccessoryPresentation();
   UpdateSearchRowChrome();
@@ -480,7 +489,9 @@ MahoCommandOverlayView::MahoCommandOverlayView(
   scroll_view_->SetDrawOverflowIndicator(false);
   scroll_view_->SetHorizontalScrollBarMode(
       views::ScrollView::ScrollBarMode::kDisabled);
-  scroll_view_->ClipHeightTo(0, kMaxResultsHeightDp);
+  scroll_view_->SetVerticalScrollBarMode(
+      views::ScrollView::ScrollBarMode::kHiddenButEnabled);
+  scroll_view_->ClipHeightTo(kFixedResultsHeightDp, kFixedResultsHeightDp);
   layout->SetFlexForView(scroll_view_, 1);
 
   results_container_ =
@@ -510,6 +521,7 @@ MahoCommandOverlayView::MahoCommandOverlayView(
   hint_label_->SetEnabledColor(kMahoColorCommandBarEmptyText);
   hint_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
   hint_label_->SetAutoColorReadabilityEnabled(false);
+  hint_label_->SetSkipSubpixelRenderingOpacityCheck(true);
   hint_label_->SetMultiLine(true);
   hint_label_->SetBorder(views::CreateEmptyBorder(EmptyStateInsets(false)));
 
@@ -727,8 +739,8 @@ void MahoCommandOverlayView::UpdateSearchLeadingAccessory() {
   }
 
   if (icon_to_decode.has_value()) {
-    const gfx::Image context_icon = MahoCommandResultRowView::DecodeFaviconImage(*icon_to_decode);
-    if (!context_icon.IsEmpty()) {
+    const gfx::ImageSkia context_icon = MahoCommandResultRowView::GetOrDecodeFavicon(*icon_to_decode);
+    if (!context_icon.isNull()) {
       if (!favicon_image_) {
         auto* glyph_layout = search_icon_lane_->SetLayoutManager(
             std::make_unique<views::BoxLayout>(
@@ -744,7 +756,7 @@ void MahoCommandOverlayView::UpdateSearchLeadingAccessory() {
         favicon_image_->layer()->SetFillsBoundsOpaquely(false);
       }
       favicon_image_->SetImage(
-          ui::ImageModel::FromImageSkia(context_icon.AsImageSkia()));
+          ui::ImageModel::FromImageSkia(context_icon));
       const int favicon_size = MahoCommandResultRowView::PreferredFaviconSize(
           icon_to_decode, MahoCommandResultRowView::kGlyphIconSizeDp);
       favicon_image_->SetImageSize(gfx::Size(favicon_size, favicon_size));
@@ -844,7 +856,18 @@ void MahoCommandOverlayView::ContentsChanged(
     return;
   }
 
-  TriggerSearchForCurrentText();
+  // First (seeded) search and empty-query clears fire immediately; everything
+  // else is coalesced to avoid a full search + rebuild per character.
+  if (first_search_since_open_ || new_contents.empty()) {
+    first_search_since_open_ = false;
+    debounce_timer_.Stop();
+    TriggerSearchForCurrentText();
+  } else {
+    debounce_timer_.Start(
+        FROM_HERE, base::Milliseconds(40),
+        base::BindOnce(&MahoCommandOverlayView::TriggerSearchForCurrentText,
+                       base::Unretained(this)));   // timer owned by `this`; safe
+  }
 }
 
 void MahoCommandOverlayView::OnAfterUserAction(views::Textfield* sender) {}
@@ -862,18 +885,19 @@ void MahoCommandOverlayView::TriggerSearchForCurrentText() {
       query == initial_url_) {
     query.clear();
   }
-  LOG(WARNING) << "[maho-cmdl-diag] TriggerSearch mode=" << static_cast<int>(mode_)
-               << " initial_url_.empty=" << initial_url_.empty()
-               << " query='" << query << "'";
+  VLOG(1) << "[maho-cmdl-diag] TriggerSearch mode=" << static_cast<int>(mode_)
+          << " initial_url_.empty=" << initial_url_.empty()
+          << " query='" << query << "'";
 
   if (mode_ == CommandOverlayMode::kSiteSearch && !query.empty()) {
     query = "@" + site_search_prefix_ + " " + query;
   }
 
+  const uint64_t seq = ++search_seq_;
   model_->Search(
       query, mode_,
-      base::BindRepeating(&MahoCommandOverlayView::OnSearchResults,
-                          weak_factory_.GetWeakPtr()));
+      base::BindRepeating(&MahoCommandOverlayView::OnSearchResultsSequenced,
+                          weak_factory_.GetWeakPtr(), seq));
 }
 
 bool MahoCommandOverlayView::HandleKeyEvent(views::Textfield* sender,
@@ -989,11 +1013,18 @@ bool MahoCommandOverlayView::HandleKeyEvent(views::Textfield* sender,
   }
 }
 
+void MahoCommandOverlayView::OnSearchResultsSequenced(
+    uint64_t seq, std::vector<CommandSuggestion> results) {
+  if (seq != search_seq_)          // a newer search superseded this reply → drop
+    return;
+  OnSearchResults(std::move(results));
+}
+
 void MahoCommandOverlayView::OnSearchResults(
     std::vector<CommandSuggestion> results) {
-  LOG(WARNING) << "[maho-cmdl-diag] OnSearchResults count=" << results.size()
-               << " mode=" << static_cast<int>(mode_)
-               << " initial_url_='" << initial_url_ << "'";
+  VLOG(1) << "[maho-cmdl-diag] OnSearchResults count=" << results.size()
+          << " mode=" << static_cast<int>(mode_)
+          << " initial_url_='" << initial_url_ << "'";
   if (mode_ == CommandOverlayMode::kCurrentTab && !initial_url_.empty()) {
     for (size_t i = 0; i < results.size(); ++i) {
       if (results[i].type == CommandSuggestionType::kTab &&
@@ -1013,20 +1044,6 @@ void MahoCommandOverlayView::OnSearchResults(
   }
   UpdateResultViews(results);
   UpdateSearchLeadingAccessory();
-}
-
-namespace {
-
-void DisableSubpixelRenderingOnLabelsRecursive(views::View* view) {
-  if (!view) return;
-  if (views::Label* label = views::AsViewClass<views::Label>(view)) {
-    label->SetSkipSubpixelRenderingOpacityCheck(true);
-  }
-  for (views::View* child : view->children()) {
-    DisableSubpixelRenderingOnLabelsRecursive(child);
-  }
-}
-
 }
 
 void MahoCommandOverlayView::UpdateResultViews(
@@ -1136,7 +1153,6 @@ void MahoCommandOverlayView::UpdateResultViews(
   results_container_->GetViewAccessibility().NotifyEvent(
       ax::mojom::Event::kSelectedChildrenChanged, true);
   GetViewAccessibility().NotifyEvent(ax::mojom::Event::kValueChanged, true);
-  DisableSubpixelRenderingOnLabelsRecursive(this);
 }
 
 void MahoCommandOverlayView::UpdateSelection(int new_index) {
@@ -1336,6 +1352,9 @@ void MahoCommandOverlayView::Dismiss() {
 
 void MahoCommandOverlayView::ResizeWidgetToContents() {
   gfx::Size preferred = GetPreferredSize();
+  if (preferred.height() == last_resized_height_)
+    return;                                   // avoids macOS window-server round-trip when unchanged
+  last_resized_height_ = preferred.height();
   if (resize_callback_)
     resize_callback_.Run(preferred.height());
 }
@@ -1343,6 +1362,7 @@ void MahoCommandOverlayView::ResizeWidgetToContents() {
 void MahoCommandOverlayView::EnterSiteSearchMode(
     const std::string& prefix,
     const std::string& engine_name) {
+  debounce_timer_.Stop();  // cancel pending keystroke search before mode switch
   if (mode_ != CommandOverlayMode::kSiteSearch) {
     origin_mode_ = mode_;
   }
@@ -1361,6 +1381,7 @@ void MahoCommandOverlayView::EnterSiteSearchMode(
 }
 
 void MahoCommandOverlayView::ExitSiteSearchMode() {
+  debounce_timer_.Stop();  // cancel pending keystroke search before mode switch
   mode_ = origin_mode_;
   site_search_prefix_.clear();
   site_search_engine_name_.clear();
@@ -1376,6 +1397,7 @@ void MahoCommandOverlayView::ExitSiteSearchMode() {
 }
 
 void MahoCommandOverlayView::EnterAIMode() {
+  debounce_timer_.Stop();  // cancel pending keystroke search before mode switch
   if (mode_ != CommandOverlayMode::kAI) {
     origin_mode_ = mode_;
   }
@@ -1392,12 +1414,17 @@ void MahoCommandOverlayView::EnterAIMode() {
   hint_label_ = nullptr;
   if (divider_)
     divider_->SetVisible(false);
+  if (scroll_view_)
+    scroll_view_->ClipHeightTo(0, 0);
   InvalidateLayout();
   ResizeWidgetToContents();
 }
 
 void MahoCommandOverlayView::ExitAIMode() {
+  debounce_timer_.Stop();  // cancel pending keystroke search before mode switch
   mode_ = origin_mode_;
+  if (scroll_view_)
+    scroll_view_->ClipHeightTo(kFixedResultsHeightDp, kFixedResultsHeightDp);
   textfield_->SetText(std::u16string());
   UpdateLayoutForMode();
   UpdateModeChip();
@@ -1408,6 +1435,7 @@ void MahoCommandOverlayView::ExitAIMode() {
 }
 
 void MahoCommandOverlayView::EnterCommandsOnlyMode() {
+  debounce_timer_.Stop();  // cancel pending keystroke search before mode switch
   if (mode_ != CommandOverlayMode::kCommandsOnly) {
     origin_mode_ = mode_;
   }
@@ -1423,6 +1451,7 @@ void MahoCommandOverlayView::EnterCommandsOnlyMode() {
 }
 
 void MahoCommandOverlayView::ExitCommandsOnlyMode() {
+  debounce_timer_.Stop();  // cancel pending keystroke search before mode switch
   mode_ = origin_mode_;
   textfield_->SetText(std::u16string());
   UpdateLayoutForMode();
@@ -1572,7 +1601,6 @@ void MahoCommandOverlayView::ApplyVibrancyBackgroundTransparency(bool vibrancy_a
   if (divider_) {
     divider_->SetPreferredSize(gfx::Size(0, 1));
   }
-  DisableSubpixelRenderingOnLabelsRecursive(this);
 }
 
 }  // namespace maho

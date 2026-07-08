@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "base/functional/callback.h"
+#include "base/timer/timer.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/cancelable_task_tracker.h"
@@ -121,6 +122,7 @@ class MahoCommandOverlayView : public views::View,
 
  private:
   void OnSearchResults(std::vector<CommandSuggestion> results);
+  void OnSearchResultsSequenced(uint64_t seq, std::vector<CommandSuggestion> results);
   void TriggerSearchForCurrentText();
   void UpdateResultViews(const std::vector<CommandSuggestion>& results);
   void UpdateSelection(int new_index);
@@ -191,6 +193,11 @@ class MahoCommandOverlayView : public views::View,
   std::string initial_url_;
   bool suppress_search_ = false;
   base::ScopedObservation<views::Widget, views::WidgetObserver> picker_observation_{this};
+
+  base::OneShotTimer debounce_timer_;
+  bool first_search_since_open_ = true;
+  uint64_t search_seq_ = 0;
+  int last_resized_height_ = -1;
 
   base::WeakPtrFactory<MahoCommandOverlayView> weak_factory_{this};
 };
