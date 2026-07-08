@@ -17,7 +17,8 @@ enum ShellEvent: Codable {
     case pinTab(tabId: TabId)
     case unpinTab(tabId: TabId)
     case favoriteTab(tabId: TabId)
-    case unfavoriteTab(tabId: TabId)
+    case changeTabRole(tabId: TabId, newRole: TabRole)
+    case reorderFavorite(tabId: TabId, newIndex: Int)
     case muteTab(tabId: TabId)
     case unmuteTab(tabId: TabId)
     case freezeTab(tabId: TabId)
@@ -207,7 +208,8 @@ enum ShellEvent: Codable {
         case .pinTab: return "pin_tab"
         case .unpinTab: return "unpin_tab"
         case .favoriteTab: return "favorite_tab"
-        case .unfavoriteTab: return "unfavorite_tab"
+        case .changeTabRole: return "change_tab_role"
+        case .reorderFavorite: return "reorder_favorite"
         case .muteTab: return "mute_tab"
         case .unmuteTab: return "unmute_tab"
         case .freezeTab: return "freeze_tab"
@@ -359,8 +361,12 @@ enum ShellEvent: Codable {
             try container.encode(tabId, forKey: DynamicCodingKey(stringValue: "tab_id")!)
         case .favoriteTab(let tabId):
             try container.encode(tabId, forKey: DynamicCodingKey(stringValue: "tab_id")!)
-        case .unfavoriteTab(let tabId):
+        case .changeTabRole(let tabId, let newRole):
             try container.encode(tabId, forKey: DynamicCodingKey(stringValue: "tab_id")!)
+            try container.encode(newRole, forKey: DynamicCodingKey(stringValue: "new_role")!)
+        case .reorderFavorite(let tabId, let newIndex):
+            try container.encode(tabId, forKey: DynamicCodingKey(stringValue: "tab_id")!)
+            try container.encode(newIndex, forKey: DynamicCodingKey(stringValue: "new_index")!)
         case .muteTab(let tabId):
             try container.encode(tabId, forKey: DynamicCodingKey(stringValue: "tab_id")!)
         case .unmuteTab(let tabId):
@@ -692,8 +698,14 @@ enum ShellEvent: Codable {
             self = .unpinTab(tabId: try container.decode(TabId.self, forKey: DynamicCodingKey(stringValue: "tab_id")!))
         case "favorite_tab":
             self = .favoriteTab(tabId: try container.decode(TabId.self, forKey: DynamicCodingKey(stringValue: "tab_id")!))
-        case "unfavorite_tab":
-            self = .unfavoriteTab(tabId: try container.decode(TabId.self, forKey: DynamicCodingKey(stringValue: "tab_id")!))
+        case "change_tab_role":
+            self = .changeTabRole(
+                tabId: try container.decode(TabId.self, forKey: DynamicCodingKey(stringValue: "tab_id")!),
+                newRole: try container.decode(TabRole.self, forKey: DynamicCodingKey(stringValue: "new_role")!))
+        case "reorder_favorite":
+            self = .reorderFavorite(
+                tabId: try container.decode(TabId.self, forKey: DynamicCodingKey(stringValue: "tab_id")!),
+                newIndex: try container.decode(Int.self, forKey: DynamicCodingKey(stringValue: "new_index")!))
         case "mute_tab":
             self = .muteTab(tabId: try container.decode(TabId.self, forKey: DynamicCodingKey(stringValue: "tab_id")!))
         case "unmute_tab":
