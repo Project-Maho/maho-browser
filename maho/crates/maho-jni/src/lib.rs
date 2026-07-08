@@ -301,25 +301,34 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeFavoriteTab<'local
 }
 
 #[no_mangle]
-pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeUnfavoriteTab<'local>(
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeTransitionTabRole<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     ptr: jlong,
     tab_id_json: JString<'local>,
+    role_json: JString<'local>,
 ) {
     let core = match unsafe { get_core(ptr) } {
         Some(c) => c,
         None => return,
     };
-    let json_str = match get_rust_string(&mut env, &tab_id_json) {
+    let tab_id_str = match get_rust_string(&mut env, &tab_id_json) {
         Some(s) => s,
         None => return,
     };
-    let tab_id: maho_types::identifiers::TabId = match serde_json::from_str(&json_str) {
+    let role_str = match get_rust_string(&mut env, &role_json) {
+        Some(s) => s,
+        None => return,
+    };
+    let tab_id: maho_types::identifiers::TabId = match serde_json::from_str(&tab_id_str) {
         Ok(id) => id,
         Err(_) => return,
     };
-    core.unfavorite_tab(&tab_id);
+    let role: maho_types::tab::TabRole = match serde_json::from_str(&role_str) {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    core.transition_tab_role(&tab_id, role);
 }
 
 #[no_mangle]
@@ -2924,7 +2933,13 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentCreate
         false, // allow_insecure_key_storage = false on mobile/Android JNI
     ));
     
-    let secure_storage_cb = Box::new(|provider: &str| jni_secure_storage_handler(provider));
+    let secure_storage_cb = Box::new(|provider: &str| {
+        jni_secure_storage_handler(provider).map(|key| maho_agent::SecureKeyBundle {
+            key,
+            base_url: None,
+            model: None,
+        })
+    });
     if runtime.set_secure_storage_callback(secure_storage_cb).is_err() {
         return 0;
     }
