@@ -7,6 +7,8 @@ use crate::common::{ImageData, MemoryPressureLevel, Size, Url};
 use crate::identifiers::{BoostId, FolderId, NoteId, ProfileId, SpaceId, TabId};
 use crate::settings::SettingsUpdate;
 use crate::space::{SpaceColor, SpaceConfigUpdate};
+use crate::tab::TabRole;
+
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -114,8 +116,9 @@ pub enum ShellEvent {
     FavoriteTab {
         tab_id: TabId,
     },
-    UnfavoriteTab {
+    ChangeTabRole {
         tab_id: TabId,
+        new_role: TabRole,
     },
     ReorderFavorite {
         tab_id: TabId,
@@ -704,7 +707,7 @@ impl ShellEvent {
                 | Self::PinTab { .. }
                 | Self::UnpinTab { .. }
                 | Self::FavoriteTab { .. }
-                | Self::UnfavoriteTab { .. }
+                | Self::ChangeTabRole { .. }
                 | Self::ReorderFavorite { .. }
                 | Self::MuteTab { .. }
                 | Self::UnmuteTab { .. }

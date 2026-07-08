@@ -10,7 +10,7 @@ use crate::profile::ProfileConfig;
 use crate::search_engine::SearchEngineViewModel;
 use crate::settings::Settings;
 use crate::space::{ActiveSpaceModel, SpaceColor, SpaceConfigUpdate};
-use crate::tab::TabLifecycleState;
+use crate::tab::{TabLifecycleState, TabRole};
 use crate::boost::Boost;
 use crate::traits::shell_renderer::{
     DownloadViewModel, FolderViewModel, NotificationViewModel, PermissionRequest,
@@ -445,6 +445,11 @@ pub enum CoreUpdate {
     MemoryUpdated {
         changed_ids: Vec<String>,
     },
+    TabRoleChanged {
+        tab_id: TabId,
+        old_role: Option<TabRole>,
+        new_role: TabRole,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -478,6 +483,7 @@ impl CoreUpdate {
                 | Self::TabLifecycleChanged { .. }
                 | Self::TabPreviewUpdated { .. }
                 | Self::TabPreviewCaptureRequested { .. }
+                | Self::TabRoleChanged { .. }
         )
     }
 

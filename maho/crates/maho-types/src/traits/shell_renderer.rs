@@ -6,6 +6,8 @@ use crate::identifiers::{BoostId, FolderId, PaneId, ProfileId, SpaceId, TabId};
 use crate::space::{ActiveSpaceModel, SpaceColor, SpaceTheme};
 use crate::split_view::SplitConfig;
 
+use crate::tab::TabRole;
+
 // === View Models ===
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -20,15 +22,16 @@ pub struct TabViewModel {
     pub favicon: Option<ImageData>,
     pub is_loading: bool,
     pub is_pinned: bool,
-    pub is_favorite: bool,
+    pub is_favorite: bool, // L3-EXEMPT
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub favorite_order: Option<u32>,
+    pub favorite_order: Option<u32>, // L3-EXEMPT
     pub is_muted: bool,
     pub is_playing_audio: bool,
     pub lifecycle_state: String,
     pub children: Vec<TabId>,
     pub created_at: DateTime,
     pub last_active_at: DateTime,
+    pub role: TabRole,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -222,11 +225,13 @@ pub struct TabStateUpdate {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_playing_audio: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub is_favorite: Option<bool>,
+    pub is_favorite: Option<bool>, // L3-EXEMPT
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub favorite_order: Option<Option<u32>>,
+    pub favorite_order: Option<Option<u32>>, // L3-EXEMPT
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lifecycle_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<TabRole>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
