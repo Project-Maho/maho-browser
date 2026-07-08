@@ -5,7 +5,7 @@ use maho_types::events::shell_event::{QuickAction, ShellEvent};
 use maho_types::identifiers::{FolderId, NoteId, ProfileId, SpaceId, TabId};
 use maho_types::settings::{Settings, SettingsUpdate};
 use maho_types::space::{Space, SpaceColor};
-use maho_types::tab::Tab;
+use maho_types::tab::{Tab, TabRole};
 use maho_types::traits::shell_renderer::{
     SearchContext, SpaceViewModel, SuggestionViewModel, TabStateUpdate, TabViewModel,
 };
@@ -28,7 +28,7 @@ pub trait TabManagerInterface {
     fn pin_tab(&mut self, tab_id: &TabId);
     fn unpin_tab(&mut self, tab_id: &TabId);
     fn favorite_tab(&mut self, tab_id: &TabId);
-    fn unfavorite_tab(&mut self, tab_id: &TabId);
+    fn transition_tab_role(&mut self, tab_id: &TabId, new_role: TabRole) -> bool;
     fn reorder_favorite(&mut self, tab_id: &TabId, new_index: usize);
     fn mute_tab(&mut self, tab_id: &TabId);
     fn unmute_tab(&mut self, tab_id: &TabId);
@@ -147,7 +147,7 @@ pub trait SpaceManagerInterface {
         &mut self,
         space_id: &SpaceId,
         tab_id: &TabId,
-        is_favorite: bool,
+        is_favorite: bool, // L3-EXEMPT: local parameter
         is_in_folder: bool,
     );
     fn remove_tab_from_root_order(&mut self, space_id: &SpaceId, tab_id: &TabId);
@@ -315,7 +315,7 @@ impl EventDispatcher {
                 space_mgr.add_tab_to_space(&space_id, tab.id.clone(), None);
                 if let Some(explicit_id) = tab_id_clone {
                     let is_in_folder = space_mgr.is_tab_in_folder(&space_id, &explicit_id);
-                    space_mgr.apply_tab_residency(&space_id, &explicit_id, tab.is_favorite, is_in_folder);
+                    space_mgr.apply_tab_residency(&space_id, &explicit_id, tab.role.is_favorite(), is_in_folder); // L3-EXEMPT: role query
                 }
                 space_mgr.set_last_active_tab(&space_id, Some(tab.id.clone()));
                 vec![CoreUpdate::TabCreated {
@@ -440,8 +440,8 @@ impl EventDispatcher {
             ShellEvent::FavoriteTab { .. } => {
                 unreachable!("FavoriteTab is handled by MahoCore::handle_event before dispatch; this branch must never be reached")
             }
-            ShellEvent::UnfavoriteTab { .. } => {
-                unreachable!("UnfavoriteTab is handled by MahoCore::handle_event before dispatch; this branch must never be reached")
+            ShellEvent::ChangeTabRole { .. } => {
+                unreachable!("ChangeTabRole is handled by MahoCore::handle_event before dispatch; this branch must never be reached")
             }
             ShellEvent::MuteTab { tab_id } => {
                 tab_mgr.mute_tab(&tab_id);
@@ -476,14 +476,14 @@ impl EventDispatcher {
                 target_space,
                 position,
             } => {
-                let is_favorite = tab_mgr.get_tab(&tab_id).map(|t| t.is_favorite).unwrap_or(false);
+                let is_favorite = tab_mgr.get_tab(&tab_id).map(|t| t.role.is_favorite()).unwrap_or(false); // L3-EXEMPT: local query
                 if let Some(source_space) =
                     tab_mgr.move_tab(&tab_id, target_space.clone(), position)
                 {
                     space_mgr.remove_tab_from_space(&source_space, &tab_id);
                     let is_in_folder = space_mgr.is_tab_in_folder(&target_space, &tab_id);
                     space_mgr.add_tab_to_space(&target_space, tab_id.clone(), Some(position));
-                    space_mgr.apply_tab_residency(&target_space, &tab_id, is_favorite, is_in_folder);
+                    space_mgr.apply_tab_residency(&target_space, &tab_id, is_favorite, is_in_folder); // L3-EXEMPT: local parameter
                     vec![
                         CoreUpdate::TabOrderChanged {
                             space_id: source_space,
@@ -504,12 +504,12 @@ impl EventDispatcher {
                 section: _,
             } => {
                 if let Some(source_space) = tab_mgr.get_tab(&tab_id).map(|t| t.space_id.clone()) {
-                    let is_favorite = tab_mgr.get_tab(&tab_id).map(|t| t.is_favorite).unwrap_or(false);
+                    let is_favorite = tab_mgr.get_tab(&tab_id).map(|t| t.role.is_favorite()).unwrap_or(false); // L3-EXEMPT: local query
                     tab_mgr.move_tab(&tab_id, target_space_id.clone(), 0);
                     space_mgr.remove_tab_from_space(&source_space, &tab_id);
                     space_mgr.add_tab_to_space(&target_space_id, tab_id.clone(), None);
                     let is_in_folder = space_mgr.is_tab_in_folder(&target_space_id, &tab_id);
-                    space_mgr.apply_tab_residency(&target_space_id, &tab_id, is_favorite, is_in_folder);
+                    space_mgr.apply_tab_residency(&target_space_id, &tab_id, is_favorite, is_in_folder); // L3-EXEMPT: local parameter
                     vec![
                         CoreUpdate::TabOrderChanged {
                             space_id: source_space,
@@ -584,7 +584,7 @@ impl EventDispatcher {
                     };
                     let is_in_folder = space_mgr.is_tab_in_folder(&target_space, &tab.id);
                     space_mgr.add_tab_to_space(&target_space, tab.id.clone(), None);
-                    space_mgr.apply_tab_residency(&target_space, &tab.id, tab.is_favorite, is_in_folder);
+                    space_mgr.apply_tab_residency(&target_space, &tab.id, tab.role.is_favorite(), is_in_folder); // L3-EXEMPT: role query
                     let view_model = if target_space == tab.space_id {
                         tab_mgr.to_tab_view_model(&tab)
                     } else {
@@ -800,8 +800,8 @@ impl EventDispatcher {
                 tab_id,
             } => {
                 space_mgr.remove_tab_from_folder(&space_id, &folder_id, &tab_id);
-                let is_favorite = tab_mgr.get_tab(&tab_id).map(|t| t.is_favorite).unwrap_or(false);
-                space_mgr.apply_tab_residency(&space_id, &tab_id, is_favorite, false);
+                let is_favorite = tab_mgr.get_tab(&tab_id).map(|t| t.role.is_favorite()).unwrap_or(false); // L3-EXEMPT: local query
+                space_mgr.apply_tab_residency(&space_id, &tab_id, is_favorite, false); // L3-EXEMPT: local parameter
                 vec![CoreUpdate::FolderUpdated {
                     folder_id,
                     changes: FolderUpdate {
@@ -883,20 +883,20 @@ impl EventDispatcher {
                     }
 
                     for tab_id in &folder_tab_ids {
-                        let is_favorite = tab_mgr.get_tab(tab_id).map(|t| t.is_favorite).unwrap_or(false);
+                        let is_favorite = tab_mgr.get_tab(tab_id).map(|t| t.role.is_favorite()).unwrap_or(false); // L3-EXEMPT: local query
                         tab_mgr.move_tab(tab_id, new_space_id.clone(), 0);
                         space_mgr.remove_tab_from_space(&space_id, tab_id);
                         space_mgr.add_tab_to_space(&new_space_id, tab_id.clone(), None);
-                        space_mgr.apply_tab_residency(&new_space_id, tab_id, is_favorite, false);
+                        space_mgr.apply_tab_residency(&new_space_id, tab_id, is_favorite, false); // L3-EXEMPT: local parameter
                     }
 
                     for (_desc_id, desc_tab_ids) in &descendants_with_tabs {
                         for tab_id in desc_tab_ids {
-                            let is_favorite = tab_mgr.get_tab(tab_id).map(|t| t.is_favorite).unwrap_or(false);
+                            let is_favorite = tab_mgr.get_tab(tab_id).map(|t| t.role.is_favorite()).unwrap_or(false); // L3-EXEMPT: local query
                             tab_mgr.move_tab(tab_id, new_space_id.clone(), 0);
                             space_mgr.remove_tab_from_space(&space_id, tab_id);
                             space_mgr.add_tab_to_space(&new_space_id, tab_id.clone(), None);
-                            space_mgr.apply_tab_residency(&new_space_id, tab_id, is_favorite, true);
+                            space_mgr.apply_tab_residency(&new_space_id, tab_id, is_favorite, true); // L3-EXEMPT: local parameter
                         }
                     }
 
@@ -1311,15 +1311,14 @@ impl EventDispatcher {
             }
             ShellEvent::ReorderFavorite { tab_id, new_index } => {
                 tab_mgr.reorder_favorite(&tab_id, new_index);
-                let favorite_order = tab_mgr
-                    .get_tab(&tab_id)
-                    .and_then(|t| t.favorite_order)
-                    .map(Some);
+                let role = tab_mgr.get_tab(&tab_id).map(|t| t.role.clone());
+                let favorite_order = role.as_ref().and_then(|r| r.favorite_order()).map(Some);
                 vec![CoreUpdate::TabUpdated {
                     tab_id,
                     changes: TabStateUpdate {
-                        is_favorite: Some(true),
+                        is_favorite: Some(true), // L3-EXEMPT: legacy compat
                         favorite_order,
+                        role,
                         ..Default::default()
                     },
                 }]

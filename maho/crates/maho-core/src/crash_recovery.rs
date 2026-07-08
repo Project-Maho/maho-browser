@@ -2,6 +2,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 
 use maho_types::common::DateTime;
+use maho_types::tab::TabRole;
 use maho_types::traits::shell_renderer::{SpaceViewModel, TabViewModel};
 
 #[derive(Serialize)]
@@ -24,7 +25,7 @@ pub struct CrashTabSnapshot {
     pub url: String,
     pub title: String,
     pub is_pinned: bool,
-    pub is_favorite: bool,
+    pub role: TabRole,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub form_data: Option<String>,
 }
@@ -68,8 +69,8 @@ impl CrashRecoveryManager {
                         id: tab.id.0.clone(),
                         url: tab.url.clone(),
                         title: tab.title.clone(),
-                        is_pinned: tab.is_pinned,
-                        is_favorite: tab.is_favorite,
+                        is_pinned: tab.role.is_pinned(),
+                        role: tab.role.clone(),
                         form_data: form_data_map.get(&tab.id.0).cloned(),
                     })
                     .collect();

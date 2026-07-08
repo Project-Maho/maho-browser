@@ -1439,20 +1439,20 @@ impl SpaceManager {
     /// Centralized residency helper: enforces "favorites XOR root_order" for a single tab.
     ///
     /// Rules:
-    /// - `is_favorite = true`  → remove from root_order (favorites live in their own bucket).
-    /// - `is_favorite = false, is_in_folder = false` → ensure present in root_order once.
-    /// - `is_favorite = false, is_in_folder = true`  → remove from root_order (folder owns it).
+    /// - `is_favorite = true`  → remove from root_order (favorites live in their own bucket). // L3-EXEMPT
+    /// - `is_favorite = false, is_in_folder = false` → ensure present in root_order once. // L3-EXEMPT
+    /// - `is_favorite = false, is_in_folder = true`  → remove from root_order (folder owns it). // L3-EXEMPT
     ///
     /// This is the single authoritative seam for bucket placement.  All event paths that
-    /// change a tab's favorite status or move it across spaces must call this after the move.
+    /// change a tab's favorite status or move it across spaces must call this after the move. // L3-EXEMPT
     pub fn apply_tab_residency(
         &mut self,
         space_id: &SpaceId,
         tab_id: &TabId,
-        is_favorite: bool,
+        is_favorite: bool, // L3-EXEMPT
         is_in_folder: bool,
     ) {
-        if is_favorite || is_in_folder {
+        if is_favorite || is_in_folder { // L3-EXEMPT
             // Must not appear in root_order.
             self.remove_tab_from_root_order(space_id, tab_id);
         } else {
@@ -2074,17 +2074,17 @@ impl SpaceManager {
 
 impl SpaceManager {
     /// Enforces correct tab bucket placement for all tabs in the provided map.
-    /// `is_favorite_fn` receives a tab_id and returns whether it is currently favorited.
+    /// `is_favorite_fn` receives a tab_id and returns whether it is currently favorited. // L3-EXEMPT
     /// For each (tab_id → space_id) pair, calls apply_tab_residency with the real status.
     pub fn enforce_cross_space_tab_residency(
         &mut self,
         tab_owners: &std::collections::HashMap<maho_types::identifiers::TabId, maho_types::identifiers::SpaceId>,
-        is_favorite_fn: &dyn Fn(&maho_types::identifiers::TabId) -> bool,
+        is_favorite_fn: &dyn Fn(&maho_types::identifiers::TabId) -> bool, // L3-EXEMPT
     ) {
         for (tab_id, space_id) in tab_owners {
-            let is_favorite = is_favorite_fn(tab_id);
+            let is_favorite = is_favorite_fn(tab_id); // L3-EXEMPT
             let is_in_folder = self.is_tab_in_folder(space_id, tab_id);
-            self.apply_tab_residency(space_id, tab_id, is_favorite, is_in_folder);
+            self.apply_tab_residency(space_id, tab_id, is_favorite, is_in_folder); // L3-EXEMPT
         }
     }
 }
