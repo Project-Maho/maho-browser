@@ -327,3 +327,65 @@ fn app_will_terminate_force_flushes_pending() {
     assert!(urls.contains(&"https://first.com"));
     assert!(urls.contains(&"https://second.com"));
 }
+
+#[test]
+fn test_lmdb_schema_migration_v1_to_v2() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let storage_path = temp_dir.path().join("maho-core.lmdb");
+
+    // Pre-populate old schema version 1 tabs JSON
+    let old_tabs_json = r#"[
+        {
+            "id": "tab-1",
+            "parentId": null,
+            "spaceId": "space-test",
+            "url": "https://google.com",
+            "title": "Google",
+            "customTitle": null,
+            "favicon": null,
+            "state": { "kind": "active" },
+            "isMuted": false,
+            "zoomLevel": 1.0,
+            "createdAt": "2026-07-08T00:00:00Z",
+            "lastActiveAt": "2026-07-08T00:00:00Z",
+            "scrollPosition": {"x": 0, "y": 0},
+            "pinnedUrl": null,
+            "windowId": null,
+            "isPinned": true,
+            "isFavorite": true,
+            "favoriteOrder": 3
+        }
+    ]"#;
+
+    {
+        // Set up the old state manually
+        let storage = maho_storage::lmdb::LmdbStorage::open(&storage_path)
+            .expect("init storage");
+        storage.put("tabs", old_tabs_json.as_bytes()).unwrap();
+        // Do not write "schema_version", which implies version 0 or 1.
+    }
+
+    // Now initialize MahoCore and load
+    let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
+    core.load_state().expect("should load and migrate state successfully");
+
+    // Check tabs got migrated
+    let tabs = core.get_tab_view_models();
+    assert_eq!(tabs.len(), 1);
+    assert_eq!(tabs[0].id.to_string(), "tab-1");
+    assert!(tabs[0].is_favorite);
+    assert_eq!(tabs[0].favorite_order, Some(3));
+    assert_eq!(tabs[0].role, maho_types::tab::TabRole::Favorite { order: 3 });
+
+    // Verify schema_version key is 2
+    let storage = maho_storage::lmdb::LmdbStorage::open(&storage_path)
+        .expect("re-init storage");
+    let schema_version_data = storage.get("schema_version").unwrap().unwrap();
+    let schema_version: u32 = serde_json::from_slice(&schema_version_data).unwrap();
+    assert_eq!(schema_version, 2);
+
+    // Verify backup exists
+    let backup_data = storage.get("tabs.pre_migration_backup").unwrap().unwrap();
+    let backup_str = std::str::from_utf8(&backup_data).unwrap();
+    assert!(backup_str.contains("isFavorite"));
+}

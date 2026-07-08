@@ -14,6 +14,7 @@ fn make_tab(id: &str, title: &str, url: &str) -> TabViewModel {
         is_pinned: false,
         is_favorite: false,
         favorite_order: None,
+        role: maho_types::tab::TabRole::Normal,
         is_muted: false,
         is_playing_audio: false,
         lifecycle_state: "active".to_string(),

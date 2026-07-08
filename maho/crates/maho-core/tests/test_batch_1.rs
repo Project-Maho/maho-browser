@@ -9,6 +9,7 @@ use maho_types::identifiers::{FolderId, SpaceId, TabId};
 use maho_types::settings::{GeneralSettingsUpdate, PinnedCloseBehavior, SettingsUpdate};
 use maho_types::space::{SpaceColor, SpaceConfigUpdate};
 use maho_types::traits::shell_renderer::{SearchContext, SuggestionType, TabViewModel};
+use maho_types::tab::TabRole;
 
 fn make_color(hue: f64) -> SpaceColor {
     SpaceColor {
@@ -282,8 +283,8 @@ fn favorite_tab_emits_tab_updated_with_favorite_true() {
 
     assert!(matches!(
         updates.as_slice(),
-        [CoreUpdate::TabUpdated { tab_id: updated_id, changes }]
-            if *updated_id == tab_id && changes.is_favorite == Some(true)
+        [CoreUpdate::TabRoleChanged { tab_id: updated_id, new_role: TabRole::Favorite { .. }, .. }]
+            if *updated_id == tab_id
     ));
 }
 
@@ -297,8 +298,8 @@ fn favorite_tab_is_idempotent_via_shell_event() {
     });
     assert!(matches!(
         first_updates.as_slice(),
-        [CoreUpdate::TabUpdated { tab_id: updated_id, changes }]
-            if *updated_id == tab_id && changes.is_favorite == Some(true)
+        [CoreUpdate::TabRoleChanged { tab_id: updated_id, new_role: TabRole::Favorite { .. }, .. }]
+            if *updated_id == tab_id
     ));
 
     let first_favorite_order = core
@@ -320,8 +321,8 @@ fn favorite_tab_is_idempotent_via_shell_event() {
     assert_eq!(second_favorite_order, first_favorite_order);
     assert!(!second_updates.iter().any(|update| matches!(
         update,
-        CoreUpdate::TabUpdated { tab_id: updated_id, changes }
-            if *updated_id == tab_id && changes.is_favorite == Some(true)
+        CoreUpdate::TabRoleChanged { tab_id: updated_id, new_role: TabRole::Favorite { .. }, .. }
+            if *updated_id == tab_id
     )));
 }
 
@@ -330,7 +331,7 @@ fn tab_unfavorite_removes() {
     let mut core = MahoCore::new();
     let tab_id = create_tab(&mut core);
     core.favorite_tab(&tab_id);
-    core.unfavorite_tab(&tab_id);
+    core.transition_tab_role(&tab_id, TabRole::Normal);
     let space_id = core.get_active_space_id();
     let favs = core.get_favorite_tabs(&space_id);
     assert!(!favs.iter().any(|t| t.id == tab_id));
@@ -344,15 +345,16 @@ fn unfavorite_tab_emits_tab_updated_with_favorite_false() {
         tab_id: tab_id.clone(),
     });
 
-    let updates = core.handle_event(ShellEvent::UnfavoriteTab {
+    let updates = core.handle_event(ShellEvent::ChangeTabRole {
         tab_id: tab_id.clone(),
+        new_role: TabRole::Normal,
     });
 
-    assert!(matches!(
-        updates.as_slice(),
-        [CoreUpdate::TabUpdated { tab_id: updated_id, changes }]
-            if *updated_id == tab_id && changes.is_favorite == Some(false)
-    ));
+    assert!(updates.iter().any(|update| matches!(
+        update,
+        CoreUpdate::TabRoleChanged { tab_id: updated_id, new_role: TabRole::Normal, .. }
+            if *updated_id == tab_id
+    )));
 }
 
 #[test]
@@ -2681,6 +2683,7 @@ fn make_tab_vm(id: &str, title: &str, url: &str) -> TabViewModel {
         is_pinned: false,
         is_favorite: false,
         favorite_order: None,
+        role: TabRole::Normal,
         is_muted: false,
         is_playing_audio: false,
         lifecycle_state: "active".to_string(),
