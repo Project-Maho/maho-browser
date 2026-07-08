@@ -16,6 +16,7 @@
 #include "base/logging.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/values.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
@@ -43,14 +44,14 @@ namespace {
 
 ShellEventObserver* g_shell_event_observer_for_testing = nullptr;
 
-// Returns true when the browser was launched with --maho-sidebar-safe-mode.
-// In safe mode all maho-core FFI calls in the sidebar state path are skipped
-// so the browser stays usable (e.g. for maho-ai QA) even when the core is
-// in a bad state.
+}  // namespace
+
 bool IsSidebarSafeMode() {
   const base::CommandLine* cmd = base::CommandLine::ForCurrentProcess();
   return cmd && cmd->HasSwitch("maho-sidebar-safe-mode");
 }
+
+namespace {
 
 content::WebContents* GetActiveWebContents(Browser* browser) {
   if (!browser) {
@@ -80,7 +81,7 @@ const GURL& GetVisibleOrCommittedUrl(content::WebContents* contents) {
 // LEGACY: replaced by FetchSidebarStateV2 in BuildViewStateModel. Kept
 // compiling for backward compat during transition; will be deleted after
 // 1-week soak (4.2.3).
-FooterSpaceState GetCoreFooterSpaceState() {
+FooterSpaceState GetCoreFooterSpaceStateRaw() {
   FooterSpaceState state;
   ::MahoCore* core = maho::GetCore();
   if (!core) {
@@ -186,6 +187,30 @@ bool ShouldShowSearchPlaceholderAddress(const GURL& url) {
   }
 
   return false;
+}
+
+std::u16string GetTabTitle(content::WebContents* contents) {
+  if (!contents || contents->GetTitle().empty()) {
+    return u"New Tab";
+  }
+  return contents->GetTitle();
+}
+
+std::u16string GetTabHost(content::WebContents* contents) {
+  if (!contents) {
+    return std::u16string();
+  }
+
+  const GURL& url = GetVisibleOrCommittedUrl(contents);
+  if (!url.is_valid() || MahoDisplayPolicy::IsNtpOrBlankUrl(url)) {
+    return std::u16string();
+  }
+
+  if (!url.host().empty()) {
+    return base::UTF8ToUTF16(url.host());
+  }
+
+  return base::UTF8ToUTF16(url.spec());
 }
 
 std::u16string GetTabTitle(TabStripModel* model, int index) {
@@ -312,8 +337,8 @@ std::optional<SidebarTreeNode> ParseTreeNode(
     std::optional<bool> pinned = dict->FindBool("isPinned");
     node.is_pinned = pinned.value_or(false);
 
-    std::optional<bool> favorite = dict->FindBool("isFavorite");
-    node.is_favorite = favorite.value_or(false);
+    std::optional<bool> favorite = dict->FindBool("isFavorite");  // L3-EXEMPT: legacy compat
+    node.is_favorite = favorite.value_or(false);  // L3-EXEMPT: legacy compat
 
     // V2 path: look up prebuilt favicon from the flat_map (base64-decoded in
     // BuildViewStateModel). Falls back to legacy int-array parsing if the map
@@ -351,11 +376,11 @@ std::optional<SidebarTreeNode> ParseTreeNode(
       content::WebContents* contents =
           model->GetWebContentsAt(node.tab_strip_index);
       node.is_active = model->active_index() == node.tab_strip_index;
-      if (node.custom_title.empty()) {
-        node.title = GetTabTitle(model, node.tab_strip_index);
-      }
-      node.host = GetTabHost(model, node.tab_strip_index);
       if (contents) {
+        if (node.custom_title.empty()) {
+          node.title = GetTabTitle(contents);
+        }
+        node.host = GetTabHost(contents);
         node.is_loading = contents->IsLoading();
         node.is_audible = contents->IsCurrentlyAudible();
         node.is_muted = contents->IsAudioMuted();
@@ -385,11 +410,6 @@ std::optional<SidebarTreeNode> ParseTreeNode(
       expanded = dict->FindBool("isExpanded");
     }
     node.is_expanded = expanded.value_or(false);
-    if (name && *name == "Research") {
-      LOG(ERROR) << "[folder-state-debug] Research folderId="
-                 << node.folder_id << " isExpanded=" << node.is_expanded;
-    }
-
     std::optional<bool> pinned = dict->FindBool("is_pinned");
     if (!pinned.has_value()) {
       pinned = dict->FindBool("isPinned");
@@ -472,12 +492,15 @@ void GroupSplitTabs(std::vector<SidebarTreeNode>& nodes,
   }
 
   std::map<split_tabs::SplitTabId, std::vector<size_t>> split_groups;
+  std::vector<std::optional<split_tabs::SplitTabId>> node_splits;
+  node_splits.resize(nodes.size());
   for (size_t i = 0; i < nodes.size(); ++i) {
     const auto& node = nodes[i];
     if (node.kind != SidebarNodeKind::kTab || node.tab_strip_index < 0) {
       continue;
     }
     auto split_id = model->GetSplitForTab(node.tab_strip_index);
+    node_splits[i] = split_id;
     if (split_id.has_value()) {
       split_groups[split_id.value()].push_back(i);
     }
@@ -491,7 +514,7 @@ void GroupSplitTabs(std::vector<SidebarTreeNode>& nodes,
     }
     auto& node = nodes[i];
     if (node.kind == SidebarNodeKind::kTab && node.tab_strip_index >= 0) {
-      auto split_id = model->GetSplitForTab(node.tab_strip_index);
+      const auto& split_id = node_splits[i];
       if (split_id.has_value()) {
         auto it = split_groups.find(split_id.value());
         if (it != split_groups.end() && it->second.size() == 2) {
@@ -595,6 +618,31 @@ void SetShellEventObserverForTesting(ShellEventObserver* observer) {
   g_shell_event_observer_for_testing = observer;
 }
 
+void NotifyChangedHelper(const std::string& kind) {
+  if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
+    const bool is_structural = !(kind == "tab_title_updated" || 
+                                 kind == "tab_url_updated" ||
+                                 kind == "tab_favicon_updated" ||
+                                 kind == "tab_loading_state_changed" ||
+                                 kind == "update_tab_scroll_position" ||
+                                 kind == "update_tab_preview");
+    if (is_structural) {
+      bridge->NotifyChanged(true);
+    } else {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+          FROM_HERE,
+          base::BindOnce(
+              [](bool is_structural) {
+                if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
+                  bridge->NotifyChanged(is_structural);
+                }
+              },
+              false),
+          base::Milliseconds(16));
+    }
+  }
+}
+
 void DispatchShellEvent(
     const std::string& kind,
     const std::vector<std::pair<std::string, std::string>>& fields) {
@@ -613,18 +661,7 @@ void DispatchShellEvent(
     return;
   }
   std::string updates = maho::core::HandleEvent(core, json.c_str());
-  if (kind == "toggle_folder_expanded") {
-    LOG(ERROR) << "[folder-state-debug] handle_event updates=" << updates;
-  }
-  if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
-    const bool is_structural = !(kind == "tab_title_updated" || 
-                                 kind == "tab_url_updated" ||
-                                 kind == "tab_favicon_updated" ||
-                                 kind == "tab_loading_state_changed" ||
-                                 kind == "update_tab_scroll_position" ||
-                                 kind == "update_tab_preview");
-    bridge->NotifyChanged(is_structural);
-  }
+  NotifyChangedHelper(kind);
   MahoBoostInjectionHandler::OnCoreUpdatesJson(updates);
 }
 
@@ -656,15 +693,7 @@ void DispatchShellEventEx(
     return;
   }
   std::string updates = maho::core::HandleEvent(core, json.c_str());
-  if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
-    const bool is_structural = !(kind == "tab_title_updated" || 
-                                 kind == "tab_url_updated" ||
-                                 kind == "tab_favicon_updated" ||
-                                 kind == "tab_loading_state_changed" ||
-                                 kind == "update_tab_scroll_position" ||
-                                 kind == "update_tab_preview");
-    bridge->NotifyChanged(is_structural);
-  }
+  NotifyChangedHelper(kind);
   MahoBoostInjectionHandler::OnCoreUpdatesJson(updates);
 }
 
@@ -681,15 +710,7 @@ void DispatchShellEventDict(const std::string& kind,
     return;
   }
   std::string updates = maho::core::HandleEvent(core, json.c_str());
-  if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
-    const bool is_structural = !(kind == "tab_title_updated" || 
-                                 kind == "tab_url_updated" ||
-                                 kind == "tab_favicon_updated" ||
-                                 kind == "tab_loading_state_changed" ||
-                                 kind == "update_tab_scroll_position" ||
-                                 kind == "update_tab_preview");
-    bridge->NotifyChanged(is_structural);
-  }
+  NotifyChangedHelper(kind);
   MahoBoostInjectionHandler::OnCoreUpdatesJson(updates);
 }
 
@@ -875,11 +896,22 @@ MahoSidebarTabListModel MahoSidebarStateAdapter::BuildTabListModel(
   model.active_space_id = GetRawActiveSpaceIdForBrowser(browser);
   std::string space_id_json = GetActiveSpaceIdJsonForBrowser(browser);
 
+  std::string active_stable_id;
+  content::WebContents* active_contents = nullptr;
+  int active_index = TabStripModel::kNoTab;
+
   if (tab_strip_model) {
-    model.active_tab.index = tab_strip_model->active_index();
-    if (tab_strip_model->ContainsIndex(model.active_tab.index)) {
-      model.active_tab.title = GetTabTitle(tab_strip_model, model.active_tab.index);
-      model.active_tab.host = GetTabHost(tab_strip_model, model.active_tab.index);
+    active_index = tab_strip_model->active_index();
+    if (tab_strip_model->ContainsIndex(active_index)) {
+      active_contents = tab_strip_model->GetWebContentsAt(active_index);
+      if (active_contents) {
+        model.active_tab.index = active_index;
+        model.active_tab.title = GetTabTitle(active_contents);
+        model.active_tab.host = GetTabHost(active_contents);
+        if (auto* helper = MahoTabIdHelper::FromWebContents(active_contents)) {
+          active_stable_id = helper->stable_tab_id();
+        }
+      }
     }
   }
 
@@ -926,21 +958,6 @@ MahoSidebarTabListModel MahoSidebarStateAdapter::BuildTabListModel(
   };
 
   if (tree_requested) {
-    std::string active_stable_id;
-    if (tab_strip_model) {
-      const int active_index = tab_strip_model->active_index();
-      if (active_index != TabStripModel::kNoTab &&
-          tab_strip_model->ContainsIndex(active_index)) {
-        if (auto* active_contents =
-                tab_strip_model->GetWebContentsAt(active_index)) {
-          if (auto* helper = MahoTabIdHelper::FromWebContents(active_contents);
-              helper && !helper->stable_tab_id().empty()) {
-            active_stable_id = helper->stable_tab_id();
-          }
-        }
-      }
-    }
-
     auto parsed_tree = std::move(v2_tree_);
     if (parsed_tree && parsed_tree->is_list()) {
       for (const auto& root_val : parsed_tree->GetList()) {
@@ -969,28 +986,13 @@ MahoSidebarTabListModel MahoSidebarStateAdapter::BuildTabListModel(
   // a previous navigation) never wins over the real page state. The row is
   // guaranteed to exist in the tree because BuildTreeSection exempts the
   // active entry from URL/ghost filters via active_stable_id.
-  if (tab_strip_model) {
-    const int active_index = tab_strip_model->active_index();
-    if (active_index != TabStripModel::kNoTab &&
-        tab_strip_model->ContainsIndex(active_index)) {
-      content::WebContents* active_contents =
-          tab_strip_model->GetWebContentsAt(active_index);
-
-      std::string active_stable_id;
-      if (active_contents) {
-        if (auto* helper = MahoTabIdHelper::FromWebContents(active_contents);
-            helper && !helper->stable_tab_id().empty()) {
-          active_stable_id = helper->stable_tab_id();
-        }
-      }
-
-      if (!FindAndOverlayActiveTabInTree(
-              model.pinned_tree, active_index, active_stable_id,
-              tab_strip_model, active_contents)) {
-        FindAndOverlayActiveTabInTree(model.normal_tree, active_index,
-                                      active_stable_id, tab_strip_model,
-                                      active_contents);
-      }
+  if (tab_strip_model && active_index != TabStripModel::kNoTab) {
+    if (!FindAndOverlayActiveTabInTree(
+            model.pinned_tree, active_index, active_stable_id,
+            tab_strip_model, active_contents)) {
+      FindAndOverlayActiveTabInTree(model.normal_tree, active_index,
+                                    active_stable_id, tab_strip_model,
+                                    active_contents);
     }
   }
 
@@ -998,7 +1000,7 @@ MahoSidebarTabListModel MahoSidebarStateAdapter::BuildTabListModel(
   if (cycle_space_cache_) {
     space_state = cycle_space_cache_->state;
   } else if (!IsSidebarSafeMode()) {
-    space_state = GetCoreFooterSpaceState();
+    space_state = GetFooterSpaceState();
   }
   const int idx = space_state.active_space_index;
   if (idx >= 0 &&
@@ -1018,7 +1020,7 @@ MahoSidebarFooterModel MahoSidebarStateAdapter::BuildFooterModel(
   if (cycle_space_cache_) {
     core_state = cycle_space_cache_->state;
   } else if (!IsSidebarSafeMode()) {
-    core_state = GetCoreFooterSpaceState();
+    core_state = GetFooterSpaceState();
   }
   const auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
   const size_t bridge_space_count =
@@ -1090,7 +1092,7 @@ MahoSidebarViewStateModel MahoSidebarStateAdapter::BuildViewStateModel(
   if (!IsSidebarSafeMode()) {
     base::ElapsedTimer footer_t;
     cycle_space_cache_ = std::make_unique<CycleSpaceCache>();
-    cycle_space_cache_->state = GetCoreFooterSpaceState();
+    cycle_space_cache_->state = GetFooterSpaceState();
     LOG(INFO) << "[MAHO_PERF]     GetCoreFooterSpaceState="
               << footer_t.Elapsed().InMillisecondsF() << "ms";
   }
@@ -1163,7 +1165,7 @@ SidebarStateBackgroundResult MahoSidebarStateAdapter::BuildStateOnBackground(
 
   // Phase 0: footer space state (FFI, 1.5-7ms).
   if (!safe_mode) {
-    result.footer_state = GetCoreFooterSpaceState();
+    result.footer_state = GetCoreFooterSpaceStateRaw();
   }
 
   // Phase 2: V2 tree + favicons (FFI + JSON parse + base64 decode, 3-21ms).
@@ -1239,6 +1241,18 @@ std::u16string MahoSidebarStateAdapter::GetActiveHostText(Browser* browser) cons
   }
 
   return GetTabHost(tab_strip_model, tab_strip_model->active_index());
+}
+
+void MahoSidebarStateAdapter::InvalidateFooterState() {
+  footer_state_is_dirty_ = true;
+}
+
+FooterSpaceState MahoSidebarStateAdapter::GetFooterSpaceState() const {
+  if (footer_state_is_dirty_) {
+    cached_footer_state_ = GetCoreFooterSpaceStateRaw();
+    footer_state_is_dirty_ = false;
+  }
+  return cached_footer_state_;
 }
 
 }  // namespace maho

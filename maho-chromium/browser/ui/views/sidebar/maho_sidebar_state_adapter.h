@@ -95,6 +95,8 @@ void DispatchShellEventEx(const std::string& kind,
 void DispatchShellEventDict(const std::string& kind,
                             base::DictValue dict);
 
+bool IsSidebarSafeMode();
+
 class MahoSidebarStateAdapter {
  public:
   MahoSidebarStateAdapter();
@@ -123,6 +125,9 @@ class MahoSidebarStateAdapter {
       Browser* browser,
       SidebarStateBackgroundResult result) const;
 
+  void InvalidateFooterState();
+  FooterSpaceState GetFooterSpaceState() const;
+
  private:
   struct CycleSpaceCache;
   mutable std::unique_ptr<CycleSpaceCache> cycle_space_cache_;
@@ -139,6 +144,9 @@ class MahoSidebarStateAdapter {
 
   // Parsed tree from v2 FFI. When non-null, BuildTabListModel uses this.
   mutable std::optional<base::Value> v2_tree_;
+
+  mutable FooterSpaceState cached_footer_state_;
+  mutable bool footer_state_is_dirty_ = true;
 };
 
 }  // namespace maho

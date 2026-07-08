@@ -9,6 +9,7 @@
 
 #include "base/values.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
+#include "maho/browser/ui/views/sidebar/maho_spaces_board_data.h"
 #include "url/gurl.h"
 
 namespace maho {
@@ -168,7 +169,7 @@ struct MahoSidebarFavoriteItemModel {
   GURL url;
   // Stable tab ID from maho-core, empty if no matching tab.
   std::string tab_id;
-  bool is_favorite = true;
+  bool is_favorite = true;  // L3-EXEMPT: derived from role in state_adapter.cc
   bool is_active = false;
 };
 
@@ -218,7 +219,7 @@ struct SidebarTreeNode {
                             // exists only in core.
   bool is_active = false;
   bool is_pinned = false;
-  bool is_favorite = false;
+  bool is_favorite = false;  // L3-EXEMPT: derived from role in state_adapter.cc
   std::string url;          // Raw URL string; used by display policy helpers.
   std::u16string custom_title;
   std::u16string title;
@@ -332,45 +333,6 @@ struct MahoSidebarFooterUpdatePillModel {
   std::u16string label;
   std::u16string accessible_label;
 };
-
-enum class MahoSpaceDisplayThemeKind {
-  kLegacyColor,
-  kSolid,
-  kGradient,
-  kZen,
-};
-
-// Canonical per-space theme payload for display-only consumers.
-// `theme_json` preserves the source theme object so downstream surfaces do not
-// lose fidelity at the model boundary, while primary/secondary/palette colors
-// provide inexpensive render-ready swatches for native views.
-struct MahoSpaceDisplayThemeModel {
-  MahoSpaceDisplayThemeModel();
-  MahoSpaceDisplayThemeModel(const MahoSpaceDisplayThemeModel&);
-  MahoSpaceDisplayThemeModel(MahoSpaceDisplayThemeModel&&);
-  MahoSpaceDisplayThemeModel& operator=(const MahoSpaceDisplayThemeModel&);
-  MahoSpaceDisplayThemeModel& operator=(MahoSpaceDisplayThemeModel&&);
-  ~MahoSpaceDisplayThemeModel();
-
-  bool has_theme = false;
-  MahoSpaceDisplayThemeKind kind = MahoSpaceDisplayThemeKind::kLegacyColor;
-  std::string theme_json;
-  std::string primary_color;
-  std::string secondary_color;
-  std::vector<std::string> palette_colors;
-  float opacity = 1.0f;
-  float texture = 0.0f;
-  float grain = 0.0f;
-};
-
-MahoSpaceDisplayThemeModel BuildMahoSpaceDisplayThemeModel(
-    const base::DictValue& space_dict);
-std::string GetMahoSpaceDisplayPrimaryColor(
-    const MahoSpaceDisplayThemeModel& theme,
-    const std::string& fallback_color);
-std::string GetMahoSpaceDisplaySecondaryColor(
-    const MahoSpaceDisplayThemeModel& theme,
-    const std::string& fallback_color);
 
 struct MahoSidebarFooterModel {
   MahoSidebarFooterModel();
