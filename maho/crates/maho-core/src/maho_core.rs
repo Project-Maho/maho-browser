@@ -35,12 +35,11 @@ use maho_types::identifiers::{BoostId, FolderId, NoteId, ProfileId, SpaceId, Tab
 use maho_types::note::Note;
 use maho_types::settings::{AppearanceSettingsUpdate, PinnedCloseBehavior, Settings, SettingsUpdate};
 use maho_types::keyboard::{KeyCombo, KeyModifier};
-use maho_types::space::{RootItem, Space, SpaceColor};
+use maho_types::space::{Space, SpaceColor};
 use maho_types::split_view::{SplitConfig, SplitViewConfig};
-use maho_types::tab::{Tab, TabLifecycleState};
+use maho_types::tab::{Tab, TabLifecycleState, TabRole};
 use maho_types::traits::shell_renderer::{
-    ArchivedTabViewModel, SearchContext, SpaceViewModel, SuggestionViewModel, TabStateUpdate,
-    TabViewModel,
+    ArchivedTabViewModel, SearchContext, SpaceViewModel, SuggestionViewModel, TabViewModel,
 };
 
 use crate::account_manager::AccountManager;
@@ -262,7 +261,7 @@ mod tests {
             "tab must not be in root_order after favoriting"
         );
 
-        core.unfavorite_tab(&tab_id);
+        core.transition_tab_role(&tab_id, TabRole::Normal);
 
         assert!(
             core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
@@ -277,7 +276,7 @@ mod tests {
         let tab_id = create_tab(&mut core);
 
         core.favorite_tab(&tab_id);
-        core.unfavorite_tab(&tab_id);
+        core.transition_tab_role(&tab_id, TabRole::Normal);
 
         let order = core.space_manager.get_root_order(&space_id);
         let count = order.iter().filter(|i| *i == &maho_types::space::RootItem::Tab(tab_id.clone())).count();
@@ -299,17 +298,17 @@ mod tests {
     }
 
     #[test]
-    fn handle_event_unfavorite_tab_restores_root_order() {
+    fn change_tab_role_to_normal_restores_to_root_order() {
         let mut core = MahoCore::new();
         let space_id = core.get_active_space_id().clone();
         let tab_id = create_tab(&mut core);
 
         core.handle_event(ShellEvent::FavoriteTab { tab_id: tab_id.clone() });
-        core.handle_event(ShellEvent::UnfavoriteTab { tab_id: tab_id.clone() });
+        core.handle_event(ShellEvent::ChangeTabRole { tab_id: tab_id.clone(), new_role: TabRole::Normal });
 
         assert!(
             core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
-            "tab must be back in root_order after UnfavoriteTab event"
+            "tab must be back in root_order after ChangeTabRole to Normal (was: UnfavoriteTab, replaced by ADR 11 role transition contract)"
         );
     }
 
@@ -388,7 +387,7 @@ mod tests {
         core.space_manager.add_tab_to_folder(&space_id, &folder_vm.id, tab_id.clone());
 
         core.favorite_tab(&tab_id);
-        core.unfavorite_tab(&tab_id);
+        core.transition_tab_role(&tab_id, TabRole::Normal);
 
         let root_order = core.space_manager.get_root_order(&space_id);
         assert!(
@@ -404,7 +403,7 @@ mod tests {
         let tab_id = create_tab(&mut core);
 
         core.favorite_tab(&tab_id);
-        core.unfavorite_tab(&tab_id);
+        core.transition_tab_role(&tab_id, TabRole::Normal);
 
         assert!(
             core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
@@ -910,6 +909,7 @@ pub struct MahoCore {
     sync_last_snapshot_time: Cell<chrono::DateTime<chrono::Utc>>,
     sync_startup_time: Cell<chrono::DateTime<chrono::Utc>>,
     sync_last_upload_attempt: Cell<chrono::DateTime<chrono::Utc>>,
+    emitted_during_dispatch: Rc<RefCell<Vec<CoreUpdate>>>,
 }
 
 impl Default for MahoCore {
@@ -933,9 +933,12 @@ impl MahoCore {
 
     pub fn new() -> Self {
         let update_listeners: UpdateListeners = Rc::new(RefCell::new(Vec::new()));
+        let emitted_during_dispatch = Rc::new(RefCell::new(Vec::new()));
 
         let listeners_for_tab = update_listeners.clone();
+        let emitted_for_tab = emitted_during_dispatch.clone();
         let tab_callback = Box::new(move |update: CoreUpdate| {
+            emitted_for_tab.borrow_mut().push(update.clone());
             for listener in listeners_for_tab.borrow().iter() {
                 listener(update.clone());
             }
@@ -1163,6 +1166,7 @@ impl MahoCore {
             sync_last_snapshot_time: Cell::new(chrono::Utc::now() - chrono::Duration::hours(6)),
             sync_startup_time: Cell::new(chrono::Utc::now()),
             sync_last_upload_attempt: Cell::new(chrono::Utc::now() - chrono::Duration::hours(1)), // Initialize to 1 hour ago so first upload is allowed
+            emitted_during_dispatch,
         };
 
         core
@@ -1296,7 +1300,7 @@ impl MahoCore {
 
         if dirty & LMDB_DIRTY_TABS != 0 {
             let tabs: Vec<&maho_types::tab::Tab> = self.tab_manager.get_all_tabs();
-            let favorite_count = tabs.iter().filter(|t| t.is_favorite).count();
+            let favorite_count = tabs.iter().filter(|t| t.role.is_favorite()).count(); // L3-EXEMPT: role query
             eprintln!(
                 "[Maho] save_state: persisting {} tabs ({} favorites), {} spaces",
                 tabs.len(),
@@ -1400,6 +1404,51 @@ impl MahoCore {
             .as_ref()
             .ok_or_else(|| PersistenceError::Storage("LMDB storage not initialized".to_string()))?;
 
+        // One-shot LMDB schema migration for favorites schema v1 -> v2 (HC-1)
+        let schema_version: u32 = if let Some(version_data) = lmdb
+            .get("schema_version")
+            .map_err(|e| PersistenceError::Storage(e.to_string()))?
+        {
+            serde_json::from_slice(&version_data).unwrap_or(0)
+        } else {
+            0
+        };
+
+        if schema_version < 2 {
+            if let Some(tabs_data) = lmdb
+                .get("tabs")
+                .map_err(|e| PersistenceError::Storage(e.to_string()))?
+            {
+                let tabs: Vec<maho_types::tab::Tab> = serde_json::from_slice(&tabs_data)
+                    .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+
+                let migrated_data = serde_json::to_vec(&tabs)
+                    .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+
+                let version_bytes = serde_json::to_vec(&2u32)
+                    .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+
+                // Atomic batch write (M1)
+                lmdb.put_batch(&[
+                    ("tabs.pre_migration_backup", &tabs_data),
+                    ("tabs", &migrated_data),
+                    ("schema_version", &version_bytes),
+                ]).map_err(|e| PersistenceError::Storage(e.to_string()))?;
+
+                let fav_count = tabs.iter().filter(|t| t.role.is_favorite()).count(); // L3-EXEMPT: role query
+                eprintln!(
+                    "[Maho] LMDB migration v1->v2: {} tabs migrated, {} favorites",
+                    tabs.len(),
+                    fav_count
+                );
+            } else {
+                let version_bytes = serde_json::to_vec(&2u32)
+                    .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+                lmdb.put("schema_version", &version_bytes)
+                    .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+            }
+        }
+
         let tabs_data = lmdb
             .get("tabs")
             .map_err(|e| PersistenceError::Storage(e.to_string()))?;
@@ -1419,7 +1468,7 @@ impl MahoCore {
         if let Some(tabs_data) = tabs_data {
             let tabs: Vec<maho_types::tab::Tab> = serde_json::from_slice(&tabs_data)
                 .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
-            let fav_count = tabs.iter().filter(|t| t.is_favorite).count();
+            let fav_count = tabs.iter().filter(|t| t.role.is_favorite()).count(); // L3-EXEMPT: role query
             eprintln!(
                 "[Maho] load_state: restoring {} tabs ({} favorites)",
                 tabs.len(),
@@ -1463,7 +1512,7 @@ impl MahoCore {
                 let tm = &self.tab_manager;
                 self.space_manager
                     .enforce_cross_space_tab_residency(&tab_owners, &|tid| {
-                        tm.get_tab(tid).map(|t| t.is_favorite).unwrap_or(false)
+                        tm.get_tab(tid).map(|t| t.role.is_favorite()).unwrap_or(false) // L3-EXEMPT: role query
                     });
             }
 
@@ -2680,6 +2729,7 @@ impl MahoCore {
         let dirty_bits = Self::event_dirty_flags(&event);
         let urgent = Self::event_persist_is_urgent(&event);
         let event_cloned = event.clone();
+        self.emitted_during_dispatch.borrow_mut().clear();
         let result = self.handle_event_inner(event);
         if dirty_bits != 0 {
             if urgent {
@@ -2689,6 +2739,25 @@ impl MahoCore {
             }
         }
         self.post_dispatch_sync(&event_cloned, &result);
+        
+        let emitted = self.emitted_during_dispatch.borrow().clone();
+        let emitted_strs: std::collections::HashSet<String> = emitted
+            .iter()
+            .filter_map(|e| serde_json::to_string(e).ok())
+            .collect();
+        let filtered: Vec<CoreUpdate> = result
+            .iter()
+            .filter(|u| {
+                if let Ok(u_str) = serde_json::to_string(u) {
+                    !emitted_strs.contains(&u_str)
+                } else {
+                    true
+                }
+            })
+            .cloned()
+            .collect();
+        self.emit_updates(filtered);
+        
         result
     }
 
@@ -2822,7 +2891,7 @@ impl MahoCore {
             | ShellEvent::UnfreezeTab { .. }
             | ShellEvent::SuspendTab { .. }
             | ShellEvent::FavoriteTab { .. }
-            | ShellEvent::UnfavoriteTab { .. }
+            | ShellEvent::ChangeTabRole { .. }
             | ShellEvent::PinTab { .. }
             | ShellEvent::UnpinTab { .. }
             | ShellEvent::SetTabCustomTitle { .. }
@@ -3322,7 +3391,7 @@ impl MahoCore {
                     .iter()
                     .filter_map(|tab_id| {
                         let tab = self.tab_manager.get_tab(tab_id)?;
-                        if tab.is_pinned {
+                        if tab.role.is_pinned() {
                             return None;
                         }
                         Some((tab_id.clone(), tab.title.clone(), tab.url.0.clone()))
@@ -3366,38 +3435,45 @@ impl MahoCore {
                 let already_favorite = self
                     .tab_manager
                     .get_tab(tab_id)
-                    .map(|tab| tab.is_favorite)
+                    .map(|tab| tab.role.is_favorite()) // L3-EXEMPT: role query
                     .unwrap_or(false);
-                if !self.favorite_tab(tab_id) {
-                    if already_favorite {
-                        return vec![];
-                    }
+                if already_favorite {
+                    return vec![];
+                }
+
+                let profile_space_ids = self
+                    .tab_manager
+                    .get_tab(tab_id)
+                    .and_then(|tab| self.space_manager.get_space(&tab.space_id))
+                    .map(|space| {
+                        self.space_manager
+                            .get_space_ids_for_profile(&space.profile_id)
+                    })
+                    .unwrap_or_default();
+
+                if self
+                    .tab_manager
+                    .count_favorite_tabs_in_spaces(&profile_space_ids)
+                    >= crate::tab_lifecycle::MAX_FAVORITES
+                {
                     return vec![CoreUpdate::FavoriteLimitReached {
                         max: crate::tab_lifecycle::MAX_FAVORITES,
                     }];
                 }
-                if already_favorite {
-                    return vec![];
-                }
-                return vec![CoreUpdate::TabUpdated {
-                    tab_id: tab_id.clone(),
-                    changes: TabStateUpdate {
-                        custom_title: None,
-                        is_favorite: Some(true),
-                        ..Default::default()
-                    },
-                }];
+
+                let max_order = self
+                    .tab_manager
+                    .get_all_favorite_tabs()
+                    .iter()
+                    .filter_map(|t| t.role.favorite_order())
+                    .max()
+                    .unwrap_or(0);
+
+                let new_role = TabRole::Favorite { order: max_order + 1 };
+                return self.transition_tab_role(tab_id, new_role);
             }
-            ShellEvent::UnfavoriteTab { ref tab_id } => {
-                self.unfavorite_tab(tab_id);
-                return vec![CoreUpdate::TabUpdated {
-                    tab_id: tab_id.clone(),
-                    changes: TabStateUpdate {
-                        custom_title: None,
-                        is_favorite: Some(false),
-                        ..Default::default()
-                    },
-                }];
+            ShellEvent::ChangeTabRole { ref tab_id, ref new_role } => {
+                return self.transition_tab_role(tab_id, new_role.clone());
             }
             ShellEvent::CloseTab { ref tab_id, ref expected_space_id } => {
                 if let Some(ref expected_sid) = expected_space_id {
@@ -3424,19 +3500,19 @@ impl MahoCore {
                     .pinned_close_behavior
                     .clone();
                 let tab_opt = self.tab_manager.get_tab(tab_id);
-                let is_pinned = tab_opt.map(|t| t.is_pinned).unwrap_or(false);
-                let is_favorite_tab = tab_opt.map(|t| t.is_favorite).unwrap_or(false);
+                // Architectural Shift (B-Architecture):
+                // Under B-architecture, favorites on the grid and tabs on the normal strip are 
+                // strictly decoupled using unique TabIds. Pinned tabs remain on the strip and 
+                // require close-guard protection, whereas favorites do not reside on the active 
+                // tab strip as regular closable tabs and thus do not require close-guard protection.
+                let is_pinned = tab_opt.map(|t| t.role == TabRole::Pinned).unwrap_or(false);
                 let already_suspended = tab_opt
                     .map(|t| matches!(t.state, TabLifecycleState::Suspended { .. }))
                     .unwrap_or(false);
 
-                if (is_pinned || is_favorite_tab) && !matches!(behavior, PinnedCloseBehavior::Close) {
-                    if already_suspended && !is_favorite_tab {
+                if is_pinned && !matches!(behavior, PinnedCloseBehavior::Close) {
+                    if already_suspended {
                         // 2nd close on a ghost pinned tab -> fall through to full delete
-                    } else if already_suspended && is_favorite_tab {
-                        // Favorite tabs must persist: 2nd close is a no-op so
-                        // the tile always remains clickable.
-                        return vec![];
                     } else {
                         let space_id =
                             match self.tab_manager.get_tab(tab_id).map(|t| t.space_id.clone()) {
@@ -3526,13 +3602,13 @@ impl MahoCore {
                         self.space_manager.remove_tab_from_space(space_id, tab_id);
                         self.space_manager
                             .add_tab_to_space(target_space_id, tab_id.clone(), None);
-                        let is_favorite = self
+                        let is_favorite = self // L3-EXEMPT: local query
                             .tab_manager
                             .get_tab(tab_id)
-                            .map(|t| t.is_favorite)
+                            .map(|t| t.role.is_favorite()) // L3-EXEMPT: local query
                             .unwrap_or(false);
                         self.space_manager
-                            .apply_tab_residency(target_space_id, tab_id, is_favorite, false);
+                            .apply_tab_residency(target_space_id, tab_id, is_favorite, false); // L3-EXEMPT: local parameter
                     }
                     if !tab_ids.is_empty() || is_active_space {
                         updates.push(CoreUpdate::TabsMigrated {
@@ -3953,15 +4029,16 @@ impl MahoCore {
                     url: tab.url.0.clone(),
                     favicon: tab.favicon.clone(),
                     is_loading: self.tab_manager.is_tab_loading(&tab.id),
-                    is_pinned: tab.is_pinned,
-                    is_favorite: tab.is_favorite,
+                    is_pinned: tab.role.is_pinned(),
+                    is_favorite: tab.role.is_favorite(), // L3-EXEMPT: views display
                     is_muted: tab.is_muted,
                     is_playing_audio: false,
                     lifecycle_state: tab.state.kind_str().to_string(),
                     children,
                     created_at: tab.created_at.clone(),
                     last_active_at: tab.last_active_at.clone(),
-                    favorite_order: tab.favorite_order,
+                    favorite_order: tab.role.favorite_order(),
+                    role: tab.role.clone(),
                 }
             })
             .collect()
@@ -4383,7 +4460,7 @@ impl MahoCore {
             .get_tab_order(space_id)
             .into_iter()
             .filter_map(|tab_id| self.tab_manager.get_tab(&tab_id))
-            .filter(|tab| tab.is_pinned && !matches!(tab.state, TabLifecycleState::Archived { .. }))
+            .filter(|tab| tab.role == TabRole::Pinned && !matches!(tab.state, TabLifecycleState::Archived { .. }))
             .map(|tab| self.make_view_model(tab))
             .collect()
     }
@@ -4393,7 +4470,7 @@ impl MahoCore {
             .get_tab_order(space_id)
             .into_iter()
             .filter_map(|tab_id| self.tab_manager.get_tab(&tab_id))
-            .filter(|tab| !tab.is_pinned && !matches!(tab.state, TabLifecycleState::Archived { .. }))
+            .filter(|tab| !tab.role.is_pinned() && !matches!(tab.state, TabLifecycleState::Archived { .. }))
             .map(|tab| self.make_view_model(tab))
             .collect()
     }
@@ -4411,7 +4488,7 @@ impl MahoCore {
             .into_iter()
             .filter_map(|tab_id| self.tab_manager.get_tab(&tab_id))
             .filter(|tab| {
-                !tab.is_pinned
+                !tab.role.is_pinned()
                     && tab.window_id == Some(window_id)
                     && !matches!(tab.state, TabLifecycleState::Archived { .. })
             })
@@ -4459,7 +4536,7 @@ impl MahoCore {
                     continue;
                 }
                 if let Some(tab) = self.tab_manager.get_tab(&tab_id) {
-                    if tab.is_favorite && !matches!(tab.state, TabLifecycleState::Archived { .. }) {
+                    if tab.role.is_favorite() && !matches!(tab.state, TabLifecycleState::Archived { .. }) { // L3-EXEMPT: role query
                         tabs.push(self.make_view_model(tab));
                     }
                 }
@@ -4588,7 +4665,7 @@ impl MahoCore {
         let tid = maho_types::identifiers::TabId::new(tab_id);
         self.tab_manager
             .get_tab(&tid)
-            .map(|tab| tab.is_pinned)
+            .map(|tab| tab.role.is_pinned())
             .unwrap_or(false)
     }
 
@@ -4597,6 +4674,10 @@ impl MahoCore {
     }
 
     pub fn favorite_tab(&mut self, tab_id: &TabId) -> bool {
+        if self.tab_manager.get_tab(tab_id).map(|tab| tab.role.is_favorite()).unwrap_or(false) { // L3-EXEMPT: role query
+            return true;
+        }
+
         let profile_space_ids = self
             .tab_manager
             .get_tab(tab_id)
@@ -4615,50 +4696,46 @@ impl MahoCore {
             return false;
         }
 
-        let space_id_opt = self.tab_manager.get_tab(tab_id).map(|t| t.space_id.clone());
-        self.tab_manager.favorite_tab(tab_id);
+        let max_order = self
+            .tab_manager
+            .get_all_favorite_tabs()
+            .iter()
+            .filter_map(|t| t.role.favorite_order())
+            .max()
+            .unwrap_or(0);
 
-        // Strip the now-favorited tab from EVERY space's root_order, not just
-        // the home space. Stale entries can survive in other spaces from
-        // pre-invariant persisted state, so a single-space cleanup leaves the
-        // tab visible as a regular row in those spaces' sidebars.
-        let mut favorited = std::collections::HashSet::new();
-        favorited.insert(tab_id.clone());
-        self.space_manager
-            .strip_favorited_tabs_from_root_orders(&favorited);
-
-        // Defense in depth: enforce tab.space_id-as-ground-truth across every
-        // space's tab_order/root_order/folders. Catches any runtime path that
-        // may have leaked this tab into another space without updating
-        // tab.space_id (e.g. legacy code that bypasses add_tab_to_space's
-        // cross-space guard).
-        self.enforce_residency_for_tab(tab_id);
-
-        self.persist_lmdb_now_partial(LMDB_DIRTY_TABS | LMDB_DIRTY_SPACES);
-        
-        self.push_tab_sync(tab_id);
-        if let Some(ref space_id) = space_id_opt {
-            self.push_space_sync(space_id);
-        }
+        let new_role = TabRole::Favorite { order: max_order + 1 };
+        let _updates = self.transition_tab_role(tab_id, new_role);
         true
     }
 
-    pub fn unfavorite_tab(&mut self, tab_id: &TabId) {
-        self.tab_manager.unfavorite_tab(tab_id);
-
-        let space_id_opt = self.tab_manager.get_tab(tab_id).map(|t| t.space_id.clone());
-        if let Some(ref space_id) = space_id_opt {
-            if !self.space_manager.is_tab_in_folder(space_id, tab_id) {
-                self.space_manager.add_tab_to_root_order_if_absent(space_id, tab_id);
+    pub fn transition_tab_role(&mut self, id: &TabId, new_role: TabRole) -> Vec<CoreUpdate> {
+        let old = self.tab_manager.get_tab(id).map(|t| t.role.clone());
+        if !self.tab_manager.transition_tab_role(id, new_role.clone()) {
+            return vec![];
+        }
+        if let Some(tab) = self.tab_manager.get_tab(id) {
+            let space_id = tab.space_id.clone();
+            let is_in_folder = self.space_manager.is_tab_in_folder(&space_id, id);
+            self.space_manager.apply_tab_residency(
+                &space_id, id, new_role.is_favorite(), is_in_folder // L3-EXEMPT: role query
+            );
+            
+            if new_role.is_favorite() { // L3-EXEMPT: role query
+                let mut favorited = std::collections::HashSet::new();
+                favorited.insert(id.clone());
+                self.space_manager
+                    .strip_favorited_tabs_from_root_orders(&favorited);
             }
+            
+            self.enforce_residency_for_tab(id);
+            self.persist_lmdb_now_partial(LMDB_DIRTY_TABS | LMDB_DIRTY_SPACES);
+            self.push_tab_sync(id);
+            self.push_space_sync(&space_id);
         }
-
-        self.enforce_residency_for_tab(tab_id);
-        
-        self.push_tab_sync(tab_id);
-        if let Some(ref space_id) = space_id_opt {
-            self.push_space_sync(space_id);
-        }
+        vec![
+            CoreUpdate::TabRoleChanged { tab_id: id.clone(), old_role: old, new_role },
+        ]
     }
 
     fn enforce_residency_for_tab(&mut self, tab_id: &TabId) {
@@ -4672,7 +4749,7 @@ impl MahoCore {
             let tm = &self.tab_manager;
             self.space_manager
                 .enforce_cross_space_tab_residency(&owners, &|tid| {
-                    tm.get_tab(tid).map(|t| t.is_favorite).unwrap_or(false)
+                    tm.get_tab(tid).map(|t| t.role.is_favorite()).unwrap_or(false) // L3-EXEMPT: role query
                 });
         }
     }
@@ -5296,15 +5373,16 @@ impl MahoCore {
             url: tab.url.0.clone(),
             favicon: tab.favicon.clone(),
             is_loading: self.tab_manager.is_tab_loading(&tab.id),
-            is_pinned: tab.is_pinned,
-            is_favorite: tab.is_favorite,
+            is_pinned: tab.role.is_pinned(),
+            is_favorite: tab.role.is_favorite(), // L3-EXEMPT: views display
             is_muted: tab.is_muted,
             is_playing_audio: false,
             lifecycle_state: tab.state.kind_str().to_string(),
             children: vec![],
             created_at: tab.created_at.clone(),
             last_active_at: tab.last_active_at.clone(),
-            favorite_order: tab.favorite_order,
+            favorite_order: tab.role.favorite_order(),
+            role: tab.role.clone(),
         }
     }
 
@@ -6307,7 +6385,7 @@ impl MahoCore {
                     .iter()
                     .filter(|tab| {
                         let state = tab.state.kind_str();
-                        state == "active" && !tab.is_pinned
+                        state == "active" && !tab.role.is_pinned()
                     })
                     .map(|tab| tab.id.0.clone())
                     .collect();
@@ -6326,7 +6404,7 @@ impl MahoCore {
                     .iter()
                     .filter(|tab| {
                         let state = tab.state.kind_str();
-                        state != "active" || !tab.is_pinned
+                        state != "active" || !tab.role.is_pinned()
                     })
                     .map(|tab| tab.id.0.clone())
                     .collect();
@@ -6345,7 +6423,7 @@ impl MahoCore {
                     .iter()
                     .filter(|tab| {
                         let state = tab.state.kind_str();
-                        state != "active" || !tab.is_pinned
+                        state != "active" || !tab.role.is_pinned()
                     })
                     .map(|tab| tab.id.0.clone())
                     .collect();
@@ -7464,10 +7542,10 @@ impl MahoCore {
                         let tab_id = maho_types::identifiers::TabId::new(&entity.entity_id);
                         self.tab_manager.close_tab(&tab_id);
                     } else if let Ok(tab) = serde_json::from_str::<maho_types::tab::Tab>(&entity.payload_json) {
-                        let is_favorite = tab.is_favorite;
+                        let is_favorite = tab.role.is_favorite(); // L3-EXEMPT: local query
                         let tab_id = tab.id.clone();
                         self.tab_manager.restore_tab(tab);
-                        if is_favorite {
+                        if is_favorite { // L3-EXEMPT: local parameter
                             let mut favorited_tab_ids = std::collections::HashSet::new();
                             favorited_tab_ids.insert(tab_id);
                             self.space_manager.strip_favorited_tabs_from_root_orders(&favorited_tab_ids);
@@ -8187,8 +8265,8 @@ impl TabManagerInterface for TabLifecycleManager {
         self.favorite_tab(tab_id);
     }
 
-    fn unfavorite_tab(&mut self, tab_id: &TabId) {
-        self.unfavorite_tab(tab_id)
+    fn transition_tab_role(&mut self, tab_id: &TabId, new_role: TabRole) -> bool {
+        self.transition_tab_role(tab_id, new_role)
     }
 
     fn reorder_favorite(&mut self, tab_id: &TabId, new_index: usize) {
@@ -8480,10 +8558,10 @@ impl SpaceManagerInterface for SpaceManager {
         &mut self,
         space_id: &SpaceId,
         tab_id: &TabId,
-        is_favorite: bool,
+        is_favorite: bool, // L3-EXEMPT: local parameter
         is_in_folder: bool,
     ) {
-        self.apply_tab_residency(space_id, tab_id, is_favorite, is_in_folder)
+        self.apply_tab_residency(space_id, tab_id, is_favorite, is_in_folder) // L3-EXEMPT: local parameter
     }
 
     fn remove_tab_from_root_order(&mut self, space_id: &SpaceId, tab_id: &TabId) {
