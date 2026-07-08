@@ -22,6 +22,8 @@
 #include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/views/animation/bounds_animator.h"
+#include "ui/views/animation/bounds_animator_observer.h"
 #include "ui/views/context_menu_controller.h"
 #include "ui/views/view.h"
 #include "url/gurl.h"
@@ -35,6 +37,7 @@ class SimpleMenuModel;
 }
 
 namespace views {
+class BoundsAnimator;
 class Button;
 class ImageView;
 class Label;
@@ -44,7 +47,8 @@ class View;
 
 namespace maho {
 
-class MahoSidebarFavoritesGridView : public views::View {
+class MahoSidebarFavoritesGridView : public views::View,
+                                     public views::BoundsAnimatorObserver {
   METADATA_HEADER(MahoSidebarFavoritesGridView, views::View)
 
  public:
@@ -62,6 +66,7 @@ class MahoSidebarFavoritesGridView : public views::View {
   void Update(const MahoSidebarFavoritesModel& model);
   bool ActivateFavoriteByIndex(size_t index);
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
+  void Layout(PassKey) override;
 
   bool GetDropFormats(int* formats,
                       std::set<ui::ClipboardFormatType>* format_types) override;
@@ -82,6 +87,13 @@ class MahoSidebarFavoritesGridView : public views::View {
   // Called by the parent when the drag session ends (drop or cancel) so the
   // grid can restore its tile layer state.
   void OnDragEnded();
+  void OnExternalDragStarted(const std::string& tab_id);
+  void CleanupAfterDrop();
+  void HideOverlayAndPhantom();
+
+  // views::BoundsAnimatorObserver:
+  void OnBoundsAnimatorProgressed(views::BoundsAnimator* animator) override;
+  void OnBoundsAnimatorDone(views::BoundsAnimator* animator) override;
 
   ui::DropTargetEvent ForwardDropEventToGrid(
       const ui::DropTargetEvent& event,
@@ -133,7 +145,7 @@ class MahoSidebarFavoritesGridView : public views::View {
   void OnFavoritesHintDismissed();
   int ResolveDropIndex(const gfx::Point& point,
                        const std::string& source_tab_id,
-                       bool source_is_favorite) const;
+                       bool source_is_favorite) const;  // L3-EXEMPT: local parameter
   int TileIndexForPoint(const gfx::Point& point, int item_count) const;
   std::array<gfx::Rect, kTileCount> GetTileBoundsForCount(int item_count) const;
   size_t GetVisibleFavoriteCount() const;
@@ -146,6 +158,26 @@ class MahoSidebarFavoritesGridView : public views::View {
   void OnFaviconLoaded(size_t index,
                        const GURL& requested_url,
                        const favicon_base::FaviconImageResult& result);
+
+  // Insertion-preview (phantom) tile: shown at the target drop index while a
+  // tab is being dragged FROM the tab list INTO the favorites grid. Gives the
+  // "favicon+box morph" feedback the user expects when the drag ghost (a tab
+  // row snapshot) reaches the favorites zone.
+  void ShowInsertionPreview(int preview_index,
+                              const std::string& tab_id);
+  void HideInsertionPreview();
+  void OnInsertionPreviewFaviconLoaded(
+      const std::string& tab_id,
+      const GURL& requested_url,
+      const favicon_base::FaviconImageResult& result);
+
+  ui::ImageModel ResolveFaviconForTabId(const std::string& tab_id);
+
+  // Flat drag-preview mode (external tab drag into favorites).
+  void EnterDragPreview(int preview_slot, const std::string& dragged_tab_id);
+  void UpdateDragPreview(int preview_slot);
+  void ExitDragPreview(bool animate);
+  void FinalizeExitDragPreview();
 
   raw_ptr<Browser> browser_ = nullptr;
   raw_ptr<PrefService> prefs_ = nullptr;
@@ -161,21 +193,41 @@ class MahoSidebarFavoritesGridView : public views::View {
   std::array<GURL, kTileCount> tile_urls_ = {};
   std::array<std::u16string, kTileCount> tile_titles_ = {};
   std::array<std::string, kTileCount> tile_tab_ids_ = {};
+  std::array<ui::ImageModel, kTileCount> cached_tile_favicons_ = {};
+  std::array<std::optional<SkColor>, kTileCount> cached_tile_colors_ = {};
+  std::array<bool, kTileCount> cached_tile_colors_valid_ = {};
   std::vector<raw_ptr<views::View>> row_views_;
   LayoutSpec current_layout_spec_;
   bool drag_over_drop_target_ = false;
   bool drag_reveal_active_ = false;
   std::string active_drag_tab_id_;
   std::string drag_accepted_tab_id_;
+  std::string pending_external_drag_tab_id_;
 
   std::unique_ptr<MahoFavoritesContextMenu> active_context_menu_;
   std::unique_ptr<ui::SimpleMenuModel> active_menu_model_;
   std::unique_ptr<views::MenuRunner> active_menu_runner_;
 
+
+
   // --- Animation infrastructure ---
   std::array<gfx::Rect, kTileCount> snapshot_bounds_ = {};
   std::array<std::string, kTileCount> snapshot_tab_ids_ = {};
   int current_drag_preview_index_ = -1;
+
+  raw_ptr<views::View> drag_preview_tile_ = nullptr;
+  raw_ptr<views::ImageView> drag_preview_icon_ = nullptr;
+  std::string drag_preview_tab_id_;
+  GURL drag_preview_url_;
+  int drag_preview_slot_ = -1;
+  base::CancelableTaskTracker drag_preview_task_tracker_;
+
+  // Flat drag-preview mode state.
+  bool drag_preview_active_ = false;
+  bool finalize_in_progress_ = false;
+  std::string drag_preview_source_tab_id_;
+  std::vector<size_t> drag_preview_tile_order_;
+  std::unique_ptr<views::BoundsAnimator> drag_bounds_animator_;
 
   // Animation helpers
   void SnapshotCurrentBounds();

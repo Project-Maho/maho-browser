@@ -13,6 +13,8 @@
 #include <set>
 
 #include "base/containers/flat_map.h"
+#include "base/auto_reset.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
@@ -77,6 +79,7 @@
 #include "ui/views/controls/label.h"
 #include "ui/views/drag_controller.h"
 #include "ui/views/animation/animation_builder.h"
+#include "ui/views/animation/bounds_animator.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/view_utils.h"
@@ -286,11 +289,6 @@ class FavoriteTileButton : public views::Button,
     set_context_menu_controller(this);
   }
 
-  void OnThemeChanged() override {
-    views::Button::OnThemeChanged();
-    UpdateAppearance();
-  }
-
   void StateChanged(views::Button::ButtonState old_state) override {
     views::Button::StateChanged(old_state);
     UpdateAppearance();
@@ -423,6 +421,29 @@ class FavoriteTileButton : public views::Button,
     }
   }
 
+  struct TileVisualState {
+    ui::ColorId bg_color_id = 0;
+    bool is_active = false;
+    bool has_active_border_color = false;
+    SkColor active_border_color = SK_ColorTRANSPARENT;
+
+    bool operator==(const TileVisualState& o) const {
+      return bg_color_id == o.bg_color_id &&
+             is_active == o.is_active &&
+             has_active_border_color == o.has_active_border_color &&
+             active_border_color == o.active_border_color;
+    }
+    bool operator!=(const TileVisualState& o) const {
+      return !(*this == o);
+    }
+  };
+
+  void OnThemeChanged() override {
+    views::Button::OnThemeChanged();
+    visual_state_valid_ = false;
+    UpdateAppearance();
+  }
+
  private:
   void UpdateAppearance() {
     const bool enabled = GetEnabled();
@@ -439,18 +460,25 @@ class FavoriteTileButton : public views::Button,
     } else {
       bg = kMahoColorInteractiveChipIdleBackground;
     }
-    SetBackground(views::CreateRoundedRectBackground(
-        bg, sidebar_layout::kFavoriteTileCornerRadiusDp));
-    // 1dp inset reserved unconditionally to prevent icon jitter on active toggle.
-    if (is_active_) {
-      ui::ColorVariant border_color =
-          has_active_border_color_
-              ? ui::ColorVariant(active_border_color_)
-              : ui::ColorVariant(kMahoColorSelectionHighlight);
-      SetBorder(views::CreateRoundedRectBorder(
-          1, sidebar_layout::kFavoriteTileCornerRadiusDp, border_color));
-    } else {
-      SetBorder(views::CreateEmptyBorder(gfx::Insets(1)));
+
+    TileVisualState current_state{bg, is_active_, has_active_border_color_, active_border_color_};
+    if (!visual_state_valid_ || current_state != last_visual_state_) {
+      last_visual_state_ = current_state;
+      visual_state_valid_ = true;
+
+      SetBackground(views::CreateRoundedRectBackground(
+          bg, sidebar_layout::kFavoriteTileCornerRadiusDp));
+      // 1dp inset reserved unconditionally to prevent icon jitter on active toggle.
+      if (is_active_) {
+        ui::ColorVariant border_color =
+            has_active_border_color_
+                ? ui::ColorVariant(active_border_color_)
+                : ui::ColorVariant(kMahoColorSelectionHighlight);
+        SetBorder(views::CreateRoundedRectBorder(
+            1, sidebar_layout::kFavoriteTileCornerRadiusDp, border_color));
+      } else {
+        SetBorder(views::CreateEmptyBorder(gfx::Insets(1)));
+      }
     }
   }
 
@@ -462,6 +490,9 @@ class FavoriteTileButton : public views::Button,
   bool is_active_ = false;
   bool has_active_border_color_ = false;
   SkColor active_border_color_ = SK_ColorTRANSPARENT;
+
+  TileVisualState last_visual_state_;
+  bool visual_state_valid_ = false;
 };
 
 struct FavoriteTileSpec {
@@ -666,10 +697,36 @@ MahoSidebarFavoritesGridView::MahoSidebarFavoritesGridView(Browser* browser)
   Update(MahoSidebarFavoritesModel());
 }
 
-MahoSidebarFavoritesGridView::~MahoSidebarFavoritesGridView() = default;
+MahoSidebarFavoritesGridView::~MahoSidebarFavoritesGridView() {
+  if (drag_bounds_animator_) {
+    drag_bounds_animator_->RemoveObserver(this);
+    drag_bounds_animator_->Cancel();
+  }
+}
+
+void MahoSidebarFavoritesGridView::CleanupAfterDrop() {
+  if (drag_preview_active_) {
+    ExitDragPreview(false);
+  }
+  HideInsertionPreview();
+  pending_external_drag_tab_id_.clear();
+}
+
+void MahoSidebarFavoritesGridView::HideOverlayAndPhantom() {
+  if (drag_preview_active_) {
+    ExitDragPreview(false);
+  }
+  HideInsertionPreview();
+}
 
 void MahoSidebarFavoritesGridView::OnBoundsChanged(
     const gfx::Rect& previous_bounds) {
+  if (drag_preview_active_) {
+    if (drag_bounds_animator_) {
+      drag_bounds_animator_->Cancel();
+    }
+    return;
+  }
   CancelAnimations();
   views::View::OnBoundsChanged(previous_bounds);
   if (bounds().size() != previous_bounds.size()) {
@@ -678,8 +735,28 @@ void MahoSidebarFavoritesGridView::OnBoundsChanged(
   }
 }
 
+void MahoSidebarFavoritesGridView::Layout(PassKey) {
+  if (drag_preview_active_) {
+    return;
+  }
+  LayoutSuperclass<views::View>(this);
+  if (drag_preview_tile_ && drag_preview_tile_->GetVisible() &&
+      drag_preview_slot_ >= 0) {
+    const int slot_count = std::min(static_cast<int>(favorite_count_) + 1,
+                                    static_cast<int>(kTileCount));
+    const int idx = std::clamp(drag_preview_slot_, 0, slot_count - 1);
+    const auto slot_bounds = GetTileBoundsForCount(slot_count);
+    if (!slot_bounds[idx].IsEmpty()) {
+      drag_preview_tile_->SetBoundsRect(slot_bounds[idx]);
+    }
+  }
+}
+
 void MahoSidebarFavoritesGridView::Update(
     const MahoSidebarFavoritesModel& model) {
+  if (drag_preview_active_) {
+    FinalizeExitDragPreview();
+  }
   cancelable_task_tracker_.TryCancelAll();
   SnapshotCurrentBounds();
   const size_t old_count = favorite_count_;
@@ -795,7 +872,16 @@ void MahoSidebarFavoritesGridView::Update(
       tile_icons_[index]->SetImageSize(
           gfx::Size(sidebar_layout::kFavoriteGlyphSizeDp,
                     sidebar_layout::kFavoriteGlyphSizeDp));
-      if (auto color = ExtractDominantColor(fav); color.has_value()) {
+      std::optional<SkColor> color;
+      if (cached_tile_colors_valid_[index] && cached_tile_favicons_[index] == fav) {
+        color = cached_tile_colors_[index];
+      } else {
+        color = ExtractDominantColor(fav);
+        cached_tile_favicons_[index] = fav;
+        cached_tile_colors_[index] = color;
+        cached_tile_colors_valid_[index] = true;
+      }
+      if (color.has_value()) {
         tile_btn->SetActiveBorderColor(*color);
       } else {
         tile_btn->ClearActiveBorderColor();
@@ -806,6 +892,15 @@ void MahoSidebarFavoritesGridView::Update(
       }
       tile_labels_[index]->SetText(specs[index].text);
       tile_labels_[index]->SetVisible(false);
+      if (tile_views_[index]->layer()) {
+        if (tile_tab_ids_[index] == active_drag_tab_id_ ||
+            tile_tab_ids_[index] == pending_external_drag_tab_id_) {
+          tile_views_[index]->layer()->SetOpacity(0.f);
+        } else {
+          tile_views_[index]->layer()->SetOpacity(1.f);
+          tile_views_[index]->layer()->SetTransform(gfx::Transform());
+        }
+      }
     } else {
       tile_labels_[index]->SetVisible(false);
     }
@@ -854,7 +949,16 @@ void MahoSidebarFavoritesGridView::OnFaviconLoaded(
                 sidebar_layout::kFavoriteGlyphSizeDp));
   if (index < tile_views_.size() && tile_views_[index]) {
     auto* tile_btn = static_cast<FavoriteTileButton*>(tile_views_[index].get());
-    if (auto color = ExtractDominantColor(fav); color.has_value()) {
+    std::optional<SkColor> color;
+    if (cached_tile_colors_valid_[index] && cached_tile_favicons_[index] == fav) {
+      color = cached_tile_colors_[index];
+    } else {
+      color = ExtractDominantColor(fav);
+      cached_tile_favicons_[index] = fav;
+      cached_tile_colors_[index] = color;
+      cached_tile_colors_valid_[index] = true;
+    }
+    if (color.has_value()) {
       tile_btn->SetActiveBorderColor(*color);
     } else {
       tile_btn->ClearActiveBorderColor();
@@ -1070,7 +1174,17 @@ int MahoSidebarFavoritesGridView::OnDragUpdated(
     SetBorder(nullptr);
     UpdateEmptyStateHighlight(false);
     UpdateContainerOwnedPreferredHeight(favorite_count_);
+    HideInsertionPreview();
     return static_cast<int>(ui::mojom::DragOperation::kNone);
+  }
+
+  active_drag_tab_id_ = payload.node_id;
+  for (size_t i = 0; i < kTileCount; ++i) {
+    if (tile_tab_ids_[i] == payload.node_id) {
+      if (tile_views_[i] && tile_views_[i]->layer()) {
+        tile_views_[i]->layer()->SetOpacity(0.f);
+      }
+    }
   }
 
   const size_t favorite_count = favorite_count_;
@@ -1080,6 +1194,7 @@ int MahoSidebarFavoritesGridView::OnDragUpdated(
     drag_reveal_active_ = false;
     SetBorder(nullptr);
     UpdateEmptyStateHighlight(false);
+    HideInsertionPreview();
     return static_cast<int>(ui::mojom::DragOperation::kNone);
   }
 
@@ -1099,13 +1214,30 @@ int MahoSidebarFavoritesGridView::OnDragUpdated(
     const int preview_index = ResolveDropIndex(
         event.location(), payload.node_id,
         payload.origin == SidebarDragOrigin::kFavorites);
-    if (preview_index != current_drag_preview_index_) {
-      current_drag_preview_index_ = preview_index;
-      AnimateDragPreview(preview_index, payload.node_id);
+
+    if (payload.origin != SidebarDragOrigin::kFavorites) {
+      if (!drag_preview_active_) {
+        EnterDragPreview(preview_index, payload.node_id);
+      } else if (preview_index != current_drag_preview_index_) {
+        current_drag_preview_index_ = preview_index;
+        UpdateDragPreview(preview_index);
+      }
+    } else {
+      if (preview_index != current_drag_preview_index_) {
+        current_drag_preview_index_ = preview_index;
+        AnimateDragPreview(preview_index, payload.node_id);
+      }
+      HideInsertionPreview();
     }
+    current_drag_preview_index_ = preview_index;
     SetBorder(nullptr);
   } else {
-    current_drag_preview_index_ = -1;
+    current_drag_preview_index_ = 0;
+    if (payload.origin != SidebarDragOrigin::kFavorites) {
+      ShowInsertionPreview(0, payload.node_id);
+    } else {
+      HideInsertionPreview();
+    }
   }
 
   return static_cast<int>(ui::mojom::DragOperation::kMove);
@@ -1136,11 +1268,22 @@ views::View::DropCallback MahoSidebarFavoritesGridView::GetDropCallback(
           return;
         }
         output_drag_op = ui::mojom::DragOperation::kMove;
+        LOG(WARNING) << "[MahoDropDbg] drop: origin=" << static_cast<int>(payload.origin)
+                     << " tab_id=" << payload.node_id
+                     << " target_index=" << target_index
+                     << " favorite_count=" << favorite_count;
         if (weak_grid) {
+          weak_grid->HideOverlayAndPhantom();
           weak_grid->MarkDropAccepted(payload.node_id);
         }
 
         const SidebarDropPlan plan = PlanFavoritesGridDrop(payload);
+        LOG(WARNING) << "[MahoDropDbg] plan.is_valid=" << plan.is_valid
+                     << " plan.steps.size=" << plan.steps.size();
+        for (const auto& step : plan.steps) {
+          LOG(WARNING) << "[MahoDropDbg]   step.kind=" << step.kind
+                       << " step.tab_id=" << step.node_id;
+        }
         ExecuteDropPlan(plan);
 
         const bool from_favorites =
@@ -1153,6 +1296,10 @@ views::View::DropCallback MahoSidebarFavoritesGridView::GetDropCallback(
           DispatchShellEventEx("reorder_favorite", {
               ShellEventField("tab_id", payload.node_id),
               ShellEventField("new_index", target_index)});
+        }
+
+        if (weak_grid) {
+          weak_grid->CleanupAfterDrop();
         }
       },
       target_index, favorite_count, weak_factory_.GetWeakPtr());
@@ -1201,8 +1348,13 @@ void MahoSidebarFavoritesGridView::OnDragStarted(const std::string& tab_id) {
 }
 
 void MahoSidebarFavoritesGridView::OnDragEnded() {
+  if (drag_preview_active_) {
+    ExitDragPreview(false);
+  }
   active_drag_tab_id_.clear();
+  pending_external_drag_tab_id_.clear();
   current_drag_preview_index_ = -1;
+  CleanupAfterDrop();
   for (size_t i = 0; i < kTileCount; ++i) {
     if (tile_views_[i] && tile_views_[i]->layer()) {
       tile_views_[i]->layer()->GetAnimator()->StopAnimating();
@@ -1212,11 +1364,43 @@ void MahoSidebarFavoritesGridView::OnDragEnded() {
   }
 }
 
+void MahoSidebarFavoritesGridView::OnExternalDragStarted(
+    const std::string& tab_id) {
+  pending_external_drag_tab_id_ = tab_id;
+  if (!browser_ || tab_id.empty()) return;
+  TabStripModel* strip = browser_->tab_strip_model();
+  if (!strip) return;
+  GURL url;
+  for (int i = 0; i < strip->count(); ++i) {
+    content::WebContents* contents = strip->GetWebContentsAt(i);
+    if (!contents) continue;
+    auto* helper = MahoTabIdHelper::FromWebContents(contents);
+    if (helper && helper->stable_tab_id() == tab_id) {
+      url = contents->GetVisibleURL();
+      break;
+    }
+  }
+  if (!url.is_valid()) return;
+  favicon::FaviconService* favicon_service =
+      FaviconServiceFactory::GetForProfile(
+          browser_->profile(), ServiceAccessType::EXPLICIT_ACCESS);
+  if (favicon_service) {
+    favicon_service->GetFaviconImageForPageURL(
+        url, base::DoNothing(), &drag_preview_task_tracker_);
+  }
+}
+
 void MahoSidebarFavoritesGridView::OnDragExited() {
+  if (drag_preview_active_) {
+    ExitDragPreview(true);
+  }
   current_drag_preview_index_ = -1;
   drag_over_drop_target_ = false;
   SetBorder(nullptr);
   UpdateEmptyStateHighlight(false);
+  HideInsertionPreview();
+  active_drag_tab_id_.clear();
+  pending_external_drag_tab_id_.clear();
   for (size_t i = 0; i < kTileCount; ++i) {
     if (tile_views_[i] && tile_views_[i]->GetVisible() &&
         tile_views_[i]->layer()) {
@@ -1224,7 +1408,9 @@ void MahoSidebarFavoritesGridView::OnDragExited() {
           .Once()
           .SetDuration(base::Milliseconds(180))
           .SetTransform(tile_views_[i]->layer(), gfx::Transform(),
-                        gfx::Tween::EASE_IN_OUT);
+                        gfx::Tween::EASE_IN_OUT)
+          .SetOpacity(tile_views_[i]->layer(), 1.0f,
+                      gfx::Tween::EASE_IN_OUT);
     }
   }
   if (drag_reveal_active_) {
@@ -1246,7 +1432,7 @@ ui::DropTargetEvent MahoSidebarFavoritesGridView::ForwardDropEventToGrid(
 int MahoSidebarFavoritesGridView::ResolveDropIndex(
     const gfx::Point& point,
     const std::string& source_tab_id,
-    bool source_is_favorite) const {
+    bool source_is_favorite) const {  // L3-EXEMPT: local parameter
   const int favorite_count = static_cast<int>(GetVisibleFavoriteCount());
   // Always resolve against the full N-item grid so the index matches
   // AnimateDragPreview's GetTileBoundsForCount(N) layout.  Using N-1
@@ -1254,7 +1440,7 @@ int MahoSidebarFavoritesGridView::ResolveDropIndex(
   const int item_count = favorite_count;
   const int target_index = TileIndexForPoint(point, item_count);
 
-  if (!source_is_favorite) {
+  if (!source_is_favorite) {  // L3-EXEMPT: local parameter
     return std::clamp(target_index, 0, item_count);
   }
 
@@ -1352,8 +1538,7 @@ MahoSidebarFavoritesGridView::GetTileBoundsForCount(int item_count) const {
 }
 
 size_t MahoSidebarFavoritesGridView::GetVisibleFavoriteCount() const {
-  return std::count_if(tile_urls_.begin(), tile_urls_.end(),
-                       [](const GURL& url) { return url.is_valid(); });
+  return favorite_count_;
 }
 
 void MahoSidebarFavoritesGridView::MarkDropAccepted(const std::string& tab_id) {
@@ -1373,7 +1558,7 @@ void MahoSidebarFavoritesGridView::OnTileDragDone(const std::string& tab_id) {
     return;
   }
 
-  DispatchShellEvent("unfavorite_tab", {{"tab_id", tab_id}});
+  DispatchShellEvent("close_tab", {{"tab_id", tab_id}});
 }
 
 void MahoSidebarFavoritesGridView::OnFavoritesHintDismissed() {
@@ -1412,14 +1597,6 @@ bool MahoSidebarFavoritesGridView::ActivateFavoriteByIndex(size_t index) {
   const std::string& tab_id = tile_tab_ids_[index];
   if (!tab_id.empty()) {
     sidebar_view->ActivateTabById(tab_id);
-    return true;
-  }
-  if (browser_ && index < tile_urls_.size() && tile_urls_[index].is_valid()) {
-    browser_->OpenURL(
-        content::OpenURLParams(tile_urls_[index], content::Referrer(),
-                               WindowOpenDisposition::NEW_FOREGROUND_TAB,
-                               ui::PAGE_TRANSITION_AUTO_BOOKMARK, false),
-        /*navigation_handle_callback=*/{});
     return true;
   }
   return false;
@@ -1600,10 +1777,16 @@ void MahoSidebarFavoritesGridView::AnimateRemoval(
 void MahoSidebarFavoritesGridView::AnimateDragPreview(
     int preview_index,
     const std::string& dragged_tab_id) {
-  const int item_count = static_cast<int>(GetVisibleFavoriteCount());
-  if (item_count <= 0) {
+  const int base_count = static_cast<int>(GetVisibleFavoriteCount());
+  if (base_count <= 0) {
     return;
   }
+  const bool is_insertion =
+      std::find(tile_tab_ids_.begin(), tile_tab_ids_.end(), dragged_tab_id) ==
+      tile_tab_ids_.end();
+  const int item_count =
+      is_insertion ? std::min(base_count + 1, static_cast<int>(kTileCount))
+                   : base_count;
 
   const auto ideal_bounds = GetTileBoundsForCount(item_count);
 
@@ -1656,6 +1839,359 @@ void MahoSidebarFavoritesGridView::CancelAnimations() {
     }
   }
   current_drag_preview_index_ = -1;
+}
+
+void MahoSidebarFavoritesGridView::ShowInsertionPreview(
+    int preview_index,
+    const std::string& tab_id) {
+  if (preview_index < 0 || tab_id.empty()) {
+    HideInsertionPreview();
+    return;
+  }
+
+  if (!drag_preview_tile_) {
+    auto tile = std::make_unique<views::View>();
+    tile->SetPaintToLayer();
+    tile->layer()->SetFillsBoundsOpaquely(false);
+    tile->SetPreferredSize(gfx::Size(0, 0));
+    tile->SetVisible(false);
+    tile->SetCanProcessEventsWithinSubtree(false);
+    tile->SetBackground(views::CreateRoundedRectBackground(
+        kMahoColorInteractiveChipIdleBackground,
+        sidebar_layout::kFavoriteTileCornerRadiusDp));
+    tile->SetBorder(views::CreateEmptyBorder(gfx::Insets(1)));
+
+    auto* tile_layout = tile->SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kVertical,
+        sidebar_layout::kFavoriteTileInsets, 0));
+    tile_layout->set_main_axis_alignment(
+        views::BoxLayout::MainAxisAlignment::kCenter);
+    tile_layout->set_cross_axis_alignment(
+        views::BoxLayout::CrossAxisAlignment::kCenter);
+
+    auto glyph_container = std::make_unique<views::View>();
+    glyph_container->SetPreferredSize(
+        gfx::Size(sidebar_layout::kFavoriteGlyphContainerSizeDp,
+                  sidebar_layout::kFavoriteGlyphContainerSizeDp));
+    auto* glyph_layout = glyph_container->SetLayoutManager(
+        std::make_unique<views::BoxLayout>(
+            views::BoxLayout::Orientation::kVertical, gfx::Insets(), 0));
+    glyph_layout->set_main_axis_alignment(
+        views::BoxLayout::MainAxisAlignment::kCenter);
+    glyph_layout->set_cross_axis_alignment(
+        views::BoxLayout::CrossAxisAlignment::kCenter);
+
+    auto icon = std::make_unique<views::ImageView>();
+    icon->SetImageSize(gfx::Size(sidebar_layout::kFavoriteGlyphSizeDp,
+                                 sidebar_layout::kFavoriteGlyphSizeDp));
+    drag_preview_icon_ = icon.get();
+    glyph_container->AddChildView(std::move(icon));
+    tile->AddChildView(std::move(glyph_container));
+
+    drag_preview_tile_ = AddChildView(std::move(tile));
+  }
+
+  // Compute target slot bounds in grid-view coordinates.
+  const int slot_count = std::min(static_cast<int>(favorite_count_) + 1,
+                                  static_cast<int>(kTileCount));
+  const int clamped_index = std::clamp(preview_index, 0, slot_count - 1);
+  const auto slot_bounds = GetTileBoundsForCount(slot_count);
+  const gfx::Rect target_bounds = slot_bounds[clamped_index];
+  if (target_bounds.IsEmpty()) {
+    HideInsertionPreview();
+    return;
+  }
+
+  drag_preview_slot_ = clamped_index;
+  drag_preview_tile_->SetBoundsRect(target_bounds);
+  drag_preview_tile_->SetVisible(true);
+  drag_preview_tile_->layer()->SetOpacity(1.f);
+
+  if (drag_preview_tab_id_ == tab_id && drag_preview_url_.is_valid()) {
+    return;
+  }
+  drag_preview_tab_id_ = tab_id;
+  drag_preview_url_ = GURL();
+
+  ui::ImageModel fav;
+  GURL resolved_url;
+  if (browser_ && browser_->tab_strip_model()) {
+    TabStripModel* strip = browser_->tab_strip_model();
+    const int strip_count = strip->count();
+    for (int i = 0; i < strip_count; ++i) {
+      content::WebContents* contents = strip->GetWebContentsAt(i);
+      if (!contents) {
+        continue;
+      }
+      auto* helper = MahoTabIdHelper::FromWebContents(contents);
+      if (!helper || helper->stable_tab_id() != tab_id) {
+        continue;
+      }
+      resolved_url = contents->GetVisibleURL();
+      auto* tab_iface = tabs::TabInterface::GetFromContents(contents);
+      if (tab_iface) {
+        fav = TabUIHelper::From(tab_iface)->GetFavicon();
+      }
+      break;
+    }
+  }
+
+  drag_preview_url_ = resolved_url;
+
+  if (fav.IsEmpty() && resolved_url.is_valid() && browser_) {
+    drag_preview_task_tracker_.TryCancelAll();
+    favicon::FaviconService* favicon_service =
+        FaviconServiceFactory::GetForProfile(
+            browser_->profile(), ServiceAccessType::EXPLICIT_ACCESS);
+    if (favicon_service) {
+      favicon_service->GetFaviconImageForPageURL(
+          resolved_url,
+          base::BindOnce(
+              &MahoSidebarFavoritesGridView::OnInsertionPreviewFaviconLoaded,
+              weak_factory_.GetWeakPtr(), tab_id, resolved_url),
+          &drag_preview_task_tracker_);
+    }
+    fav = ui::ImageModel::FromVectorIcon(vector_icons::kGlobeIcon);
+  } else if (fav.IsEmpty()) {
+    fav = ui::ImageModel::FromVectorIcon(vector_icons::kGlobeIcon);
+  }
+
+  drag_preview_icon_->SetImage(fav);
+  drag_preview_icon_->SetImageSize(
+      gfx::Size(sidebar_layout::kFavoriteGlyphSizeDp,
+                sidebar_layout::kFavoriteGlyphSizeDp));
+}
+
+void MahoSidebarFavoritesGridView::HideInsertionPreview() {
+  drag_preview_task_tracker_.TryCancelAll();
+  drag_preview_tab_id_.clear();
+  drag_preview_url_ = GURL();
+  drag_preview_slot_ = -1;
+  if (drag_preview_tile_) {
+    drag_preview_tile_->SetVisible(false);
+  }
+}
+
+void MahoSidebarFavoritesGridView::OnInsertionPreviewFaviconLoaded(
+    const std::string& tab_id,
+    const GURL& requested_url,
+    const favicon_base::FaviconImageResult& result) {
+  if (drag_preview_tab_id_ != tab_id || drag_preview_url_ != requested_url ||
+      !drag_preview_icon_) {
+    return;
+  }
+  if (result.image.IsEmpty()) {
+    return;
+  }
+  drag_preview_icon_->SetImage(ui::ImageModel::FromImage(result.image));
+  drag_preview_icon_->SetImageSize(
+      gfx::Size(sidebar_layout::kFavoriteGlyphSizeDp,
+                sidebar_layout::kFavoriteGlyphSizeDp));
+}
+
+ui::ImageModel MahoSidebarFavoritesGridView::ResolveFaviconForTabId(
+    const std::string& tab_id) {
+  if (tab_id.empty() || !browser_ || !browser_->tab_strip_model()) {
+    return ui::ImageModel::FromVectorIcon(vector_icons::kGlobeIcon);
+  }
+  TabStripModel* strip = browser_->tab_strip_model();
+  const int strip_count = strip->count();
+  for (int i = 0; i < strip_count; ++i) {
+    content::WebContents* contents = strip->GetWebContentsAt(i);
+    if (!contents) {
+      continue;
+    }
+    auto* helper = MahoTabIdHelper::FromWebContents(contents);
+    if (!helper || helper->stable_tab_id() != tab_id) {
+      continue;
+    }
+    auto* tab_iface = tabs::TabInterface::GetFromContents(contents);
+    if (tab_iface) {
+      ui::ImageModel fav = TabUIHelper::From(tab_iface)->GetFavicon();
+      if (!fav.IsEmpty()) {
+        return fav;
+      }
+    }
+    break;
+  }
+  return ui::ImageModel::FromVectorIcon(vector_icons::kGlobeIcon);
+}
+
+void MahoSidebarFavoritesGridView::EnterDragPreview(
+    int preview_slot,
+    const std::string& dragged_tab_id) {
+  DCHECK(!drag_preview_active_);
+  SnapshotCurrentBounds();
+
+  content_view_->SetLayoutManager(
+      std::unique_ptr<views::LayoutManager>(nullptr));
+
+  drag_preview_tile_order_.clear();
+  for (size_t i = 0; i < kTileCount; ++i) {
+    if (tile_views_[i] && tile_views_[i]->GetVisible() &&
+        tile_tab_ids_[i] != dragged_tab_id) {
+      drag_preview_tile_order_.push_back(i);
+    }
+  }
+
+  for (size_t i : drag_preview_tile_order_) {
+    views::View* tile = tile_views_[i];
+    gfx::Rect seed = snapshot_bounds_[i];
+    gfx::Point origin = seed.origin();
+    views::View::ConvertPointToTarget(this, content_view_, &origin);
+    seed.set_origin(origin);
+
+    views::View* old_parent = tile->parent();
+    auto owned = old_parent->RemoveChildViewT(tile);
+    tile_views_[i] = static_cast<views::Button*>(
+        content_view_->AddChildView(std::move(owned)));
+    tile_views_[i]->SetBoundsRect(seed);
+  }
+
+  row_views_.clear();
+  std::vector<views::View*> to_remove;
+  for (views::View* child : content_view_->children()) {
+    bool is_tile = false;
+    for (size_t i : drag_preview_tile_order_) {
+      if (tile_views_[i] == child) {
+        is_tile = true;
+        break;
+      }
+    }
+    if (!is_tile && child != drag_preview_tile_) {
+      to_remove.push_back(child);
+    }
+  }
+  for (views::View* child : to_remove) {
+    content_view_->RemoveChildViewT(child);
+  }
+
+  UpdateContainerOwnedPreferredHeight(favorite_count_ + 1);
+
+  ShowInsertionPreview(preview_slot, dragged_tab_id);
+  if (drag_preview_tile_ && drag_preview_tile_->parent() != content_view_) {
+    views::View* old_parent = drag_preview_tile_->parent();
+    if (old_parent) {
+      auto owned = old_parent->RemoveChildViewT(drag_preview_tile_.get());
+      drag_preview_tile_ = content_view_->AddChildView(std::move(owned));
+    }
+  }
+  if (drag_preview_tile_) {
+    drag_preview_tile_->SetVisible(true);
+  }
+
+  if (!drag_bounds_animator_) {
+    drag_bounds_animator_ =
+        std::make_unique<views::BoundsAnimator>(content_view_);
+    drag_bounds_animator_->SetAnimationDuration(base::Milliseconds(220));
+    drag_bounds_animator_->set_tween_type(gfx::Tween::EASE_IN_OUT);
+    drag_bounds_animator_->AddObserver(this);
+  }
+
+  drag_preview_active_ = true;
+  drag_preview_source_tab_id_ = dragged_tab_id;
+  UpdateDragPreview(preview_slot);
+}
+
+void MahoSidebarFavoritesGridView::UpdateDragPreview(int preview_slot) {
+  DCHECK(drag_preview_active_);
+  const int N = static_cast<int>(drag_preview_tile_order_.size());
+  const int slot_count = std::min(N + 1, static_cast<int>(kTileCount));
+  drag_preview_slot_ = std::clamp(preview_slot, 0, slot_count - 1);
+
+  auto targets = GetTileBoundsForCount(slot_count);
+  for (auto& r : targets) {
+    gfx::Point origin = r.origin();
+    views::View::ConvertPointToTarget(this, content_view_, &origin);
+    r.set_origin(origin);
+  }
+
+  for (int j = 0; j < N; ++j) {
+    const int slot = (j >= drag_preview_slot_) ? j + 1 : j;
+    if (slot >= slot_count) {
+      break;
+    }
+    views::View* tile = tile_views_[drag_preview_tile_order_[j]];
+    if (!targets[slot].IsEmpty()) {
+      drag_bounds_animator_->AnimateViewTo(tile, targets[slot]);
+    }
+  }
+
+  if (drag_preview_tile_ && !targets[drag_preview_slot_].IsEmpty()) {
+    drag_preview_tile_->SetBoundsRect(targets[drag_preview_slot_]);
+  }
+}
+
+void MahoSidebarFavoritesGridView::ExitDragPreview(bool animate) {
+  if (!drag_preview_active_) {
+    return;
+  }
+  drag_preview_active_ = false;
+
+  if (animate && drag_bounds_animator_) {
+    for (size_t j = 0; j < drag_preview_tile_order_.size(); ++j) {
+      const size_t i = drag_preview_tile_order_[j];
+      gfx::Rect target = snapshot_bounds_[i];
+      gfx::Point origin = target.origin();
+      views::View::ConvertPointToTarget(this, content_view_, &origin);
+      target.set_origin(origin);
+      drag_bounds_animator_->AnimateViewTo(tile_views_[i], target);
+    }
+    if (drag_preview_tile_) {
+      drag_preview_tile_->SetVisible(false);
+    }
+    if (!drag_bounds_animator_->IsAnimating()) {
+      FinalizeExitDragPreview();
+    }
+  } else {
+    FinalizeExitDragPreview();
+  }
+}
+
+void MahoSidebarFavoritesGridView::FinalizeExitDragPreview() {
+  if (finalize_in_progress_) {
+    return;
+  }
+  base::AutoReset<bool> guard(&finalize_in_progress_, true);
+  drag_preview_active_ = false;
+  auto tile_order = std::move(drag_preview_tile_order_);
+
+  if (drag_bounds_animator_) {
+    drag_bounds_animator_->Cancel();
+  }
+
+  if (drag_preview_tile_ && drag_preview_tile_->parent()) {
+    drag_preview_tile_->parent()->RemoveChildViewT(drag_preview_tile_.get());
+    drag_preview_tile_ = nullptr;
+    drag_preview_icon_ = nullptr;
+  }
+
+  auto* content_layout = content_view_->SetLayoutManager(
+      std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kVertical, gfx::Insets(),
+          sidebar_layout::kFavoriteTileSpacingDp));
+  content_layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kStretch);
+
+  current_layout_spec_ = LayoutSpec{};
+  RebuildGridRows(favorite_count_);
+  UpdateContainerOwnedPreferredHeight(favorite_count_);
+
+  drag_preview_source_tab_id_.clear();
+  drag_preview_slot_ = -1;
+}
+
+void MahoSidebarFavoritesGridView::OnBoundsAnimatorProgressed(
+    views::BoundsAnimator* /*animator*/) {}
+
+void MahoSidebarFavoritesGridView::OnBoundsAnimatorDone(
+    views::BoundsAnimator* /*animator*/) {
+  if (!drag_preview_active_ && !drag_preview_tile_order_.empty()) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&MahoSidebarFavoritesGridView::FinalizeExitDragPreview,
+                       weak_factory_.GetWeakPtr()));
+  }
 }
 
 }  // namespace maho
