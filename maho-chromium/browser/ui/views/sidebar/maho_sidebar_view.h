@@ -58,6 +58,7 @@ class MahoSidebarFavoritesGridView;
 class MahoSidebarFooterView;
 class MahoSidebarLibraryActionPaneView;
 class MahoSidebarMediaView;
+class MahoSidebarNowPlayingView;
 class MahoSidebarSearchView;
 class MahoSidebarTabListView;
 class MahoSidebarUpdateNotificationController;
@@ -90,6 +91,7 @@ class MahoSidebarView
   DropCallback GetDropCallback(const ui::DropTargetEvent& event) override;
   void OnDragExited() override;
   void OnDragEnded();
+  void OnDragStarted(const std::string& tab_id);
 
   void OpenLibrary();
   void OpenLibrary(MahoSidebarLibraryRailView::Category category);
@@ -131,6 +133,10 @@ class MahoSidebarView
     return downloads_view_;
   }
   MahoSidebarMediaView* media_view_for_testing() { return media_view_; }
+  MahoSidebarLibraryRailView* library_rail_view() { return library_rail_view_; }
+  base::WeakPtr<MahoSidebarView> GetWeakPtr() {
+    return weak_factory_.GetWeakPtr();
+  }
   MahoSidebarLibraryRailView* library_rail_view_for_testing() {
     return library_rail_view_;
   }
@@ -156,6 +162,7 @@ class MahoSidebarView
 
   void ActivateTabById(const std::string& tab_id);
   bool ActivateFavoriteByIndex(size_t index);
+  MahoSidebarNowPlayingView* AddNowPlayingView(std::unique_ptr<MahoSidebarNowPlayingView> view);
 
  private:
   void BuildUi();
@@ -191,10 +198,14 @@ class MahoSidebarView
   void UpdateTabList(const MahoSidebarTabListModel& model);
   void UpdateFooter(const MahoSidebarFooterModel& model);
   void PositionUpdateNotification();
+  void PositionNowPlayingView();
 
   // views::ViewObserver:
   void OnViewPreferredSizeChanged(views::View* observed_view) override;
   void OnViewBoundsChanged(views::View* observed_view) override;
+  void OnViewVisibilityChanged(views::View* observed_view,
+                               views::View* starting_view,
+                               bool visible) override;
 
   void OpenWebUIInNewTab(const GURL& url);
 
@@ -241,6 +252,7 @@ class MahoSidebarView
   raw_ptr<views::ScrollView> tab_scroll_view_ = nullptr;
   base::CallbackListSubscription tab_scroll_subscription_;
   raw_ptr<MahoSidebarFooterView> footer_view_ = nullptr;
+  raw_ptr<MahoSidebarNowPlayingView> now_playing_view_ = nullptr;
   std::unique_ptr<MahoSidebarUpdateNotificationController>
       update_notification_controller_;
   raw_ptr<MahoSidebarUpdateNotificationView> update_notification_view_ =
@@ -256,11 +268,15 @@ class MahoSidebarView
 
   bool refresh_scheduled_ = false;
   bool needs_re_refresh_ = false;
+  bool refresh_in_progress_ = false;
   base::OneShotTimer cosmetic_refresh_timer_;
   std::set<content::WebContents*> recently_registered_contents_;
   base::ScopedObservation<translate::ContentTranslateDriver,
                          translate::ContentTranslateDriver::TranslationObserver>
       translate_observation_{this};
+
+  void OnBackgroundStateReady(SidebarStateBackgroundResult result);
+
   base::WeakPtrFactory<MahoSidebarView> weak_factory_{this};
 };
 

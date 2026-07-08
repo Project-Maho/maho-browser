@@ -99,7 +99,9 @@ class MahoSidebarTabListView : public views::View,
   // origin tab is successfully dropped on a section container.  The callback
   // receives the tab_id of the dropped tab and should call
   // MahoSidebarFavoritesGridView::MarkDropAccepted to suppress the duplicate
-  // unfavorite_tab that OnTileDragDone would otherwise fire.
+  // destructive close_tab that OnTileDragDone would otherwise fire when a
+  // drag terminates outside any accepting target (see ADR 11 — role transitions
+  // vs. destructive close semantics).
   void SetFavoritesDropAcceptedCallback(
       base::RepeatingCallback<void(const std::string&)> callback);
 

@@ -175,6 +175,19 @@ void NotifySidebarDragEnded(views::View* start_view) {
   }
 }
 
+void NotifySidebarDragStarted(views::View* start_view,
+                               const std::string& tab_id) {
+  views::View* v = start_view;
+  while (v) {
+    if (v->GetClassName() == std::string("MahoSidebarView")) {
+      MahoSidebarView* sidebar_view = static_cast<MahoSidebarView*>(v);
+      sidebar_view->OnDragStarted(tab_id);
+      break;
+    }
+    v = v->parent();
+  }
+}
+
 // Virtual layout manager for tab_rows_ that culls off-screen children based
 // on scroll position, reducing the active view working set.
 class SidebarVirtualLayoutDelegate : public views::LayoutManagerBase {
@@ -1850,8 +1863,35 @@ void SidebarTabRowView::WriteDragDataForView(views::View* sender,
   payload.source_parent_folder_id = source_parent_folder_id_;
   payload.source_folder_child_index = folder_child_index_;
   WriteMahoDragData(payload, data);
-  data->provider().SetDragImage(CreateSidebarDragImage(sender),
-                                gfx::Vector2d(0, 0));
+  NotifySidebarDragStarted(this, tab_id_);
+
+  // Hide layer-backed children before Paint() to avoid missing them in the snapshot.
+  const bool audio_was_visible = audio_button_->GetVisible();
+  const bool close_was_visible = close_button_->GetVisible();
+  audio_button_->SetVisible(false);
+  close_button_->SetVisible(false);
+
+  // Temporarily move to origin so PaintInfo::CreateRootPaintInfo offset == 0.
+  // Without this, Paint() DCHECKs: context.PaintOffset().y() == offset.y().
+  const gfx::Rect og_bounds = bounds();
+  gfx::Rect adjusted_bounds = og_bounds;
+  adjusted_bounds.Offset(-og_bounds.OffsetFromOrigin());
+  const gfx::Rect unmirrored_bounds =
+      parent() ? parent()->GetMirroredRect(adjusted_bounds) : adjusted_bounds;
+  SetBoundsRect(unmirrored_bounds);
+
+  const ui::ColorProvider* color_provider = GetColorProvider();
+  const SkColor bg_color =
+      color_provider ? color_provider->GetColor(kMahoColorTabRowHoverBackground)
+                     : SkColorSetARGB(0x33, 0x88, 0x88, 0x88);
+  auto drag_image = CreateSidebarDragImageWithBackground(
+      this, bg_color, static_cast<float>(kRowCornerRadiusDp));
+
+  SetBoundsRect(og_bounds);
+  audio_button_->SetVisible(audio_was_visible);
+  close_button_->SetVisible(close_was_visible);
+
+  data->provider().SetDragImage(drag_image, press_pt.OffsetFromOrigin());
 }
 
 int SidebarTabRowView::GetDragOperationsForView(views::View* sender,
@@ -1957,10 +1997,6 @@ void SidebarTabRowView::UpdateAppearance() {
   const float close_opacity = show_close_button ? 1.0f : 0.0f;
   close_button_->layer()->SetOpacity(close_opacity);
   close_button_->SetCanProcessEventsWithinSubtree(show_close_button);
-  if (audio_button_) {
-    audio_button_->layer()->SetOpacity(1.0f - close_opacity);
-    audio_button_->SetCanProcessEventsWithinSubtree(!show_close_button);
-  }
 }
 
 SidebarTabRowView::SidebarTabDropZone SidebarTabRowView::ResolveDropZone(
@@ -2193,6 +2229,9 @@ void SidebarFolderRowView::OnMouseExited(const ui::MouseEvent& event) {
 bool SidebarFolderRowView::OnMousePressed(const ui::MouseEvent& event) {
   toggle_pending_ = event.IsOnlyLeftMouseButton() && !is_editing_name_;
   toggle_handled_for_current_press_ = false;
+  if (toggle_pending_) {
+    return true;
+  }
   return views::View::OnMousePressed(event);
 }
 
@@ -2823,7 +2862,22 @@ MahoSidebarTabListView::~MahoSidebarTabListView() = default;
 
 void MahoSidebarTabListView::SetFavoritesDropAcceptedCallback(
     base::RepeatingCallback<void(const std::string&)> callback) {
-  favorites_drop_accepted_callback_ = std::move(callback);
+  favorites_drop_accepted_callback_ = callback;
+
+  auto propagate = [&callback](auto& self, views::View* root) -> void {
+    if (!root) return;
+    if (auto* lane = views::AsViewClass<SidebarInsertionLaneView>(root)) {
+      lane->SetFavoritesDropAcceptedCallback(callback);
+    } else if (auto* folder = views::AsViewClass<SidebarFolderRowView>(root)) {
+      folder->SetFavoritesDropAcceptedCallback(callback);
+    } else if (auto* tab = views::AsViewClass<SidebarTabRowView>(root)) {
+      tab->SetFavoritesDropAcceptedCallback(callback);
+    }
+    for (views::View* child : root->children()) {
+      self(self, child);
+    }
+  };
+  propagate(propagate, this);
 }
 
 bool MahoSidebarTabListView::IsTabPreviewShowingForTesting() const {
@@ -2865,7 +2919,7 @@ void MahoSidebarTabListView::Update(const MahoSidebarTabListModel& model,
   LOG(INFO) << "[MAHO_PERF] Update START";
   browser_ = browser;
   active_space_id_ = model.active_space_id;
-  pinned_drop_lane_revealed_ = false;
+  HideEmptyPinnedDropLane();
 
   const TabStripModel* strip = browser ? browser->tab_strip_model() : nullptr;
   const bool live_tab_strip_is_empty = !strip || strip->empty();
@@ -3603,6 +3657,7 @@ struct PersistedTabInfo {
   std::string url;
   std::string title;
   bool is_pinned = false;
+  std::string role_type;
   double scroll_x = 0.0;
   double scroll_y = 0.0;
 };
@@ -3631,6 +3686,11 @@ std::optional<PersistedTabInfo> QueryTabFromCore(const std::string& tab_id) {
   if (const std::string* url = dict.FindString("url")) info.url = *url;
   if (const std::string* title = dict.FindString("title")) info.title = *title;
   if (auto is_pinned = dict.FindBool("isPinned")) info.is_pinned = *is_pinned;
+  if (const auto* role = dict.FindDict("role")) {
+    if (const std::string* type = role->FindString("type")) {
+      info.role_type = *type;
+    }
+  }
   if (const auto* scroll = dict.FindDict("scrollPosition")) {
     if (auto x = scroll->FindDouble("x")) info.scroll_x = *x;
     if (auto y = scroll->FindDouble("y")) info.scroll_y = *y;
@@ -3665,6 +3725,11 @@ void MahoSidebarTabListView::WakeSuspendedTab(const std::string& tab_id) {
   if (!persisted) {
     LOG(INFO) << "[MAHO_PERF] WakeSuspendedTab END(no_persisted) "
               << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
+    return;
+  }
+
+  if (persisted->role_type == "favorite") {
+    LOG(ERROR) << "BUG: favorite should never be suspended";
     return;
   }
 

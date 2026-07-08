@@ -141,8 +141,9 @@ MahoSidebarNowPlayingView* MahoSidebarView::AddNowPlayingView(std::unique_ptr<Ma
   if (!body_host_ || !footer_view_) {
     return nullptr;
   }
-  size_t footer_index = body_host_->GetIndexOf(footer_view_).value_or(0);
-  now_playing_view_ = body_host_->AddChildViewAt(std::move(view), footer_index);
+  now_playing_view_ = AddChildView(std::move(view));
+  now_playing_view_->SetProperty(views::kViewIgnoredByLayoutKey, true);
+  now_playing_view_->AddObserver(this);
   return now_playing_view_;
 }
 
@@ -835,11 +836,26 @@ void MahoSidebarView::OnViewPreferredSizeChanged(views::View* observed_view) {
   if (observed_view == update_notification_view_) {
     PositionUpdateNotification();
   }
+  if (observed_view == now_playing_view_) {
+    PositionNowPlayingView();
+  }
 }
 
 void MahoSidebarView::OnViewBoundsChanged(views::View* observed_view) {
   if (observed_view == footer_view_ || observed_view == this) {
     PositionUpdateNotification();
+    PositionNowPlayingView();
+  }
+  if (observed_view == now_playing_view_) {
+    PositionNowPlayingView();
+  }
+}
+
+void MahoSidebarView::OnViewVisibilityChanged(views::View* observed_view,
+                                              views::View* starting_view,
+                                              bool visible) {
+  if (observed_view == now_playing_view_) {
+    PositionNowPlayingView();
   }
 }
 
@@ -866,6 +882,33 @@ void MahoSidebarView::PositionUpdateNotification() {
           : local_bounds.bottom();
   const int top = footer_top - pref.height();
   update_notification_view_->SetBoundsRect(
+      gfx::Rect(rail_x + kHorizontalMargin, top, width, pref.height()));
+}
+
+void MahoSidebarView::PositionNowPlayingView() {
+  if (!now_playing_view_ || !footer_view_ || !body_host_) {
+    return;
+  }
+  if (!now_playing_view_->GetVisible()) {
+    now_playing_view_->SetBoundsRect(gfx::Rect());
+    return;
+  }
+  const gfx::Rect local_bounds = GetLocalBounds();
+  if (local_bounds.IsEmpty()) {
+    return;
+  }
+  constexpr int kHorizontalMargin = 10;
+  const int rail_x = body_host_->x();
+  const int rail_w = body_host_->width();
+  const int width = std::max(0, rail_w - kHorizontalMargin * 2);
+  const gfx::Size pref =
+      now_playing_view_->GetPreferredSize(views::SizeBounds(width, {}));
+  const int footer_top =
+      footer_view_->GetVisible()
+          ? body_host_->y() + footer_view_->y()
+          : local_bounds.bottom();
+  const int top = footer_top - pref.height();
+  now_playing_view_->SetBoundsRect(
       gfx::Rect(rail_x + kHorizontalMargin, top, width, pref.height()));
 }
 
@@ -1086,6 +1129,12 @@ void MahoSidebarView::OnDragExited() {
 void MahoSidebarView::OnDragEnded() {
   if (favorites_view_) {
     favorites_view_->OnDragEnded();
+  }
+}
+
+void MahoSidebarView::OnDragStarted(const std::string& tab_id) {
+  if (favorites_view_) {
+    favorites_view_->OnExternalDragStarted(tab_id);
   }
 }
 
