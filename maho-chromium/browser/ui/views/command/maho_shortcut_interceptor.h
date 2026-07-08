@@ -6,6 +6,7 @@
 #include <string>
 
 #include "components/input/native_web_keyboard_event.h"
+#include "ui/base/accelerators/accelerator.h"
 
 class Browser;
 
@@ -35,6 +36,12 @@ class MahoShortcutInterceptor {
   // without dispatching the action. Intended for focused widgets that need
   // to mirror BrowserView shortcut behavior locally.
   static std::string ResolveActionForKeyEvent(const ui::KeyEvent& event);
+
+  // Resolve a ui::Accelerator to a Maho shortcut action id (empty if none).
+  // Used by BrowserView::AcceleratorPressed to dispatch Maho shortcuts
+  // registered via FocusManager, which fires regardless of focus target.
+  static std::string ResolveActionForAccelerator(
+      const ui::Accelerator& accelerator);
 
   static void SetRecordingMode(bool enabled);
   static bool IsRecording();

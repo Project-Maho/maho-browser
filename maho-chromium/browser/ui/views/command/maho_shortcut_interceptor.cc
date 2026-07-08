@@ -16,6 +16,7 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
+#include "ui/base/accelerators/accelerator.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/event.h"
 #include "ui/events/keycodes/keyboard_codes.h"
@@ -149,6 +150,42 @@ std::string BuildKeyComboJson(const ui::KeyEvent& event) {
   return "{\"key\":\"" + key + "\",\"modifiers\":" + modifiers + "}";
 }
 
+std::string BuildKeyComboJson(const ui::Accelerator& accelerator) {
+  std::string key = VKeyToString(accelerator.key_code());
+  if (key.empty()) {
+    return {};
+  }
+
+  std::string modifiers = "[";
+  bool first = true;
+
+  auto append = [&](const char* name) {
+    if (!first) {
+      modifiers += ",";
+    }
+    modifiers += "\"";
+    modifiers += name;
+    modifiers += "\"";
+    first = false;
+  };
+
+  if (accelerator.IsAltDown()) {
+    append("alt");
+  }
+  if (accelerator.IsCtrlDown()) {
+    append("ctrl");
+  }
+  if (accelerator.IsCmdDown()) {
+    append("meta");
+  }
+  if (accelerator.IsShiftDown()) {
+    append("shift");
+  }
+
+  modifiers += "]";
+  return "{\"key\":\"" + key + "\",\"modifiers\":" + modifiers + "}";
+}
+
 std::string ResolveActionForKeyComboJson(const std::string& json) {
   if (json.empty()) {
     return {};
@@ -191,6 +228,12 @@ void LogShortcutTrace(const input::NativeWebKeyboardEvent& event,
 std::string MahoShortcutInterceptor::ResolveActionForKeyEvent(
     const ui::KeyEvent& event) {
   return ResolveActionForKeyComboJson(BuildKeyComboJson(event));
+}
+
+// static
+std::string MahoShortcutInterceptor::ResolveActionForAccelerator(
+    const ui::Accelerator& accelerator) {
+  return ResolveActionForKeyComboJson(BuildKeyComboJson(accelerator));
 }
 
 // static

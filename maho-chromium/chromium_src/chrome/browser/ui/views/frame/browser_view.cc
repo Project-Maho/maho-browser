@@ -242,3 +242,46 @@
 //       actions: add_split_view, remove_split_view, toggle_split_view
 //                swap_split_view
 //       via file-local GetOrCreateSplitViewController(Browser*) helper
+//
+// 14. Accelerator-layer fix: Maho shortcuts work regardless of focus target.
+//
+//     Includes already present at line ~212:
+//       #include "maho/browser/ui/views/command/maho_shortcut_interceptor.h"
+//       #include "maho/browser/ui/views/command/maho_command_action_handler.h"
+//
+//     In BrowserView::AddedToWidget(), IMMEDIATELY AFTER
+//     views::ClientView::AddedToWidget(), insert:
+//
+//       // Maho: Register Ctrl+1..9 as FocusManager accelerators so
+//       // space-switching shortcuts fire regardless of which view has focus.
+//       if (IsMahoArcLayoutActive()) {
+//         views::FocusManager* fm = GetFocusManager();
+//         if (fm) {
+//           for (int i = 0; i < 9; ++i) {
+//             fm->RegisterAccelerator(
+//                 ui::Accelerator(
+//                     static_cast<ui::KeyboardCode>(ui::VKEY_1 + i),
+//                     ui::EF_CONTROL_DOWN),
+//                 ui::AcceleratorManager::kNormalPriority, this);
+//           }
+//         }
+//       }
+//
+//     At the start of BrowserView::AcceleratorPressed(), BEFORE the existing
+//     FindCommandIdForAccelerator call, insert:
+//
+//       std::string maho_action =
+//           maho::MahoShortcutInterceptor::ResolveActionForAccelerator(
+//               accelerator);
+//       if (!maho_action.empty()) {
+//         maho::ExecuteCommandAction(browser_.get(), maho_action);
+//         return true;
+//       }
+//
+//     FocusManager dispatches accelerators to registered targets regardless
+//     of which view holds focus. This means Ctrl+1..9 space-switch shortcuts
+//     fire from empty state, omnibox focus, sidebar focus, and no-first-
+//     responder states — not just when a WebContents has focus (the
+//     limitation of the PreHandleKeyboardEvent / MaybeHandleKeyEvent path).
+//     ResolveActionForAccelerator delegates to the Rust ShortcutManager via
+//     maho_core_resolve_shortcut(), keeping it as the single source of truth.
