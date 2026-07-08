@@ -247,11 +247,7 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
       web_contents->GetPrimaryMainFrame()->ViewSource();
     }
   } else if (action_id == "settings") {
-    GURL settings_url(maho::kMahoSettingsURL);
-    NavigateParams params(browser, settings_url,
-                          ui::PAGE_TRANSITION_GENERATED);
-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
-    Navigate(&params);
+    maho::OpenMahoSettingsPane(browser, "");
   } else if (action_id == "open_history") {
     chrome::ShowHistory(browser);
   } else if (action_id == "open_bookmarks") {
@@ -478,11 +474,7 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
         .ShowForActiveDomain(
             browser->tab_strip_model()->GetActiveWebContents());
   } else if (action_id == "open_atc_rules") {
-    GURL settings_url(maho::kMahoSettingsURL);
-    NavigateParams params(browser, settings_url,
-                          ui::PAGE_TRANSITION_GENERATED);
-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
-    Navigate(&params);
+    maho::OpenMahoSettingsPane(browser, "");
   } else if (action_id == "clear_unpinned_tabs") {
     TabStripModel* model = browser->tab_strip_model();
     if (model) {
@@ -619,12 +611,7 @@ void OpenCommandSuggestion(Browser* browser,
   }
 
   if (gurl.spec() == maho::kMahoSettingsURL) {
-    if (!chrome::ActivateMahoSettingsTabIfOpen(browser)) {
-      content::OpenURLParams params(gurl, content::Referrer(),
-                                    WindowOpenDisposition::NEW_WINDOW,
-                                    ui::PAGE_TRANSITION_AUTO_BOOKMARK, false);
-      browser->OpenURL(params, /*navigation_handle_callback=*/{});
-    }
+    maho::OpenMahoSettingsPane(browser, "");
     return;
   }
 

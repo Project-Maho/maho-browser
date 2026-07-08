@@ -5,16 +5,22 @@
 #include <string>
 
 #include "base/check.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/browser.h"  // nogncheck
 #include "chrome/browser/ui/browser_navigator.h"  // nogncheck
 #include "chrome/browser/ui/browser_navigator_params.h"  // nogncheck
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"  // nogncheck
 #include "chrome/browser/ui/tabs/tab_strip_model.h"  // nogncheck
 #include "content/public/browser/web_contents.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "net/base/url_util.h"
+#include "ui/base/base_window.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
+
+class Profile;
 
 namespace maho {
 
@@ -34,20 +40,38 @@ GURL BuildSettingsUrl(const std::string& pane_key) {
   return net::AppendQueryParameter(url, "pane", pane_key);
 }
 
-int FindSettingsTabIndex(Browser* browser) {
-  TabStripModel* tab_strip = browser->tab_strip_model();
-  for (int i = 0; i < tab_strip->count(); ++i) {
-    auto* contents = tab_strip->GetWebContentsAt(i);
-    if (!contents) {
-      continue;
-    }
-    const GURL& visible = contents->GetVisibleURL();
-    if (visible.SchemeIs("chrome") &&
-        visible.host() == maho::kMahoSettingsHost) {
-      return i;
-    }
-  }
-  return TabStripModel::kNoTab;
+struct SettingsTabLocation {
+  raw_ptr<BrowserWindowInterface> browser_window = nullptr;
+  int index = TabStripModel::kNoTab;
+};
+
+SettingsTabLocation FindSettingsTabAcrossWindows(Profile* profile) {
+  SettingsTabLocation result;
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [profile, &result](BrowserWindowInterface* bwi) {
+        if (bwi->GetProfile() != profile) {
+          return true;
+        }
+        TabStripModel* tab_strip = bwi->GetTabStripModel();
+        if (!tab_strip) {
+          return true;
+        }
+        for (int i = 0; i < tab_strip->count(); ++i) {
+          auto* contents = tab_strip->GetWebContentsAt(i);
+          if (!contents) {
+            continue;
+          }
+          const GURL& visible = contents->GetVisibleURL();
+          if (visible.SchemeIs("chrome") &&
+              visible.host() == maho::kMahoSettingsHost) {
+            result.browser_window = bwi;
+            result.index = i;
+            return false;
+          }
+        }
+        return true;
+      });
+  return result;
 }
 
 }  // namespace
@@ -58,14 +82,19 @@ void OpenMahoSettingsPane(Browser* browser, const std::string& pane_key) {
   const bool pane_targeted = !pane_key.empty();
   const GURL target_url = BuildSettingsUrl(pane_key);
 
-  const int existing_index = FindSettingsTabIndex(browser);
-  if (existing_index != TabStripModel::kNoTab) {
-    browser->tab_strip_model()->ActivateTabAt(existing_index);
+  const SettingsTabLocation existing =
+      FindSettingsTabAcrossWindows(browser->profile());
+  if (existing.browser_window) {
+    existing.browser_window->GetWindow()->Activate();
+    TabStripModel* existing_tab_strip =
+        existing.browser_window->GetTabStripModel();
+    existing_tab_strip->ActivateTabAt(existing.index);
     if (pane_targeted) {
-      auto* contents = browser->tab_strip_model()->GetActiveWebContents();
+      auto* contents = existing_tab_strip->GetActiveWebContents();
       if (contents &&
           PaneQueryFromUrl(contents->GetVisibleURL()) != pane_key) {
-        NavigateParams nav(browser, target_url, ui::PAGE_TRANSITION_GENERATED);
+        NavigateParams nav(existing.browser_window, target_url,
+                           ui::PAGE_TRANSITION_GENERATED);
         nav.disposition = WindowOpenDisposition::CURRENT_TAB;
         Navigate(&nav);
       }

@@ -33,6 +33,7 @@
 #include "ui/base/window_open_disposition.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "maho/browser/ai/maho_ai_security_utils.h"
+#include "maho/browser/ui/maho_settings_navigation.h"
 #include "maho/browser/ui/webui/maho_ai/maho_ai_prefs_registration.h"
 #include "maho/browser/maho_ai_popup_lifetime_tracker.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
@@ -1326,13 +1327,7 @@ void MahoAIPageHandler::OpenSettings() {
   if (!browser_) {
     return;
   }
-  content::OpenURLParams params(
-      GURL("chrome://maho-settings/?pane=maho-ai"),
-      content::Referrer(),
-      WindowOpenDisposition::SINGLETON_TAB,
-      ui::PAGE_TRANSITION_AUTO_TOPLEVEL,
-      /*is_renderer_initiated=*/false);
-  browser_->OpenURL(params, /*navigation_handle_callback=*/{});
+  maho::OpenMahoSettingsPane(browser_, "maho-ai");
 }
 
 maho_ai::mojom::AISettingsInfoPtr
