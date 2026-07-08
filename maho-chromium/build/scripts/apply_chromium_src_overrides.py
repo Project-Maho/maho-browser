@@ -532,6 +532,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "Schedule startup-safe shortcuts even when they arrive before "
                 "any tab is selected"
             ),
+            guard="ShouldDeferStartupCommandUntilTabSelected(id)",
         ),
     ],
     "chrome/browser/app_controller_mac.mm": [
@@ -928,9 +929,32 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '      "//maho/browser/ui/views/sidebar/maho_sidebar_state_models.cc",\n'
                 '      "//maho/browser/ui/views/sidebar/maho_sidebar_state_models.h",\n'
                 '      "//maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.cc",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_folder_hover_popup_view.cc",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_folder_hover_popup_view.h",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_folder_hover_controller.cc",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_folder_hover_controller.h",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_update_notification_controller.cc",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_update_notification_controller.h",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_update_notification_model.cc",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_update_notification_model.h",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_update_notification_view.cc",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_update_notification_view.h",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_now_playing_view.cc",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_now_playing_view.h",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_now_playing_card.cc",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_now_playing_card.h",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_spaces_view.cc",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_spaces_view.h",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_visibility_manager.cc",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_sidebar_visibility_manager.h",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_toolbar_button_provider.cc",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_toolbar_button_provider.h",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_traffic_light_geometry_mac.mm",\n'
+                '      "//maho/browser/ai/maho_tab_tidy_orchestrator.cc",\n'
+                '      "//maho/browser/ai/maho_tab_tidy_orchestrator.h",\n'
             ),
             description="Include Maho tab preview controller sources in Chromium browser UI build",
-            guard='      "//maho/browser/ui/tab_preview/maho_tab_preview_controller.cc",\n',
+            guard='      "//maho/browser/ui/views/sidebar/maho_sidebar_folder_hover_popup_view.cc",\n',
         ),
         Replacement(
             old='      "//maho/browser/ui/views/spaces_overlay:maho_spaces_overlay",\n',
@@ -1695,6 +1719,67 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             guard="[Maho fix] Defensive cleanup",
         ),
+        # ── Patch #14: Ctrl+1..9 space switching from any focus state ─────────
+        Replacement(
+            old=(
+                "  views::ClientView::AddedToWidget();\n"
+                "\n"
+                "  widget_observation_.Observe(GetWidget());\n"
+            ),
+            new=(
+                "  views::ClientView::AddedToWidget();\n"
+                "\n"
+                "  // Maho: Register Ctrl+1..9 as FocusManager accelerators so space-switching\n"
+                "  // shortcuts fire regardless of which view has focus. Delegates to\n"
+                "  // MahoShortcutInterceptor::ResolveActionForAccelerator to preserve\n"
+                "  // Rust ShortcutManager as the single source of truth.\n"
+                "  if (IsMahoArcLayoutActive()) {\n"
+                "    views::FocusManager* fm = GetFocusManager();\n"
+                "    if (fm) {\n"
+                "      for (int i = 0; i < 9; ++i) {\n"
+                "        fm->RegisterAccelerator(\n"
+                "            ui::Accelerator(static_cast<ui::KeyboardCode>(ui::VKEY_1 + i),\n"
+                "                            ui::EF_CONTROL_DOWN),\n"
+                "            ui::AcceleratorManager::kNormalPriority, this);\n"
+                "      }\n"
+                "    }\n"
+                "  }\n"
+                "\n"
+                "  widget_observation_.Observe(GetWidget());\n"
+            ),
+            description=(
+                "Register Ctrl+1..9 as FocusManager accelerators in AddedToWidget "
+                "so Maho space-switching shortcuts fire regardless of which view "
+                "holds focus (fixes shortcuts being dead when the WebContents is "
+                "not the first responder, e.g. fresh window, omnibox focus)"
+            ),
+            guard="Maho: Register Ctrl+1..9 as FocusManager accelerators",
+        ),
+        Replacement(
+            old=(
+                "bool BrowserView::AcceleratorPressed(const ui::Accelerator& accelerator) {\n"
+                "  int command_id;\n"
+            ),
+            new=(
+                "bool BrowserView::AcceleratorPressed(const ui::Accelerator& accelerator) {\n"
+                "  // Maho: Try to dispatch as a Maho shortcut first. This works from any\n"
+                "  // focus state (unlike MaybeHandleKeyEvent which needs WebContents focus).\n"
+                "  std::string maho_action =\n"
+                "      maho::MahoShortcutInterceptor::ResolveActionForAccelerator(accelerator);\n"
+                "  if (!maho_action.empty()) {\n"
+                "    maho::ExecuteCommandAction(browser_.get(), maho_action);\n"
+                "    return true;\n"
+                "  }\n"
+                "\n"
+                "  int command_id;\n"
+            ),
+            description=(
+                "Prepend Maho shortcut dispatch to BrowserView::AcceleratorPressed; "
+                "non-Maho accelerators fall through to the existing "
+                "FindCommandIdForAccelerator path unchanged"
+            ),
+            guard="Maho: Try to dispatch as a Maho shortcut first",
+        ),
     ],
     # ── browser.cc ───────────────────────────────────────────────────────────
     "chrome/browser/ui/browser.cc": [
@@ -2371,6 +2456,21 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Register 'maho' Perfetto category for TRACE_EVENT calls in maho code",
             guard='perfetto::Category("maho")',
+        ),
+    ],
+    "chrome/browser/ui/views/toolbar/toolbar_view.cc": [
+        Replacement(
+            old=(
+                "  if (media_button) {\n"
+                "    media_button_ = AddChildView(std::move(media_button));\n"
+                "  }"
+            ),
+            new=(
+                "  if (media_button) {\n"
+                "    // Suppressed for Maho sidebar-bottom media controls\n"
+                "  }"
+            ),
+            description="Suppress upstream MediaToolbarButtonView addition",
         ),
     ],
 }
