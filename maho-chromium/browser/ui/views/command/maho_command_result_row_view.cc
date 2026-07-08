@@ -512,7 +512,7 @@ RowLayoutElements MahoCommandResultRowView::BuildRowLayout(
 
   auto content_view_ptr = std::make_unique<views::View>();
   auto* content_view = parent->AddChildView(std::move(content_view_ptr));
-  outer_layout->SetFlexForView(content_view, 1);
+  outer_layout->SetFlexForView(content_view, 1, /*use_min_size=*/true);
 
   auto* row_layout = content_view->SetLayoutManager(
       std::make_unique<views::BoxLayout>(
@@ -844,12 +844,10 @@ void MahoCommandResultRowView::RebuildGlyph() {
           ? kCurrentTabSeededGlyphIconSizeDp
           : kGlyphIconSizeDp;
   auto* globe_view =
-      glyph_container_->AddChildView(std::make_unique<views::ImageView>());
-  const gfx::ImageSkia globe_bitmap = gfx::CreateVectorIcon(
-      vector_icons::kGlobeIcon, glyph_icon_size, gfx::kGoogleGrey700);
-  globe_view->SetImage(ui::ImageModel::FromImageSkia(globe_bitmap));
-  globe_view->SetImageSize(gfx::Size(glyph_icon_size, glyph_icon_size));
-  globe_view->SetPreferredSize(gfx::Size(glyph_icon_size, glyph_icon_size));
+      glyph_container_->AddChildView(std::make_unique<views::ImageView>(
+          ui::ImageModel::FromVectorIcon(
+              vector_icons::kGlobeIcon, ui::kColorSysOnSurface,
+              glyph_icon_size - 6)));
   globe_view->SetCanProcessEventsWithinSubtree(false);
   glyph_image_ = globe_view;
 }
@@ -875,8 +873,6 @@ void MahoCommandResultRowView::UpdateLayout() {
                                       : favicon_size;
     favicon_image_->SetPreferredSize(
         gfx::Size(favicon_tile_size, favicon_tile_size));
-  } else if (glyph_image_) {
-    glyph_image_->SetPreferredSize(gfx::Size(glyph_icon_size, glyph_icon_size));
   }
 
   auto* outer_layout = static_cast<views::BoxLayout*>(GetLayoutManager());

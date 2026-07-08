@@ -533,8 +533,8 @@ MahoCommandOverlayView::MahoCommandOverlayView(
 
   if (!initial_text.empty()) {
     initial_url_ = initial_text;
-    ContentsChanged(textfield_, std::u16string(textfield_->GetText()));
   }
+  ContentsChanged(textfield_, std::u16string(textfield_->GetText()));
 
   ApplyVibrancyBackgroundTransparency(use_vibrancy);
 }
@@ -723,11 +723,6 @@ void MahoCommandOverlayView::UpdateSearchLeadingAccessory() {
       if (!icon_to_decode.has_value()) {
         use_globe_fallback = true;
       }
-    } else {
-      int selected_idx = model_->selected_index();
-      if (selected_idx >= 0 && selected_idx < static_cast<int>(model_->results().size())) {
-        icon_to_decode = model_->results()[selected_idx].icon;
-      }
     }
   }
 
@@ -774,12 +769,13 @@ void MahoCommandOverlayView::UpdateSearchLeadingAccessory() {
       favicon_image_->SetPaintToLayer();
       favicon_image_->layer()->SetFillsBoundsOpaquely(false);
     }
-    const int icon_size = MahoCommandResultRowView::kGlyphIconSizeDp;
+    const int tile_size = MahoCommandResultRowView::kGlyphIconSizeDp;
+    const int globe_size = tile_size - 6;
     const gfx::ImageSkia globe_bitmap = gfx::CreateVectorIcon(
-        vector_icons::kGlobeIcon, icon_size, gfx::kGoogleGrey700);
+        vector_icons::kGlobeIcon, globe_size, SK_ColorWHITE);
     favicon_image_->SetImage(ui::ImageModel::FromImageSkia(globe_bitmap));
-    favicon_image_->SetImageSize(gfx::Size(icon_size, icon_size));
-    favicon_image_->SetPreferredSize(gfx::Size(icon_size, icon_size));
+    favicon_image_->SetImageSize(gfx::Size(globe_size, globe_size));
+    favicon_image_->SetPreferredSize(gfx::Size(tile_size, tile_size));
     favicon_image_->SetVisible(true);
     return;
   }
