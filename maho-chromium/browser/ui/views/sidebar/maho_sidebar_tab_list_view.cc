@@ -1,12 +1,14 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho_sidebar_tab_list_view.h"
+#include "ui/views/controls/button/image_button.h"
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 
 #include <functional>
 #include <memory>
 #include <set>
+#include <unordered_set>
 #include <utility>
 
 #include "base/functional/bind.h"
@@ -16,6 +18,7 @@
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/json/string_escape.h"
 #include "base/pickle.h"
 #include "base/strings/string_util.h"
 #include "base/strings/string_number_conversions.h"
@@ -43,6 +46,7 @@
 #include "content/public/common/referrer.h"
 #include "chrome/browser/ui/tab_ui_helper.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
+#include "chrome/browser/ui/tabs/tab_muted_utils.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/web_contents.h"
@@ -178,6 +182,16 @@ class SidebarVirtualLayoutDelegate : public views::LayoutManagerBase {
   SidebarVirtualLayoutDelegate(SidebarVisibilityManager* mgr, int row_height)
       : visibility_mgr_(mgr), row_height_(row_height) {}
 
+  bool OnViewAdded(views::View* host, views::View* view) override {
+    cache_valid_ = false;
+    return views::LayoutManagerBase::OnViewAdded(host, view);
+  }
+
+  bool OnViewRemoved(views::View* host, views::View* view) override {
+    cache_valid_ = false;
+    return views::LayoutManagerBase::OnViewRemoved(host, view);
+  }
+
   views::ProposedLayout CalculateProposedLayout(
       const views::SizeBounds& size_bounds) const override {
     views::ProposedLayout layout;
@@ -186,25 +200,31 @@ class SidebarVirtualLayoutDelegate : public views::LayoutManagerBase {
     const int total = static_cast<int>(children.size());
     const int width = size_bounds.width().value_or(0);
 
+    if (width != last_width_) {
+      last_width_ = width;
+      cache_valid_ = false;
+    }
+
     gfx::Rect visible_rect;
     if (auto* scroll = views::ScrollView::GetScrollViewForContents(
             const_cast<views::View*>(host->parent()))) {
       visible_rect = scroll->GetVisibleRect();
     }
 
-    // Compute actual child heights from preferred sizes for correct content
-    // height reporting (children may be sections with variable height).
-    int total_height = 0;
-    std::vector<int> child_heights;
-    child_heights.reserve(total);
-    for (int i = 0; i < total; ++i) {
-      const int h = children[i]->GetPreferredSize(
-          views::SizeBounds(width, views::SizeBound())).height();
-      child_heights.push_back(h);
-      total_height += h;
+    if (!cache_valid_ || cached_heights_.size() != static_cast<size_t>(total)) {
+      cached_heights_.clear();
+      cached_heights_.reserve(total);
+      total_height_ = 0;
+      for (int i = 0; i < total; ++i) {
+        const int h = children[i]->GetPreferredSize(
+            views::SizeBounds(width, views::SizeBound())).height();
+        cached_heights_.push_back(h);
+        total_height_ += h;
+      }
+      cache_valid_ = true;
     }
 
-    layout.host_size = gfx::Size(width, total_height);
+    layout.host_size = gfx::Size(width, total_height_);
 
     // Expand visible rect by overscan buffer.
     const int buffer_dp = visibility_mgr_->is_drag_active()
@@ -220,12 +240,12 @@ class SidebarVirtualLayoutDelegate : public views::LayoutManagerBase {
     for (int i = 0; i < total; ++i) {
       views::ChildLayout child_layout;
       child_layout.child_view = children[i];
-      child_layout.bounds = gfx::Rect(0, y, width, child_heights[i]);
+      child_layout.bounds = gfx::Rect(0, y, width, cached_heights_[i]);
       child_layout.visible =
           visible_rect.IsEmpty() ||
-          expanded_rect.Intersects(gfx::Rect(0, y, width, child_heights[i]));
+          expanded_rect.Intersects(gfx::Rect(0, y, width, cached_heights_[i]));
       layout.child_layouts.push_back(child_layout);
-      y += child_heights[i];
+      y += cached_heights_[i];
     }
 
     return layout;
@@ -234,6 +254,11 @@ class SidebarVirtualLayoutDelegate : public views::LayoutManagerBase {
  private:
   raw_ptr<SidebarVisibilityManager> visibility_mgr_;
   int row_height_;
+
+  mutable std::vector<int> cached_heights_;
+  mutable int total_height_ = 0;
+  mutable int last_width_ = 0;
+  mutable bool cache_valid_ = false;
 };
 
 class MahoInlineActionButton : public views::LabelButton {
@@ -1252,6 +1277,7 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
                                      std::u16string display_title,
                                      views::Button::PressedCallback activate_callback,
                                      views::Button::PressedCallback close_callback,
+                                     views::Button::PressedCallback mute_callback,
                                      base::RepeatingCallback<void(const std::string&, const std::u16string&)>
                                          rename_callback,
                                      base::RepeatingCallback<int(const std::string&)>
@@ -1275,7 +1301,8 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
       resolve_tab_index_(std::move(resolve_tab_index)),
       preview_show_callback_(std::move(preview_show_callback)),
       preview_hide_callback_(std::move(preview_hide_callback)),
-      activate_callback_(std::move(activate_callback)) {
+      activate_callback_(std::move(activate_callback)),
+      mute_callback_(std::move(mute_callback)) {
   SetNotifyEnterExitOnChild(true);
   const int indent = node.depth * kFolderIndentDp;
   auto row_insets = gfx::Insets::TLBR(0, 9 + indent, 0, 7);
@@ -1328,23 +1355,12 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
   title_field_ = AddChildView(std::move(title_field));
   layout->SetFlexForView(title_field_, 1);
 
-  if (muted_) {
-    audio_indicator_view_ = AddChildView(std::make_unique<views::ImageView>());
-    audio_indicator_view_->SetImage(ui::ImageModel::FromVectorIcon(
-        vector_icons::kVolumeOffChromeRefreshIcon, ui::kColorSysOnSurfaceSubtle,
-        kAudioIndicatorSizeDp));
-    audio_indicator_view_->SetImageSize(
-        gfx::Size(kAudioIndicatorSizeDp, kAudioIndicatorSizeDp));
-    audio_indicator_view_->SetTooltipText(u"Tab muted");
-  } else if (audible_) {
-    audio_indicator_view_ = AddChildView(std::make_unique<views::ImageView>());
-    audio_indicator_view_->SetImage(ui::ImageModel::FromVectorIcon(
-        vector_icons::kVolumeUpChromeRefreshIcon, ui::kColorSysOnSurfaceSubtle,
-        kAudioIndicatorSizeDp));
-    audio_indicator_view_->SetImageSize(
-        gfx::Size(kAudioIndicatorSizeDp, kAudioIndicatorSizeDp));
-    audio_indicator_view_->SetTooltipText(u"Tab playing audio");
-  }
+  audio_button_ = AddChildView(std::make_unique<views::ImageButton>(
+      base::BindRepeating(&SidebarTabRowView::OnAudioButtonPressed,
+                          base::Unretained(this))));
+  audio_button_->SetBorder(nullptr);
+  views::InstallCircleHighlightPathGenerator(audio_button_);
+  UpdateAudioState(audible_, muted_);
 
   close_button_ = AddChildView(views::CreateVectorImageButtonWithNativeTheme(
       std::move(close_callback), maho_lucide_icons::kXIcon,
@@ -1366,10 +1382,8 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
   close_button_->layer()->SetFillsBoundsOpaquely(false);
   close_button_->layer()->SetOpacity(0.0f);
   close_button_->SetCanProcessEventsWithinSubtree(false);
-  if (audio_indicator_view_) {
-    audio_indicator_view_->SetPaintToLayer();
-    audio_indicator_view_->layer()->SetFillsBoundsOpaquely(false);
-  }
+  audio_button_->SetPaintToLayer();
+  audio_button_->layer()->SetFillsBoundsOpaquely(false);
 
   title_button_->set_context_menu_controller(this);
   title_button_->set_drag_controller(this);
@@ -1381,6 +1395,40 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
 }
 
 SidebarTabRowView::~SidebarTabRowView() = default;
+
+void SidebarTabRowView::UpdateAudioState(bool audible, bool muted) {
+  audible_ = audible;
+  muted_ = muted;
+
+  if (!audio_button_) {
+    return;
+  }
+
+  if (muted_) {
+    views::SetImageFromVectorIconWithColor(
+        audio_button_, maho_lucide_icons::kVolumeXIcon, 14,
+        views::IconColors(ui::kColorSysOnSurfaceSubtle, ui::kColorSysOnSurface,
+                          ui::kColorSysOnSurface));
+    audio_button_->SetTooltipText(u"Tab muted");
+    audio_button_->SetVisible(true);
+  } else if (audible_) {
+    views::SetImageFromVectorIconWithColor(
+        audio_button_, maho_lucide_icons::kVolume2Icon, 14,
+        views::IconColors(ui::kColorSysOnSurfaceSubtle, ui::kColorSysOnSurface,
+                          ui::kColorSysOnSurface));
+    audio_button_->SetTooltipText(u"Tab playing audio");
+    audio_button_->SetVisible(true);
+  } else {
+    audio_button_->SetVisible(false);
+  }
+  InvalidateLayout();
+}
+
+void SidebarTabRowView::OnAudioButtonPressed(const ui::Event& event) {
+  if (mute_callback_) {
+    mute_callback_.Run(event);
+  }
+}
 
 // P3: Constant preferred size avoids BoxLayout re-measuring 870+ rows during
 // layout invalidation triggered by hover state changes.
@@ -1909,9 +1957,9 @@ void SidebarTabRowView::UpdateAppearance() {
   const float close_opacity = show_close_button ? 1.0f : 0.0f;
   close_button_->layer()->SetOpacity(close_opacity);
   close_button_->SetCanProcessEventsWithinSubtree(show_close_button);
-  if (audio_indicator_view_) {
-    audio_indicator_view_->layer()->SetOpacity(1.0f - close_opacity);
-    audio_indicator_view_->SetCanProcessEventsWithinSubtree(!show_close_button);
+  if (audio_button_) {
+    audio_button_->layer()->SetOpacity(1.0f - close_opacity);
+    audio_button_->SetCanProcessEventsWithinSubtree(!show_close_button);
   }
 }
 
@@ -2432,12 +2480,18 @@ void SidebarFolderRowView::UpdateAppearance() {
     folder_glyph_container_->SetBackground(nullptr);
     folder_glyph_container_->SetBorder(nullptr);
   }
-  if (folder_icon_) {
-    folder_icon_->SetImage(ui::ImageModel::FromVectorIcon(
-        expanded ? maho_lucide_icons::kFolderOpenIcon
-                 : maho_lucide_icons::kFolderIcon,
-        show_drop_target ? ui::kColorSysPrimary : ui::kColorSysOnSurface,
-        kFolderGlyphSizeDp));
+  const ui::ColorId icon_color_id = show_drop_target ? ui::kColorSysPrimary : ui::kColorSysOnSurface;
+  if (!icon_cache_valid_ || cached_icon_expanded_ != expanded || cached_icon_color_id_ != icon_color_id) {
+    cached_icon_expanded_ = expanded;
+    cached_icon_color_id_ = icon_color_id;
+    icon_cache_valid_ = true;
+    if (folder_icon_) {
+      folder_icon_->SetImage(ui::ImageModel::FromVectorIcon(
+          expanded ? maho_lucide_icons::kFolderOpenIcon
+                   : maho_lucide_icons::kFolderIcon,
+          icon_color_id,
+          kFolderGlyphSizeDp));
+    }
   }
   if (label_button_) {
     label_button_->SetVisible(!is_editing_name_);
@@ -2812,7 +2866,6 @@ void MahoSidebarTabListView::Update(const MahoSidebarTabListModel& model,
   browser_ = browser;
   active_space_id_ = model.active_space_id;
   pinned_drop_lane_revealed_ = false;
-  PruneLocalTitleCache(model);
 
   const TabStripModel* strip = browser ? browser->tab_strip_model() : nullptr;
   const bool live_tab_strip_is_empty = !strip || strip->empty();
@@ -2876,6 +2929,10 @@ void MahoSidebarTabListView::Update(const MahoSidebarTabListModel& model,
     if (model.active_tab.tab_id != last_active_tab_id_) {
       LOG(INFO) << "[MAHO_PERF]   fp_match active_only";
       UpdateActiveTabHighlightOnly(model.active_tab.tab_id);
+      last_active_tab_id_ = model.active_tab.tab_id;
+      if (favorites_sync_callback_) {
+        favorites_sync_callback_.Run();
+      }
     } else {
       LOG(INFO) << "[MAHO_PERF]   fp_match noop";
     }
@@ -2885,6 +2942,7 @@ void MahoSidebarTabListView::Update(const MahoSidebarTabListModel& model,
   }
   last_model_fingerprint_ = std::move(fingerprint);
   last_active_tab_id_ = model.active_tab.tab_id;
+  PruneLocalTitleCache(model);
 
   base::ElapsedTimer rebuild_t;
   RebuildRows(model, browser);
@@ -2946,11 +3004,7 @@ std::string MahoSidebarTabListView::ComputeModelFingerprint(
 
 bool MahoSidebarTabListView::HasTabInLastModel(
     const std::string& tab_id) const {
-  base::ElapsedTimer maho_perf_t;
   if (!has_last_model_ || tab_id.empty()) {
-    LOG(INFO) << "[MAHO_PERF] HasTabInLastModel(id='" << tab_id
-              << "') early_return has_last_model=" << has_last_model_
-              << " empty=" << tab_id.empty();
     return false;
   }
   std::function<bool(const std::vector<SidebarTreeNode>&)> search;
@@ -2965,36 +3019,11 @@ bool MahoSidebarTabListView::HasTabInLastModel(
     }
     return false;
   };
-  bool found = search(last_model_.pinned_tree) || search(last_model_.normal_tree);
-  int pinned_top = static_cast<int>(last_model_.pinned_tree.size());
-  int normal_top = static_cast<int>(last_model_.normal_tree.size());
-  std::string sample_ids;
-  int shown = 0;
-  std::function<void(const std::vector<SidebarTreeNode>&)> collect;
-  collect = [&](const std::vector<SidebarTreeNode>& nodes) {
-    for (const auto& n : nodes) {
-      if (shown >= 3) return;
-      if (n.kind == SidebarNodeKind::kTab && !n.tab_id.empty()) {
-        if (!sample_ids.empty()) sample_ids += ",";
-        sample_ids += n.tab_id.substr(0, 8);
-        ++shown;
-      }
-      if (!n.children.empty()) collect(n.children);
-    }
-  };
-  collect(last_model_.normal_tree);
-  LOG(INFO) << "[MAHO_PERF] HasTabInLastModel(id='" << tab_id.substr(0, 8)
-            << "') found=" << found
-            << " pinned_top=" << pinned_top
-            << " normal_top=" << normal_top
-            << " sample_normal_ids=[" << sample_ids << "]"
-            << " took " << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
-  return found;
+  return search(last_model_.pinned_tree) || search(last_model_.normal_tree);
 }
 
 void MahoSidebarTabListView::UpdateActiveTabHighlightOnly(
     const std::string& new_active_tab_id) {
-  base::ElapsedTimer maho_perf_t;
   if (last_active_tab_id_ == new_active_tab_id) {
     return;
   }
@@ -3004,31 +3033,25 @@ void MahoSidebarTabListView::UpdateActiveTabHighlightOnly(
   }
 
   if (!last_active_tab_id_.empty()) {
-    const std::string previous_id = last_active_tab_id_;
-    if (auto* previous_row = RecursiveFindView<SidebarTabRowView>(
-            tab_rows_,
-            std::function<bool(SidebarTabRowView*)>(
-                [&previous_id](SidebarTabRowView* row) {
-                  return row->tab_id() == previous_id;
-                }))) {
-      previous_row->SetActive(false);
+    auto it = tab_id_to_row_view_.find(last_active_tab_id_);
+    if (it != tab_id_to_row_view_.end() && it->second) {
+      it->second->SetActive(false);
     }
   }
 
   if (!new_active_tab_id.empty()) {
-    if (auto* next_row = RecursiveFindView<SidebarTabRowView>(
-            tab_rows_,
-            std::function<bool(SidebarTabRowView*)>(
-                [&new_active_tab_id](SidebarTabRowView* row) {
-                  return row->tab_id() == new_active_tab_id;
-                }))) {
-      next_row->SetActive(true);
+    auto it = tab_id_to_row_view_.find(new_active_tab_id);
+    if (it != tab_id_to_row_view_.end() && it->second) {
+      it->second->SetActive(true);
     }
   }
 
   last_active_tab_id_ = new_active_tab_id;
-  LOG(INFO) << "[MAHO_PERF] UpdateActiveTabHighlightOnly="
-            << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
+}
+
+void MahoSidebarTabListView::SetFavoritesSyncCallback(
+    base::RepeatingClosure callback) {
+  favorites_sync_callback_ = std::move(callback);
 }
 
 bool MahoSidebarTabListView::GetDropFormats(
@@ -3173,10 +3196,14 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
                                              Browser* browser) {
   base::ElapsedTimer maho_rr_t;
   HandleTabRowHoverEnd();
+  favicon_task_tracker_.TryCancelAll();
   folder_rows_by_id_.clear();
   active_menu_runner_.reset();
   active_menu_model_.reset();
   active_context_menu_.reset();
+
+  tab_rows_->SetLayoutManager(nullptr);
+
   base::ElapsedTimer rr_remove_t;
   tab_rows_->RemoveAllChildViews();
   LOG(INFO) << "[MAHO_PERF]     RR.RemoveAllChildViews="
@@ -3229,16 +3256,31 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
             << rr_normal_t.Elapsed().InMillisecondsF()
             << "ms nodes=" << effective_model->normal_tree.size();
 
+  // Rebuild O(1) tab_id -> row_view map used by UpdateActiveTabHighlightOnly.
+  tab_id_to_row_view_.clear();
+  if (tab_rows_) {
+    std::function<void(views::View*)> collect_rows;
+    collect_rows = [&](views::View* parent) {
+      for (views::View* child : parent->children()) {
+        if (auto* row = views::AsViewClass<SidebarTabRowView>(child)) {
+          if (!row->tab_id().empty()) {
+            tab_id_to_row_view_[row->tab_id()] = row;
+          }
+        }
+        collect_rows(child);
+      }
+    };
+    collect_rows(tab_rows_);
+  }
+
+  if (tab_rows_) {
+    tab_rows_->SetLayoutManager(std::make_unique<SidebarVirtualLayoutDelegate>(
+        visibility_manager_.get(), kRowHeightDp));
+    tab_rows_->InvalidateLayout();
+  }
+
   if (GetWidget() && GetWidget()->IsVisible()) {
-    base::ElapsedTimer rr_layout_t;
-    int ancestor_count = 0;
-    for (views::View* current = this; current; current = current->parent()) {
-      current->DeprecatedLayoutImmediately();
-      ++ancestor_count;
-    }
-    LOG(INFO) << "[MAHO_PERF]     RR.DeprecatedLayoutImmediately="
-              << rr_layout_t.Elapsed().InMillisecondsF()
-              << "ms ancestors=" << ancestor_count;
+    GetWidget()->LayoutRootViewIfNecessary();
     if (GetWidget()->HasCapture()) {
       LOG(INFO) << "[MAHO_PERF]     RR TOTAL(has_capture)="
                 << maho_rr_t.Elapsed().InMillisecondsF() << "ms";
@@ -3337,21 +3379,24 @@ void MahoSidebarTabListView::RebuildTreeNodes(
     MahoSidebarTabSection section,
     Browser* browser,
     const std::string& parent_folder_id) {
+  std::unordered_map<std::string, std::string> sibling_parent_to_last_seen_folder_id;
+  std::vector<std::string> next_sibling_folder_ids(nodes.size());
+  for (int i = static_cast<int>(nodes.size()) - 1; i >= 0; --i) {
+    const auto& n = nodes[i];
+    if (n.kind == SidebarNodeKind::kFolder) {
+      const std::string& parent_id = n.parent_of_folder_id;
+      next_sibling_folder_ids[i] = sibling_parent_to_last_seen_folder_id[parent_id];
+      if (!n.folder_id.empty()) {
+        sibling_parent_to_last_seen_folder_id[parent_id] = n.folder_id;
+      }
+    }
+  }
+
   for (size_t index = 0; index < nodes.size(); ++index) {
     const auto& node = nodes[index];
     if (node.kind == SidebarNodeKind::kFolder) {
-      std::string next_sibling_folder_id;
+      std::string next_sibling_folder_id = next_sibling_folder_ids[index];
       const std::string sibling_parent_folder_id = node.parent_of_folder_id;
-      for (size_t next_index = index + 1; next_index < nodes.size();
-           ++next_index) {
-        const auto& next_node = nodes[next_index];
-        if (next_node.kind == SidebarNodeKind::kFolder &&
-            next_node.parent_of_folder_id == sibling_parent_folder_id &&
-            !next_node.folder_id.empty()) {
-          next_sibling_folder_id = next_node.folder_id;
-          break;
-        }
-      }
 
       auto* before_folder_lane =
           parent->AddChildView(std::make_unique<SidebarInsertionLaneView>(
@@ -3486,6 +3531,9 @@ void MahoSidebarTabListView::RebuildTreeNodes(
                               weak_factory_.GetWeakPtr(),
                               node.tab_id),
           base::BindRepeating(&MahoSidebarTabListView::CloseTabById,
+                              weak_factory_.GetWeakPtr(),
+                              node.tab_id),
+          base::BindRepeating(&MahoSidebarTabListView::MuteTabById,
                               weak_factory_.GetWeakPtr(),
                               node.tab_id),
           base::BindRepeating(&MahoSidebarTabListView::CommitTabTitleChange,
@@ -3708,6 +3756,20 @@ void MahoSidebarTabListView::CloseTabById(const std::string& tab_id) {
   }
 }
 
+void MahoSidebarTabListView::MuteTabById(const std::string& tab_id) {
+  const int index = ResolveTabStripIndexForTabId(tab_id);
+  if (index >= 0) {
+    TabStripModel* model = browser_->tab_strip_model();
+    if (model) {
+      content::WebContents* contents = model->GetWebContentsAt(index);
+      if (contents) {
+        ::SetTabAudioMuted(contents, !contents->IsAudioMuted(),
+                                 TabMutedReason::kAudioIndicator, std::string());
+      }
+    }
+  }
+}
+
 int MahoSidebarTabListView::ResolveTabStripIndexForTabId(
     const std::string& tab_id) const {
   if (tab_id.empty()) {
@@ -3893,6 +3955,67 @@ void MahoSidebarTabListView::OnTidyFinished(int folder_count, const std::string&
       overlay->Show(title, body);
     }
   }
+  // Post-Tidy cleanup: sweep any empty folders in the active space. Runs
+  // regardless of Rust-side auto_delete setting because the Rust sweep path
+  // in ApplyTidyTabs has proven unreliable — it either does not delete the
+  // folders from the persisted state or the sidebar view fails to reflect
+  // the deletion. Dispatching delete_folder shell events for each currently
+  // empty folder in this space is a robust C++-side fallback: Rust receives
+  // the events one-by-one and each triggers the usual NotifyChanged refresh
+  // pipeline, so the sidebar can no longer show a stale folder that has
+  // zero children after Tidy.
+  auto* bridge = MahoSpaceProfileBridge::GetInstance();
+  const std::string space_id = bridge ? bridge->GetActiveSpaceId(browser_) : std::string();
+  if (space_id.empty()) {
+    return;
+  }
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return;
+  }
+  const std::string space_id_json = ::base::GetQuotedJSONString(space_id);
+  char* raw = maho_core_get_sidebar_state_v2(core, space_id_json.c_str());
+  if (!raw) {
+    return;
+  }
+  std::string state_json(raw);
+  maho_string_free(raw);
+  std::optional<base::Value> parsed = base::JSONReader::Read(state_json, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_dict()) {
+    return;
+  }
+  const base::ListValue* tree = parsed->GetDict().FindList("tree");
+  if (!tree) {
+    return;
+  }
+  std::vector<std::string> empty_folder_ids;
+  for (const auto& node : *tree) {
+    const auto* dict = node.GetIfDict();
+    if (!dict) {
+      continue;
+    }
+    const std::string* kind = dict->FindString("kind");
+    if (!kind || *kind != "folder") {
+      continue;
+    }
+    const std::string* fid = dict->FindString("id");
+    const base::ListValue* children = dict->FindList("children");
+    if (!fid || fid->empty()) {
+      continue;
+    }
+    if (!children || children->empty()) {
+      empty_folder_ids.push_back(*fid);
+    }
+  }
+  int cleaned = 0;
+  for (const std::string& fid : empty_folder_ids) {
+    maho::DispatchShellEvent("delete_folder", {
+        {"space_id", space_id},
+        {"folder_id", fid},
+    });
+    cleaned++;
+  }
+  LOG(INFO) << "[maho-tidy] post-tidy empty-folder cleanup: removed " << cleaned;
 }
 
 void MahoSidebarTabListView::OnClearPressed(const ui::Event& event) {
@@ -4204,7 +4327,7 @@ void MahoSidebarTabListView::SetLastFavoritesModel(
 
 void MahoSidebarTabListView::PruneLocalTitleCache(
     const MahoSidebarTabListModel& model) {
-  std::set<std::string> live_tab_ids;
+  std::unordered_set<std::string> live_tab_ids;
   auto collect_tree = [&](const auto& self,
                           const std::vector<SidebarTreeNode>& nodes) -> void {
     for (const auto& node : nodes) {
@@ -4294,6 +4417,90 @@ std::string MahoSidebarTabListView::FindCoreTabIdByWebContents(
     return helper->stable_tab_id();
   }
   return std::string();
+}
+
+void MahoSidebarTabListView::ApplyCosmeticRefresh() {
+  if (!has_last_model_ || !browser_) {
+    return;
+  }
+  TabStripModel* tab_strip_model = browser_->tab_strip_model();
+  if (!tab_strip_model) {
+    return;
+  }
+
+  auto find_tab_index = [&](const std::string& tab_id) -> int {
+    auto it = tab_id_to_index_.find(tab_id);
+    if (it != tab_id_to_index_.end()) {
+      return it->second;
+    }
+    for (int i = 0; i < tab_strip_model->count(); ++i) {
+      if (auto* contents = tab_strip_model->GetWebContentsAt(i)) {
+        if (auto* helper = MahoTabIdHelper::FromWebContents(contents)) {
+          if (helper->stable_tab_id() == tab_id) {
+            return i;
+          }
+        }
+      }
+    }
+    return -1;
+  };
+
+  // Direct row-view update path: bypasses Update() because ComputeModelFingerprint
+  // intentionally excludes title/URL (to skip RebuildRows on cosmetic events),
+  // so the fingerprint would match and row labels would go stale otherwise.
+  // Instead push new title/url straight to SidebarTabRowView via tab_id_to_row_view_.
+  std::function<void(std::vector<SidebarTreeNode>&)> overlay_tree;
+  overlay_tree = [&](std::vector<SidebarTreeNode>& nodes) {
+    for (auto& node : nodes) {
+      if (node.kind == SidebarNodeKind::kTab && !node.tab_id.empty()) {
+        int idx = find_tab_index(node.tab_id);
+        if (idx != -1 && tab_strip_model->ContainsIndex(idx)) {
+          content::WebContents* contents = tab_strip_model->GetWebContentsAt(idx);
+          if (contents) {
+            std::u16string new_title = contents->GetTitle();
+            const GURL& url = contents->GetVisibleURL();
+            std::string new_url = url.is_valid() ? url.spec() : std::string();
+            std::u16string new_host = url.is_valid()
+                ? base::UTF8ToUTF16(url.host()) : std::u16string();
+            node.title = new_title;
+            node.url = new_url;
+            node.host = new_host;
+            node.is_loading = contents->IsLoading();
+            node.is_audible = contents->IsCurrentlyAudible();
+            node.is_muted = contents->IsAudioMuted();
+            node.is_active = (tab_strip_model->active_index() == idx);
+
+            auto row_it = tab_id_to_row_view_.find(node.tab_id);
+            if (row_it != tab_id_to_row_view_.end() && row_it->second) {
+              std::u16string display_text =
+                  new_title.empty() ? new_host : new_title;
+              row_it->second->ApplyDisplayedTitle(display_text);
+              row_it->second->UpdateAudioState(node.is_audible, node.is_muted);
+            }
+          }
+        }
+      }
+      if (!node.children.empty()) {
+        overlay_tree(node.children);
+      }
+    }
+  };
+
+  overlay_tree(last_model_.pinned_tree);
+  overlay_tree(last_model_.normal_tree);
+
+  if (tab_strip_model->ContainsIndex(tab_strip_model->active_index())) {
+    content::WebContents* active_contents = tab_strip_model->GetWebContentsAt(tab_strip_model->active_index());
+    if (active_contents) {
+      last_model_.active_tab.index = tab_strip_model->active_index();
+      last_model_.active_tab.title = active_contents->GetTitle();
+      const GURL& url = active_contents->GetVisibleURL();
+      last_model_.active_tab.host = url.is_valid() ? base::UTF8ToUTF16(url.host()) : std::u16string();
+      if (auto* helper = MahoTabIdHelper::FromWebContents(active_contents)) {
+        last_model_.active_tab.tab_id = helper->stable_tab_id();
+      }
+    }
+  }
 }
 
 }  // namespace maho

@@ -1,6 +1,10 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_now_playing_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+#include "ui/views/view_utils.h"
 
 #include <memory>
 #include <vector>
@@ -101,6 +105,21 @@ MahoSidebarView::MahoSidebarView(Browser* browser)
     tab_strip_model()->AddObserver(this);
   }
   RefreshTranslateObservation();
+  // Synchronously seed favorites so Cmd+1..8 works immediately at startup,
+  // before the async BuildFavoritesModelOnBackground round-trip completes.
+  // Payload is tiny (~12 items) so the FFI cost is <1ms.
+  {
+    std::string active_space_id_json;
+    if (auto* bridge = MahoSpaceProfileBridge::GetInstance(); bridge) {
+      const std::string& active_space_id = bridge->GetActiveSpaceId(browser_);
+      if (!active_space_id.empty()) {
+        active_space_id_json = ::base::GetQuotedJSONString(active_space_id);
+      }
+    }
+    state_adapter_.SetFavoritesModel(
+        MahoSidebarStateAdapter::BuildFavoritesModelForSpaceIdJson(
+            active_space_id_json));
+  }
   ScheduleRefreshAll();
 
   // Warm the live folder item cache so expanded live folders show children
@@ -118,6 +137,15 @@ MahoSidebarView::~MahoSidebarView() {
   translate_observation_.Reset();
 }
 
+MahoSidebarNowPlayingView* MahoSidebarView::AddNowPlayingView(std::unique_ptr<MahoSidebarNowPlayingView> view) {
+  if (!body_host_ || !footer_view_) {
+    return nullptr;
+  }
+  size_t footer_index = body_host_->GetIndexOf(footer_view_).value_or(0);
+  now_playing_view_ = body_host_->AddChildViewAt(std::move(view), footer_index);
+  return now_playing_view_;
+}
+
 void MahoSidebarView::OnThemeChanged() {
   views::View::OnThemeChanged();
   SetBackground(views::CreateRoundedRectBackground(
@@ -128,7 +156,11 @@ void MahoSidebarView::OnThemeChanged() {
     library_divider_->SetBackground(
         views::CreateSolidBackground(ui::kColorSeparator));
   }
-  RefreshAll();
+  auto model = state_adapter_.BuildViewStateModel(browser_);
+  UpdateTopBar(model.top_bar);
+  UpdateSearch(model.search);
+  UpdateFavorites(model.favorites);
+  UpdateFooter(model.footer);
 }
 
 void MahoSidebarView::OnTabListScrolled() {
@@ -247,6 +279,15 @@ void MahoSidebarView::BuildUi() {
   tab_scroll_view_ = tabs_surface_->AddChildView(std::move(scroll));
 
   tab_list_view_->SetAutoScrollScrollView(tab_scroll_view_);
+
+  tab_list_view_->SetFavoritesSyncCallback(base::BindRepeating(
+      [](MahoSidebarView* self) {
+        if (self->favorites_view_) {
+          self->UpdateFavorites(
+              self->state_adapter_.BuildFavoritesModel(self->browser_));
+        }
+      },
+      base::Unretained(this)));
 
   tab_scroll_subscription_ = tab_scroll_view_->AddContentsScrolledCallback(
       base::BindRepeating(&MahoSidebarView::OnTabListScrolled,
@@ -395,6 +436,17 @@ void MahoSidebarView::HandleLibraryCategorySelected(
     MahoSidebarLibraryRailView::Category category) {
   if (!library_rail_view_) {
     return;
+  }
+
+  if (category == MahoSidebarLibraryRailView::Category::kSpaces) {
+    PrefService* prefs = browser_->profile()->GetPrefs();
+    if (prefs && prefs->GetBoolean(maho::sidebar_prefs::kSpacesFullViewport)) {
+      auto* container = views::AsViewClass<MahoSidebarContainerView>(parent());
+      if (container) {
+        container->ToggleSpacesOverlay();
+      }
+      return;
+    }
   }
 
   ShowLibraryPane(category);
@@ -688,19 +740,33 @@ void MahoSidebarView::OnFavoritesModelReady(
 }
 
 void MahoSidebarView::RefreshAll() {
-  base::ElapsedTimer maho_perf_t;
-  LOG(INFO) << "[MAHO_PERF] RefreshAll START";
+  if (refresh_in_progress_) {
+    needs_re_refresh_ = true;
+    return;
+  }
+  refresh_in_progress_ = true;
   refresh_scheduled_ = false;
 
-  base::ElapsedTimer bvsm_t;
-  auto model = state_adapter_.BuildViewStateModel(browser_);
-  LOG(INFO) << "[MAHO_PERF]   BuildViewStateModel="
-            << bvsm_t.Elapsed().InMillisecondsF() << "ms";
+  std::string space_id_json;
+  if (auto* bridge = MahoSpaceProfileBridge::GetInstance()) {
+    space_id_json = base::GetQuotedJSONString(bridge->GetActiveSpaceId(browser_));
+  }
+  bool safe_mode = IsSidebarSafeMode();
 
-  base::ElapsedTimer apply_t;
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE,
+      {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+      base::BindOnce(&MahoSidebarStateAdapter::BuildStateOnBackground,
+                     space_id_json, safe_mode),
+      base::BindOnce(&MahoSidebarView::OnBackgroundStateReady,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void MahoSidebarView::OnBackgroundStateReady(SidebarStateBackgroundResult result) {
+  refresh_in_progress_ = false;
+
+  auto model = state_adapter_.BuildViewStateModelFromResult(browser_, std::move(result));
   ApplyViewState(model);
-  LOG(INFO) << "[MAHO_PERF]   ApplyViewState="
-            << apply_t.Elapsed().InMillisecondsF() << "ms";
 
   if (current_body_mode_ == MahoSidebarBodyMode::kLibrary &&
       active_library_category_ ==
@@ -712,8 +778,6 @@ void MahoSidebarView::RefreshAll() {
     needs_re_refresh_ = false;
     ScheduleRefreshAll();
   }
-  LOG(INFO) << "[MAHO_PERF] RefreshAll END "
-            << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
 }
 
 void MahoSidebarView::ApplyViewState(const MahoSidebarViewStateModel& model) {
@@ -872,6 +936,10 @@ void MahoSidebarView::OnTabStripModelChanged(
 void MahoSidebarView::OnTabChangedAt(tabs::TabInterface* tab,
                                      int index,
                                      TabChangeType change_type) {
+  if (change_type == TabChangeType::kAll) {
+    ScheduleCosmeticRefresh();
+    return;
+  }
   // P3: Skip ScheduleRefreshAll for non-active tab changes; only the active
   // tab's title/favicon update needs immediate sidebar reflection. With 870+
   // tabs, background loads fire OnTabChangedAt hundreds of times per second.
@@ -923,12 +991,10 @@ void MahoSidebarView::OnSpaceProfileBridgeChanged(bool is_structural) {
 }
 
 void MahoSidebarView::OnSpaceProfileBridgeChanged() {
+  state_adapter_.InvalidateFooterState();
   // Structural change preempts any pending cosmetic refresh so we don't apply
   // stale title/URL patches on top of a freshly-rebuilt tab list.
   cosmetic_refresh_timer_.Stop();
-  if (footer_view_) {
-    UpdateFooter(state_adapter_.BuildFooterModel(browser_));
-  }
   UpdateSpacesPaneActions();
   ScheduleRefreshAll();
 }
@@ -944,12 +1010,10 @@ void MahoSidebarView::ScheduleCosmeticRefresh() {
 }
 
 void MahoSidebarView::ApplyCosmeticRefresh() {
-  base::ElapsedTimer t;
-  auto model = state_adapter_.BuildViewStateModel(browser_);
-  UpdateTabList(model.tab_list);
-  UpdateFavorites(model.favorites);
-  LOG(INFO) << "[MAHO_PERF] ApplyCosmeticRefresh="
-            << t.Elapsed().InMillisecondsF() << "ms";
+  if (tab_list_view_) {
+    tab_list_view_->ApplyCosmeticRefresh();
+  }
+  UpdateFavorites(state_adapter_.BuildFavoritesModel(browser_));
 }
 
 bool MahoSidebarView::GetDropFormats(

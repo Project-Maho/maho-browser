@@ -154,7 +154,11 @@ class MahoSidebarTabListView : public views::View,
 
   void UpdateActiveTabHighlightOnly(const std::string& new_active_tab_id);
 
+  void SetFavoritesSyncCallback(base::RepeatingClosure callback);
+
   bool HasTabInLastModel(const std::string& tab_id) const;
+
+  void ApplyCosmeticRefresh();
 
   void ShowContextMenuForViewImpl(views::View* source,
                                   const gfx::Point& point,
@@ -184,6 +188,7 @@ class MahoSidebarTabListView : public views::View,
   void CloseTab(int tab_index);
   void CloseTabById(const std::string& tab_id);
   int ResolveTabStripIndexForTabId(const std::string& tab_id) const;
+  void MuteTabById(const std::string& tab_id);
   void OpenNewTab(const ui::Event& event);
   // Opens Maho AI side panel. Auto-firing Tab Tidy on open deferred (ADR-0010 §future).
   void OnTidyPressed(const ui::Event& event);
@@ -246,12 +251,18 @@ class MahoSidebarTabListView : public views::View,
 
   std::string last_model_fingerprint_;
   std::string last_active_tab_id_;
+  base::RepeatingClosure favorites_sync_callback_;
 
   std::map<std::string, raw_ptr<SidebarFolderRowView>> folder_rows_by_id_;
 
   // P3: O(1) tab_id→strip index lookup eliminates O(870) linear scan per
   // hover event (~870 calls/hover cycle). Rebuilt on Update() success.
   std::unordered_map<std::string, int> tab_id_to_index_;
+
+  // P4 (Fix 2): O(1) tab_id->row view lookup for UpdateActiveTabHighlightOnly.
+  // Replaces two RecursiveFindView O(N) walks per active-tab change.
+  // Rebuilt at end of RebuildRows; cleared on teardown via RemoveAllChildViews.
+  std::unordered_map<std::string, raw_ptr<SidebarTabRowView>> tab_id_to_row_view_;
 
   base::WeakPtrFactory<MahoSidebarTabListView> weak_factory_{this};
 };
@@ -272,6 +283,7 @@ class SidebarTabRowView : public views::View,
                      std::u16string display_title,
                      views::Button::PressedCallback activate_callback,
                      views::Button::PressedCallback close_callback,
+                     views::Button::PressedCallback mute_callback,
                      base::RepeatingCallback<void(const std::string&, const std::u16string&)>
                           rename_callback,
                      base::RepeatingCallback<int(const std::string&)>
@@ -367,22 +379,23 @@ class SidebarTabRowView : public views::View,
   void SetFavicon(ui::ImageModel image);
   const std::string& tab_id() const { return tab_id_; }
   const std::string& containing_folder_id() const { return source_parent_folder_id_; }
+  void ApplyDisplayedTitle(const std::u16string& title);
+  void UpdateAudioState(bool audible, bool muted);
 
  private:
   void ActivateTabFromEvent(const ui::Event& event);
   void ActivateFromRowClick(const ui::MouseEvent& event);
+  void OnAudioButtonPressed(const ui::Event& event);
   SidebarTabDropZone ResolveDropZone(const ui::DropTargetEvent& event,
                                      const SidebarDragPayload& payload) const;
   void BeginTitleEditing();
   void EndTitleEditing(bool commit);
-  void ApplyDisplayedTitle(const std::u16string& title);
   void UpdateAppearance();
 
-  // Non-const to allow SetActive() partial update; see comment on SetActive().
   bool active_;
   const bool pinned_;
-  const bool audible_;
-  const bool muted_;
+  bool audible_;
+  bool muted_;
   const std::string tab_id_;
   const MahoSidebarTabSection section_;
   const std::string space_id_;
@@ -393,7 +406,7 @@ class SidebarTabRowView : public views::View,
   std::u16string committed_title_;
   bool is_editing_title_ = false;
   raw_ptr<views::ImageView> favicon_view_ = nullptr;
-  raw_ptr<views::ImageView> audio_indicator_view_ = nullptr;
+  raw_ptr<views::ImageButton> audio_button_ = nullptr;
   raw_ptr<views::LabelButton> title_button_ = nullptr;
   raw_ptr<views::Textfield> title_field_ = nullptr;
   raw_ptr<views::ImageButton> close_button_ = nullptr;
@@ -402,6 +415,7 @@ class SidebarTabRowView : public views::View,
   base::RepeatingCallback<void(views::View*, int)> preview_show_callback_;
   base::RepeatingClosure preview_hide_callback_;
   views::Button::PressedCallback activate_callback_;
+  views::Button::PressedCallback mute_callback_;
   base::RepeatingCallback<void(const std::string&)>
       favorites_drop_accepted_callback_;
   base::RepeatingClosure reveal_empty_pinned_drop_lane_callback_;
@@ -565,6 +579,11 @@ class SidebarFolderRowView : public views::View,
   std::unique_ptr<MahoFolderContextMenu> active_folder_context_menu_;
   std::unique_ptr<ui::SimpleMenuModel> active_folder_menu_model_;
   std::unique_ptr<views::MenuRunner> active_folder_menu_runner_;
+
+  mutable bool cached_icon_expanded_ = false;
+  mutable ui::ColorId cached_icon_color_id_ = 0;
+  mutable bool icon_cache_valid_ = false;
+
   base::WeakPtrFactory<SidebarFolderRowView> weak_factory_{this};
 };
 
