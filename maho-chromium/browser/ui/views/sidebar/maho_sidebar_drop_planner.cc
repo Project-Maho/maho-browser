@@ -55,7 +55,7 @@ SidebarDropPlan ResolveDropPlan(SectionKind target,
       (payload.origin == SidebarDragOrigin::kPinnedSection);
 
   if (!is_tab) {
-    if (target == SectionKind::kFavorites || target == SectionKind::kNormal) {
+    if (target == SectionKind::kFavorites || target == SectionKind::kPinned) {
       plan.is_valid = false;
       return plan;
     }
@@ -101,11 +101,12 @@ SidebarDropPlan ResolveDropPlan(SectionKind target,
     plan.favorite_transition.kind =
         SidebarDropPlan::FavoriteTransition::Kind::kUnfavorite;
     plan.favorite_transition.node_id = payload.node_id;
-    plan.steps.push_back({"unfavorite_tab", payload.node_id, {}, {}});
     if (to_pinned) {
+      plan.steps.push_back({"change_tab_role_pinned", payload.node_id, {}, {}});
       plan.pin_transition.kind = SidebarDropPlan::PinTransition::Kind::kPin;
       plan.pin_transition.node_id = payload.node_id;
-      plan.steps.push_back({"pin_tab", payload.node_id, {}, {}});
+    } else {
+      plan.steps.push_back({"change_tab_role_normal", payload.node_id, {}, {}});
     }
     return plan;
   }
@@ -151,6 +152,17 @@ SidebarDropPlan PlanFavoritesGridDrop(const SidebarDragPayload& payload) {
   return ResolveDropPlan(SectionKind::kFavorites, payload);
 }
 
+namespace {
+void DispatchRoleTransitionEvent(const std::string& node_id, const std::string& role_type) {
+  base::DictValue event;
+  event.Set("tab_id", node_id);
+  base::DictValue new_role;
+  new_role.Set("type", role_type);
+  event.Set("new_role", std::move(new_role));
+  DispatchShellEventDict("change_tab_role", std::move(event));
+}
+}  // namespace
+
 bool ExecuteDropPlan(const SidebarDropPlan& plan) {
   if (!plan.is_valid || plan.steps.empty()) {
     return false;
@@ -161,6 +173,10 @@ bool ExecuteDropPlan(const SidebarDropPlan& plan) {
           {"space_id", step.space_id},
           {"folder_id", step.folder_id},
           {"tab_id", step.node_id}});
+    } else if (step.kind == "change_tab_role_normal") {
+      DispatchRoleTransitionEvent(step.node_id, "normal");
+    } else if (step.kind == "change_tab_role_pinned") {
+      DispatchRoleTransitionEvent(step.node_id, "pinned");
     } else {
       DispatchShellEvent(step.kind, {{"tab_id", step.node_id}});
     }
@@ -177,7 +193,13 @@ bool ExecuteDropPlanTransitionsOnly(const SidebarDropPlan& plan) {
     if (step.kind == maho::sidebar::kMoveTabToRoot) {
       continue;
     }
-    DispatchShellEvent(step.kind, {{"tab_id", step.node_id}});
+    if (step.kind == "change_tab_role_normal") {
+      DispatchRoleTransitionEvent(step.node_id, "normal");
+    } else if (step.kind == "change_tab_role_pinned") {
+      DispatchRoleTransitionEvent(step.node_id, "pinned");
+    } else {
+      DispatchShellEvent(step.kind, {{"tab_id", step.node_id}});
+    }
     executed = true;
   }
   return executed;
