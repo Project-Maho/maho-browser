@@ -4,7 +4,7 @@ use maho_types::animation::performance_contract::TAB_LIFECYCLE_TIMEOUTS;
 use maho_types::common::{DateTime, MemoryPressureLevel, ScrollPosition, TabSnapshot, Url};
 use maho_types::events::core_update::{CoreUpdate, MemoryAction};
 use maho_types::identifiers::{SpaceId, TabId};
-use maho_types::tab::{Tab, TabLifecycleState};
+use maho_types::tab::{Tab, TabLifecycleState, TabRole};
 use maho_types::traits::shell_renderer::{TabStateUpdate, TabViewModel};
 
 const MAX_CLOSED_STACK: usize = 25;
@@ -47,7 +47,7 @@ fn extract_registrable_domain(url: &str) -> String {
 }
 
 fn is_auto_lifecycle_exempt(tab: &Tab) -> bool {
-    tab.is_pinned || tab.is_favorite
+    tab.role.is_pinned()
 }
 
 pub struct TabLifecycleManager {
@@ -120,9 +120,7 @@ impl TabLifecycleManager {
             custom_title: None,
             favicon: None,
             state: TabLifecycleState::Active,
-            is_pinned: false,
-            is_favorite: false,
-            favorite_order: None,
+            role: TabRole::Normal,
             is_muted: false,
             zoom_level: 1.0,
             created_at: now.clone(),
@@ -304,7 +302,7 @@ impl TabLifecycleManager {
             "id": tab_id.as_ref(),
             "url": tab.url.0.clone(),
             "title": tab.title.clone(),
-            "isPinned": tab.is_pinned,
+            "isPinned": tab.role.is_pinned(),
             "scrollPosition": { "x": tab.scroll_position.x, "y": tab.scroll_position.y }
         });
         Some(snapshot.to_string())
@@ -405,17 +403,8 @@ impl TabLifecycleManager {
         (self.on_update)(CoreUpdate::TabUpdated {
             tab_id: tab_id.clone(),
             changes: TabStateUpdate {
-                title: None,
-                custom_title: None,
-                url: None,
-                favicon: None,
-                is_loading: None,
-                is_pinned: None,
-                is_favorite: None,
-                is_muted: None,
-                is_playing_audio: None,
-                lifecycle_state: None,
-                favorite_order: None,
+                role: Some(tab.role.clone()),
+                ..Default::default()
             },
         });
 
@@ -424,7 +413,7 @@ impl TabLifecycleManager {
 
     pub fn pin_tab(&mut self, tab_id: &TabId) {
         if let Some(tab) = self.tabs.get_mut(tab_id) {
-            tab.is_pinned = true;
+            tab.role = TabRole::Pinned;
             tab.pinned_url = Some(tab.url.clone());
             (self.on_update)(CoreUpdate::TabUpdated {
                 tab_id: tab_id.clone(),
@@ -435,11 +424,12 @@ impl TabLifecycleManager {
                     favicon: None,
                     is_loading: None,
                     is_pinned: Some(true),
-                    is_favorite: None,
-                    favorite_order: None,
+                    is_favorite: Some(false), // L3-EXEMPT: legacy compat
+                    favorite_order: Some(None),
                     is_muted: None,
                     is_playing_audio: None,
                     lifecycle_state: None,
+                    role: Some(TabRole::Pinned),
                 },
             });
         }
@@ -447,7 +437,7 @@ impl TabLifecycleManager {
 
     pub fn unpin_tab(&mut self, tab_id: &TabId) {
         if let Some(tab) = self.tabs.get_mut(tab_id) {
-            tab.is_pinned = false;
+            tab.role = TabRole::Normal;
             tab.pinned_url = None;
             (self.on_update)(CoreUpdate::TabUpdated {
                 tab_id: tab_id.clone(),
@@ -458,77 +448,69 @@ impl TabLifecycleManager {
                     favicon: None,
                     is_loading: None,
                     is_pinned: Some(false),
-                    is_favorite: None,
-                    favorite_order: None,
+                    is_favorite: Some(false), // L3-EXEMPT: legacy compat
+                    favorite_order: Some(None),
                     is_muted: None,
                     is_playing_audio: None,
                     lifecycle_state: None,
+                    role: Some(TabRole::Normal),
                 },
             });
         }
     }
 
+    /// Sets `tab.role` to `new_role` and emits a `TabUpdated` event.
+    ///
+    /// This is a pure role-field mutation: side-effect fields such as
+    /// `pinned_url` are NOT automatically managed. Callers that need
+    /// pinned-related side effects (e.g. clearing `pinned_url` on a
+    /// Pinned → Normal transition, or seeding it on Normal → Pinned)
+    /// must apply those separately before/after this call. See ADR 11
+    /// (docs/decisions/0011-favorites-close-protection-policy.md) for
+    /// the role-transition contract.
+    pub fn transition_tab_role(&mut self, id: &TabId, new_role: TabRole) -> bool {
+        if let Some(tab) = self.tabs.get_mut(id) {
+            tab.role = new_role.clone();
+            (self.on_update)(CoreUpdate::TabUpdated {
+                tab_id: id.clone(),
+                changes: TabStateUpdate {
+                    title: None,
+                    custom_title: None,
+                    url: None,
+                    favicon: None,
+                    is_loading: None,
+                    is_pinned: Some(new_role.is_pinned()),
+                    is_favorite: Some(new_role.is_favorite()), // L3-EXEMPT: legacy compat
+                    favorite_order: Some(new_role.favorite_order()),
+                    is_muted: None,
+                    is_playing_audio: None,
+                    lifecycle_state: None,
+                    role: Some(new_role),
+                },
+            });
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn favorite_tab(&mut self, tab_id: &TabId) {
-        if self.tabs.get(tab_id).map(|tab| tab.is_favorite).unwrap_or(false) {
+        if self.tabs.get(tab_id).map(|tab| tab.role.is_favorite()).unwrap_or(false) { // L3-EXEMPT: role query
             return;
         }
-        let current_count = self.tabs.values().filter(|t| t.is_favorite && !matches!(t.state, TabLifecycleState::Archived { .. })).count();
+        let current_count = self.tabs.values().filter(|t| t.role.is_favorite() && !matches!(t.state, TabLifecycleState::Archived { .. })).count(); // L3-EXEMPT: role query
         if current_count >= MAX_FAVORITES {
             return;
         }
         let max_order = self
             .tabs
             .values()
-            .filter(|t| t.is_favorite && !matches!(t.state, TabLifecycleState::Archived { .. }))
-            .filter_map(|t| t.favorite_order)
+            .filter(|t| t.role.is_favorite() && !matches!(t.state, TabLifecycleState::Archived { .. })) // L3-EXEMPT: role query
+            .filter_map(|t| t.role.favorite_order())
             .max()
             .unwrap_or(0);
-        if let Some(tab) = self.tabs.get_mut(tab_id) {
-            tab.is_favorite = true;
-            tab.is_pinned = true;
-            tab.favorite_order = Some(max_order + 1);
-            let fav_order = tab.favorite_order;
-            (self.on_update)(CoreUpdate::TabUpdated {
-                tab_id: tab_id.clone(),
-                changes: TabStateUpdate {
-                    title: None,
-                    custom_title: None,
-                    url: None,
-                    favicon: None,
-                    is_loading: None,
-                    is_pinned: Some(true),
-                    is_favorite: Some(true),
-                    favorite_order: Some(fav_order),
-                    is_muted: None,
-                    is_playing_audio: None,
-                    lifecycle_state: None,
-                },
-            });
-        }
-    }
-
-    pub fn unfavorite_tab(&mut self, tab_id: &TabId) {
-        if let Some(tab) = self.tabs.get_mut(tab_id) {
-            tab.is_favorite = false;
-            tab.is_pinned = false;
-            tab.favorite_order = None;
-            (self.on_update)(CoreUpdate::TabUpdated {
-                tab_id: tab_id.clone(),
-                changes: TabStateUpdate {
-                    title: None,
-                    custom_title: None,
-                    url: None,
-                    favicon: None,
-                    is_loading: None,
-                    is_pinned: Some(false),
-                    is_favorite: Some(false),
-                    favorite_order: Some(None),
-                    is_muted: None,
-                    is_playing_audio: None,
-                    lifecycle_state: None,
-                },
-            });
-        }
+        
+        self.transition_tab_role(tab_id, TabRole::Favorite { order: max_order + 1 });
     }
 
     pub fn mute_tab(&mut self, tab_id: &TabId) {
@@ -537,17 +519,8 @@ impl TabLifecycleManager {
             (self.on_update)(CoreUpdate::TabUpdated {
                 tab_id: tab_id.clone(),
                 changes: TabStateUpdate {
-                    title: None,
-                    custom_title: None,
-                    url: None,
-                    favicon: None,
-                    is_loading: None,
-                    is_pinned: None,
-                    is_favorite: None,
-                    favorite_order: None,
                     is_muted: Some(true),
-                    is_playing_audio: None,
-                    lifecycle_state: None,
+                    ..Default::default()
                 },
             });
         }
@@ -559,17 +532,8 @@ impl TabLifecycleManager {
             (self.on_update)(CoreUpdate::TabUpdated {
                 tab_id: tab_id.clone(),
                 changes: TabStateUpdate {
-                    title: None,
-                    custom_title: None,
-                    url: None,
-                    favicon: None,
-                    is_loading: None,
-                    is_pinned: None,
-                    is_favorite: None,
-                    favorite_order: None,
                     is_muted: Some(false),
-                    is_playing_audio: None,
-                    lifecycle_state: None,
+                    ..Default::default()
                 },
             });
         }
@@ -694,7 +658,7 @@ impl TabLifecycleManager {
                 .tabs
                 .values()
                 .filter(|t| {
-                    !t.is_pinned && !t.is_favorite && matches!(t.state, TabLifecycleState::Active)
+                    t.role == TabRole::Normal && matches!(t.state, TabLifecycleState::Active)
                 })
                 .map(|t| t.id.clone())
                 .collect();
@@ -798,7 +762,7 @@ impl TabLifecycleManager {
     pub fn get_pinned_tabs(&self, space_id: &SpaceId) -> Vec<&Tab> {
         self.tabs
             .values()
-            .filter(|t| t.space_id == *space_id && t.is_pinned && !t.is_favorite && !matches!(t.state, TabLifecycleState::Archived { .. }))
+            .filter(|t| t.space_id == *space_id && t.role == TabRole::Pinned && !matches!(t.state, TabLifecycleState::Archived { .. }))
             .collect()
     }
 
@@ -806,9 +770,9 @@ impl TabLifecycleManager {
         let mut tabs: Vec<&Tab> = self
             .tabs
             .values()
-            .filter(|t| t.space_id == *space_id && t.is_favorite && !matches!(t.state, TabLifecycleState::Archived { .. }))
+            .filter(|t| t.space_id == *space_id && t.role.is_favorite() && !matches!(t.state, TabLifecycleState::Archived { .. })) // L3-EXEMPT: role query
             .collect();
-        tabs.sort_by_key(|t| t.favorite_order.unwrap_or(u32::MAX));
+        tabs.sort_by_key(|t| t.role.favorite_order().unwrap_or(u32::MAX));
         tabs
     }
 
@@ -816,10 +780,10 @@ impl TabLifecycleManager {
         let mut favorite_tabs: Vec<Tab> = self
             .tabs
             .values()
-            .filter(|t| t.is_favorite && !matches!(t.state, TabLifecycleState::Archived { .. }))
+            .filter(|t| t.role.is_favorite() && !matches!(t.state, TabLifecycleState::Archived { .. })) // L3-EXEMPT: role query
             .cloned()
             .collect();
-        favorite_tabs.sort_by_key(|t| t.favorite_order.unwrap_or(u32::MAX));
+        favorite_tabs.sort_by_key(|t| t.role.favorite_order().unwrap_or(u32::MAX));
 
         let Some(tab_pos) = favorite_tabs.iter().position(|t| &t.id == tab_id) else {
             return;
@@ -830,32 +794,33 @@ impl TabLifecycleManager {
         favorite_tabs.insert(insert_index, tab);
 
         for (i, favorite_tab) in favorite_tabs.into_iter().enumerate() {
-            let new_order = Some(i as u32);
-            if favorite_tab.favorite_order != new_order {
+            let new_order = i as u32;
+            if favorite_tab.role.favorite_order() != Some(new_order) {
                 if let Some(existing_tab) = self.tabs.get_mut(&favorite_tab.id) {
-                    existing_tab.favorite_order = new_order;
+                    existing_tab.role = TabRole::Favorite { order: new_order };
                 }
                 (self.on_update)(CoreUpdate::TabUpdated {
                     tab_id: favorite_tab.id.clone(),
                     changes: TabStateUpdate {
-                        favorite_order: Some(new_order),
+                        favorite_order: Some(Some(new_order)),
+                        role: Some(TabRole::Favorite { order: new_order }),
                         ..Default::default()
                     },
                 });
             } else if let Some(existing_tab) = self.tabs.get_mut(&favorite_tab.id) {
-                existing_tab.favorite_order = new_order;
+                existing_tab.role = TabRole::Favorite { order: new_order };
             }
         }
     }
 
     pub fn get_all_favorite_tabs(&self) -> Vec<&Tab> {
-        self.tabs.values().filter(|t| t.is_favorite).collect()
+        self.tabs.values().filter(|t| t.role.is_favorite()).collect() // L3-EXEMPT: role query
     }
 
     pub fn count_favorite_tabs_in_spaces(&self, space_ids: &HashSet<SpaceId>) -> usize {
         self.tabs
             .values()
-            .filter(|t| t.is_favorite && space_ids.contains(&t.space_id) && !matches!(t.state, TabLifecycleState::Archived { .. }))
+            .filter(|t| t.role.is_favorite() && space_ids.contains(&t.space_id) && !matches!(t.state, TabLifecycleState::Archived { .. })) // L3-EXEMPT: role query
             .count()
     }
 
@@ -864,8 +829,7 @@ impl TabLifecycleManager {
             .values()
             .filter(|t| {
                 t.space_id == *space_id
-                    && !t.is_pinned
-                    && !t.is_favorite
+                    && !t.role.is_pinned()
                     && matches!(t.state, TabLifecycleState::Active)
             })
             .collect()
@@ -879,7 +843,7 @@ impl TabLifecycleManager {
             .values()
             .filter(|t| {
                 t.space_id == *space_id
-                    && !t.is_pinned
+                    && !t.role.is_pinned()
                     && t.window_id == Some(window_id)
                     && !matches!(t.state, TabLifecycleState::Archived { .. })
             })
@@ -1038,8 +1002,8 @@ impl TabLifecycleManager {
             url: tab.url.0.clone(),
             favicon: tab.favicon.clone(),
             is_loading: self.loading_states.get(&tab.id).copied().unwrap_or(false),
-            is_pinned: tab.is_pinned,
-            is_favorite: tab.is_favorite,
+            is_pinned: tab.role.is_pinned(),
+            is_favorite: tab.role.is_favorite(), // L3-EXEMPT: views display
             is_muted: tab.is_muted,
             is_playing_audio: false,
             lifecycle_state: tab.state.kind_str().to_string(),
@@ -1047,7 +1011,8 @@ impl TabLifecycleManager {
             space_id: tab.space_id.clone(),
             created_at: tab.created_at.clone(),
             last_active_at: tab.last_active_at.clone(),
-            favorite_order: tab.favorite_order,
+            favorite_order: tab.role.favorite_order(),
+            role: tab.role.clone(),
         }
     }
 
@@ -1113,7 +1078,7 @@ impl TabLifecycleManager {
                 t.space_id == *space_id
                     && t.id != *tab_id
                     && !matches!(t.state, TabLifecycleState::Archived { .. })
-                    && !t.is_pinned
+                    && !t.role.is_pinned()
             })
             .map(|t| t.id.clone())
             .collect();
@@ -1153,7 +1118,7 @@ impl TabLifecycleManager {
                 t.space_id == *space_id
                     && t.id != *tab_id
                     && !matches!(t.state, TabLifecycleState::Archived { .. })
-                    && !t.is_pinned
+                    && !t.role.is_pinned()
                     && self.creation_timestamps.get(&t.id).copied().unwrap_or(0) > reference_ts
             })
             .map(|t| t.id.clone())
@@ -1194,7 +1159,7 @@ impl TabLifecycleManager {
                 t.space_id == *space_id
                     && t.id != *tab_id
                     && !matches!(t.state, TabLifecycleState::Archived { .. })
-                    && !t.is_pinned
+                    && !t.role.is_pinned()
                     && self.creation_timestamps.get(&t.id).copied().unwrap_or(0) < reference_ts
             })
             .map(|t| t.id.clone())
@@ -1234,7 +1199,7 @@ impl TabLifecycleManager {
                 if tab.space_id != *space_id {
                     return false;
                 }
-                if tab.is_pinned {
+                if tab.role.is_pinned() {
                     return false;
                 }
                 if matches!(tab.state, TabLifecycleState::Archived { .. }) {
@@ -1324,7 +1289,7 @@ impl TabLifecycleManager {
     }
 
     pub fn should_open_in_peek(tab: &Tab, new_url: &Url) -> bool {
-        if !tab.is_pinned {
+        if !tab.role.is_pinned() {
             return false;
         }
         let pinned_url = match &tab.pinned_url {
@@ -1358,20 +1323,20 @@ mod tests {
         manager.favorite_tab(&tab_id);
 
         let after_first_call = manager.get_tab(&tab_id).unwrap();
-        assert!(after_first_call.is_favorite);
-        assert_eq!(after_first_call.favorite_order, Some(1));
+        assert!(after_first_call.role.is_favorite()); // L3-EXEMPT: test assert
+        assert_eq!(after_first_call.role.favorite_order(), Some(1));
         assert_eq!(manager.get_favorite_tabs(&space_id).len(), 1);
 
         let first_call_updates = updates.borrow().clone();
         assert_eq!(first_call_updates.len(), 2);
         assert!(matches!(first_call_updates[0], CoreUpdate::TabCreated { .. }));
-        assert!(matches!(&first_call_updates[1], CoreUpdate::TabUpdated { tab_id: update_tab_id, changes } if update_tab_id == &tab_id && changes.is_favorite == Some(true) && changes.favorite_order == Some(Some(1))));
+        assert!(matches!(&first_call_updates[1], CoreUpdate::TabUpdated { tab_id: update_tab_id, changes } if update_tab_id == &tab_id && changes.is_favorite == Some(true) && changes.favorite_order == Some(Some(1)))); // L3-EXEMPT: test assert
 
         manager.favorite_tab(&tab_id);
 
         let after_second_call = manager.get_tab(&tab_id).unwrap();
-        assert!(after_second_call.is_favorite);
-        assert_eq!(after_second_call.favorite_order, Some(1));
+        assert!(after_second_call.role.is_favorite()); // L3-EXEMPT: test assert
+        assert_eq!(after_second_call.role.favorite_order(), Some(1));
         assert_eq!(manager.get_favorite_tabs(&space_id).len(), 1);
 
         let all_updates = updates.borrow();
