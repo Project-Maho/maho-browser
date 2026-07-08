@@ -1,5 +1,5 @@
 name = "maho-billing-proxy"
-main = "src/lib.rs"
+main = "build/worker/shim.mjs"
 compatibility_date = "2026-06-27"
 compatibility_flags = [ "nodejs_compat" ]
 

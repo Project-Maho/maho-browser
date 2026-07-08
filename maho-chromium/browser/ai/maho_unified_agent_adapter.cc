@@ -7,6 +7,7 @@
 #include "maho/browser/ai/maho_unified_agent_adapter.h"
 
 #include <cstring>
+#include <fstream>
 #include <memory>
 
 #include "base/base64.h"
@@ -16,6 +17,12 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
+#include "base/synchronization/waitable_event.h"
+#include "chrome/browser/ui/browser.h"  // nogncheck
+#include "chrome/browser/ui/browser_finder.h"  // nogncheck
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck
+#include "content/public/browser/browser_thread.h"
+#include "maho/browser/ai/maho_browser_tool_executor.h"  // nogncheck
 #include "base/strings/string_number_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/uuid.h"
@@ -137,6 +144,14 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
           prefs_->GetString(maho::ai_prefs::kByokOpenAIEncryptedB64);
       byok_snapshot_->encrypted_byok_anthropic_b64 =
           prefs_->GetString(maho::ai_prefs::kByokAnthropicEncryptedB64);
+      byok_snapshot_->custom_provider =
+          prefs_->GetString(maho::ai_prefs::kProvider);
+      byok_snapshot_->custom_api_key =
+          prefs_->GetString(maho::ai_prefs::kApiKey);
+      byok_snapshot_->custom_base_url =
+          prefs_->GetString(maho::ai_prefs::kBaseUrl);
+      byok_snapshot_->custom_model =
+          prefs_->GetString(maho::ai_prefs::kModel);
     }
     if (encryptor_) {
       byok_snapshot_->encryptor = encryptor_;
@@ -151,7 +166,9 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
     agent_session_ = maho_agent_create_session(
         core, session_id_.c_str(), nullptr, /*allow_insecure_key_storage=*/false,
         &MahoUnifiedAgentAdapter::OnAgentPermission, this,
-        &MahoUnifiedAgentAdapter::OnAgentSecureStorage, byok_bridge_);
+        &MahoUnifiedAgentAdapter::OnAgentSecureStorage, byok_bridge_,
+        &MahoUnifiedAgentAdapter::OnAgentBrowserTool,
+        static_cast<void*>(nullptr));
     if (!agent_session_) {
       TransitionToError("Failed to create agent session.");
       return;
@@ -292,10 +309,8 @@ MahoAgentPermissionDecision MahoUnifiedAgentAdapter::OnAgentPermission(void* use
                                                                         const char* tool_name,
                                                                         const char* arguments) {
   if (!user_data) {
-    if (!tool_name) return MahoAgentPermissionDecision_Deny;
-    const std::string tool(tool_name);
-    if (tool == "shell_exec") return MahoAgentPermissionDecision_Deny;
-    if (tool == "fs_read" || tool == "web_search") return MahoAgentPermissionDecision_Allow;
+    // Defense-in-depth: no adapter context means we cannot consult approval
+    // policy; deny all tool use in the null-user_data fallback path.
     return MahoAgentPermissionDecision_Deny;
   }
   MahoUnifiedAgentAdapter* adapter = static_cast<MahoUnifiedAgentAdapter*>(user_data);
@@ -308,10 +323,28 @@ MahoAgentPermissionDecision MahoUnifiedAgentAdapter::OnAgentPermissionOnSequence
   if (!tool_name) return MahoAgentPermissionDecision_Deny;
   const std::string tool(tool_name);
   if (tool == "shell_exec") return MahoAgentPermissionDecision_Deny;
+  
+  // 0. Check global approval policy override
+  if (prefs_) {
+    const std::string policy = prefs_->GetString(maho::ai_prefs::kApprovalPolicy);
+    if (policy == "deny") {
+      return MahoAgentPermissionDecision_Deny;
+    }
+    if (policy == "allow") {
+      return MahoAgentPermissionDecision_Allow;
+    }
+  }
+
+  if (tool == "read_current_page" || tool == "get_selected_text" ||
+      tool == "get_active_tab" || tool == "search_in_page" ||
+      tool == "extract_structured_page_context") {
+    return MahoAgentPermissionDecision_Allow;
+  }
 
   if (permission_extension_id_.empty()) {
-    if (tool == "fs_read" || tool == "web_search") return MahoAgentPermissionDecision_Allow;
-    return MahoAgentPermissionDecision_Deny;
+    if (tool != "fs_read" && tool != "web_search") {
+      return MahoAgentPermissionDecision_Deny;
+    }
   }
 
   // 1. Check persistent grants in prefs
@@ -361,7 +394,7 @@ MahoAgentPermissionDecision MahoUnifiedAgentAdapter::OnAgentPermissionOnSequence
                 : "DENY");
 
   if (decision_val == PromptDecision::kAllow) {
-    if (prefs_) {
+    if (prefs_ && !permission_extension_id_.empty()) {
       ScopedDictPrefUpdate update(prefs_, maho::ai_prefs::kAgentToolGrants);
       auto* tool_list = update->EnsureList(permission_extension_id_);
       if (tool_list) {
@@ -446,20 +479,46 @@ MahoAgentSecureKey AllocateSecureKeyFromPlaintext(const std::string& plaintext) 
 MahoAgentSecureKey MahoUnifiedAgentAdapter::OnAgentSecureStorage(
     void* user_data, const char* provider) {
   if (!user_data || !provider) {
-    return MahoAgentSecureKey{nullptr, 0, nullptr};
+    return MahoAgentSecureKey{nullptr, 0, nullptr, nullptr, nullptr, nullptr};
   }
   // user_data is a std::shared_ptr<ByokSnapshot>* bridge (heap-allocated).
   auto* bridge = static_cast<std::shared_ptr<ByokSnapshot>*>(user_data);
   std::shared_ptr<ByokSnapshot> snapshot = *bridge;
   if (!snapshot) {
-    return MahoAgentSecureKey{nullptr, 0, nullptr};
-  }
-
-  if (!snapshot->encryptor) {
-    return MahoAgentSecureKey{nullptr, 0, nullptr};
+    return MahoAgentSecureKey{nullptr, 0, nullptr, nullptr, nullptr, nullptr};
   }
 
   const std::string provider_str(provider);
+
+  // Custom-provider path: user configured a plain api_key + base_url via
+  // the Chromium Settings pane (maho.ai.api_key, maho.ai.base_url,
+  // maho.ai.model). Match by provider family: "openai" / "openai-compatible"
+  // are both served when Rust asks for "openai"; "anthropic" /
+  // "anthropic-compatible" are both served when Rust asks for "anthropic".
+  auto provider_family_matches = [&](const std::string& family) -> bool {
+    return snapshot->custom_provider == family ||
+           snapshot->custom_provider == (family + "-compatible");
+  };
+
+  if (!snapshot->custom_api_key.empty() && provider_family_matches(provider_str)) {
+    MahoAgentSecureKey result = AllocateSecureKeyFromPlaintext(snapshot->custom_api_key);
+    if (!snapshot->custom_base_url.empty()) {
+      result.base_url = strdup(snapshot->custom_base_url.c_str());
+      result.cstring_free_fn = reinterpret_cast<void(*)(char*)>(&::free);
+    }
+    if (!snapshot->custom_model.empty()) {
+      result.model = strdup(snapshot->custom_model.c_str());
+      result.cstring_free_fn = reinterpret_cast<void(*)(char*)>(&::free);
+    }
+    g_byok_key_status.Set("active");
+    return result;
+  }
+
+  // Encrypted BYOK path: original behaviour.
+  if (!snapshot->encryptor) {
+    return MahoAgentSecureKey{nullptr, 0, nullptr, nullptr, nullptr, nullptr};
+  }
+
   const std::string* encrypted_b64 = nullptr;
   if (provider_str == "openai") {
     encrypted_b64 = &snapshot->encrypted_byok_openai_b64;
@@ -468,38 +527,118 @@ MahoAgentSecureKey MahoUnifiedAgentAdapter::OnAgentSecureStorage(
   } else {
     DLOG(WARNING) << "OnAgentSecureStorage: unknown provider '" << provider_str
                   << "'; returning null key triple";
-    return MahoAgentSecureKey{nullptr, 0, nullptr};
+    return MahoAgentSecureKey{nullptr, 0, nullptr, nullptr, nullptr, nullptr};
   }
 
   if (encrypted_b64->empty()) {
-    // No key configured for this provider; Rust runtime will fail closed
-    // when allow_insecure_key_storage=false (see SubmitMessage).
-    return MahoAgentSecureKey{nullptr, 0, nullptr};
+    return MahoAgentSecureKey{nullptr, 0, nullptr, nullptr, nullptr, nullptr};
   }
 
   std::string encrypted_bytes;
   if (!base::Base64Decode(*encrypted_b64, &encrypted_bytes)) {
-    return MahoAgentSecureKey{nullptr, 0, nullptr};
+    return MahoAgentSecureKey{nullptr, 0, nullptr, nullptr, nullptr, nullptr};
   }
   std::string plaintext;
   const bool decrypted = snapshot->encryptor->DecryptString(encrypted_bytes, &plaintext);
 
   if (!decrypted || plaintext.empty()) {
-    // Scrub any partial output before returning.
     if (!plaintext.empty()) {
       volatile char* p = plaintext.data();
       for (size_t i = 0; i < plaintext.size(); ++i) p[i] = 0;
     }
-    return MahoAgentSecureKey{nullptr, 0, nullptr};
+    return MahoAgentSecureKey{nullptr, 0, nullptr, nullptr, nullptr, nullptr};
   }
   MahoAgentSecureKey result = AllocateSecureKeyFromPlaintext(plaintext);
-  // Set crashpad annotation to indicate a BYOK key is active in memory
   g_byok_key_status.Set("active");
-  // Scrub the local plaintext copy before std::string destructor returns
-  // the buffer to the allocator.
   volatile char* p = plaintext.data();
   for (size_t i = 0; i < plaintext.size(); ++i) p[i] = 0;
   return result;
+}
+
+namespace {
+
+void FreeCStr(char* p) { ::free(p); }
+
+MahoAgentToolResult MakeErrorToolResult(const std::string& error) {
+  MahoAgentToolResult result{nullptr, nullptr, &FreeCStr};
+  result.error_ptr = strdup(error.c_str());
+  return result;
+}
+
+MahoAgentToolResult MakeJsonToolResult(const std::string& json) {
+  MahoAgentToolResult result{nullptr, nullptr, &FreeCStr};
+  result.json_ptr = strdup(json.c_str());
+  return result;
+}
+
+}  // namespace
+
+// static
+MahoAgentToolResult MahoUnifiedAgentAdapter::OnAgentBrowserTool(
+    void* user_data, const char* tool_name, const char* args_json) {
+  if (!tool_name) {
+    return MakeErrorToolResult("tool_name is null");
+  }
+  const std::string tool_name_str(tool_name);
+  const std::string args_json_str(args_json ? args_json : "{}");
+  {
+    std::ofstream log_file("/tmp/maho-agent-live.log", std::ios::app);
+    if (log_file.is_open()) {
+      log_file << "[OnAgentBrowserTool] invoked tool=" << tool_name_str
+               << " args=" << args_json_str << "\n";
+    }
+  }
+
+  auto ui_runner = content::GetUIThreadTaskRunner({});
+  base::WaitableEvent done(base::WaitableEvent::ResetPolicy::AUTOMATIC,
+                            base::WaitableEvent::InitialState::NOT_SIGNALED);
+  std::string result_json;
+  std::string result_error;
+
+  ui_runner->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](std::string tool_name, std::string args_json_in,
+             std::string* out_json, std::string* out_err,
+             base::WaitableEvent* done_event) {
+            BrowserWindowInterface* bwi = chrome::FindLastActive();
+            Browser* browser = bwi ? static_cast<Browser*>(bwi) : nullptr;
+            if (!browser) {
+              *out_err = "No active browser window";
+              done_event->Signal();
+              return;
+            }
+            std::optional<base::DictValue> parsed =
+                base::JSONReader::ReadDict(args_json_in, base::JSON_PARSE_RFC);
+            base::DictValue args_dict;
+            if (parsed) {
+              args_dict = std::move(*parsed);
+            }
+            auto executor =
+                std::make_shared<MahoBrowserToolExecutor>(browser);
+            executor->Execute(
+                tool_name, args_dict,
+                base::BindOnce(
+                    [](std::shared_ptr<MahoBrowserToolExecutor> keep_alive,
+                       std::string* out_json,
+                       base::WaitableEvent* done_event,
+                       base::DictValue result) {
+                      std::string json;
+                      base::JSONWriter::Write(base::Value(std::move(result)),
+                                              &json);
+                      *out_json = std::move(json);
+                      done_event->Signal();
+                    },
+                    executor, out_json, done_event));
+          },
+          tool_name_str, args_json_str, &result_json, &result_error, &done));
+
+  done.Wait();
+
+  if (!result_error.empty()) {
+    return MakeErrorToolResult(result_error);
+  }
+  return MakeJsonToolResult(result_json);
 }
 
 // static

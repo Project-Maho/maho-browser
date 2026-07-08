@@ -12,8 +12,10 @@
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
 #include "base/values.h"
+#include "components/prefs/testing_pref_service.h"
 #include "maho/browser/ai/maho_ai_runtime_adapter.h"
 #include "maho/browser/ui/webui/maho_ai/maho_ai.mojom.h"
+#include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -198,3 +200,82 @@ TEST_F(MahoUnifiedAgentAdapterTest, DestructorFreesSession) {
   adapter_.reset();
   EXPECT_TRUE(fake_agent_->destroyed);
 }
+
+class MahoUnifiedAgentAdapterPolicyTest : public testing::Test {
+ protected:
+  void SetUp() override {
+    prefs_.registry()->RegisterStringPref(maho::ai_prefs::kApprovalPolicy, "");
+    prefs_.registry()->RegisterDictionaryPref(maho::ai_prefs::kAgentToolGrants);
+    fake_agent_ = std::make_unique<FakeAgentState>();
+    g_fake_agent = fake_agent_.get();
+    adapter_ = std::make_unique<MahoUnifiedAgentAdapter>(&prefs_, nullptr);
+  }
+
+  void TearDown() override {
+    adapter_.reset();
+    g_fake_agent = nullptr;
+    fake_agent_.reset();
+  }
+
+  MahoAgentPermissionDecision CallStatic(const char* tool) {
+    return MahoUnifiedAgentAdapter::OnAgentPermission(
+        adapter_.get(), tool, "{}");
+  }
+
+  MahoAgentPermissionDecision CallStaticNullUserData(const char* tool) {
+    return MahoUnifiedAgentAdapter::OnAgentPermission(nullptr, tool, "{}");
+  }
+
+  base::test::TaskEnvironment task_environment_;
+  TestingPrefServiceSimple prefs_;
+  std::unique_ptr<FakeAgentState> fake_agent_;
+  std::unique_ptr<MahoUnifiedAgentAdapter> adapter_;
+};
+
+TEST_F(MahoUnifiedAgentAdapterPolicyTest, PolicyDeny_BlocksAutoAllowedPageTools) {
+  prefs_.SetString(maho::ai_prefs::kApprovalPolicy, "deny");
+  EXPECT_EQ(CallStatic("read_current_page"), MahoAgentPermissionDecision_Deny);
+  EXPECT_EQ(CallStatic("get_selected_text"), MahoAgentPermissionDecision_Deny);
+  EXPECT_EQ(CallStatic("search_in_page"), MahoAgentPermissionDecision_Deny);
+  EXPECT_EQ(CallStatic("fs_read"), MahoAgentPermissionDecision_Deny);
+  EXPECT_EQ(CallStatic("web_search"), MahoAgentPermissionDecision_Deny);
+  EXPECT_EQ(CallStatic("unknown_tool"), MahoAgentPermissionDecision_Deny);
+}
+
+TEST_F(MahoUnifiedAgentAdapterPolicyTest, PolicyAllow_PermitsUnknownTools) {
+  prefs_.SetString(maho::ai_prefs::kApprovalPolicy, "allow");
+  EXPECT_EQ(CallStatic("read_current_page"), MahoAgentPermissionDecision_Allow);
+  EXPECT_EQ(CallStatic("fs_read"), MahoAgentPermissionDecision_Allow);
+  EXPECT_EQ(CallStatic("unknown_tool"), MahoAgentPermissionDecision_Allow);
+}
+
+TEST_F(MahoUnifiedAgentAdapterPolicyTest, ShellExec_AlwaysDeniedEvenUnderAllow) {
+  prefs_.SetString(maho::ai_prefs::kApprovalPolicy, "allow");
+  EXPECT_EQ(CallStatic("shell_exec"), MahoAgentPermissionDecision_Deny);
+  prefs_.SetString(maho::ai_prefs::kApprovalPolicy, "prompt");
+  EXPECT_EQ(CallStatic("shell_exec"), MahoAgentPermissionDecision_Deny);
+  prefs_.SetString(maho::ai_prefs::kApprovalPolicy, "");
+  EXPECT_EQ(CallStatic("shell_exec"), MahoAgentPermissionDecision_Deny);
+}
+
+TEST_F(MahoUnifiedAgentAdapterPolicyTest, PolicyPrompt_AutoAllowsPageTools) {
+  prefs_.SetString(maho::ai_prefs::kApprovalPolicy, "prompt");
+  EXPECT_EQ(CallStatic("read_current_page"), MahoAgentPermissionDecision_Allow);
+  EXPECT_EQ(CallStatic("get_active_tab"), MahoAgentPermissionDecision_Allow);
+  EXPECT_EQ(CallStatic("extract_structured_page_context"),
+            MahoAgentPermissionDecision_Allow);
+}
+
+TEST_F(MahoUnifiedAgentAdapterPolicyTest, NullUserData_DeniesAllTools) {
+  EXPECT_EQ(CallStaticNullUserData("shell_exec"),
+            MahoAgentPermissionDecision_Deny);
+  EXPECT_EQ(CallStaticNullUserData("fs_read"),
+            MahoAgentPermissionDecision_Deny);
+  EXPECT_EQ(CallStaticNullUserData("web_search"),
+            MahoAgentPermissionDecision_Deny);
+  EXPECT_EQ(CallStaticNullUserData("read_current_page"),
+            MahoAgentPermissionDecision_Deny);
+  EXPECT_EQ(CallStaticNullUserData(nullptr),
+            MahoAgentPermissionDecision_Deny);
+}
+

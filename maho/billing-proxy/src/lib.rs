@@ -691,6 +691,60 @@ pub async fn main(req: Request, env: Env, ctx: Context) -> Result<Response> {
 
     router
         .get("/health", |_, _| Response::ok("ok"))
+        .get_async("/v1/models", |req, route_ctx| async move {
+            let now_sec = Date::now().as_millis() as i64 / 1000;
+
+            let (user_info, _degradation_mode) = match authenticate_request(&req, &route_ctx, now_sec).await {
+                Ok(ProxyAuthOutcome::Authenticated(info, mode)) => (info, mode),
+                Ok(ProxyAuthOutcome::Degraded(resp)) => return Ok(resp),
+                Err(err) => return Response::error(format!("Unauthorized: {err}"), 401),
+            };
+
+            let free_list = fetch_allowlist(&route_ctx, "free").await;
+            let pro_list = fetch_allowlist(&route_ctx, "pro").await;
+            let max_list = fetch_allowlist(&route_ctx, "max").await;
+
+            let tier = user_info.tier.to_lowercase();
+            let mut models = Vec::new();
+            match tier.as_str() {
+                "free" => {
+                    models.extend(free_list);
+                }
+                "pro" => {
+                    models.extend(free_list);
+                    models.extend(pro_list);
+                }
+                "max" | "payg" => {
+                    models.extend(free_list);
+                    models.extend(pro_list);
+                    models.extend(max_list);
+                }
+                _ => {}
+            }
+
+            models.retain(|m| !is_frontier_forbidden(m));
+
+            #[derive(Serialize)]
+            struct ModelEntry {
+                id: String,
+                object: String,
+            }
+            #[derive(Serialize)]
+            struct ModelsListResponse {
+                object: String,
+                data: Vec<ModelEntry>,
+            }
+
+            let data = models.into_iter().map(|id| ModelEntry {
+                id,
+                object: "model".to_string(),
+            }).collect();
+
+            Response::from_json(&ModelsListResponse {
+                object: "list".to_string(),
+                data,
+            })
+        })
         .post_async("/v1/chat/completions", |mut req, route_ctx| {
             let ctx = route_ctx.data.clone();
             async move {
@@ -843,15 +897,19 @@ pub async fn main(req: Request, env: Env, ctx: Context) -> Result<Response> {
                     }
                 }
 
-                // Forward to OpenRouter
                 let openrouter_key = route_ctx.var("OPENROUTER_API_KEY")?.to_string();
+                let upstream_url = route_ctx
+                    .var("UPSTREAM_LLM_URL")
+                    .ok()
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "https://openrouter.ai/api/v1/chat/completions".to_string());
                 let or_headers = Headers::new();
                 or_headers.set("Authorization", &format!("Bearer {}", openrouter_key))?;
                 or_headers.set("Content-Type", "application/json")?;
 
                 let or_req_body_str = serde_json::to_string(&req_body)?;
                 let or_req = Request::new_with_init(
-                    "https://openrouter.ai/api/v1/chat/completions",
+                    &upstream_url,
                     RequestInit::new()
                         .with_method(Method::Post)
                         .with_headers(or_headers)
@@ -1471,5 +1529,44 @@ mod tests {
         // But bare gpt-5 is forbidden
         assert!(is_frontier_forbidden("openai/gpt-5"));
         assert!(is_frontier_forbidden("openai/gpt-5-turbo")); // hypothetical variant still matches
+    }
+    #[test]
+    fn test_v1_models_tier_filter_filtering() {
+        let free_list = vec![
+            "google/gemini-3-flash-lite:free".to_string(),
+            "qwen/qwen-3-32b:free".to_string(),
+        ];
+        let pro_list = vec![
+            "google/gemini-3.5-flash".to_string(),
+            "openai/gpt-5-nano".to_string(),
+            "openai/gpt-5-mini".to_string(),
+        ];
+        let max_list = vec![
+            "google/gemini-3.5-pro".to_string(),
+            "anthropic/claude-sonnet-4.7".to_string(),
+            "openai/gpt-5".to_string(),
+        ];
+
+        let mut free_models = Vec::new();
+        free_models.extend(free_list.clone());
+        free_models.retain(|m| !is_frontier_forbidden(m));
+        assert!(free_models.contains(&"google/gemini-3-flash-lite:free".to_string()));
+        assert!(!free_models.contains(&"openai/gpt-5".to_string()));
+
+        let mut pro_models = Vec::new();
+        pro_models.extend(free_list.clone());
+        pro_models.extend(pro_list.clone());
+        pro_models.retain(|m| !is_frontier_forbidden(m));
+        assert!(pro_models.contains(&"google/gemini-3.5-flash".to_string()));
+        assert!(!pro_models.contains(&"openai/gpt-5".to_string()));
+
+        let mut max_models = Vec::new();
+        max_models.extend(free_list.clone());
+        max_models.extend(pro_list.clone());
+        max_models.extend(max_list.clone());
+        max_models.retain(|m| !is_frontier_forbidden(m));
+        assert!(max_models.contains(&"google/gemini-3.5-pro".to_string()));
+        assert!(max_models.contains(&"anthropic/claude-sonnet-4.7".to_string()));
+        assert!(!max_models.contains(&"openai/gpt-5".to_string()));
     }
 }

@@ -1893,6 +1893,7 @@ void MahoAIPageHandler::RequestTabTidy(
   auto llm_client = std::make_unique<MahoAiLlmClient>(
       browser_->profile()->GetPrefs(),
       url_loader_factory,
+      encryptor_ ? &*encryptor_ : nullptr,
       /*provider_adapter_v2_enabled=*/false);
 
   MahoAiLlmClient::CompletionRequest request;

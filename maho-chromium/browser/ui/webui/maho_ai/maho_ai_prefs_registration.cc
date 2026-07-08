@@ -37,6 +37,9 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterDictionaryPref(ai_prefs::kAgentToolGrants);
   registry->RegisterBooleanPref(
       ai_prefs::kSettingsMigratedFromMacOSDefaults, false);
+  registry->RegisterBooleanPref(
+      ai_prefs::kSettingsMigratedFromGoogleProvider, false);
+  registry->RegisterDictionaryPref(ai_prefs::kModelCache);
 
   // Account / relay auth prefs.
   registry->RegisterStringPref(

@@ -13,6 +13,7 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "components/prefs/pref_service.h"
 #include "maho/browser/ui/webui/maho_account_prefs.h"
@@ -142,6 +143,27 @@ void ClearRelayTokens(PrefService* prefs) {
   prefs->ClearPref(maho::account_prefs::kRelayUserTier);
   prefs->ClearPref(maho::account_prefs::kRelaySubscriptionStatus);
   prefs->ClearPref(maho::account_prefs::kRelaySubscriptionExpiresAt);
+}
+
+bool HasValidRelaySession(PrefService* prefs) {
+  const std::string access_token_enc = prefs->GetString(maho::account_prefs::kRelayAccessTokenEncryptedB64);
+  if (access_token_enc.empty()) {
+    return false;
+  }
+  
+  const int64_t access_expires_at = prefs->GetInt64(maho::account_prefs::kRelayAccessTokenExpiresAt);
+  const int64_t now = base::Time::Now().ToTimeT();
+  if (access_expires_at > now) {
+    return true;
+  }
+  
+  const std::string refresh_token_enc = prefs->GetString(maho::account_prefs::kRelayRefreshTokenEncryptedB64);
+  if (refresh_token_enc.empty()) {
+    return false;
+  }
+  
+  const int64_t refresh_expires_at = prefs->GetInt64(maho::account_prefs::kRelayRefreshTokenExpiresAt);
+  return refresh_expires_at > now;
 }
 
 std::string GetRelayBaseUrl() {

@@ -11,6 +11,10 @@ source_set("maho_settings") {
     "maho_settings_page_handler.h",
     "maho_settings_ui.cc",
     "maho_settings_ui.h",
+    "../../../ai/maho_managed_connection_test.cc",
+    "../../../ai/maho_managed_connection_test.h",
+    "../../../ai/maho_model_list_fetcher.cc",
+    "../../../ai/maho_model_list_fetcher.h",
   ]
 
   public_deps = [

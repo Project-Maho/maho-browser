@@ -30,7 +30,7 @@ import {
   SelectValue,
 } from '@ui/select';
 import {Switch} from '@ui/switch';
-import {AlertCircle, ArrowUpRight, Sparkles, Download, ExternalLink} from '@icons/lucide';
+import {AlertCircle, ArrowUpRight, Sparkles, Download, ExternalLink, Check, Loader2} from '@icons/lucide';
 import {cn} from '@lib/utils';
 import {PasswordProviderKind} from '../mojo.js';
 import type {AccountStatus, BillingInfo} from '../maho_settings.mojom-webui.js';
@@ -831,6 +831,390 @@ function ATCRuleRow(
   );
 }
 
+function useProviderModels(store: MahoSettingsStore, providerId: string) {
+  const handler = store.getHandler();
+  const callbackRouter = store.getCallbackRouter();
+  const [models, setModels] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [fromCache, setFromCache] = useState(true);
+
+  const fetchModels = useCallback(async () => {
+    if (!providerId) {
+      setModels([]);
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await handler.fetchProviderModels(providerId);
+      setModels(res.modelIds);
+      setFromCache(res.fromCache);
+    } catch (e) {
+      console.error('Failed to fetch provider models', e);
+    } finally {
+      setLoading(false);
+    }
+  }, [handler, providerId]);
+
+  useEffect(() => {
+    void fetchModels();
+  }, [fetchModels]);
+
+  useEffect(() => {
+    const onRefreshed = (pId: string, modelIds: string[]) => {
+      if (pId === providerId) {
+        setModels(modelIds);
+        setFromCache(false);
+      }
+    };
+    callbackRouter.providerModelsRefreshed.addListener(onRefreshed);
+    return () => {
+      callbackRouter.providerModelsRefreshed.removeListener(onRefreshed);
+    };
+  }, [callbackRouter, providerId]);
+
+  return { models, loading, fromCache };
+}
+
+function TestConnectionButton({ handler }: { handler: PageHandlerRemote }) {
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  const handleTest = async () => {
+    setTesting(true);
+    setResult(null);
+    try {
+      const res = await handler.testManagedConnection();
+      setResult({ success: res.success, message: res.message });
+    } catch {
+      setResult({ success: false, message: 'Failed to communicate with connection tester.' });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  useEffect(() => {
+    if (result) {
+      const timer = setTimeout(() => setResult(null), 5000);
+      return () => clearTimeout(timer);
+    }
+    return undefined;
+  }, [result]);
+
+  return (
+    <div className="flex items-center gap-2 mt-4">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={testing}
+        onClick={handleTest}
+      >
+        {testing ? (
+          <span className="flex items-center gap-1">
+            <Loader2 className="size-3.5 animate-spin" />
+            Testing...
+          </span>
+        ) : (
+          'Test connection'
+        )}
+      </Button>
+      {result ? (
+        <span className={cn(
+          "text-xs flex items-center gap-1 font-medium",
+          result.success ? "text-emerald-600" : "text-destructive"
+        )}>
+          {result.success ? <Check className="size-3.5" /> : <AlertCircle className="size-3.5" />}
+          {result.message}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function ModelPicker({
+  ariaLabel,
+  modelValue,
+  providerModels,
+  modelsLoading,
+  onCommitModel,
+  allowAuto,
+  customPlaceholder = "Enter model identifier",
+  emptyErrorMsg
+}: {
+  ariaLabel: string;
+  modelValue: string;
+  providerModels: string[];
+  modelsLoading: boolean;
+  onCommitModel: (value: string) => Promise<void>;
+  allowAuto?: boolean;
+  customPlaceholder?: string;
+  emptyErrorMsg?: string;
+}) {
+  if (modelsLoading) {
+    return (
+      <div className="text-xs text-muted-foreground flex items-center gap-1">
+        <Loader2 className="size-3 animate-spin" />
+        Loading models...
+      </div>
+    );
+  }
+
+  const hasModels = providerModels.length > 0;
+  const isCustom = hasModels && !providerModels.includes(modelValue) && (!allowAuto || modelValue !== '');
+
+  const options: Array<{value: string; label: string}> = [];
+  if (allowAuto) {
+    options.push({value: '', label: 'Auto — Best model for your prompt'});
+  }
+  options.push(...providerModels.map(m => ({value: m, label: m})));
+  if (hasModels) {
+    options.push({value: 'custom', label: 'Other...'});
+  }
+
+  const selectedValue = isCustom ? 'custom' : modelValue;
+
+  return (
+    <div className="flex flex-col gap-2 w-full">
+      {hasModels ? (
+        <SelectShell
+          ariaLabel={ariaLabel}
+          value={selectedValue}
+          options={options}
+          onChange={value => {
+            if (value !== 'custom') {
+              void onCommitModel(value);
+            }
+          }}
+        />
+      ) : emptyErrorMsg ? (
+        <div className="text-xs text-destructive flex items-center gap-1 mb-1">
+          <AlertCircle className="size-3.5" />
+          {emptyErrorMsg}
+        </div>
+      ) : null}
+      {(!hasModels || isCustom) && (
+        <TextFieldShell
+          ariaLabel={ariaLabel + " Text Input"}
+          placeholder={customPlaceholder}
+          value={modelValue}
+          onChange={onCommitModel}
+        />
+      )}
+    </div>
+  );
+}
+
+function ProviderModeSelector({
+  provider,
+  onProviderChange
+}: {
+  provider: string;
+  onProviderChange: (mode: 'maho-managed' | 'byok') => void;
+}) {
+  return (
+    <ManagedSettingRow
+      title="AI Provider Mode"
+      description="Choose between Maho Managed AI service and bringing your own API keys."
+      isFirstRow={true}
+    >
+      <div className="flex flex-col gap-2">
+        <label className="flex items-center gap-2 cursor-pointer text-sm font-medium">
+          <input
+            type="radio"
+            name="ai_provider_mode"
+            checked={provider === 'maho-managed'}
+            onChange={() => onProviderChange('maho-managed')}
+          />
+          <span>Maho Managed AI Service</span>
+        </label>
+        <label className="flex items-center gap-2 cursor-pointer text-sm font-medium">
+          <input
+            type="radio"
+            name="ai_provider_mode"
+            checked={provider !== 'maho-managed'}
+            onChange={() => onProviderChange('byok')}
+          />
+          <span>Use my own API key</span>
+        </label>
+      </div>
+    </ManagedSettingRow>
+  );
+}
+
+function MahoManagedStatus({
+  data,
+  modelsLoading,
+  providerModels,
+  handler,
+  commit
+}: {
+  data: AISettings;
+  modelsLoading: boolean;
+  providerModels: string[];
+  handler: any;
+  commit: (cb: () => Promise<void>) => void;
+}) {
+  return (
+    <div className="p-4 border border-border/70 rounded-xl bg-card/50 flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Sparkles className="size-4 text-primary animate-pulse" />
+          <span className="font-semibold text-sm">Maho AI Status</span>
+        </div>
+        <Badge variant="secondary" className="capitalize font-semibold text-xs">
+          {data.relayTier || 'free'} Tier
+        </Badge>
+      </div>
+      <div className="text-xs text-muted-foreground flex flex-col gap-1">
+        <div>Subscription Status: <span className="font-medium text-foreground capitalize">{data.relaySubscriptionStatus || 'none'}</span></div>
+        {data.tierCeilingUsd > 0 ? (
+          <div>Monthly Limit: <span className="font-medium text-foreground">${data.tierCeilingUsd.toFixed(2)}</span></div>
+        ) : null}
+        {data.creditBalanceUsd >= 0 ? (
+          <div>Remaining Balance: <span className="font-medium text-foreground">${data.creditBalanceUsd.toFixed(2)}</span></div>
+        ) : null}
+      </div>
+      
+      {data.relayTier === 'max' ? (
+        <div className="mt-2">
+          <div className="text-xs font-semibold mb-1">Model Select (Max Tier)</div>
+          <ModelPicker
+            ariaLabel="Max Model"
+            modelValue={data.model}
+            providerModels={providerModels}
+            modelsLoading={modelsLoading}
+            onCommitModel={value => commit(async () => handler.setAIModel(value))}
+            allowAuto={true}
+          />
+        </div>
+      ) : null}
+
+      <TestConnectionButton handler={handler} />
+    </div>
+  );
+}
+
+function ByokFields({
+  data,
+  handler,
+  commit
+}: {
+  data: AISettings;
+  handler: any;
+  commit: (cb: () => Promise<void>) => void;
+}) {
+  const provider = data.provider;
+  if (provider === 'openai') {
+    return (
+      <AiFieldRow
+        initialValue={data.hasByokOpenai ? '••••••••' : ''}
+        label="OpenAI BYOK Key"
+        placeholder="Enter OpenAI API key (encrypted at rest)"
+        type="password"
+        onCommit={value => commit(async () => {
+          const {success} = await handler.setBYOKKey('openai', value);
+          if (!success) throw new Error('Failed to save OpenAI BYOK key');
+        })}
+      />
+    );
+  }
+  if (provider === 'anthropic') {
+    return (
+      <AiFieldRow
+        initialValue={data.hasByokAnthropic ? '••••••••' : ''}
+        label="Anthropic BYOK Key"
+        placeholder="Enter Anthropic API key (encrypted at rest)"
+        type="password"
+        onCommit={value => commit(async () => {
+          const {success} = await handler.setBYOKKey('anthropic', value);
+          if (!success) throw new Error('Failed to save Anthropic BYOK key');
+        })}
+      />
+    );
+  }
+  if (provider === 'openai-compatible') {
+    return (
+      <>
+        <AiFieldRow
+          initialValue={data.apiKey}
+          label="API key"
+          placeholder="Enter API key"
+          type="password"
+          onCommit={value => commit(async () => handler.setAIApiKey(value))}
+        />
+        <AiFieldRow
+          initialValue={data.baseUrl}
+          label="Base URL"
+          placeholder="e.g. https://api.together.xyz"
+          onCommit={value => commit(async () => handler.setAIBaseUrl(value))}
+        />
+      </>
+    );
+  }
+  return null;
+}
+
+function ByokModelPickerRow({
+  data,
+  modelsLoading,
+  providerModels,
+  handler,
+  commit
+}: {
+  data: AISettings;
+  modelsLoading: boolean;
+  providerModels: string[];
+  handler: any;
+  commit: (cb: () => Promise<void>) => void;
+}) {
+  const provider = data.provider;
+  const isByokProvider = provider === 'openai' || provider === 'anthropic' || provider === 'openai-compatible';
+  if (!isByokProvider) return null;
+
+  return (
+    <ManagedSettingRow title="Model" description="Choose which model identifier to request.">
+      <ModelPicker
+        ariaLabel="Model"
+        modelValue={data.model}
+        providerModels={providerModels}
+        modelsLoading={modelsLoading}
+        onCommitModel={value => commit(async () => handler.setAIModel(value))}
+        customPlaceholder="Enter model identifier"
+      />
+    </ManagedSettingRow>
+  );
+}
+
+function LocalServerModelPickerRow({
+  data,
+  modelsLoading,
+  providerModels,
+  handler,
+  commit
+}: {
+  data: AISettings;
+  modelsLoading: boolean;
+  providerModels: string[];
+  handler: any;
+  commit: (cb: () => Promise<void>) => void;
+}) {
+  if (data.provider !== 'local-server') return null;
+
+  return (
+    <ManagedSettingRow title="Model" description="Local Ollama model listing.">
+      <ModelPicker
+        ariaLabel="Local Model"
+        modelValue={data.model}
+        providerModels={providerModels}
+        modelsLoading={modelsLoading}
+        onCommitModel={value => commit(async () => handler.setAIModel(value))}
+        customPlaceholder="e.g. llama3.1:8b"
+        emptyErrorMsg="Ollama not detected or no models found."
+      />
+    </ManagedSettingRow>
+  );
+}
+
 function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}) {
   const handler = store.getHandler();
   const [actionError, setActionError] = useState<string | null>(null);
@@ -851,15 +1235,26 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
     void loadSettings();
   }, [loadSettings]);
 
+  useEffect(() => {
+    const unsub = store.subscribe(() => {
+      void loadSettings();
+    });
+    return unsub;
+  }, [store, loadSettings]);
+
   const commit = useCallback(async (action: () => Promise<void>) => {
+    setActionError(null);
     try {
-      setActionError(null);
       await action();
-      await loadSettings();
     } catch {
       setActionError('Failed to save AI settings.');
+    } finally {
+      await loadSettings();
     }
   }, [loadSettings]);
+
+  const providerId = state.status === 'loaded' ? state.data.provider : '';
+  const { models: providerModels, loading: modelsLoading } = useProviderModels(store, providerId);
 
   return (
     <DomainPaneSection pane={pane}>
@@ -871,62 +1266,76 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
       ) : null}
       {state.status === 'loaded' ? (
         <div className={ROWS_CLASS}>
+          {state.data.hasRelaySession ? (
+            <ProviderModeSelector
+              provider={state.data.provider}
+              onProviderChange={mode => commit(async () => {
+                const nextProvider = mode === 'maho-managed' ? 'maho-managed' : 'openai';
+                await handler.setAIProvider(nextProvider);
+              })}
+            />
+          ) : null}
+
+          {state.data.hasRelaySession && state.data.provider === 'maho-managed' ? (
+            <MahoManagedStatus
+              data={state.data}
+              modelsLoading={modelsLoading}
+              providerModels={providerModels}
+              handler={handler}
+              commit={commit}
+            />
+          ) : null}
+
+          {state.data.provider !== 'maho-managed' ? (
+            <>
+              <AiSelectRow
+                label="Provider"
+                initialValue={state.data.provider}
+                options={[
+                  {value: '', label: '(not set)'},
+                  {value: 'anthropic', label: 'Anthropic'},
+                  {value: 'openai', label: 'OpenAI'},
+                  {value: 'openai-compatible', label: 'OpenAI-compatible (custom URL)'},
+                  {value: 'local-server', label: 'Local Server (Ollama)'},
+                ]}
+                onCommit={value => commit(async () => handler.setAIProvider(value))}
+              />
+
+              <ByokFields
+                data={state.data}
+                handler={handler}
+                commit={commit}
+              />
+
+              <ByokModelPickerRow
+                data={state.data}
+                modelsLoading={modelsLoading}
+                providerModels={providerModels}
+                handler={handler}
+                commit={commit}
+              />
+
+              <LocalServerModelPickerRow
+                data={state.data}
+                modelsLoading={modelsLoading}
+                providerModels={providerModels}
+                handler={handler}
+                commit={commit}
+              />
+            </>
+          ) : null}
+
           <AiSelectRow
-            label="Provider"
-            initialValue={state.data.provider}
-            options={[
-              {value: '', label: '(not set)'},
-              {value: 'anthropic', label: 'Anthropic'},
-              {value: 'openai', label: 'OpenAI'},
-              {value: 'openai-compatible', label: 'OpenAI-compatible (custom URL)'},
-              {value: 'google', label: 'Google (Gemini)'},
-            ]}
-            onCommit={value => commit(async () => handler.setAIProvider(value))}
-          />
-          <AiFieldRow
-            initialValue={state.data.baseUrl}
-            label="Base URL"
-            placeholder="(provider default)"
-            onCommit={value => commit(async () => handler.setAIBaseUrl(value))}
-          />
-          <AiFieldRow
-            initialValue={state.data.hasApiKey ? '••••••••' : ''}
-            label="API key"
-            placeholder="Paste your API key"
-            type="password"
-            onCommit={value => commit(async () => handler.setAIApiKey(value))}
-          />
-          <AiFieldRow
-            initialValue={state.data.hasByokOpenai ? '••••••••' : ''}
-            label="OpenAI BYOK Key"
-            placeholder="Enter OpenAI API key (encrypted at rest)"
-            type="password"
-            onCommit={value => commit(async () => {
-              const {success} = await handler.setBYOKKey('openai', value);
-              if (!success) throw new Error('Failed to save OpenAI BYOK key');
-            })}
-          />
-          <AiFieldRow
-            initialValue={state.data.hasByokAnthropic ? '••••••••' : ''}
-            label="Anthropic BYOK Key"
-            placeholder="Enter Anthropic API key (encrypted at rest)"
-            type="password"
-            onCommit={value => commit(async () => {
-              const {success} = await handler.setBYOKKey('anthropic', value);
-              if (!success) throw new Error('Failed to save Anthropic BYOK key');
-            })}
-          />
-          <AiFieldRow
-            initialValue={state.data.model}
-            label="Model"
-            placeholder="e.g. claude-sonnet-4-20250514 or gpt-4o"
-            onCommit={value => commit(async () => handler.setAIModel(value))}
-          />
-          <AiFieldRow
-            initialValue={state.data.approvalPolicy}
             label="Approval policy"
+            initialValue={state.data.approvalPolicy}
+            options={[
+              {value: 'prompt', label: 'Ask before each tool call'},
+              {value: 'allow', label: 'Auto-approve all tool calls'},
+              {value: 'deny', label: 'Block all tool calls'},
+            ]}
             onCommit={value => commit(async () => handler.setAIApprovalPolicy(value))}
           />
+
           <ManagedSettingRow
             description="Enable or disable AI session persistence."
             title="Session persistence">
@@ -1304,6 +1713,12 @@ function BillingPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
   );
 }
 
+// Sentinel value used by GetAISettings to indicate "a key is stored but its
+// value is intentionally hidden from the WebUI". If the user clicks Save
+// without editing the field, we must NOT submit this literal value, or it
+// would overwrite the real stored key with the placeholder characters.
+const MASKED_SECRET_PLACEHOLDER = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';
+
 function AiFieldRow(
     {initialValue, label, onCommit, placeholder, type = 'text'}: {
       initialValue: string;
@@ -1318,10 +1733,25 @@ function AiFieldRow(
     setDraft(initialValue);
   }, [initialValue]);
 
+  const isUnchangedMaskedSecret =
+      draft === MASKED_SECRET_PLACEHOLDER &&
+      initialValue === MASKED_SECRET_PLACEHOLDER;
+
   return (
     <ManagedSettingRow description="" title={label}>
       <TextFieldShell ariaLabel={label} placeholder={placeholder ?? label} type={type} value={draft} onChange={setDraft} />
-      <ActionButton label="Save" onClick={() => onCommit(draft)} />
+      <ActionButton
+          disabled={isUnchangedMaskedSecret}
+          label="Save"
+          onClick={() => {
+            if (isUnchangedMaskedSecret) {
+              // No-op: user has not edited a masked secret. Submitting would
+              // overwrite the real stored key with the placeholder bullets.
+              return;
+            }
+            return onCommit(draft);
+          }}
+      />
     </ManagedSettingRow>
   );
 }
@@ -1338,7 +1768,6 @@ function AiSelectRow(
   useEffect(() => {
     setDraft(initialValue);
   }, [initialValue]);
-
   return (
     <ManagedSettingRow description="" title={label}>
       <SelectShell

@@ -71,6 +71,7 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
 
  private:
   friend class MahoUnifiedAgentAdapterTest;
+  friend class MahoUnifiedAgentAdapterTestHelper;
 
   // Thread-safe, immutable BYOK data snapshot for OnAgentSecureStorage.
   // Created once per session in SubmitMessage; immutable thereafter so
@@ -82,6 +83,10 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
     std::string encrypted_byok_openai_b64;
     std::string encrypted_byok_anthropic_b64;
     std::shared_ptr<os_crypt_async::Encryptor> encryptor;
+    std::string custom_provider;
+    std::string custom_api_key;
+    std::string custom_base_url;
+    std::string custom_model;
   };
 
   static MahoAgentPermissionDecision OnAgentPermission(void* user_data,
@@ -89,6 +94,9 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
                                                         const char* arguments);
   static MahoAgentSecureKey OnAgentSecureStorage(void* user_data,
                                                   const char* provider);
+  static MahoAgentToolResult OnAgentBrowserTool(void* user_data,
+                                                const char* tool_name,
+                                                const char* args_json);
 
   static void OnAgentToken(void* user_data, const char* token);
   static void OnAgentComplete(void* user_data, const char* full_text, const char* tool_calls_json);

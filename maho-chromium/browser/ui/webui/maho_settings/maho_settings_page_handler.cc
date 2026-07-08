@@ -38,6 +38,12 @@
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
+
+#include "maho/browser/ai/maho_model_list_fetcher.h"
+#include "maho/browser/ai/maho_managed_connection_test.h"
+#include "maho/browser/ui/webui/maho_ai_prefs.h"
+#include "maho/browser/ui/webui/maho_auth_utils.h"
+#include "maho/browser/ui/webui/maho_account_prefs.h"
 #include "maho/browser/extensions/maho_extension_state_bridge.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/passwords/maho_password_provider_utils.h"
@@ -1258,6 +1264,16 @@ MahoSettingsPageHandler::MahoSettingsPageHandler(
   if (auto* bridge = maho::MahoExtensionStateBridge::FromProfile(profile_)) {
     ext_bridge_observation_.Observe(bridge);
   }
+
+  auto url_loader_factory = profile_->GetDefaultStoragePartition()
+                                ->GetURLLoaderFactoryForBrowserProcess();
+  model_list_fetcher_ = std::make_unique<maho::ai::MahoModelListFetcher>(
+      prefs_, url_loader_factory);
+  model_list_fetcher_->SetRefreshedCallback(base::BindRepeating(
+      &MahoSettingsPageHandler::OnProviderModelsRefreshed,
+      weak_factory_.GetWeakPtr()));
+  managed_connection_test_ = std::make_unique<maho::ai::MahoManagedConnectionTest>(
+      prefs_, url_loader_factory);
 }
 
 MahoSettingsPageHandler::~MahoSettingsPageHandler() {
@@ -1766,11 +1782,42 @@ void MahoSettingsPageHandler::GetAISettings(GetAISettingsCallback callback) {
       !prefs_->GetString(ai::kByokOpenAIEncryptedB64).empty();
   settings->has_byok_anthropic =
       !prefs_->GetString(ai::kByokAnthropicEncryptedB64).empty();
+
+  settings->has_relay_session = maho::auth::HasValidRelaySession(prefs_);
+  settings->relay_tier = prefs_->GetString(maho::account_prefs::kRelayUserTier);
+  settings->relay_subscription_status = prefs_->GetString(maho::account_prefs::kRelaySubscriptionStatus);
+  settings->credit_balance_usd = last_known_credit_balance_;
+  settings->tier_ceiling_usd = last_known_tier_ceiling_;
+
+  // Legacy migration
+  if (!prefs_->GetBoolean(ai::kSettingsMigratedFromGoogleProvider)) {
+    if (settings->provider == "google") {
+      prefs_->SetString(ai::kProvider, "");
+      settings->provider = "";
+    }
+    prefs_->SetBoolean(ai::kSettingsMigratedFromGoogleProvider, true);
+    prefs_->CommitPendingWrite();
+  }
+
+  // Server-side coercion (single source of truth; client is read-only).
+  if (settings->has_relay_session && settings->provider.empty()) {
+    prefs_->SetString(ai::kProvider, "maho-managed");
+    prefs_->CommitPendingWrite();
+    settings->provider = "maho-managed";
+  }
+
   std::move(callback).Run(std::move(settings));
 }
 
 void MahoSettingsPageHandler::SetAIProvider(const std::string& provider) {
+  if (provider != "" && provider != "maho-managed" && provider != "openai" &&
+      provider != "anthropic" && provider != "openai-compatible" &&
+      provider != "local-server") {
+    DLOG(WARNING) << "Rejecting invalid AI provider: " << provider;
+    return;
+  }
   prefs_->SetString(ai::kProvider, provider);
+  prefs_->CommitPendingWrite();
 }
 
 void MahoSettingsPageHandler::SetAIBaseUrl(const std::string& url) {
@@ -1791,6 +1838,36 @@ void MahoSettingsPageHandler::SetAIApprovalPolicy(const std::string& policy) {
 
 void MahoSettingsPageHandler::SetAISessionPersistence(bool enabled) {
   prefs_->SetBoolean(ai::kSessionPersistenceEnabled, enabled);
+}
+
+void MahoSettingsPageHandler::FetchProviderModels(
+    const std::string& provider_id,
+    FetchProviderModelsCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!model_list_fetcher_) {
+    std::move(callback).Run(std::vector<std::string>(), false);
+    return;
+  }
+  model_list_fetcher_->FetchModels(provider_id, std::move(callback));
+}
+
+void MahoSettingsPageHandler::OnProviderModelsRefreshed(
+    const std::string& provider_id,
+    const std::vector<std::string>& model_ids) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (page_) {
+    page_->ProviderModelsRefreshed(provider_id, model_ids);
+  }
+}
+
+void MahoSettingsPageHandler::TestManagedConnection(
+    TestManagedConnectionCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!managed_connection_test_) {
+    std::move(callback).Run(false, "Connection test helper not ready.");
+    return;
+  }
+  managed_connection_test_->RunTest(encryptor(), std::move(callback));
 }
 
 // ── Shortcuts domain ──
@@ -2419,11 +2496,19 @@ void MahoSettingsPageHandler::SetBYOKKey(const std::string& provider,
     return;
   }
   if (!encryptor_.has_value()) {
-    std::move(callback).Run(false);
+    // OSCrypt is initialized asynchronously; queue the request and drain it in
+    // OnOsCryptReady. Without this queue, saves attempted before OSCrypt is
+    // ready were silently rejected with success=false and the user perceived
+    // the BYOK key as "not persisting".
+    LOG(WARNING) << "[SetBYOKKey] encryptor not ready; queuing " << provider
+                 << " save for retry on OnOsCryptReady";
+    pending_byok_saves_.push_back(
+        PendingByokSave(provider, key, std::move(callback)));
     return;
   }
   std::string encrypted_bytes;
   if (!encryptor_->EncryptString(key, &encrypted_bytes)) {
+    LOG(ERROR) << "[SetBYOKKey] EncryptString failed for provider=" << provider;
     std::move(callback).Run(false);
     return;
   }
@@ -2431,11 +2516,14 @@ void MahoSettingsPageHandler::SetBYOKKey(const std::string& provider,
 
   if (provider == "openai") {
     prefs_->SetString(ai::kByokOpenAIEncryptedB64, encrypted_b64);
+    prefs_->CommitPendingWrite();
     std::move(callback).Run(true);
   } else if (provider == "anthropic") {
     prefs_->SetString(ai::kByokAnthropicEncryptedB64, encrypted_b64);
+    prefs_->CommitPendingWrite();
     std::move(callback).Run(true);
   } else {
+    LOG(ERROR) << "[SetBYOKKey] unknown provider: " << provider;
     std::move(callback).Run(false);
   }
 }
@@ -2444,18 +2532,42 @@ void MahoSettingsPageHandler::ClearBYOKKey(const std::string& provider,
                                            ClearBYOKKeyCallback callback) {
   if (provider == "openai") {
     prefs_->SetString(ai::kByokOpenAIEncryptedB64, "");
+    prefs_->CommitPendingWrite();
     std::move(callback).Run(true);
   } else if (provider == "anthropic") {
     prefs_->SetString(ai::kByokAnthropicEncryptedB64, "");
+    prefs_->CommitPendingWrite();
     std::move(callback).Run(true);
   } else {
+    LOG(ERROR) << "[ClearBYOKKey] unknown provider: " << provider;
     std::move(callback).Run(false);
   }
 }
 
 void MahoSettingsPageHandler::OnOsCryptReady(os_crypt_async::Encryptor encryptor) {
   encryptor_ = std::move(encryptor);
+  if (!pending_byok_saves_.empty()) {
+    LOG(WARNING) << "[OnOsCryptReady] draining " << pending_byok_saves_.size()
+                 << " pending BYOK save(s) queued during encryptor init race";
+    std::vector<PendingByokSave> drained;
+    drained.swap(pending_byok_saves_);
+    for (auto& pending : drained) {
+      SetBYOKKey(pending.provider, pending.key, std::move(pending.callback));
+    }
+  }
 }
+
+MahoSettingsPageHandler::PendingByokSave::PendingByokSave(
+    std::string provider_in,
+    std::string key_in,
+    SetBYOKKeyCallback callback_in)
+    : provider(std::move(provider_in)),
+      key(std::move(key_in)),
+      callback(std::move(callback_in)) {}
+MahoSettingsPageHandler::PendingByokSave::~PendingByokSave() = default;
+MahoSettingsPageHandler::PendingByokSave::PendingByokSave(PendingByokSave&&) = default;
+MahoSettingsPageHandler::PendingByokSave&
+MahoSettingsPageHandler::PendingByokSave::operator=(PendingByokSave&&) = default;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Auth — Login / Logout / GetAccountStatus / GetBillingInfo
@@ -2957,6 +3069,9 @@ void MahoSettingsPageHandler::OnSubscriptionResponse(
   if (!info->tier.empty()) {
     prefs_->SetString(maho::account_prefs::kRelayUserTier, info->tier);
   }
+
+  last_known_credit_balance_ = info->credit_balance_usd;
+  last_known_tier_ceiling_ = info->tier_ceiling_usd;
 
   // Re-broadcast so account pane updates without page reload:
   BroadcastAccountStatus();

@@ -280,7 +280,11 @@ async fn test_secure_storage_callback_invoked() {
     backend.set_secure_storage_callback(Box::new(move |provider| {
         if provider == "openai" {
             *callback_invoked_clone.lock().unwrap() = true;
-            Ok(maho_agent::ZeroizedString::new("openai-key".to_string()))
+            Ok(maho_agent::SecureKeyBundle {
+                key: maho_agent::ZeroizedString::new("openai-key".to_string()),
+                base_url: None,
+                model: None,
+            })
         } else {
             Err(maho_agent::AgentError::ExecutionError("not found".to_string()))
         }
@@ -339,7 +343,11 @@ async fn test_secure_storage_callback_provider_routing() {
     backend.set_secure_storage_callback(Box::new(move |provider| {
         invocations_clone.lock().unwrap().push(provider.to_string());
         if provider == "anthropic" {
-            Ok(maho_agent::ZeroizedString::new("anthropic-key".to_string()))
+            Ok(maho_agent::SecureKeyBundle {
+                key: maho_agent::ZeroizedString::new("anthropic-key".to_string()),
+                base_url: None,
+                model: None,
+            })
         } else {
             Err(maho_agent::AgentError::ExecutionError("no key for provider".to_string()))
         }
@@ -376,7 +384,11 @@ async fn test_byok_key_access_audit_emitted() {
     backend.set_secure_storage_callback(Box::new(move |provider| {
         if provider == "openai" {
             observed_clone.store(true, Ordering::SeqCst);
-            Ok(maho_agent::ZeroizedString::new("audit-test-key".to_string()))
+            Ok(maho_agent::SecureKeyBundle {
+                key: maho_agent::ZeroizedString::new("audit-test-key".to_string()),
+                base_url: None,
+                model: None,
+            })
         } else {
             Err(maho_agent::AgentError::ExecutionError("not found".to_string()))
         }

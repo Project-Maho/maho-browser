@@ -26,6 +26,11 @@ typedef struct MahoCore MahoCore;
  */
 typedef struct MahoImportSession MahoImportSession;
 
+typedef void (*MahoExtensionSyncCallback)(void *user_data,
+                                          const char *extension_id,
+                                          bool enabled,
+                                          bool deleted);
+
 typedef struct MahoChatConfig {
   const char *api_key;
   const char *endpoint;
@@ -37,7 +42,16 @@ typedef struct MahoAgentSecureKey {
   char *ptr;
   uintptr_t len;
   void (*free_fn)(char*, uintptr_t);
+  char *base_url;
+  char *model;
+  void (*cstring_free_fn)(char*);
 } MahoAgentSecureKey;
+
+typedef struct MahoAgentToolResult {
+  char *json_ptr;
+  char *error_ptr;
+  void (*free_fn)(char*);
+} MahoAgentToolResult;
 
 /**
  * Progress callback type invoked from the import background thread.
@@ -188,14 +202,16 @@ char *maho_core_get_space_tabs(struct MahoCore *ptr,
 void maho_core_release_window_tabs(struct MahoCore *ptr, int64_t window_id);
 
 /**
- * Returns JSON array of non-pinned tab IDs older than `cutoff_ts` (epoch seconds) in the given `space_id`.
- * Read-only — does NOT modify state. Caller frees the returned string with
- * `maho_string_free`. Returns NULL on null pointer or internal error.
+ * Returns non-pinned tab IDs older than `cutoff_ts` (epoch seconds) in the given `space_id` as a JSON array of strings.
+ * Read-only — does NOT modify state. Caller frees the returned string with `maho_string_free`.
+ * Returns NULL on null pointer or internal error.
  *
  * # Safety
  * `core` and `space_id` must be valid pointers.
  */
-char *maho_core_find_tabs_older_than(struct MahoCore *core, int64_t cutoff_ts, const char *space_id);
+char *maho_core_find_tabs_older_than(struct MahoCore *core,
+                                     int64_t cutoff_ts,
+                                     const char *space_id);
 
 /**
  * # Safety
@@ -250,16 +266,16 @@ char *maho_core_get_installed_extensions(struct MahoCore *ptr);
  */
 void maho_core_clear_installed_extensions(struct MahoCore *ptr);
 
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `extensions_json` must be a valid null-terminated C string.
+ */
 void maho_core_set_installed_extensions(struct MahoCore *ptr, const char *extensions_json);
-
-typedef void (*MahoExtensionSyncCallback)(void* user_data,
-                                          const char* extension_id,
-                                          bool enabled,
-                                          bool deleted);
 
 void maho_core_register_extension_sync_callback(struct MahoCore *ptr,
                                                 MahoExtensionSyncCallback callback,
-                                                void* user_data);
+                                                void *user_data);
 
 void maho_core_register_side_panel(struct MahoCore *ptr,
                                    const char *extension_id,
@@ -267,8 +283,7 @@ void maho_core_register_side_panel(struct MahoCore *ptr,
                                    const char *layout,
                                    int32_t default_width);
 
-void maho_core_unregister_side_panel(struct MahoCore *ptr,
-                                     const char *extension_id);
+void maho_core_unregister_side_panel(struct MahoCore *ptr, const char *extension_id);
 
 bool maho_core_get_side_panel_options(struct MahoCore *ptr,
                                       const char *extension_id,
@@ -279,9 +294,15 @@ bool maho_core_get_side_panel_options(struct MahoCore *ptr,
 /**
  * # Safety
  * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * Caller must free the returned string with `maho_string_free` if not null.
+ */
+char *maho_core_get_password_provider_extension(struct MahoCore *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
  */
 bool maho_core_is_native_password_provider_active(struct MahoCore *ptr);
-char *maho_core_get_password_provider_extension(struct MahoCore *ptr);
 
 /**
  * # Safety
@@ -615,6 +636,19 @@ bool maho_core_load_content_engine_cache(struct MahoCore *ptr, const char *path)
  * `s` must be a valid pointer returned by one of the `maho_core_*` functions, or null.
  */
 void maho_string_free(char *s);
+
+/**
+ * Returns the Maho AI proxy base URL. Reads MAHO_PROXY_URL env var,
+ * falls back to compile-time default. Caller must free via maho_core_free_string.
+ * Returns null on interior-NUL byte in the URL (never panics across FFI).
+ */
+char *maho_core_managed_proxy_url(void);
+
+/**
+ * # Safety
+ * `s` must be a valid pointer returned by `maho_core_managed_proxy_url`, or null.
+ */
+void maho_core_free_string(char *s);
 
 /**
  * # Safety
@@ -1229,15 +1263,18 @@ void maho_core_toggle_shortcut(struct MahoCore *ptr, const char *action, bool en
 
 /**
  * # Safety
- * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. Caller must free returned string.
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`. Caller must free the returned string
+ * with `maho_string_free`. Returns null on null input or if import is active.
  */
 char *maho_core_export_shortcuts(struct MahoCore *ptr);
 
 /**
  * # Safety
- * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `json_data` must be a valid C string.
+ * `ptr` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `json_data` must be a
+ * valid NUL-terminated C string. Returns true on success, false on failure or null input or if import is active.
  */
-bool maho_core_import_shortcuts(struct MahoCore *ptr, const char *json_data);
+bool maho_core_import_shortcuts(struct MahoCore *ptr,
+                                const char *json_data);
 
 /**
  * # Safety
@@ -1599,6 +1636,20 @@ bool maho_core_reset_pinned_tab(struct MahoCore *ptr, const char *tab_id);
 char *maho_core_check_pinned_navigation(struct MahoCore *ptr,
                                         const char *tab_id,
                                         const char *url);
+
+/**
+ * Acknowledge a sync entity.
+ * `entity_type` is the sync entity type name ("tab", "bookmark", etc.).
+ * `entity_id` is the entity ID.
+ * `version` is the HLC timestamp version.
+ *
+ * # Safety
+ * `ptr`, `entity_type`, `entity_id` must be valid C strings.
+ */
+void maho_core_ack_sync_entity(struct MahoCore *ptr,
+                               const char *entity_type,
+                               const char *entity_id,
+                               uint64_t version);
 
 /**
  * Apply incoming entity batch from server.
@@ -2035,7 +2086,11 @@ struct MahoAgentSession *maho_agent_create_session(struct MahoCore *core,
                                                    void *permission_user_data,
                                                    struct MahoAgentSecureKey (*secure_storage_cb)(void *user_data,
                                                                                                   const char *provider),
-                                                   void *secure_storage_user_data);
+                                                   void *secure_storage_user_data,
+                                                   struct MahoAgentToolResult (*browser_tool_cb)(void *user_data,
+                                                                                                 const char *tool_name,
+                                                                                                 const char *args_json),
+                                                   void *browser_tool_user_data);
 
 /**
  * # Safety

@@ -31,6 +31,12 @@ struct AISettings {
   bool session_persistence_enabled;
   bool has_byok_openai;
   bool has_byok_anthropic;
+
+  bool has_relay_session;
+  string relay_tier;
+  string relay_subscription_status;
+  double credit_balance_usd;
+  double tier_ceiling_usd;
 };
 
 struct MojoKeyCombo {
@@ -223,6 +229,8 @@ interface PageHandler {
   SetAIModel(string model);
   SetAIApprovalPolicy(string policy);
   SetAISessionPersistence(bool enabled);
+  FetchProviderModels(string provider_id) => (array<string> model_ids, bool from_cache);
+  TestManagedConnection() => (bool success, string message);
 
   GetShortcuts() => (array<ShortcutBinding> shortcuts);
   SetShortcut(string action, MojoKeyCombo key_combo) => (SetShortcutResult result);
@@ -325,4 +333,7 @@ interface Page {
 
   // Pushed when a shortcut key combo is intercepted in recording mode.
   OnShortcutRecorded(MojoKeyCombo key_combo);
+
+  // Pushed when background model-list refresh completes.
+  ProviderModelsRefreshed(string provider_id, array<string> model_ids);
 };

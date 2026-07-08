@@ -1,0 +1,14 @@
+RELAY_URL=http://localhost:13000
+SERVICE_TOKEN=<must-match-MAHO_RELAY_SERVICE_TOKEN-on-relay-side>
+
+# Upstream LLM endpoint (OpenAI-compatible /v1/chat/completions URL).
+# Production: leave unset to use OpenRouter default.
+# Local dev with Quotio: http://127.0.0.1:8317/v1/chat/completions
+# Local dev with Ollama: http://localhost:11434/v1/chat/completions
+UPSTREAM_LLM_URL=http://127.0.0.1:8317/v1/chat/completions
+
+# API key sent as Bearer to the upstream.
+# For OpenRouter (prod): your OpenRouter API key.
+# For Quotio: check ~/Library/Application Support/Quotio/config.yaml `api-keys`.
+# For Ollama/LiteLLM: any non-empty string works.
+OPENROUTER_API_KEY=<upstream-api-key>

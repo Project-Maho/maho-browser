@@ -53,6 +53,10 @@ bool StoreRelayTokens(PrefService* prefs,
 // Clear all auth-related prefs (tokens + expiry + user info).
 void ClearRelayTokens(PrefService* prefs);
 
+// Returns true if there is a valid relay session (an unexpired access token
+// or a valid refresh token to obtain one).
+bool HasValidRelaySession(PrefService* prefs);
+
 // Returns the relay base URL (MAHO_RELAY_URL env var override, otherwise
 // default "https://relay.maho.co").
 std::string GetRelayBaseUrl();

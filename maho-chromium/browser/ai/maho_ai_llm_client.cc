@@ -14,6 +14,12 @@
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/cpp/simple_url_loader_stream_consumer.h"
+#include "chrome/browser/browser_process.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
+
+#include "maho/browser/ui/webui/maho_auth_utils.h"
+#include "maho/browser/ui/webui/maho_settings/maho_settings_page_handler.h"
+#include "maho/third_party/maho/maho_ffi.h"
 
 namespace {
 
@@ -241,6 +247,10 @@ class OpenAICompatibleProviderTransport final
            prefs->GetString(kMahoAiProviderPref) == "local-server";
   }
 
+  std::string GetCredential(PrefService* prefs, const os_crypt_async::Encryptor*) const override {
+    return GetConfiguredApiKey(prefs);
+  }
+
   std::optional<std::string> ResolveEndpoint(
       const MahoAiLlmClient::CompletionRequest& request,
       PrefService* prefs) const override {
@@ -310,6 +320,10 @@ class ProviderAdapterV2Transport final
            prefs->GetString(kMahoAiProviderPref) == "local-server";
   }
 
+  std::string GetCredential(PrefService* prefs, const os_crypt_async::Encryptor*) const override {
+    return GetConfiguredApiKey(prefs);
+  }
+
   std::optional<std::string> ResolveEndpoint(
       const MahoAiLlmClient::CompletionRequest& request,
       PrefService* prefs) const override {
@@ -370,18 +384,115 @@ class ProviderAdapterV2Transport final
   }
 };
 
+class MahoManagedProviderTransport final
+    : public MahoAiLlmClient::ProviderTransport {
+ public:
+  bool HasConfiguredCredential(PrefService* prefs) const override {
+    return maho::auth::HasValidRelaySession(prefs);
+  }
+
+  std::string GetCredential(PrefService* prefs, const os_crypt_async::Encryptor* encryptor) const override {
+    if (encryptor) {
+      return maho::auth::GetRelayAccessToken(prefs, *encryptor);
+    }
+    return "";
+  }
+
+  std::optional<std::string> ResolveEndpoint(
+      const MahoAiLlmClient::CompletionRequest& request,
+      PrefService* prefs) const override {
+    if (request.endpoint.has_value()) {
+      return request.endpoint;
+    }
+    char* p = maho_core_managed_proxy_url();
+    if (!p) {
+      return std::nullopt;
+    }
+    std::string proxy_url(p);
+    maho_core_free_string(p);
+    return proxy_url;
+  }
+
+  std::optional<std::string> ResolveModel(
+      const MahoAiLlmClient::CompletionRequest& request,
+      PrefService* prefs) const override {
+    if (request.model.has_value()) {
+      return request.model;
+    }
+    const std::string model = prefs->GetString(kMahoAiModelPref);
+    if (model.empty()) {
+      return std::nullopt;
+    }
+    return model;
+  }
+
+  MahoAiLlmClient::RequestPlan CreateRequestPlan(
+      MahoAiLlmClient::CompletionRequest request,
+      const std::string& endpoint,
+      const std::string& model) const override {
+    base::DictValue request_body;
+    request_body.Set("model", model);
+    request_body.Set("stream", true);
+    request_body.Set("messages", std::move(request.prompt_messages));
+
+    std::string body_json;
+    base::JSONWriter::Write(request_body, &body_json);
+
+    GURL endpoint_url(endpoint);
+    AppendChatCompletionsPath(&endpoint_url);
+
+    return MahoAiLlmClient::RequestPlan{
+        .url = endpoint_url,
+        .body_json = std::move(body_json)};
+  }
+
+  void ProcessResponseBody(
+      std::string body,
+      std::string* sse_buffer,
+      MahoAiLlmClient::CompletionResult* completion_result,
+      const MahoAiLlmClient::TokenCallback& on_token,
+      bool* overflowed) const override {
+    *sse_buffer += NormalizeSseChunk(std::move(body));
+    ProcessSseBuffer(sse_buffer, completion_result, on_token, overflowed);
+  }
+};
+
 }  // namespace
+
+MahoAiLlmClient::PendingRequest::PendingRequest() = default;
+MahoAiLlmClient::PendingRequest::PendingRequest(CompletionRequest r, TokenCallback t, CompleteCallback c, ErrorCallback e)
+    : request(std::move(r)), on_token(std::move(t)), on_complete(std::move(c)), on_error(std::move(e)) {}
+MahoAiLlmClient::PendingRequest::PendingRequest(PendingRequest&&) = default;
+MahoAiLlmClient::PendingRequest& MahoAiLlmClient::PendingRequest::operator=(PendingRequest&&) = default;
+MahoAiLlmClient::PendingRequest::~PendingRequest() = default;
 
 MahoAiLlmClient::MahoAiLlmClient(
     PrefService* prefs,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    const os_crypt_async::Encryptor* encryptor,
     bool provider_adapter_v2_enabled)
     : prefs_(prefs),
       url_loader_factory_(std::move(url_loader_factory)),
       provider_adapter_v2_enabled_(provider_adapter_v2_enabled),
-      provider_transport_(provider_adapter_v2_enabled_
-                              ? std::unique_ptr<ProviderTransport>(std::make_unique<ProviderAdapterV2Transport>())
-                              : std::unique_ptr<ProviderTransport>(std::make_unique<OpenAICompatibleProviderTransport>())) {}
+      encryptor_(encryptor) {
+  const std::string provider = prefs_->GetString(kMahoAiProviderPref);
+  if (provider == "maho-managed") {
+    provider_transport_ = std::make_unique<MahoManagedProviderTransport>();
+  } else if (provider_adapter_v2_enabled_) {
+    provider_transport_ = std::make_unique<ProviderAdapterV2Transport>();
+  } else {
+    provider_transport_ = std::make_unique<OpenAICompatibleProviderTransport>();
+  }
+
+  if (!encryptor_) {
+    if (g_browser_process && g_browser_process->os_crypt_async()) {
+      g_browser_process->os_crypt_async()->GetInstance(
+          base::BindOnce(&MahoAiLlmClient::OnOsCryptReady,
+                         oscrypt_weak_factory_.GetWeakPtr()),
+          os_crypt_async::Encryptor::Option::kEncryptSyncCompat);
+    }
+  }
+}
 
 MahoAiLlmClient::~MahoAiLlmClient() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -419,6 +530,8 @@ void MahoAiLlmClient::Reset() {
   on_token_.Reset();
   on_complete_.Reset();
   on_error_.Reset();
+  is_retry_ = false;
+  pending_request_.reset();
 }
 
 void MahoAiLlmClient::StartCompletion(CompletionRequest request,
@@ -428,9 +541,27 @@ void MahoAiLlmClient::StartCompletion(CompletionRequest request,
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   Reset();
+
+  active_request_.endpoint = request.endpoint;
+  active_request_.model = request.model;
+  active_request_.prompt_messages = request.prompt_messages.Clone();
+
   on_token_ = std::move(on_token);
   on_complete_ = std::move(on_complete);
   on_error_ = std::move(on_error);
+
+  if (provider_transport_->HasConfiguredCredential(prefs_) && !GetEncryptor()) {
+    pending_request_ = PendingRequest{
+        std::move(request), on_token_,
+        std::move(on_complete_), std::move(on_error_)};
+    return;
+  }
+
+  PerformStartCompletion(std::move(request));
+}
+
+void MahoAiLlmClient::PerformStartCompletion(CompletionRequest request) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   const std::optional<std::string> endpoint =
       provider_transport_->ResolveEndpoint(request, prefs_);
@@ -449,7 +580,7 @@ void MahoAiLlmClient::StartCompletion(CompletionRequest request,
   auto resource_request = std::make_unique<network::ResourceRequest>();
   resource_request->url = request_plan.url;
   resource_request->method = "POST";
-  const std::string api_key = GetConfiguredApiKey(prefs_);
+  const std::string api_key = provider_transport_->GetCredential(prefs_, GetEncryptor());
   if (!api_key.empty()) {
     resource_request->headers.SetHeader("Authorization",
                                         "Bearer " + api_key);
@@ -478,12 +609,57 @@ void MahoAiLlmClient::OnResponseDataReceived(std::string body_chunk) {
   }
 }
 
+void MahoAiLlmClient::OnOsCryptReady(os_crypt_async::Encryptor encryptor) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  local_encryptor_ = std::move(encryptor);
+  if (pending_request_) {
+    PendingRequest req = std::move(*pending_request_);
+    pending_request_.reset();
+    StartCompletion(std::move(req.request), std::move(req.on_token),
+                    std::move(req.on_complete), std::move(req.on_error));
+  }
+}
+
+const os_crypt_async::Encryptor* MahoAiLlmClient::GetEncryptor() const {
+  if (encryptor_) return encryptor_;
+  if (local_encryptor_) return &*local_encryptor_;
+  return nullptr;
+}
+
 void MahoAiLlmClient::OnResponseComplete(bool success) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+  int response_code = -1;
+  if (url_loader_ && url_loader_->ResponseInfo() && url_loader_->ResponseInfo()->headers) {
+    response_code = url_loader_->ResponseInfo()->headers->response_code();
+  }
+
+  if (response_code == 401 && !is_retry_ && prefs_ && url_loader_factory_) {
+    const os_crypt_async::Encryptor* encryptor = GetEncryptor();
+    if (!encryptor) {
+      FinishWithError("Unauthorized: Decryption helper not ready.");
+      return;
+    }
+    std::string refresh_token = maho::auth::GetRelayRefreshToken(prefs_, *encryptor);
+    if (refresh_token.empty()) {
+      FinishWithError("Unauthorized: Session expired. Please sign in again.");
+      return;
+    }
+    is_retry_ = true;
+    maho::auth::RefreshAccessToken(
+        refresh_token, url_loader_factory_,
+        base::BindOnce(&MahoAiLlmClient::OnRefreshComplete,
+                       weak_factory_.GetWeakPtr()));
+    return;
+  }
+
   if (!success && sse_buffer_.empty() && completion_result_.full_text.empty() &&
       completion_result_.tool_calls.empty()) {
-    FinishWithError("No response received from the AI service.");
+    if (response_code == 401) {
+      FinishWithError("Unauthorized: Session expired. Please sign in again.");
+    } else {
+      FinishWithError("No response received from the AI service.");
+    }
     return;
   }
 
@@ -502,6 +678,27 @@ void MahoAiLlmClient::OnResponseComplete(bool success) {
     return;
   }
   FinishWithSuccess();
+}
+
+void MahoAiLlmClient::OnRefreshComplete(
+    bool success,
+    int http_status,
+    std::optional<maho::auth::RefreshedTokens> tokens) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!success || !tokens.has_value()) {
+    FinishWithError("Unauthorized: Session expired. Please sign in again.");
+    return;
+  }
+
+  stream_consumer_.reset();
+  url_loader_.reset();
+
+  CompletionRequest request;
+  request.endpoint = active_request_.endpoint;
+  request.model = active_request_.model;
+  request.prompt_messages = active_request_.prompt_messages.Clone();
+
+  PerformStartCompletion(std::move(request));
 }
 
 void MahoAiLlmClient::FinishWithSuccess() {

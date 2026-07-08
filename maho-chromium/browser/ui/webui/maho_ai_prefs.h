@@ -39,6 +39,13 @@ inline constexpr char kAgentToolGrants[] = "maho.ai.extensions.agent_tool_grants
 inline constexpr char kSettingsMigratedFromMacOSDefaults[] =
     "maho.ai.settings_migrated_from_macos_defaults";
 
+// One-time migration flag: true once legacy Google provider settings
+// have been cleared/migrated to blank.
+inline constexpr char kSettingsMigratedFromGoogleProvider[] =
+    "maho.ai.settings_migrated_from_google_provider";
+
+inline constexpr char kModelCache[] = "maho.ai.model_cache";
+
 }  // namespace maho::ai_prefs
 
 #endif  // MAHO_BROWSER_UI_WEBUI_MAHO_AI_PREFS_H_

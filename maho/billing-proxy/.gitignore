@@ -1,0 +1,7 @@
+# Local dev artifacts (never commit)
+.dev.vars
+.dev.vars.local
+.wrangler/
+
+# worker-build output (regenerated on every build)
+build/

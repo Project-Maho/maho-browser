@@ -16,7 +16,13 @@
 #include "base/values.h"
 #include "url/gurl.h"
 
+#include "maho/browser/ui/webui/maho_auth_utils.h"
+
 class PrefService;
+
+namespace os_crypt_async {
+class Encryptor;
+}
 
 namespace network {
 class SharedURLLoaderFactory;
@@ -77,6 +83,7 @@ class MahoAiLlmClient {
     virtual ~ProviderTransport() = default;
 
     virtual bool HasConfiguredCredential(PrefService* prefs) const = 0;
+    virtual std::string GetCredential(PrefService* prefs, const os_crypt_async::Encryptor* encryptor) const = 0;
     virtual std::optional<std::string> ResolveEndpoint(
         const CompletionRequest& request,
         PrefService* prefs) const = 0;
@@ -97,6 +104,7 @@ class MahoAiLlmClient {
   MahoAiLlmClient(
       PrefService* prefs,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+      const os_crypt_async::Encryptor* encryptor,
       bool provider_adapter_v2_enabled);
   MahoAiLlmClient(const MahoAiLlmClient&) = delete;
   MahoAiLlmClient& operator=(const MahoAiLlmClient&) = delete;
@@ -113,15 +121,34 @@ class MahoAiLlmClient {
 
  private:
   friend class MahoAiLlmClientStreamConsumer;
+  friend class MahoAiLlmClientTestHelper;
+
+  struct PendingRequest {
+    PendingRequest();
+    PendingRequest(CompletionRequest r, TokenCallback t, CompleteCallback c, ErrorCallback e);
+    PendingRequest(PendingRequest&&);
+    PendingRequest& operator=(PendingRequest&&);
+    ~PendingRequest();
+
+    CompletionRequest request;
+    TokenCallback on_token;
+    CompleteCallback on_complete;
+    ErrorCallback on_error;
+  };
 
   void OnResponseDataReceived(std::string body_chunk);
   void OnResponseComplete(bool success);
   void FinishWithSuccess();
   void FinishWithError(const std::string& error);
 
-  SEQUENCE_CHECKER(sequence_checker_);
+  void PerformStartCompletion(CompletionRequest request);
+  void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
+  void OnRefreshComplete(bool success,
+                         int http_status,
+                         std::optional<maho::auth::RefreshedTokens> tokens);
+  const os_crypt_async::Encryptor* GetEncryptor() const;
 
-  friend class MahoAiLlmClientStreamConsumer;
+  SEQUENCE_CHECKER(sequence_checker_);
 
   raw_ptr<PrefService> prefs_;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
@@ -135,6 +162,13 @@ class MahoAiLlmClient {
   CompleteCallback on_complete_;
   ErrorCallback on_error_;
 
+  raw_ptr<const os_crypt_async::Encryptor> encryptor_ = nullptr;
+  std::optional<os_crypt_async::Encryptor> local_encryptor_;
+  std::optional<PendingRequest> pending_request_;
+  CompletionRequest active_request_;
+  bool is_retry_ = false;
+
+  base::WeakPtrFactory<MahoAiLlmClient> oscrypt_weak_factory_{this};
   base::WeakPtrFactory<MahoAiLlmClient> weak_factory_{this};
 };
 

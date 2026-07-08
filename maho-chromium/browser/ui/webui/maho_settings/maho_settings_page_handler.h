@@ -28,6 +28,11 @@
 class PrefService;
 class Profile;
 
+namespace maho::ai {
+class MahoModelListFetcher;
+class MahoManagedConnectionTest;
+}  // namespace maho::ai
+
 class MahoSettingsPageHandler
     : public maho_settings::mojom::PageHandler,
       public maho::MahoExtensionStateBridge::Observer,
@@ -42,6 +47,9 @@ class MahoSettingsPageHandler
   ~MahoSettingsPageHandler() override;
 
   static MahoSettingsPageHandler* GetActiveInstance();
+  const os_crypt_async::Encryptor* encryptor() const {
+    return encryptor_.has_value() ? &encryptor_.value() : nullptr;
+  }
   void NotifyShortcutRecorded(maho_settings::mojom::MojoKeyComboPtr key_combo);
 
   void GetSettings(GetSettingsCallback callback) override;
@@ -71,6 +79,9 @@ class MahoSettingsPageHandler
   void SetAIModel(const std::string& model) override;
   void SetAIApprovalPolicy(const std::string& policy) override;
   void SetAISessionPersistence(bool enabled) override;
+  void FetchProviderModels(const std::string& provider_id,
+                           FetchProviderModelsCallback callback) override;
+  void TestManagedConnection(TestManagedConnectionCallback callback) override;
 
   void GetShortcuts(GetShortcutsCallback callback) override;
   void SetShortcut(const std::string& action,
@@ -246,6 +257,26 @@ class MahoSettingsPageHandler
 
   std::optional<os_crypt_async::Encryptor> encryptor_;
   void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
+  void OnProviderModelsRefreshed(const std::string& provider_id,
+                                 const std::vector<std::string>& model_ids);
+
+  struct PendingByokSave {
+    PendingByokSave(std::string provider,
+                    std::string key,
+                    SetBYOKKeyCallback callback);
+    ~PendingByokSave();
+    PendingByokSave(PendingByokSave&&);
+    PendingByokSave& operator=(PendingByokSave&&);
+    std::string provider;
+    std::string key;
+    SetBYOKKeyCallback callback;
+  };
+  std::vector<PendingByokSave> pending_byok_saves_;
+
+  std::unique_ptr<maho::ai::MahoModelListFetcher> model_list_fetcher_;
+  std::unique_ptr<maho::ai::MahoManagedConnectionTest> managed_connection_test_;
+  double last_known_credit_balance_ = -1.0;
+  double last_known_tier_ceiling_ = -1.0;
 
   static MahoSettingsPageHandler* g_active_instance;
 

@@ -1941,6 +1941,27 @@ pub unsafe extern "C" fn maho_string_free(s: *mut c_char) {
     }, ())
 }
 
+/// Returns the Maho AI proxy base URL. Reads MAHO_PROXY_URL env var,
+/// falls back to compile-time default. Caller must free via maho_core_free_string.
+/// Returns null on interior-NUL byte in the URL (never panics across FFI).
+#[no_mangle]
+pub extern "C" fn maho_core_managed_proxy_url() -> *mut c_char {
+    let url = maho_agent::proxy_url();
+    match CString::new(url) {
+        Ok(cstr) => cstr.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// # Safety
+/// `s` must be a valid pointer returned by `maho_core_managed_proxy_url`, or null.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_free_string(s: *mut c_char) {
+    if !s.is_null() {
+        drop(CString::from_raw(s));
+    }
+}
+
 /// # Safety
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
 /// `url` and `title` must be valid null-terminated C strings.
@@ -2065,8 +2086,9 @@ pub unsafe extern "C" fn maho_core_command_bar_search(
                 favicon: t.favicon.clone(),
                 is_loading: false,
                 is_pinned: false,
-                is_favorite: false,
+                is_favorite: false, // L3-EXEMPT
                 favorite_order: None,
+                role: maho_types::tab::TabRole::Normal,
                 is_muted: false,
                 is_playing_audio: false,
                 lifecycle_state: "active".to_string(),
@@ -7260,12 +7282,76 @@ pub struct MahoAgentSecureKey {
     pub ptr: *mut std::os::raw::c_char,
     pub len: usize,
     pub free_fn: Option<unsafe extern "C" fn(*mut std::os::raw::c_char, usize)>,
+    pub base_url: *mut std::os::raw::c_char,
+    pub model: *mut std::os::raw::c_char,
+    pub cstring_free_fn: Option<unsafe extern "C" fn(*mut std::os::raw::c_char)>,
 }
 
 pub type MahoAgentSecureStorageCallback = extern "C" fn(
     user_data: *mut std::ffi::c_void,
     provider: *const c_char,
 ) -> MahoAgentSecureKey;
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct MahoAgentToolResult {
+    pub json_ptr: *mut std::os::raw::c_char,
+    pub error_ptr: *mut std::os::raw::c_char,
+    pub free_fn: Option<unsafe extern "C" fn(*mut std::os::raw::c_char)>,
+}
+
+struct FfiBrowserToolBridge {
+    cb: SendableCallback<unsafe extern "C" fn(
+        *mut std::ffi::c_void,
+        *const c_char,
+        *const c_char,
+    ) -> MahoAgentToolResult>,
+    user_data: SendableUserData,
+}
+
+impl maho_agent::BrowserToolBridge for FfiBrowserToolBridge {
+    fn invoke(&self, tool_name: &str, args_json: &str) -> Result<String, String> {
+        let name_c = match CString::new(tool_name) {
+            Ok(s) => s,
+            Err(e) => return Err(format!("Invalid tool_name UTF-8: {e}")),
+        };
+        let args_c = match CString::new(args_json) {
+            Ok(s) => s,
+            Err(e) => return Err(format!("Invalid args_json UTF-8: {e}")),
+        };
+        let cb = self.cb.0;
+        let ud = self.user_data.0 as *mut std::ffi::c_void;
+        let result = unsafe { cb(ud, name_c.as_ptr(), args_c.as_ptr()) };
+
+        let json_opt = if !result.json_ptr.is_null() {
+            let s = unsafe { CStr::from_ptr(result.json_ptr) }
+                .to_string_lossy()
+                .into_owned();
+            if let Some(free_fn) = result.free_fn {
+                unsafe { free_fn(result.json_ptr); }
+            }
+            Some(s)
+        } else {
+            None
+        };
+        let err_opt = if !result.error_ptr.is_null() {
+            let s = unsafe { CStr::from_ptr(result.error_ptr) }
+                .to_string_lossy()
+                .into_owned();
+            if let Some(free_fn) = result.free_fn {
+                unsafe { free_fn(result.error_ptr); }
+            }
+            Some(s)
+        } else {
+            None
+        };
+        match (json_opt, err_opt) {
+            (_, Some(err)) => Err(err),
+            (Some(json), None) => Ok(json),
+            (None, None) => Err("Browser tool returned no result".to_string()),
+        }
+    }
+}
 
 /// # Safety
 /// `core` must be a valid pointer to a `MahoCore`.
@@ -7287,10 +7373,16 @@ pub unsafe extern "C" fn maho_agent_create_session(
         provider: *const c_char,
     ) -> MahoAgentSecureKey>,
     secure_storage_user_data: *mut std::ffi::c_void,
+    browser_tool_cb: Option<unsafe extern "C" fn(
+        user_data: *mut std::ffi::c_void,
+        tool_name: *const c_char,
+        args_json: *const c_char,
+    ) -> MahoAgentToolResult>,
+    browser_tool_user_data: *mut std::ffi::c_void,
 ) -> *mut MahoAgentSession {
     ffi_safe!({
         if core.is_null() || session_id.is_null() {
-            eprintln!(
+            tracing::debug!(
                 "[maho_agent_create_session] FAIL: null pointer args (core_null={}, session_id_null={})",
                 core.is_null(),
                 session_id.is_null(),
@@ -7299,14 +7391,14 @@ pub unsafe extern "C" fn maho_agent_create_session(
         }
         // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
         if import_gate::is_active() {
-            eprintln!("[maho_agent_create_session] FAIL: import_gate is active (data import in progress)");
+            tracing::debug!("[maho_agent_create_session] FAIL: import_gate is active (data import in progress)");
             return ptr::null_mut();
         }
         let core = &*core;
         let sid = match CStr::from_ptr(session_id).to_str() {
             Ok(s) => s.to_string(),
             Err(e) => {
-                eprintln!("[maho_agent_create_session] FAIL: session_id is not valid UTF-8: {e}");
+                tracing::debug!("[maho_agent_create_session] FAIL: session_id is not valid UTF-8: {e}");
                 return std::ptr::null_mut();
             }
         };
@@ -7323,7 +7415,7 @@ pub unsafe extern "C" fn maho_agent_create_session(
         let db_path = match core.sqlite_db_path() {
             Some(p) => p,
             None => {
-                eprintln!(
+                tracing::debug!(
                     "[maho_agent_create_session] FAIL: core.sqlite_db_path() is None \
                      (MahoCore was initialized without SQLite storage; session_id={sid})"
                 );
@@ -7334,7 +7426,7 @@ pub unsafe extern "C" fn maho_agent_create_session(
         let storage = match maho_storage::sqlite::SqliteStorage::open(db_path) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!(
+                tracing::debug!(
                     "[maho_agent_create_session] FAIL: SqliteStorage::open failed \
                      (db_path={db_path:?}, session_id={sid}): {e}"
                 );
@@ -7400,27 +7492,62 @@ pub unsafe extern "C" fn maho_agent_create_session(
                     Ok(s) => s,
                     Err(e) => return Err(maho_agent::AgentError::ExecutionError(e.to_string())),
                 };
-                
-                // Zeroize C buffer immediately after copy!
+
                 unsafe {
                     std::ptr::write_bytes(secure_key.ptr, 0, secure_key.len);
                 }
-                
-                // Call the free function if present
+
                 if let Some(free_fn) = secure_key.free_fn {
                     unsafe {
                         free_fn(secure_key.ptr, secure_key.len);
                     }
                 }
-                Ok(maho_agent::ZeroizedString::new(key_str))
+
+                let base_url_opt = if !secure_key.base_url.is_null() {
+                    let s = unsafe { CStr::from_ptr(secure_key.base_url) }
+                        .to_string_lossy()
+                        .into_owned();
+                    if let Some(free_fn) = secure_key.cstring_free_fn {
+                        unsafe { free_fn(secure_key.base_url); }
+                    }
+                    Some(s)
+                } else {
+                    None
+                };
+
+                let model_opt = if !secure_key.model.is_null() {
+                    let s = unsafe { CStr::from_ptr(secure_key.model) }
+                        .to_string_lossy()
+                        .into_owned();
+                    if let Some(free_fn) = secure_key.cstring_free_fn {
+                        unsafe { free_fn(secure_key.model); }
+                    }
+                    Some(s)
+                } else {
+                    None
+                };
+
+                Ok(maho_agent::SecureKeyBundle {
+                    key: maho_agent::ZeroizedString::new(key_str),
+                    base_url: base_url_opt,
+                    model: model_opt,
+                })
             });
             runtime.set_secure_storage_callback(callback).unwrap();
         }
-        
+
+        if let Some(cb) = browser_tool_cb {
+            let user_data_ptr = SendableUserData(browser_tool_user_data as usize);
+            let cb_sendable = SendableCallback(cb);
+            let bridge: std::sync::Arc<dyn maho_agent::BrowserToolBridge> =
+                std::sync::Arc::new(FfiBrowserToolBridge { cb: cb_sendable, user_data: user_data_ptr });
+            runtime.set_browser_tool_bridge(bridge).unwrap();
+        }
+
         let isolation = match SessionRuntime::new() {
             Ok(i) => Arc::new(i),
             Err(e) => {
-                eprintln!(
+                tracing::debug!(
                     "[maho_agent_create_session] FAIL: SessionRuntime::new() failed \
                      (Tokio runtime build error; session_id={sid}): {e}"
                 );

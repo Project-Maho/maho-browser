@@ -31,6 +31,22 @@ pub enum AgentError {
 
 pub struct ZeroizedString(secrecy::SecretString);
 
+pub struct SecureKeyBundle {
+    pub key: ZeroizedString,
+    pub base_url: Option<String>,
+    pub model: Option<String>,
+}
+
+impl SecureKeyBundle {
+    pub fn from_key(key: ZeroizedString) -> Self {
+        Self { key, base_url: None, model: None }
+    }
+}
+
+pub trait BrowserToolBridge: Send + Sync {
+    fn invoke(&self, tool_name: &str, args_json: &str) -> Result<String, String>;
+}
+
 impl ZeroizedString {
     pub fn new(s: String) -> Self {
         Self(secrecy::SecretString::new(s.into_boxed_str()))
@@ -165,8 +181,15 @@ pub trait AgentRuntime: Send + Sync {
     ) -> Result<(), AgentError>;
     fn set_secure_storage_callback(
         &self,
-        callback: Box<dyn Fn(&str) -> Result<ZeroizedString, AgentError> + Send + Sync + 'static>,
+        callback: Box<dyn Fn(&str) -> Result<SecureKeyBundle, AgentError> + Send + Sync + 'static>,
     ) -> Result<(), AgentError>;
+
+    fn set_browser_tool_bridge(
+        &self,
+        _bridge: std::sync::Arc<dyn BrowserToolBridge>,
+    ) -> Result<(), AgentError> {
+        Ok(())
+    }
 }
 
 pub struct MockAgentRuntime;
@@ -199,7 +222,7 @@ impl AgentRuntime for MockAgentRuntime {
 
     fn set_secure_storage_callback(
         &self,
-        _callback: Box<dyn Fn(&str) -> Result<ZeroizedString, AgentError> + Send + Sync + 'static>,
+        _callback: Box<dyn Fn(&str) -> Result<SecureKeyBundle, AgentError> + Send + Sync + 'static>,
     ) -> Result<(), AgentError> {
         Ok(())
     }
@@ -262,4 +285,9 @@ pub fn init_audit_logging() {
             }
         }
     });
+}
+
+pub fn proxy_url() -> String {
+    std::env::var("MAHO_PROXY_URL")
+        .unwrap_or_else(|_| "https://proxy.maho.co/v1".to_string())
 }

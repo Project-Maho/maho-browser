@@ -497,14 +497,107 @@ impl Tool for ClipboardTool {
     }
 }
 
-use crate::ZeroizedString;
+use crate::{ZeroizedString, SecureKeyBundle, BrowserToolBridge};
+
+#[derive(Clone)]
+struct BrowserToolShim {
+    name: &'static str,
+    description: &'static str,
+    parameters_schema: serde_json::Value,
+    bridge: Arc<dyn BrowserToolBridge>,
+}
+
+#[async_trait]
+impl Tool for BrowserToolShim {
+    async fn invoke(
+        &self,
+        _agent_context: &dyn AgentContext,
+        tool_call: &ToolCall,
+    ) -> anyhow::Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
+        let args = tool_call.args().unwrap_or("{}").to_string();
+        let name = self.name.to_string();
+        let bridge = Arc::clone(&self.bridge);
+        let result = tokio::task::spawn_blocking(move || bridge.invoke(&name, &args))
+            .await
+            .map_err(|e| swiftide_core::chat_completion::errors::ToolError::unknown(
+                anyhow::anyhow!("spawn_blocking join failed: {e}")))?;
+        match result {
+            Ok(json) => Ok(ToolOutput::Text(json)),
+            Err(msg) => Err(swiftide_core::chat_completion::errors::ToolError::unknown(
+                anyhow::anyhow!("Browser tool `{}` failed: {msg}", self.name))),
+        }
+    }
+
+    fn name(&self) -> Cow<'_, str> {
+        Cow::Borrowed(self.name)
+    }
+
+    fn tool_spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: self.name.to_string(),
+            description: self.description.to_string(),
+            parameters_schema: Some(serde_json::from_value(self.parameters_schema.clone()).unwrap()),
+        }
+    }
+}
+
+fn browser_tool_shims(bridge: Arc<dyn BrowserToolBridge>) -> Vec<BrowserToolShim> {
+    let no_args = serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+    });
+    let search_args = serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "query": {"type": "string", "description": "Text to search for in the active page."},
+            "max_results": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Maximum number of excerpts to return."}
+        },
+        "required": ["query"]
+    });
+    vec![
+        BrowserToolShim {
+            name: "read_current_page",
+            description: "Read the currently active browser tab and return its main content (title, url, text) as structured JSON.",
+            parameters_schema: no_args.clone(),
+            bridge: Arc::clone(&bridge),
+        },
+        BrowserToolShim {
+            name: "get_selected_text",
+            description: "Return the current text selection from the active browser tab.",
+            parameters_schema: no_args.clone(),
+            bridge: Arc::clone(&bridge),
+        },
+        BrowserToolShim {
+            name: "get_active_tab",
+            description: "Return metadata (title, url, id) for the currently active browser tab.",
+            parameters_schema: no_args.clone(),
+            bridge: Arc::clone(&bridge),
+        },
+        BrowserToolShim {
+            name: "search_in_page",
+            description: "Search the active page content for a query string and return matching excerpts.",
+            parameters_schema: search_args,
+            bridge: Arc::clone(&bridge),
+        },
+        BrowserToolShim {
+            name: "extract_structured_page_context",
+            description: "Extract a rich structured context object from the active page (headings, links, main text).",
+            parameters_schema: no_args,
+            bridge,
+        },
+    ]
+}
 
 pub struct SwiftideBackend {
     storage: Arc<dyn AgentStorage>,
     permission_callback: Arc<Mutex<Option<PermissionCallback>>>,
     active_sessions: Arc<Mutex<std::collections::HashMap<String, tokio::task::AbortHandle>>>,
     llm_override: Arc<Mutex<Option<Box<dyn swiftide_core::chat_completion::ChatCompletion>>>>,
-    secure_storage_callback: Arc<Mutex<Option<Box<dyn Fn(&str) -> Result<ZeroizedString, AgentError> + Send + Sync + 'static>>>>,
+    secure_storage_callback: Arc<Mutex<Option<Box<dyn Fn(&str) -> Result<SecureKeyBundle, AgentError> + Send + Sync + 'static>>>>,
+    browser_tool_bridge: Arc<Mutex<Option<Arc<dyn BrowserToolBridge>>>>,
     workspace_root: std::path::PathBuf,
     allow_insecure_key_storage: bool,
 }
@@ -517,6 +610,7 @@ impl Clone for SwiftideBackend {
             active_sessions: Arc::clone(&self.active_sessions),
             llm_override: Arc::clone(&self.llm_override),
             secure_storage_callback: Arc::clone(&self.secure_storage_callback),
+            browser_tool_bridge: Arc::clone(&self.browser_tool_bridge),
             workspace_root: self.workspace_root.clone(),
             allow_insecure_key_storage: self.allow_insecure_key_storage,
         }
@@ -537,6 +631,7 @@ impl SwiftideBackend {
             active_sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
             llm_override: Arc::new(Mutex::new(None)),
             secure_storage_callback: Arc::new(Mutex::new(None)),
+            browser_tool_bridge: Arc::new(Mutex::new(None)),
             workspace_root,
             allow_insecure_key_storage,
         }
@@ -584,10 +679,10 @@ impl SwiftideBackend {
         let secure_cb_opt = {
             let secure_cb = self.secure_storage_callback.lock_unpoison();
             if let Some(ref cb) = *secure_cb {
-                if let Ok(key) = cb("openai") {
-                    Some(("openai", key))
-                } else if let Ok(key) = cb("anthropic") {
-                    Some(("anthropic", key))
+                if let Ok(bundle) = cb("openai") {
+                    Some(("openai", bundle))
+                } else if let Ok(bundle) = cb("anthropic") {
+                    Some(("anthropic", bundle))
                 } else {
                     None
                 }
@@ -599,8 +694,7 @@ impl SwiftideBackend {
         let llm: Box<dyn swiftide_core::chat_completion::ChatCompletion> = if let Some(llm) = llm_override_opt {
             llm
         } else if let Some(access_token) = self.storage.get_setting("auth:access_token").await? {
-            let api_base = std::env::var("MAHO_PROXY_URL")
-                .unwrap_or_else(|_| "https://proxy.maho.co/v1".to_string());
+            let api_base = crate::proxy_url();
             let config = MahoOpenAIConfig {
                 api_key: Arc::new(access_token.secret().clone()),
                 api_base,
@@ -612,37 +706,49 @@ impl SwiftideBackend {
                 .map_err(|e| AgentError::ExecutionError(format!("Failed to build MahoManaged OpenAI client: {e}")))?;
             Box::new(client)
         } else {
-            let (provider, api_key) = if let Some(res) = secure_cb_opt {
+            let (provider, bundle) = if let Some(res) = secure_cb_opt {
                 res
             } else {
                 if !self.allow_insecure_key_storage {
                     return Err(AgentError::ExecutionError("Secure storage callback is missing or returned no keys, and insecure key storage is not allowed".to_string()));
                 }
                 if let Some(key) = self.storage.get_byok_key("openai").await? {
-                    ("openai", key)
+                    ("openai", SecureKeyBundle::from_key(key))
                 } else if let Some(key) = self.storage.get_byok_key("anthropic").await? {
-                    ("anthropic", key)
+                    ("anthropic", SecureKeyBundle::from_key(key))
                 } else {
                     return Err(AgentError::ExecutionError("No BYOK API key configured".to_string()));
                 }
             };
 
-            // Instantiate LLM client
+            let api_key = bundle.key;
+            let base_url_override = bundle.base_url;
+            let model_override = bundle.model;
+
             if provider == "openai" {
+                let api_base = base_url_override
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| OPENAI_DEFAULT_API_BASE.to_string());
+                let default_model = model_override
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "gpt-4o".to_string());
                 let config = MahoOpenAIConfig {
                     api_key: Arc::new(api_key.secret().clone()),
-                    api_base: OPENAI_DEFAULT_API_BASE.to_string(),
+                    api_base,
                 };
                 let client = swiftide_integrations::openai::GenericOpenAIBuilder::<MahoOpenAIConfig>::default()
-                    .default_prompt_model("gpt-4o")
+                    .default_prompt_model(default_model)
                     .client(async_openai::Client::with_config(config))
                     .build()
                     .map_err(|e| AgentError::ExecutionError(format!("Failed to build OpenAI client: {e}")))?;
                 Box::new(client)
             } else {
+                let default_model = model_override
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "claude-3-5-sonnet".to_string());
                 let client = async_anthropic::Client::from_api_key(api_key.secret().clone());
                 let swiftide_anthropic = swiftide_integrations::anthropic::Anthropic::builder()
-                    .default_prompt_model("claude-3-5-sonnet")
+                    .default_prompt_model(default_model)
                     .client(client)
                     .build()
                     .map_err(|e| AgentError::ExecutionError(format!("Failed to build Anthropic client: {e}")))?;
@@ -686,6 +792,31 @@ impl SwiftideBackend {
             platform_tools.push(self.build_gated_tool(Arc::new(ShellExecTool { workspace_root: self.workspace_root.clone() }), denied_flag.clone(), session_id));
         }
 
+        let browser_bridge_opt = self.browser_tool_bridge.lock_unpoison().clone();
+        let dbg_log = |msg: &str| {
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/maho-agent-live.log")
+                .and_then(|mut f| {
+                    use std::io::Write;
+                    writeln!(f, "{}", msg)
+                });
+        };
+        if let Some(bridge) = browser_bridge_opt {
+            let shims = browser_tool_shims(bridge);
+            let names: Vec<_> = shims.iter().map(|s| s.name).collect();
+            dbg_log(&format!("[swiftide_backend] Registering {} browser tools: {:?}", shims.len(), names));
+            for shim in shims {
+                platform_tools.push(self.build_gated_tool(Arc::new(shim), denied_flag.clone(), session_id));
+            }
+        } else {
+            dbg_log("[swiftide_backend] No browser_tool_bridge set");
+        }
+        let final_names: Vec<_> = platform_tools.iter().map(|t| t.name().to_string()).collect();
+        dbg_log(&format!("[swiftide_backend] Final platform_tools count: {} names: {:?}",
+            platform_tools.len(), final_names));
+
         // Load DefaultContext with history
         let mut context = swiftide_agents::DefaultContext::default();
         context.with_existing_messages(swiftide_history).await
@@ -728,13 +859,39 @@ impl SwiftideBackend {
         let result_history = agent.context().history().await
             .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
-        if let Some(SwiftideChatMessage::Assistant(text, _)) = result_history.last() {
-            let res_text = text.clone().unwrap_or_default();
-            // Save response to storage
+        let last_assistant_text = result_history.iter().rev().find_map(|msg| {
+            if let SwiftideChatMessage::Assistant(text, _) = msg {
+                text.clone()
+            } else {
+                None
+            }
+        });
+
+        if let Some(res_text) = last_assistant_text {
             self.storage.save_message(session_id, "assistant", &res_text).await?;
             Ok(MahoChatMessage::assistant(ChatContent::text(res_text)))
         } else {
-            Err(AgentError::ExecutionError("No assistant response generated".to_string()))
+            let history_summary: Vec<&str> = result_history.iter().map(|m| match m {
+                SwiftideChatMessage::System(_) => "System",
+                SwiftideChatMessage::User(_) => "User",
+                SwiftideChatMessage::Assistant(_, _) => "Assistant",
+                SwiftideChatMessage::ToolOutput(_, _) => "ToolOutput",
+                SwiftideChatMessage::Summary(_) => "Summary",
+            }).collect();
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/tmp/maho-agent-live.log")
+                .and_then(|mut f| {
+                    use std::io::Write;
+                    writeln!(f,
+                        "[swiftide_backend] No assistant text found. History roles: {history_summary:?}. Session={session_id}."
+                    )
+                });
+            Err(AgentError::ExecutionError(format!(
+                "No assistant response generated (history ended with: {:?})",
+                history_summary.last().copied().unwrap_or("<empty>")
+            )))
         }
     }
 }
@@ -813,10 +970,19 @@ impl AgentRuntime for SwiftideBackend {
 
     fn set_secure_storage_callback(
         &self,
-        callback: Box<dyn Fn(&str) -> Result<ZeroizedString, AgentError> + Send + Sync + 'static>,
+        callback: Box<dyn Fn(&str) -> Result<SecureKeyBundle, AgentError> + Send + Sync + 'static>,
     ) -> Result<(), AgentError> {
         let mut lock = self.secure_storage_callback.lock_unpoison();
         *lock = Some(callback);
+        Ok(())
+    }
+
+    fn set_browser_tool_bridge(
+        &self,
+        bridge: Arc<dyn BrowserToolBridge>,
+    ) -> Result<(), AgentError> {
+        let mut lock = self.browser_tool_bridge.lock_unpoison();
+        *lock = Some(bridge);
         Ok(())
     }
 }

@@ -686,7 +686,37 @@ source_set("maho_unified_agent_adapter_unittests") {
     ":maho_unified_agent_adapter",
     "//base",
     "//base/test:test_support",
+    "//components/prefs:test_support",
     "//maho/browser/ui/webui/maho_ai:mojo_bindings",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_auth_utils_unittests") {
+  testonly = true
+  sources = [
+    "ui/webui/maho_auth_utils_unittest.cc",
+  ]
+  deps = [
+    ":maho_auth_utils",
+    "//base",
+    "//base/test:test_support",
+    "//components/prefs:test_support",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_ai_llm_client_unittests") {
+  testonly = true
+  sources = [
+    "ai/maho_ai_llm_client_unittest.cc",
+  ]
+  deps = [
+    ":maho_ai_client",
+    ":maho_auth_utils",
+    "//base",
+    "//base/test:test_support",
+    "//components/prefs:test_support",
     "//testing/gtest",
   ]
 }
