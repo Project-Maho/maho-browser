@@ -182,10 +182,10 @@ object MahoBridge {
         nativeFavoriteTab(ptr, tabIdJson)
     }
 
-    fun unfavoriteTab(tabIdJson: String) {
+    fun transitionTabRole(tabIdJson: String, newRoleJson: String) {
         val ptr = corePtr
         if (ptr == 0L) return
-        nativeUnfavoriteTab(ptr, tabIdJson)
+        nativeTransitionTabRole(ptr, tabIdJson, newRoleJson)
     }
 
     fun setTabParent(tabIdJson: String, newParentIdJson: String) {
@@ -1083,7 +1083,7 @@ object MahoBridge {
     private external fun nativeGetArchivedTabs(ptr: Long, spaceIdJson: String): String?
     private external fun nativeGetFavoriteTabs(ptr: Long, spaceIdJson: String): String?
     private external fun nativeFavoriteTab(ptr: Long, tabIdJson: String)
-    private external fun nativeUnfavoriteTab(ptr: Long, tabIdJson: String)
+    private external fun nativeTransitionTabRole(ptr: Long, tabIdJson: String, newRoleJson: String)
     private external fun nativeSetTabParent(ptr: Long, tabIdJson: String, newParentIdJson: String)
     private external fun nativeResetPinnedTab(ptr: Long, tabId: String): String?
     private external fun nativeCheckPinnedNavigation(ptr: Long, tabId: String, url: String): String?

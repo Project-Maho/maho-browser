@@ -9,6 +9,12 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
+data class TabRole(
+    val type: String, // "normal", "pinned", "favorite"
+    val order: Int? = null
+)
+
+@Serializable
 data class TabViewModel(
     val id: TabId,
     @SerialName("spaceId") val spaceId: SpaceId,
@@ -17,16 +23,23 @@ data class TabViewModel(
     val url: String,
     val favicon: ImageData? = null,
     @SerialName("isLoading") val isLoading: Boolean,
-    @SerialName("isPinned") val isPinned: Boolean,
-    @SerialName("isFavorite") val isFavorite: Boolean,
-    @SerialName("favoriteOrder") val favoriteOrder: Int? = null,
     @SerialName("isMuted") val isMuted: Boolean,
     @SerialName("isPlayingAudio") val isPlayingAudio: Boolean,
     @SerialName("lifecycleState") val lifecycleState: String,
     val children: List<TabId>,
     @SerialName("createdAt") val createdAt: String,
     @SerialName("lastActiveAt") val lastActiveAt: String,
-)
+    val role: TabRole,
+) {
+    @Deprecated("Use role instead")
+    val isPinned: Boolean get() = role.type == "pinned" || role.type == "favorite"
+
+    @Deprecated("Use role instead")
+    val isFavorite: Boolean get() = role.type == "favorite"
+
+    @Deprecated("Use role instead")
+    val favoriteOrder: Int? get() = if (role.type == "favorite") role.order else null
+}
 
 @Serializable
 data class SpaceViewModel(
@@ -136,6 +149,7 @@ data class TabStateUpdate(
     @SerialName("isFavorite") val isFavorite: Boolean? = null,
     @SerialName("favoriteOrder") val favoriteOrder: Int? = null,
     @SerialName("lifecycleState") val lifecycleState: String? = null,
+    val role: TabRole? = null,
 )
 
 @Serializable

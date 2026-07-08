@@ -99,8 +99,17 @@ sealed class ShellEvent {
     @Serializable @SerialName("favorite_tab")
     data class FavoriteTab(@SerialName("tab_id") val tabId: TabId) : ShellEvent()
 
-    @Serializable @SerialName("unfavorite_tab")
-    data class UnfavoriteTab(@SerialName("tab_id") val tabId: TabId) : ShellEvent()
+    @Serializable @SerialName("change_tab_role")
+    data class ChangeTabRole(
+        @SerialName("tab_id") val tabId: TabId,
+        @SerialName("new_role") val newRole: TabRole
+    ) : ShellEvent()
+
+    @Serializable @SerialName("reorder_favorite")
+    data class ReorderFavorite(
+        @SerialName("tab_id") val tabId: TabId,
+        @SerialName("new_index") val newIndex: Int
+    ) : ShellEvent()
 
     @Serializable @SerialName("mute_tab")
     data class MuteTab(@SerialName("tab_id") val tabId: TabId) : ShellEvent()
