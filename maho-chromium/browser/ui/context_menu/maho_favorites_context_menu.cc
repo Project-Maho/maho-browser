@@ -63,7 +63,15 @@ void MahoFavoritesContextMenu::ExecuteCommand(int command_id,
       break;
     case IDC_MAHO_FAV_REMOVE:
       if (!tab_id_.empty()) {
-        maho::DispatchShellEvent("unfavorite_tab", {{"tab_id", tab_id_}});
+        // ADR 11: Decoupled Favorites Close-Protection Policy.
+        // Removing a favorite from the grid transitions its role back to normal
+        // rather than closing the tab. The tab remains open in the normal list.
+        base::DictValue event;
+        event.Set("tab_id", tab_id_);
+        base::DictValue new_role;
+        new_role.Set("type", "normal");
+        event.Set("new_role", std::move(new_role));
+        maho::DispatchShellEventDict("change_tab_role", std::move(event));
       }
       break;
     default:

@@ -168,6 +168,35 @@ std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
   return model;
 }
 
+namespace {
+std::string QueryTabRole(const std::string& tab_id) {
+  ::MahoCore* core = maho::GetCore();
+  if (!core) {
+    return "";
+  }
+  char* json_str = maho_core_get_tab_snapshot_by_id(core, tab_id.c_str());
+  if (!json_str) {
+    return "";
+  }
+  std::string json(json_str);
+  maho_string_free(json_str);
+
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_dict()) {
+    return "";
+  }
+
+  const auto& dict = parsed->GetDict();
+  if (const auto* role = dict.FindDict("role")) {
+    if (const std::string* type = role->FindString("type")) {
+      return *type;
+    }
+  }
+  return "";
+}
+}  // namespace
+
 void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
   TabStripModel* tab_strip_model =
       browser_ ? browser_->tab_strip_model() : nullptr;
@@ -198,12 +227,16 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
       TabStripModel* tab_strip = browser_->tab_strip_model();
       for (int i = tab_strip->count() - 1; i >= 0; --i) {
         if (i != tab_index_) {
+          if (content::WebContents* wc = tab_strip->GetWebContentsAt(i)) {
+            if (auto* helper = MahoTabIdHelper::FromWebContents(wc);
+                helper && !helper->stable_tab_id().empty()) {
+              maho::DispatchShellEvent("close_tab",
+                                       {{"tab_id", helper->stable_tab_id()}});
+            }
+          }
           tab_strip->CloseWebContentsAt(
               i, TabCloseTypes::CLOSE_USER_GESTURE |
                      TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
-          if (i < tab_index_) {
-            --tab_index_;
-          }
         }
       }
       break;
@@ -214,6 +247,13 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
       }
       TabStripModel* tab_strip = browser_->tab_strip_model();
       for (int i = tab_strip->count() - 1; i > tab_index_; --i) {
+        if (content::WebContents* wc = tab_strip->GetWebContentsAt(i)) {
+          if (auto* helper = MahoTabIdHelper::FromWebContents(wc);
+              helper && !helper->stable_tab_id().empty()) {
+            maho::DispatchShellEvent("close_tab",
+                                     {{"tab_id", helper->stable_tab_id()}});
+          }
+        }
         tab_strip->CloseWebContentsAt(
             i, TabCloseTypes::CLOSE_USER_GESTURE |
                    TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
@@ -226,20 +266,28 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
       }
       TabStripModel* tab_strip = browser_->tab_strip_model();
       for (int i = tab_index_ - 1; i >= 0; --i) {
+        if (content::WebContents* wc = tab_strip->GetWebContentsAt(i)) {
+          if (auto* helper = MahoTabIdHelper::FromWebContents(wc);
+              helper && !helper->stable_tab_id().empty()) {
+            maho::DispatchShellEvent("close_tab",
+                                     {{"tab_id", helper->stable_tab_id()}});
+          }
+        }
         tab_strip->CloseWebContentsAt(
             i, TabCloseTypes::CLOSE_USER_GESTURE |
                    TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
       }
-      tab_index_ = 0;
       break;
     }
-    case IDC_MAHO_TAB_DUPLICATE:
-      if (!has_valid_tab_index) {
-        break;
+    case IDC_MAHO_TAB_DUPLICATE: {
+      content::WebContents* contents =
+          has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_)
+                              : nullptr;
+      if (contents) {
+        chrome::DuplicateTabAt(browser_, tab_index_);
       }
-      tab_strip_model->ActivateTabAt(tab_index_);
-      chrome::DuplicateTab(browser_);
       break;
+    }
     case IDC_MAHO_TAB_BOOST: {
       content::WebContents* contents =
           has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_)
@@ -251,24 +299,43 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
       }
       break;
     }
-    case IDC_MAHO_TAB_PIN:
-      if (!has_valid_tab_index) {
-        break;
+    case IDC_MAHO_TAB_PIN: {
+      content::WebContents* contents =
+          has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_)
+                              : nullptr;
+      if (contents) {
+        if (auto* helper = MahoTabIdHelper::FromWebContents(contents);
+            helper && !helper->stable_tab_id().empty()) {
+          maho::DispatchShellEvent("pin_tab",
+                                   {{"tab_id", helper->stable_tab_id()}});
+        }
       }
-      tab_strip_model->SetTabPinned(tab_index_, true);
       break;
-    case IDC_MAHO_TAB_UNPIN:
-      if (!has_valid_tab_index) {
-        break;
+    }
+    case IDC_MAHO_TAB_UNPIN: {
+      content::WebContents* contents =
+          has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_)
+                              : nullptr;
+      if (contents) {
+        if (auto* helper = MahoTabIdHelper::FromWebContents(contents);
+            helper && !helper->stable_tab_id().empty()) {
+          maho::DispatchShellEvent("unpin_tab",
+                                   {{"tab_id", helper->stable_tab_id()}});
+        }
       }
-      tab_strip_model->SetTabPinned(tab_index_, false);
       break;
+    }
     case IDC_MAHO_TAB_MUTE: {
       content::WebContents* contents =
           has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_)
                               : nullptr;
       if (contents) {
         contents->SetAudioMuted(true);
+        if (auto* helper = MahoTabIdHelper::FromWebContents(contents);
+            helper && !helper->stable_tab_id().empty()) {
+          maho::DispatchShellEvent("mute_tab",
+                                   {{"tab_id", helper->stable_tab_id()}});
+        }
       }
       break;
     }
@@ -278,6 +345,11 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
                               : nullptr;
       if (contents) {
         contents->SetAudioMuted(false);
+        if (auto* helper = MahoTabIdHelper::FromWebContents(contents);
+            helper && !helper->stable_tab_id().empty()) {
+          maho::DispatchShellEvent("unmute_tab",
+                                   {{"tab_id", helper->stable_tab_id()}});
+        }
       }
       break;
     }
@@ -317,10 +389,37 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
       }
       break;
     }
-    case IDC_MAHO_TAB_ADD_FAVORITE:
+    case IDC_MAHO_TAB_ADD_FAVORITE: {  // L3-EXEMPT
+      if (!has_valid_tab_index) {
+        break;
+      }
+      content::WebContents* wc = tab_strip_model->GetWebContentsAt(tab_index_);
+      if (wc) {
+        if (auto* helper = MahoTabIdHelper::FromWebContents(wc);
+            helper && !helper->stable_tab_id().empty()) {
+          maho::DispatchShellEvent("favorite_tab",
+                                   {{"tab_id", helper->stable_tab_id()}});
+        }
+      }
       break;
-    case IDC_MAHO_TAB_REMOVE_FAVORITE:
+    }
+    case IDC_MAHO_TAB_REMOVE_FAVORITE: {  // L3-EXEMPT
+      if (!has_valid_tab_index) {
+        break;
+      }
+      if (content::WebContents* wc =
+              tab_strip_model->GetWebContentsAt(tab_index_)) {
+        if (auto* helper = MahoTabIdHelper::FromWebContents(wc);
+            helper && !helper->stable_tab_id().empty()) {
+          maho::DispatchShellEvent("close_tab",
+                                   {{"tab_id", helper->stable_tab_id()}});
+        }
+      }
+      tab_strip_model->CloseWebContentsAt(
+          tab_index_, TabCloseTypes::CLOSE_USER_GESTURE |
+                          TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
       break;
+    }
     case IDC_MAHO_TAB_FREEZE:
       if (!has_valid_tab_index) {
         break;
@@ -348,48 +447,21 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
         break;
       }
       break;
+    case IDC_MAHO_TAB_MOVE_TO_SPACE:
+      break;
     default:
       if (IsMoveToSpaceCommand(command_id)) {
         int index = MoveToSpaceIndex(command_id);
-        if (index >= 0 && index < static_cast<int>(space_entries_.size())) {
+        if (index >= 0 && index < static_cast<int>(space_entries_.size()) && has_valid_tab_index) {
           const auto& entry = space_entries_[index];
-          std::string section =
-              IsMoveToSpacePinned(command_id) ? "pinned" : "today";
-          content::WebContents* contents =
-              has_valid_tab_index
-                  ? tab_strip_model->GetWebContentsAt(tab_index_)
-                  : nullptr;
-          if (contents) {
-            std::string target_space_id = entry.id;
-            std::string tab_id;
-            if (auto* helper = MahoTabIdHelper::FromWebContents(contents)) {
-              tab_id = helper->stable_tab_id();
+          if (content::WebContents* wc =
+                  tab_strip_model->GetWebContentsAt(tab_index_)) {
+            if (auto* helper = MahoTabIdHelper::FromWebContents(wc);
+                helper && !helper->stable_tab_id().empty()) {
+              maho::DispatchShellEvent("move_tab_to_space",
+                                       {{"space_id", entry.id},
+                                        {"tab_id", helper->stable_tab_id()}});
             }
-            if (tab_id.empty()) {
-              break;
-            }
-            base::ThreadPool::PostTask(
-                FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
-                base::BindOnce(
-                    [](std::string space_id, std::string sec,
-                       std::string t_id) {
-                      MahoCore* core = maho::GetCore();
-                      if (!core) {
-                        return;
-                      }
-                      base::DictValue event;
-                      event.Set("kind", "move_tab_to_space");
-                      event.Set("tab_id", t_id);
-                      event.Set("target_space_id", space_id);
-                      event.Set("section", sec);
-                      std::string json;
-                      base::JSONWriter::Write(event, &json);
-                      char* result = maho_core_handle_event(core, json.c_str());
-                      if (result) {
-                        maho_string_free(result);
-                      }
-                    },
-                    target_space_id, section, tab_id));
           }
         }
       }
@@ -427,9 +499,36 @@ bool MahoTabContextMenu::IsCommandIdEnabled(int command_id) const {
       return has_valid_tab_index && tab_index_ < tab_strip_model->count() - 1;
     case IDC_MAHO_TAB_CLOSE_LEFT:
       return has_valid_tab_index && tab_index_ > 0;
-    case IDC_MAHO_TAB_ADD_FAVORITE:
-      return true;
-    case IDC_MAHO_TAB_REMOVE_FAVORITE:
+    case IDC_MAHO_TAB_ADD_FAVORITE: {  // L3-EXEMPT
+      content::WebContents* wc =
+          has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_)
+                              : nullptr;
+      if (wc) {
+        if (auto* helper = MahoTabIdHelper::FromWebContents(wc);
+            helper && !helper->stable_tab_id().empty()) {
+          std::string role_type = QueryTabRole(helper->stable_tab_id());
+          if (role_type == "favorite") {
+            return false;
+          }
+        }
+      }
+      return has_valid_tab_index;
+    }
+    case IDC_MAHO_TAB_REMOVE_FAVORITE: {  // L3-EXEMPT
+      content::WebContents* wc =
+          has_valid_tab_index ? tab_strip_model->GetWebContentsAt(tab_index_)
+                              : nullptr;
+      if (wc) {
+        if (auto* helper = MahoTabIdHelper::FromWebContents(wc);
+            helper && !helper->stable_tab_id().empty()) {
+          std::string role_type = QueryTabRole(helper->stable_tab_id());
+          if (role_type == "favorite") {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
     case IDC_MAHO_TAB_FREEZE:
     case IDC_MAHO_TAB_UNFREEZE:
       return false;
