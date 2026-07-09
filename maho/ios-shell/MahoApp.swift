@@ -23,6 +23,7 @@ struct MahoApp: App {
 
         MahoBridge.shared.initialize(storagePath: storagePath)
         MahoBridge.shared.loadState()
+        E2ETestHooks.runOnBoot()
         SyncManager.shared.configureForCurrentSession()
     }
 

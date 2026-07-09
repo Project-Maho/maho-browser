@@ -5,17 +5,18 @@ pub mod permission;
 pub mod runtime_isolation;
 pub mod swiftide_backend;
 pub mod tool_registry;
+#[cfg(not(target_os = "ios"))]
+pub mod mcp_client;
+#[cfg(target_os = "ios")]
+#[path = "mcp_client_ios_stub.rs"]
+pub mod mcp_client;
+pub mod cli_tool_executor;
 
 pub use permission::{PermissionDecision, PermissionRequest, PermissionCallback};
 pub use runtime_isolation::SessionRuntime;
 pub use swiftide_backend::SwiftideBackend;
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct ToolDefinition {
-    pub name: String,
-    pub description: String,
-    pub input_schema: serde_json::Value,
-}
+pub use maho_types::tool::ToolDescriptor as ToolDefinition;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
@@ -87,6 +88,24 @@ pub trait AgentStorage: Send + Sync {
     async fn get_setting(&self, key: &str) -> Result<Option<ZeroizedString>, AgentError>;
     async fn save_message(&self, session_id: &str, role: &str, content: &str) -> Result<(), AgentError>;
     async fn get_history(&self, session_id: &str) -> Result<Vec<ChatMessage>, AgentError>;
+    async fn list_mcp_servers(&self, _workspace_id: &str) -> Result<Vec<maho_types::ai::AiMcpServer>, AgentError> {
+        Ok(vec![])
+    }
+    async fn list_cli_tools(&self, _workspace_id: &str) -> Result<Vec<maho_types::ai::AiCliTool>, AgentError> {
+        Ok(vec![])
+    }
+    async fn get_mcp_server(&self, _id: &str) -> Result<Option<maho_types::ai::AiMcpServer>, AgentError> {
+        Ok(None)
+    }
+    async fn get_cli_tool(&self, _id: &str) -> Result<Option<maho_types::ai::AiCliTool>, AgentError> {
+        Ok(None)
+    }
+    async fn list_workspaces(&self) -> Result<Vec<maho_types::ai::AiWorkspace>, AgentError> {
+        Ok(vec![])
+    }
+    async fn get_profile(&self, _id: &str) -> Result<Option<maho_types::ai::AiProfile>, AgentError> {
+        Ok(None)
+    }
 }
 
 pub struct MutexAgentStorage(pub std::sync::Arc<std::sync::Mutex<maho_storage::sqlite::SqliteStorage>>);
@@ -163,6 +182,77 @@ impl AgentStorage for MutexAgentStorage {
         .await
         .map_err(|e| AgentError::ExecutionError(e.to_string()))?
     }
+
+    async fn list_mcp_servers(&self, workspace_id: &str) -> Result<Vec<maho_types::ai::AiMcpServer>, AgentError> {
+        let storage = std::sync::Arc::clone(&self.0);
+        let workspace_id = workspace_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            let lock = storage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            lock.list_mcp_servers(&workspace_id)
+                .map_err(|e| AgentError::ExecutionError(e.to_string()))
+        })
+        .await
+        .map_err(|e| AgentError::ExecutionError(e.to_string()))?
+    }
+
+    async fn list_cli_tools(&self, workspace_id: &str) -> Result<Vec<maho_types::ai::AiCliTool>, AgentError> {
+        let storage = std::sync::Arc::clone(&self.0);
+        let workspace_id = workspace_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            let lock = storage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            lock.list_cli_tools(&workspace_id)
+                .map_err(|e| AgentError::ExecutionError(e.to_string()))
+        })
+        .await
+        .map_err(|e| AgentError::ExecutionError(e.to_string()))?
+    }
+
+    async fn get_mcp_server(&self, id: &str) -> Result<Option<maho_types::ai::AiMcpServer>, AgentError> {
+        let storage = std::sync::Arc::clone(&self.0);
+        let id = id.to_string();
+        tokio::task::spawn_blocking(move || {
+            let lock = storage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            lock.get_mcp_server(&id)
+                .map_err(|e| AgentError::ExecutionError(e.to_string()))
+        })
+        .await
+        .map_err(|e| AgentError::ExecutionError(e.to_string()))?
+    }
+
+    async fn get_cli_tool(&self, id: &str) -> Result<Option<maho_types::ai::AiCliTool>, AgentError> {
+        let storage = std::sync::Arc::clone(&self.0);
+        let id = id.to_string();
+        tokio::task::spawn_blocking(move || {
+            let lock = storage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            lock.get_cli_tool(&id)
+                .map_err(|e| AgentError::ExecutionError(e.to_string()))
+        })
+        .await
+        .map_err(|e| AgentError::ExecutionError(e.to_string()))?
+    }
+
+    async fn list_workspaces(&self) -> Result<Vec<maho_types::ai::AiWorkspace>, AgentError> {
+        let storage = std::sync::Arc::clone(&self.0);
+        tokio::task::spawn_blocking(move || {
+            let lock = storage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            lock.list_workspaces()
+                .map_err(|e| AgentError::ExecutionError(e.to_string()))
+        })
+        .await
+        .map_err(|e| AgentError::ExecutionError(e.to_string()))?
+    }
+
+    async fn get_profile(&self, id: &str) -> Result<Option<maho_types::ai::AiProfile>, AgentError> {
+        let storage = std::sync::Arc::clone(&self.0);
+        let id = id.to_string();
+        tokio::task::spawn_blocking(move || {
+            let lock = storage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            lock.get_ai_profile(&id)
+                .map_err(|e| AgentError::ExecutionError(e.to_string()))
+        })
+        .await
+        .map_err(|e| AgentError::ExecutionError(e.to_string()))?
+    }
 }
 
 #[async_trait]
@@ -190,6 +280,8 @@ pub trait AgentRuntime: Send + Sync {
     ) -> Result<(), AgentError> {
         Ok(())
     }
+
+    fn set_system_prompt(&self, _prompt: &str) {}
 }
 
 pub struct MockAgentRuntime;

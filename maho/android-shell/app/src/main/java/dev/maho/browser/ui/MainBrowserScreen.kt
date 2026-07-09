@@ -145,6 +145,9 @@ fun MainBrowserScreen(externalUrl: String? = null) {
     var showSummaryOverlay by rememberSaveable { mutableStateOf(false) }
     var chromeScrollAccumulator by remember { mutableStateOf(0f) }
     var chromeRevealLockUntilMs by remember { mutableStateOf(0L) }
+    var prevIncognitoTabsCount by remember { mutableStateOf(0) }
+    var urlBeforeReaderMode by rememberSaveable { mutableStateOf<String?>(null) }
+    var showReaderSettingsSheet by rememberSaveable { mutableStateOf(false) }
 
     val browserPrefs = remember(context) {
         context.getSharedPreferences("maho_browser_ui_prefs", Context.MODE_PRIVATE)
@@ -203,6 +206,183 @@ fun MainBrowserScreen(externalUrl: String? = null) {
             isReaderMode = isReaderMode,
             zoomLevel = zoomLevel,
         )
+    }
+
+    fun runReadabilityExtraction() {
+        val webView = webViewRef ?: return
+        val context = webView.context
+        val readabilityScript = try {
+            context.assets.open("readability.js").bufferedReader().use { it.readText() }
+        } catch (e: Exception) {
+            android.util.Log.e("MahoReader", "Failed to load readability.js", e)
+            ""
+        }
+        
+        val extractionScript = """
+            $readabilityScript
+            (function() {
+                try {
+                    var docClone = document.cloneNode(true);
+                    var article = new Readability(docClone).parse();
+                    if (article) {
+                        return JSON.stringify({
+                            title: article.title || "",
+                            content: article.content || "",
+                            textContent: article.textContent || "",
+                            byline: article.byline || "",
+                            dir: article.dir || "",
+                            excerpt: article.excerpt || null,
+                            siteName: article.siteName || null,
+                            length: article.length || null,
+                            publishedTime: article.publishedTime || null
+                        });
+                    } else {
+                        return JSON.stringify({ error: "Failed to parse page content." });
+                    }
+                } catch (e) {
+                    return JSON.stringify({ error: e.toString() });
+                }
+            })();
+        """.trimIndent()
+
+        webView.evaluateJavascript(extractionScript) { json ->
+            if (json == null || json == "null" || json.startsWith("\"error")) return@evaluateJavascript
+            try {
+                // unescape JS string quotes if wrapped as a JSON string
+                val rawJson = if (json.startsWith("\"") && json.endsWith("\"")) {
+                    org.json.JSONObject.quote(json).substring(1, json.length - 1)
+                        .replace("\\\"", "\"")
+                        .replace("\\\\", "\\")
+                } else {
+                    json
+                }
+                
+                val parsedJson = if (rawJson.startsWith("\"")) {
+                    // It's a JSON string, need to parse it to get the actual JSON object string
+                    val token = org.json.JSONTokener(rawJson).nextValue() as? String ?: rawJson
+                    token
+                } else {
+                    rawJson
+                }
+
+                val unescaped = org.json.JSONObject(parsedJson)
+                if (unescaped.has("error")) {
+                    android.util.Log.e("MahoReader", "Readability extraction error: " + unescaped.getString("error"))
+                    return@evaluateJavascript
+                }
+                
+                val title = unescaped.optString("title")
+                val content = unescaped.optString("content")
+                val textContent = unescaped.optString("textContent")
+                val byline = unescaped.optString("byline")
+                val dir = unescaped.optString("dir")
+                val excerpt = if (unescaped.isNull("excerpt")) null else unescaped.optString("excerpt")
+                val siteName = if (unescaped.isNull("siteName")) null else unescaped.optString("siteName")
+                val length = if (unescaped.isNull("length")) null else unescaped.optInt("length")
+                val publishedTime = if (unescaped.isNull("publishedTime")) null else unescaped.optString("publishedTime")
+                
+                val textDir = try {
+                    dev.maho.browser.models.TextDirection.valueOf(dir.lowercase())
+                } catch (_: Exception) {
+                    dev.maho.browser.models.TextDirection.auto
+                }
+
+                val article = dev.maho.browser.models.ExtractedArticle(
+                    id = java.util.UUID.randomUUID().toString(),
+                    title = title,
+                    content = content,
+                    textContent = textContent,
+                    byline = byline,
+                    dir = dir,
+                    excerpt = excerpt,
+                    siteName = siteName,
+                    length = length,
+                    publishedTime = publishedTime,
+                    textDirection = textDir
+                )
+
+                val readerSettings = dev.maho.browser.bridge.BridgeSettings.getSettingsTyped()?.reader
+                val bgHex: String
+                val fgHex: String
+                when (readerSettings?.theme) {
+                    dev.maho.browser.models.ReaderTheme.Sepia -> {
+                        bgHex = "#faf2df"
+                        fgHex = "#5a402a"
+                    }
+                    dev.maho.browser.models.ReaderTheme.Dark -> {
+                        bgHex = "#1e1e1e"
+                        fgHex = "#dcdcdc"
+                    }
+                    else -> {
+                        bgHex = "#ffffff"
+                        fgHex = "#000000"
+                    }
+                }
+                val fontStack = when (readerSettings?.fontFamily) {
+                    "Georgia" -> "Georgia, serif"
+                    "Courier New" -> "'Courier New', monospace"
+                    else -> "sans-serif"
+                }
+                val fontSize = readerSettings?.fontSize ?: 18.0
+
+                val html = """
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        <style>
+                            body {
+                                background-color: $bgHex;
+                                color: $fgHex;
+                                font-family: $fontStack;
+                                font-size: ${fontSize}px;
+                                line-height: 1.6;
+                                margin: 0;
+                                padding: 16px;
+                            }
+                            .container {
+                                max-width: 600px;
+                                margin: 0 auto;
+                            }
+                            .title {
+                                font-size: 1.5em;
+                                margin-bottom: 8px;
+                                line-height: 1.2;
+                            }
+                            .byline {
+                                font-size: 0.9em;
+                                color: ${if (readerSettings?.theme == dev.maho.browser.models.ReaderTheme.Dark) "#888" else "#666"};
+                                margin-bottom: 24px;
+                                font-style: italic;
+                            }
+                            img {
+                                max-width: 100%;
+                                height: auto;
+                                border-radius: 8px;
+                                margin: 16px 0;
+                            }
+                        </style>
+                    </head>
+                    <body>
+                        <div class="container">
+                            <h1 class="title">${article.title}</h1>
+                            ${if (article.byline.isEmpty()) "" else "<p class=\"byline\">By ${article.byline}</p>"}
+                            <div class="content">
+                                ${article.content}
+                            </div>
+                        </div>
+                    </body>
+                    </html>
+                """.trimIndent()
+                
+                if (urlBeforeReaderMode == null) {
+                    urlBeforeReaderMode = webView.url
+                }
+                webView.loadDataWithBaseURL(webView.url, html, "text/html", "UTF-8", null)
+            } catch (e: Exception) {
+                android.util.Log.e("MahoReader", "Failed to parse json: " + e.message)
+            }
+        }
     }
 
     fun toggleDesktopMode() {
@@ -519,6 +699,14 @@ fun MainBrowserScreen(externalUrl: String? = null) {
         }
     }
 
+    LaunchedEffect(tabs, isIncognito) {
+        val incognitoTabsCount = if (isIncognito) currentSpaceTabs.count() else 0
+        if (isIncognito && prevIncognitoTabsCount > 0 && incognitoTabsCount == 0) {
+            clearBrowsingData()
+        }
+        prevIncognitoTabsCount = incognitoTabsCount
+    }
+
     LaunchedEffect(tabs, pendingHomeNavigationUrl, shellRoute) {
         val pendingUrl = pendingHomeNavigationUrl ?: return@LaunchedEffect
         if (shellRoute != ShellRoute.Home) return@LaunchedEffect
@@ -701,7 +889,17 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                                 },
                                 onToggleReaderMode = {
                                     isReaderMode = !isReaderMode
-                                    applyDisplayOptions()
+                                    if (isReaderMode) {
+                                        runReadabilityExtraction()
+                                    } else {
+                                        urlBeforeReaderMode?.let {
+                                            webViewRef?.loadUrl(it)
+                                            urlBeforeReaderMode = null
+                                        } ?: webViewRef?.reload()
+                                    }
+                                },
+                                onReaderSettingsClick = {
+                                    showReaderSettingsSheet = true
                                 },
                                 onZoomIn = {
                                     adjustZoom(0.1f)
@@ -788,6 +986,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                             onShare = {},
                             onReload = {},
                             onToggleReaderMode = {},
+                            onReaderSettingsClick = {},
                             onZoomIn = {},
                             onZoomOut = {},
                             onToggleDesktopMode = {},
@@ -823,6 +1022,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                             tabId = tabId,
                             initialUrl = browsingInitialUrl,
                             isDesktopMode = isDesktopMode,
+                            isIncognito = isIncognito,
                             onUrlChanged = { url ->
                                 currentUrl = url
                             },
@@ -833,6 +1033,8 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                             onLoadingChanged = { loading ->
                                 isLoading = loading
                                 if (loading) {
+                                    isReaderMode = false
+                                    urlBeforeReaderMode = null
                                     revealBottomBar(lockMillis = 700)
                                 }
                                 if (!loading) {
@@ -1081,6 +1283,12 @@ fun MainBrowserScreen(externalUrl: String? = null) {
             onNewTabCreated = { spaceId, tabId ->
                 completeTabGridNewTabFlow(spaceId, tabId)
             },
+        )
+    }
+
+    if (showReaderSettingsSheet) {
+        dev.maho.browser.ui.settings.ReaderSettingsSheet(
+            onDismiss = { showReaderSettingsSheet = false }
         )
     }
 }

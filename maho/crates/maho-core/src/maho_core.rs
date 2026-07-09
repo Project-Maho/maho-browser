@@ -1254,7 +1254,9 @@ impl MahoCore {
                         }
                     }
                     // Memory feature: build HNSW from persisted embeddings
+                    #[cfg(not(target_os = "ios"))]
                     let _ = self.memory_manager.rebuild_index(storage);
+                    #[cfg(not(target_os = "ios"))]
                     self.memory_manager.start_browsing_summary_loop();
                 }
             }
@@ -1270,6 +1272,14 @@ impl MahoCore {
     }
 
     pub fn with_lmdb_storage(mut self, path: &std::path::Path) -> Self {
+        #[cfg(target_os = "ios")]
+        {
+            let _ = path;
+            eprintln!("[MahoCore::with_lmdb_storage] SKIPPED on iOS (LMDB incompatible with APFS mmap semantics). Tab/space state will not persist across restarts.");
+            self.lmdb_storage = None;
+            return self;
+        }
+        #[cfg(not(target_os = "ios"))]
         match maho_storage::lmdb::LmdbStorage::open(path) {
             Ok(storage) => {
                 self.lmdb_storage = Some(storage);

@@ -55,14 +55,13 @@ class CodableRoundTripTest {
             title = "Example",
             url = "https://example.com",
             isLoading = false,
-            isPinned = false,
-            isFavorite = false,
             isMuted = false,
             isPlayingAudio = false,
             lifecycleState = "active",
             children = emptyList(),
             createdAt = "2024-01-01T00:00:00Z",
             lastActiveAt = "2024-01-01T00:00:00Z",
+            role = TabRole("normal"),
         )
         val snapshot = AppStateSnapshot(
             spaces = listOf(space),
@@ -84,14 +83,13 @@ class CodableRoundTripTest {
             title = "New Tab",
             url = "https://newtab.com",
             isLoading = true,
-            isPinned = false,
-            isFavorite = false,
             isMuted = false,
             isPlayingAudio = false,
             lifecycleState = "active",
             children = emptyList(),
             createdAt = "2024-01-01T00:00:00Z",
             lastActiveAt = "2024-01-01T00:00:00Z",
+            role = TabRole("normal"),
         )
         val original = CoreUpdate.TabCreated(tab = tab)
         val encoded = json.encodeToString(CoreUpdate.serializer(), original)

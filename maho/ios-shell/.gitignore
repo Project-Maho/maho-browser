@@ -1,0 +1,10 @@
+# Local signing overrides — DO NOT commit. Values loaded via #include? in Signing.xcconfig.
+Signing.local.xcconfig
+
+# XcodeGen output
+Maho.xcodeproj/xcuserdata/
+Maho.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Build outputs
+build/
+DerivedData/

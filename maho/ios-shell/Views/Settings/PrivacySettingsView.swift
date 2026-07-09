@@ -3,7 +3,7 @@ import SwiftUI
 struct PrivacySettingsView: View {
     @State private var doNotTrack: Bool = false
     @State private var blockThirdPartyCookies: Bool = true
-    @State private var contentBlockerEnabled: Bool = true
+    @State private var contentBlockerEnabled: Bool = false
     @State private var popupBlockerEnabled: Bool = true
     @State private var searchSuggestionsEnabled: Bool = false
     @State private var secureDnsEnabled: Bool = false
@@ -42,6 +42,12 @@ struct PrivacySettingsView: View {
                         bridge.setContentBlocker(newValue)
                     }
 
+                if contentBlockerEnabled {
+                    NavigationLink("Whitelisted Domains") {
+                        ContentBlockerWhitelistView()
+                    }
+                }
+
                 Toggle("Popup Blocker", isOn: $popupBlockerEnabled)
                     .onChange(of: popupBlockerEnabled) { _, newValue in
                         bridge.updatePrivacySettings(
@@ -56,6 +62,7 @@ struct PrivacySettingsView: View {
                         )
                     }
             }
+
 
             Section("DNS") {
                 Toggle("Secure DNS", isOn: $secureDnsEnabled)
@@ -122,3 +129,56 @@ struct PrivacySettingsView: View {
         }
     }
 }
+
+struct ContentBlockerWhitelistView: View {
+    @State private var domains: [String] = []
+    @State private var newDomain: String = ""
+    private let bridge = MahoBridge.shared
+    
+    var body: some View {
+        List {
+            Section("Add Domain") {
+                HStack {
+                    TextField("example.com", text: $newDomain)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Button("Add") {
+                        let trimmed = newDomain.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty {
+                            bridge.addDomainToWhitelist(trimmed)
+                            loadDomains()
+                            newDomain = ""
+                        }
+                    }
+                }
+            }
+            
+            Section("Whitelisted Domains") {
+                if domains.isEmpty {
+                    Text("No whitelisted domains.")
+                        .foregroundColor(.secondary)
+                } else {
+                    ForEach(domains, id: \.self) { domain in
+                        Text(domain)
+                    }
+                    .onDelete(perform: deleteDomains)
+                }
+            }
+        }
+        .navigationTitle("Whitelist")
+        .onAppear(perform: loadDomains)
+    }
+    
+    private func loadDomains() {
+        domains = bridge.getWhitelistedDomains()
+    }
+    
+    private func deleteDomains(at offsets: IndexSet) {
+        for idx in offsets {
+            let domain = domains[idx]
+            bridge.removeDomainFromWhitelist(domain)
+        }
+        loadDomains()
+    }
+}
+

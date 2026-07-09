@@ -90,7 +90,7 @@ final class MahoBridge: @unchecked Sendable {
         } ?? nil
     }
 
-    func tick() -> String? {
+    func tickJson() -> String? {
         withCore { ptr in
             FFIString.consume(maho_core_tick(ptr))
         } ?? nil

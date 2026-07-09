@@ -62,6 +62,8 @@ struct MainBrowserView: View {
         ZStack {
             shellBackgroundLayer
 
+            e2eVerifyResultOverlay
+
             if let activeTabId {
                 BrowserView(
                     viewModel: browserVM,
@@ -275,6 +277,19 @@ struct MainBrowserView: View {
                 createTabAndNavigate(url)
             }
         }
+        .fullScreenCover(isPresented: Binding(
+            get: { isReaderMode && browserVM.extractedArticle != nil },
+            set: { newValue in
+                isReaderMode = newValue
+                if !newValue {
+                    browserVM.extractedArticle = nil
+                }
+            }
+        )) {
+            if let article = browserVM.extractedArticle {
+                ReaderView(article: article, isPresented: $isReaderMode)
+            }
+        }
         .confirmationDialog("Page menu", isPresented: $showPageMenu, titleVisibility: .hidden) {
             if isBrowsing {
                 Button("Reload", action: reloadCurrentPage)
@@ -338,7 +353,7 @@ struct MainBrowserView: View {
             setupDeepLinkHandler()
         }
         .onReceive(tickTimer) { _ in
-            processUpdates(bridge.tick())
+            processUpdates(bridge.tickDrain())
             if let url = pendingNavigationUrl, browserVM.webView != nil {
                 pendingNavigationUrl = nil
                 browserVM.navigate(to: url)
@@ -438,6 +453,20 @@ struct MainBrowserView: View {
         }
 
         return activeTabId != nil ? ShellTheme.Palette.browsingBackground : ShellTheme.Palette.homeBackground
+    }
+
+    @ViewBuilder
+    private var e2eVerifyResultOverlay: some View {
+        Group {
+            if E2ETestHooks.verifyResult != .notRun {
+                Text(E2ETestHooks.verifyResult.rawValue)
+                    .frame(width: 1, height: 1)
+                    .opacity(0.001)
+                    .allowsHitTesting(false)
+                    .accessibilityIdentifier("e2eVerifyResult")
+                    .accessibilityLabel(E2ETestHooks.verifyResult.rawValue)
+            }
+        }
     }
 
     @ViewBuilder
@@ -614,6 +643,7 @@ struct MainBrowserView: View {
 
         for update in updates {
             browserVM.handleCoreUpdate(update)
+            bridge.handleProfileUpdate(update)
 
             switch update {
             case .fullState,
@@ -819,7 +849,20 @@ struct MainBrowserView: View {
     private func toggleReaderMode() {
         guard browsingTabId != nil else { return }
         isReaderMode.toggle()
-        applyReaderMode()
+        if isReaderMode {
+            runReadabilityExtraction()
+        } else {
+            browserVM.extractedArticle = nil
+        }
+    }
+
+    private func runReadabilityExtraction() {
+        guard let webView = browserVM.webView else { return }
+        webView.evaluateJavaScript("window.__mahoRunReadability && window.__mahoRunReadability();") { _, error in
+            if let error = error {
+                print("Readability execution failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     private func triggerPinchSummarize() {
@@ -831,42 +874,6 @@ struct MainBrowserView: View {
     private func translatePage() {
         guard browsingTabId != nil else { return }
         browserVM.translatePage()
-    }
-
-    private func applyReaderMode() {
-        guard let webView = browserVM.webView else { return }
-
-        let readerEnabled = isReaderMode ? "true" : "false"
-        let script = """
-        (function() {
-            const rssLink = document.querySelector('link[rel="alternate"][type="application/rss+xml"]');
-            const existing = document.getElementById('maho-reader-style');
-            if (
-                \(readerEnabled)
-            ) {
-                if (!existing) {
-                    const style = document.createElement('style');
-                    style.id = 'maho-reader-style';
-                    style.textContent = `
-                        html, body { background: #f8f5ef !important; color: #1f1a17 !important; }
-                        header, nav, footer, aside, [role="banner"], [role="navigation"], [role="complementary"], [role="contentinfo"], .sidebar, .navigation, .nav, .footer, .header { display: none !important; }
-                        body { max-width: 760px !important; margin: 0 auto !important; padding: 32px 20px 80px !important; font-size: 20px !important; line-height: 1.75 !important; }
-                        article, main, [role="main"] { max-width: 100% !important; margin: 0 auto !important; }
-                        p, li, blockquote { font-size: inherit !important; line-height: inherit !important; }
-                        img, video { max-width: 100% !important; height: auto !important; }
-                    `;
-                    document.head.appendChild(style);
-                }
-                document.documentElement.setAttribute('data-maho-reader', rssLink ? 'rss' : 'article');
-            } else {
-                existing?.remove();
-                document.documentElement.removeAttribute('data-maho-reader');
-            }
-            return document.documentElement.getAttribute('data-maho-reader') || '';
-        })();
-        """
-
-        webView.evaluateJavaScript(script)
     }
 
     private func adjustZoom(by delta: Double) {
@@ -923,7 +930,7 @@ struct MainBrowserView: View {
         guard browserVM.webView != nil else { return }
 
         if isReaderMode {
-            applyReaderMode()
+            runReadabilityExtraction()
         }
 
         if abs(zoomLevel - 1.0) > 0.001 {

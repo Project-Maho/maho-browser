@@ -6,10 +6,12 @@ import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import dev.maho.browser.bridge.BridgeNavigation
 import dev.maho.browser.models.TabId
+import java.io.ByteArrayInputStream
 
 class MahoWebViewClient(
     private val tabIdProvider: () -> TabId,
@@ -41,6 +43,41 @@ class MahoWebViewClient(
             return false
         }
         return true
+    }
+
+    override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+        val settings = dev.maho.browser.bridge.BridgeSettings.getSettingsTyped()
+        val contentBlockerEnabled = settings?.privacy?.contentBlockerEnabled ?: false
+        if (!contentBlockerEnabled) {
+            return super.shouldInterceptRequest(view, request)
+        }
+
+        val sourceUrl = view.url ?: ""
+        val sourceHost = try {
+            android.net.Uri.parse(sourceUrl).host ?: ""
+        } catch (_: Exception) {
+            ""
+        }
+        if (sourceHost.isNotEmpty() && dev.maho.browser.ui.settings.WhitelistManager.getWhitelist(view.context).contains(sourceHost)) {
+            return super.shouldInterceptRequest(view, request)
+        }
+
+        val url = request.url.toString()
+        val isMainFrame = request.isForMainFrame
+        val requestType = if (isMainFrame) "document" else "other"
+        
+        val isBlocked = dev.maho.browser.MahoBridge.queryFilterDecision(url, sourceUrl, requestType)
+        if (isBlocked) {
+            return WebResourceResponse(
+                "text/plain",
+                "UTF-8",
+                204,
+                "No Content",
+                mapOf("Access-Control-Allow-Origin" to "*"),
+                java.io.ByteArrayInputStream(ByteArray(0))
+            )
+        }
+        return super.shouldInterceptRequest(view, request)
     }
 
     override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {

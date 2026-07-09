@@ -37,7 +37,7 @@ fun PrivacySettingsScreen(
 ) {
     var doNotTrack by remember { mutableStateOf(false) }
     var blockThirdPartyCookies by remember { mutableStateOf(true) }
-    var contentBlockerEnabled by remember { mutableStateOf(true) }
+    var contentBlockerEnabled by remember { mutableStateOf(false) }
     var popupBlockerEnabled by remember { mutableStateOf(true) }
     var searchSuggestionsEnabled by remember { mutableStateOf(false) }
     var secureDnsEnabled by remember { mutableStateOf(false) }
@@ -114,6 +114,65 @@ fun PrivacySettingsScreen(
                 contentBlockerEnabled = it
                 BridgeSettings.updatePrivacySettings(PrivacySettingsUpdate(contentBlockerEnabled = it))
             }
+            if (contentBlockerEnabled) {
+                var showAddWhitelistDialog by remember { mutableStateOf(false) }
+                var newWhitelistDomain by remember { mutableStateOf("") }
+                val context = androidx.compose.ui.platform.LocalContext.current
+                var whitelist by remember { mutableStateOf(WhitelistManager.getWhitelist(context).toList()) }
+
+                whitelist.forEach { domain ->
+                    androidx.compose.foundation.layout.Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                    ) {
+                        Text(domain, modifier = Modifier.weight(1f))
+                        IconButton(onClick = {
+                            WhitelistManager.removeDomain(context, domain)
+                            whitelist = WhitelistManager.getWhitelist(context).toList()
+                        }) {
+                            Icon(
+                                painter = painterResource(id = MahoIcon.Close.drawableRes),
+                                contentDescription = "Remove from Whitelist"
+                            )
+                        }
+                    }
+                }
+                
+                TextButton(
+                    onClick = { showAddWhitelistDialog = true },
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                ) { Text("Add Whitelisted Domain") }
+
+                if (showAddWhitelistDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showAddWhitelistDialog = false },
+                        title = { Text("Add Domain to Whitelist") },
+                        text = {
+                            OutlinedTextField(
+                                value = newWhitelistDomain,
+                                onValueChange = { newWhitelistDomain = it },
+                                label = { Text("example.com") }
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                val trimmed = newWhitelistDomain.trim()
+                                if (trimmed.isNotEmpty()) {
+                                    WhitelistManager.addDomain(context, trimmed)
+                                    whitelist = WhitelistManager.getWhitelist(context).toList()
+                                    newWhitelistDomain = ""
+                                    showAddWhitelistDialog = false
+                                }
+                            }) { Text("Add") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showAddWhitelistDialog = false }) { Text("Cancel") }
+                        }
+                    )
+                }
+            }
             SwitchPreference("Popup Blocker", popupBlockerEnabled) {
                 popupBlockerEnabled = it
                 BridgeSettings.updatePrivacySettings(PrivacySettingsUpdate(popupBlockerEnabled = it))
@@ -151,3 +210,25 @@ fun PrivacySettingsScreen(
         }
     }
 }
+
+object WhitelistManager {
+    fun getWhitelist(context: android.content.Context): Set<String> {
+        val prefs = context.getSharedPreferences("content_blocker_prefs", android.content.Context.MODE_PRIVATE)
+        return prefs.getStringSet("whitelist", emptySet()) ?: emptySet()
+    }
+
+    fun addDomain(context: android.content.Context, domain: String) {
+        val prefs = context.getSharedPreferences("content_blocker_prefs", android.content.Context.MODE_PRIVATE)
+        val set = prefs.getStringSet("whitelist", emptySet())?.toMutableSet() ?: mutableSetOf()
+        set.add(domain)
+        prefs.edit().putStringSet("whitelist", set).apply()
+    }
+
+    fun removeDomain(context: android.content.Context, domain: String) {
+        val prefs = context.getSharedPreferences("content_blocker_prefs", android.content.Context.MODE_PRIVATE)
+        val set = prefs.getStringSet("whitelist", emptySet())?.toMutableSet() ?: mutableSetOf()
+        set.remove(domain)
+        prefs.edit().putStringSet("whitelist", set).apply()
+    }
+}
+

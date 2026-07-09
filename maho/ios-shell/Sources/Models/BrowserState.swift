@@ -38,7 +38,7 @@ class BrowserState: ObservableObject {
         refreshState()
         tickTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.tick()
+                self?.drainCoreUpdates()
             }
         }
     }
@@ -89,8 +89,8 @@ class BrowserState: ObservableObject {
         }
     }
 
-    func tick() {
-        guard let updatesJson = bridge.tick() else { return }
+    func drainCoreUpdates() {
+        guard let updatesJson = bridge.tickJson() else { return }
         guard let data = updatesJson.data(using: .utf8) else { return }
         guard let updates = try? JSONDecoder().decode([CoreUpdate].self, from: data) else { return }
         processCoreUpdates(updates)

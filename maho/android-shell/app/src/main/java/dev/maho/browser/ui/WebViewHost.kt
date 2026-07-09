@@ -5,7 +5,9 @@ package dev.maho.browser.ui
 import android.annotation.SuppressLint
 import android.view.GestureDetector
 import android.view.MotionEvent
+import android.webkit.CookieManager
 import android.webkit.WebSettings
+import android.webkit.WebStorage
 import android.webkit.WebView
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -34,11 +36,13 @@ fun WebViewHost(
     onWebViewReady: (WebView) -> Unit,
     onScrollChanged: (scrollY: Int, oldScrollY: Int) -> Unit = { _, _ -> },
     onSingleTap: () -> Unit = {},
+    isIncognito: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentTabId = rememberUpdatedState(tabId)
+    val currentIsIncognito = rememberUpdatedState(isIncognito)
     val gestureDetector = remember(context, onSingleTap) {
         GestureDetector(
             context,
@@ -121,6 +125,16 @@ fun WebViewHost(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             webView.stopLoading()
+            if (currentIsIncognito.value) {
+                webView.clearCache(true)
+                webView.clearHistory()
+                webView.clearFormData()
+                try {
+                    WebStorage.getInstance().deleteAllData()
+                    CookieManager.getInstance().removeAllCookies(null)
+                    CookieManager.getInstance().flush()
+                } catch (e: Exception) {}
+            }
             webView.destroy()
         }
     }

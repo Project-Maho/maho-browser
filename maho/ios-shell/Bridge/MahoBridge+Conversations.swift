@@ -3,19 +3,43 @@ import Foundation
 struct ConversationSession: Codable, Identifiable {
     let id: String
     let title: String?
-    let space_id: String?
+    let spaceId: String?
     let model: String?
-    let message_count: Int
-    let created_at: String
-    let last_message_at: String
+    let createdAt: String
+    let updatedAt: String
+
+    var space_id: String? { spaceId }
+    var created_at: String { createdAt }
+    var last_message_at: String { updatedAt }
+    var message_count: Int { 0 }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case spaceId
+        case model
+        case createdAt
+        case updatedAt
+    }
 }
 
 struct ConversationTurn: Codable, Identifiable {
     let id: String
     let role: String
     let content: String
-    let url_context: String?
-    let created_at: String
+    let urlContext: String?
+    let createdAt: String
+
+    var url_context: String? { urlContext }
+    var created_at: String { createdAt }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case role
+        case content
+        case urlContext
+        case createdAt
+    }
 }
 
 @_silgen_name("maho_core_create_conversation")

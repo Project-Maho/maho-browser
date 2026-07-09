@@ -3109,3 +3109,215 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentPollEv
     }
 }
 
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeQueryFilterDecision<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    url: JString<'local>,
+    source_url: JString<'local>,
+    request_type: JString<'local>,
+) -> jboolean {
+    let core = match get_core(ptr) {
+        Some(c) => c,
+        None => return 0,
+    };
+    let url_str = match get_rust_string(&mut env, &url) {
+        Some(s) => s,
+        None => return 0,
+    };
+    let source_str = match get_rust_string(&mut env, &source_url) {
+        Some(s) => s,
+        None => return 0,
+    };
+    let type_str = match get_rust_string(&mut env, &request_type) {
+        Some(s) => s,
+        None => return 0,
+    };
+
+    if core.should_block_request(&url_str, &source_str, &type_str) {
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeCreateConversation<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    id: JString<'local>,
+    title: JString<'local>,
+    space_id: JString<'local>,
+    model: JString<'local>,
+) -> jboolean {
+    let core = match get_core(ptr) {
+        Some(c) => c,
+        None => return 0,
+    };
+    let id_str = match get_rust_string(&mut env, &id) {
+        Some(s) => s,
+        None => return 0,
+    };
+    let title_opt = get_rust_string(&mut env, &title).filter(|s| !s.is_empty());
+    let space_opt = get_rust_string(&mut env, &space_id).filter(|s| !s.is_empty());
+    let model_opt = get_rust_string(&mut env, &model).filter(|s| !s.is_empty());
+    
+    if core.create_conversation_persisted(&id_str, title_opt.as_deref(), space_opt.as_deref(), model_opt.as_deref()) {
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeListConversations<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    limit: jlong,
+) -> jstring {
+    let core = match get_core(ptr) {
+        Some(c) => c,
+        None => return std::ptr::null_mut(),
+    };
+    let conversations = if let Some(storage) = core.storage_ref() {
+        storage.list_conversations(limit as usize).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let json_str = serde_json::to_string(&conversations).unwrap_or_else(|_| "[]".to_string());
+    match env.new_string(&json_str) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetConversationMessages<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    session_id: JString<'local>,
+) -> jstring {
+    let core = match get_core(ptr) {
+        Some(c) => c,
+        None => return std::ptr::null_mut(),
+    };
+    let sid_str = match get_rust_string(&mut env, &session_id) {
+        Some(s) => s,
+        None => return std::ptr::null_mut(),
+    };
+    let messages = if let Some(storage) = core.storage_ref() {
+        storage.get_conversation_messages(&sid_str).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let json_str = serde_json::to_string(&messages).unwrap_or_else(|_| "[]".to_string());
+    match env.new_string(&json_str) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeSaveConversationMessage<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    session_id: JString<'local>,
+    role: JString<'local>,
+    content: JString<'local>,
+    url_context: JString<'local>,
+) -> jboolean {
+    let core = match get_core(ptr) {
+        Some(c) => c,
+        None => return 0,
+    };
+    let sid_str = match get_rust_string(&mut env, &session_id) {
+        Some(s) => s,
+        None => return 0,
+    };
+    let role_str = match get_rust_string(&mut env, &role) {
+        Some(s) => s,
+        None => return 0,
+    };
+    let content_str = match get_rust_string(&mut env, &content) {
+        Some(s) => s,
+        None => return 0,
+    };
+    let url_opt = get_rust_string(&mut env, &url_context).filter(|s| !s.is_empty());
+    
+    if core.save_conversation_message_persisted(&sid_str, &role_str, &content_str, url_opt.as_deref()) {
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeDeleteConversation<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    id: JString<'local>,
+) -> jboolean {
+    let core = match get_core(ptr) {
+        Some(c) => c,
+        None => return 0,
+    };
+    let id_str = match get_rust_string(&mut env, &id) {
+        Some(s) => s,
+        None => return 0,
+    };
+    if core.delete_conversation_persisted(&id_str) {
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeRenameConversation<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    id: JString<'local>,
+    title: JString<'local>,
+) -> jboolean {
+    let core = match get_core(ptr) {
+        Some(c) => c,
+        None => return 0,
+    };
+    let id_str = match get_rust_string(&mut env, &id) {
+        Some(s) => s,
+        None => return 0,
+    };
+    let title_str = match get_rust_string(&mut env, &title) {
+        Some(s) => s,
+        None => return 0,
+    };
+    if core.rename_conversation_persisted(&id_str, &title_str) {
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeClusterTabs<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    threshold: jni::sys::jdouble,
+) -> jstring {
+    let core = match unsafe { get_core(ptr) } {
+        Some(c) => c,
+        None => return std::ptr::null_mut(),
+    };
+    let clusters = core.cluster_tabs(threshold);
+    to_json_jstring(&mut env, &clusters)
+}
+
+

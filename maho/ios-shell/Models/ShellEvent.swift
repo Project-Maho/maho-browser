@@ -70,10 +70,7 @@ enum ShellEvent: Codable {
     case notificationAction(notificationId: String, actionId: String)
     case setNotificationFilter(origin: String, allowed: Bool)
 
-    // Split view
-    case createSplit(tabIds: [TabId], orientation: Orientation)
-    case removeSplit(paneId: PaneId)
-    case resizeSplit(paneId: PaneId, ratio: Double)
+
 
     // Boosts
     case createBoost(domain: String)
@@ -252,9 +249,7 @@ enum ShellEvent: Codable {
         case .dismissAllNotifications: return "dismiss_all_notifications"
         case .notificationAction: return "notification_action"
         case .setNotificationFilter: return "set_notification_filter"
-        case .createSplit: return "create_split"
-        case .removeSplit: return "remove_split"
-        case .resizeSplit: return "resize_split"
+
         case .createBoost: return "create_boost"
         case .updateBoost: return "update_boost"
         case .toggleBoost: return "toggle_boost"
@@ -482,14 +477,7 @@ enum ShellEvent: Codable {
         case .setNotificationFilter(let origin, let allowed):
             try container.encode(origin, forKey: DynamicCodingKey(stringValue: "origin")!)
             try container.encode(allowed, forKey: DynamicCodingKey(stringValue: "allowed")!)
-        case .createSplit(let tabIds, let orientation):
-            try container.encode(tabIds, forKey: DynamicCodingKey(stringValue: "tab_ids")!)
-            try container.encode(orientation, forKey: DynamicCodingKey(stringValue: "orientation")!)
-        case .removeSplit(let paneId):
-            try container.encode(paneId, forKey: DynamicCodingKey(stringValue: "pane_id")!)
-        case .resizeSplit(let paneId, let ratio):
-            try container.encode(paneId, forKey: DynamicCodingKey(stringValue: "pane_id")!)
-            try container.encode(ratio, forKey: DynamicCodingKey(stringValue: "ratio")!)
+
         case .createBoost(let domain):
             try container.encode(domain, forKey: DynamicCodingKey(stringValue: "domain")!)
         case .updateBoost(let boostId, let changes):
@@ -859,17 +847,7 @@ enum ShellEvent: Codable {
                 origin: try container.decode(String.self, forKey: DynamicCodingKey(stringValue: "origin")!),
                 allowed: try container.decode(Bool.self, forKey: DynamicCodingKey(stringValue: "allowed")!))
 
-        // Split view
-        case "create_split":
-            self = .createSplit(
-                tabIds: try container.decode([TabId].self, forKey: DynamicCodingKey(stringValue: "tab_ids")!),
-                orientation: try container.decode(Orientation.self, forKey: DynamicCodingKey(stringValue: "orientation")!))
-        case "remove_split":
-            self = .removeSplit(paneId: try container.decode(PaneId.self, forKey: DynamicCodingKey(stringValue: "pane_id")!))
-        case "resize_split":
-            self = .resizeSplit(
-                paneId: try container.decode(PaneId.self, forKey: DynamicCodingKey(stringValue: "pane_id")!),
-                ratio: try container.decode(Double.self, forKey: DynamicCodingKey(stringValue: "ratio")!))
+
 
         // Boosts
         case "create_boost":

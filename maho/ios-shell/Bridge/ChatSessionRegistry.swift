@@ -34,6 +34,14 @@ final class ChatSessionRegistry {
         return id
     }
 
+    /// Stores `ptr` with the specified handle.
+    func register(id: String, ptr: OpaquePointer) {
+        lock.lock()
+        sessions[id] = ptr
+        lock.unlock()
+    }
+
+
     /// Returns the native pointer for `id`, or `nil` if `id` is not registered.
     func get(id: String) -> OpaquePointer? {
         lock.lock()
@@ -89,6 +97,15 @@ final class ChatSessionRegistry {
             nativeFree(ptr)
         }
     }
+
+    /// Removes the entry whose stored pointer equals `ptr` without freeing the native session.
+    func unregisterWithoutFree(_ ptr: OpaquePointer) {
+        lock.lock()
+        let id = sessions.first(where: { $0.value == ptr })?.key
+        if let id { sessions.removeValue(forKey: id) }
+        lock.unlock()
+    }
+
 
     /// Looks up the UUID string handle registered for `ptr`.
     func findHandle(for ptr: OpaquePointer) -> String? {

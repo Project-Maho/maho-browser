@@ -14,6 +14,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -133,3 +134,82 @@ fun ReaderSettingsScreen(
         }
     }
 }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ReaderSettingsSheet(
+    onDismiss: () -> Unit,
+) {
+    var fontFamily by remember { mutableStateOf("System") }
+    var fontSize by remember { mutableDoubleStateOf(18.0) }
+    var readerThemeIndex by remember { mutableIntStateOf(0) }
+
+    val availableFonts = listOf("System", "Georgia", "Palatino", "Times New Roman", "Helvetica", "Arial", "Verdana")
+    val readerThemes = listOf("Light", "Sepia", "Dark")
+    val readerThemeValues = listOf(ReaderTheme.Light, ReaderTheme.Sepia, ReaderTheme.Dark)
+
+    LaunchedEffect(Unit) {
+        val settings = BridgeSettings.getSettingsTyped() ?: return@LaunchedEffect
+        fontFamily = settings.reader.fontFamily
+        fontSize = settings.reader.fontSize
+        readerThemeIndex = readerThemeValues.indexOf(settings.reader.theme).coerceAtLeast(0)
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .verticalScroll(rememberScrollState())
+        ) {
+            Text(
+                text = "Reader Settings",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(vertical = 8.dp)
+            )
+
+            SectionHeader("Font")
+            DropdownPreference(
+                title = "Font Family",
+                value = fontFamily,
+                options = availableFonts,
+                onSelect = { idx ->
+                    fontFamily = availableFonts[idx]
+                    BridgeSettings.updateReaderSettings(ReaderSettingsUpdate(fontFamily = fontFamily))
+                },
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text("Font Size: ${fontSize.toInt()}pt", style = MaterialTheme.typography.bodyMedium)
+            Slider(
+                value = fontSize.toFloat(),
+                onValueChange = { fontSize = it.toDouble() },
+                onValueChangeFinished = {
+                    BridgeSettings.updateReaderSettings(ReaderSettingsUpdate(fontSize = fontSize))
+                },
+                valueRange = 12f..32f,
+                steps = 19,
+            )
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            SectionHeader("Theme")
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                readerThemes.forEachIndexed { index, label ->
+                    SegmentedButton(
+                        selected = readerThemeIndex == index,
+                        onClick = {
+                            readerThemeIndex = index
+                            BridgeSettings.updateReaderSettings(
+                                ReaderSettingsUpdate(theme = readerThemeValues[index])
+                            )
+                        },
+                        shape = SegmentedButtonDefaults.itemShape(index, readerThemes.size),
+                    ) { Text(label) }
+                }
+            }
+            Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+}
+

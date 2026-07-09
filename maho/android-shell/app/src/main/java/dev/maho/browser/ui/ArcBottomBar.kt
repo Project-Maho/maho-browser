@@ -97,6 +97,7 @@ fun ArcBottomBar(
     onShare: () -> Unit,
     onReload: () -> Unit,
     onToggleReaderMode: () -> Unit,
+    onReaderSettingsClick: () -> Unit = {},
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
     onToggleDesktopMode: () -> Unit,
@@ -610,6 +611,24 @@ fun ArcBottomBar(
                                         onToggleReaderMode()
                                     },
                                 )
+                                if (isReaderMode) {
+                                    DropdownMenuItem(
+                                        text = {
+                                            ArcMenuLabel(
+                                                title = "Reader Settings",
+                                                subtitle = "Adjust font, size, and theme",
+                                                shellColors = shellColors,
+                                            )
+                                        },
+                                        leadingIcon = {
+                                            Icon(painter = painterResource(id = MahoIcon.Tune.drawableRes), contentDescription = null)
+                                        },
+                                        onClick = {
+                                            expanded = false
+                                            onReaderSettingsClick()
+                                        },
+                                    )
+                                }
                                 DropdownMenuItem(
                                     text = {
                                         ArcMenuLabel(

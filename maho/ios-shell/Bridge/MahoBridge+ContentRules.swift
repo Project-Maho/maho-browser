@@ -48,8 +48,49 @@ extension MahoBridge {
         }
     }
 
+    func getWhitelistedDomains() -> [String] {
+        return UserDefaults.standard.stringArray(forKey: "contentBlockerWhitelist") ?? []
+    }
+    
+    func addDomainToWhitelist(_ domain: String) {
+        var list = getWhitelistedDomains()
+        if !list.contains(domain) {
+            list.append(domain)
+            UserDefaults.standard.set(list, forKey: "contentBlockerWhitelist")
+        }
+    }
+    
+    func removeDomainFromWhitelist(_ domain: String) {
+        var list = getWhitelistedDomains()
+        if let idx = list.firstIndex(of: domain) {
+            list.remove(at: idx)
+            UserDefaults.standard.set(list, forKey: "contentBlockerWhitelist")
+        }
+    }
+    
+    func isDomainWhitelisted(_ domain: String) -> Bool {
+        return getWhitelistedDomains().contains(domain)
+    }
+
     func refreshContentRules(webView: WKWebView) {
         removeAllContentRules(from: webView)
+        
+        var isEnabled = false
+        if let vm = getSettings() {
+            for section in vm.sections {
+                for item in section.items {
+                    if item.key == "privacy.contentBlockerEnabled" {
+                        isEnabled = (item.value.value as? Bool) ?? false
+                    }
+                }
+            }
+        }
+        guard isEnabled else { return }
+        
+        if let url = webView.url, let host = url.host, isDomainWhitelisted(host) {
+            return
+        }
+
         guard let jsonRules: String = withCore({ ptr -> String? in
             guard let raw = maho_core_get_content_rules(ptr) else { return nil }
             return String(cString: raw)
@@ -59,6 +100,7 @@ extension MahoBridge {
             self?.applyContentRules(ruleList, to: webView)
         }
     }
+
 
     @discardableResult
     func processContentRulesUpdate(_ update: CoreUpdate, handler: ContentRulesUpdateHandler) -> Bool {

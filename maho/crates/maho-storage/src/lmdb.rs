@@ -38,6 +38,15 @@ impl LmdbStorage {
         Ok(())
     }
 
+    pub fn put_batch(&self, entries: &[(&str, &[u8])]) -> Result<(), StorageError> {
+        let mut wtxn = self.env.write_txn()?;
+        for (key, value) in entries {
+            self.db.put(&mut wtxn, key, &value.to_vec())?;
+        }
+        wtxn.commit()?;
+        Ok(())
+    }
+
     pub fn delete(&self, key: &str) -> Result<bool, StorageError> {
         let mut wtxn = self.env.write_txn()?;
         let existed = self.db.delete(&mut wtxn, key)?;

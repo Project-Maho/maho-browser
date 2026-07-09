@@ -1,5 +1,7 @@
 package dev.maho.browser
 
+import dev.maho.browser.support.MahoJson
+
 object MahoBridge {
 
     init {
@@ -658,6 +660,12 @@ object MahoBridge {
         return nativeDrainOutgoing(ptr)
     }
 
+    fun queryFilterDecision(url: String, sourceUrl: String, requestType: String): Boolean {
+        val ptr = corePtr
+        if (ptr == 0L) return false
+        return nativeQueryFilterDecision(ptr, url, sourceUrl, requestType)
+    }
+
     // === Profiles ===
 
     fun getActiveProfileId(): String? {
@@ -1009,13 +1017,35 @@ object MahoBridge {
         return nativeAgentPollEvent(sessionPtr)
     }
 
-    // --- Conversation Stubs ---
-    fun createConversation(id: String, title: String?, spaceId: String?, model: String?): Boolean = true
-    fun listConversations(limit: Long = 100L): List<ConversationSession> = emptyList()
-    fun getConversationMessages(sessionId: String): List<ConversationTurn> = emptyList()
-    fun saveConversationMessage(sessionId: String, role: String, content: String, urlContext: String? = null): Boolean = true
-    fun deleteConversation(id: String): Boolean = true
-    fun renameConversation(id: String, title: String): Boolean = true
+    // --- Conversation ---
+    fun createConversation(id: String, title: String?, spaceId: String?, model: String?): Boolean {
+        return nativeCreateConversation(corePtr, id, title ?: "", spaceId ?: "", model ?: "")
+    }
+    fun listConversations(limit: Long = 100L): List<ConversationSession> {
+        val jsonStr = nativeListConversations(corePtr, limit) ?: return emptyList()
+        return try {
+            MahoJson.instance.decodeFromString<List<ConversationSession>>(jsonStr)
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+    fun getConversationMessages(sessionId: String): List<ConversationTurn> {
+        val jsonStr = nativeGetConversationMessages(corePtr, sessionId) ?: return emptyList()
+        return try {
+            MahoJson.instance.decodeFromString<List<ConversationTurn>>(jsonStr)
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+    fun saveConversationMessage(sessionId: String, role: String, content: String, urlContext: String? = null): Boolean {
+        return nativeSaveConversationMessage(corePtr, sessionId, role, content, urlContext ?: "")
+    }
+    fun deleteConversation(id: String): Boolean {
+        return nativeDeleteConversation(corePtr, id)
+    }
+    fun renameConversation(id: String, title: String): Boolean {
+        return nativeRenameConversation(corePtr, id, title)
+    }
 
     // --- Chat Stubs ---
     fun chatSessionNew(apiKey: String, endpoint: String, model: String, systemInstruction: String): Long = 0L
@@ -1036,7 +1066,10 @@ object MahoBridge {
     fun setSpaceAIConfig(spaceId: String, configJson: String): Boolean = true
 
     // --- Tab Clustering ---
-    fun clusterTabs(threshold: Float): String? = null
+    fun clusterTabs(threshold: Float): String? {
+        val p = ptr ?: return null
+        return nativeClusterTabs(p, threshold.toDouble())
+    }
 
     // --- Offline Model ---
     @kotlinx.serialization.Serializable
@@ -1055,6 +1088,7 @@ object MahoBridge {
     private external fun nativeDestroy(ptr: Long)
     private external fun nativeHandleEvent(ptr: Long, eventJson: String): String?
     private external fun nativeTick(ptr: Long): String?
+    private external fun nativeClusterTabs(ptr: Long, threshold: Double): String?
     private external fun nativeSaveState(ptr: Long): Boolean
     private external fun nativeLoadState(ptr: Long): Boolean
 
@@ -1187,6 +1221,9 @@ object MahoBridge {
     private external fun nativeApplyRemoteEntities(ptr: Long, entitiesJson: String): String?
     private external fun nativeDrainOutgoing(ptr: Long): String?
 
+    // --- Content Blocking ---
+    private external fun nativeQueryFilterDecision(ptr: Long, url: String, sourceUrl: String, requestType: String): Boolean
+
     // --- Profiles ---
     private external fun nativeGetActiveProfileId(ptr: Long): String?
     private external fun nativeListProfiles(ptr: Long): String?
@@ -1242,4 +1279,12 @@ object MahoBridge {
     private external fun nativeAgentCancel(sessionPtr: Long): Boolean
     private external fun nativeAgentListTools(sessionPtr: Long): String?
     private external fun nativeAgentPollEvent(sessionPtr: Long): String?
+
+    // --- Conversation ---
+    private external fun nativeCreateConversation(ptr: Long, id: String, title: String, spaceId: String, model: String): Boolean
+    private external fun nativeListConversations(ptr: Long, limit: Long): String?
+    private external fun nativeGetConversationMessages(ptr: Long, sessionId: String): String?
+    private external fun nativeSaveConversationMessage(ptr: Long, sessionId: String, role: String, content: String, urlContext: String): Boolean
+    private external fun nativeDeleteConversation(ptr: Long, id: String): Boolean
+    private external fun nativeRenameConversation(ptr: Long, id: String, title: String): Boolean
 }

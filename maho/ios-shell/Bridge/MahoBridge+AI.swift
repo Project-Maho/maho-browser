@@ -46,6 +46,12 @@ private func ffiSetSpaceAIConfig(
     _ configJson: UnsafePointer<CChar>?
 ) -> Bool
 
+@_silgen_name("maho_core_cluster_tabs")
+private func ffiClusterTabs(
+    _ ptr: OpaquePointer?,
+    _ threshold: Double
+) -> UnsafeMutablePointer<CChar>?
+
 
 
 
@@ -111,8 +117,9 @@ extension MahoBridge {
     // MARK: Tab Clustering
 
     func clusterTabs(threshold: Double) -> [TabClusterResult] {
-        _ = threshold
-        return []
+        (withCore { ptr in
+            FFIString.consumeJSON(ffiClusterTabs(ptr, threshold), as: [TabClusterResult].self)
+        } ?? nil) ?? []
     }
 
     // MARK: Offline Model (stubs)

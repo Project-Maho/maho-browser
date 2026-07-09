@@ -43,14 +43,14 @@ extension MahoBridge {
 
     func handleProfileUpdate(_ update: CoreUpdate) {
         switch update {
-        case .profileCreated:
-            break
-        case .profileUpdated:
-            break
-        case .profileDeleted:
-            break
-        case .activeProfileChanged:
-            break
+        case .profileCreated(let profile):
+            NotificationCenter.default.post(name: NSNotification.Name("MahoProfileCreated"), object: nil, userInfo: ["profile": profile])
+        case .profileUpdated(let profile):
+            NotificationCenter.default.post(name: NSNotification.Name("MahoProfileUpdated"), object: nil, userInfo: ["profile": profile])
+        case .profileDeleted(let profileId, let dataStoreId):
+            NotificationCenter.default.post(name: NSNotification.Name("MahoProfileDeleted"), object: nil, userInfo: ["profileId": profileId, "dataStoreId": dataStoreId as Any])
+        case .activeProfileChanged(let profileId):
+            NotificationCenter.default.post(name: NSNotification.Name("MahoActiveProfileChanged"), object: nil, userInfo: ["profileId": profileId])
         default:
             break
         }

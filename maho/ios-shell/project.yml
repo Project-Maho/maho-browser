@@ -14,18 +14,27 @@ settings:
   base:
     SWIFT_OBJC_BRIDGING_HEADER: "$(SRCROOT)/Maho-Bridging-Header.h"
     HEADER_SEARCH_PATHS: ["$(SRCROOT)/include"]
-    LIBRARY_SEARCH_PATHS: ["$(SRCROOT)/build/universal", "$(SRCROOT)/../target/aarch64-apple-ios-sim/release"]
+    LIBRARY_SEARCH_PATHS: ["$(SRCROOT)/build/universal"]
+    "LIBRARY_SEARCH_PATHS[sdk=iphoneos*]": "$(SRCROOT)/build/ios"
+    "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]": "$(SRCROOT)/build/sim"
     OTHER_LDFLAGS: ["-lmaho_ffi", "-framework", "WebKit", "-framework", "Security", "-framework", "SystemConfiguration", "-framework", "Speech", "-framework", "AVFoundation"]
     SWIFT_VERSION: "5.9"
     GENERATE_INFOPLIST_FILE: false
-    CODE_SIGN_IDENTITY: ""
-    CODE_SIGNING_REQUIRED: "NO"
-    CODE_SIGNING_ALLOWED: "NO"
+    CODE_SIGN_IDENTITY: "Apple Distribution"
+    CODE_SIGNING_REQUIRED: "YES"
+    CODE_SIGNING_ALLOWED: "YES"
+    # DEVELOPMENT_TEAM is provided by Signing.xcconfig (gitignored, per-developer)
+    # or by the CI environment. Do NOT hardcode a placeholder here — a missing
+    # team ID should fail the build loudly with "requires a development team".
+
 
 targets:
   Maho:
     type: application
     platform: iOS
+    configFiles:
+      Debug: Signing.xcconfig
+      Release: Signing.xcconfig
     sources:
       - path: MahoApp.swift
       - path: Models

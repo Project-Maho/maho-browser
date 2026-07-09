@@ -82,7 +82,8 @@ final class CodableRoundTripTests: XCTestCase {
                 "lifecycleState": "active",
                 "children": [],
                 "createdAt": "2024-01-01T00:00:00Z",
-                "lastActiveAt": "2024-01-01T00:00:00Z"
+                "lastActiveAt": "2024-01-01T00:00:00Z",
+                "role": {"type": "normal"}
             }
         }
         """.data(using: .utf8)!

@@ -140,6 +140,7 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, UI
             viewModel.isLoading = true
             guard !viewModel.tabId.isEmpty else { return }
             bridge.sendEvent(.tabLoadingChanged(tabId: viewModel.tabId, isLoading: true))
+            bridge.refreshContentRules(webView: webView)
         }
     }
 
@@ -268,5 +269,41 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, UI
             presenter = presented
         }
         presenter.present(alert, animated: true)
+    }
+}
+
+extension WebViewCoordinator: WKScriptMessageHandler {
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "mahoReader" else { return }
+        guard let dict = message.body as? [String: Any] else { return }
+        
+        if let error = dict["error"] as? String {
+            log.error("Reader Mode extraction failed: \(error)")
+            return
+        }
+        
+        let title = dict["title"] as? String ?? ""
+        let content = dict["content"] as? String ?? ""
+        let textContent = dict["textContent"] as? String ?? ""
+        let byline = dict["byline"] as? String ?? ""
+        let dir = dict["dir"] as? String
+        
+        let excerpt = dict["excerpt"] as? String
+        let siteName = dict["siteName"] as? String
+        let length = dict["length"] as? Int
+        let publishedTime = dict["publishedTime"] as? String
+        
+        let article = ExtractedArticle(
+            title: title,
+            content: content,
+            textContent: textContent,
+            byline: byline,
+            textDirection: TextDirection(readabilityDir: dir),
+            excerpt: excerpt,
+            siteName: siteName,
+            length: length,
+            publishedTime: publishedTime
+        )
+        viewModel.extractedArticle = article
     }
 }

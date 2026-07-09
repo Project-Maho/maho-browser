@@ -19,7 +19,7 @@ extension MahoBridge {
         return result == 1
     }
 
-    func tick() -> [CoreUpdate] {
+    func tickDrain() -> [CoreUpdate] {
         (withCore { ptr in
             FFIString.consumeJSON(maho_core_tick(ptr))
         } ?? nil) ?? []

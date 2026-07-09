@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideIcons
 
 struct TabGridSheet: View {
     let onNewTab: () -> Bool
@@ -10,6 +11,7 @@ struct TabGridSheet: View {
     @State private var activeTabId: TabId?
     @State private var activeSpaceId: SpaceId?
     @State private var showSpaceSwitcher = false
+    @State private var showClustering = false
 
     private let bridge = MahoBridge.shared
 
@@ -68,6 +70,18 @@ struct TabGridSheet: View {
                 }
             )
         }
+        .sheet(isPresented: $showClustering) {
+            if let spaceId = activeSpaceId {
+                TabGroupSuggestionView(
+                    spaceId: spaceId,
+                    tabs: filteredTabs,
+                    spaceName: activeSpaceTitle,
+                    onFoldersCreated: {
+                        reloadState()
+                    }
+                )
+            }
+        }
     }
 
     private var sheetHeader: some View {
@@ -83,6 +97,16 @@ struct TabGridSheet: View {
             }
 
             Spacer(minLength: 0)
+
+            if FeatureFlags.clusterTabsEnabled {
+                Button(action: { showClustering = true }) {
+                    Image(lucide: Lucide.sparkles)
+                        .font(.body)
+                        .foregroundStyle(ShellTheme.Palette.accent)
+                }
+                .padding(.trailing, ShellTheme.Spacing.small)
+                .accessibilityIdentifier("tabClusteringButton")
+            }
 
             Text("\(filteredTabs.count)")
                 .font(.caption.weight(.semibold))

@@ -6,6 +6,7 @@ final class SettingsTests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        app.launchEnvironment["MAHO_UITEST_MODE"] = "1"
         app.launch()
     }
 

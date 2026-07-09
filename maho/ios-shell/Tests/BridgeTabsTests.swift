@@ -58,7 +58,8 @@ final class BridgeTabsTests: XCTestCase {
             "lifecycleState": "active",
             "children": [],
             "createdAt": "2024-01-01T00:00:00Z",
-            "lastActiveAt": "2024-01-01T00:00:00Z"
+            "lastActiveAt": "2024-01-01T00:00:00Z",
+            "role": {"type": "pinned"}
         }
         """
         let data = try XCTUnwrap(json.data(using: .utf8))
@@ -82,15 +83,13 @@ final class BridgeTabsTests: XCTestCase {
             url: "https://example.com",
             favicon: nil,
             isLoading: true,
-            isPinned: false,
-            isFavorite: true,
-            favoriteOrder: 1,
             isMuted: false,
             isPlayingAudio: true,
             lifecycleState: "frozen",
             children: ["tab-child"],
             createdAt: "2024-06-01T12:00:00Z",
-            lastActiveAt: "2024-06-01T12:30:00Z"
+            lastActiveAt: "2024-06-01T12:30:00Z",
+            role: .favorite(order: 1)
         )
 
         let data = try encoder.encode(original)

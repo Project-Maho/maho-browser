@@ -101,6 +101,7 @@ pub unsafe extern "C" fn maho_core_handle_event(
         Err(_) => return ptr::null_mut(),
     };
     let updates = core.handle_event(event);
+    process_split_callbacks_for_updates(&updates);
     to_json_cstring(&updates)
 
     }, ptr::null_mut())
@@ -341,6 +342,7 @@ pub unsafe extern "C" fn maho_core_tick(ptr: *mut MahoCore) -> *mut c_char {
     if import_gate::is_active() { return ptr::null_mut(); }
     let core = &mut *ptr;
     let updates = core.tick();
+    process_split_callbacks_for_updates(&updates);
     to_json_cstring(&updates)
 
     }, ptr::null_mut())
@@ -661,7 +663,7 @@ pub unsafe extern "C" fn maho_core_set_installed_extensions(
     }, ())
 }
 
-pub type MahoExtensionSyncCallback = unsafe extern "C" fn(
+pub type MahoExtensionSyncCallback = extern "C" fn(
     user_data: *mut c_void,
     extension_id: *const c_char,
     enabled: bool,
@@ -671,7 +673,7 @@ pub type MahoExtensionSyncCallback = unsafe extern "C" fn(
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_register_extension_sync_callback(
     ptr: *mut MahoCore,
-    callback: Option<MahoExtensionSyncCallback>,
+    callback: Option<extern "C" fn(*mut c_void, *const c_char, bool, bool)>,
     user_data: *mut c_void,
 ) {
     ffi_safe!({
@@ -6706,9 +6708,34 @@ pub unsafe extern "C" fn maho_core_chat_cancel(
 
 /// # Safety
 /// `ptr` must be a valid pointer to a `ChatSession`.
+/// `content` must be a null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_chat_append_user_message(
+    ptr: *mut maho_core::chat_session::ChatSession,
+    content: *const c_char,
+) {
+    ffi_safe!({
+        if ptr.is_null() {
+            return;
+        }
+        let session = &mut *ptr;
+        let content_str = if content.is_null() {
+            ""
+        } else {
+            match CStr::from_ptr(content).to_str() {
+                Ok(s) => s,
+                Err(_) => return,
+            }
+        };
+        session.append_user_message(content_str);
+    }, ())
+}
+
+/// `ptr` must be a valid pointer to a `ChatSession`.
 /// `content` and `tool_calls_json` must be null-terminated C strings.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_chat_append_assistant_message(
+
     ptr: *mut maho_core::chat_session::ChatSession,
     content: *const c_char,
     tool_calls_json: *const c_char,
@@ -7778,6 +7805,25 @@ pub unsafe extern "C" fn maho_core_set_space_ai_config(
     }, false)
 }
 
+/// # Safety
+/// `ptr` must be a valid pointer to a `MahoCore`.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_cluster_tabs(
+    ptr: *mut MahoCore,
+    threshold: f64,
+) -> *mut c_char {
+    ffi_safe!({
+        if ptr.is_null() {
+            return ptr::null_mut();
+        }
+        if import_gate::is_active() { return ptr::null_mut(); }
+        let core = &*ptr;
+        let clusters = core.cluster_tabs(threshold);
+        to_json_cstring(&clusters)
+    }, ptr::null_mut())
+}
+
 // ============================================================
 // Account Tier FFI
 // ============================================================
@@ -7970,6 +8016,114 @@ pub unsafe extern "C" fn maho_routines_tick(core: *mut MahoCore, now_sec: i64) -
     0
 
     }, -2)
+}
+
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static SPLIT_CALLBACKS: OnceLock<Mutex<Vec<(u64, extern "C" fn(*const c_char))>>> = OnceLock::new();
+static NEXT_CALLBACK_TOKEN: AtomicU64 = AtomicU64::new(1);
+
+fn get_split_callbacks() -> &'static Mutex<Vec<(u64, extern "C" fn(*const c_char))>> {
+    SPLIT_CALLBACKS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn process_split_callbacks_for_updates(updates: &[maho_types::events::core_update::CoreUpdate]) {
+    for update in updates {
+        if let maho_types::events::core_update::CoreUpdate::SplitViewChanged { .. } = update {
+            if let Ok(cbs) = get_split_callbacks().lock() {
+                let json_str = serde_json::to_string(update).unwrap_or_default();
+                let c_json = CString::new(json_str).unwrap();
+                for (_, cb) in cbs.iter() {
+                    cb(c_json.as_ptr());
+                }
+            }
+        }
+    }
+}
+
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
+/// `window_id` must be a valid null-terminated C string.
+/// The caller must free the returned JSON string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_split_view_config(
+    core: *mut MahoCore,
+    window_id: *const c_char,
+) -> *mut c_char {
+    ffi_safe!({
+        if core.is_null() || window_id.is_null() {
+            return ptr::null_mut();
+        }
+        let win_str = match CStr::from_ptr(window_id).to_str() {
+            Ok(s) => s,
+            Err(_) => return ptr::null_mut(),
+        };
+        let c = &*core;
+        let win_id = maho_types::identifiers::WindowId::new(win_str);
+        if let Some(config) = c.get_split_view_config(&win_id) {
+            to_json_cstring(&config)
+        } else {
+            ptr::null_mut()
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
+/// `window_id` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_window_closed(
+    core: *mut MahoCore,
+    window_id: *const c_char,
+) {
+    ffi_safe!({
+        if core.is_null() || window_id.is_null() {
+            return;
+        }
+        let win_str = match CStr::from_ptr(window_id).to_str() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let c = &mut *core;
+        let win_id = maho_types::identifiers::WindowId::new(win_str);
+        c.window_closed(&win_id);
+    }, ())
+}
+
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_register_split_change_callback(
+    core: *mut MahoCore,
+    callback: extern "C" fn(*const c_char),
+) -> u64 {
+    ffi_safe!({
+        if core.is_null() {
+            return 0;
+        }
+        let token = NEXT_CALLBACK_TOKEN.fetch_add(1, Ordering::SeqCst);
+        if let Ok(mut cbs) = get_split_callbacks().lock() {
+            cbs.push((token, callback));
+        }
+        token
+    }, 0)
+}
+
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_unregister_split_change_callback(
+    core: *mut MahoCore,
+    token: u64,
+) {
+    ffi_safe!({
+        if core.is_null() {
+            return;
+        }
+        if let Ok(mut cbs) = get_split_callbacks().lock() {
+            cbs.retain(|(t, _)| *t != token);
+        }
+    }, ())
 }
 
 #[cfg(test)]

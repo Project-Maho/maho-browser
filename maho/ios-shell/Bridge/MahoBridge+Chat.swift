@@ -242,6 +242,12 @@ extension MahoBridge {
         maho_core_chat_cancel(ptr)
     }
 
+    func chatAppendUserMessage(_ ptr: OpaquePointer, content: String) {
+        FFIString.withCString(content) { contentPointer in
+            maho_core_chat_append_user_message(ptr, contentPointer)
+        }
+    }
+
     func chatAppendAssistantMessage(_ ptr: OpaquePointer, content: String, toolCallsJson: String) {
         FFIString.withCString(content) { contentPointer in
             FFIString.withCString(toolCallsJson) { toolCallsPointer in
@@ -249,6 +255,7 @@ extension MahoBridge {
             }
         }
     }
+
 
     @discardableResult
     func chatRegisterTool(_ ptr: OpaquePointer, name: String, description: String, schemaJson: String) -> Bool {

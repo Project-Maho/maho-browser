@@ -1,26 +1,34 @@
 package dev.maho.browser
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
 data class ConversationSession(
     val id: String,
     val title: String? = null,
-    val space_id: String? = null,
+    @SerialName("spaceId") val spaceId: String? = null,
     val model: String? = null,
-    val created_at: Long = 0L,
-    val last_message_at: String = "",
-    val message_count: Int = 0,
-)
+    @SerialName("createdAt") val createdAt: String = "",
+    @SerialName("updatedAt") val updatedAt: String = "",
+) {
+    val space_id: String? get() = spaceId
+    val created_at: String get() = createdAt
+    val last_message_at: String get() = updatedAt
+    val message_count: Int get() = 0
+}
 
 @Serializable
 data class ConversationTurn(
     val id: String = "",
     val role: String,
     val content: String,
-    val created_at: String? = null,
-    val timestamp: Long = 0L,
-)
+    @SerialName("urlContext") val urlContext: String? = null,
+    @SerialName("createdAt") val createdAt: String = "",
+) {
+    val url_context: String? get() = urlContext
+    val created_at: String get() = createdAt
+}
 
 @Serializable
 data class SpaceAIConfig(

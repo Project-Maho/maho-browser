@@ -12,7 +12,9 @@ private func ffiAgentCreateSession(
     _ permissionCb: MahoAgentPermissionCallback?,
     _ permissionUserData: UnsafeMutableRawPointer?,
     _ secureStorageCb: MahoAgentSecureStorageCallback?,
-    _ secureStorageUserData: UnsafeMutableRawPointer?
+    _ secureStorageUserData: UnsafeMutableRawPointer?,
+    _ browserToolCb: MahoAgentBrowserToolCallback?,
+    _ browserToolUserData: UnsafeMutableRawPointer?
 ) -> OpaquePointer?
 
 @_silgen_name("maho_agent_session_free")
@@ -45,6 +47,12 @@ private typealias MahoAgentSecureStorageCallback = @convention(c) (
     UnsafeMutableRawPointer?,
     UnsafePointer<CChar>?
 ) -> MahoAgentSecureKey
+
+private typealias MahoAgentBrowserToolCallback = @convention(c) (
+    UnsafeMutableRawPointer?,
+    UnsafePointer<CChar>?,
+    UnsafePointer<CChar>?
+) -> MahoAgentToolResult
 
 // MARK: - BYOK OS Keychain Helper
 
@@ -206,15 +214,15 @@ private func agentSecureStorageCallback(
     _ provider: UnsafePointer<CChar>?
 ) -> MahoAgentSecureKey {
     guard let provider else {
-        return MahoAgentSecureKey(ptr: nil, len: 0, free_fn: nil)
+        return MahoAgentSecureKey(ptr: nil, len: 0, free_fn: nil, base_url: nil, model: nil, cstring_free_fn: nil)
     }
     let providerStr = String(cString: provider)
     guard let data = BYOKKeychain.getData(provider: providerStr), !data.isEmpty else {
-        return MahoAgentSecureKey(ptr: nil, len: 0, free_fn: nil)
+        return MahoAgentSecureKey(ptr: nil, len: 0, free_fn: nil, base_url: nil, model: nil, cstring_free_fn: nil)
     }
     let len = data.count
     guard let allocated = malloc(len)?.assumingMemoryBound(to: CChar.self) else {
-        return MahoAgentSecureKey(ptr: nil, len: 0, free_fn: nil)
+        return MahoAgentSecureKey(ptr: nil, len: 0, free_fn: nil, base_url: nil, model: nil, cstring_free_fn: nil)
     }
     data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
         if let base = raw.baseAddress {
@@ -224,7 +232,10 @@ private func agentSecureStorageCallback(
     return MahoAgentSecureKey(
         ptr: allocated,
         len: UInt(len),
-        free_fn: freeSecureKey
+        free_fn: freeSecureKey,
+        base_url: nil,
+        model: nil,
+        cstring_free_fn: nil
     )
 }
 
@@ -285,7 +296,9 @@ extension MahoBridge {
                         agentPermissionCallback,
                         contextPointer,
                         agentSecureStorageCallback,
-                        contextPointer
+                        contextPointer,
+                        nil,  // browser_tool_cb: iOS has no browser tools
+                        nil   // browser_tool_user_data
                     ) else {
                         Unmanaged<AgentSessionContext>.fromOpaque(contextPointer).release()
                         return nil

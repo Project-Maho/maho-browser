@@ -15,6 +15,7 @@ final class BrowserViewModel: ObservableObject {
     @Published var isSecure: Bool = false
     @Published var isUrlBarEditing: Bool = false
     @Published var tabId: TabId = ""
+    @Published var extractedArticle: ExtractedArticle? = nil
 
     weak var webView: WKWebView?
 

@@ -8,54 +8,46 @@ RUST_LIB_DIR       := ../target
 HEADER_DIR         := include
 FFI_CRATE          := maho-ffi
 CBINDGEN_CONFIG    := ../mobile-build/cbindgen.toml
+IOS_LIB_DIR        := build/ios
+SIM_LIB_DIR        := build/sim
 UNIVERSAL_LIB_DIR  := build/universal
 
 .PHONY: all build-rust-ios build-rust-sim generate-header universal-lib build-app test clean
 
 all: generate-header universal-lib
 
-# Build the Rust FFI library for iOS device (arm64)
 build-rust-ios:
 	cargo build --target $(RUST_TARGET_IOS) --release -p $(FFI_CRATE) --manifest-path ../Cargo.toml
 
-# Build the Rust FFI library for iOS simulator (arm64)
 build-rust-sim:
 	cargo build --target $(RUST_TARGET_SIM) --release -p $(FFI_CRATE) --manifest-path ../Cargo.toml
 
-# Generate the C header from Rust FFI crate
 generate-header:
 	cbindgen --config $(CBINDGEN_CONFIG) --crate $(FFI_CRATE) --output $(HEADER_DIR)/maho_ffi.h ..
 
-# Create universal binary for device + simulator
-# Fall back to simulator binary if lipo fails (e.g. on Apple Silicon where both are arm64)
 universal-lib: build-rust-ios build-rust-sim
-	@mkdir -p $(UNIVERSAL_LIB_DIR)
-	lipo -create \
-		$(RUST_LIB_DIR)/$(RUST_TARGET_IOS)/release/$(RUST_LIB_NAME) \
-		$(RUST_LIB_DIR)/$(RUST_TARGET_SIM)/release/$(RUST_LIB_NAME) \
-		-output $(UNIVERSAL_LIB_DIR)/$(RUST_LIB_NAME) || \
-	(echo "lipo failed (likely due to matching arm64 architectures), falling back to copying simulator binary" && \
-	 cp $(RUST_LIB_DIR)/$(RUST_TARGET_SIM)/release/$(RUST_LIB_NAME) $(UNIVERSAL_LIB_DIR)/$(RUST_LIB_NAME))
-	@echo "Universal library created at $(UNIVERSAL_LIB_DIR)/$(RUST_LIB_NAME)"
+	@mkdir -p $(IOS_LIB_DIR) $(SIM_LIB_DIR) $(UNIVERSAL_LIB_DIR)
+	cp $(RUST_LIB_DIR)/$(RUST_TARGET_IOS)/release/$(RUST_LIB_NAME) $(IOS_LIB_DIR)/$(RUST_LIB_NAME)
+	cp $(RUST_LIB_DIR)/$(RUST_TARGET_SIM)/release/$(RUST_LIB_NAME) $(SIM_LIB_DIR)/$(RUST_LIB_NAME)
+	cp $(RUST_LIB_DIR)/$(RUST_TARGET_SIM)/release/$(RUST_LIB_NAME) $(UNIVERSAL_LIB_DIR)/$(RUST_LIB_NAME)
+	@echo "Per-platform libs: $(IOS_LIB_DIR)/, $(SIM_LIB_DIR)/  (project.yml LIBRARY_SEARCH_PATHS is SDK-conditional)"
+	@echo "Legacy universal fallback: $(UNIVERSAL_LIB_DIR)/$(RUST_LIB_NAME) (sim slice, for tools that only look here)"
 
 
-# Build the iOS app via xcodebuild (requires .xcodeproj)
 build-app: generate-header
 	xcodebuild build \
 		-project Maho.xcodeproj \
 		-scheme Maho \
 		-sdk iphoneos \
 		-configuration Release \
-		HEADER_SEARCH_PATHS="$$(pwd)/$(HEADER_DIR)" \
-		LIBRARY_SEARCH_PATHS="$$(pwd)/$(UNIVERSAL_LIB_DIR)"
+		HEADER_SEARCH_PATHS="$$(pwd)/$(HEADER_DIR)"
 
-# Run tests
 test:
 	xcodebuild test \
 		-project Maho.xcodeproj \
 		-scheme Maho \
 		-sdk iphonesimulator \
-		-destination 'platform=iOS Simulator,name=iPhone 15'
+		-destination 'platform=iOS Simulator,name=TestiPhone16Pro'
 
 # Clean build artifacts
 clean:

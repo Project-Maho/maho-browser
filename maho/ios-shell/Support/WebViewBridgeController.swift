@@ -223,8 +223,39 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
             return handle
 
         case "chatSessionResume":
-            // Resuming is a no-op on iOS native since the session pointer is managed in memory
+            let handle = try stringParam(params, at: 0, name: "handle")
+            if ChatSessionRegistry.shared.get(id: handle) != nil {
+                return nil
+            }
+            let conversations = bridge.listConversations()
+            guard let conversation = conversations.first(where: { $0.id == handle }) else {
+                throw BridgeError.operationFailed("Conversation session not found for handle: \(handle)")
+            }
+            let model = conversation.model ?? "gpt-4o"
+            let provider = model.contains("claude") ? "anthropic" : "openai"
+            let apiKey = bridge.byokGetKey(provider: provider) ?? ""
+            let systemInstruction = "You are Maho Assistant, a helpful AI built into the browser."
+            
+            guard let ptr = bridge.createChatSession(
+                apiKey: apiKey, endpoint: "",
+                model: model, systemInstruction: systemInstruction
+            ) else {
+                throw BridgeError.operationFailed("chatSessionResume failed to create chat session")
+            }
+            
+            ChatSessionRegistry.shared.unregisterWithoutFree(ptr)
+            ChatSessionRegistry.shared.register(id: handle, ptr: ptr)
+            
+            let turns = bridge.getConversationMessages(sessionId: handle)
+            for turn in turns {
+                if turn.role == "user" {
+                    bridge.chatAppendUserMessage(ptr, content: turn.content)
+                } else if turn.role == "assistant" {
+                    bridge.chatAppendAssistantMessage(ptr, content: turn.content, toolCallsJson: "[]")
+                }
+            }
             return nil
+
 
         case "chatSessionFree":
             let handle = try stringParam(params, at: 0, name: "handle")
