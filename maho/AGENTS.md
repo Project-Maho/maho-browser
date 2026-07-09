@@ -10,7 +10,6 @@ Hybrid repo: Rust workspace plus native shells and Appium test harnesses. Backen
 ## STRUCTURE
 - `crates/` — Rust workspace members (`maho-core`, `maho-ffi`, `maho-storage`, `maho-types`, `maho-extension`, `maho-engine`, `maho-jni`, `maho-bench`)
 - `relay/` — Standalone Rust workspace for sync relay server (server, entity, migration crates)
-- `macos-shell/` — AppKit shell; existing detailed AGENTS.md already covers local rules
 - `ios-shell/` — iOS shell target and views bridge
 - `android-shell/` — Android shell Gradle project
 - `appium-tests/` — standalone Appium regression suite
@@ -22,7 +21,7 @@ Hybrid repo: Rust workspace plus native shells and Appium test harnesses. Backen
 | Backend browser behavior | `crates/maho-core` | Manager-per-concern architecture |
 | Shared types/events | `crates/maho-types` | Contract types only |
 | Sync relay server | `relay/` | Standalone workspace; do NOT add to root Cargo.toml members |
-| Swift shell work | `macos-shell/`, `ios-shell/` | Reference-only Swift code; active implementation work is in the Chromium fork |
+| Swift shell work | `ios-shell/` | Reference-only Swift code; active implementation work is in the Chromium fork |
 | Android shell work | `android-shell/` | Gradle-based native app |
 | Regression automation | `appium-tests/` | Canonical Appium runners |
 | Test order / commands | `docs/test-matrix.md` | CI-style run sequence |
@@ -38,7 +37,6 @@ Hybrid repo: Rust workspace plus native shells and Appium test harnesses. Backen
 
 ## ANTI-PATTERNS (THIS PROJECT)
 - No type-safety suppression.
-- No direct Keychain/Security.framework use in macOS shell code.
 - No direct FFI/business-logic mixing in `maho-ffi`.
 - No domain types invented in `maho-core`; use `maho-types`.
 - No adding relay/ crates to root workspace members (libsqlite3-sys conflict).
@@ -48,8 +46,6 @@ Hybrid repo: Rust workspace plus native shells and Appium test harnesses. Backen
 ```bash
 bun run typecheck
 bun run test
-cd macos-shell && make app
-cd macos-shell && make test
 cd ios-shell && make test
 cd android-shell && ./gradlew app:testDebugUnitTest
 cd appium-tests && bun run test
@@ -79,7 +75,6 @@ autoninja -C out/Default chrome
 For targeted rebuilds, use `chrome_framework_shared_library` or `chrome_app`.
 
 ## NOTES
-- `macos-shell/AGENTS.md` already contains the most specific shell rules.
 - Prefer the nearest AGENTS.md when working inside a subtree.
 - `docs/test-matrix.md` is the canonical execution order.
 - `relay/` is a separate Cargo workspace with its own `relay/AGENTS.md`; use that guide for relay-specific build, auth, and migration rules.

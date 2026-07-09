@@ -19,7 +19,6 @@ maho-workspace/
 ├── maho/               # Rust workspace + native shells (see maho/AGENTS.md)
 │   ├── crates/         # maho-core, maho-ffi, maho-storage, maho-types, maho-engine, maho-extension, maho-jni, maho-bench
 │   ├── relay/          # Standalone sync relay server (separate Cargo workspace)
-│   ├── macos-shell/    # AppKit shell (reference; active work in Chromium fork)
 │   ├── ios-shell/      # iOS shell
 │   ├── android-shell/  # Android Gradle project
 │   └── appium-tests/   # Regression automation
@@ -52,6 +51,7 @@ maho-workspace/
 | Build maho-core lib | `maho-chromium/build/scripts/build_maho_core.py` | Produces prebuilt static lib |
 | Regression tests | `maho/appium-tests/` | Appium runners |
 | Icon system (canonical) | `docs/icon-system.md` + `maho/assets/icons/sf-to-lucide-mapping.json` | Lucide is the unified icon library across all surfaces. Per-platform: `lucide-react` (Mail; canonical for new WebUI surfaces, see `maho-chromium/docs/webui-shadcn-conventions.md`), legacy vendored SVGs at `browser/resources/<feature>/icons/` for pre-shadcn surfaces, `aggregate_vector_icons` GN target at `maho-chromium/browser/ui/views/maho_lucide_icons/` (Native Views; auto-generated from `manifest.json` via `maho-chromium/build/scripts/lucide_icons/generate.py`), `lucide-icons-swift` SwiftPM (macOS/iOS), AVDs at `maho/android-shell/app/src/main/res/drawable/ic_*.xml`. License: `LICENSES/lucide.txt` |
+| Reference screenshots (Arc/design target) | `maho/reference_screenshots/` | Ground-truth UI targets. e.g. `arc-library-space.jpeg` = Arc's Spaces library view reference for Maho's Archive-Spaces overlay. ALWAYS consult before claiming visual parity. |
 
 ## CONVENTIONS
 - `bun run` for repo scripts, `bunx` for one-off CLIs
@@ -67,7 +67,6 @@ maho-workspace/
 - No type-safety suppression
 - No domain types in `maho-core`; use `maho-types`
 - No direct FFI/business-logic mixing in `maho-ffi`
-- No direct Keychain/Security.framework use in macOS shell
 - **NEVER delete `.build.lock`** — see BUILD LOCK below
 - **빌드 실패 시 GN 파일 강제 수정 금지** — 빌드 (특히 `build_maho.py`) 가 GN regen 단계 또는 그 이후에서 실패하면 즉시 중단하고 사용자에게 보고. `chromium/src/**/BUILD.gn`, `maho-chromium/**/BUILD.gn`, `chromium/src/chrome/test/BUILD.gn` 등의 GN 파일을 우회 fix 목적으로 직접 수정하지 말 것. 다른 세션의 미완 작업이나 working tree dirty state 인 경우가 많고, 임의 cleanup 은 추후 충돌·revert·데이터 손실을 부른다. fix 가 필요해 보여도 **사용자 명시 승인 없이는 GN 편집·삭제 금지**.
 
