@@ -230,6 +230,7 @@ interface PageHandler {
   SetAIApprovalPolicy(string policy);
   SetAISessionPersistence(bool enabled);
   FetchProviderModels(string provider_id) => (array<string> model_ids, bool from_cache);
+  RefreshProviderModels(string provider_id) => (array<string> model_ids);
   TestManagedConnection() => (bool success, string message);
 
   GetShortcuts() => (array<ShortcutBinding> shortcuts);

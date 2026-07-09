@@ -2,7 +2,7 @@
 
 /* maho_ai-specific token overrides if needed (e.g., panel padding) */
 :root {
-  --color-accent-glow: rgba(155,178,255,0.18);
+  --color-accent-glow: rgba(212,216,226,0.18);
 }
 
 @layer utilities {

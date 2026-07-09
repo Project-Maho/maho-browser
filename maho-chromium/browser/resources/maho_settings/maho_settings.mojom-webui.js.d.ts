@@ -32,6 +32,11 @@ export interface AISettings {
   sessionPersistenceEnabled: boolean;
   hasByokOpenai: boolean;
   hasByokAnthropic: boolean;
+  hasRelaySession: boolean;
+  relayTier: string;
+  relaySubscriptionStatus: string;
+  creditBalanceUsd: number;
+  tierCeilingUsd: number;
 }
 
 export interface MojoKeyCombo {
@@ -207,6 +212,9 @@ export class PageCallbackRouter {
     addListener(listener: (keyCombo: MojoKeyCombo) => void): void;
     removeListener(listener: (keyCombo: MojoKeyCombo) => void): void;
   };
+  providerModelsRefreshed: {
+    addListener(listener: (providerId: string, modelIds: string[]) => void): void;
+  };
 }
 
 export class PageHandlerRemote {
@@ -230,6 +238,9 @@ export class PageHandlerRemote {
   setAIModel(model: string): Promise<void>;
   setAIApprovalPolicy(policy: string): Promise<void>;
   setAISessionPersistence(enabled: boolean): Promise<void>;
+  fetchProviderModels(providerId: string): Promise<{modelIds: string[]; fromCache: boolean}>;
+  refreshProviderModels(providerId: string): Promise<{modelIds: string[]}>;
+  testManagedConnection(): Promise<{success: boolean; message: string}>;
   getShortcuts(): Promise<{shortcuts: ShortcutBinding[]}>;
   setShortcut(action: string, keyCombo: MojoKeyCombo): Promise<{result: SetShortcutResult}>;
   checkShortcutConflict(keyCombo: MojoKeyCombo): Promise<{conflictAction: string | null}>;

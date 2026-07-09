@@ -81,6 +81,8 @@ class MahoSettingsPageHandler
   void SetAISessionPersistence(bool enabled) override;
   void FetchProviderModels(const std::string& provider_id,
                            FetchProviderModelsCallback callback) override;
+  void RefreshProviderModels(const std::string& provider_id,
+                             RefreshProviderModelsCallback callback) override;
   void TestManagedConnection(TestManagedConnectionCallback callback) override;
 
   void GetShortcuts(GetShortcutsCallback callback) override;

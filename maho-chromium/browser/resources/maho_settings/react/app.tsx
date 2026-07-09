@@ -23,13 +23,6 @@ import {Button} from '@ui/button';
 import {Input} from '@ui/input';
 import {Textarea} from '@ui/textarea';
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@ui/card';
-import {
   Select,
   SelectContent,
   SelectItem,
@@ -40,7 +33,7 @@ import {ToggleGroup, ToggleGroupItem} from '@ui/toggle-group';
 import {Toaster} from '@ui/sonner';
 import {cn} from '@lib/utils';
 import {applyTheme, watchAutoTheme} from '@theme/apply_theme';
-import {DomainPaneContent, Toggle} from './domain_panes.js';
+import {DomainPaneContent, PaneShell, SectionCard, Toggle} from './domain_panes.js';
 import {MahoSettingsStore} from './store.js';
 
 const LIVE_SETTINGS_PANE_KEYS = new Set(['notifications','tabs','advanced','privacy','general','appearance']);
@@ -115,13 +108,6 @@ const SETTINGS_DOMAIN_LABEL_CLASS =
     'mt-4 mb-1 px-2 text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground first:mt-0';
 const SETTINGS_CONTENT_CLASS = 'h-full min-w-0 overflow-hidden bg-background';
 const SETTINGS_CONTENT_SCROLL_CLASS = 'h-full overflow-y-auto p-6 lg:p-7';
-const SETTINGS_SECTION_CLASS = 'mb-8 scroll-mt-8';
-const SETTINGS_SECTION_CARD_CLASS = 'overflow-hidden rounded-xl border border-border bg-card shadow-sm';
-const SETTINGS_SECTION_HEADER_CLASS = 'flex flex-col gap-2 border-b border-border p-4 md:p-5';
-const SETTINGS_SECTION_HEADER_EMBED_CLASS = 'border-b-0 pb-0 sm:flex-row sm:items-center sm:justify-between';
-const SETTINGS_SECTION_TITLE_CLASS = 'text-2xl font-semibold tracking-tight';
-const SETTINGS_SECTION_DESCRIPTION_CLASS = 'text-sm leading-6 text-muted-foreground';
-const SETTINGS_CARDS_GRID_CLASS = 'grid gap-4 p-4 md:grid-cols-2 md:p-5';
 const SIDEBAR_BUTTON_CLASS =
     'h-auto w-full justify-start border border-transparent px-3 py-2.5 text-left text-sm font-medium text-foreground shadow-none [&:not([aria-current=page])]:hover:border-border/60 [&:not([aria-current=page])]:hover:bg-background/80 [&:not([aria-current=page])]:hover:text-foreground aria-[current=page]:translate-x-px aria-[current=page]:border-border aria-[current=page]:bg-accent aria-[current=page]:text-accent-foreground aria-[current=page]:shadow-sm';
 const SIDEBAR_BUTTON_TEXT_CLASS = 'flex min-w-0 flex-1';
@@ -129,8 +115,7 @@ const SIDEBAR_BUTTON_LABEL_CLASS = 'truncate';
 const BROWSER_SHELL_CLASS = 'min-w-0 overflow-hidden rounded-xl border border-border bg-background/50 shadow-inner';
 const BROWSER_FRAME_CLASS = 'block h-[78vh] min-h-[720px] w-full border-0 bg-background';
 const SETTING_ROW_CLASS =
-    'grid gap-4 border-b border-border py-4 sm:grid-cols-[minmax(0,1fr)_minmax(270px,344px)] sm:items-center';
-const SETTING_ROW_FIRST_CLASS = 'pt-0';
+    'grid gap-4 border-t border-border px-6 py-4 sm:grid-cols-[minmax(0,1fr)_minmax(270px,344px)] sm:items-center';
 const SETTING_COPY_CLASS = 'min-w-0 flex-1';
 const SETTING_ROW_TITLE_CLASS = 'text-sm font-medium text-foreground';
 const SETTING_ROW_DESCRIPTION_CLASS = 'mt-1 text-xs leading-5 text-muted-foreground';
@@ -235,9 +220,10 @@ function EmbedPane({pane, onExit}: {pane: PaneDefinition; onExit: () => void}) {
   const embedUrl = pane.embedUrl || 'chrome://settings/';
 
   return (
-    <section className={SETTINGS_SECTION_CLASS} data-pane={pane.key} id={`section-${pane.key}`}>
-      <div className={SETTINGS_SECTION_CARD_CLASS}>
-        <header className={cn(SETTINGS_SECTION_HEADER_CLASS, SETTINGS_SECTION_HEADER_EMBED_CLASS)}>
+    <PaneShell pane={pane}>
+      <SectionCard
+        title={pane.title}
+        action={(
           <Button
             className="w-fit justify-start rounded-lg border border-border bg-background/70 px-3 text-sm font-medium text-foreground hover:bg-accent hover:text-accent-foreground"
             type="button"
@@ -246,20 +232,18 @@ function EmbedPane({pane, onExit}: {pane: PaneDefinition; onExit: () => void}) {
             <img alt="" aria-hidden="true" className={SETTING_ICON_CLASS} src="chrome://maho-settings/icons/arrow-right.svg" style={{transform: 'rotate(180deg)'}} />
             Back to Maho settings
           </Button>
-          <h2 className={SETTINGS_SECTION_TITLE_CLASS}>{pane.title}</h2>
-        </header>
-        <div className={cn(SETTINGS_CARDS_GRID_CLASS, 'grid-cols-1 pt-4 md:grid-cols-1')}>
-          <div className={BROWSER_SHELL_CLASS}>
-            <iframe
-              className={BROWSER_FRAME_CLASS}
-              role="document"
-              src={embedUrl}
-              title={pane.title}
-            />
-          </div>
+        )}
+        padded>
+        <div className={BROWSER_SHELL_CLASS}>
+          <iframe
+            className={BROWSER_FRAME_CLASS}
+            role="document"
+            src={embedUrl}
+            title={pane.title}
+          />
         </div>
-      </div>
-    </section>
+      </SectionCard>
+    </PaneShell>
   );
 }
 
@@ -319,85 +303,50 @@ function LivePaneSection(
   }, [pane.key, pane.title, relevantSettings]);
 
   return (
-    <section className={SETTINGS_SECTION_CLASS} data-pane={pane.key} id={`section-${pane.key}`}>
-      <div className={SETTINGS_SECTION_CARD_CLASS}>
-        <header className={SETTINGS_SECTION_HEADER_CLASS}>
-          <h2 className={SETTINGS_SECTION_TITLE_CLASS}>{pane.title}</h2>
-          {bootstrapError ? <p className={SETTINGS_SECTION_DESCRIPTION_CLASS}>{bootstrapError}</p> : null}
-          {!bootstrapError && lastActionError ? (
-            <p className={SETTINGS_SECTION_DESCRIPTION_CLASS}>{lastActionError}</p>
-          ) : null}
-        </header>
-        <div className={SETTINGS_CARDS_GRID_CLASS}>
-          {cards.map(card => (
-            <ContentCard
-              key={`${pane.key}-${card.title}`}
-              description={card.description}
-              missingSettingKeys={card.missingSettingKeys}
-              settings={card.settings}
-              store={store}
-              title={card.title}
-              wide={card.wide}
-            />
-          ))}
+    <PaneShell pane={pane}>
+      {bootstrapError ? <p className="mb-4 text-sm leading-6 text-muted-foreground">{bootstrapError}</p> : null}
+      {!bootstrapError && lastActionError ? (
+        <p className="mb-4 text-sm leading-6 text-muted-foreground">{lastActionError}</p>
+      ) : null}
+      {cards.map((card, cardIndex) => (
+        <div key={`${pane.key}-${card.title}`} className={cardIndex < cards.length - 1 ? 'mb-6' : undefined}>
+          <SectionCard title={card.title} description={card.description}>
+            {card.missingSettingKeys.length > 0 ? (
+              <div className="text-sm text-yellow-500 bg-yellow-500/10 p-3 mx-6 my-4 rounded-md">
+                <h4 className="font-semibold">Settings unavailable</h4>
+                <p className="text-xs">
+                  {`The browser did not provide these schema-declared settings: ${card.missingSettingKeys.join(', ')}.`}
+                </p>
+              </div>
+            ) : null}
+            {card.settings.length === 0 && card.missingSettingKeys.length === 0 ? (
+              <div className="text-sm text-muted-foreground text-center py-6">
+                No settings available
+              </div>
+            ) : null}
+            {card.settings.map(setting => (
+              <SettingRow
+                key={setting.key}
+                item={setting}
+                store={store}
+              />
+            ))}
+          </SectionCard>
         </div>
-      </div>
-    </section>
-  );
-}
-
-function ContentCard(
-    {description, missingSettingKeys, settings, store, title, wide}: {
-      description: string;
-      missingSettingKeys: string[];
-      settings: SettingValue[];
-      store: MahoSettingsStore;
-      title: string;
-      wide: boolean;
-    }) {
-  return (
-    <Card className={cn('h-full border-border/70 bg-background/40 shadow-none', wide ? 'md:col-span-full' : undefined)}>
-      <CardHeader>
-        <CardTitle>{title}</CardTitle>
-        {description ? <CardDescription>{description}</CardDescription> : null}
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {missingSettingKeys.length > 0 ? (
-          <div className="text-sm text-yellow-500 bg-yellow-500/10 p-3 rounded-md">
-            <h4 className="font-semibold">Settings unavailable</h4>
-            <p className="text-xs">
-              {`The browser did not provide these schema-declared settings: ${missingSettingKeys.join(', ')}.`}
-            </p>
-          </div>
-        ) : null}
-        {settings.length === 0 && missingSettingKeys.length === 0 ? (
-          <div className="text-sm text-muted-foreground text-center py-4">
-            No settings available
-          </div>
-        ) : null}
-        {settings.map((setting, index) => (
-          <SettingRow
-            key={setting.key}
-            isFirstRow={index === 0 && missingSettingKeys.length === 0}
-            item={setting}
-            store={store}
-          />
-        ))}
-      </CardContent>
-    </Card>
+      ))}
+    </PaneShell>
   );
 }
 
 function SettingRow(
-    {isFirstRow, item, store}: {
-      isFirstRow: boolean;
+    {item, store}: {
       item: SettingValue;
       store: MahoSettingsStore;
     }) {
   const meta = getSettingMetadata(item);
 
   return (
-    <section className={cn(SETTING_ROW_CLASS, isFirstRow ? SETTING_ROW_FIRST_CLASS : undefined)}>
+    <section className={SETTING_ROW_CLASS}>
       <div className={SETTING_COPY_CLASS}>
         <h4 className={SETTING_ROW_TITLE_CLASS}>{meta ? meta.label : item.key}</h4>
         <p className={SETTING_ROW_DESCRIPTION_CLASS}>

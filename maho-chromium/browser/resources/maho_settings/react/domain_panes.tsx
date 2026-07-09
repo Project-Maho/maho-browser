@@ -1,26 +1,10 @@
-import React, {useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore} from 'react';
+import React, {useCallback, useEffect, useRef, useState, useSyncExternalStore} from 'react';
 
 import {Alert, AlertDescription, AlertTitle} from '@ui/alert';
 import {Badge} from '@ui/badge';
 import {Button} from '@ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from '@ui/dialog';
-import {useShortcutInterceptor} from './use_shortcut_interceptor.js';
 import {ShortcutsPane} from './shortcuts/index.js';
 import {openCheckoutOverlay} from '../../maho_common/react/lemonsqueezy.js';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@ui/card';
 import {Input} from '@ui/input';
 import {
   Select,
@@ -33,7 +17,7 @@ import {Switch} from '@ui/switch';
 import {AlertCircle, ArrowUpRight, Sparkles, Download, ExternalLink, Check, Loader2} from '@icons/lucide';
 import {cn} from '@lib/utils';
 import {PasswordProviderKind} from '../mojo.js';
-import type {AccountStatus, BillingInfo} from '../maho_settings.mojom-webui.js';
+import type {AccountStatus, BillingInfo, PageHandlerRemote} from '../maho_settings.mojom-webui.js';
 import type {
   AISettings,
   ATCRule,
@@ -46,8 +30,6 @@ import type {
   ProfileInfo,
   SavedPassword,
   SettingValue,
-  ShortcutBinding,
-  SpaceBasicInfo,
   SyncDeviceInfo,
   SyncKeyInfo,
   SyncStatus,
@@ -119,7 +101,6 @@ function createTransientId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-const SHORTCUT_ACRONYMS = new Set(['URL', 'JS', 'HC', 'AI', 'API', 'OS', 'CSS', 'HTML', 'JSON', 'RSS', 'ID', 'UI', 'UX', 'IP', 'DNS', 'TLS', 'SSL', 'VPN', 'CPU', 'GPU', 'RAM']);
 
 const USD_FORMATTER = new Intl.NumberFormat(undefined, {
   style: 'currency',
@@ -127,19 +108,6 @@ const USD_FORMATTER = new Intl.NumberFormat(undefined, {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
-
-function formatShortcutAction(action: string): string {
-  return action.split('_').map((word, index) => {
-    const upper = word.toUpperCase();
-    if (SHORTCUT_ACRONYMS.has(upper)) {
-      return upper;
-    }
-    if (index === 0 && word.length > 0) {
-      return word.charAt(0).toUpperCase() + word.slice(1);
-    }
-    return word;
-  }).join(' ');
-}
 
 function formatPlanLabel(tier: AccountStatus['tier'] | BillingInfo['tier']): string {
   if (!tier) {
@@ -217,24 +185,12 @@ function normalizeSavedPasswords(passwords: SavedPassword[]): SavedPassword[] {
   }));
 }
 
-const PANE_SECTION_CLASS = 'mb-6 scroll-mt-8';
-const PANE_SHELL_CLASS = 'overflow-hidden rounded-xl border border-border bg-card shadow-sm';
-const PANE_HEADER_CLASS = 'border-b border-border px-6 py-4';
-const PANE_TITLE_CLASS = 'text-2xl font-semibold tracking-tight';
-const PANE_GRID_CLASS = 'grid gap-4 p-4 md:grid-cols-2 md:p-5';
-const PANE_CONTENT_CLASS = 'min-w-0 space-y-4 md:col-span-2';
-const SECTION_CARD_CLASS = 'overflow-hidden rounded-xl border border-border/70 bg-background/20';
+
 const STANDALONE_MESSAGE_CLASS = 'rounded-xl border border-border/70 bg-background/20 px-6 py-4 text-sm leading-6 text-muted-foreground';
 const RETRY_ROW_CLASS =
     'grid gap-4 rounded-xl border border-border/70 bg-background/20 px-6 py-4 sm:grid-cols-[minmax(0,1fr)_minmax(270px,344px)] sm:items-start';
-const SECTION_HEADER_CLASS =
-    'flex flex-col gap-3 rounded-xl border border-border/70 bg-background/20 px-6 py-4 sm:flex-row sm:items-center sm:justify-between';
-const SECTION_HEADER_SPACED_CLASS = 'mt-6';
-const SECTION_TITLE_CLASS = 'text-base font-semibold tracking-tight';
-const ROWS_CLASS = SECTION_CARD_CLASS;
 const SETTING_ROW_CLASS =
     'grid gap-4 border-t border-border px-6 py-4 sm:grid-cols-[minmax(0,1fr)_minmax(270px,344px)] sm:items-start';
-const SETTING_ROW_FIRST_CLASS = 'border-t-0 pt-0';
 const SETTING_COPY_CLASS = 'min-w-0';
 const SETTING_TITLE_CLASS = 'text-sm font-medium text-foreground';
 const SETTING_DESCRIPTION_CLASS = 'mt-1 text-xs leading-5 text-muted-foreground';
@@ -250,13 +206,55 @@ const SELECT_TRIGGER_CLASS = 'bg-background/70';
 const ACTION_BUTTON_CLASS =
     'h-9 min-w-fit rounded-lg border-border bg-background/70 px-4 text-sm font-medium text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground';
 const INLINE_STATUS_CLASS = 'inline-flex min-h-9 items-center rounded-lg border border-border bg-background/70 px-3 text-sm font-medium text-foreground';
-const CONTENT_STACKED_HEADER_CLASS = 'rounded-xl border border-border/70 bg-background/20 px-6 py-4';
-const CONTENT_TITLE_GROUP_CLASS = 'min-w-0 space-y-1';
-const CONTENT_COPY_CLASS = 'text-sm leading-6 text-muted-foreground';
-const PROVIDER_CARD_CLASS = 'grid gap-0 overflow-hidden rounded-lg border border-border/70 bg-background/40';
-const CAPABILITIES_COPY_CLASS = 'px-6 py-4 text-xs leading-5 text-muted-foreground';
-const BROWSER_SHELL_CLASS = 'overflow-hidden rounded-xl border border-border/70 bg-background/20';
 const ICON_CLASS = 'inline-block size-4 shrink-0 align-middle';
+
+interface PaneShellProps {
+  pane: PaneDefinition;
+  children: React.ReactNode;
+}
+
+export function PaneShell({pane, children}: PaneShellProps) {
+  return (
+    <section
+      className="mx-auto w-full max-w-3xl px-6 py-8"
+      data-pane={pane.key}
+      id={`section-${pane.key}`}
+    >
+      <h2 className="mb-6 text-2xl font-semibold tracking-tight">{pane.title}</h2>
+      {children}
+    </section>
+  );
+}
+
+interface SectionCardProps {
+  title: string;
+  description?: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+  padded?: boolean;
+  headerBanner?: React.ReactNode;
+}
+
+export function SectionCard({title, description, action, children, className, padded, headerBanner}: SectionCardProps) {
+  return (
+    <div className={cn("space-y-3", className)}>
+      <div className="flex flex-wrap items-start justify-between gap-4 px-1">
+        <div className="space-y-1">
+          <h3 className="text-base font-semibold tracking-tight">{title}</h3>
+          {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
+        </div>
+        {action || null}
+      </div>
+      <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+        {headerBanner || null}
+        <div className={cn(padded ? "p-6" : "[&>section:first-child]:border-t-0")}>
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function DomainPaneContent(
     {pane, settings, store}: {
@@ -289,9 +287,9 @@ export function DomainPaneContent(
       return <ATCPane pane={pane} store={store} />;
     default:
       return (
-        <DomainPaneSection pane={pane}>
+        <PaneShell pane={pane}>
           <p className={STANDALONE_MESSAGE_CLASS}>This pane is not available.</p>
-        </DomainPaneSection>
+        </PaneShell>
       );
   }
 }
@@ -312,134 +310,109 @@ function AccountPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
 
   if (loading && !submitting && account === null) {
     return (
-      <DomainPaneSection pane={pane}>
+      <PaneShell pane={pane}>
         <PaneLoading message="Loading account…" />
-      </DomainPaneSection>
+      </PaneShell>
     );
   }
 
   if (!account?.signedIn) {
     return (
-      <DomainPaneSection pane={pane}>
-        <Card className="max-w-md border-border/70 bg-card/95 shadow-sm">
-          <CardHeader className="space-y-4">
-            <div className="flex size-10 items-center justify-center rounded-full bg-primary/10 text-primary">
-              <Sparkles className="size-4" />
-            </div>
-            <div className="space-y-1">
-              <CardTitle>Sign in to Maho</CardTitle>
-              <CardDescription>Access your subscription, sync, and billing.</CardDescription>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <form
-              className="grid gap-4"
-              onSubmit={async (event) => {
-                event.preventDefault();
-                if (submitting) {
-                  return;
-                }
+      <PaneShell pane={pane}>
+        <SectionCard title="Sign in to Maho" description="Access your subscription, sync, and billing." className="max-w-md" padded>
+          <div className="mb-4 flex size-10 items-center justify-center rounded-full bg-primary/10 text-primary">
+            <Sparkles className="size-4" />
+          </div>
+          <form
+            className="grid gap-4"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              if (submitting) {
+                return;
+              }
 
-                setSubmitting(true);
-                const result = await store.signIn(email.trim(), password);
-                if (!mountedRef.current) {
-                  return;
-                }
+              setSubmitting(true);
+              const result = await store.signIn(email.trim(), password);
+              if (!mountedRef.current) {
+                return;
+              }
 
-                setSubmitting(false);
-                if (result.success) {
-                  setEmail('');
-                  setPassword('');
-                }
-              }}>
-              <div className="grid gap-2">
-                <label className="text-sm font-medium leading-none" htmlFor="account-email">Email</label>
-                <Input
-                  autoComplete="email"
-                  disabled={submitting}
-                  id="account-email"
-                  required
-                  type="email"
-                  value={email}
-                  onChange={event => setEmail(event.currentTarget.value)}
-                />
-              </div>
-              <div className="grid gap-2">
-                <label className="text-sm font-medium leading-none" htmlFor="account-password">Password</label>
-                <Input
-                  autoComplete="current-password"
-                  disabled={submitting}
-                  id="account-password"
-                  required
-                  type="password"
-                  value={password}
-                  onChange={event => setPassword(event.currentTarget.value)}
-                />
-              </div>
-              {error ? (
-                <Alert className="border-destructive/60 bg-destructive/10 text-destructive shadow-sm" variant="destructive">
-                  <AlertCircle className="size-4" />
-                  <AlertTitle>Sign in failed</AlertTitle>
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
-              ) : null}
-              <Button disabled={submitting || !email.trim() || !password} type="submit">
-                {submitting ? 'Signing in…' : 'Sign in'}
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
-      </DomainPaneSection>
+              setSubmitting(false);
+              if (result.success) {
+                setEmail('');
+                setPassword('');
+              }
+            }}>
+            <div className="grid gap-2">
+              <label className="text-sm font-medium leading-none" htmlFor="account-email">Email</label>
+              <Input
+                autoComplete="email"
+                disabled={submitting}
+                id="account-email"
+                required
+                type="email"
+                value={email}
+                onChange={event => setEmail(event.currentTarget.value)}
+              />
+            </div>
+            <div className="grid gap-2">
+              <label className="text-sm font-medium leading-none" htmlFor="account-password">Password</label>
+              <Input
+                autoComplete="current-password"
+                disabled={submitting}
+                id="account-password"
+                required
+                type="password"
+                value={password}
+                onChange={event => setPassword(event.currentTarget.value)}
+              />
+            </div>
+            {error ? (
+              <Alert className="border-destructive/60 bg-destructive/10 text-destructive shadow-sm" variant="destructive">
+                <AlertCircle className="size-4" />
+                <AlertTitle>Sign in failed</AlertTitle>
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            ) : null}
+            <Button disabled={submitting || !email.trim() || !password} type="submit">
+              {submitting ? 'Signing in…' : 'Sign in'}
+            </Button>
+          </form>
+        </SectionCard>
+      </PaneShell>
     );
   }
 
   const tierLabel = formatPlanLabel(account.tier);
-  const planBadgeVariant: 'default' | 'secondary' =
-      account.tier && account.tier !== 'free' ? 'default' : 'secondary';
+
   const renewDate = formatBillingDate(account.subscriptionExpiresAt);
 
   return (
-    <DomainPaneSection pane={pane}>
-      <Card className="max-w-2xl border-border/70 bg-card/95 shadow-sm">
-        <CardHeader className="gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="space-y-3">
-            <div className="space-y-1">
-              <CardTitle className="text-2xl tracking-tight">{account.email}</CardTitle>
-              <CardDescription className="flex flex-wrap items-center gap-2">
-                <Badge variant={planBadgeVariant}>{tierLabel} plan</Badge>
-                {account.displayName ? <span>{account.displayName}</span> : null}
-                {account.subscriptionStatus ? <span>· {account.subscriptionStatus}</span> : null}
-              </CardDescription>
-            </div>
-            <div className="grid gap-1 text-sm text-muted-foreground">
-              {account.userId ? <p>Account ID: {account.userId}</p> : null}
-              {renewDate ? <p>Next renewal on {renewDate}</p> : null}
-            </div>
-          </div>
+    <PaneShell pane={pane}>
+      <SectionCard
+        title={account.email}
+        description={[
+          tierLabel + ' plan',
+          account.displayName || '',
+          account.subscriptionStatus ? `Status: ${account.subscriptionStatus}` : ''
+        ].filter(Boolean).join(' · ')}
+        action={
           <Button disabled={loading} type="button" variant="outline" onClick={() => void store.signOut()}>
             Sign out
           </Button>
-        </CardHeader>
-      </Card>
-    </DomainPaneSection>
+        }
+        padded
+      >
+        <div className="text-sm text-muted-foreground space-y-1">
+          {account.userId ? <p>Account ID: {account.userId}</p> : null}
+          {renewDate ? <p>Next renewal on {renewDate}</p> : null}
+        </div>
+      </SectionCard>
+    </PaneShell>
   );
 }
 
-function DomainPaneSection(
-    {children, pane}: {children: React.ReactNode; pane: PaneDefinition}) {
-  return (
-    <section className={PANE_SECTION_CLASS} data-pane={pane.key} id={`section-${pane.key}`}>
-      <div className={PANE_SHELL_CLASS}>
-        <header className={PANE_HEADER_CLASS}>
-          <h2 className={PANE_TITLE_CLASS}>{pane.title}</h2>
-        </header>
-        <div className={PANE_GRID_CLASS}>
-          <article className={PANE_CONTENT_CLASS}>{children}</article>
-        </div>
-      </div>
-    </section>
-  );
-}
+
 
 function PaneLoading({message}: {message: string}) {
   return <p className={STANDALONE_MESSAGE_CLASS}>{message}</p>;
@@ -468,19 +441,7 @@ function EmptyDescription({message}: {message: string}) {
   return <p className={EMPTY_DESCRIPTION_CLASS}>{message}</p>;
 }
 
-function SectionHeader(
-    {action, spaced = false, title}: {
-      action?: React.ReactNode;
-      spaced?: boolean;
-      title: string;
-    }) {
-  return (
-    <div className={cn(SECTION_HEADER_CLASS, spaced ? SECTION_HEADER_SPACED_CLASS : undefined)}>
-      <h3 className={SECTION_TITLE_CLASS}>{title}</h3>
-      {action ?? null}
-    </div>
-  );
-}
+
 
 function ActionButton(
     {ariaLabel, className, disabled, label, onClick, style}: {
@@ -554,15 +515,14 @@ export function Toggle(
 }
 
 function ManagedSettingRow(
-    {children, controlClassName, description, isFirstRow = false, title}: {
+    {children, controlClassName, description, title}: {
       children?: React.ReactNode;
       controlClassName?: string;
       description: React.ReactNode;
-      isFirstRow?: boolean;
       title: string;
     }) {
   return (
-    <section className={cn(SETTING_ROW_CLASS, isFirstRow ? SETTING_ROW_FIRST_CLASS : undefined)}>
+    <section className={SETTING_ROW_CLASS}>
       <div className={SETTING_COPY_CLASS}>
         <h4 className={SETTING_TITLE_CLASS}>{title}</h4>
         <p className={SETTING_DESCRIPTION_CLASS}>{description}</p>
@@ -639,14 +599,13 @@ function ProfilesPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
   }, [loadProfiles]);
 
   return (
-    <DomainPaneSection pane={pane}>
-      <SectionHeader title="Browser profiles" />
+    <PaneShell pane={pane}>
       {state.status === 'loading' ? <PaneLoading message="Loading profiles…" /> : null}
       {state.status === 'error' ? (
         <PaneRetry message={state.message} title="Profiles unavailable" onRetry={() => void loadProfiles()} />
       ) : null}
       {state.status === 'loaded' ? (
-        <div className={ROWS_CLASS}>
+        <SectionCard title="Browser profiles">
           {state.data.length === 0 ? <EmptyDescription message="No profiles configured." /> : null}
           {state.data.map(profile => (
             <ProfileRow key={profile.id} profile={profile} onReload={loadProfiles} store={store} />
@@ -676,9 +635,9 @@ function ProfilesPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
               }}
             />
           </ManagedSettingRow>
-        </div>
+        </SectionCard>
       ) : null}
-    </DomainPaneSection>
+    </PaneShell>
   );
 }
 
@@ -749,14 +708,13 @@ function ATCPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}
   }, [loadRules]);
 
   return (
-    <DomainPaneSection pane={pane}>
-      <SectionHeader title="URL routing rules" />
+    <PaneShell pane={pane}>
       {rulesState.status === 'loading' ? <PaneLoading message="Loading rules…" /> : null}
       {rulesState.status === 'error' ? (
         <PaneRetry message={rulesState.message} title="Rules unavailable" onRetry={() => void loadRules()} />
       ) : null}
       {rulesState.status === 'loaded' ? (
-        <div className={ROWS_CLASS}>
+        <SectionCard title="URL routing rules">
           {rulesState.data.map(rule => (
             <ATCRuleRow
               key={rule.id}
@@ -808,9 +766,9 @@ function ATCPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}
               }}
             />
           </ManagedSettingRow>
-        </div>
+        </SectionCard>
       ) : null}
-    </DomainPaneSection>
+    </PaneShell>
   );
 }
 
@@ -837,6 +795,7 @@ function useProviderModels(store: MahoSettingsStore, providerId: string) {
   const [models, setModels] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [fromCache, setFromCache] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const fetchModels = useCallback(async () => {
     if (!providerId) {
@@ -855,12 +814,28 @@ function useProviderModels(store: MahoSettingsStore, providerId: string) {
     }
   }, [handler, providerId]);
 
+  const refresh = useCallback(async () => {
+    if (!providerId) return;
+    setRefreshing(true);
+    try {
+      const res = await handler.refreshProviderModels(providerId);
+      setModels(res.modelIds);
+      setFromCache(false);
+    } catch (e) {
+      console.error('Failed to refresh provider models', e);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [handler, providerId]);
+
   useEffect(() => {
     void fetchModels();
   }, [fetchModels]);
 
   useEffect(() => {
+    let cancelled = false;
     const onRefreshed = (pId: string, modelIds: string[]) => {
+      if (cancelled) return;
       if (pId === providerId) {
         setModels(modelIds);
         setFromCache(false);
@@ -868,11 +843,11 @@ function useProviderModels(store: MahoSettingsStore, providerId: string) {
     };
     callbackRouter.providerModelsRefreshed.addListener(onRefreshed);
     return () => {
-      callbackRouter.providerModelsRefreshed.removeListener(onRefreshed);
+      cancelled = true;
     };
   }, [callbackRouter, providerId]);
 
-  return { models, loading, fromCache };
+  return { models, loading, fromCache, refresh, refreshing };
 }
 
 function TestConnectionButton({ handler }: { handler: PageHandlerRemote }) {
@@ -950,6 +925,18 @@ function ModelPicker({
   customPlaceholder?: string;
   emptyErrorMsg?: string;
 }) {
+  const hasModels = providerModels.length > 0;
+  const modelInList = hasModels && providerModels.includes(modelValue);
+  const isAuto = allowAuto === true && modelValue === '';
+
+  const [userChoseCustom, setUserChoseCustom] = useState(false);
+
+  useEffect(() => {
+    if (modelInList) {
+      setUserChoseCustom(false);
+    }
+  }, [modelInList, modelValue]);
+
   if (modelsLoading) {
     return (
       <div className="text-xs text-muted-foreground flex items-center gap-1">
@@ -959,8 +946,8 @@ function ModelPicker({
     );
   }
 
-  const hasModels = providerModels.length > 0;
-  const isCustom = hasModels && !providerModels.includes(modelValue) && (!allowAuto || modelValue !== '');
+  const showCustomInput =
+      !hasModels || userChoseCustom || (!isAuto && hasModels && !modelInList);
 
   const options: Array<{value: string; label: string}> = [];
   if (allowAuto) {
@@ -971,7 +958,14 @@ function ModelPicker({
     options.push({value: 'custom', label: 'Other...'});
   }
 
-  const selectedValue = isCustom ? 'custom' : modelValue;
+  let selectedValue: string;
+  if (isAuto) {
+    selectedValue = '';
+  } else if (showCustomInput) {
+    selectedValue = 'custom';
+  } else {
+    selectedValue = modelValue;
+  }
 
   return (
     <div className="flex flex-col gap-2 w-full">
@@ -981,7 +975,10 @@ function ModelPicker({
           value={selectedValue}
           options={options}
           onChange={value => {
-            if (value !== 'custom') {
+            if (value === 'custom') {
+              setUserChoseCustom(true);
+            } else {
+              setUserChoseCustom(false);
               void onCommitModel(value);
             }
           }}
@@ -992,7 +989,7 @@ function ModelPicker({
           {emptyErrorMsg}
         </div>
       ) : null}
-      {(!hasModels || isCustom) && (
+      {showCustomInput && (
         <TextFieldShell
           ariaLabel={ariaLabel + " Text Input"}
           placeholder={customPlaceholder}
@@ -1015,7 +1012,6 @@ function ProviderModeSelector({
     <ManagedSettingRow
       title="AI Provider Mode"
       description="Choose between Maho Managed AI service and bringing your own API keys."
-      isFirstRow={true}
     >
       <div className="flex flex-col gap-2">
         <label className="flex items-center gap-2 cursor-pointer text-sm font-medium">
@@ -1051,7 +1047,7 @@ function MahoManagedStatus({
   data: AISettings;
   modelsLoading: boolean;
   providerModels: string[];
-  handler: any;
+  handler: PageHandlerRemote;
   commit: (cb: () => Promise<void>) => void;
 }) {
   return (
@@ -1083,7 +1079,7 @@ function MahoManagedStatus({
             modelValue={data.model}
             providerModels={providerModels}
             modelsLoading={modelsLoading}
-            onCommitModel={value => commit(async () => handler.setAIModel(value))}
+            onCommitModel={async value => { await commit(async () => { await handler.setAIModel(value); }); }}
             allowAuto={true}
           />
         </div>
@@ -1100,7 +1096,7 @@ function ByokFields({
   commit
 }: {
   data: AISettings;
-  handler: any;
+  handler: PageHandlerRemote;
   commit: (cb: () => Promise<void>) => void;
 }) {
   const provider = data.provider;
@@ -1111,10 +1107,12 @@ function ByokFields({
         label="OpenAI BYOK Key"
         placeholder="Enter OpenAI API key (encrypted at rest)"
         type="password"
-        onCommit={value => commit(async () => {
-          const {success} = await handler.setBYOKKey('openai', value);
-          if (!success) throw new Error('Failed to save OpenAI BYOK key');
-        })}
+        onCommit={async (value) => {
+          await commit(async () => {
+            const {success} = await handler.setBYOKKey('openai', value);
+            if (!success) throw new Error('Failed to save OpenAI BYOK key');
+          });
+        }}
       />
     );
   }
@@ -1125,10 +1123,12 @@ function ByokFields({
         label="Anthropic BYOK Key"
         placeholder="Enter Anthropic API key (encrypted at rest)"
         type="password"
-        onCommit={value => commit(async () => {
-          const {success} = await handler.setBYOKKey('anthropic', value);
-          if (!success) throw new Error('Failed to save Anthropic BYOK key');
-        })}
+        onCommit={async (value) => {
+          await commit(async () => {
+            const {success} = await handler.setBYOKKey('anthropic', value);
+            if (!success) throw new Error('Failed to save Anthropic BYOK key');
+          });
+        }}
       />
     );
   }
@@ -1136,17 +1136,17 @@ function ByokFields({
     return (
       <>
         <AiFieldRow
-          initialValue={data.apiKey}
+          initialValue=""
           label="API key"
-          placeholder="Enter API key"
+          placeholder={data.hasApiKey ? '••••••••  (saved — enter new value to change)' : 'Enter API key'}
           type="password"
-          onCommit={value => commit(async () => handler.setAIApiKey(value))}
+          onCommit={async value => { await commit(async () => { await handler.setAIApiKey(value); }); }}
         />
         <AiFieldRow
           initialValue={data.baseUrl}
           label="Base URL"
           placeholder="e.g. https://api.together.xyz"
-          onCommit={value => commit(async () => handler.setAIBaseUrl(value))}
+          onCommit={async value => { await commit(async () => { await handler.setAIBaseUrl(value); }); }}
         />
       </>
     );
@@ -1164,12 +1164,22 @@ function ByokModelPickerRow({
   data: AISettings;
   modelsLoading: boolean;
   providerModels: string[];
-  handler: any;
+  handler: PageHandlerRemote;
   commit: (cb: () => Promise<void>) => void;
 }) {
   const provider = data.provider;
   const isByokProvider = provider === 'openai' || provider === 'anthropic' || provider === 'openai-compatible';
   if (!isByokProvider) return null;
+
+  const emptyErrorMsg = (() => {
+    if (provider === 'openai') return 'Add your OpenAI API key above to fetch available models.';
+    if (provider === 'anthropic') return 'Add your Anthropic API key above to fetch available models.';
+    if (provider === 'openai-compatible') {
+      if (!data.baseUrl) return 'Enter a Base URL above to fetch available models.';
+      return 'No models returned. Verify the server exposes /v1/models and the API key is correct.';
+    }
+    return undefined;
+  })();
 
   return (
     <ManagedSettingRow title="Model" description="Choose which model identifier to request.">
@@ -1178,8 +1188,9 @@ function ByokModelPickerRow({
         modelValue={data.model}
         providerModels={providerModels}
         modelsLoading={modelsLoading}
-        onCommitModel={value => commit(async () => handler.setAIModel(value))}
+        onCommitModel={async value => { await commit(async () => { await handler.setAIModel(value); }); }}
         customPlaceholder="Enter model identifier"
+        emptyErrorMsg={emptyErrorMsg}
       />
     </ManagedSettingRow>
   );
@@ -1195,7 +1206,7 @@ function LocalServerModelPickerRow({
   data: AISettings;
   modelsLoading: boolean;
   providerModels: string[];
-  handler: any;
+  handler: PageHandlerRemote;
   commit: (cb: () => Promise<void>) => void;
 }) {
   if (data.provider !== 'local-server') return null;
@@ -1207,7 +1218,7 @@ function LocalServerModelPickerRow({
         modelValue={data.model}
         providerModels={providerModels}
         modelsLoading={modelsLoading}
-        onCommitModel={value => commit(async () => handler.setAIModel(value))}
+        onCommitModel={async value => { await commit(async () => { await handler.setAIModel(value); }); }}
         customPlaceholder="e.g. llama3.1:8b"
         emptyErrorMsg="Ollama not detected or no models found."
       />
@@ -1242,7 +1253,7 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
     return unsub;
   }, [store, loadSettings]);
 
-  const commit = useCallback(async (action: () => Promise<void>) => {
+  const commit: (action: () => Promise<void>) => Promise<void> = useCallback(async (action: () => Promise<void>): Promise<void> => {
     setActionError(null);
     try {
       await action();
@@ -1254,100 +1265,131 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
   }, [loadSettings]);
 
   const providerId = state.status === 'loaded' ? state.data.provider : '';
-  const { models: providerModels, loading: modelsLoading } = useProviderModels(store, providerId);
+  const { models: providerModels, loading: modelsLoading, refresh: refreshModels, refreshing: modelsRefreshing } = useProviderModels(store, providerId);
 
   return (
-    <DomainPaneSection pane={pane}>
-      <SectionHeader title="Maho AI configuration" />
+    <section className="mx-auto w-full max-w-3xl px-6 py-8" data-pane={pane.key} id={`section-${pane.key}`}>
+      <h2 className="mb-6 text-2xl font-semibold tracking-tight">{pane.title}</h2>
+
       {actionError ? <p className={STANDALONE_MESSAGE_CLASS}>{actionError}</p> : null}
       {state.status === 'loading' ? <PaneLoading message="Loading Maho AI settings…" /> : null}
       {state.status === 'error' ? (
         <PaneRetry message={state.message} title="Maho AI settings unavailable" onRetry={() => void loadSettings()} />
       ) : null}
       {state.status === 'loaded' ? (
-        <div className={ROWS_CLASS}>
-          {state.data.hasRelaySession ? (
-            <ProviderModeSelector
-              provider={state.data.provider}
-              onProviderChange={mode => commit(async () => {
-                const nextProvider = mode === 'maho-managed' ? 'maho-managed' : 'openai';
-                await handler.setAIProvider(nextProvider);
-              })}
-            />
-          ) : null}
+        <>
+          <div className="mb-6">
+            <SectionCard title="Providers">
+              {state.data.hasRelaySession ? (
+                <ProviderModeSelector
+                  provider={state.data.provider}
+                  onProviderChange={async mode => {
+                    await commit(async () => {
+                      const nextProvider = mode === 'maho-managed' ? 'maho-managed' : 'openai';
+                      await handler.setAIProvider(nextProvider);
+                    });
+                  }}
+                />
+              ) : null}
 
-          {state.data.hasRelaySession && state.data.provider === 'maho-managed' ? (
-            <MahoManagedStatus
-              data={state.data}
-              modelsLoading={modelsLoading}
-              providerModels={providerModels}
-              handler={handler}
-              commit={commit}
-            />
-          ) : null}
+              {state.data.hasRelaySession && state.data.provider === 'maho-managed' ? (
+                <MahoManagedStatus
+                  data={state.data}
+                  modelsLoading={modelsLoading}
+                  providerModels={providerModels}
+                  handler={handler}
+                  commit={commit}
+                />
+              ) : null}
 
-          {state.data.provider !== 'maho-managed' ? (
-            <>
+              {state.data.provider !== 'maho-managed' ? (
+                <>
+                  <AiSelectRow
+                    label="Provider"
+                    initialValue={state.data.provider}
+                    options={[
+                      {value: '', label: '(not set)'},
+                      {value: 'anthropic', label: 'Anthropic'},
+                      {value: 'openai', label: 'OpenAI'},
+                      {value: 'openai-compatible', label: 'OpenAI-compatible (custom URL)'},
+                      {value: 'local-server', label: 'Local Server (Ollama)'},
+                    ]}
+                    onCommit={async (value) => { await commit(async () => { await handler.setAIProvider(value); }); }}
+                  />
+
+                  <ByokFields
+                    data={state.data}
+                    handler={handler}
+                    commit={commit}
+                  />
+                </>
+              ) : null}
+            </SectionCard>
+          </div>
+
+          <div className="mb-6">
+            <SectionCard
+              title="Model"
+              action={state.data.provider !== 'maho-managed' && state.data.provider !== '' ? (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded-md border border-border bg-background/70 px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
+                  disabled={modelsRefreshing}
+                  onClick={() => void refreshModels()}
+                  aria-label="Refresh model list"
+                >
+                  <Loader2 className={cn("size-3", modelsRefreshing ? "animate-spin" : "hidden")} />
+                  {modelsRefreshing ? 'Refreshing…' : 'Refresh'}
+                </button>
+              ) : null}
+            >
+              {state.data.provider !== 'maho-managed' ? (
+                <>
+                  <ByokModelPickerRow
+                    data={state.data}
+                    modelsLoading={modelsLoading}
+                    providerModels={providerModels}
+                    handler={handler}
+                    commit={commit}
+                  />
+
+                  <LocalServerModelPickerRow
+                    data={state.data}
+                    modelsLoading={modelsLoading}
+                    providerModels={providerModels}
+                    handler={handler}
+                    commit={commit}
+                  />
+                </>
+              ) : null}
+
               <AiSelectRow
-                label="Provider"
-                initialValue={state.data.provider}
+                label="Approval policy"
+                initialValue={state.data.approvalPolicy}
                 options={[
-                  {value: '', label: '(not set)'},
-                  {value: 'anthropic', label: 'Anthropic'},
-                  {value: 'openai', label: 'OpenAI'},
-                  {value: 'openai-compatible', label: 'OpenAI-compatible (custom URL)'},
-                  {value: 'local-server', label: 'Local Server (Ollama)'},
+                  {value: 'prompt', label: 'Ask before each tool call'},
+                  {value: 'allow', label: 'Auto-approve all tool calls'},
+                  {value: 'deny', label: 'Block all tool calls'},
                 ]}
-                onCommit={value => commit(async () => handler.setAIProvider(value))}
+                onCommit={async (value) => { await commit(async () => { await handler.setAIApprovalPolicy(value); }); }}
               />
+            </SectionCard>
+          </div>
 
-              <ByokFields
-                data={state.data}
-                handler={handler}
-                commit={commit}
+          <SectionCard title="Workspace">
+            <ManagedSettingRow
+              description="Enable or disable AI session persistence."
+              title="Session persistence">
+              <Toggle
+                enabled={state.data.sessionPersistenceEnabled}
+                label="Session persistence"
+                onToggle={async enabled => { await commit(async () => { await handler.setAISessionPersistence(enabled); }); }}
               />
-
-              <ByokModelPickerRow
-                data={state.data}
-                modelsLoading={modelsLoading}
-                providerModels={providerModels}
-                handler={handler}
-                commit={commit}
-              />
-
-              <LocalServerModelPickerRow
-                data={state.data}
-                modelsLoading={modelsLoading}
-                providerModels={providerModels}
-                handler={handler}
-                commit={commit}
-              />
-            </>
-          ) : null}
-
-          <AiSelectRow
-            label="Approval policy"
-            initialValue={state.data.approvalPolicy}
-            options={[
-              {value: 'prompt', label: 'Ask before each tool call'},
-              {value: 'allow', label: 'Auto-approve all tool calls'},
-              {value: 'deny', label: 'Block all tool calls'},
-            ]}
-            onCommit={value => commit(async () => handler.setAIApprovalPolicy(value))}
-          />
-
-          <ManagedSettingRow
-            description="Enable or disable AI session persistence."
-            title="Session persistence">
-            <Toggle
-              enabled={state.data.sessionPersistenceEnabled}
-              label="Session persistence"
-              onToggle={enabled => commit(async () => handler.setAISessionPersistence(enabled))}
-            />
-          </ManagedSettingRow>
-        </div>
+            </ManagedSettingRow>
+          </SectionCard>
+        </>
       ) : null}
-    </DomainPaneSection>
+    </section>
   );
 }
 
@@ -1427,54 +1469,42 @@ function BillingPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
 
   if (!account?.signedIn) {
     return (
-      <DomainPaneSection pane={pane}>
-        <Card className="max-w-xl border-border/70 bg-card/95 shadow-sm">
-          <CardHeader>
-            <CardTitle>Sign in to manage your subscription</CardTitle>
-            <CardDescription>You'll see plan details, credits, and invoices here after signing in.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button type="button" onClick={() => store.selectPane('account')}>
-              Go to sign in
-            </Button>
-          </CardContent>
-        </Card>
-      </DomainPaneSection>
+      <PaneShell pane={pane}>
+        <SectionCard
+          title="Sign in to manage your subscription"
+          description="You'll see plan details, credits, and invoices here after signing in."
+          className="max-w-xl"
+          padded
+        >
+          <Button type="button" onClick={() => store.selectPane('account')}>
+            Go to sign in
+          </Button>
+        </SectionCard>
+      </PaneShell>
     );
   }
 
   if (loading && !billing) {
     return (
-      <DomainPaneSection pane={pane}>
+      <PaneShell pane={pane}>
         <PaneLoading message="Loading billing details…" />
-      </DomainPaneSection>
+      </PaneShell>
     );
   }
 
   if (error) {
     return (
-      <DomainPaneSection pane={pane}>
-        <div className="grid max-w-xl gap-3">
-          <Alert className="border-destructive/60 bg-destructive/10 text-destructive shadow-sm" variant="destructive">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Connection lost</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-          <div>
-            <Button type="button" variant="outline" onClick={() => void store.refreshBilling()}>
-              Retry
-            </Button>
-          </div>
-        </div>
-      </DomainPaneSection>
+      <PaneShell pane={pane}>
+        <PaneRetry message={error} title="Connection lost" onRetry={() => void store.refreshBilling()} />
+      </PaneShell>
     );
   }
 
   if (!billing) {
     return (
-      <DomainPaneSection pane={pane}>
+      <PaneShell pane={pane}>
         <PaneLoading message="Loading billing details…" />
-      </DomainPaneSection>
+      </PaneShell>
     );
   }
 
@@ -1492,224 +1522,213 @@ function BillingPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
       billing.subscriptionStatus === 'active' ? 'success' : 'secondary';
 
   return (
-    <DomainPaneSection pane={pane}>
-      <div className="grid max-w-3xl gap-6">
-        <Card className="border-border/70 bg-card/95 shadow-sm">
-          <CardHeader className="gap-4 pb-4 sm:flex-row sm:items-start sm:justify-between">
-            <div className="space-y-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <CardTitle>Overview</CardTitle>
-                <Badge variant={statusBadgeVariant}>{billing.subscriptionStatus || 'No subscription'}</Badge>
-              </div>
-              <CardDescription>Plan details, renewal timing, and payment status for your Maho account.</CardDescription>
-            </div>
+    <PaneShell pane={pane}>
+      <SectionCard
+        title="Overview"
+        description="Plan details, renewal timing, and payment status for your Maho account."
+        action={
+          <div className="flex items-center gap-2">
+            <Badge variant={statusBadgeVariant}>{billing.subscriptionStatus || 'No subscription'}</Badge>
             <Button size="sm" type="button" variant="outline" onClick={openBillingPortal}>
               Adjust plan
               <ArrowUpRight className="size-3.5" />
             </Button>
-          </CardHeader>
-          <CardContent className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-xl border border-border/70 bg-background/60 p-4">
-              <p className="text-sm font-medium text-muted-foreground">Plan</p>
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <p className="text-lg font-semibold tracking-tight">{tierLabel}</p>
-                <Badge variant={tier && tier !== 'free' ? 'default' : 'secondary'}>{tierLabel} plan</Badge>
-              </div>
-              <p className="mt-2 text-sm text-muted-foreground">
-                {renewDate ? `Auto-renews on ${renewDate}.` : 'Renewal details will appear once your subscription is active.'}
-              </p>
+          </div>
+        }
+        className="mb-6"
+        padded
+      >
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="rounded-xl border border-border/70 bg-background/60 p-4">
+            <p className="text-sm font-medium text-muted-foreground">Plan</p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <p className="text-lg font-semibold tracking-tight">{tierLabel}</p>
+              <Badge variant={tier && tier !== 'free' ? 'default' : 'secondary'}>{tierLabel} plan</Badge>
             </div>
-            <div className="rounded-xl border border-border/70 bg-background/60 p-4">
-              <p className="text-sm font-medium text-muted-foreground">Payment method</p>
-              <p className="mt-3 text-lg font-semibold tracking-tight">
-                {billing.hasPaymentMethod ? 'Payment method on file' : 'No payment method'}
-              </p>
-              <p className="mt-2 text-sm text-muted-foreground">Update cards, receipts, and billing details in Stripe.</p>
-              <Button className="mt-4" size="sm" type="button" variant="outline" onClick={openBillingPortal}>
-                Manage
-                <ArrowUpRight className="size-3.5" />
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-border/70 bg-card/95 shadow-sm">
-          <CardHeader className="pb-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="space-y-1">
-                <CardTitle>Credits</CardTitle>
-                <CardDescription>
-                  {creditLimit > 0 ? `${remainingPct}% remaining` : 'Current available balance'}
-                </CardDescription>
-              </div>
-              <Badge variant={progressValue > 20 ? 'success' : progressValue > 5 ? 'warning' : 'destructive'}>
-                {formatUsd(creditBalance)}
-              </Badge>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="grid gap-4 rounded-xl border border-border/70 bg-background/60 p-4">
-              <div className="flex flex-wrap items-end justify-between gap-3">
-                <div>
-                  <p className="text-3xl font-semibold tracking-tight">
-                    {creditLimit > 0 ? `${remainingPct}%` : formatUsd(creditBalance)}
-                  </p>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {creditLimit > 0 ? `${formatUsd(creditBalance)} of ${formatUsd(creditLimit)} remaining.` : 'Your current balance is available for usage.'}
-                  </p>
-                </div>
-                {loading ? <Badge variant="secondary">Refreshing…</Badge> : null}
-              </div>
-              <Progress value={progressValue} />
-              <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
-                <span>
-                  {renewDate ? `Resets to ${formatUsd(creditLimit)} on ${renewDate}.` : 'Your next reset date will appear here.'}
-                </span>
-                {billing.lifetimePurchasedUsd > 0 ? (
-                  <span>Purchased {formatUsd(billing.lifetimePurchasedUsd)} total</span>
-                ) : null}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-border/70 bg-card/95 shadow-sm">
-          <CardHeader className="pb-4">
-            <CardTitle>Buy Credits</CardTitle>
-            <CardDescription>
-              Prepaid credit packs that never expire. Overflow when your subscription ceiling is reached, or standalone if you have no subscription.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid gap-3 sm:grid-cols-3">
-              {([10, 50, 100] as const).map((packSize) => {
-                const isFeatured = packSize === 50;
-                const isPurchasing = purchasingSize === packSize;
-                const isDisabled = purchasingSize !== null;
-                return (
-                  <button
-                    key={packSize}
-                    type="button"
-                    disabled={isDisabled}
-                    onClick={() => void handleBuyCredits(packSize)}
-                    className={cn(
-                      'flex flex-col items-start gap-1 rounded-xl border p-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60',
-                      isFeatured
-                        ? 'border-foreground bg-foreground text-background hover:opacity-90'
-                        : 'border-border/70 bg-background/60 hover:border-foreground',
-                    )}
-                  >
-                    <span className="text-2xl font-semibold tracking-tight">
-                      ${packSize}
-                    </span>
-                    <span className="text-xs opacity-80">
-                      {packSize === 10
-                        ? 'Starter pack'
-                        : packSize === 50
-                        ? 'Best value'
-                        : 'Power-user pack'}
-                    </span>
-                    {isPurchasing ? (
-                      <span className="text-xs opacity-70">Opening…</span>
-                    ) : null}
-                  </button>
-                );
-              })}
-            </div>
-            {purchaseError ? (
-              <Alert className="border-destructive/60 bg-destructive/10 text-destructive shadow-sm" variant="destructive">
-                <AlertCircle className="size-4" />
-                <AlertTitle>Purchase failed</AlertTitle>
-                <AlertDescription>{purchaseError}</AlertDescription>
-              </Alert>
-            ) : null}
-            <p className="text-xs text-muted-foreground">
-              Credits are consumed at a 30% markup over usage cost. Credits never expire. See ADR 0010 for details.
+            <p className="mt-2 text-sm text-muted-foreground">
+              {renewDate ? `Auto-renews on ${renewDate}.` : 'Renewal details will appear once your subscription is active.'}
             </p>
-          </CardContent>
-        </Card>
+          </div>
+          <div className="rounded-xl border border-border/70 bg-background/60 p-4">
+            <p className="text-sm font-medium text-muted-foreground">Payment method</p>
+            <p className="mt-3 text-lg font-semibold tracking-tight">
+              {billing.hasPaymentMethod ? 'Payment method on file' : 'No payment method'}
+            </p>
+            <p className="mt-2 text-sm text-muted-foreground">Update cards, receipts, and billing details in Stripe.</p>
+            <Button className="mt-4" size="sm" type="button" variant="outline" onClick={openBillingPortal}>
+              Manage
+              <ArrowUpRight className="size-3.5" />
+            </Button>
+          </div>
+        </div>
+      </SectionCard>
 
-        <Card className="border-border/70 bg-card/95 shadow-sm">
-          <CardHeader className="flex-row items-center justify-between">
-            <div className="space-y-1">
-              <CardTitle>Invoices</CardTitle>
-              <CardDescription>Receipts and invoices will appear here after your first paid charge.</CardDescription>
+      <SectionCard
+        title="Credits"
+        description={creditLimit > 0 ? `${remainingPct}% remaining` : 'Current available balance'}
+        action={
+          <Badge variant={progressValue > 20 ? 'success' : progressValue > 5 ? 'warning' : 'destructive'}>
+            {formatUsd(creditBalance)}
+          </Badge>
+        }
+        className="mb-6"
+        padded
+      >
+        <div className="grid gap-4 rounded-xl border border-border/70 bg-background/60 p-4">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <p className="text-3xl font-semibold tracking-tight">
+                {creditLimit > 0 ? `${remainingPct}%` : formatUsd(creditBalance)}
+              </p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {creditLimit > 0 ? `${formatUsd(creditBalance)} of ${formatUsd(creditLimit)} remaining.` : 'Your current balance is available for usage.'}
+              </p>
             </div>
-            {state.invoicesLoading && <Badge variant="secondary">Loading…</Badge>}
-          </CardHeader>
-          <CardContent>
-            {state.invoicesError ? (
-              <Alert className="border-destructive/60 bg-destructive/10 text-destructive shadow-sm" variant="destructive">
-                <AlertCircle className="size-4" />
-                <AlertTitle>Failed to load invoices</AlertTitle>
-                <AlertDescription>{state.invoicesError}</AlertDescription>
-              </Alert>
-            ) : invoices.length === 0 ? (
-              <div className="grid min-h-36 place-items-center rounded-xl border border-dashed border-border/70 bg-background/40 px-6 py-10 text-center">
-                <div className="space-y-1">
-                  <p className="text-base font-semibold tracking-tight">No invoices yet</p>
-                  <p className="text-sm text-muted-foreground">Invoices will appear after your first payment.</p>
-                </div>
-              </div>
-            ) : (
-              <div className="overflow-x-auto rounded-xl border border-border/70 bg-background/60">
-                <table className="w-full text-left border-collapse text-sm">
-                  <thead>
-                    <tr className="border-b border-border/60 bg-muted/30 text-muted-foreground font-medium">
-                      <th className="p-3">Date</th>
-                      <th className="p-3">Amount</th>
-                      <th className="p-3">Status</th>
-                      <th className="p-3 text-right">PDF</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border/40">
-                    {invoices.map(invoice => (
-                      <tr key={invoice.id} className="hover:bg-muted/10 transition-colors">
-                        <td className="p-3 font-medium whitespace-nowrap">
-                          {formatBillingDate(invoice.createdAt) || 'N/A'}
-                        </td>
-                        <td className="p-3 whitespace-nowrap">
-                          {formatUsd(invoice.amountUsd)} {invoice.currency?.toUpperCase() || 'USD'}
-                        </td>
-                        <td className="p-3 whitespace-nowrap">
-                          <Badge
-                            variant={
-                              invoice.status === 'paid'
-                                ? 'success'
-                                : invoice.status === 'void' || invoice.status === 'failed'
-                                ? 'destructive'
-                                : 'warning'
-                            }
-                          >
-                            {invoice.status}
-                          </Badge>
-                        </td>
-                        <td className="p-3 text-right whitespace-nowrap">
-                          {invoice.pdfUrl ? (
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              type="button"
-                              onClick={() => window.open(invoice.pdfUrl, '_blank', 'noopener')}
-                              title="Download PDF Invoice"
-                            >
-                              <Download className="size-3.5 mr-1" />
-                              PDF
-                            </Button>
-                          ) : (
-                            <span className="text-muted-foreground text-xs">—</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-    </DomainPaneSection>
+            {loading ? <Badge variant="secondary">Refreshing…</Badge> : null}
+          </div>
+          <Progress value={progressValue} />
+          <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+            <span>
+              {renewDate ? `Resets to ${formatUsd(creditLimit)} on ${renewDate}.` : 'Your next reset date will appear here.'}
+            </span>
+            {billing.lifetimePurchasedUsd > 0 ? (
+              <span>Purchased {formatUsd(billing.lifetimePurchasedUsd)} total</span>
+            ) : null}
+          </div>
+        </div>
+      </SectionCard>
+
+      <SectionCard
+        title="Buy Credits"
+        description="Prepaid credit packs that never expire. Overflow when your subscription ceiling is reached, or standalone if you have no subscription."
+        className="mb-6"
+        padded
+      >
+        <div className="grid gap-3 sm:grid-cols-3">
+          {([10, 50, 100] as const).map((packSize) => {
+            const isFeatured = packSize === 50;
+            const isPurchasing = purchasingSize === packSize;
+            const isDisabled = purchasingSize !== null;
+            return (
+              <button
+                key={packSize}
+                type="button"
+                disabled={isDisabled}
+                onClick={() => void handleBuyCredits(packSize)}
+                className={cn(
+                  'flex flex-col items-start gap-1 rounded-xl border p-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60',
+                  isFeatured
+                    ? 'border-foreground bg-foreground text-background hover:opacity-90'
+                    : 'border-border/70 bg-background/60 hover:border-foreground',
+                )}
+              >
+                <span className="text-2xl font-semibold tracking-tight">
+                  ${packSize}
+                </span>
+                <span className="text-xs opacity-80">
+                  {packSize === 10
+                    ? 'Starter pack'
+                    : packSize === 50
+                    ? 'Best value'
+                    : 'Power-user pack'}
+                </span>
+                {isPurchasing ? (
+                  <span className="text-xs opacity-70">Opening…</span>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+        {purchaseError ? (
+          <div className="mt-4">
+            <Alert className="border-destructive/60 bg-destructive/10 text-destructive shadow-sm" variant="destructive">
+              <AlertCircle className="size-4" />
+              <AlertTitle>Purchase failed</AlertTitle>
+              <AlertDescription>{purchaseError}</AlertDescription>
+            </Alert>
+          </div>
+        ) : null}
+        <p className="text-xs text-muted-foreground mt-4">
+          Credits are consumed at a 30% markup over usage cost. Credits never expire. See ADR 0010 for details.
+        </p>
+      </SectionCard>
+
+      <SectionCard
+        title="Invoices"
+        description="Receipts and invoices will appear here after your first paid charge."
+        action={state.invoicesLoading && <Badge variant="secondary">Loading…</Badge>}
+        padded
+      >
+        {state.invoicesError ? (
+          <Alert className="border-destructive/60 bg-destructive/10 text-destructive shadow-sm" variant="destructive">
+            <AlertCircle className="size-4" />
+            <AlertTitle>Failed to load invoices</AlertTitle>
+            <AlertDescription>{state.invoicesError}</AlertDescription>
+          </Alert>
+        ) : invoices.length === 0 ? (
+          <div className="grid min-h-36 place-items-center rounded-xl border border-dashed border-border/70 bg-background/40 px-6 py-10 text-center">
+            <div className="space-y-1">
+              <p className="text-base font-semibold tracking-tight">No invoices yet</p>
+              <p className="text-sm text-muted-foreground">Invoices will appear after your first payment.</p>
+            </div>
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-border/70 bg-background/60">
+            <table className="w-full text-left border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-border/60 bg-muted/30 text-muted-foreground font-medium">
+                  <th className="p-3">Date</th>
+                  <th className="p-3">Amount</th>
+                  <th className="p-3">Status</th>
+                  <th className="p-3 text-right">PDF</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border/40">
+                {invoices.map(invoice => (
+                  <tr key={invoice.id} className="hover:bg-muted/10 transition-colors">
+                    <td className="p-3 font-medium whitespace-nowrap">
+                      {formatBillingDate(invoice.createdAt) || 'N/A'}
+                    </td>
+                    <td className="p-3 whitespace-nowrap">
+                      {formatUsd(invoice.amountUsd)} {invoice.currency?.toUpperCase() || 'USD'}
+                    </td>
+                    <td className="p-3 whitespace-nowrap">
+                      <Badge
+                        variant={
+                          invoice.status === 'paid'
+                            ? 'success'
+                            : invoice.status === 'void' || invoice.status === 'failed'
+                            ? 'destructive'
+                            : 'warning'
+                        }
+                      >
+                        {invoice.status}
+                      </Badge>
+                    </td>
+                    <td className="p-3 text-right whitespace-nowrap">
+                      {invoice.pdfUrl ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          type="button"
+                          onClick={() => window.open(invoice.pdfUrl, '_blank', 'noopener')}
+                          title="Download PDF Invoice"
+                        >
+                          <Download className="size-3.5 mr-1" />
+                          PDF
+                        </Button>
+                      ) : (
+                        <span className="text-muted-foreground text-xs">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </SectionCard>
+    </PaneShell>
   );
 }
 
@@ -1819,19 +1838,17 @@ function SyncPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore
   }, [loadStatus]);
 
   return (
-    <DomainPaneSection pane={pane}>
-      <SectionHeader title="Account & sync" />
+    <PaneShell pane={pane}>
       {state.status === 'loading' ? <PaneLoading message="Loading sync status…" /> : null}
       {state.status === 'error' ? (
         <PaneRetry message={state.message} title="Sync unavailable" onRetry={() => void loadStatus()} />
       ) : null}
       {state.status === 'loaded' ? (
-        <div className={ROWS_CLASS}>
+        <SectionCard title="Connection">
           <ManagedSettingRow
             description={state.data.status.isSyncing ?
               `Syncing · ${state.data.status.statusLabel}` :
               `Not connected · ${state.data.status.statusLabel || 'idle'}`}
-            isFirstRow
             title="Status"
           />
           {state.data.status.errorMessage ? (
@@ -1895,9 +1912,9 @@ function SyncPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore
               </ManagedSettingRow>
             </>
           )}
-        </div>
+        </SectionCard>
       ) : null}
-    </DomainPaneSection>
+    </PaneShell>
   );
 }
 
@@ -1982,17 +1999,16 @@ function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
   }, [loadAutofill]);
 
   return (
-    <DomainPaneSection pane={pane}>
+    <PaneShell pane={pane}>
       {state.status === 'loading' ? <PaneLoading message="Loading autofill data…" /> : null}
       {state.status === 'error' ? (
         <PaneRetry message={state.message} title="Autofill unavailable" onRetry={() => void loadAutofill()} />
       ) : null}
       {state.status === 'loaded' ? (
         <>
-          <SectionHeader title="Saved addresses" />
-          <div className={ROWS_CLASS}>
+          <SectionCard title="Saved addresses" className="mb-6">
             {state.data.addresses.length === 0 ? <EmptyDescription message="No saved addresses." /> : null}
-            {state.data.addresses.map((address, index) => {
+            {state.data.addresses.map((address) => {
               const locationParts = [
                 address.addressLine1,
                 address.addressLine2,
@@ -2013,7 +2029,6 @@ function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
                   key={address.id}
                   controlClassName={SETTING_ACTIONS_CLASS}
                   description={descriptionParts.join(' · ') || 'No address details'}
-                  isFirstRow={index === 0}
                   title={address.name || address.email || address.addressLine1 || 'Unnamed address'}>
                   <ActionButton
                     ariaLabel={`Delete address ${address.name || address.addressLine1 || address.id}`}
@@ -2029,7 +2044,6 @@ function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
             <ManagedSettingRow
               controlClassName={SETTING_CONTROL_STACKED_CLASS}
               description="Create a new saved address for form autofill. Fields left blank stay empty."
-              isFirstRow={state.data.addresses.length === 0}
               title="Add address">
               <div className={SETTING_CONTROL_STACK_CLASS}>
                 <TextFieldShell ariaLabel="Address full name" placeholder="Full name" value={addressForm.name} onChange={value => setAddressForm(current => ({...current, name: value}))} />
@@ -2068,18 +2082,17 @@ function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
                 }} />
               </div>
             </ManagedSettingRow>
-          </div>
-          <SectionHeader spaced title="Payment methods" />
-          <div className={ROWS_CLASS}>
+          </SectionCard>
+
+          <SectionCard title="Payment methods">
             {state.data.payments.length === 0 ? <EmptyDescription message="No saved payment methods." /> : null}
-            {state.data.payments.map((payment, index) => {
+            {state.data.payments.map((payment) => {
               const descriptionParts = [payment.cardholderName, payment.expiration ? `Exp ${payment.expiration}` : ''].filter(Boolean);
               return (
                 <ManagedSettingRow
                   key={payment.id}
                   controlClassName={SETTING_ACTIONS_CLASS}
                   description={descriptionParts.join(' · ') || 'No details'}
-                  isFirstRow={index === 0}
                   title={`${payment.cardNetwork || 'Card'} •••• ${payment.lastFour || '????'}`}>
                   <ActionButton
                     ariaLabel={`Delete payment method ${payment.cardholderName || payment.lastFour || payment.id}`}
@@ -2095,7 +2108,6 @@ function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
             <ManagedSettingRow
               controlClassName={SETTING_CONTROL_STACKED_CLASS}
               description="Store a payment method for faster checkout autofill."
-              isFirstRow={state.data.payments.length === 0}
               title="Add payment method">
               <div className={SETTING_CONTROL_STACK_CLASS}>
                 <TextFieldShell ariaLabel="Payment card network" placeholder="Card network" value={paymentForm.cardNetwork} onChange={value => setPaymentForm(current => ({...current, cardNetwork: value}))} />
@@ -2122,10 +2134,10 @@ function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
                 }} />
               </div>
             </ManagedSettingRow>
-          </div>
+          </SectionCard>
         </>
       ) : null}
-    </DomainPaneSection>
+    </PaneShell>
   );
 }
 
@@ -2195,52 +2207,50 @@ function PasswordsPane(
   }, [loadPasswords, searchQuery]);
 
   return (
-    <DomainPaneSection pane={pane}>
+    <PaneShell pane={pane}>
       {loadState.status === 'loading' ? <PaneLoading message="Loading password provider…" /> : null}
       {loadState.status === 'error' ? (
         <PaneRetry message={loadState.message} title="Passwords unavailable" onRetry={() => void loadPasswords(searchQuery)} />
       ) : null}
       {loadState.status === 'loaded' ? (
         <>
-          <div className={CONTENT_STACKED_HEADER_CLASS}>
-            <div className={CONTENT_TITLE_GROUP_CLASS}>
-                <h3 className={SECTION_TITLE_CLASS}>Saved passwords</h3>
-              <p className={CONTENT_COPY_CLASS}>{`Passwords provider: ${loadState.data.providerStatus.displayName}.`}</p>
+          <SectionCard
+            title="Saved passwords"
+            description={`Passwords provider: ${loadState.data.providerStatus.displayName}.`}
+            className="mb-6"
+          >
+            <ManagedSettingRow
+              description="Enable password management to show saved passwords."
+              title="Passwords">
+              <Toggle
+                enabled={passwordsEnabled}
+                label="Passwords"
+                onToggle={async nextEnabled => {
+                  const success = await store.commitSettingValue(
+                      'autofill.passwords_enabled', nextEnabled ? 'true' : 'false');
+                  if (success) {
+                    setPasswordsEnabledOverride(nextEnabled);
+                  }
+                }}
+              />
+            </ManagedSettingRow>
+            <ManagedSettingRow
+              description={loadState.data.providerStatus.description}
+              title={`Password provider · ${loadState.data.providerStatus.displayName}`}>
+              <span className={INLINE_STATUS_CLASS}>
+                {loadState.data.providerStatus.provider === PasswordProviderKind.kMahoNative ?
+                  'Maho Native' :
+                  loadState.data.providerStatus.provider === PasswordProviderKind.kBitwarden ?
+                    'Bitwarden' :
+                    '1Password'}
+              </span>
+            </ManagedSettingRow>
+            <div className="px-6 py-4 text-xs leading-5 text-muted-foreground border-t border-border">
+              {`Capabilities: ${loadState.data.providerStatus.capabilities.canListSavedPasswords ? 'list' : 'no list'}, ${loadState.data.providerStatus.capabilities.canSearchSavedPasswords ? 'search' : 'no search'}, ${loadState.data.providerStatus.capabilities.canAddSavedPasswords ? 'add' : 'no add'}, ${loadState.data.providerStatus.capabilities.canEditSavedPasswords ? 'edit' : 'no edit'}, ${loadState.data.providerStatus.capabilities.canRevealPasswords ? 'reveal' : 'no reveal'}, ${loadState.data.providerStatus.capabilities.canDeleteSavedPasswords ? 'delete' : 'no delete'}.`}
             </div>
-            <div className={PROVIDER_CARD_CLASS}>
-              <ManagedSettingRow
-                description="Enable password management to show saved passwords."
-                isFirstRow
-                title="Passwords">
-                <Toggle
-                  enabled={passwordsEnabled}
-                  label="Passwords"
-                  onToggle={async nextEnabled => {
-                    const success = await store.commitSettingValue(
-                        'autofill.passwords_enabled', nextEnabled ? 'true' : 'false');
-                    if (success) {
-                      setPasswordsEnabledOverride(nextEnabled);
-                    }
-                  }}
-                />
-              </ManagedSettingRow>
-              <ManagedSettingRow
-                description={loadState.data.providerStatus.description}
-                title={`Password provider · ${loadState.data.providerStatus.displayName}`}>
-                <span className={INLINE_STATUS_CLASS}>
-                  {loadState.data.providerStatus.provider === PasswordProviderKind.kMahoNative ?
-                    'Maho Native' :
-                    loadState.data.providerStatus.provider === PasswordProviderKind.kBitwarden ?
-                      'Bitwarden' :
-                      '1Password'}
-                </span>
-              </ManagedSettingRow>
-              <p className={CAPABILITIES_COPY_CLASS}>
-                {`Capabilities: ${loadState.data.providerStatus.capabilities.canListSavedPasswords ? 'list' : 'no list'}, ${loadState.data.providerStatus.capabilities.canSearchSavedPasswords ? 'search' : 'no search'}, ${loadState.data.providerStatus.capabilities.canAddSavedPasswords ? 'add' : 'no add'}, ${loadState.data.providerStatus.capabilities.canEditSavedPasswords ? 'edit' : 'no edit'}, ${loadState.data.providerStatus.capabilities.canRevealPasswords ? 'reveal' : 'no reveal'}, ${loadState.data.providerStatus.capabilities.canDeleteSavedPasswords ? 'delete' : 'no delete'}.`}
-              </p>
-            </div>
-          </div>
-          <div className={BROWSER_SHELL_CLASS}>
+          </SectionCard>
+
+          <SectionCard title="Credentials">
             {!isMahoNativeProvider(loadState.data.providerStatus.provider) ? (
               <>
                 <ManagedSettingRow
@@ -2249,13 +2259,13 @@ function PasswordsPane(
                   <span className={INLINE_STATUS_CLASS}>Extension-managed</span>
                 </ManagedSettingRow>
                 {loadState.data.passwords.length > 0 ? (
-                  <p className={STANDALONE_MESSAGE_CLASS}>
-                    {`${loadState.data.passwords.length} Maho Native password${loadState.data.passwords.length === 1 ? '' : 's'} remain stored locally and can only be managed after switching back to Maho Native.`}
-                  </p>
+                  <EmptyDescription
+                    message={`${loadState.data.passwords.length} Maho Native password${loadState.data.passwords.length === 1 ? '' : 's'} remain stored locally and can only be managed after switching back to Maho Native.`}
+                  />
                 ) : null}
               </>
             ) : !passwordsEnabled ? (
-              <p className={STANDALONE_MESSAGE_CLASS}>Passwords is turned off. Turn it on to show saved passwords.</p>
+              <EmptyDescription message="Passwords is turned off. Turn it on to show saved passwords." />
             ) : (
               <NativePasswordsContent
                 data={loadState.data}
@@ -2268,10 +2278,10 @@ function PasswordsPane(
                 store={store}
               />
             )}
-          </div>
+          </SectionCard>
         </>
       ) : null}
-    </DomainPaneSection>
+    </PaneShell>
   );
 }
 
@@ -2286,12 +2296,12 @@ function NativePasswordsContent(
       setSearchInputValue: (value: string) => void;
       store: MahoSettingsStore;
     }) {
-  const handler = store.getHandler();
+
   const providerStatus = data.providerStatus;
 
   return (
     <>
-      <ManagedSettingRow description="Filter the native password list below." isFirstRow title="Search saved passwords">
+      <ManagedSettingRow description="Filter the native password list below." title="Search saved passwords">
         <TextFieldShell
           ariaLabel="Search passwords"
           placeholder="Search passwords"
@@ -2303,21 +2313,19 @@ function NativePasswordsContent(
       {providerStatus.capabilities.canAddSavedPasswords ? (
         <AddPasswordRow loadPasswords={loadPasswords} query={searchQuery} store={store} />
       ) : null}
-      <div className={ROWS_CLASS}>
-        {data.passwords.length === 0 ? <EmptyDescription message="No saved passwords." /> : null}
-        {data.passwords.map(savedPassword => (
-          <PasswordRow
-            key={savedPassword.id}
-            isRevealed={revealedIds.has(savedPassword.id)}
-            loadPasswords={loadPasswords}
-            password={savedPassword}
-            providerStatus={providerStatus}
-            query={searchQuery}
-            setRevealedIds={setRevealedIds}
-            store={store}
-          />
-        ))}
-      </div>
+      {data.passwords.length === 0 ? <EmptyDescription message="No saved passwords." /> : null}
+      {data.passwords.map(savedPassword => (
+        <PasswordRow
+          key={savedPassword.id}
+          isRevealed={revealedIds.has(savedPassword.id)}
+          loadPasswords={loadPasswords}
+          password={savedPassword}
+          providerStatus={providerStatus}
+          query={searchQuery}
+          setRevealedIds={setRevealedIds}
+          store={store}
+        />
+      ))}
     </>
   );
 }
@@ -2465,33 +2473,32 @@ function ContentBlockerPane({pane, store}: {pane: PaneDefinition; store: MahoSet
   }, [loadContentBlocker]);
 
   return (
-    <DomainPaneSection pane={pane}>
+    <PaneShell pane={pane}>
       {state.status === 'loading' ? <PaneLoading message="Loading content blocker…" /> : null}
       {state.status === 'error' ? (
         <PaneRetry message={state.message} title="Content blocker unavailable" onRetry={() => void loadContentBlocker()} />
       ) : null}
       {state.status === 'loaded' ? (
         <>
-          <SectionHeader title="Content blocker" />
-          <ManagedSettingRow
-            controlClassName={SETTING_ACTIONS_CLASS}
-            description={`${state.data.stats.totalRuleCount.toLocaleString()} rules active · ${state.data.stats.filterListCount} filter list(s)`}
-            isFirstRow
-            title="Engine status">
-            <ActionButton label="Rebuild" onClick={async () => {
-              await handler.rebuildContentRules();
-              await loadContentBlocker();
-            }} />
-          </ManagedSettingRow>
-          <SectionHeader spaced title="Filter lists" />
-          <div className={ROWS_CLASS}>
+          <SectionCard title="Status" className="mb-6">
+            <ManagedSettingRow
+              controlClassName={SETTING_ACTIONS_CLASS}
+              description={`${state.data.stats.totalRuleCount.toLocaleString()} rules active · ${state.data.stats.filterListCount} filter list(s)`}
+              title="Engine status">
+              <ActionButton label="Rebuild" onClick={async () => {
+                await handler.rebuildContentRules();
+                await loadContentBlocker();
+              }} />
+            </ManagedSettingRow>
+          </SectionCard>
+
+          <SectionCard title="Filter lists">
             {state.data.lists.length === 0 ? <EmptyDescription message="No filter lists configured." /> : null}
-            {state.data.lists.map((filterList, index) => (
+            {state.data.lists.map((filterList) => (
               <ManagedSettingRow
                 key={filterList.id}
                 controlClassName={SETTING_ACTIONS_CLASS}
                 description={[filterList.url, `${filterList.ruleCount.toLocaleString()} rules`, filterList.enabled ? 'Enabled' : 'Disabled'].filter(Boolean).join(' · ')}
-                isFirstRow={index === 0}
                 title={filterList.name || filterList.id}>
                 <Toggle
                   enabled={filterList.enabled}
@@ -2514,7 +2521,6 @@ function ContentBlockerPane({pane, store}: {pane: PaneDefinition; store: MahoSet
             <ManagedSettingRow
               controlClassName={SETTING_CONTROL_STACKED_CLASS}
               description="Add a custom filter list by name and source URL."
-              isFirstRow={state.data.lists.length === 0}
               title="Add filter list">
               <div className={SETTING_CONTROL_STACK_CLASS}>
                 <TextFieldShell ariaLabel="Filter list name" placeholder="Filter list name" value={form.name} onChange={value => setForm(current => ({...current, name: value}))} />
@@ -2533,10 +2539,10 @@ function ContentBlockerPane({pane, store}: {pane: PaneDefinition; store: MahoSet
                 }} />
               </div>
             </ManagedSettingRow>
-          </div>
+          </SectionCard>
         </>
       ) : null}
-    </DomainPaneSection>
+    </PaneShell>
   );
 }
 
@@ -2573,43 +2579,48 @@ function ExtensionsPane({pane, store}: {pane: PaneDefinition; store: MahoSetting
   const hasMv2Extensions = state.status === 'loaded' && state.data.some(e => e.manifestVersion === 2);
 
   return (
-    <DomainPaneSection pane={pane}>
-      <SectionHeader title="Installed extensions" />
+    <PaneShell pane={pane}>
       {state.status === 'loading' ? <PaneLoading message="Loading extensions…" /> : null}
       {state.status === 'error' ? (
         <PaneRetry message={state.message} title="Extensions unavailable" onRetry={() => void loadExtensions()} />
       ) : null}
       {state.status === 'loaded' ? (
-        <div className={ROWS_CLASS}>
-          {hasMv2Extensions && !bannerDismissed ? (
-            <Alert className="mb-4 flex items-start gap-3 border-amber-200/50 bg-amber-500/5 text-amber-900 dark:text-amber-200">
-              <AlertCircle className="h-5 w-5 mt-0.5 text-amber-500" />
-              <div className="flex-1">
-                <AlertTitle className="font-semibold text-amber-800 dark:text-amber-300">Manifest V2 Support Ending</AlertTitle>
-                <AlertDescription className="text-sm mt-1 leading-relaxed opacity-90">
-                  Some of your installed extensions are using Manifest V2, which will soon be deprecated. Please migrate to Manifest V3 versions to ensure they continue working.{' '}
-                  <a
-                    href="https://developer.chrome.com/docs/extensions/develop/migrate"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="underline font-semibold hover:opacity-80 inline-flex items-center gap-0.5"
+        <SectionCard
+          title="Installed extensions"
+          headerBanner={
+            hasMv2Extensions && !bannerDismissed ? (
+              <div className="p-4 border-b border-border">
+                <Alert className="flex items-start gap-3 border-amber-200/50 bg-amber-500/5 text-amber-900 dark:text-amber-200">
+                  <AlertCircle className="h-5 w-5 mt-0.5 text-amber-500" />
+                  <div className="flex-1">
+                    <AlertTitle className="font-semibold text-amber-800 dark:text-amber-300">Manifest V2 Support Ending</AlertTitle>
+                    <AlertDescription className="text-sm mt-1 leading-relaxed opacity-90">
+                      Some of your installed extensions are using Manifest V2, which will soon be deprecated. Please migrate to Manifest V3 versions to ensure they continue working.{' '}
+                      <a
+                        href="https://developer.chrome.com/docs/extensions/develop/migrate"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline font-semibold hover:opacity-80 inline-flex items-center gap-0.5"
+                      >
+                        Learn more <ExternalLink className="h-3 w-3 inline" />
+                      </a>
+                    </AlertDescription>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 px-2 text-amber-700 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300 hover:bg-amber-500/10"
+                    onClick={() => setBannerDismissed(true)}
                   >
-                    Learn more <ExternalLink className="h-3 w-3 inline" />
-                  </a>
-                </AlertDescription>
+                    Dismiss
+                  </Button>
+                </Alert>
               </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 px-2 text-amber-700 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300 hover:bg-amber-500/10"
-                onClick={() => setBannerDismissed(true)}
-              >
-                Dismiss
-              </Button>
-            </Alert>
-          ) : null}
+            ) : null
+          }
+        >
           {state.data.length === 0 ? <EmptyDescription message="No extensions installed." /> : null}
-          {state.data.map((extension, index) => {
+          {state.data.map((extension) => {
             const isMv2 = extension.manifestVersion === 2;
             const descriptionParts = [
               extension.version ? `v${extension.version}` : '',
@@ -2635,7 +2646,6 @@ function ExtensionsPane({pane, store}: {pane: PaneDefinition; store: MahoSetting
                 key={extension.id}
                 controlClassName={SETTING_ACTIONS_CLASS}
                 description={descriptionNode}
-                isFirstRow={index === 0}
                 title={extension.name || extension.id}>
                 <Toggle
                   enabled={extension.enabled}
@@ -2658,7 +2668,6 @@ function ExtensionsPane({pane, store}: {pane: PaneDefinition; store: MahoSetting
           })}
           <ManagedSettingRow
             controlClassName={SETTING_ACTIONS_CLASS}
-            isFirstRow={state.data.length === 0}
             title="Advanced extension controls"
             description="Access full extension settings and developer features.">
             <ActionButton
@@ -2669,8 +2678,8 @@ function ExtensionsPane({pane, store}: {pane: PaneDefinition; store: MahoSetting
               }}
             />
           </ManagedSettingRow>
-        </div>
+        </SectionCard>
       ) : null}
-    </DomainPaneSection>
+    </PaneShell>
   );
 }

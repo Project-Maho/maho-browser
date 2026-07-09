@@ -3,6 +3,7 @@
 
 @source "../ui/**/*.tsx";
 @source "../../../maho_ai/react/**/*.tsx";
+@source "../../../maho_space_config/react/**/*.tsx";
 @source "../../../maho_settings/react/**/*.tsx";
 
 @custom-variant dark (&:is([data-theme="dark"] *));
@@ -44,45 +45,45 @@
   color-scheme: dark;
   --radius: 0.75rem;  /* 12px — matches existing --maho-settings-radius-sm */
 
-  --background:          #171a23;
-  --foreground:          #f5f7fb;
-  --card:                #10121b;
-  --card-foreground:     #f5f7fb;
-  --popover:             #10121b;
-  --popover-foreground:  #f5f7fb;
-  --primary:             #9bb2ff;
-  --primary-foreground:  #0b1027;
-  --secondary:           #1f2333;
-  --secondary-foreground: #d0d6e8;
-  --muted:               #1f2333;
-  --muted-foreground:    #98a1ba;
-  --accent:              #9bb2ff;
-  --accent-foreground:   #0b1027;
+  --background:          #1a1a1a;
+  --foreground:          #f5f5f5;
+  --card:                #0f0f0f;
+  --card-foreground:     #f5f5f5;
+  --popover:             #0f0f0f;
+  --popover-foreground:  #f5f5f5;
+  --primary:             #e5e5e5;
+  --primary-foreground:  #1a1a1a;
+  --secondary:           #2a2a2a;
+  --secondary-foreground: #d5d5d5;
+  --muted:               #2a2a2a;
+  --muted-foreground:    #a0a0a0;
+  --accent:              #e5e5e5;
+  --accent-foreground:   #1a1a1a;
   --destructive:         #ef4444;
   --destructive-foreground: #ffffff;
   --success:             #95d8bb;
   --warning:             #f5b96a;
   --border:              rgba(255,255,255,0.08);
-  --input:               rgba(9,11,17,0.38);
-  --ring:                rgba(155,178,255,0.5);
+  --input:               rgba(0,0,0,0.38);
+  --ring:                rgba(229,229,229,0.5);
 }
 
 /* Light theme */
 [data-theme="light"] {
   color-scheme: light;
-  --background:          #f4f5f7;
-  --foreground:          #1a1d27;
+  --background:          #f5f5f5;
+  --foreground:          #1a1a1a;
   --card:                #ffffff;
-  --card-foreground:     #1a1d27;
+  --card-foreground:     #1a1a1a;
   --popover:             #ffffff;
-  --popover-foreground:  #1a1d27;
-  --primary:             #4a6aff;
+  --popover-foreground:  #1a1a1a;
+  --primary:             #2b2b2b;
   --primary-foreground:  #ffffff;
-  --secondary:           #f7f8fa;
-  --secondary-foreground: #4a5068;
-  --muted:               #f7f8fa;
-  --muted-foreground:    #7a8299;
-  --accent:              #4a6aff;
+  --secondary:           #f0f0f0;
+  --secondary-foreground: #4a4a4a;
+  --muted:               #f0f0f0;
+  --muted-foreground:    #7a7a7a;
+  --accent:              #2b2b2b;
   --accent-foreground:   #ffffff;
   --destructive:         #dc2626;
   --destructive-foreground: #ffffff;
@@ -90,7 +91,7 @@
   --warning:             #d97706;
   --border:              rgba(0,0,0,0.08);
   --input:               rgba(0,0,0,0.03);
-  --ring:                rgba(74,106,255,0.5);
+  --ring:                rgba(43,43,43,0.5);
 }
 
 @layer base {

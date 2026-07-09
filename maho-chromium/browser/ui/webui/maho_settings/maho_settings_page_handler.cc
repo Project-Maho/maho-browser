@@ -64,7 +64,7 @@ namespace {
 namespace ai = maho::ai_prefs;
 namespace acct = maho::account_prefs;
 
-constexpr char kSettingsSyncRelayUrl[] = "https://sync.maho.app";
+constexpr char kSettingsSyncRelayUrl[] = "https://sync.mahobrowser.com";
 
 // ── Auth traffic annotations ──
 
@@ -1849,6 +1849,23 @@ void MahoSettingsPageHandler::FetchProviderModels(
     return;
   }
   model_list_fetcher_->FetchModels(provider_id, std::move(callback));
+}
+
+void MahoSettingsPageHandler::RefreshProviderModels(
+    const std::string& provider_id,
+    RefreshProviderModelsCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!model_list_fetcher_) {
+    std::move(callback).Run(std::vector<std::string>());
+    return;
+  }
+  model_list_fetcher_->RefreshModels(
+      provider_id,
+      base::BindOnce([](RefreshProviderModelsCallback cb,
+                        const std::vector<std::string>& models,
+                        bool from_cache) {
+        std::move(cb).Run(models);
+      }, std::move(callback)));
 }
 
 void MahoSettingsPageHandler::OnProviderModelsRefreshed(
