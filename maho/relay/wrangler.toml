@@ -1,0 +1,81 @@
+name = "maho-relay"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-07-08"
+account_id = "b1c1bfc44b1313b6f51553095ccb2eb4"
+
+[build]
+command = "cargo install -q worker-build --version \"^0.1\" 2>/dev/null; worker-build --release"
+
+# ---- Production ----
+[env.production]
+routes = [
+  { pattern = "relay.mahobrowser.com", custom_domain = true },
+  { pattern = "sync.mahobrowser.com", custom_domain = true },
+  { pattern = "update.mahobrowser.com", custom_domain = true },
+  { pattern = "updates.mahobrowser.com", custom_domain = true },
+  { pattern = "proxy.mahobrowser.com", custom_domain = true },
+]
+
+[[env.production.d1_databases]]
+binding = "MAHO_DB"
+database_name = "maho-relay-db"
+database_id = "af9d394f-f6b6-4e85-a666-bd1258671929"
+migrations_dir = "migrations"
+
+[[env.production.durable_objects.bindings]]
+name = "ROOM"
+class_name = "RoomDO"
+
+[env.production.vars]
+REQUIRE_AUTH = "true"
+OPEN_REGISTRATION = "false"
+SIGNUP_RATE_LIMIT_PER_IP_PER_MINUTE = "3"
+LOGIN_RATE_LIMIT_PER_IP_PER_MINUTE = "10"
+MIN_PASSWORD_LENGTH = "12"
+MAX_ROOM_SIZE_MB = "50"
+MAX_MESSAGE_SIZE_BYTES = "1048576"
+MAX_CONNECTIONS_PER_ROOM = "5"
+MAX_CONNECTIONS_PER_IP = "20"
+MAX_ROOMS_PER_IP = "10"
+RETENTION_DAYS = "30"
+
+[[env.production.migrations]]
+tag = "v1"
+new_sqlite_classes = ["RoomDO"]
+
+# ---- Staging ----
+[env.staging]
+routes = [
+  { pattern = "relay-staging.mahobrowser.com", custom_domain = true },
+]
+
+[[env.staging.d1_databases]]
+binding = "MAHO_DB"
+database_name = "maho-relay-db-staging"
+database_id = "1f2d9cec-fe46-4ec7-ad7e-82c954098412"
+migrations_dir = "migrations"
+
+[[env.staging.durable_objects.bindings]]
+name = "ROOM"
+class_name = "RoomDO"
+
+[env.staging.vars]
+REQUIRE_AUTH = "true"
+OPEN_REGISTRATION = "true"          # staging allows registration for testing
+SIGNUP_RATE_LIMIT_PER_IP_PER_MINUTE = "60"
+LOGIN_RATE_LIMIT_PER_IP_PER_MINUTE = "60"
+MIN_PASSWORD_LENGTH = "8"
+MAX_ROOM_SIZE_MB = "50"
+MAX_MESSAGE_SIZE_BYTES = "1048576"
+MAX_CONNECTIONS_PER_ROOM = "5"
+MAX_CONNECTIONS_PER_IP = "20"
+MAX_ROOMS_PER_IP = "10"
+RETENTION_DAYS = "7"
+
+[[env.staging.migrations]]
+tag = "v1"
+new_sqlite_classes = ["RoomDO"]
+
+# ---- Scheduled (both environments) ----
+[triggers]
+crons = ["0 * * * *"]   # hourly maintenance

@@ -1,24 +1,24 @@
 import Foundation
 
 func testRelayServerLocatorNormalizesWebSocketURLs() {
-    let secure = RelayServerLocator.normalizedBaseURL(from: "wss://sync.maho.app")
-    assertEqual(secure?.absoluteString, "https://sync.maho.app")
+    let secure = RelayServerLocator.normalizedBaseURL(from: "wss://sync.mahobrowser.com")
+    assertEqual(secure?.absoluteString, "https://sync.mahobrowser.com")
 
     let insecure = RelayServerLocator.normalizedBaseURL(from: "ws://localhost:8787/api/")
     assertEqual(insecure?.absoluteString, "http://localhost:8787/api")
 }
 
 func testRelayServerLocatorRejectsUnsupportedSchemes() {
-    assertTrue(RelayServerLocator.normalizedBaseURL(from: "ftp://sync.maho.app") == nil)
-    assertTrue(RelayServerLocator.normalizedBaseURL(from: "sync.maho.app") == nil)
+    assertTrue(RelayServerLocator.normalizedBaseURL(from: "ftp://sync.mahobrowser.com") == nil)
+    assertTrue(RelayServerLocator.normalizedBaseURL(from: "sync.mahobrowser.com") == nil)
 }
 
 func testRelayEndpointCandidatesDeduplicatePaths() {
-    let baseURL = RelayServerLocator.normalizedBaseURL(from: "https://sync.maho.app")!
+    let baseURL = RelayServerLocator.normalizedBaseURL(from: "https://sync.mahobrowser.com")!
     let candidates = RelayServerLocator.endpointCandidates(baseURL: baseURL, pathVariants: ["/auth/login", "auth/login", "login"])
     assertEqual(candidates.map(\.absoluteString), [
-        "https://sync.maho.app/auth/login",
-        "https://sync.maho.app/login",
+        "https://sync.mahobrowser.com/auth/login",
+        "https://sync.mahobrowser.com/login",
     ])
 }
 
@@ -36,7 +36,7 @@ func testRelayAuthSessionDecodesNestedPayload() throws {
     let data = try JSONSerialization.data(withJSONObject: payload)
     let session = RelayPayloadCodec.authSession(
         from: data,
-        baseURL: URL(string: "https://sync.maho.app")!,
+        baseURL: URL(string: "https://sync.mahobrowser.com")!,
         fallbackEmail: "fallback@example.com",
         fallbackDisplayName: nil
     )
@@ -57,7 +57,7 @@ func testRelayAuthSessionUsesFallbackRefreshToken() throws {
     let data = try JSONSerialization.data(withJSONObject: payload)
     let session = RelayPayloadCodec.authSession(
         from: data,
-        baseURL: URL(string: "https://sync.maho.app")!,
+        baseURL: URL(string: "https://sync.mahobrowser.com")!,
         fallbackEmail: "saved@example.com",
         fallbackDisplayName: "Saved User",
         fallbackRefreshToken: "existing-refresh"

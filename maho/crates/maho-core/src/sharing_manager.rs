@@ -30,7 +30,7 @@ impl SharingManager {
 
     pub fn create_collection(&mut self, space_id: &str, name: &str) -> SharedCollection {
         let id = uuid::Uuid::new_v4().to_string();
-        let share_link = format!("https://maho.app/shared/{}", id);
+        let share_link = format!("https://mahobrowser.com/shared/{}", id);
         let collection = SharedCollection {
             id: id.clone(),
             space_id: space_id.to_string(),

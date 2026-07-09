@@ -4,7 +4,7 @@ import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
 import { getSiteUrl } from '../lib/site';
 
-const { absoluteUrl } = getSiteUrl(Astro);
+const { siteUrl, absoluteUrl } = getSiteUrl(Astro);
 const description = "Maho collects nothing by default. Local-first architecture, zero-retention AI proxy, full GDPR compliance. Verify our claims through network behavior.";
 ---
 
@@ -17,7 +17,7 @@ const description = "Maho collects nothing by default. Local-first architecture,
 
       <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Overview</h2>
       <p class="text-muted-foreground leading-relaxed mb-4">
-        Maho is built with privacy as a core principle. Our applications run locally on your device, keeping your data under your control. This policy covers both the maho.app website and Maho applications.
+        Maho is built with privacy as a core principle. Our applications run locally on your device, keeping your data under your control. This policy covers both the mahobrowser.com website and Maho applications.
       </p>
 
       <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Information We Don't Collect</h2>
@@ -50,8 +50,8 @@ const description = "Maho collects nothing by default. Local-first architecture,
       <ul class="text-muted-foreground leading-relaxed mb-4 list-disc list-inside space-y-2">
         <li><strong>Network behavior</strong> — Open Activity Monitor on macOS, sort by network activity, and confirm Maho does not transmit data in normal browsing.</li>
         <li><strong>Architecture documentation</strong> — Our sync, encryption, and AI privacy designs are published as engineering blog posts at /blog/sync-architecture-end-to-end.</li>
-        <li><strong>Vulnerability disclosure</strong> — Security researchers can report findings to hello@maho.app with subject prefix [security]; acknowledgment within 48h.</li>
-        <li><strong>Developer transparency</strong> — Maho is built by an individual developer; reach out directly at hello@maho.app for any clarification.</li>
+        <li><strong>Vulnerability disclosure</strong> — Security researchers can report findings to hello@mahobrowser.com with subject prefix [security]; acknowledgment within 48h.</li>
+        <li><strong>Developer transparency</strong> — Maho is built by an individual developer; reach out directly at hello@mahobrowser.com for any clarification.</li>
       </ul>
 
       <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Data Storage</h2>
@@ -66,7 +66,7 @@ const description = "Maho collects nothing by default. Local-first architecture,
 
       <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Contact</h2>
       <p class="text-muted-foreground leading-relaxed mb-4">
-        Privacy questions can be directed to hello@maho.app
+        Privacy questions can be directed to hello@mahobrowser.com
       </p>
     </main>
     <Footer />
@@ -77,6 +77,6 @@ const description = "Maho collects nothing by default. Local-first architecture,
     "name": "Privacy Policy — Maho",
     "description": description,
     "url": absoluteUrl('/privacy'),
-    "isPartOf": { "@type": "WebSite", "@id": "https://maho.app/#website" },
+    "isPartOf": { "@type": "WebSite", "@id": `${siteUrl}/#website` },
   })} />
 </BaseLayout>

@@ -16,7 +16,7 @@ final class SyncManager: CoreUpdateObserver {
     deinit { CoreUpdateDispatcher.shared.unregister(self) }
 
     func startSync() {
-        let serverUrl = UserDefaults.standard.string(forKey: "maho_sync_server_url") ?? "https://sync.maho.app"
+        let serverUrl = UserDefaults.standard.string(forKey: "maho_sync_server_url") ?? "https://sync.mahobrowser.com"
         let syncKey = UserDefaults.standard.string(forKey: "maho_sync_key") ?? ""
         startSync(serverUrl: serverUrl, syncKey: syncKey)
     }

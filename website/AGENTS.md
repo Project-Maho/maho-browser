@@ -3,7 +3,7 @@
 **Generated:** 2026-06-15
 
 ## OVERVIEW
-Maho public website (`maho.app`): Astro 6 + Starlight docs + Starlight Blog + React landing/marketing pages. Serves browser/mail/CLI/API docs and blog posts alongside product pages.
+Maho public website (`mahobrowser.com`): Astro 6 + Starlight docs + Starlight Blog + React landing/marketing pages. Serves browser/mail/CLI/API docs and blog posts alongside product pages.
 
 ## STRUCTURE
 ```
@@ -36,13 +36,13 @@ website/
 - Docs live under `src/content/docs/` — Starlight autogenerates sidebar for `browser/`, `cli/`, `api/`
 - Blog posts use Starlight Blog plugin: prefix `blog`, RSS enabled
 - React used for marketing pages only (`pages/`); Starlight handles all `/docs/*` routing
-- **Canonical site URL**: `astro.config.mjs` reads `SITE_URL` env var (default `https://maho.app`). All JSON-LD blocks must use the `getSiteUrl(Astro)` helper from `src/lib/site.ts` instead of hardcoding `https://maho.app`. Hardcoded domain in runtime code is a defect.
+- **Canonical site URL**: `astro.config.mjs` reads `SITE_URL` env var (default `https://mahobrowser.com`). All JSON-LD blocks must use the `getSiteUrl(Astro)` helper from `src/lib/site.ts` instead of hardcoding `https://mahobrowser.com`. Hardcoded domain in runtime code is a defect.
 
 ## COMMANDS
 ```bash
 bun run dev                                  # Astro dev server (port 5555)
 bun run build                                # Build static site → dist/ (runs OG generator first)
-SITE_URL=https://staging.maho.app bun run build   # Override domain for staging/preview
+SITE_URL=https://staging.mahobrowser.com bun run build   # Override domain for staging/preview
 bun run preview                              # Preview built site locally
 ```
 
@@ -51,22 +51,22 @@ All `PUBLIC_*` and site-config env vars are **baked into the static JS at build 
 
 | Var | Purpose | Prod value | Local default |
 |-----|---------|------------|---------------|
-| `SITE_URL` | Canonical origin used in JSON-LD, canonical `<link>`, sitemap, OG URLs | `https://maho.app` | `https://maho.app` |
-| `PUBLIC_RELAY_URL` | Relay backend origin for waitlist form (`POST /waitlist`) | e.g. `https://relay.maho.app` | falls back to `http://localhost:8080` if unset |
+| `SITE_URL` | Canonical origin used in JSON-LD, canonical `<link>`, sitemap, OG URLs | `https://mahobrowser.com` | `https://mahobrowser.com` |
+| `PUBLIC_RELAY_URL` | Relay backend origin for waitlist form (`POST /waitlist`) | e.g. `https://relay.mahobrowser.com` | falls back to `http://localhost:8080` if unset |
 
 **IMPORTANT**: This project uses **Direct Upload** (no Git integration; Cloudflare does NOT build on their servers). Env vars set in the Cloudflare Dashboard are IGNORED for Direct Upload deploys. Values must be present in the LOCAL shell at build time.
 
 ### Option A — inline on the command
 ```bash
-PUBLIC_RELAY_URL=https://relay.maho.app bun run --cwd website build
+PUBLIC_RELAY_URL=https://relay.mahobrowser.com bun run --cwd website build
 bunx wrangler pages deploy website/dist --project-name=maho-website
 ```
 
 ### Option B — persistent `.env` file (gitignored)
 ```
 # website/.env
-PUBLIC_RELAY_URL=https://relay.maho.app
-SITE_URL=https://maho.app
+PUBLIC_RELAY_URL=https://relay.mahobrowser.com
+SITE_URL=https://mahobrowser.com
 ```
 Astro auto-loads `.env` at build time. Ensure `.env` is in `.gitignore`.
 
@@ -74,14 +74,14 @@ Astro auto-loads `.env` at build time. Ensure `.env` is in `.gitignore`.
 After a build, grep the compiled script:
 ```bash
 grep -o "const PUBLIC_RELAY_URL = [^;]*" website/dist/waitlist/index.html
-# Correct:   const PUBLIC_RELAY_URL = "https://relay.maho.app"
+# Correct:   const PUBLIC_RELAY_URL = "https://relay.mahobrowser.com"
 # Wrong:     const PUBLIC_RELAY_URL = undefined
 ```
 
 ## DEPLOY
 ```bash
 # 1. Build with correct env vars
-PUBLIC_RELAY_URL=https://relay.maho.app bun run --cwd website build
+PUBLIC_RELAY_URL=https://relay.mahobrowser.com bun run --cwd website build
 
 # 2. Deploy the built dist/
 bunx wrangler pages deploy website/dist --project-name=maho-website --branch=main --commit-dirty=true
@@ -93,4 +93,4 @@ bunx wrangler pages deploy website/dist --project-name=maho-website --branch=mai
 ## NOTES
 - `maho-website/` subdirectory was a legacy/nested copy — deleted 2026-06-28
 - `dist/` is generated; do not commit
-- Hardcoded `https://maho.app` only allowed in `src/lib/site.ts` JSDoc + `src/components/JSONLD.astro` JSDoc (examples only, not runtime)
+- Hardcoded `https://mahobrowser.com` only allowed in `src/lib/site.ts` JSDoc + `src/components/JSONLD.astro` JSDoc (examples only, not runtime)

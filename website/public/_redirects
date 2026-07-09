@@ -1,0 +1,5 @@
+# Cloudflare Pages redirects — evaluated in order, first match wins.
+
+# D0.4: /waitlist route deleted, preserve inbound URLs via 301 to home.
+/waitlist  /  301
+/waitlist/ /  301

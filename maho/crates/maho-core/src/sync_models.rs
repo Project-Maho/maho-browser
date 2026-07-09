@@ -78,7 +78,7 @@ pub struct SyncConfig {
 impl Default for SyncConfig {
     fn default() -> Self {
         Self {
-            server_url: "wss://sync.maho.app".to_string(),
+            server_url: "wss://sync.mahobrowser.com".to_string(),
             sync_key: None,
             device_id: uuid::Uuid::new_v4().to_string(),
             device_name: hostname(),

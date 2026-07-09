@@ -159,7 +159,7 @@ class SyncTransport(
     private fun resolveBaseUrl(currentSession: RelaySession): String {
         return serverUrl
             ?: currentSession.serverUrl
-            ?: RelaySessionStore.getServerUrl("https://sync.maho.app")
+            ?: RelaySessionStore.getServerUrl("https://sync.mahobrowser.com")
     }
 
     private fun refreshSession(): Boolean {

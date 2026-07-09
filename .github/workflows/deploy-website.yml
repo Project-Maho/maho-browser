@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       site_url:
-        description: 'SITE_URL override (default: https://maho.app)'
+        description: 'SITE_URL override (default: https://mahobrowser.com)'
         required: false
-        default: 'https://maho.app'
+        default: 'https://mahobrowser.com'
 
 permissions:
   contents: read
@@ -38,7 +38,7 @@ jobs:
 
       - name: Build site
         env:
-          SITE_URL: ${{ github.event.inputs.site_url || 'https://maho.app' }}
+          SITE_URL: ${{ github.event.inputs.site_url || 'https://mahobrowser.com' }}
         run: bun run build
 
       - name: Deploy to Cloudflare Pages

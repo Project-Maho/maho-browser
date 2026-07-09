@@ -1,13 +1,39 @@
-[workspace]
-resolver = "2"
-members = ["server", "entity", "migration"]
+[package]
+name = "maho-relay-worker"
+version = "0.1.0"
+edition = "2021"
 
-[workspace.dependencies]
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+worker = { version = "0.4", features = ["d1", "http"] }
+worker-macros = "0.4"
+
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-uuid = { version = "1", features = ["serde", "v4"] }
-chrono = { version = "0.4", features = ["serde"] }
-sea-orm = { version = "1", features = ["sqlx-sqlite", "runtime-tokio-rustls"] }
+
+# Preserved from legacy
 argon2 = "0.5"
 sha2 = "0.10"
-rand = "0.8"
+hmac = "0.12"
+subtle = "2.5"
+uuid = { version = "1", features = ["serde", "v4", "js"] }
+chrono = { version = "0.4", features = ["serde", "wasmbind"] }
+base64 = "0.22"
+
+# WASM support
+wasm-bindgen = "=0.2.105"
+wasm-bindgen-futures = "0.4"
+console_error_panic_hook = "0.1"
+getrandom = { version = "0.2", features = ["js"] }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1

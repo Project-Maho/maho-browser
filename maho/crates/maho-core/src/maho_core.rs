@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -8,7 +9,8 @@ const LMDB_DIRTY_ACTIVE_SPACE: u8 = 0b000100;
 const LMDB_DIRTY_PROFILES: u8 = 0b001000;
 const LMDB_DIRTY_ACTIVE_PROFILE: u8 = 0b010000;
 const LMDB_DIRTY_ACCOUNT: u8 = 0b100000;
-const LMDB_DIRTY_ALL: u8 = 0b111111;
+const LMDB_DIRTY_SPLIT_VIEW: u8 = 0b1000000;
+const LMDB_DIRTY_ALL: u8 = 0b1111111;
 
 const PERSIST_THROTTLE_MS: u64 = 50;
 
@@ -29,9 +31,9 @@ impl PersistThrottle {
 use maho_types::account::{AccountInfo, AuthState};
 use maho_types::boost::{Boost, BoostUpdate};
 use maho_types::common::{MemoryPressureLevel, Url};
-use maho_types::events::core_update::{CoreUpdate, MemoryAction};
+use maho_types::events::core_update::{CoreUpdate, MemoryAction, SPLIT_VIEW_SCHEMA_VERSION};
 use maho_types::events::shell_event::ShellEvent;
-use maho_types::identifiers::{BoostId, FolderId, NoteId, ProfileId, SpaceId, TabId};
+use maho_types::identifiers::{BoostId, FolderId, NoteId, ProfileId, SpaceId, TabId, WindowId};
 use maho_types::note::Note;
 use maho_types::settings::{AppearanceSettingsUpdate, PinnedCloseBehavior, Settings, SettingsUpdate};
 use maho_types::keyboard::{KeyCombo, KeyModifier};
@@ -61,7 +63,7 @@ use crate::extension_bridge::ExtensionBridge;
 use crate::find_manager::FindManager;
 use crate::import_export_manager::ImportExportManager;
 use crate::llm_manager::LLMManager;
-use crate::mcp_manager::McpManager;
+use crate::tool_registry::ToolRegistry;
 use crate::memory_manager::{MemoryManager, MemoryResult, AuthSnapshot};
 use crate::note_manager::NoteManager;
 use crate::notification_manager::NotificationManager;
@@ -897,10 +899,10 @@ pub struct MahoCore {
     shortcut_manager: ShortcutManager,
     last_hlc_ts: Cell<u64>,
     account_manager: AccountManager,
-    split_view_config: Option<SplitViewConfig>,
+    split_view_configs: HashMap<WindowId, SplitViewConfig>,
     sync_manager: Option<crate::sync_manager::SyncManager>,
     llm_manager: LLMManager,
-    mcp_manager: McpManager,
+    tool_registry: ToolRegistry,
     skills_manager: SkillsManager,
     sharing_manager: SharingManager,
     memory_manager: MemoryManager,
@@ -1154,10 +1156,10 @@ impl MahoCore {
             shortcut_manager: ShortcutManager::new(),
             last_hlc_ts: Cell::new(0),
             account_manager: AccountManager::new(),
-            split_view_config: None,
+            split_view_configs: HashMap::new(),
             sync_manager: None,
             llm_manager: LLMManager::new(),
-            mcp_manager: McpManager::new(),
+            tool_registry: ToolRegistry::new(),
             skills_manager: SkillsManager::new(),
             sharing_manager: SharingManager::new(),
             memory_manager: MemoryManager::new(),
@@ -1356,6 +1358,35 @@ impl MahoCore {
             lmdb.put("account", &account_json)
                 .map_err(|e| PersistenceError::Storage(e.to_string()))?;
         }
+        if dirty & LMDB_DIRTY_SPLIT_VIEW != 0 {
+            let mut persist_map = HashMap::new();
+            for (window_id, config) in &self.split_view_configs {
+                let mut stable_panes = Vec::new();
+                for pane in &config.panes {
+                    if let Some(tab) = self.tab_manager.get_tab(&pane.tab_id) {
+                        let tab_creation_time_micros = if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&tab.created_at.0) {
+                            dt.timestamp_micros() as u64
+                        } else {
+                            0
+                        };
+                        stable_panes.push(maho_types::split_view::StablePaneIdentity {
+                            url: tab.url.0.clone(),
+                            tab_creation_time_micros,
+                            window_session_uuid: tab.window_id.map(|id| id.to_string()),
+                        });
+                    }
+                }
+                persist_map.insert(window_id.0.clone(), maho_types::split_view::SplitViewPersistConfig {
+                    panes: stable_panes,
+                    orientation: config.orientation.clone(),
+                    ratios: config.ratios.clone(),
+                });
+            }
+            let split_view_json = serde_json::to_vec(&persist_map)
+                .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
+            lmdb.put("split_view_configs", &split_view_json)
+                .map_err(|e| PersistenceError::Storage(e.to_string()))?;
+        }
 
         Ok(())
     }
@@ -1523,6 +1554,62 @@ impl MahoCore {
                 .map(|t| t.id.clone())
                 .collect();
             self.space_manager.strip_favorited_tabs_from_root_orders(&favorited_ids);
+        }
+
+        // Restore split_view_configs
+        if let Some(split_view_data) = lmdb
+            .get("split_view_configs")
+            .map_err(|e| PersistenceError::Storage(e.to_string()))?
+        {
+            if let Ok(persist_map) = serde_json::from_slice::<HashMap<String, maho_types::split_view::SplitViewPersistConfig>>(&split_view_data) {
+                self.split_view_configs.clear();
+                for (window_str, persist_config) in persist_map {
+                    let window_id = WindowId::new(window_str);
+                    let mut resolved_panes = Vec::new();
+                    let mut skip_window = false;
+                    for stable_pane in &persist_config.panes {
+                        let matching_tabs: Vec<&maho_types::tab::Tab> = self.tab_manager
+                            .get_all_tabs()
+                            .into_iter()
+                            .filter(|t| {
+                                let t_created_micros = if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&t.created_at.0) {
+                                    dt.timestamp_micros() as u64
+                                } else {
+                                    0
+                                };
+                                t.url.0 == stable_pane.url
+                                    && t_created_micros == stable_pane.tab_creation_time_micros
+                            })
+                            .collect();
+
+                        if matching_tabs.len() == 1 {
+                            resolved_panes.push(maho_types::split_view::SplitPane {
+                                tab_id: matching_tabs[0].id.clone(),
+                            });
+                        } else if matching_tabs.len() > 1 {
+                            eprintln!(
+                                "[Maho] split-view restore: Ambiguity found for URL {} ({} matches). Skipping window {}",
+                                stable_pane.url,
+                                matching_tabs.len(),
+                                window_id
+                            );
+                            skip_window = true;
+                            break;
+                        } else {
+                            skip_window = true;
+                            break;
+                        }
+                    }
+
+                    if !skip_window && resolved_panes.len() >= 2 {
+                        self.split_view_configs.insert(window_id, maho_types::split_view::SplitViewConfig {
+                            panes: resolved_panes,
+                            orientation: persist_config.orientation,
+                            ratios: persist_config.ratios,
+                        });
+                    }
+                }
+            }
         }
 
         if let Some(profiles_data) = profiles_data {
@@ -2713,16 +2800,85 @@ impl MahoCore {
 
     pub fn set_zoom(&mut self, _tab_id: &maho_types::identifiers::TabId, _zoom_level: f64) {}
 
-    pub fn get_split_view_config(&self) -> Option<SplitViewConfig> {
-        self.split_view_config.clone()
+    pub fn get_split_view_config(&self, window_id: &WindowId) -> Option<SplitViewConfig> {
+        self.split_view_configs.get(window_id).cloned()
     }
 
-    pub fn clear_split_view_config(&mut self) {
-        self.split_view_config = None;
+    pub fn clear_split_view_config(&mut self, window_id: &WindowId) {
+        self.split_view_configs.remove(window_id);
     }
 
-    fn set_split_view_config(&mut self, config: SplitConfig) {
-        self.split_view_config = config.into_split_view_config();
+    fn set_split_view_config(&mut self, window_id: WindowId, config: SplitConfig) {
+        if let Some(cfg) = config.into_split_view_config() {
+            self.split_view_configs.insert(window_id, cfg);
+        } else {
+            self.split_view_configs.remove(&window_id);
+        }
+    }
+
+    pub fn window_closed(&mut self, window_id: &WindowId) {
+        self.split_view_configs.remove(window_id);
+    }
+
+    fn remove_split_view_pane(&mut self, window_id: &WindowId, pane_id: &str) -> Option<SplitViewConfig> {
+        let mut config = self.split_view_configs.get(window_id)?.clone();
+        if let Some(pos) = config.panes.iter().position(|p| p.tab_id.0 == pane_id) {
+            config.panes.remove(pos);
+            if pos < config.ratios.len() {
+                config.ratios.remove(pos);
+            }
+            if config.panes.len() < 2 {
+                self.split_view_configs.remove(window_id);
+                None
+            } else {
+                let sum: f64 = config.ratios.iter().sum();
+                if sum > 0.0 {
+                    for r in &mut config.ratios {
+                        *r /= sum;
+                    }
+                } else {
+                    config.ratios = vec![1.0 / config.panes.len() as f64; config.panes.len()];
+                }
+                self.split_view_configs.insert(window_id.clone(), config.clone());
+                Some(config)
+            }
+        } else {
+            Some(config)
+        }
+    }
+
+    fn resize_split_view_pane(&mut self, window_id: &WindowId, pane_id: &str, ratio: f64) -> Option<SplitViewConfig> {
+        let mut config = self.split_view_configs.get(window_id)?.clone();
+        if let Some(pos) = config.panes.iter().position(|p| p.tab_id.0 == pane_id) {
+            if config.panes.len() > 1 && pos < config.ratios.len() {
+                let old_ratio = config.ratios[pos];
+                config.ratios[pos] = ratio;
+                let remaining_new = 1.0 - ratio;
+                let remaining_old = 1.0 - old_ratio;
+                if remaining_old > 0.0 && remaining_new >= 0.0 {
+                    let scale = remaining_new / remaining_old;
+                    for (i, r) in config.ratios.iter_mut().enumerate() {
+                        if i != pos {
+                            *r *= scale;
+                        }
+                    }
+                } else {
+                    let rest_count = config.panes.len() - 1;
+                    let rest_val = remaining_new / rest_count as f64;
+                    for (i, r) in config.ratios.iter_mut().enumerate() {
+                        if i != pos {
+                            *r = rest_val;
+                        }
+                    }
+                }
+                self.split_view_configs.insert(window_id.clone(), config.clone());
+                Some(config)
+            } else {
+                Some(config)
+            }
+        } else {
+            Some(config)
+        }
     }
 
     pub fn handle_event(&mut self, event: ShellEvent) -> Vec<CoreUpdate> {
@@ -2949,23 +3105,81 @@ impl MahoCore {
             | ShellEvent::SignOut
             | ShellEvent::ToggleSync => LMDB_DIRTY_ACCOUNT,
 
+            ShellEvent::ClearSplitView { .. }
+            | ShellEvent::CreateSplit { .. }
+            | ShellEvent::RemoveSplit { .. }
+            | ShellEvent::ResizeSplit { .. } => LMDB_DIRTY_SPLIT_VIEW,
+
             _ => 0,
         }
     }
 
     fn handle_event_inner(&mut self, event: ShellEvent) -> Vec<CoreUpdate> {
+        if let ShellEvent::CreateTab { tab_id: Some(explicit_id), window_id, .. } = &event {
+            if let Some(mut tab) = self.tab_manager.get_tab(explicit_id).cloned() {
+                if tab.window_id != *window_id {
+                    tab.window_id = *window_id;
+                    self.tab_manager.restore_tab(tab);
+
+                    if let Some(w_id) = window_id {
+                        let new_win_key = WindowId::new(w_id.to_string());
+                        let mut found_old_key = None;
+                        let mut found_config = None;
+                        for (win_key, cfg) in &self.split_view_configs {
+                            if cfg.panes.iter().any(|p| p.tab_id == *explicit_id) {
+                                found_old_key = Some(win_key.clone());
+                                found_config = Some(cfg.clone());
+                                break;
+                            }
+                        }
+                        if let (Some(old_key), Some(cfg)) = (found_old_key, found_config) {
+                            if old_key != new_win_key {
+                                self.split_view_configs.remove(&old_key);
+                                self.split_view_configs.insert(new_win_key, cfg);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Handle command bar mutation events before dispatch (dispatcher only has read-only access)
         match &event {
-            ShellEvent::ClearSplitView => {
-                self.clear_split_view_config();
-                return vec![];
+            ShellEvent::ClearSplitView { window_id } => {
+                self.clear_split_view_config(window_id);
+                return vec![CoreUpdate::SplitViewChanged {
+                    window_id: window_id.clone(),
+                    config: None,
+                    schema_version: SPLIT_VIEW_SCHEMA_VERSION,
+                }];
             }
-            ShellEvent::CreateSplit { tab_ids, orientation } => {
-                self.set_split_view_config(SplitConfig {
+            ShellEvent::CreateSplit { window_id, tab_ids, orientation } => {
+                self.set_split_view_config(window_id.clone(), SplitConfig {
                     tab_ids: tab_ids.clone(),
                     orientation: orientation.clone(),
                 });
-                return vec![];
+                let config = self.get_split_view_config(window_id);
+                return vec![CoreUpdate::SplitViewChanged {
+                    window_id: window_id.clone(),
+                    config,
+                    schema_version: SPLIT_VIEW_SCHEMA_VERSION,
+                }];
+            }
+            ShellEvent::RemoveSplit { window_id, pane_id } => {
+                let config = self.remove_split_view_pane(window_id, pane_id);
+                return vec![CoreUpdate::SplitViewChanged {
+                    window_id: window_id.clone(),
+                    config,
+                    schema_version: SPLIT_VIEW_SCHEMA_VERSION,
+                }];
+            }
+            ShellEvent::ResizeSplit { window_id, pane_id, ratio } => {
+                let config = self.resize_split_view_pane(window_id, pane_id, *ratio);
+                return vec![CoreUpdate::SplitViewChanged {
+                    window_id: window_id.clone(),
+                    config,
+                    schema_version: SPLIT_VIEW_SCHEMA_VERSION,
+                }];
             }
             ShellEvent::SaveSearch { query } => {
                 self.save_search_persisted(query.clone());
@@ -3804,9 +4018,9 @@ impl MahoCore {
                                 .map(|t| (t.title.clone(), t.url.0.clone()));
                             let active_ref = active_tab_info.as_ref().map(|(t, u)| (t.as_str(), u.as_str()));
 
-                            // Temporarily take storage to avoid borrow conflict with mcp_manager
+                            // Temporarily take storage to avoid borrow conflict with tool_registry
                             let storage = self.storage.take();
-                            let mcp_updates = self.mcp_manager.handle_llm_response_with_tools(
+                            let mcp_updates = self.tool_registry.handle_llm_response_with_tools(
                                 request_id,
                                 tool_calls,
                                 messages,
@@ -3851,14 +4065,14 @@ impl MahoCore {
                 return vec![];
             }
             ShellEvent::ToolPermissionResponse { ref call_id, granted } => {
-                return self.mcp_manager.handle_tool_permission_response(call_id, *granted);
+                return self.tool_registry.handle_tool_permission_response(call_id, *granted);
             }
             ShellEvent::ToolActionResult {
                 ref call_id,
                 success,
                 ref result,
             } => {
-                return self.mcp_manager.handle_tool_action_result(call_id, *success, result);
+                return self.tool_registry.handle_tool_action_result(call_id, *success, result);
             }
             _ => {}
         }
@@ -4044,6 +4258,11 @@ impl MahoCore {
             .collect()
     }
 
+    pub fn cluster_tabs(&self, threshold: f64) -> Vec<crate::tab_clustering::TabClusterResult> {
+        let tabs = self.tab_manager.get_all_tabs();
+        crate::tab_clustering::cluster_tabs(&tabs, threshold)
+    }
+
     pub fn get_space_view_models(&self) -> Vec<SpaceViewModel> {
         self.space_manager
             .get_all_spaces()
@@ -4106,19 +4325,17 @@ impl MahoCore {
     }
 
     pub fn delete_space(&mut self, space_id: &SpaceId) {
-        let updates = self.handle_event(ShellEvent::DeleteSpace {
+        let _updates = self.handle_event(ShellEvent::DeleteSpace {
             space_id: space_id.clone(),
         });
-        self.emit_updates(updates);
     }
 
     pub fn update_space_config(&mut self, changes: maho_types::space::SpaceConfigUpdate) {
-        let updates = self.handle_event(ShellEvent::UpdateSpaceConfig { changes });
-        self.emit_updates(updates);
+        let _updates = self.handle_event(ShellEvent::UpdateSpaceConfig { changes });
     }
 
     pub fn rename_space(&mut self, space_id: &SpaceId, name: &str) {
-        let updates = self.handle_event(ShellEvent::UpdateSpaceConfig {
+        let _updates = self.handle_event(ShellEvent::UpdateSpaceConfig {
             changes: maho_types::space::SpaceConfigUpdate {
                 space_id: space_id.clone(),
                 name: Some(name.to_string()),
@@ -4128,11 +4345,10 @@ impl MahoCore {
                 profile_id: None,
             },
         });
-        self.emit_updates(updates);
     }
 
     pub fn recolor_space(&mut self, space_id: &SpaceId, color: SpaceColor) {
-        let updates = self.handle_event(ShellEvent::UpdateSpaceConfig {
+        let _updates = self.handle_event(ShellEvent::UpdateSpaceConfig {
             changes: maho_types::space::SpaceConfigUpdate {
                 space_id: space_id.clone(),
                 name: None,
@@ -4142,23 +4358,20 @@ impl MahoCore {
                 profile_id: None,
             },
         });
-        self.emit_updates(updates);
     }
 
     pub fn reorder_space(&mut self, space_id: &SpaceId, from: usize, to: usize) {
-        let updates = self.handle_event(ShellEvent::ReorderSpace {
+        let _updates = self.handle_event(ShellEvent::ReorderSpace {
             space_id: space_id.clone(),
             from,
             to,
         });
-        self.emit_updates(updates);
     }
 
     pub fn activate_space(&mut self, space_id: &SpaceId) {
-        let updates = self.handle_event(ShellEvent::ActivateSpace {
+        let _updates = self.handle_event(ShellEvent::ActivateSpace {
             space_id: space_id.clone(),
         });
-        self.emit_updates(updates);
     }
 
     pub fn on_update(&self, callback: Box<dyn Fn(CoreUpdate)>) {
@@ -6797,7 +7010,7 @@ impl MahoCore {
                 .to_string();
             }
         };
-        self.start_sync("wss://sync.maho.app", &room_id);
+        self.start_sync("wss://sync.mahobrowser.com", &room_id);
         if let Some(ref mut sm) = self.sync_manager {
             sm.set_encryption_key(encryption_key);
         }

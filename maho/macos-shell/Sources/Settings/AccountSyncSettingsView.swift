@@ -53,7 +53,7 @@ final class AccountSyncSettingsViewController: NSViewController, SettingsPaneRef
         authHeader.font = .systemFont(ofSize: 13, weight: .semibold)
         styleSettingsLabel(authHeader)
 
-        serverUrlField.placeholderString = "https://sync.maho.app"
+        serverUrlField.placeholderString = "https://sync.mahobrowser.com"
         styleSettingsEditableTextField(serverUrlField)
         let serverUrlRow = makeSettingsLabeledRow("Server URL:", serverUrlField, embedded: true)
 
@@ -157,7 +157,7 @@ final class AccountSyncSettingsViewController: NSViewController, SettingsPaneRef
     override func viewDidLoad() {
         super.viewDidLoad()
         CoreUpdateDispatcher.shared.register(self)
-        serverUrlField.stringValue = UserDefaults.standard.string(forKey: "maho_sync_server_url") ?? "https://sync.maho.app"
+        serverUrlField.stringValue = UserDefaults.standard.string(forKey: "maho_sync_server_url") ?? "https://sync.mahobrowser.com"
         syncKeyField.stringValue = UserDefaults.standard.string(forKey: "maho_sync_key") ?? ""
         if let session = RelayAuthManager.shared.session(for: serverUrlField.stringValue) {
             emailField.stringValue = session.email

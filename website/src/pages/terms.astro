@@ -6,7 +6,7 @@ import Footer from '../components/Footer.astro';
 import Nav from '../components/Nav.astro';
 import { getSiteUrl } from '../lib/site';
 
-const { absoluteUrl } = getSiteUrl(Astro);
+const { siteUrl, absoluteUrl } = getSiteUrl(Astro);
 const description = "Terms of Service for Maho Browser and Mail. Free tier, Pro $5/mo, Max $20/mo subscriptions, PAYG credits, and BYOK usage terms.";
 ---
 
@@ -24,7 +24,7 @@ const description = "Terms of Service for Maho Browser and Mail. Free tier, Pro 
 
       <h2 class="text-lg font-medium text-foreground mt-10 mb-3">License</h2>
       <p class="text-muted-foreground leading-relaxed mb-4">
-        Maho grants you a non-exclusive, non-transferable license to use the software for personal or commercial use. This license does not grant you any rights to modify, distribute, or create derivative works unless explicitly permitted in writing by the Developer, or under a separate open-source license accompanying a specific component released as such.
+        Maho grants you a non-exclusive, non-transferable license to use the software for personal or commercial use. This license does not grant you any rights to modify, distribute, or create derivative works unless explicitly permitted in writing by the Developer, or under a separate license accompanying a specific component released as such.
       </p>
       <p class="text-muted-foreground leading-relaxed mb-4">
         The software is provided as-is. We reserve the right to modify, suspend, or discontinue any aspect of the software at any time without notice.
@@ -32,7 +32,7 @@ const description = "Terms of Service for Maho Browser and Mail. Free tier, Pro 
 
       <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Software License</h2>
       <p class="text-muted-foreground leading-relaxed mb-4">
-        Maho Browser and Maho Mail are proprietary software, developed and provided by an individual developer (hereinafter "the Developer"). The software is licensed, not sold, under the terms of this agreement. Source code is not publicly distributed. The Developer may, at sole discretion, release individual components as open source under separate license terms; such components are governed by their respective licenses.
+        Maho Browser and Maho Mail are proprietary software, developed and provided by an individual developer (hereinafter "the Developer"). The software is licensed, not sold, under the terms of this agreement. Source code is not publicly distributed. The Developer may, at sole discretion, release individual components under separate public license terms; such components are governed by their respective licenses.
       </p>
 
       <h2 class="text-lg font-medium text-foreground mt-10 mb-3">User Data</h2>
@@ -84,7 +84,7 @@ const description = "Terms of Service for Maho Browser and Mail. Free tier, Pro 
 
       <h2 class="text-lg font-medium text-foreground mt-10 mb-3">Contact</h2>
       <p class="text-muted-foreground leading-relaxed mb-4">
-        Questions about these terms can be directed to hello@maho.app
+        Questions about these terms can be directed to hello@mahobrowser.com
       </p>
     </main>
     <Footer />
@@ -95,6 +95,6 @@ const description = "Terms of Service for Maho Browser and Mail. Free tier, Pro 
     "name": "Terms of Service — Maho",
     "description": description,
     "url": absoluteUrl('/terms'),
-    "isPartOf": { "@type": "WebSite", "@id": "https://maho.app/#website" },
+    "isPartOf": { "@type": "WebSite", "@id": `${siteUrl}/#website` },
   })} />
 </BaseLayout>

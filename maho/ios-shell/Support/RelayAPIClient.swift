@@ -149,7 +149,7 @@ protocol RelayAPIClientProtocol: AnyObject {
 
 final class RelayAPIClient: RelayAPIClientProtocol {
     static let serverURLDefaultsKey = "maho_sync_server_url"
-    static let defaultBaseURLString = "https://sync.maho.app"
+    static let defaultBaseURLString = "https://sync.mahobrowser.com"
 
     private enum Endpoint: String {
         case signup = "/auth/signup"

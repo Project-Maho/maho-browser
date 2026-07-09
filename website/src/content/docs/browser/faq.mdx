@@ -25,7 +25,15 @@ head:
             "name": "Is Maho available on Windows or Linux?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "Not yet. Maho currently supports macOS, iOS, and Android. Windows and Linux are on the roadmap, but there is no confirmed timeline.\n\nIf you need a cross-platform browser today, Zen Browser is worth considering. It is Firefox-based, open source under MPL-2.0, and available on macOS, Windows, and Linux. It does not have iOS or Android builds."
+              "text": "Not yet. Maho currently supports macOS, with iOS and Android in development. Windows and Linux are on the roadmap, but there is no confirmed timeline.\n\nIf you need a cross-platform browser today, Zen Browser is worth considering. It is Firefox-based, open source under MPL-2.0, and available on macOS, Windows, and Linux. It does not have iOS or Android builds."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Are there mobile apps for iOS and Android?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Not yet. iOS and Android are in development — private TestFlight and Android alpha access is invite-only for now. Public beta timing has not been announced. Follow the download page for updates."
             }
           },
           {
@@ -33,7 +41,7 @@ head:
             "name": "How does Maho compare to Arc Browser?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "Maho's space system was designed with direct feature parity to Arc. Both browsers offer Spaces, Boosts, Split View, and a canvas feature (Easels in Arc, Easel in Maho). Maho also includes pinned tabs, folder support, and space-specific favorites that match Arc's workspace model.\n\nThe key difference is trajectory. Arc's developer, The Browser Company, has pivoted to a new product called Dia. Arc is still downloadable for Mac and Windows but is no longer actively developed. Maho is actively maintained and adds capabilities Arc did not ship, including cross-device sync with end-to-end encryption, mobile apps for iOS and Android, and built-in AI with BYOK support."
+              "text": "Maho's space system was designed with direct feature parity to Arc. Both browsers offer Spaces, Boosts, Split View, and a canvas feature (Easels in Arc, Easel in Maho). Maho also includes pinned tabs, folder support, and space-specific favorites that match Arc's workspace model.\n\nThe key difference is trajectory. Arc's developer, The Browser Company, has pivoted to a new product called Dia. Arc is still downloadable for Mac and Windows but is no longer actively developed. Maho is actively maintained and adds capabilities Arc did not ship, including cross-device sync with end-to-end encryption, mobile clients for iOS and Android in development, and built-in AI with BYOK support."
             }
           },
           {
@@ -65,7 +73,7 @@ head:
             "name": "Is my data synced through Maho's servers?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "Sync uses a relay server at wss://sync.maho.app, but all data is end-to-end encrypted before it reaches the relay. The server stores encrypted blobs only — it cannot read your browsing data, bookmarks, notes, or any other synced content.\n\nWhen you are offline, changes queue locally and sync automatically when the connection returns. You can also use Maho without sync entirely."
+              "text": "Sync uses a relay server at wss://sync.mahobrowser.com, but all data is end-to-end encrypted before it reaches the relay. The server stores encrypted blobs only — it cannot read your browsing data, bookmarks, notes, or any other synced content.\n\nWhen you are offline, changes queue locally and sync automatically when the connection returns. You can also use Maho without sync entirely."
             }
           },
           {
@@ -104,15 +112,19 @@ The browser is workspace-first. Spaces, folders, and auto-tab-close rules are ce
 
 ## Is Maho available on Windows or Linux?
 
-Not yet. Maho currently supports macOS, iOS, and Android. Windows and Linux are on the roadmap, but there is no confirmed timeline.
+Not yet. Maho currently supports macOS, with iOS and Android in development. Windows and Linux are on the roadmap, but there is no confirmed timeline.
 
 If you need a cross-platform browser today, Zen Browser is worth considering. It is Firefox-based, open source under MPL-2.0, and available on macOS, Windows, and Linux. It does not have iOS or Android builds.
+
+## Are there mobile apps for iOS and Android?
+
+Not yet. iOS and Android are in development — private TestFlight and Android alpha access is invite-only for now. Public beta timing has not been announced. Follow the download page for updates.
 
 ## How does Maho compare to Arc Browser?
 
 Maho's space system was designed with direct feature parity to Arc. Both browsers offer Spaces, Boosts, Split View, and a canvas feature (Easels in Arc, Easel in Maho). Maho also includes pinned tabs, folder support, and space-specific favorites that match Arc's workspace model.
 
-The key difference is trajectory. Arc's developer, The Browser Company, has pivoted to a new product called Dia. Arc is still downloadable for Mac and Windows but is no longer actively developed. Maho is actively maintained and adds capabilities Arc did not ship, including cross-device sync with end-to-end encryption, mobile apps for iOS and Android, and built-in AI with BYOK support.
+The key difference is trajectory. Arc's developer, The Browser Company, has pivoted to a new product called Dia. Arc is still downloadable for Mac and Windows but is no longer actively developed. Maho is actively maintained and adds capabilities Arc did not ship, including cross-device sync with end-to-end encryption, mobile clients for iOS and Android in development, and built-in AI with BYOK support.
 
 ## Can I use Chrome extensions in Maho?
 
@@ -161,7 +173,7 @@ Arc introduced AI features under the "Max" brand before pivoting to Dia. Zen and
 
 ## Is my data synced through Maho's servers?
 
-Sync uses a relay server at `wss://sync.maho.app`, but all data is end-to-end encrypted before it reaches the relay. The server stores encrypted blobs only — it cannot read your browsing data, bookmarks, notes, or any other synced content.
+Sync uses a relay server at `wss://sync.mahobrowser.com`, but all data is end-to-end encrypted before it reaches the relay. The server stores encrypted blobs only — it cannot read your browsing data, bookmarks, notes, or any other synced content.
 
 When you are offline, changes queue locally and sync automatically when the connection returns. You can also use Maho without sync entirely.
 

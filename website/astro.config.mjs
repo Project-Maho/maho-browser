@@ -6,7 +6,7 @@ import sitemap from '@astrojs/sitemap';
 
 // Canonical site URL. Override at build time with SITE_URL env var.
 // Used by Astro for canonical URLs, sitemap, OG tags, and JSON-LD via Astro.site.
-const SITE_URL = process.env.SITE_URL || 'https://maho.app';
+const SITE_URL = process.env.SITE_URL || 'https://mahobrowser.com';
 
 export default defineConfig({
   site: SITE_URL,
@@ -125,7 +125,7 @@ export default defineConfig({
         }
 
         // Home
-        if (url === 'https://maho.app/' || url === 'https://maho.app') {
+        if (url === `${SITE_URL}/` || url === SITE_URL) {
           item.priority = 1.0;
           item.changefreq = 'weekly';
           return item;

@@ -117,7 +117,7 @@ fn register_extension_emits_update() {
 #[test]
 fn test_extension_sync_push_and_callback() {
     let mut core = MahoCore::new();
-    core.start_sync("wss://sync.maho.app", "test-room");
+    core.start_sync("wss://sync.mahobrowser.com", "test-room");
     core.set_sync_status(maho_core::sync_models::SyncStatus::Synced);
 
     // Register sync callback to trace remote events

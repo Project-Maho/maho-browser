@@ -9,7 +9,7 @@ import dev.maho.browser.bridge.BridgeSync
 
 object SyncManager : DefaultLifecycleObserver {
     private const val TAG = "SyncManager"
-    private const val DEFAULT_SERVER_URL = "https://sync.maho.app"
+    private const val DEFAULT_SERVER_URL = "https://sync.mahobrowser.com"
 
     var isSyncing = false
         private set
