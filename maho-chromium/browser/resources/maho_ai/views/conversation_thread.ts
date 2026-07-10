@@ -36,6 +36,7 @@ export interface ConversationItem {
   text: string;
   timestamp: number;
   tone?: ConversationTone;
+  toolName?: string;
 }
 
 function summarizeInlineText(text: string, maxLength = 64): string {
@@ -141,6 +142,23 @@ function humanizeToolRequest(toolCall?: ToolCallInfo|null): string {
   const description = getStringField(args, 'description');
   const normalizedName = normalizeToolName(toolCall.toolName);
 
+  if (normalizedName === 'read_current_page') {
+    return 'Reading current page';
+  }
+  if (normalizedName === 'get_selected_text') {
+    return 'Reading selected text';
+  }
+  if (normalizedName === 'get_active_tab') {
+    return 'Checking active tab';
+  }
+  if (normalizedName === 'search_in_page') {
+    const detail = query || pattern;
+    return detail ? `Searching page for “${summarizeInlineText(detail, 40)}”` : 'Searching current page';
+  }
+  if (normalizedName === 'extract_structured_page_context') {
+    return 'Extracting page structure';
+  }
+
   if (normalizedName.includes('read')) {
     return filePath ? `Reading ${filePath}` : 'Reading a file';
   }
@@ -165,7 +183,8 @@ function humanizeToolRequest(toolCall?: ToolCallInfo|null): string {
     return description ? `Running ${summarizeInlineText(description, 40)}` : 'Running a command';
   }
 
-  return getToolProgressLabel(toolCall.toolName).replace(/…$/, '');
+  const display = getToolDisplayName(toolCall.toolName);
+  return display ? `Calling ${display}` : getToolProgressLabel(toolCall.toolName).replace(/…$/, '');
 }
 
 function countOutputLines(text?: string): number {
@@ -405,6 +424,7 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
           text: humanizeToolRequest(event.toolCall),
           timestamp: event.timestamp,
           tone: 'accent',
+          toolName: getToolDisplayName(event.toolCall?.toolName),
         });
         break;
       case RuntimeEventKind.kToolResult: {
@@ -415,19 +435,23 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
         const existingToolIndex = event.toolResult?.callId ?
             toolItemIndexByCallId.get(event.toolResult.callId) :
             undefined;
-        const resultText = humanizeToolResult(toolCall, event.toolResult);
-        const resultTone = event.toolResult?.success ? 'success' : 'danger';
-        const resultNote = !event.toolResult?.success ?
+        const success = event.toolResult?.success === true;
+        const requestText = toolCall ? humanizeToolRequest(toolCall) : undefined;
+        const failureText = humanizeToolResult(toolCall, event.toolResult);
+        const resultTone = success ? 'success' : 'danger';
+        const resultNote = !success ?
             summarizeInlineText(event.toolResult?.errorMessage || event.toolResult?.output || '', 72) :
-            (event.toolResult?.output ? summarizeInlineText(event.toolResult.output, 120) : undefined);
+            undefined;
         if (existingToolIndex !== undefined && items[existingToolIndex]) {
+          const existingItem = items[existingToolIndex]!;
           items[existingToolIndex] = {
-            ...items[existingToolIndex],
-            chips: [getToolStatusChip(event.toolResult?.success ? ToolCallStatus.kCompleted : ToolCallStatus.kFailed)],
-            text: resultText,
+            ...existingItem,
+            chips: [getToolStatusChip(success ? ToolCallStatus.kCompleted : ToolCallStatus.kFailed)],
+            text: success ? existingItem.text : failureText,
             note: resultNote,
             tone: resultTone,
             timestamp: event.timestamp,
+            toolName: existingItem.toolName || getToolDisplayName(toolCall?.toolName),
           };
         } else {
           items.push({
@@ -436,9 +460,10 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
             markdown: false,
             note: resultNote,
             role: 'system',
-            text: resultText,
+            text: success ? (requestText || failureText) : failureText,
             timestamp: event.timestamp,
             tone: resultTone,
+            toolName: getToolDisplayName(toolCall?.toolName),
           });
         }
         break;

@@ -85,6 +85,9 @@ action("bundle_react") {
     "react/components/empty-state.tsx",
     "react/components/markdown.tsx",
     "store.ts",
+    "views/cards.ts",
+    "views/conversation_thread.ts",
+    "views/icons.ts",
     "bundle_react.mjs",
   ]
   outputs = [ "$target_gen_dir/app_bundle.js" ]

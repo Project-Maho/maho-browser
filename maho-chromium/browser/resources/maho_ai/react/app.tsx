@@ -11,6 +11,7 @@ import {bootstrapStore, createMahoAiStore} from './store.js';
 import {runWithBootGuard} from './boot-guard.js';
 import {CompactShell} from './features/compact/compact-shell.js';
 import {TabTidyModal} from './features/compact/tab-tidy-modal.js';
+import {SlashEditors} from './features/compact/slash-editors.js';
 import type {TidyFolderSuggestion} from './features/compact/tab-tidy-modal.js';
 import {
   Composer,
@@ -239,6 +240,83 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
       void store.openSettings();
     },
     onSubmit: () => {
+      const stateSnapshot = store.getSnapshot();
+      const prompt = stateSnapshot.composer.prompt.trim();
+
+      if (prompt.startsWith('/')) {
+        const parts = prompt.split(/\s+/);
+        const cmd = parts[0].toLowerCase();
+
+        if (cmd === '/agent') {
+          const sub = parts[1]?.toLowerCase();
+          if (sub === 'new') {
+            store.setActiveSlashEditor('agent-new');
+            store.setComposerPrompt('');
+            return;
+          } else if (sub === 'switch') {
+            const name = parts.slice(2).join(' ').trim();
+            if (name) {
+              const targetProfile = stateSnapshot.profiles.find(p => p.name.toLowerCase() === name.toLowerCase());
+              if (targetProfile && stateSnapshot.activeWorkspace) {
+                void store.switchWorkspaceProfile(stateSnapshot.activeWorkspace.id, targetProfile.id);
+              } else {
+                toast.error(`Agent profile "${name}" not found`);
+              }
+            } else {
+              toast.error('Usage: /agent switch <name>');
+            }
+            store.setComposerPrompt('');
+            return;
+          } else {
+            toast.error('Usage: /agent new | /agent switch <name>');
+            store.setComposerPrompt('');
+            return;
+          }
+        } else if (cmd === '/tools') {
+          const sub = parts[1]?.toLowerCase();
+          const target = parts[2]?.toLowerCase();
+          if (sub === 'add') {
+            if (target === 'mcp') {
+              store.setActiveSlashEditor('mcp-add');
+              store.setComposerPrompt('');
+              return;
+            } else if (target === 'cli') {
+              store.setActiveSlashEditor('cli-add');
+              store.setComposerPrompt('');
+              return;
+            } else {
+              toast.error('Usage: /tools add mcp | /tools add cli');
+              store.setComposerPrompt('');
+              return;
+            }
+          } else {
+            toast.error('Usage: /tools add mcp | /tools add cli');
+            store.setComposerPrompt('');
+            return;
+          }
+        } else if (cmd === '/workspace') {
+          const sub = parts[1]?.toLowerCase();
+          if (sub === 'import') {
+            const path = parts.slice(2).join(' ').trim();
+            if (path && stateSnapshot.activeWorkspace) {
+              void store.importProfileFromToml(stateSnapshot.activeWorkspace.id, path);
+            } else {
+              toast.error('Usage: /workspace import <path>');
+            }
+            store.setComposerPrompt('');
+            return;
+          } else {
+            toast.error('Usage: /workspace import <path>');
+            store.setComposerPrompt('');
+            return;
+          }
+        } else {
+          toast.error(`Unknown command "${cmd}". Available: /agent, /tools, /workspace`);
+          store.setComposerPrompt('');
+          return;
+        }
+      }
+
       if (!store.getSnapshot().currentSessionId) {
         void store.startSessionThenSubmit();
         return;
@@ -330,6 +408,7 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
                 />
               ) : (
                 <CompactShell
+                  store={store}
                   entries={sessionEvents}
                   hasMessages={hasMessages}
                   onClosePanel={modeHandlers.onClosePanel}
@@ -346,6 +425,7 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
               )}
             </div>
             <div className="sticky bottom-0 z-10 bg-gradient-to-t from-background via-background/95 to-transparent pt-1">
+              <SlashEditors store={store} />
               <Composer handlers={composerHandlers} state={state} />
             </div>
           </>

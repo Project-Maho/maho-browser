@@ -68,18 +68,21 @@ class MahoMcpSocketServer {
     std::unique_ptr<net::StreamSocket> socket;
     std::unique_ptr<MahoMcpSession> session;
     scoped_refptr<net::IOBufferWithSize> read_buf;
+    uint64_t connection_id = 0;
   };
 
   static bool AuthenticateClient(
       const net::UnixDomainServerSocket::Credentials& credentials);
 
+  ActiveConnection* FindConnection(uint64_t connection_id);
   void DoAccept();
   void OnAcceptComplete(int result);
-  void OnReadComplete(size_t connection_index, int result);
-  void OnResponsesReady(size_t connection_index,
+  void OnReadComplete(uint64_t connection_id, int result);
+  void OnResponsesReady(uint64_t connection_id,
                         std::vector<std::string> responses);
-  void ReadFromConnection(size_t connection_index);
-  void RemoveConnection(size_t connection_index);
+  void OnDeferredResponse(uint64_t connection_id, std::string response);
+  void ReadFromConnection(uint64_t connection_id);
+  void RemoveConnection(uint64_t connection_id);
   void CleanupStaleSocket();
 
   base::FilePath user_data_dir_;
@@ -88,6 +91,7 @@ class MahoMcpSocketServer {
   std::unique_ptr<net::UnixDomainServerSocket> server_socket_;
   std::unique_ptr<net::StreamSocket> accepted_socket_;
   std::vector<ActiveConnection> sessions_;
+  uint64_t next_connection_id_ = 1;
 
   SEQUENCE_CHECKER(sequence_checker_);
   base::WeakPtrFactory<MahoMcpSocketServer> weak_factory_{this};

@@ -210,6 +210,8 @@ enum RuntimeEventKind {
   // Browser context was injected (or denied) into the prompt. Carries a
   // BrowserContextPayload with the truthful extraction outcome.
   kBrowserContextInjected,
+  // Emitted when tools availability changed.
+  kToolAvailabilityChanged,
 };
 
 // Status of a tool invocation.
@@ -481,6 +483,37 @@ interface PageHandler {
   // Returns the LemonSqueezy checkout URL for buying a credit pack.
   // pack_size_usd MUST be one of 10, 50, 100 - otherwise empty URL returned.
   GetBuyCreditsUrl(int32 pack_size_usd) => (string checkout_url);
+
+  // ==========================================================================
+  // AI Extensibility methods
+  // ==========================================================================
+
+  // Profile CRUD
+  CreateAiProfile(string name, string system_prompt, string? model) => (string? profile_id);
+  GetAiProfiles() => (string profiles_json);
+  UpdateAiProfile(string id, string profile_json) => (bool success);
+  DeleteAiProfile(string id) => (bool success);
+  ImportProfileFromToml(string workspace_id, string toml_path) => (string? profile_id_or_error);
+
+  // Workspace CRUD & Info
+  CreateAiWorkspace(string name, string? space_id) => (string? workspace_json);
+  GetActiveAiWorkspace(string space_id) => (string? workspace_json);
+  GetAiWorkspaces() => (string workspaces_json);
+  SwitchWorkspaceProfile(string workspace_id, string profile_id) => (bool success);
+
+  // MCP Server management
+  RegisterMcpServer(string workspace_id, string config_json) => (bool success);
+  RemoveMcpServer(string workspace_id, string server_name) => (bool success);
+  GetMcpServers(string workspace_id) => (string servers_json);
+  ApproveMcpServerTrust(string workspace_id, string server_name, array<string> tools) => (bool success);
+
+  // CLI Tool management
+  RegisterCliTool(string workspace_id, string tool_json) => (bool success);
+  RemoveCliTool(string workspace_id, string tool_name) => (bool success);
+  GetCliTools(string workspace_id) => (string tools_json);
+
+  // Active resolved tools
+  GetWorkspaceEffectiveTools(string workspace_id) => (string tools_json);
 };
 
 // WebUI-side interface for browser-to-page push updates.

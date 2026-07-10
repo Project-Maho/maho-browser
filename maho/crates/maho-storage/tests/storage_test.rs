@@ -643,3 +643,204 @@ fn sqlite_conversation_cascade_delete() {
     let turns = db.get_conversation_messages("c1").unwrap();
     assert!(turns.is_empty());
 }
+
+#[test]
+fn sqlite_ai_profiles_crud() {
+    let db = SqliteStorage::open_in_memory().unwrap();
+    use maho_types::ai::AiProfile;
+
+    let profile = AiProfile {
+        id: "test-prof".to_string(),
+        name: "Test Profile".to_string(),
+        system_prompt: "You are a helpful assistant".to_string(),
+        preferred_model: Some("gpt-4".to_string()),
+        tools: vec!["search".to_string()],
+        mcp_servers: vec!["server1".to_string()],
+        is_default: false,
+        created_at: "2026-07-09T00:00:00Z".to_string(),
+        updated_at: "2026-07-09T00:00:00Z".to_string(),
+    };
+
+    // Create
+    db.create_ai_profile(&profile).unwrap();
+
+    // Read
+    let loaded = db.get_ai_profile("test-prof").unwrap().unwrap();
+    assert_eq!(loaded.name, "Test Profile");
+    assert_eq!(loaded.system_prompt, "You are a helpful assistant");
+    assert_eq!(loaded.preferred_model.as_deref(), Some("gpt-4"));
+    assert_eq!(loaded.tools, vec!["search".to_string()]);
+    assert_eq!(loaded.mcp_servers, vec!["server1".to_string()]);
+    assert!(!loaded.is_default);
+
+    // List
+    let list = db.list_ai_profiles().unwrap();
+    // Default profiles should also be loaded
+    assert!(list.len() > 1);
+    assert!(list.iter().any(|p| p.id == "test-prof"));
+
+    // Update
+    let mut updated = loaded;
+    updated.name = "Updated Name".to_string();
+    updated.system_prompt = "Updated Prompt".to_string();
+    db.update_ai_profile(&updated).unwrap();
+
+    let loaded_updated = db.get_ai_profile("test-prof").unwrap().unwrap();
+    assert_eq!(loaded_updated.name, "Updated Name");
+    assert_eq!(loaded_updated.system_prompt, "Updated Prompt");
+
+    // Default Profile check
+    let default_prof = db.get_default_ai_profile().unwrap().unwrap();
+    assert_eq!(default_prof.id, "blank");
+    assert!(default_prof.is_default);
+
+    // Delete
+    db.delete_ai_profile("test-prof").unwrap();
+    assert!(db.get_ai_profile("test-prof").unwrap().is_none());
+}
+
+#[test]
+fn sqlite_ai_workspaces_crud() {
+    let db = SqliteStorage::open_in_memory().unwrap();
+    use maho_types::ai::AiWorkspace;
+
+    let ws = AiWorkspace {
+        id: "ws-1".to_string(),
+        name: "My Workspace".to_string(),
+        profile_id: Some("blank".to_string()),
+        space_id: Some("space-x".to_string()),
+        workspace_root: Some("/tmp".to_string()),
+        created_at: "2026-07-09T00:00:00Z".to_string(),
+        updated_at: "2026-07-09T00:00:00Z".to_string(),
+    };
+
+    // Create
+    db.create_workspace(&ws).unwrap();
+
+    // Read
+    let loaded = db.get_workspace("ws-1").unwrap().unwrap();
+    assert_eq!(loaded.name, "My Workspace");
+    assert_eq!(loaded.profile_id.as_deref(), Some("blank"));
+    assert_eq!(loaded.space_id.as_deref(), Some("space-x"));
+    assert_eq!(loaded.workspace_root.as_deref(), Some("/tmp"));
+
+    // Query by space_id
+    let by_space = db.get_workspace_by_space("space-x").unwrap().unwrap();
+    assert_eq!(by_space.id, "ws-1");
+
+    // List
+    let list = db.list_workspaces().unwrap();
+    assert_eq!(list.len(), 1);
+
+    // Update
+    let mut updated = loaded;
+    updated.name = "New Workspace Name".to_string();
+    db.update_workspace(&updated).unwrap();
+
+    let loaded_updated = db.get_workspace("ws-1").unwrap().unwrap();
+    assert_eq!(loaded_updated.name, "New Workspace Name");
+
+    // Delete
+    db.delete_workspace("ws-1").unwrap();
+    assert!(db.get_workspace("ws-1").unwrap().is_none());
+}
+
+#[test]
+fn sqlite_ai_mcp_servers_and_cli_tools_crud() {
+    let db = SqliteStorage::open_in_memory().unwrap();
+    use maho_types::ai::{AiWorkspace, AiMcpServer, AiCliTool, McpTransport};
+
+    // First create a workspace
+    let ws = AiWorkspace {
+        id: "ws-1".to_string(),
+        name: "My Workspace".to_string(),
+        profile_id: Some("blank".to_string()),
+        space_id: None,
+        workspace_root: None,
+        created_at: "2026-07-09T00:00:00Z".to_string(),
+        updated_at: "2026-07-09T00:00:00Z".to_string(),
+    };
+    db.create_workspace(&ws).unwrap();
+
+    // 1. MCP Servers
+    let mcp = AiMcpServer {
+        id: "mcp-1".to_string(),
+        workspace_id: "ws-1".to_string(),
+        name: "server-x".to_string(),
+        transport: McpTransport::Stdio,
+        command: Some("npx".to_string()),
+        url: None,
+        auth_keychain_id: Some("key-id".to_string()),
+        trusted: true,
+        trusted_tools: Some(vec!["tool-a".to_string()]),
+        timeout_ms: 30000,
+        output_cap_bytes: 5000,
+        created_at: "2026-07-09T00:00:00Z".to_string(),
+        updated_at: "2026-07-09T00:00:00Z".to_string(),
+    };
+
+    db.create_mcp_server(&mcp).unwrap();
+
+    let loaded_mcp = db.get_mcp_server("mcp-1").unwrap().unwrap();
+    assert_eq!(loaded_mcp.name, "server-x");
+    assert_eq!(loaded_mcp.transport, McpTransport::Stdio);
+    assert_eq!(loaded_mcp.command.as_deref(), Some("npx"));
+    assert_eq!(loaded_mcp.auth_keychain_id.as_deref(), Some("key-id"));
+    assert!(loaded_mcp.trusted);
+    assert_eq!(loaded_mcp.trusted_tools.as_ref().unwrap(), &vec!["tool-a".to_string()]);
+    assert_eq!(loaded_mcp.timeout_ms, 30000);
+    assert_eq!(loaded_mcp.output_cap_bytes, 5000);
+
+    let list_mcp = db.list_mcp_servers("ws-1").unwrap();
+    assert_eq!(list_mcp.len(), 1);
+
+    // Update
+    let mut updated_mcp = loaded_mcp;
+    updated_mcp.trusted = false;
+    db.update_mcp_server(&updated_mcp).unwrap();
+
+    let loaded_updated_mcp = db.get_mcp_server("mcp-1").unwrap().unwrap();
+    assert!(!loaded_updated_mcp.trusted);
+
+    // 2. CLI Tools
+    let tool = AiCliTool {
+        id: "cli-1".to_string(),
+        workspace_id: "ws-1".to_string(),
+        name: "rg".to_string(),
+        description: "ripgrep".to_string(),
+        command_template: "rg {pattern}".to_string(),
+        parameters_schema: serde_json::json!({"type": "object"}),
+        sensitive: true,
+        timeout_ms: 10000,
+        output_cap_bytes: 2000,
+        working_directory: Some("/tmp".to_string()),
+        created_at: "2026-07-09T00:00:00Z".to_string(),
+        updated_at: "2026-07-09T00:00:00Z".to_string(),
+    };
+
+    db.create_cli_tool(&tool).unwrap();
+
+    let loaded_tool = db.get_cli_tool("cli-1").unwrap().unwrap();
+    assert_eq!(loaded_tool.name, "rg");
+    assert_eq!(loaded_tool.command_template, "rg {pattern}");
+    assert!(loaded_tool.sensitive);
+    assert_eq!(loaded_tool.timeout_ms, 10000);
+    assert_eq!(loaded_tool.output_cap_bytes, 2000);
+    assert_eq!(loaded_tool.working_directory.as_deref(), Some("/tmp"));
+
+    let list_tools = db.list_cli_tools("ws-1").unwrap();
+    assert_eq!(list_tools.len(), 1);
+
+    // Update
+    let mut updated_tool = loaded_tool;
+    updated_tool.sensitive = false;
+    db.update_cli_tool(&updated_tool).unwrap();
+
+    let loaded_updated_tool = db.get_cli_tool("cli-1").unwrap().unwrap();
+    assert!(!loaded_updated_tool.sensitive);
+
+    // Delete workspace should cascade delete mcp servers and cli tools
+    db.delete_workspace("ws-1").unwrap();
+    assert!(db.get_mcp_server("mcp-1").unwrap().is_none());
+    assert!(db.get_cli_tool("cli-1").unwrap().is_none());
+}

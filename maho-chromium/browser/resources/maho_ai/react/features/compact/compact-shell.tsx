@@ -1,10 +1,15 @@
-import type {AppState, TimelineEntry, ViewMode} from '../../../types.js';
+import React from 'react';
 import {CompactStage} from './compact-stage.js';
 import {CompactTopbar} from './compact-topbar.js';
 import {ConversationThread} from './conversation-thread.js';
+import type {MahoAiStore} from '../../../store.js';
+import type {AppState, TimelineEntry, ViewMode} from '../../../types.js';
+
+import {TrustCeremony} from '../trust-ceremony/trust-ceremony.js';
 
 export function CompactShell(
     {
+      store,
       entries,
       hasMessages,
       onClosePanel,
@@ -18,6 +23,7 @@ export function CompactShell(
       state,
       thinkingLabel,
     }: {
+      store: MahoAiStore;
       entries: TimelineEntry[];
       hasMessages: boolean;
       onClosePanel: () => void;
@@ -34,6 +40,7 @@ export function CompactShell(
   return (
     <>
       <CompactTopbar
+        store={store}
         onClosePanel={onClosePanel}
         onGetViewMode={onGetViewMode}
         onOpenSettings={onOpenSettings}
@@ -41,6 +48,7 @@ export function CompactShell(
         onStartSession={onStartSession}
         onTidyTabs={onTidyTabs}
       />
+      <TrustCeremony store={store} />
       {hasMessages || thinkingLabel ? (
         <ConversationThread
           entries={entries}

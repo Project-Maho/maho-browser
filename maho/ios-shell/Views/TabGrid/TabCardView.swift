@@ -29,9 +29,6 @@ struct TabCardView: View {
         if tab.isPlayingAudio {
             return "Playing"
         }
-        if tab.isPinned {
-            return "Pinned"
-        }
         if tab.isMuted {
             return "Muted"
         }
@@ -241,13 +238,24 @@ struct TabCardView: View {
 
     private var faviconBadge: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: ShellTheme.Radius.button, style: .continuous)
-                .fill(ShellTheme.Palette.tabGridMetaFill)
-                .frame(width: ShellTheme.Size.tabGridFavicon, height: ShellTheme.Size.tabGridFavicon)
-
-            Image(lucide: tab.isFavorite ? Lucide.star : Lucide.globe)
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(tab.isFavorite ? Color.orange : ShellTheme.Palette.accent)
+            if let favicon = tab.favicon, let uiImage = favicon.uiImage {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: ShellTheme.Size.tabGridFavicon, height: ShellTheme.Size.tabGridFavicon)
+                    .cornerRadius(4)
+            } else {
+                let monogramLetter = DomainMonogram.letter(for: host)
+                let monogramColor = DomainMonogram.color(for: host)
+                
+                RoundedRectangle(cornerRadius: ShellTheme.Radius.button, style: .continuous)
+                    .fill(monogramColor)
+                    .frame(width: ShellTheme.Size.tabGridFavicon, height: ShellTheme.Size.tabGridFavicon)
+                
+                Text(String(monogramLetter))
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(.white)
+            }
         }
     }
 

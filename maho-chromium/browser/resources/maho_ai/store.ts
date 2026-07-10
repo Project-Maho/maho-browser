@@ -76,6 +76,10 @@ export function createMahoAiStore(): MahoAiStore {
 export class MahoAiStore {
   private state = createInitialState();
   private listeners = new Set<Listener>();
+  // RAF-coalesced notify: multiple patches within one frame (e.g. streaming
+  // tokens) collapse into a single React render, killing sub-frame flicker.
+  private notifyScheduled = false;
+  private rafHandle: number | null = null;
 
   constructor(
       private readonly pageHandler: PageHandlerRemote,
@@ -122,6 +126,14 @@ export class MahoAiStore {
 
       if (this.state.currentSessionId) {
         await this.resumeSession(this.state.currentSessionId);
+      }
+
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const spaceId = urlParams.get('spaceId') || urlParams.get('space_id') || null;
+        await this.loadAiExtensibility(spaceId);
+      } catch (err) {
+        console.warn('[maho-ai] initial loadAiExtensibility failed', err);
       }
 
       void this.fetchCreditBalance().catch(err => {
@@ -597,6 +609,10 @@ export class MahoAiStore {
           const existing = state.contextsBySessionId[sessionId] || [];
           state.contextsBySessionId[sessionId] = [...existing, event.browserContext];
         }
+        if (event.kind === RuntimeEventKind.kToolAvailabilityChanged) {
+          const activeSpaceId = state.activeWorkspace?.spaceId ?? null;
+          void this.loadAiExtensibility(activeSpaceId);
+        }
       });
     });
 
@@ -670,19 +686,16 @@ export class MahoAiStore {
         ...previous.event,
         text: `${previous.event.text || ''}${event.text || ''}`,
         timestamp: event.timestamp,
-        sequence: event.sequence,
       };
       state.eventsBySessionId[sessionId] = [...existing.slice(0, -1), previous];
       return;
     }
 
-    // Thinking events accumulate separately from assistant tokens.
     if (event.kind === RuntimeEventKind.kAssistantThinking && previous?.event.kind === RuntimeEventKind.kAssistantThinking) {
       previous.event = {
         ...previous.event,
         text: `${previous.event.text || ''}${event.text || ''}`,
         timestamp: event.timestamp,
-        sequence: event.sequence,
       };
       state.eventsBySessionId[sessionId] = [...existing.slice(0, -1), previous];
       return;
@@ -705,13 +718,209 @@ export class MahoAiStore {
   }
 
   private patch(mutator: (state: AppState) => void) {
-    // Each Mojo IPC event triggers an individual patch+notify cycle.
-    // useSyncExternalStore re-renders synchronously per notify, so tokens
-    // paint progressively. If tokens appear batched visually, it's because
-    // the model emits faster than the 16ms frame budget — not a batching bug.
     const draft = cloneState(this.state);
     mutator(draft);
     this.state = draft;
-    notifyListeners(this.listeners);
+    this.scheduleNotify();
+  }
+
+  private scheduleNotify(): void {
+    if (this.notifyScheduled) {
+      return;
+    }
+    this.notifyScheduled = true;
+    const flush = () => {
+      this.notifyScheduled = false;
+      this.rafHandle = null;
+      notifyListeners(this.listeners);
+    };
+    if (typeof requestAnimationFrame === 'function') {
+      this.rafHandle = requestAnimationFrame(flush);
+    } else {
+      setTimeout(flush, 0);
+    }
+  }
+
+  // Load AI extensibility states
+  async loadAiExtensibility(spaceId: string | null = null): Promise<void> {
+    try {
+      const [profilesRes, workspacesRes] = await Promise.all([
+        this.pageHandler.getAiProfiles(),
+        this.pageHandler.getAiWorkspaces(),
+      ]);
+
+      const profiles = JSON.parse(profilesRes.profilesJson);
+      const workspaces = JSON.parse(workspacesRes.workspacesJson);
+
+      let activeWorkspace = null;
+      let mcpServers = [];
+      let cliTools = [];
+
+      const targetWorkspace = workspaces.find((w: any) => w.spaceId === spaceId) || workspaces[0];
+      if (targetWorkspace) {
+        const [workspaceInfoRes, mcpRes, cliRes] = await Promise.all([
+          this.pageHandler.getActiveAiWorkspace(spaceId || ''),
+          this.pageHandler.getMcpServers(targetWorkspace.id),
+          this.pageHandler.getCliTools(targetWorkspace.id),
+        ]);
+
+        if (workspaceInfoRes.workspaceJson) {
+          activeWorkspace = JSON.parse(workspaceInfoRes.workspaceJson);
+        }
+        if (mcpRes.serversJson) {
+          mcpServers = JSON.parse(mcpRes.serversJson);
+        }
+        if (cliRes.toolsJson) {
+          cliTools = JSON.parse(cliRes.toolsJson);
+        }
+      }
+
+      this.patch(state => {
+        state.profiles = profiles;
+        state.activeWorkspace = activeWorkspace;
+        state.mcpServers = mcpServers;
+        state.cliTools = cliTools;
+        if (activeWorkspace) {
+          state.activeProfileId = activeWorkspace.profileId;
+        } else {
+          const defaultProfile = profiles.find((p: any) => p.isDefault);
+          state.activeProfileId = defaultProfile ? defaultProfile.id : (profiles[0]?.id || null);
+        }
+      });
+    } catch (err) {
+      console.warn('[maho-ai] loadAiExtensibility failed', err);
+    }
+  }
+
+  async switchWorkspaceProfile(workspaceId: string, profileId: string): Promise<void> {
+    try {
+      const {success} = await this.pageHandler.switchWorkspaceProfile(workspaceId, profileId);
+      if (success) {
+        this.patch(state => {
+          state.activeProfileId = profileId;
+          if (state.activeWorkspace && state.activeWorkspace.id === workspaceId) {
+            state.activeWorkspace.profileId = profileId;
+          }
+        });
+        toast.success('Workspace profile switched');
+      } else {
+        toast.error('Failed to switch workspace profile');
+      }
+    } catch (err) {
+      console.error('[maho-ai] switchWorkspaceProfile failed', err);
+    }
+  }
+
+  async approveMcpServerTrust(workspaceId: string, serverName: string, tools: string[]): Promise<void> {
+    try {
+      const {success} = await this.pageHandler.approveMcpServerTrust(workspaceId, serverName, tools);
+      if (success) {
+        toast.success('MCP server trusted');
+        await this.loadAiExtensibility(this.state.activeWorkspace?.spaceId);
+      } else {
+        toast.error('Failed to trust MCP server');
+      }
+    } catch (err) {
+      console.error('[maho-ai] approveMcpServerTrust failed', err);
+    }
+  }
+
+  async importProfileFromToml(workspaceId: string, tomlPath: string): Promise<void> {
+    try {
+      const {profileIdOrError} = await this.pageHandler.importProfileFromToml(workspaceId, tomlPath);
+      if (profileIdOrError && !profileIdOrError.startsWith('Error')) {
+        toast.success('Profile imported successfully');
+        await this.loadAiExtensibility(this.state.activeWorkspace?.spaceId);
+      } else {
+        toast.error(profileIdOrError || 'Failed to import profile');
+      }
+    } catch (err) {
+      console.error('[maho-ai] importProfileFromToml failed', err);
+    }
+  }
+
+  async registerMcpServer(workspaceId: string, configJson: string): Promise<boolean> {
+    try {
+      const {success} = await this.pageHandler.registerMcpServer(workspaceId, configJson);
+      if (success) {
+        toast.success('MCP server registered');
+        await this.loadAiExtensibility(this.state.activeWorkspace?.spaceId);
+        return true;
+      } else {
+        toast.error('Failed to register MCP server');
+        return false;
+      }
+    } catch (err) {
+      console.error('[maho-ai] registerMcpServer failed', err);
+      return false;
+    }
+  }
+
+  async removeMcpServer(workspaceId: string, serverName: string): Promise<void> {
+    try {
+      const {success} = await this.pageHandler.removeMcpServer(workspaceId, serverName);
+      if (success) {
+        toast.success('MCP server removed');
+        await this.loadAiExtensibility(this.state.activeWorkspace?.spaceId);
+      } else {
+        toast.error('Failed to remove MCP server');
+      }
+    } catch (err) {
+      console.error('[maho-ai] removeMcpServer failed', err);
+    }
+  }
+
+  async registerCliTool(workspaceId: string, toolJson: string): Promise<boolean> {
+    try {
+      const {success} = await this.pageHandler.registerCliTool(workspaceId, toolJson);
+      if (success) {
+        toast.success('CLI tool registered');
+        await this.loadAiExtensibility(this.state.activeWorkspace?.spaceId);
+        return true;
+      } else {
+        toast.error('Failed to register CLI tool');
+        return false;
+      }
+    } catch (err) {
+      console.error('[maho-ai] registerCliTool failed', err);
+      return false;
+    }
+  }
+
+  async removeCliTool(workspaceId: string, toolName: string): Promise<void> {
+    try {
+      const {success} = await this.pageHandler.removeCliTool(workspaceId, toolName);
+      if (success) {
+        toast.success('CLI tool removed');
+        await this.loadAiExtensibility(this.state.activeWorkspace?.spaceId);
+      } else {
+        toast.error('Failed to remove CLI tool');
+      }
+    } catch (err) {
+      console.error('[maho-ai] removeCliTool failed', err);
+    }
+  }
+
+  async createAiProfile(name: string, systemPrompt: string, model: string | null): Promise<boolean> {
+    try {
+      const {profileId} = await this.pageHandler.createAiProfile(name, systemPrompt, model);
+      if (profileId) {
+        toast.success('Agent profile created');
+        await this.loadAiExtensibility(this.state.activeWorkspace?.spaceId);
+        return true;
+      } else {
+        toast.error('Failed to create agent profile');
+        return false;
+      }
+    } catch (err) {
+      console.error('[maho-ai] createAiProfile failed', err);
+      return false;
+    }
+  }
+
+  setActiveSlashEditor(editor: AppState['activeSlashEditor']) {
+    this.patch(state => {
+      state.activeSlashEditor = editor;
+    });
   }
 }

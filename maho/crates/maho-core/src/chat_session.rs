@@ -14,12 +14,7 @@ pub struct ChatConfig {
     pub system_instruction: String,
 }
 
-#[derive(Clone, Debug)]
-pub struct ToolDescriptor {
-    pub name: String,
-    pub description: String,
-    pub input_schema: serde_json::Value,
-}
+pub use maho_types::tool::ToolDescriptor;
 
 #[derive(Clone)]
 pub struct MahoChatEventSink {
@@ -98,7 +93,10 @@ impl ChatSession {
         self.tools.push(ToolDescriptor {
             name: name.to_string(),
             description: description.to_string(),
-            input_schema: schema,
+            parameters_schema: schema,
+            provenance: maho_types::tool::ToolProvenance::BuiltinBrowser,
+            sensitive: false,
+            permission: maho_types::tool::ToolPermission::AutoApprove,
         });
         true
     }
@@ -114,6 +112,14 @@ impl ChatSession {
         }));
         self.trigger_completion()
     }
+
+    pub fn append_user_message(&mut self, content: &str) {
+        self.history.push(serde_json::json!({
+            "role": "user",
+            "content": content
+        }));
+    }
+
 
     pub fn append_assistant_message(&mut self, content: &str, tool_calls_json: &str) {
         let mut msg = serde_json::json!({
@@ -181,7 +187,7 @@ impl ChatSession {
                 "function": {
                     "name": tool.name,
                     "description": tool.description,
-                    "parameters": tool.input_schema
+                    "parameters": tool.parameters_schema
                 }
             })
         }).collect();

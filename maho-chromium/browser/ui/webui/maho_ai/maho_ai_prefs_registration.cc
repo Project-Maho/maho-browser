@@ -35,6 +35,7 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterStringPref(ai_prefs::kByokAnthropicEncryptedB64,
                                 std::string());
   registry->RegisterDictionaryPref(ai_prefs::kAgentToolGrants);
+  registry->RegisterDictionaryPref(ai_prefs::kMcpCredentials);
   registry->RegisterBooleanPref(
       ai_prefs::kSettingsMigratedFromMacOSDefaults, false);
   registry->RegisterBooleanPref(

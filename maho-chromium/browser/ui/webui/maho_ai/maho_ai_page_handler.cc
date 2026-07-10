@@ -330,6 +330,10 @@ maho_ai::mojom::RuntimeEventKind InternalToMojoEventKind(
       return maho_ai::mojom::RuntimeEventKind::kConnectionStateChanged;
     case MahoAiRuntimeEventType::kBrowserContextInjected:
       return maho_ai::mojom::RuntimeEventKind::kBrowserContextInjected;
+    case MahoAiRuntimeEventType::kToolAvailabilityChanged:
+      return maho_ai::mojom::RuntimeEventKind::kToolAvailabilityChanged;
+    default:
+      return maho_ai::mojom::RuntimeEventKind::kError;
   }
 }
 
@@ -452,11 +456,16 @@ void MahoAIPageHandler::OnRuntimeEvent(MahoAiRuntimeEvent event) {
     case MahoAiRuntimeEventType::kBrowserContextInjected:
       break;
 
+    case MahoAiRuntimeEventType::kToolAvailabilityChanged:
+      break;
+
     case MahoAiRuntimeEventType::kAssistantThinking:
       break;
 
     case MahoAiRuntimeEventType::kAssistantToken:
     case MahoAiRuntimeEventType::kToolResult:
+      break;
+    default:
       break;
   }
 }
@@ -2219,6 +2228,292 @@ void MahoAIPageHandler::GetBuyCreditsUrl(
   }
 
   std::move(callback).Run(checkout_url);
+}
+
+void MahoAIPageHandler::CreateAiProfile(const std::string& name,
+                                       const std::string& system_prompt,
+                                       const std::optional<std::string>& model,
+                                       CreateAiProfileCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+  const char* model_ptr = model.has_value() ? model->c_str() : nullptr;
+  char* p = maho_ai_profile_create(core, name.c_str(), system_prompt.c_str(), model_ptr);
+  if (!p) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+  std::string json(p);
+  maho_core_free_string(p);
+
+  auto parsed = base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  if (parsed && parsed->is_dict()) {
+    const std::string* id = parsed->GetDict().FindString("id");
+    if (id) {
+      std::move(callback).Run(*id);
+      return;
+    }
+  }
+  std::move(callback).Run(std::nullopt);
+}
+
+void MahoAIPageHandler::GetAiProfiles(GetAiProfilesCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run("[]");
+    return;
+  }
+  char* p = maho_ai_profile_list(core);
+  if (!p) {
+    std::move(callback).Run("[]");
+    return;
+  }
+  std::string json(p);
+  maho_core_free_string(p);
+  std::move(callback).Run(json);
+}
+
+void MahoAIPageHandler::UpdateAiProfile(const std::string& id,
+                                       const std::string& profile_json,
+                                       UpdateAiProfileCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run(false);
+    return;
+  }
+  bool success = maho_ai_profile_update(core, id.c_str(), profile_json.c_str());
+  std::move(callback).Run(success);
+}
+
+void MahoAIPageHandler::DeleteAiProfile(const std::string& id,
+                                       DeleteAiProfileCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run(false);
+    return;
+  }
+  bool success = maho_ai_profile_delete(core, id.c_str());
+  std::move(callback).Run(success);
+}
+
+void MahoAIPageHandler::ImportProfileFromToml(const std::string& workspace_id,
+                                             const std::string& toml_path,
+                                             ImportProfileFromTomlCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+  char* p = maho_ai_profile_import_toml(core, workspace_id.c_str(), toml_path.c_str());
+  if (!p) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+  std::string result(p);
+  maho_core_free_string(p);
+  std::move(callback).Run(result);
+}
+
+void MahoAIPageHandler::CreateAiWorkspace(const std::string& name,
+                                         const std::optional<std::string>& space_id,
+                                         CreateAiWorkspaceCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+  const char* space_ptr = space_id.has_value() ? space_id->c_str() : nullptr;
+  char* p = maho_ai_workspace_create(core, name.c_str(), space_ptr);
+  if (!p) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+  std::string json(p);
+  maho_core_free_string(p);
+  std::move(callback).Run(json);
+}
+
+void MahoAIPageHandler::GetActiveAiWorkspace(const std::string& space_id,
+                                             GetActiveAiWorkspaceCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+  char* p = maho_ai_workspace_get_by_space(core, space_id.c_str());
+  if (!p) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+  std::string json(p);
+  maho_core_free_string(p);
+  std::move(callback).Run(json);
+}
+
+void MahoAIPageHandler::GetAiWorkspaces(GetAiWorkspacesCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run("[]");
+    return;
+  }
+  char* p = maho_ai_workspace_list(core);
+  if (!p) {
+    std::move(callback).Run("[]");
+    return;
+  }
+  std::string json(p);
+  maho_core_free_string(p);
+  std::move(callback).Run(json);
+}
+
+void MahoAIPageHandler::SwitchWorkspaceProfile(const std::string& workspace_id,
+                                               const std::string& profile_id,
+                                               SwitchWorkspaceProfileCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run(false);
+    return;
+  }
+  bool success = maho_ai_workspace_switch_profile(core, workspace_id.c_str(), profile_id.c_str());
+  std::move(callback).Run(success);
+}
+
+void MahoAIPageHandler::RegisterMcpServer(const std::string& workspace_id,
+                                          const std::string& config_json,
+                                          RegisterMcpServerCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run(false);
+    return;
+  }
+  bool success = maho_ai_mcp_server_register(core, workspace_id.c_str(), config_json.c_str());
+  std::move(callback).Run(success);
+}
+
+void MahoAIPageHandler::RemoveMcpServer(const std::string& workspace_id,
+                                        const std::string& server_name,
+                                        RemoveMcpServerCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run(false);
+    return;
+  }
+  bool success = maho_ai_mcp_server_remove(core, workspace_id.c_str(), server_name.c_str());
+  std::move(callback).Run(success);
+}
+
+void MahoAIPageHandler::GetMcpServers(const std::string& workspace_id,
+                                      GetMcpServersCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run("[]");
+    return;
+  }
+  char* p = maho_ai_mcp_server_list(core, workspace_id.c_str());
+  if (!p) {
+    std::move(callback).Run("[]");
+    return;
+  }
+  std::string json(p);
+  maho_core_free_string(p);
+  std::move(callback).Run(json);
+}
+
+void MahoAIPageHandler::ApproveMcpServerTrust(const std::string& workspace_id,
+                                              const std::string& server_name,
+                                              const std::vector<std::string>& tools,
+                                              ApproveMcpServerTrustCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run(false);
+    return;
+  }
+  std::string tools_json;
+  base::ListValue list;
+  for (const auto& tool : tools) {
+    list.Append(tool);
+  }
+  base::JSONWriter::Write(list, &tools_json);
+
+  bool success = maho_ai_mcp_server_approve_trust(core, workspace_id.c_str(), server_name.c_str(), tools_json.c_str());
+  std::move(callback).Run(success);
+}
+
+void MahoAIPageHandler::RegisterCliTool(const std::string& workspace_id,
+                                        const std::string& tool_json,
+                                        RegisterCliToolCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run(false);
+    return;
+  }
+  bool success = maho_ai_cli_tool_register(core, workspace_id.c_str(), tool_json.c_str());
+  std::move(callback).Run(success);
+}
+
+void MahoAIPageHandler::RemoveCliTool(const std::string& workspace_id,
+                                      const std::string& tool_name,
+                                      RemoveCliToolCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run(false);
+    return;
+  }
+  bool success = maho_ai_cli_tool_remove(core, workspace_id.c_str(), tool_name.c_str());
+  std::move(callback).Run(success);
+}
+
+void MahoAIPageHandler::GetCliTools(const std::string& workspace_id,
+                                    GetCliToolsCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run("[]");
+    return;
+  }
+  char* p = maho_ai_cli_tool_list(core, workspace_id.c_str());
+  if (!p) {
+    std::move(callback).Run("[]");
+    return;
+  }
+  std::string json(p);
+  maho_core_free_string(p);
+  std::move(callback).Run(json);
+}
+
+void MahoAIPageHandler::GetWorkspaceEffectiveTools(const std::string& workspace_id,
+                                                   GetWorkspaceEffectiveToolsCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run("[]");
+    return;
+  }
+  char* p = maho_ai_workspace_get_tools(core, workspace_id.c_str());
+  if (!p) {
+    std::move(callback).Run("[]");
+    return;
+  }
+  std::string json(p);
+  maho_core_free_string(p);
+  std::move(callback).Run(json);
 }
 
 void MahoAIPageHandler::OnOsCryptReady(os_crypt_async::Encryptor encryptor) {

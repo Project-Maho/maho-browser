@@ -6,6 +6,7 @@ pub mod bookmark_manager;
 pub mod boost_manager;
 pub mod command_bar;
 pub mod css_mod_manager;
+pub mod config_resolver;
 pub mod content_blocker;
 pub mod crash_recovery;
 
@@ -17,7 +18,7 @@ pub mod find_manager;
 pub mod import_export_manager;
 pub mod llm_manager;
 pub mod maho_core;
-pub mod mcp_manager;
+pub mod tool_registry;
 pub mod note_manager;
 pub mod notification_manager;
 pub mod password_manager;
@@ -47,3 +48,7 @@ pub mod llm_provider;
 pub(crate) mod http;
 pub mod providers;
 pub mod stream_utils;
+pub mod tab_clustering;
+pub mod workspace_manager;
+pub mod profile_import;
+

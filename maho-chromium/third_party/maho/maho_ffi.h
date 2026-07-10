@@ -3,9 +3,9 @@
 #ifndef MAHO_FFI_H
 #define MAHO_FFI_H
 
-#include <cstdint>
-#include <cstddef>
-#include <cstdbool>
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
 
 typedef enum MahoAgentPermissionDecision {
   MahoAgentPermissionDecision_Allow = 0,
@@ -25,11 +25,6 @@ typedef struct MahoCore MahoCore;
  * (`AllComplete` or `Error`).
  */
 typedef struct MahoImportSession MahoImportSession;
-
-typedef void (*MahoExtensionSyncCallback)(void *user_data,
-                                          const char *extension_id,
-                                          bool enabled,
-                                          bool deleted);
 
 typedef struct MahoChatConfig {
   const char *api_key;
@@ -274,7 +269,7 @@ void maho_core_clear_installed_extensions(struct MahoCore *ptr);
 void maho_core_set_installed_extensions(struct MahoCore *ptr, const char *extensions_json);
 
 void maho_core_register_extension_sync_callback(struct MahoCore *ptr,
-                                                MahoExtensionSyncCallback callback,
+                                                void (*callback)(void*, const char*, bool, bool),
                                                 void *user_data);
 
 void maho_core_register_side_panel(struct MahoCore *ptr,
@@ -1928,6 +1923,12 @@ void maho_core_chat_cancel(struct ChatSession *ptr);
 /**
  * # Safety
  * `ptr` must be a valid pointer to a `ChatSession`.
+ * `content` must be a null-terminated C string.
+ */
+void maho_core_chat_append_user_message(struct ChatSession *ptr, const char *content);
+
+/**
+ * `ptr` must be a valid pointer to a `ChatSession`.
  * `content` and `tool_calls_json` must be null-terminated C strings.
  */
 void maho_core_chat_append_assistant_message(struct ChatSession *ptr,
@@ -2114,6 +2115,21 @@ bool maho_agent_send_message(struct MahoAgentSession *session,
 
 /**
  * # Safety
+ * Fast-path variant of `maho_agent_send_message`. Skips all tool registration
+ * and dispatches straight to the LLM. Callers MUST NOT rely on tool_calls
+ * being processed. Same pointer safety requirements as `maho_agent_send_message`.
+ */
+bool maho_agent_send_message_simple(struct MahoAgentSession *session,
+                                    const char *message,
+                                    void (*on_token)(void *user_data, const char *token),
+                                    void (*on_complete)(void *user_data,
+                                                        const char *full_text,
+                                                        const char *tool_calls_json),
+                                    void (*on_error)(void *user_data, const char *error),
+                                    void *user_data);
+
+/**
+ * # Safety
  * `session` must be a valid pointer to a `MahoAgentSession`.
  */
 bool maho_agent_cancel(struct MahoAgentSession *session);
@@ -2140,6 +2156,160 @@ char *maho_core_get_space_ai_config(struct MahoCore *ptr, const char *space_id);
 bool maho_core_set_space_ai_config(struct MahoCore *ptr,
                                    const char *space_id,
                                    const char *config_json);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer to a `MahoCore`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_cluster_tabs(struct MahoCore *ptr, double threshold);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer to a `MahoCore`.
+ * `name` and `system_prompt` must be null-terminated UTF-8 strings.
+ * `model` is an optional null-terminated UTF-8 string (can be null).
+ * Caller must free returned string via `maho_string_free`.
+ */
+char *maho_ai_profile_create(struct MahoCore *core,
+                             const char *name,
+                             const char *system_prompt,
+                             const char *model);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer to a `MahoCore`.
+ * Caller must free returned string via `maho_string_free`.
+ */
+char *maho_ai_profile_list(struct MahoCore *core);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer to a `MahoCore`.
+ * `id` and `json` must be null-terminated UTF-8 strings.
+ */
+bool maho_ai_profile_update(struct MahoCore *core, const char *id, const char *json);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer to a `MahoCore`.
+ * `id` must be a null-terminated UTF-8 string.
+ */
+bool maho_ai_profile_delete(struct MahoCore *core, const char *id);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer to a `MahoCore`.
+ * `workspace_id` must be a null-terminated UTF-8 string.
+ * `toml_path` must be a null-terminated UTF-8 string.
+ * The caller must free the returned string with `maho_core_free_string`.
+ */
+char *maho_ai_profile_import_toml(struct MahoCore *core,
+                                  const char *workspace_id,
+                                  const char *toml_path);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer to a `MahoCore`.
+ * `name` must be a null-terminated UTF-8 string.
+ * `space_id` is an optional null-terminated UTF-8 string (can be null).
+ * Caller must free returned string via `maho_string_free`.
+ */
+char *maho_ai_workspace_create(struct MahoCore *core, const char *name, const char *space_id);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer to a `MahoCore`.
+ * `space_id` must be a null-terminated UTF-8 string.
+ * Caller must free returned string via `maho_string_free`.
+ */
+char *maho_ai_workspace_get_by_space(struct MahoCore *core, const char *space_id);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer to a `MahoCore`.
+ * Caller must free returned string via `maho_string_free`.
+ */
+char *maho_ai_workspace_list(struct MahoCore *core);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer to a `MahoCore`.
+ * `workspace_id` and `profile_id` must be null-terminated UTF-8 strings.
+ */
+bool maho_ai_workspace_switch_profile(struct MahoCore *core,
+                                      const char *workspace_id,
+                                      const char *profile_id);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer to a `MahoCore`.
+ * `workspace_id` and `config_json` must be null-terminated UTF-8 strings.
+ */
+bool maho_ai_mcp_server_register(struct MahoCore *core,
+                                 const char *workspace_id,
+                                 const char *config_json);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer to a `MahoCore`.
+ * `workspace_id` and `server_name` must be null-terminated UTF-8 strings.
+ */
+bool maho_ai_mcp_server_remove(struct MahoCore *core,
+                               const char *workspace_id,
+                               const char *server_name);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer to a `MahoCore`.
+ * `workspace_id` must be a null-terminated UTF-8 string.
+ * Caller must free returned string via `maho_string_free`.
+ */
+char *maho_ai_mcp_server_list(struct MahoCore *core, const char *workspace_id);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer to a `MahoCore`.
+ * `workspace_id`, `server_name`, and `tools_json` must be null-terminated UTF-8 strings.
+ */
+bool maho_ai_mcp_server_approve_trust(struct MahoCore *core,
+                                      const char *workspace_id,
+                                      const char *server_name,
+                                      const char *tools_json);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer to a `MahoCore`.
+ * `workspace_id` and `tool_json` must be null-terminated UTF-8 strings.
+ */
+bool maho_ai_cli_tool_register(struct MahoCore *core,
+                               const char *workspace_id,
+                               const char *tool_json);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer to a `MahoCore`.
+ * `workspace_id` and `tool_name` must be null-terminated UTF-8 strings.
+ */
+bool maho_ai_cli_tool_remove(struct MahoCore *core,
+                             const char *workspace_id,
+                             const char *tool_name);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer to a `MahoCore`.
+ * `workspace_id` must be a null-terminated UTF-8 string.
+ * Caller must free returned string via `maho_string_free`.
+ */
+char *maho_ai_cli_tool_list(struct MahoCore *core, const char *workspace_id);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer to a `MahoCore`.
+ * `workspace_id` must be a null-terminated UTF-8 string.
+ * Caller must free returned string via `maho_string_free`.
+ */
+char *maho_ai_workspace_get_tools(struct MahoCore *core, const char *workspace_id);
 
 /**
  * Returns the user's subscription tier as an integer:
@@ -2183,6 +2353,50 @@ int32_t maho_routines_run(const char *id,
  * `core` must be a valid pointer returned by `maho_core_new`.
  */
 int32_t maho_routines_tick(struct MahoCore *core, int64_t now_sec);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ * `window_id` must be a valid null-terminated C string.
+ * The caller must free the returned JSON string with `maho_string_free`.
+ */
+char *maho_core_get_split_view_config(struct MahoCore *core, const char *window_id);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ * `window_id` must be a valid null-terminated C string.
+ */
+void maho_core_window_closed(struct MahoCore *core, const char *window_id);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ */
+uint64_t maho_core_register_split_change_callback(struct MahoCore *core,
+                                                  void (*callback)(const char*));
+
+/**
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ */
+void maho_core_unregister_split_change_callback(struct MahoCore *core, uint64_t token);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ * `user_data` may be null; if non-null it must outlive the callback registration.
+ * `callback` must not panic and must be safe to call from arbitrary threads.
+ */
+uint64_t maho_core_register_tool_availability_callback(struct MahoCore *core,
+                                                       void *user_data,
+                                                       void (*callback)(void*, const char*));
+
+/**
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ */
+void maho_core_unregister_tool_availability_callback(struct MahoCore *core, uint64_t token);
 
 /**
  * Detect installed browsers on the system. Returns a JSON array; caller MUST

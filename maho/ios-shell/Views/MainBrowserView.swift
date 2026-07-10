@@ -27,6 +27,8 @@ struct MainBrowserView: View {
     @State private var showHistory = false
     @State private var showBookmarks = false
     @State private var showReadingList = false
+    @State private var showDownloads = false
+    @State private var showNotes = false
     @State private var showFindInPage = false
     @State private var isIncognito = false
     @State private var activeTabId: TabId?
@@ -54,6 +56,8 @@ struct MainBrowserView: View {
     @StateObject private var pinchSummarizer = PageSummarizer()
     @State private var browseForMeSeed = UUID()
     @State private var showPageMenu = false
+    @State private var isSearchFocused = false
+    @StateObject private var commandBarVM = CommandBarViewModel()
 
     private let bridge = MahoBridge.shared
     private let tickTimer = Timer.publish(every: 0.35, on: .main, in: .common).autoconnect()
@@ -68,6 +72,7 @@ struct MainBrowserView: View {
                 BrowserView(
                     viewModel: browserVM,
                     tabId: activeTabId,
+                    isIncognito: isIncognito,
                     isBarVisible: $isBottomBarVisible,
                     tintColor: $tintColor,
                     chromeVisibilityProgress: $chromeVisibilityProgress,
@@ -97,9 +102,11 @@ struct MainBrowserView: View {
             if isBrowsing {
                 VStack(spacing: 0) {
                     if isIncognito {
-                        incognitoStateBanner
-                            .padding(.top, ShellTheme.Spacing.small)
-                            .transition(.move(edge: .top).combined(with: .opacity))
+                        PrivateBanner(onDismiss: {
+                            toggleIncognito()
+                        })
+                        .padding(.top, ShellTheme.Spacing.small)
+                        .transition(.move(edge: .top).combined(with: .opacity))
                     }
 
                     Spacer()
@@ -134,6 +141,7 @@ struct MainBrowserView: View {
                     spaces: spacesMenuItems,
                     homeQuery: $homeQuery,
                     homeSearchFocusRequest: $focusHomeSearchRequest,
+                    isSearchFocused: $isSearchFocused,
                     onTabsTapped: {
                         refreshState()
                         showTabGrid = true
@@ -249,9 +257,26 @@ struct MainBrowserView: View {
                 .transition(.scale(scale: 0.85).combined(with: .opacity))
                 .zIndex(10)
             }
+
+            if isSearchFocused {
+                SuggestionsListView(
+                    viewModel: commandBarVM,
+                    onSelect: { suggestion in
+                        isSearchFocused = false
+                        let targetUrl = suggestion.executionPayload ?? suggestion.key
+                        createTabAndNavigate(targetUrl)
+                    },
+                    onCancel: {
+                        isSearchFocused = false
+                    }
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .zIndex(100)
+            }
         }
         .sheet(isPresented: $showTabGrid, onDismiss: handleTabGridDismiss) {
             TabGridSheet(
+                isIncognito: $isIncognito,
                 onNewTab: createNewTabFromGrid
             )
             .presentationDragIndicator(.hidden)
@@ -290,63 +315,14 @@ struct MainBrowserView: View {
                 ReaderView(article: article, isPresented: $isReaderMode)
             }
         }
-        .confirmationDialog("Page menu", isPresented: $showPageMenu, titleVisibility: .hidden) {
-            if isBrowsing {
-                Button("Reload", action: reloadCurrentPage)
-                    .disabled(!canReloadCurrentPage)
-
-                Button("Share", action: shareCurrentPage)
-                    .disabled(!canShareCurrentPage)
-
-                Button("History") {
-                    showHistory = true
-                }
-
-                Button("Bookmarks") {
-                    showBookmarks = true
-                }
-
-                Button("Reading List") {
-                    showReadingList = true
-                }
-
-                Button("Find in Page") {
-                    guard browsingTabId != nil else { return }
-                    showFindInPage = true
-                }
-
-                Button(isReaderMode ? "Hide Reader" : "Reader", action: toggleReaderMode)
-
-                Button(isDesktopMode ? "Mobile Site" : "Desktop Site", action: toggleDesktopMode)
-
-                Button("Zoom Out") {
-                    adjustZoom(by: -0.1)
-                }
-
-                Button("Zoom In") {
-                    adjustZoom(by: 0.1)
-                }
-
-                Button("Browse for Me") {
-                    guard browsingTabId != nil else { return }
-                    showPinchSummary = false
-                    browseForMeSeed = UUID()
-                    showSummaryOverlay = true
-                    pageSummarizer.summarize(webView: browserVM.webView)
-                }
-
-                Button("Picture in Picture") {
-                    if let webView = browserVM.webView {
-                        PiPManager.shared.enablePiP(for: webView)
-                    }
-                }
-            }
-
-            Button(isIncognito ? "Exit Private" : "Private", action: toggleIncognito)
-            Button("Settings") {
-                showSettings = true
-            }
-            Button("Cancel", role: .cancel) {}
+        .sheet(isPresented: $showPageMenu) {
+            MahoMenuSheet(onAction: handleMenuAction)
+        }
+        .sheet(isPresented: $showDownloads) {
+            DownloadsView()
+        }
+        .sheet(isPresented: $showNotes) {
+            NotesView()
         }
         .onAppear {
             loadBrowserState()
@@ -374,6 +350,59 @@ struct MainBrowserView: View {
                 pinchSummarizer.reset()
             } else if case .error = newState {
                 pinchSummarizer.reset()
+            }
+        }
+        .onChange(of: homeQuery) { _, newValue in
+            Task {
+                try? await Task.sleep(nanoseconds: 150 * 1_000_000)
+                guard newValue == homeQuery else { return }
+                commandBarVM.query(newValue)
+            }
+        }
+        .onChange(of: isSearchFocused) { _, newValue in
+            if newValue {
+                commandBarVM.query(homeQuery)
+            }
+        }
+    }
+
+    private func handleMenuAction(_ action: MenuAction) {
+        showPageMenu = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            switch action {
+            case .newTab:
+                _ = createNewTabFromGrid()
+            case .newPrivateTab:
+                if !isIncognito {
+                    toggleIncognito()
+                }
+                _ = createNewTabFromGrid()
+            case .bookmarks:
+                showBookmarks = true
+            case .history:
+                showHistory = true
+            case .downloads:
+                showDownloads = true
+            case .readingList:
+                showReadingList = true
+            case .notes:
+                showNotes = true
+            case .sharePage:
+                shareCurrentPage()
+            case .findInPage:
+                showFindInPage = true
+            case .reload:
+                reloadCurrentPage()
+            case .desktopSite:
+                toggleDesktopMode()
+            case .readerMode:
+                toggleReaderMode()
+            case .settings:
+                showSettings = true
+            case .signIn:
+                showSettings = true
+            case .profileSwitcher:
+                showSettings = true
             }
         }
     }

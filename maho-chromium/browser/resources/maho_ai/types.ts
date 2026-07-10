@@ -485,6 +485,12 @@ export interface AppState {
   contextsBySessionId: Record<string, BrowserContextPayload[]>;
   creditBalance: CreditBalanceInfo|null;
   chatBlockedReason: 'quota-exhausted'|null;
+  activeProfileId: string|null;
+  profiles: AiProfile[];
+  activeWorkspace: AiWorkspace|null;
+  mcpServers: AiMcpServer[];
+  cliTools: AiCliTool[];
+  activeSlashEditor: 'agent-new' | 'mcp-add' | 'cli-add' | null;
 }
 
 export const DEFAULT_COMPOSER_STATE: ComposerState = {
@@ -526,6 +532,12 @@ export function createInitialState(): AppState {
     contextsBySessionId: {},
     creditBalance: null,
     chatBlockedReason: null,
+    activeProfileId: null,
+    profiles: [],
+    activeWorkspace: null,
+    mcpServers: [],
+    cliTools: [],
+    activeSlashEditor: null,
   };
 }
 
@@ -707,3 +719,57 @@ export function isRenderableTimelineEvent(event: RuntimeEventRecord): boolean {
 
   return false;
 }
+
+export interface AiProfile {
+  id: string;
+  name: string;
+  systemPrompt: string;
+  preferredModel: string | null;
+  tools: string[];
+  mcpServers: string[];
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AiWorkspace {
+  id: string;
+  name: string;
+  profileId: string | null;
+  spaceId: string | null;
+  workspaceRoot: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AiMcpServer {
+  id: string;
+  workspaceId: string;
+  name: string;
+  transport: 'stdio' | 'http';
+  command: string | null;
+  url: string | null;
+  authKeychainId: string | null;
+  trusted: boolean;
+  trustedTools: string[] | null;
+  timeoutMs: number;
+  outputCapBytes: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AiCliTool {
+  id: string;
+  workspaceId: string;
+  name: string;
+  description: string;
+  commandTemplate: string;
+  parametersSchema: any;
+  sensitive: boolean;
+  timeoutMs: number;
+  outputCapBytes: number;
+  workingDirectory: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+

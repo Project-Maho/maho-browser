@@ -5,7 +5,7 @@
 //! Reusable UDS JSON-RPC client for communicating with the Maho Browser MCP socket server.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,6 +15,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::UnixStream;
 use tokio::sync::{Mutex, oneshot};
+use tokio::task::JoinHandle;
 
 use crate::error::{McpBridgeError, Result};
 use crate::protocol::{
@@ -22,16 +23,20 @@ use crate::protocol::{
     JsonRpcResponse,
 };
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(90);
 const EXPECTED_SERVER_NAME: &str = "maho-browser";
 
 /// A JSON-RPC 2.0 client that communicates with the browser over a Unix domain socket.
 ///
 /// The client spawns a background read loop to correlate responses by ID,
-/// supporting out-of-order response delivery.
+/// supporting out-of-order response delivery. If the socket connection dies
+/// (e.g., the browser process restarts), the next `call()` attempt transparently
+/// reconnects and re-runs the initialize handshake before retrying the request.
 #[derive(Debug)]
 pub struct BrowserClient {
+    path: PathBuf,
     writer: Mutex<OwnedWriteHalf>,
+    read_task: Mutex<JoinHandle<()>>,
     pending: Arc<Mutex<HashMap<i64, oneshot::Sender<JsonRpcResponse>>>>,
     next_id: AtomicI64,
     timeout: Duration,
@@ -46,34 +51,51 @@ impl BrowserClient {
 
     /// Connect with a custom per-request timeout.
     pub async fn connect_with_timeout(path: &Path, timeout: Duration) -> Result<Self> {
+        let pending: Arc<Mutex<HashMap<i64, oneshot::Sender<JsonRpcResponse>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+
+        let (writer, read_task) = Self::open_stream(path, Arc::clone(&pending)).await?;
+
+        let client = Self {
+            path: path.to_path_buf(),
+            writer: Mutex::new(writer),
+            read_task: Mutex::new(read_task),
+            pending,
+            next_id: AtomicI64::new(1),
+            timeout,
+        };
+
+        client.perform_handshake().await?;
+        Ok(client)
+    }
+
+    async fn open_stream(
+        path: &Path,
+        pending: Arc<Mutex<HashMap<i64, oneshot::Sender<JsonRpcResponse>>>>,
+    ) -> Result<(OwnedWriteHalf, JoinHandle<()>)> {
         let stream = UnixStream::connect(path)
             .await
             .map_err(McpBridgeError::SocketConnect)?;
 
         let (read_half, write_half) = stream.into_split();
-        let pending: Arc<Mutex<HashMap<i64, oneshot::Sender<JsonRpcResponse>>>> =
-            Arc::new(Mutex::new(HashMap::new()));
 
-        // Spawn the read loop.
-        let pending_clone = Arc::clone(&pending);
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let mut reader = BufReader::new(read_half);
             let mut line = String::new();
             loop {
                 line.clear();
                 match reader.read_line(&mut line).await {
-                    Ok(0) => break, // EOF
+                    Ok(0) => break,
                     Ok(_) => {
                         if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&line) {
                             if let Some(ref id) = resp.id {
                                 if let JsonRpcId::Num(n) = id {
-                                    let mut map = pending_clone.lock().await;
+                                    let mut map = pending.lock().await;
                                     if let Some(tx) = map.remove(n) {
                                         let _ = tx.send(resp);
                                     }
                                 }
                             }
-                            // Notifications (no id) are logged and dropped.
                         }
                     }
                     Err(_) => break,
@@ -81,14 +103,10 @@ impl BrowserClient {
             }
         });
 
-        let client = Self {
-            writer: Mutex::new(write_half),
-            pending,
-            next_id: AtomicI64::new(1),
-            timeout,
-        };
+        Ok((write_half, handle))
+    }
 
-        // Perform handshake.
+    async fn perform_handshake(&self) -> Result<()> {
         let auth_token = Self::load_auth_token();
         let init_params = InitializeParams {
             protocol_version: "2025-03-26".to_string(),
@@ -98,8 +116,8 @@ impl BrowserClient {
             },
             auth_token,
         };
-        let result_value = client
-            .call("initialize", serde_json::to_value(&init_params)?)
+        let result_value = self
+            .call_no_retry("initialize", serde_json::to_value(&init_params)?)
             .await?;
 
         let init_result: InitializeResult = serde_json::from_value(result_value)?;
@@ -109,12 +127,33 @@ impl BrowserClient {
                 got: init_result.server_info.name,
             });
         }
-
-        Ok(client)
+        Ok(())
     }
 
-    /// Send a JSON-RPC request and await the correlated response.
-    pub async fn call(&self, method: &str, params: Value) -> Result<Value> {
+    async fn reconnect(&self) -> Result<()> {
+        let (new_writer, new_read_task) =
+            Self::open_stream(&self.path, Arc::clone(&self.pending)).await?;
+
+        {
+            let mut old_writer = self.writer.lock().await;
+            *old_writer = new_writer;
+        }
+        {
+            let mut old_task = self.read_task.lock().await;
+            old_task.abort();
+            *old_task = new_read_task;
+        }
+
+        {
+            let mut pending = self.pending.lock().await;
+            pending.clear();
+        }
+
+        self.perform_handshake().await?;
+        Ok(())
+    }
+
+    async fn call_no_retry(&self, method: &str, params: Value) -> Result<Value> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let req = JsonRpcRequest::new(id, method, Some(params));
 
@@ -139,6 +178,35 @@ impl BrowserClient {
         }
 
         Ok(resp.result.unwrap_or(Value::Null))
+    }
+
+    /// Send a JSON-RPC request and await the correlated response.
+    ///
+    /// On broken pipe or handler-closed errors (browser restarted / socket
+    /// invalidated), the client transparently reconnects and retries the
+    /// request exactly once before propagating the failure.
+    pub async fn call(&self, method: &str, params: Value) -> Result<Value> {
+        match self.call_no_retry(method, params.clone()).await {
+            Err(err) if should_retry_after_reconnect(&err) => {
+                tracing::warn!(
+                    "BrowserClient: connection broken ({err:?}); attempting reconnect + retry"
+                );
+                self.reconnect().await?;
+                self.call_no_retry(method, params).await
+            }
+            other => other,
+        }
+    }
+
+    /// Convenience wrapper that packages `name` and `arguments` into the
+    /// browser server's `tools/call` envelope. Prefer this over the raw
+    /// `call()` when invoking a tool by name.
+    pub async fn call_tool(&self, name: &str, arguments: Value) -> Result<Value> {
+        self.call(
+            "tools/call",
+            serde_json::json!({ "name": name, "arguments": arguments }),
+        )
+        .await
     }
 
     /// Send a JSON-RPC notification (fire-and-forget, no response expected).
@@ -191,6 +259,20 @@ impl BrowserClient {
         writer.write_all(&buf).await?;
         writer.flush().await?;
         Ok(())
+    }
+}
+
+fn should_retry_after_reconnect(err: &McpBridgeError) -> bool {
+    match err {
+        McpBridgeError::Io(io_err) => matches!(
+            io_err.kind(),
+            std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::NotConnected
+        ),
+        McpBridgeError::HandlerClosed => true,
+        _ => false,
     }
 }
 

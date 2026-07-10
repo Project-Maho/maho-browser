@@ -26,6 +26,7 @@ struct ArcBottomBar: View {
     let spaces: [SpaceMenuItem]
     @Binding var homeQuery: String
     @Binding var homeSearchFocusRequest: Bool
+    @Binding var isSearchFocused: Bool
     let onTabsTapped: () -> Void
     let onAddressTapped: () -> Void
     let onHomeSubmit: () -> Void
@@ -93,6 +94,16 @@ struct ArcBottomBar: View {
             guard newValue else { return }
             isHomeSearchFocused = true
             homeSearchFocusRequest = false
+        }
+        .onChange(of: isHomeSearchFocused) { _, newValue in
+            if isSearchFocused != newValue {
+                isSearchFocused = newValue
+            }
+        }
+        .onChange(of: isSearchFocused) { _, newValue in
+            if isHomeSearchFocused != newValue {
+                isHomeSearchFocused = newValue
+            }
         }
         .accessibilityIdentifier("arcBottomBar")
     }

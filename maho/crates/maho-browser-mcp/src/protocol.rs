@@ -142,17 +142,7 @@ pub struct Capabilities {
     pub tools: Option<Value>,
 }
 
-/// A tool descriptor as returned by `tools/list`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolDescriptor {
-    /// Tool name.
-    pub name: String,
-    /// Human-readable description.
-    pub description: String,
-    /// JSON Schema describing the tool's input parameters.
-    pub input_schema: Value,
-}
+pub use maho_types::tool::ToolDescriptor;
 
 // ---------------------------------------------------------------------------
 // Tab tools (Wave 2.2)
@@ -547,7 +537,10 @@ mod tests {
         let td = ToolDescriptor {
             name: "browser_ping".to_string(),
             description: "Ping the browser".to_string(),
-            input_schema: json!({"type": "object", "properties": {}}),
+            parameters_schema: json!({"type": "object", "properties": {}}),
+            provenance: maho_types::tool::ToolProvenance::BuiltinBrowser,
+            sensitive: false,
+            permission: maho_types::tool::ToolPermission::AutoApprove,
         };
         let val = serde_json::to_value(&td).unwrap();
         assert_eq!(val["name"], "browser_ping");

@@ -6,7 +6,7 @@ struct SettingsRootView: View {
     var body: some View {
         NavigationView {
             List {
-                Section {
+                Section(header: Text("Content")) {
                     NavigationLink(destination: GeneralSettingsView()) {
                         Label { Text("General") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("gearshape")) }
                     }
@@ -18,13 +18,25 @@ struct SettingsRootView: View {
                     }
                 }
 
-                Section {
+                Section(header: Text("Account")) {
                     NavigationLink(destination: SyncSettingsView()) {
-                        Label { Text("Sync") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("arrow.triangle.2.circlepath")) }
+                        HStack(spacing: 12) {
+                            Image(lucide: MahoIcon.imageForSFSymbol("arrow.triangle.2.circlepath"))
+                                .foregroundColor(.primary)
+                            
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Sync")
+                                    .font(.body)
+                                    .foregroundColor(.primary)
+                                Text(syncSubtitle)
+                                    .font(.footnote)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
                     }
                 }
 
-                Section {
+                Section(header: Text("Browsing")) {
                     NavigationLink(destination: ReaderSettingsView()) {
                         Label { Text("Reader Mode") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("book")) }
                     }
@@ -39,19 +51,19 @@ struct SettingsRootView: View {
                     }
                 }
 
-                Section {
+                Section(header: Text("AI")) {
                     NavigationLink(destination: MaxSettingsView()) {
-                        Label { Text("Max AI") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("sparkles")) }
+                        Label { Text("Maho AI") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("sparkles")) }
                     }
                     NavigationLink(destination: AgentView()) {
-                        Label { Text("Web Agent") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("cpu")) }
+                        Label { Text("Web Agent") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("bot")) }
                     }
                     NavigationLink(destination: AdvancedSettingsView()) {
                         Label { Text("Advanced") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("gearshape.2")) }
                     }
                 }
 
-                Section {
+                Section(header: Text("App")) {
                     NavigationLink(destination: AppIconPickerView()) {
                         Label { Text("App Icon") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("app.badge.checkmark")) }
                     }
@@ -60,11 +72,16 @@ struct SettingsRootView: View {
                     }
                 }
 
-                Section {
+                Section(header: Text("Danger"), footer: versionFooter) {
                     Button(role: .destructive) {
                         MahoBridge.shared.resetSettings()
                     } label: {
-                        Label { Text("Reset All Settings") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("arrow.counterclockwise")) }
+                        HStack(spacing: 12) {
+                            Image(lucide: MahoIcon.imageForSFSymbol("arrow.counterclockwise"))
+                                .foregroundColor(.red)
+                            Text("Reset All Settings")
+                                .foregroundColor(.red)
+                        }
                     }
                 }
             }
@@ -76,5 +93,42 @@ struct SettingsRootView: View {
                 }
             }
         }
+    }
+
+    private var syncSubtitle: String {
+        if let session = RelayAuthStore.shared.loadSession() {
+            let email = session.account.email
+            if let status = MahoBridge.shared.getSyncStatus() {
+                switch status {
+                case .syncing:
+                    return "Syncing…"
+                case .synced:
+                    return "Synced — \(email)"
+                case .error(let msg):
+                    return "Error: \(msg)"
+                default:
+                    return "Signed in as \(email)"
+                }
+            }
+            return "Signed in as \(email)"
+        } else {
+            return "Off — tap to sign in"
+        }
+    }
+
+    private var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+    }
+
+    private var buildNumber: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+    }
+
+    private var versionFooter: some View {
+        Text("Maho \(appVersion) (\(buildNumber))")
+            .font(.caption2)
+            .foregroundColor(.secondary)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.top, 12)
     }
 }

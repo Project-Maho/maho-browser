@@ -43,14 +43,15 @@ const markdownBubbleClassName = cn(
     '[&_blockquote]:m-0 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground',
     '[&_a]:text-primary [&_a]:underline [&_a]:underline-offset-4 hover:[&_a]:text-foreground');
 
-export function ConversationMessage(
-    {item, label}: {item: ConversationItem; label: string}) {
+export const ConversationMessage = React.memo(
+    function ConversationMessage(
+        {item, label}: {item: ConversationItem; label: string}) {
   const isUser = item.role === 'user';
   const bubbleClassName = cn(
-      'relative min-w-0 break-words rounded-2xl border px-4 py-3 text-sm leading-6 shadow-[0_18px_40px_-32px_rgba(8,12,24,0.85)] backdrop-blur-xl',
+      'relative min-w-0 max-w-[92%] break-words rounded-2xl px-4 py-3 text-sm leading-6',
       isUser ?
-        'max-w-[92%] rounded-tr-md border-primary/20 bg-primary/10 text-foreground' :
-        'w-full border-border/90 bg-card/95 text-foreground/90',
+        'rounded-tr-md bg-primary/10 text-foreground' :
+        'rounded-tl-md bg-muted text-foreground',
       item.markdown && markdownBubbleClassName);
 
   return (
@@ -71,4 +72,11 @@ export function ConversationMessage(
       {isUser ? <UserControls /> : null}
     </article>
   );
-}
+    },
+    (prev, next) =>
+        prev.label === next.label &&
+        prev.item.key === next.item.key &&
+        prev.item.text === next.item.text &&
+        prev.item.role === next.item.role &&
+        prev.item.markdown === next.item.markdown &&
+        prev.item.timestamp === next.item.timestamp);

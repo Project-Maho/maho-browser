@@ -13,9 +13,12 @@ import {
 } from '@ui/tooltip';
 import {Edit, Sparkles, Settings, Grid, X} from '@icons/lucide';
 import {ViewMode} from '../../../types.js';
+import {ProfileSwitcher} from '../../components/profile-switcher.js';
+import {MahoAiStore} from '../../../store.js';
 
 export function CompactTopbar(
     {
+      store,
       onClosePanel,
       onOpenSettings,
       onSetViewMode,
@@ -23,6 +26,7 @@ export function CompactTopbar(
       onStartSession,
       onTidyTabs,
     }: {
+      store: MahoAiStore;
       onClosePanel: () => void;
       onOpenSettings: () => void;
       onSetViewMode: (mode: ViewMode) => void;
@@ -50,6 +54,7 @@ export function CompactTopbar(
   return (
     <div className="flex items-center gap-2 rounded-[1.25rem] border border-border/80 bg-card/90 px-3 py-2 shadow-[0_20px_60px_-48px_rgba(8,12,24,0.85)] backdrop-blur-xl supports-[backdrop-filter]:bg-card/85">
       <div className="flex items-center gap-2">
+          <ProfileSwitcher store={store} />
           <Tooltip>
             <TooltipTrigger asChild>
               <Button

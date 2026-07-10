@@ -2,6 +2,7 @@ import SwiftUI
 import LucideIcons
 
 struct TabGridSheet: View {
+    @Binding var isIncognito: Bool
     let onNewTab: () -> Bool
 
     @Environment(\.dismiss) private var dismiss
@@ -19,7 +20,16 @@ struct TabGridSheet: View {
         VStack(spacing: 0) {
             sheetHeader
 
-            if spaces.count > 1 {
+            // Personal / Private Segmented Control (Incognito Toggle)
+            Picker("Mode", selection: $isIncognito) {
+                Text("Personal").tag(false)
+                Text("Private").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, ShellTheme.Spacing.large)
+            .padding(.bottom, ShellTheme.Spacing.small)
+
+            if !spaces.isEmpty {
                 SpaceChipRow(
                     spaces: spaces,
                     activeSpaceId: activeSpaceId,
@@ -107,17 +117,6 @@ struct TabGridSheet: View {
                 .padding(.trailing, ShellTheme.Spacing.small)
                 .accessibilityIdentifier("tabClusteringButton")
             }
-
-            Text("\(filteredTabs.count)")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, ShellTheme.Spacing.medium)
-                .padding(.vertical, ShellTheme.Spacing.xSmall)
-                .background(
-                    ShellTheme.Palette.tabGridMetaFill,
-                    in: Capsule()
-                )
-                .accessibilityIdentifier("tabGridCountBadge")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, ShellTheme.Spacing.large)

@@ -1,7 +1,45 @@
 use std::collections::HashMap;
 
 use maho_types::events::core_update::{CoreUpdate, LLMRequestContext};
-use maho_types::mcp::{ToolCall, ToolDefinition, ToolHandlerType, ToolPermissionTier, ToolResult};
+use maho_types::mcp::{ToolCall, ToolDescriptor, ToolPermission, ToolProvenance, ToolResult};
+pub type ToolDefinition = ToolDescriptor;
+
+
+
+fn is_internal_tool(name: &str) -> bool {
+    matches!(name, "search_bookmarks" | "list_tabs" | "get_page_info" | "search_history")
+}
+
+fn validate_namespace(name: &str) -> bool {
+    if name.starts_with("mcp:") {
+        let rest = &name[4..];
+        if let Some((server, tool)) = rest.split_once('/') {
+            !server.is_empty() && !tool.is_empty() && 
+            server.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') &&
+            tool.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+        } else {
+            false
+        }
+    } else if name.starts_with("sh:") {
+        let tool = &name[3..];
+        !tool.is_empty() && tool.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+    } else {
+        // Bare name
+        !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+    }
+}
+
+fn llm_facing_name(name: &str) -> String {
+    if let Some(rest) = name.strip_prefix("mcp:") {
+        if let Some((_server, tool)) = rest.split_once('/') {
+            return format!("mcp_{}", tool);
+        }
+    }
+    if let Some(tool) = name.strip_prefix("sh:") {
+        return format!("sh_{}", tool);
+    }
+    name.to_string()
+}
 
 const MAX_TOOL_ROUNDS: u8 = 5;
 type TabSummary = (String, String, String);
@@ -18,20 +56,20 @@ struct PendingToolLoop {
     _conversation_messages: serde_json::Value,
 }
 
-pub struct McpManager {
+pub struct ToolRegistry {
     tool_registry: Vec<ToolDefinition>,
     permission_cache: HashMap<String, bool>,
     pending_tool_loops: HashMap<String, PendingToolLoop>,
     active_tool_rounds: HashMap<String, u8>,
 }
 
-impl Default for McpManager {
+impl Default for ToolRegistry {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl McpManager {
+impl ToolRegistry {
     pub fn new() -> Self {
         let mut mgr = Self {
             tool_registry: Vec::new(),
@@ -44,7 +82,7 @@ impl McpManager {
     }
 
     fn register_starter_tools(&mut self) {
-        self.tool_registry.push(ToolDefinition {
+        self.tool_registry.push(ToolDescriptor {
             name: "search_bookmarks".into(),
             description: "Search the user's bookmarks by keyword".into(),
             parameters_schema: serde_json::json!({
@@ -54,33 +92,36 @@ impl McpManager {
                 },
                 "required": ["query"]
             }),
-            permission_tier: ToolPermissionTier::AutoApprove,
-            handler_type: ToolHandlerType::Internal,
+            provenance: ToolProvenance::BuiltinBrowser,
+            sensitive: false,
+            permission: ToolPermission::AutoApprove,
         });
 
-        self.tool_registry.push(ToolDefinition {
+        self.tool_registry.push(ToolDescriptor {
             name: "list_tabs".into(),
             description: "List all open tabs with their titles and URLs".into(),
             parameters_schema: serde_json::json!({
                 "type": "object",
                 "properties": {}
             }),
-            permission_tier: ToolPermissionTier::AutoApprove,
-            handler_type: ToolHandlerType::Internal,
+            provenance: ToolProvenance::BuiltinBrowser,
+            sensitive: false,
+            permission: ToolPermission::AutoApprove,
         });
 
-        self.tool_registry.push(ToolDefinition {
+        self.tool_registry.push(ToolDescriptor {
             name: "get_page_info".into(),
             description: "Get the title and URL of the currently active tab".into(),
             parameters_schema: serde_json::json!({
                 "type": "object",
                 "properties": {}
             }),
-            permission_tier: ToolPermissionTier::AutoApprove,
-            handler_type: ToolHandlerType::Internal,
+            provenance: ToolProvenance::BuiltinBrowser,
+            sensitive: false,
+            permission: ToolPermission::AutoApprove,
         });
 
-        self.tool_registry.push(ToolDefinition {
+        self.tool_registry.push(ToolDescriptor {
             name: "search_history".into(),
             description: "Search browsing history by keyword".into(),
             parameters_schema: serde_json::json!({
@@ -90,11 +131,12 @@ impl McpManager {
                 },
                 "required": ["query"]
             }),
-            permission_tier: ToolPermissionTier::AutoApprove,
-            handler_type: ToolHandlerType::Internal,
+            provenance: ToolProvenance::BuiltinBrowser,
+            sensitive: false,
+            permission: ToolPermission::AutoApprove,
         });
 
-        self.tool_registry.push(ToolDefinition {
+        self.tool_registry.push(ToolDescriptor {
             name: "open_tab".into(),
             description: "Open a new tab with the given URL".into(),
             parameters_schema: serde_json::json!({
@@ -104,11 +146,12 @@ impl McpManager {
                 },
                 "required": ["url"]
             }),
-            permission_tier: ToolPermissionTier::SessionApprove,
-            handler_type: ToolHandlerType::External,
+            provenance: ToolProvenance::BuiltinBrowser,
+            sensitive: false,
+            permission: ToolPermission::SessionApprove,
         });
 
-        self.tool_registry.push(ToolDefinition {
+        self.tool_registry.push(ToolDescriptor {
             name: "navigate".into(),
             description: "Navigate the current tab to a URL".into(),
             parameters_schema: serde_json::json!({
@@ -118,11 +161,12 @@ impl McpManager {
                 },
                 "required": ["url"]
             }),
-            permission_tier: ToolPermissionTier::SessionApprove,
-            handler_type: ToolHandlerType::External,
+            provenance: ToolProvenance::BuiltinBrowser,
+            sensitive: false,
+            permission: ToolPermission::SessionApprove,
         });
 
-        self.tool_registry.push(ToolDefinition {
+        self.tool_registry.push(ToolDescriptor {
             name: "close_tab".into(),
             description: "Close a tab by its ID".into(),
             parameters_schema: serde_json::json!({
@@ -132,11 +176,12 @@ impl McpManager {
                 },
                 "required": ["tab_id"]
             }),
-            permission_tier: ToolPermissionTier::AlwaysAsk,
-            handler_type: ToolHandlerType::External,
+            provenance: ToolProvenance::BuiltinBrowser,
+            sensitive: true,
+            permission: ToolPermission::AlwaysAsk,
         });
 
-        self.tool_registry.push(ToolDefinition {
+        self.tool_registry.push(ToolDescriptor {
             name: "create_bookmark".into(),
             description: "Create a bookmark for a URL".into(),
             parameters_schema: serde_json::json!({
@@ -147,16 +192,55 @@ impl McpManager {
                 },
                 "required": ["url", "title"]
             }),
-            permission_tier: ToolPermissionTier::SessionApprove,
-            handler_type: ToolHandlerType::External,
+            provenance: ToolProvenance::BuiltinBrowser,
+            sensitive: false,
+            permission: ToolPermission::SessionApprove,
         });
     }
 
-    pub fn register_tool(&mut self, def: ToolDefinition) {
-        if !self.tool_registry.iter().any(|t| t.name == def.name) {
-            self.tool_registry.push(def);
+    pub fn register_tool(&mut self, def: ToolDefinition) -> Result<(), String> {
+        if !validate_namespace(&def.name) {
+            return Err(format!("Invalid tool name format: {}", def.name));
         }
+
+        let new_llm_name = llm_facing_name(&def.name);
+
+        for existing in &self.tool_registry {
+            if llm_facing_name(&existing.name) == new_llm_name {
+                return Err(format!(
+                    "Collision detected: tool '{}' and existing tool '{}' both resolve to LLM name '{}'",
+                    def.name, existing.name, new_llm_name
+                ));
+            }
+        }
+
+        self.tool_registry.push(def);
+        Ok(())
     }
+
+    pub fn get_tool(&self, name: &str) -> Option<&ToolDescriptor> {
+        if let Some(t) = self.tool_registry.iter().find(|t| t.name == name) {
+            return Some(t);
+        }
+        let mut candidates: Vec<&ToolDescriptor> = self.tool_registry.iter()
+            .filter(|t| {
+                t.name == name || 
+                t.name.split('/').last().unwrap_or("") == name ||
+                t.name.split(':').last().unwrap_or("") == name
+            })
+            .collect();
+
+        candidates.sort_by_key(|t| {
+            match &t.provenance {
+                ToolProvenance::BuiltinBrowser => 0,
+                _ => 1,
+            }
+        });
+
+        candidates.into_iter().next()
+    }
+
+
 
     pub fn unregister_tool(&mut self, name: &str) {
         self.tool_registry.retain(|t| t.name != name);
@@ -229,12 +313,16 @@ impl McpManager {
                 continue;
             };
 
-            let needs_perm = match def.permission_tier {
-                ToolPermissionTier::AutoApprove => false,
-                ToolPermissionTier::SessionApprove => {
-                    !self.permission_cache.get(&def.name).copied().unwrap_or(false)
+            let needs_perm = if def.sensitive {
+                true
+            } else {
+                match def.permission {
+                    ToolPermission::AutoApprove => false,
+                    ToolPermission::SessionApprove => {
+                        !self.permission_cache.get(&def.name).copied().unwrap_or(false)
+                    }
+                    ToolPermission::AlwaysAsk => true,
                 }
-                ToolPermissionTier::AlwaysAsk => true,
             };
 
             if needs_perm {
@@ -242,20 +330,17 @@ impl McpManager {
                 continue;
             }
 
-            match def.handler_type {
-                ToolHandlerType::Internal => {
-                    let result = self.execute_internal_tool(
-                        tc,
-                        tab_summaries,
-                        active_tab_info,
-                        history_search_fn,
-                        bookmark_search_fn,
-                    );
-                    completed.push(result);
-                }
-                ToolHandlerType::External => {
-                    needs_external.push(tc.clone());
-                }
+            if is_internal_tool(&def.name) {
+                let result = self.execute_internal_tool(
+                    tc,
+                    tab_summaries,
+                    active_tab_info,
+                    history_search_fn,
+                    bookmark_search_fn,
+                );
+                completed.push(result);
+            } else {
+                needs_external.push(tc.clone());
             }
         }
 
@@ -392,7 +477,7 @@ impl McpManager {
             if let Some(name) = tool_name {
                 let def = self.tool_registry.iter().find(|d| d.name == name);
                 if let Some(def) = def {
-                    if matches!(def.permission_tier, ToolPermissionTier::SessionApprove) {
+                    if matches!(def.permission, ToolPermission::SessionApprove) {
                         self.permission_cache.insert(name.clone(), true);
                     }
                 }
@@ -422,23 +507,21 @@ impl McpManager {
         } else if let Some(tc) = &tc {
             let def = self.tool_registry.iter().find(|d| d.name == tc.name);
             if let Some(def) = def {
-                match def.handler_type {
-                    ToolHandlerType::External => {
-                        let args = serde_json::to_string(&tc.arguments).unwrap_or_default();
-                        return vec![CoreUpdate::ExecuteToolAction {
-                            call_id: call_id.to_string(),
-                            tool_name: tc.name.clone(),
-                            args,
-                        }];
-                    }
-                    ToolHandlerType::Internal => {
-                        pending.remaining_external.retain(|t| t.id != call_id);
-                        pending.completed_results.push(ToolResult {
-                            call_id: call_id.to_string(),
-                            success: true,
-                            content: "{\"result\": \"Not yet implemented\"}".into(),
-                        });
-                    }
+                if !is_internal_tool(&def.name) {
+                    let args = serde_json::to_string(&tc.arguments).unwrap_or_default();
+                    return vec![CoreUpdate::ExecuteToolAction {
+                        call_id: call_id.to_string(),
+                        tool_name: tc.name.clone(),
+                        args,
+                    }];
+                } else {
+                    pending.remaining_external.retain(|t| t.id != call_id);
+                    pending.completed_results.push(ToolResult {
+                        call_id: call_id.to_string(),
+                        success: true,
+                        content: "{\"result\": \"Not yet implemented\"}".into(),
+                    });
+                    return vec![];
                 }
             }
         }
@@ -558,7 +641,7 @@ mod tests {
 
     #[test]
     fn test_new_registers_starter_tools() {
-        let mgr = McpManager::new();
+        let mgr = ToolRegistry::new();
         assert_eq!(mgr.tool_registry.len(), 8);
         let names: Vec<&str> = mgr.tool_registry.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"search_bookmarks"));
@@ -569,7 +652,7 @@ mod tests {
 
     #[test]
     fn test_get_tools_schema_format() {
-        let mgr = McpManager::new();
+        let mgr = ToolRegistry::new();
         let schema = mgr.get_tools_schema();
         let arr = schema.as_array().expect("should be array");
         assert_eq!(arr.len(), 8);
@@ -583,7 +666,7 @@ mod tests {
 
     #[test]
     fn test_execute_internal_list_tabs() {
-        let mgr = McpManager::new();
+        let mgr = ToolRegistry::new();
         let tc = ToolCall {
             id: "call_1".into(),
             name: "list_tabs".into(),
@@ -605,7 +688,7 @@ mod tests {
 
     #[test]
     fn test_execute_internal_get_page_info() {
-        let mgr = McpManager::new();
+        let mgr = ToolRegistry::new();
         let tc = ToolCall {
             id: "call_2".into(),
             name: "get_page_info".into(),
@@ -624,21 +707,21 @@ mod tests {
 
     #[test]
     fn test_handle_tool_action_result_unknown_call() {
-        let mut mgr = McpManager::new();
+        let mut mgr = ToolRegistry::new();
         let updates = mgr.handle_tool_action_result("unknown", true, "ok");
         assert!(updates.is_empty());
     }
 
     #[test]
     fn test_handle_tool_permission_denied() {
-        let mut mgr = McpManager::new();
+        let mut mgr = ToolRegistry::new();
         let updates = mgr.handle_tool_permission_response("unknown", false);
         assert!(updates.is_empty());
     }
 
     #[test]
     fn test_auto_approve_internal_tool() {
-        let mut mgr = McpManager::new();
+        let mut mgr = ToolRegistry::new();
         let tc_json = vec![serde_json::json!({
             "id": "call_1",
             "function": {
@@ -664,7 +747,7 @@ mod tests {
 
     #[test]
     fn test_session_approve_needs_permission() {
-        let mut mgr = McpManager::new();
+        let mut mgr = ToolRegistry::new();
         let tc_json = vec![serde_json::json!({
             "id": "call_1",
             "function": {
@@ -690,7 +773,7 @@ mod tests {
 
     #[test]
     fn test_round_counter_increments_across_continuations() {
-        let mut mgr = McpManager::new();
+        let mut mgr = ToolRegistry::new();
         let tc_json = vec![serde_json::json!({
             "id": "call_1",
             "function": { "name": "list_tabs", "arguments": "{}" }
@@ -706,7 +789,7 @@ mod tests {
 
     #[test]
     fn test_round_counter_caps_at_max() {
-        let mut mgr = McpManager::new();
+        let mut mgr = ToolRegistry::new();
         let tc_json = vec![serde_json::json!({
             "id": "call_1",
             "function": { "name": "list_tabs", "arguments": "{}" }
@@ -723,7 +806,7 @@ mod tests {
 
     #[test]
     fn test_round_counter_tracks_through_action_result() {
-        let mut mgr = McpManager::new();
+        let mut mgr = ToolRegistry::new();
         mgr.permission_cache.insert("open_tab".to_string(), true);
         let tc_json = vec![serde_json::json!({
             "id": "call_ext_1",
@@ -745,47 +828,170 @@ mod tests {
 
     #[test]
     fn test_register_tool_adds_to_registry() {
-        let mut mgr = McpManager::new();
+        let mut mgr = ToolRegistry::new();
         let initial_len = mgr.tool_registry.len();
-        mgr.register_tool(ToolDefinition {
+        mgr.register_tool(ToolDescriptor {
             name: "custom_tool".into(),
             description: "A custom tool".into(),
             parameters_schema: serde_json::json!({"type": "object", "properties": {}}),
-            permission_tier: ToolPermissionTier::AutoApprove,
-            handler_type: ToolHandlerType::Internal,
-        });
+            provenance: ToolProvenance::BuiltinBrowser,
+            sensitive: false,
+            permission: ToolPermission::AutoApprove,
+        }).unwrap();
         assert_eq!(mgr.tool_registry.len(), initial_len + 1);
         assert!(mgr.list_tool_names().contains(&"custom_tool".to_string()));
     }
 
     #[test]
     fn test_register_tool_dedups() {
-        let mut mgr = McpManager::new();
-        let def = ToolDefinition {
+        let mut mgr = ToolRegistry::new();
+        let def = ToolDescriptor {
             name: "dedup_tool".into(),
             description: "Dedup test".into(),
             parameters_schema: serde_json::json!({"type": "object", "properties": {}}),
-            permission_tier: ToolPermissionTier::AutoApprove,
-            handler_type: ToolHandlerType::Internal,
+            provenance: ToolProvenance::BuiltinBrowser,
+            sensitive: false,
+            permission: ToolPermission::AutoApprove,
         };
-        mgr.register_tool(def.clone());
-        mgr.register_tool(def.clone());
+        mgr.register_tool(def.clone()).unwrap();
+        // Registering exact same name should fail due to collision checking
+        assert!(mgr.register_tool(def.clone()).is_err());
         let count = mgr.tool_registry.iter().filter(|t| t.name == "dedup_tool").count();
         assert_eq!(count, 1);
     }
 
     #[test]
     fn test_unregister_tool() {
-        let mut mgr = McpManager::new();
-        mgr.register_tool(ToolDefinition {
+        let mut mgr = ToolRegistry::new();
+        mgr.register_tool(ToolDescriptor {
             name: "removable_tool".into(),
             description: "Will be removed".into(),
             parameters_schema: serde_json::json!({"type": "object", "properties": {}}),
-            permission_tier: ToolPermissionTier::AutoApprove,
-            handler_type: ToolHandlerType::Internal,
-        });
+            provenance: ToolProvenance::BuiltinBrowser,
+            sensitive: false,
+            permission: ToolPermission::AutoApprove,
+        }).unwrap();
         assert!(mgr.list_tool_names().contains(&"removable_tool".to_string()));
         mgr.unregister_tool("removable_tool");
         assert!(!mgr.list_tool_names().contains(&"removable_tool".to_string()));
+    }
+
+    #[test]
+    fn test_tool_registration_namespace_validation() {
+        let mut mgr = ToolRegistry::new();
+
+        // Valid bare name
+        assert!(mgr.register_tool(ToolDescriptor {
+            name: "valid_name".into(),
+            description: "".into(),
+            parameters_schema: serde_json::json!({}),
+            provenance: ToolProvenance::BuiltinBrowser,
+            sensitive: false,
+            permission: ToolPermission::AutoApprove,
+        }).is_ok());
+
+        // Invalid bare name (contains spaces)
+        assert!(mgr.register_tool(ToolDescriptor {
+            name: "invalid name".into(),
+            description: "".into(),
+            parameters_schema: serde_json::json!({}),
+            provenance: ToolProvenance::BuiltinBrowser,
+            sensitive: false,
+            permission: ToolPermission::AutoApprove,
+        }).is_err());
+
+        // Valid mcp format
+        assert!(mgr.register_tool(ToolDescriptor {
+            name: "mcp:server-1/valid-tool".into(),
+            description: "".into(),
+            parameters_schema: serde_json::json!({}),
+            provenance: ToolProvenance::External("server-1".into()),
+            sensitive: false,
+            permission: ToolPermission::AutoApprove,
+        }).is_ok());
+
+        // Invalid mcp format (missing slash)
+        assert!(mgr.register_tool(ToolDescriptor {
+            name: "mcp:server-1".into(),
+            description: "".into(),
+            parameters_schema: serde_json::json!({}),
+            provenance: ToolProvenance::External("server-1".into()),
+            sensitive: false,
+            permission: ToolPermission::AutoApprove,
+        }).is_err());
+
+        // Valid sh format
+        assert!(mgr.register_tool(ToolDescriptor {
+            name: "sh:ripgrep".into(),
+            description: "".into(),
+            parameters_schema: serde_json::json!({}),
+            provenance: ToolProvenance::AgentLocal,
+            sensitive: false,
+            permission: ToolPermission::AutoApprove,
+        }).is_ok());
+    }
+
+    #[test]
+    fn test_tool_registration_collision_detection() {
+        let mut mgr = ToolRegistry::new();
+
+        // Register mcp:server1/search (LLM name: mcp_search) and bare search (LLM name: search) -> should succeed
+        mgr.register_tool(ToolDescriptor {
+            name: "mcp:server1/search".into(),
+            description: "".into(),
+            parameters_schema: serde_json::json!({}),
+            provenance: ToolProvenance::External("server1".into()),
+            sensitive: false,
+            permission: ToolPermission::AutoApprove,
+        }).unwrap();
+
+        mgr.register_tool(ToolDescriptor {
+            name: "search".into(),
+            description: "".into(),
+            parameters_schema: serde_json::json!({}),
+            provenance: ToolProvenance::BuiltinBrowser,
+            sensitive: false,
+            permission: ToolPermission::AutoApprove,
+        }).unwrap();
+
+        // Registering mcp:server2/search (LLM name: mcp_search) should collide with mcp:server1/search
+        let res = mgr.register_tool(ToolDescriptor {
+            name: "mcp:server2/search".into(),
+            description: "".into(),
+            parameters_schema: serde_json::json!({}),
+            provenance: ToolProvenance::External("server2".into()),
+            sensitive: false,
+            permission: ToolPermission::AutoApprove,
+        });
+        assert!(res.is_err());
+        assert!(res.err().unwrap().contains("Collision detected"));
+    }
+
+    #[test]
+    fn test_tool_registration_priority_resolution() {
+        let mut mgr = ToolRegistry::new();
+
+        // Register a namespaced tool and a bare builtin tool with the same short name
+        mgr.register_tool(ToolDescriptor {
+            name: "mcp:my-server/lookup".into(),
+            description: "namespaced".into(),
+            parameters_schema: serde_json::json!({}),
+            provenance: ToolProvenance::External("my-server".into()),
+            sensitive: false,
+            permission: ToolPermission::AutoApprove,
+        }).unwrap();
+
+        mgr.register_tool(ToolDescriptor {
+            name: "lookup".into(),
+            description: "builtin".into(),
+            parameters_schema: serde_json::json!({}),
+            provenance: ToolProvenance::BuiltinBrowser,
+            sensitive: false,
+            permission: ToolPermission::AutoApprove,
+        }).unwrap();
+
+        // lookup should resolve to the bare builtin
+        let tool = mgr.get_tool("lookup").unwrap();
+        assert_eq!(tool.description, "builtin");
     }
 }

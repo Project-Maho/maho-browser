@@ -106,6 +106,13 @@ pub trait AgentStorage: Send + Sync {
     async fn get_profile(&self, _id: &str) -> Result<Option<maho_types::ai::AiProfile>, AgentError> {
         Ok(None)
     }
+    async fn set_system_prompt_snapshot_if_absent(
+        &self,
+        _conversation_id: &str,
+        _system_prompt: &str,
+    ) -> Result<(), AgentError> {
+        Ok(())
+    }
 }
 
 pub struct MutexAgentStorage(pub std::sync::Arc<std::sync::Mutex<maho_storage::sqlite::SqliteStorage>>);
@@ -253,6 +260,23 @@ impl AgentStorage for MutexAgentStorage {
         .await
         .map_err(|e| AgentError::ExecutionError(e.to_string()))?
     }
+
+    async fn set_system_prompt_snapshot_if_absent(
+        &self,
+        conversation_id: &str,
+        system_prompt: &str,
+    ) -> Result<(), AgentError> {
+        let storage = std::sync::Arc::clone(&self.0);
+        let conv_id = conversation_id.to_string();
+        let prompt = system_prompt.to_string();
+        tokio::task::spawn_blocking(move || {
+            let lock = storage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            lock.set_system_prompt_snapshot_if_absent(&conv_id, &prompt)
+                .map_err(|e| AgentError::ExecutionError(e.to_string()))
+        })
+        .await
+        .map_err(|e| AgentError::ExecutionError(e.to_string()))?
+    }
 }
 
 #[async_trait]
@@ -263,6 +287,14 @@ pub trait AgentRuntime: Send + Sync {
         message: ChatMessage,
         on_token: Option<Box<dyn for<'a> Fn(&'a str) + Send + Sync + 'static>>,
     ) -> Result<ChatMessage, AgentError>;
+    async fn run_turn_simple(
+        &self,
+        session_id: &str,
+        message: ChatMessage,
+        on_token: Option<Box<dyn for<'a> Fn(&'a str) + Send + Sync + 'static>>,
+    ) -> Result<ChatMessage, AgentError> {
+        self.run_turn(session_id, message, on_token).await
+    }
     async fn cancel(&self, session_id: &str) -> Result<(), AgentError>;
     async fn list_tools(&self) -> Result<Vec<ToolDefinition>, AgentError>;
     fn set_permission_callback(

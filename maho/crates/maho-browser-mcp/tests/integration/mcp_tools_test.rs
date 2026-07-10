@@ -505,3 +505,96 @@ fn base64_decode(input: &str) -> Vec<u8> {
     }
     output
 }
+
+// ─── New Wave 8 Safari Parity Tools ────────────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires running browser"]
+async fn test_browser_console_messages() {
+    let client = common::connect_browser().await;
+    let result = common::call_tool(
+        &client,
+        "browser_console_messages",
+        json!({"tab_id": 0, "limit": 10}),
+    )
+    .await;
+    assert!(result["content"].is_array(), "Expected content array: {result}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires running browser"]
+async fn test_browser_wait_for_navigation() {
+    let client = common::connect_browser().await;
+    let result = common::call_tool(
+        &client,
+        "browser_wait_for_navigation",
+        json!({"tab_id": 0, "timeout_ms": 1000}),
+    )
+    .await;
+    assert!(result["content"].is_array(), "Expected content array: {result}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires running browser"]
+async fn test_browser_tab_switch() {
+    let client = common::connect_browser().await;
+    let result = common::call_tool(
+        &client,
+        "browser_tab_switch",
+        json!({"tab_id": 0}),
+    )
+    .await;
+    assert!(result["content"].is_array(), "Expected content array: {result}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires running browser"]
+async fn test_browser_set_viewport_size() {
+    let client = common::connect_browser().await;
+    let result = common::call_tool(
+        &client,
+        "browser_set_viewport_size",
+        json!({"width_px": 800, "height_px": 600}),
+    )
+    .await;
+    assert!(result["content"].is_array(), "Expected content array: {result}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires running browser"]
+async fn test_browser_scroll() {
+    let client = common::connect_browser().await;
+    let result = common::call_tool(
+        &client,
+        "browser_scroll",
+        json!({"direction": "down", "pixels": 100}),
+    )
+    .await;
+    assert!(result["content"].is_array(), "Expected content array: {result}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires running browser"]
+async fn test_browser_hover() {
+    let client = common::connect_browser().await;
+    let result = common::call_tool(
+        &client,
+        "browser_hover",
+        json!({"ref": 1}),
+    )
+    .await;
+    assert!(result["content"].is_array() || result["error"].is_object());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires running browser"]
+async fn test_browser_key_press() {
+    let client = common::connect_browser().await;
+    let result = common::call_tool(
+        &client,
+        "browser_key_press",
+        json!({"key": "Enter"}),
+    )
+    .await;
+    assert!(result["content"].is_array(), "Expected content array: {result}");
+}

@@ -37,7 +37,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@ui/tooltip';
-import {Globe, Plus, StopCircle, Send, Search, AlertCircle} from '@icons/lucide';
+import {Globe, Plus, Square, Send, Search, AlertCircle} from '@icons/lucide';
 import {Alert, AlertDescription} from '@ui/alert';
 import {ComposerTextarea} from '../../components/composer-textarea.js';
 
@@ -717,7 +717,7 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
               size="icon"
               onClick={canCancel ? handlers.onCancel : handlers.onSubmit}>
               <span className="inline-flex items-center justify-center">
-                {canCancel ? <StopCircle className="size-4" /> : <Send className="size-4" />}
+                {canCancel ? <Square className="size-3 fill-current" /> : <Send className="size-4" />}
               </span>
             </Button>
           </TooltipTrigger>

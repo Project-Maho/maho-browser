@@ -9,6 +9,8 @@ use std::path::Path;
 use std::ptr;
 
 use maho_core::maho_core::MahoCore;
+use maho_core::workspace_manager::WorkspaceManager;
+
 use maho_types::keyboard::KeyCombo;
 use maho_types::passwords::SavedPassword;
 
@@ -7687,6 +7689,90 @@ pub unsafe extern "C" fn maho_agent_send_message(
 }
 
 /// # Safety
+/// Fast-path variant of `maho_agent_send_message`. Skips all tool registration
+/// and dispatches straight to the LLM. Callers MUST NOT rely on tool_calls
+/// being processed. Same pointer safety requirements as `maho_agent_send_message`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_agent_send_message_simple(
+    session: *mut MahoAgentSession,
+    message: *const c_char,
+    on_token: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, token: *const c_char)>,
+    on_complete: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, full_text: *const c_char, tool_calls_json: *const c_char)>,
+    on_error: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, error: *const c_char)>,
+    user_data: *mut std::ffi::c_void,
+) -> bool {
+    ffi_safe!({
+        if session.is_null() || message.is_null() {
+            return false;
+        }
+        let session = &*session;
+        let msg_str = match CStr::from_ptr(message).to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => return false,
+        };
+        let runtime = Arc::clone(&session.runtime);
+        let session_id = session.session_id.clone();
+
+        let on_token_cb = on_token.map(|cb| {
+            let cb_sendable = SendableCallback(cb);
+            let user_data_val = SendableUserData(user_data as usize);
+            let callback: Box<dyn Fn(&str) + Send + Sync> = Box::new(move |token| {
+                let cb = cb_sendable.0;
+                let udata = user_data_val.0 as *mut std::ffi::c_void;
+                let token_c = match CString::new(token) {
+                    Ok(s) => s,
+                    Err(_) => return,
+                };
+                unsafe {
+                    cb(udata, token_c.as_ptr());
+                }
+            });
+            callback
+        });
+
+        let on_complete = SendableCallback(on_complete);
+        let on_error = SendableCallback(on_error);
+        let user_data_val = SendableUserData(user_data as usize);
+
+        let fut = async move {
+            let user_chat_msg = maho_types::chat::ChatMessage::user(maho_types::chat::ChatContent::text(msg_str));
+            match runtime.run_turn_simple(&session_id, user_chat_msg, on_token_cb).await {
+                Ok(response) => {
+                    let text = match &response.content {
+                        maho_types::chat::ChatContent::Text(t) => t.clone(),
+                        _ => String::new(),
+                    };
+                    let text_c = match CString::new(text) {
+                        Ok(s) => s,
+                        Err(_) => CString::new("").unwrap(),
+                    };
+                    let empty_json = CString::new("[]").unwrap();
+                    if let Some(cb) = on_complete.0 {
+                        cb(user_data_val.0 as *mut std::ffi::c_void, text_c.as_ptr(), empty_json.as_ptr());
+                    }
+                }
+                Err(e) => {
+                    let err_c = match CString::new(e.to_string()) {
+                        Ok(s) => s,
+                        Err(_) => CString::new("unknown error").unwrap(),
+                    };
+                    if let Some(cb) = on_error.0 {
+                        cb(user_data_val.0 as *mut std::ffi::c_void, err_c.as_ptr());
+                    }
+                }
+            }
+        };
+
+        let isolation = Arc::clone(&session.isolation);
+        let _handle = isolation.block_on(async move {
+            tokio::spawn(fut);
+        });
+
+        true
+    }, false)
+}
+
+/// # Safety
 /// `session` must be a valid pointer to a `MahoAgentSession`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_agent_cancel(
@@ -7824,8 +7910,587 @@ pub unsafe extern "C" fn maho_core_cluster_tabs(
     }, ptr::null_mut())
 }
 
+// Helper to get storage from core
+fn get_storage(core: *mut MahoCore) -> Option<maho_storage::sqlite::SqliteStorage> {
+    if core.is_null() {
+        return None;
+    }
+    let core_ref = unsafe { &*core };
+    let db_path = core_ref.sqlite_db_path()?;
+    maho_storage::sqlite::SqliteStorage::open(db_path).ok()
+}
+
+// Profile CRUD
+
+/// # Safety
+/// `core` must be a valid pointer to a `MahoCore`.
+/// `name` and `system_prompt` must be null-terminated UTF-8 strings.
+/// `model` is an optional null-terminated UTF-8 string (can be null).
+/// Caller must free returned string via `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_ai_profile_create(
+    core: *mut MahoCore,
+    name: *const c_char,
+    system_prompt: *const c_char,
+    model: *const c_char,
+) -> *mut c_char {
+    ffi_safe!({
+        if core.is_null() || name.is_null() || system_prompt.is_null() {
+            return ptr::null_mut();
+        }
+        let storage = match get_storage(core) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+
+        let name_str = CStr::from_ptr(name).to_str().unwrap_or("").to_string();
+        let prompt_str = CStr::from_ptr(system_prompt).to_str().unwrap_or("").to_string();
+        let model_str = if model.is_null() {
+            None
+        } else {
+            CStr::from_ptr(model).to_str().ok().map(String::from)
+        };
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = maho_types::common::DateTime::now().0;
+        let profile = maho_types::ai::AiProfile {
+            id: id.clone(),
+            name: name_str,
+            system_prompt: prompt_str,
+            preferred_model: model_str,
+            tools: vec![],
+            mcp_servers: vec![],
+            is_default: false,
+            created_at: now.clone(),
+            updated_at: now,
+        };
+
+        if storage.create_ai_profile(&profile).is_ok() {
+            let res = serde_json::json!({ "id": id });
+            to_json_cstring(&res)
+        } else {
+            ptr::null_mut()
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// `core` must be a valid pointer to a `MahoCore`.
+/// Caller must free returned string via `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_ai_profile_list(
+    core: *mut MahoCore,
+) -> *mut c_char {
+    ffi_safe!({
+        let storage = match get_storage(core) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        match storage.list_ai_profiles() {
+            Ok(list) => to_json_cstring(&list),
+            Err(_) => ptr::null_mut(),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// `core` must be a valid pointer to a `MahoCore`.
+/// `id` and `json` must be null-terminated UTF-8 strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_ai_profile_update(
+    core: *mut MahoCore,
+    id: *const c_char,
+    json: *const c_char,
+) -> bool {
+    ffi_safe!({
+        if core.is_null() || id.is_null() || json.is_null() {
+            return false;
+        }
+        let storage = match get_storage(core) {
+            Some(s) => s,
+            None => return false,
+        };
+        let id_str = match CStr::from_ptr(id).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let json_str = match CStr::from_ptr(json).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+
+        let mut profile: maho_types::ai::AiProfile = match serde_json::from_str(json_str) {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+
+        profile.id = id_str.to_string();
+        profile.updated_at = maho_types::common::DateTime::now().0;
+
+        storage.update_ai_profile(&profile).is_ok()
+    }, false)
+}
+
+/// # Safety
+/// `core` must be a valid pointer to a `MahoCore`.
+/// `id` must be a null-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_ai_profile_delete(
+    core: *mut MahoCore,
+    id: *const c_char,
+) -> bool {
+    ffi_safe!({
+        if core.is_null() || id.is_null() {
+            return false;
+        }
+        let storage = match get_storage(core) {
+            Some(s) => s,
+            None => return false,
+        };
+        let id_str = match CStr::from_ptr(id).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        storage.delete_ai_profile(id_str).is_ok()
+    }, false)
+}
+
+/// # Safety
+/// `core` must be a valid pointer to a `MahoCore`.
+/// `workspace_id` must be a null-terminated UTF-8 string.
+/// `toml_path` must be a null-terminated UTF-8 string.
+/// The caller must free the returned string with `maho_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_ai_profile_import_toml(
+    core: *mut MahoCore,
+    workspace_id: *const c_char,
+    toml_path: *const c_char,
+) -> *mut c_char {
+    ffi_safe!({
+        if core.is_null() || workspace_id.is_null() || toml_path.is_null() {
+            return ptr::null_mut();
+        }
+        let ws_id = match CStr::from_ptr(workspace_id).to_str() {
+            Ok(s) => s,
+            Err(_) => return ptr::null_mut(),
+        };
+        let path_str = match CStr::from_ptr(toml_path).to_str() {
+            Ok(s) => s,
+            Err(_) => return ptr::null_mut(),
+        };
+        let toml_content = match std::fs::read_to_string(path_str) {
+            Ok(content) => content,
+            Err(e) => {
+                let err_str = format!("Error reading file: {}", e);
+                return CString::new(err_str).map(|c| c.into_raw()).unwrap_or(ptr::null_mut());
+            }
+        };
+        let storage = match get_storage(core) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        match maho_core::profile_import::import_profile_from_toml(&storage, ws_id, &toml_content) {
+            Ok(profile_id) => CString::new(profile_id).map(|c| c.into_raw()).unwrap_or(ptr::null_mut()),
+            Err(e) => {
+                let err_str = format!("Error: {}", e);
+                CString::new(err_str).map(|c| c.into_raw()).unwrap_or(ptr::null_mut())
+            }
+        }
+    }, ptr::null_mut())
+}
+
+// Workspace CRUD
+
+/// # Safety
+/// `core` must be a valid pointer to a `MahoCore`.
+/// `name` must be a null-terminated UTF-8 string.
+/// `space_id` is an optional null-terminated UTF-8 string (can be null).
+/// Caller must free returned string via `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_ai_workspace_create(
+    core: *mut MahoCore,
+    name: *const c_char,
+    space_id: *const c_char,
+) -> *mut c_char {
+    ffi_safe!({
+        if core.is_null() || name.is_null() {
+            return ptr::null_mut();
+        }
+        let storage = match get_storage(core) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        let manager = WorkspaceManager::new(storage);
+        let name_str = CStr::from_ptr(name).to_str().unwrap_or("");
+        let space_str = if space_id.is_null() {
+            None
+        } else {
+            CStr::from_ptr(space_id).to_str().ok()
+        };
+
+        match manager.create_workspace(name_str, space_str) {
+            Ok(ws) => to_json_cstring(&ws),
+            Err(_) => ptr::null_mut(),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// `core` must be a valid pointer to a `MahoCore`.
+/// `space_id` must be a null-terminated UTF-8 string.
+/// Caller must free returned string via `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_ai_workspace_get_by_space(
+    core: *mut MahoCore,
+    space_id: *const c_char,
+) -> *mut c_char {
+    ffi_safe!({
+        if core.is_null() || space_id.is_null() {
+            return ptr::null_mut();
+        }
+        let storage = match get_storage(core) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        let manager = WorkspaceManager::new(storage);
+        let space_str = match CStr::from_ptr(space_id).to_str() {
+            Ok(s) => s,
+            Err(_) => return ptr::null_mut(),
+        };
+
+        match manager.get_active_workspace(space_str) {
+            Ok(ws) => to_json_cstring(&ws),
+            Err(_) => ptr::null_mut(),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// `core` must be a valid pointer to a `MahoCore`.
+/// Caller must free returned string via `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_ai_workspace_list(
+    core: *mut MahoCore,
+) -> *mut c_char {
+    ffi_safe!({
+        let storage = match get_storage(core) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        match storage.list_workspaces() {
+            Ok(list) => to_json_cstring(&list),
+            Err(_) => ptr::null_mut(),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// `core` must be a valid pointer to a `MahoCore`.
+/// `workspace_id` and `profile_id` must be null-terminated UTF-8 strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_ai_workspace_switch_profile(
+    core: *mut MahoCore,
+    workspace_id: *const c_char,
+    profile_id: *const c_char,
+) -> bool {
+    ffi_safe!({
+        if core.is_null() || workspace_id.is_null() || profile_id.is_null() {
+            return false;
+        }
+        let storage = match get_storage(core) {
+            Some(s) => s,
+            None => return false,
+        };
+        let manager = WorkspaceManager::new(storage);
+        let ws_str = match CStr::from_ptr(workspace_id).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let prof_str = match CStr::from_ptr(profile_id).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        manager.switch_profile(ws_str, prof_str).is_ok()
+    }, false)
+}
+
+// MCP Server management
+
+/// # Safety
+/// `core` must be a valid pointer to a `MahoCore`.
+/// `workspace_id` and `config_json` must be null-terminated UTF-8 strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_ai_mcp_server_register(
+    core: *mut MahoCore,
+    workspace_id: *const c_char,
+    config_json: *const c_char,
+) -> bool {
+    ffi_safe!({
+        if core.is_null() || workspace_id.is_null() || config_json.is_null() {
+            return false;
+        }
+        let storage = match get_storage(core) {
+            Some(s) => s,
+            None => return false,
+        };
+        let manager = WorkspaceManager::new(storage);
+        let ws_str = match CStr::from_ptr(workspace_id).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let json_str = match CStr::from_ptr(config_json).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let config: maho_types::ai::AiMcpServer = match serde_json::from_str(json_str) {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        manager.register_mcp_server(ws_str, config).is_ok()
+    }, false)
+}
+
+/// # Safety
+/// `core` must be a valid pointer to a `MahoCore`.
+/// `workspace_id` and `server_name` must be null-terminated UTF-8 strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_ai_mcp_server_remove(
+    core: *mut MahoCore,
+    workspace_id: *const c_char,
+    server_name: *const c_char,
+) -> bool {
+    ffi_safe!({
+        if core.is_null() || workspace_id.is_null() || server_name.is_null() {
+            return false;
+        }
+        let storage = match get_storage(core) {
+            Some(s) => s,
+            None => return false,
+        };
+        let manager = WorkspaceManager::new(storage);
+        let ws_str = match CStr::from_ptr(workspace_id).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let name_str = match CStr::from_ptr(server_name).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        manager.remove_mcp_server(ws_str, name_str).is_ok()
+    }, false)
+}
+
+/// # Safety
+/// `core` must be a valid pointer to a `MahoCore`.
+/// `workspace_id` must be a null-terminated UTF-8 string.
+/// Caller must free returned string via `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_ai_mcp_server_list(
+    core: *mut MahoCore,
+    workspace_id: *const c_char,
+) -> *mut c_char {
+    ffi_safe!({
+        if core.is_null() || workspace_id.is_null() {
+            return ptr::null_mut();
+        }
+        let storage = match get_storage(core) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        let ws_str = match CStr::from_ptr(workspace_id).to_str() {
+            Ok(s) => s,
+            Err(_) => return ptr::null_mut(),
+        };
+        match storage.list_mcp_servers(ws_str) {
+            Ok(list) => to_json_cstring(&list),
+            Err(_) => ptr::null_mut(),
+        }
+    }, ptr::null_mut())
+}
+
+/// # Safety
+/// `core` must be a valid pointer to a `MahoCore`.
+/// `workspace_id`, `server_name`, and `tools_json` must be null-terminated UTF-8 strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_ai_mcp_server_approve_trust(
+    core: *mut MahoCore,
+    workspace_id: *const c_char,
+    server_name: *const c_char,
+    tools_json: *const c_char,
+) -> bool {
+    ffi_safe!({
+        if core.is_null() || workspace_id.is_null() || server_name.is_null() || tools_json.is_null() {
+            return false;
+        }
+        let storage = match get_storage(core) {
+            Some(s) => s,
+            None => return false,
+        };
+        let ws_str = match CStr::from_ptr(workspace_id).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let name_str = match CStr::from_ptr(server_name).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let tools_str = match CStr::from_ptr(tools_json).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let tools: Vec<String> = match serde_json::from_str(tools_str) {
+            Ok(t) => t,
+            Err(_) => return false,
+        };
+
+        let mut servers = match storage.list_mcp_servers(ws_str) {
+            Ok(list) => list,
+            Err(_) => return false,
+        };
+        let server = match servers.iter_mut().find(|s| s.name == name_str) {
+            Some(s) => s,
+            None => return false,
+        };
+
+        server.trusted = true;
+        server.trusted_tools = if tools.is_empty() { None } else { Some(tools) };
+        server.updated_at = maho_types::common::DateTime::now().0;
+
+        storage.update_mcp_server(server).is_ok()
+    }, false)
+}
+
+// CLI Tool management
+
+/// # Safety
+/// `core` must be a valid pointer to a `MahoCore`.
+/// `workspace_id` and `tool_json` must be null-terminated UTF-8 strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_ai_cli_tool_register(
+    core: *mut MahoCore,
+    workspace_id: *const c_char,
+    tool_json: *const c_char,
+) -> bool {
+    ffi_safe!({
+        if core.is_null() || workspace_id.is_null() || tool_json.is_null() {
+            return false;
+        }
+        let storage = match get_storage(core) {
+            Some(s) => s,
+            None => return false,
+        };
+        let manager = WorkspaceManager::new(storage);
+        let ws_str = match CStr::from_ptr(workspace_id).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let json_str = match CStr::from_ptr(tool_json).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let tool: maho_types::ai::AiCliTool = match serde_json::from_str(json_str) {
+            Ok(t) => t,
+            Err(_) => return false,
+        };
+        manager.register_cli_tool(ws_str, tool).is_ok()
+    }, false)
+}
+
+/// # Safety
+/// `core` must be a valid pointer to a `MahoCore`.
+/// `workspace_id` and `tool_name` must be null-terminated UTF-8 strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_ai_cli_tool_remove(
+    core: *mut MahoCore,
+    workspace_id: *const c_char,
+    tool_name: *const c_char,
+) -> bool {
+    ffi_safe!({
+        if core.is_null() || workspace_id.is_null() || tool_name.is_null() {
+            return false;
+        }
+        let storage = match get_storage(core) {
+            Some(s) => s,
+            None => return false,
+        };
+        let manager = WorkspaceManager::new(storage);
+        let ws_str = match CStr::from_ptr(workspace_id).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let name_str = match CStr::from_ptr(tool_name).to_str() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        manager.remove_cli_tool(ws_str, name_str).is_ok()
+    }, false)
+}
+
+/// # Safety
+/// `core` must be a valid pointer to a `MahoCore`.
+/// `workspace_id` must be a null-terminated UTF-8 string.
+/// Caller must free returned string via `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_ai_cli_tool_list(
+    core: *mut MahoCore,
+    workspace_id: *const c_char,
+) -> *mut c_char {
+    ffi_safe!({
+        if core.is_null() || workspace_id.is_null() {
+            return ptr::null_mut();
+        }
+        let storage = match get_storage(core) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        let ws_str = match CStr::from_ptr(workspace_id).to_str() {
+            Ok(s) => s,
+            Err(_) => return ptr::null_mut(),
+        };
+        match storage.list_cli_tools(ws_str) {
+            Ok(list) => to_json_cstring(&list),
+            Err(_) => ptr::null_mut(),
+        }
+    }, ptr::null_mut())
+}
+
+// Active tool set
+
+/// # Safety
+/// `core` must be a valid pointer to a `MahoCore`.
+/// `workspace_id` must be a null-terminated UTF-8 string.
+/// Caller must free returned string via `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_ai_workspace_get_tools(
+    core: *mut MahoCore,
+    workspace_id: *const c_char,
+) -> *mut c_char {
+    ffi_safe!({
+        if core.is_null() || workspace_id.is_null() {
+            return ptr::null_mut();
+        }
+        let storage = match get_storage(core) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        let manager = WorkspaceManager::new(storage);
+        let ws_str = match CStr::from_ptr(workspace_id).to_str() {
+            Ok(s) => s,
+            Err(_) => return ptr::null_mut(),
+        };
+        
+        let core_ref = &*core;
+        let registry = core_ref.tool_registry();
+        match manager.get_effective_tools(ws_str, registry) {
+            Ok(tools) => to_json_cstring(&tools),
+            Err(_) => ptr::null_mut(),
+        }
+    }, ptr::null_mut())
+}
+
 // ============================================================
 // Account Tier FFI
+
 // ============================================================
 
 /// Returns the user's subscription tier as an integer:
@@ -8023,20 +8688,39 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static SPLIT_CALLBACKS: OnceLock<Mutex<Vec<(u64, extern "C" fn(*const c_char))>>> = OnceLock::new();
 static NEXT_CALLBACK_TOKEN: AtomicU64 = AtomicU64::new(1);
 
+type ToolAvailCb = unsafe extern "C" fn(*mut c_void, *const c_char);
+static TOOL_AVAIL_CALLBACKS: OnceLock<Mutex<Vec<(u64, usize, ToolAvailCb)>>> = OnceLock::new();
+
 fn get_split_callbacks() -> &'static Mutex<Vec<(u64, extern "C" fn(*const c_char))>> {
     SPLIT_CALLBACKS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+fn get_tool_avail_callbacks() -> &'static Mutex<Vec<(u64, usize, ToolAvailCb)>> {
+    TOOL_AVAIL_CALLBACKS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
 fn process_split_callbacks_for_updates(updates: &[maho_types::events::core_update::CoreUpdate]) {
     for update in updates {
-        if let maho_types::events::core_update::CoreUpdate::SplitViewChanged { .. } = update {
-            if let Ok(cbs) = get_split_callbacks().lock() {
-                let json_str = serde_json::to_string(update).unwrap_or_default();
-                let c_json = CString::new(json_str).unwrap();
-                for (_, cb) in cbs.iter() {
-                    cb(c_json.as_ptr());
+        match update {
+            maho_types::events::core_update::CoreUpdate::SplitViewChanged { .. } => {
+                if let Ok(cbs) = get_split_callbacks().lock() {
+                    let json_str = serde_json::to_string(update).unwrap_or_default();
+                    let c_json = CString::new(json_str).unwrap();
+                    for (_, cb) in cbs.iter() {
+                        cb(c_json.as_ptr());
+                    }
                 }
             }
+            maho_types::events::core_update::CoreUpdate::ToolAvailabilityChanged { .. } => {
+                if let Ok(cbs) = get_tool_avail_callbacks().lock() {
+                    let json_str = serde_json::to_string(update).unwrap_or_default();
+                    let c_json = CString::new(json_str).unwrap();
+                    for (_, ud, cb) in cbs.iter() {
+                        unsafe { cb(*ud as *mut c_void, c_json.as_ptr()); }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -8101,6 +8785,9 @@ pub unsafe extern "C" fn maho_core_register_split_change_callback(
         if core.is_null() {
             return 0;
         }
+        maho_types::events::core_update::set_core_update_callback(|update| {
+            process_split_callbacks_for_updates(&[update]);
+        });
         let token = NEXT_CALLBACK_TOKEN.fetch_add(1, Ordering::SeqCst);
         if let Ok(mut cbs) = get_split_callbacks().lock() {
             cbs.push((token, callback));
@@ -8122,6 +8809,48 @@ pub unsafe extern "C" fn maho_core_unregister_split_change_callback(
         }
         if let Ok(mut cbs) = get_split_callbacks().lock() {
             cbs.retain(|(t, _)| *t != token);
+        }
+    }, ())
+}
+
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
+/// `user_data` may be null; if non-null it must outlive the callback registration.
+/// `callback` must not panic and must be safe to call from arbitrary threads.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_register_tool_availability_callback(
+    core: *mut MahoCore,
+    user_data: *mut c_void,
+    callback: unsafe extern "C" fn(*mut c_void, *const c_char),
+) -> u64 {
+    ffi_safe!({
+        if core.is_null() {
+            return 0;
+        }
+        maho_types::events::core_update::set_core_update_callback(|update| {
+            process_split_callbacks_for_updates(&[update]);
+        });
+        let token = NEXT_CALLBACK_TOKEN.fetch_add(1, Ordering::SeqCst);
+        if let Ok(mut cbs) = get_tool_avail_callbacks().lock() {
+            cbs.push((token, user_data as usize, callback));
+        }
+        token
+    }, 0)
+}
+
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_unregister_tool_availability_callback(
+    core: *mut MahoCore,
+    token: u64,
+) {
+    ffi_safe!({
+        if core.is_null() {
+            return;
+        }
+        if let Ok(mut cbs) = get_tool_avail_callbacks().lock() {
+            cbs.retain(|(t, _, _)| *t != token);
         }
     }, ())
 }

@@ -84,6 +84,16 @@ class MahoMcpSession {
   // complete nd-JSON line). May transition state to kClosed.
   std::vector<std::string> ProcessData(const std::string& data);
 
+  // Set a sink for responses that complete asynchronously (e.g., screenshots
+  // that must not block the UI thread). When invoked, the argument is a
+  // complete nd-JSON response line. May be called from any sequence — the
+  // sender implementation is responsible for hopping to the socket write
+  // sequence. Not sequence-checked because it is set once at construction.
+  using DeferredResponseSender = base::RepeatingCallback<void(std::string)>;
+  void SetDeferredResponseSender(DeferredResponseSender sender) {
+    deferred_response_sender_ = std::move(sender);
+  }
+
   State state() const { return state_; }
 
   struct ConsoleMessage {
@@ -183,6 +193,8 @@ class MahoMcpSession {
   // Map of tab_id -> scroll_y
   std::unordered_map<int, int> scroll_y_positions_;
 
+  DeferredResponseSender deferred_response_sender_;
+
   SEQUENCE_CHECKER(sequence_checker_);
 };
 
@@ -193,11 +205,26 @@ class MahoMcpBrowserDelegate {
   virtual std::vector<MahoMcpSession::ConsoleMessage> GetConsoleMessages(int tab_id) = 0;
   virtual std::vector<MahoMcpSession::NavigationEvent> GetNavigationEvents(
       int tab_id, int64_t since_ms) = 0;
-  
+  virtual std::string GetPageText(int tab_id) = 0;
+  virtual base::Value GetAccessibilitySnapshot(
+      int tab_id,
+      MahoMcpSession::RefTable* out_refs) = 0;
+
+  // Async: base64-encoded PNG passed to `callback`. Empty string on failure.
+  // Callback may be invoked on any sequence.
+  virtual void CaptureFullPagePngBase64(
+      int tab_id,
+      base::OnceCallback<void(std::string)> callback) = 0;
+
   virtual bool Scroll(int tab_id,
                        const std::string& direction,
                        int pixels,
                        std::optional<ui::AXNodeID> ax_id) = 0;
+  virtual bool Click(int tab_id, ui::AXNodeID ax_id) = 0;
+  virtual bool Type(int tab_id, ui::AXNodeID ax_id, const std::string& text) = 0;
+  virtual bool Select(int tab_id,
+                      ui::AXNodeID ax_id,
+                      const std::string& value) = 0;
   virtual bool Hover(int tab_id, ui::AXNodeID ax_id) = 0;
   virtual bool KeyPress(int tab_id,
                         const std::string& key,

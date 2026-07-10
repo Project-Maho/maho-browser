@@ -1,0 +1,141 @@
+import SwiftUI
+
+struct SuggestionsListView: View {
+    @ObservedObject var viewModel: CommandBarViewModel
+    var onSelect: (SuggestionViewModel) -> Void
+    var onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Cancel / Utility Top Bar
+            HStack {
+                Button(action: onCancel) {
+                    Text("Cancel")
+                        .font(.system(size: 17))
+                        .foregroundColor(.blue)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .frame(minHeight: 44)
+                
+                Spacer()
+            }
+            .background(Color(uiColor: .systemBackground))
+            
+            Divider()
+
+            if viewModel.suggestions.isEmpty {
+                VStack {
+                    Spacer()
+                    Text("No Suggestions")
+                        .foregroundColor(.secondary)
+                        .font(.system(size: 15))
+                    Spacer()
+                }
+                .frame(maxHeight: .infinity)
+                .background(Color(uiColor: .systemGroupedBackground))
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(viewModel.suggestions) { suggestion in
+                            Button(action: { onSelect(suggestion) }) {
+                                SuggestionRow(suggestion: suggestion)
+                            }
+                            .buttonStyle(SuggestionRowButtonStyle())
+                            
+                            Divider()
+                                .padding(.leading, 48)
+                        }
+                    }
+                }
+                .background(Color(uiColor: .systemBackground))
+            }
+        }
+    }
+}
+
+struct SuggestionRow: View {
+    let suggestion: SuggestionViewModel
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Icon
+            ZStack {
+                if let icon = suggestion.icon, let uiImage = icon.uiImage {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 20, height: 20)
+                } else {
+                    Image(systemName: sfSymbol(for: suggestion.kind))
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 16, height: 16)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .frame(width: 32, height: 32)
+            .background(Color(uiColor: .secondarySystemBackground))
+            .cornerRadius(6)
+
+            // Text
+            VStack(alignment: .leading, spacing: 2) {
+                Text(highlightedText(suggestion.title, ranges: suggestion.matchRanges))
+                    .font(.system(size: 16, weight: .regular))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                
+                if let subtitle = suggestion.subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+    }
+
+    private func sfSymbol(for kind: SuggestionType) -> String {
+        switch kind {
+        case .tab: return "square.on.square"
+        case .bookmark: return "bookmark.fill"
+        case .history: return "clock"
+        case .action: return "sparkles"
+        case .navigation: return "globe"
+        case .calculator: return "plus.slash.minus"
+        case .unitConversion: return "arrow.left.and.right"
+        case .archivedTab: return "archivebox"
+        case .closedTab: return "xmark.circle"
+        }
+    }
+
+    private func highlightedText(_ text: String, ranges: [[Int]]?) -> AttributedString {
+        var attr = AttributedString(text)
+        guard let ranges = ranges else { return attr }
+        let nsString = text as NSString
+        for range in ranges {
+            guard range.count == 2 else { continue }
+            let start = range[0]
+            let length = range[1]
+            guard start >= 0, start + length <= nsString.length else { continue }
+            let nsRange = NSRange(location: start, length: length)
+            if let rangeInAttr = Range(nsRange, in: attr) {
+                attr[rangeInAttr].inlinePresentationIntent = .stronglyEmphasized
+                attr[rangeInAttr].foregroundColor = .blue
+            }
+        }
+        return attr
+    }
+}
+
+struct SuggestionRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(configuration.isPressed ? Color(uiColor: .secondarySystemBackground) : Color.clear)
+    }
+}

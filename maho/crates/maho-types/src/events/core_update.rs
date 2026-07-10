@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use crate::autofill::{AutofillAddress, AutofillPayment};
 use crate::chat::ChatRequestContext;
 use crate::common::{ImageData, Url};
-use crate::identifiers::{BoostId, DownloadId, FolderId, ProfileId, SpaceId, TabId};
+use crate::identifiers::{BoostId, DownloadId, FolderId, ProfileId, SpaceId, TabId, WindowId};
 use crate::passwords::SavedPassword;
 use crate::profile::ProfileConfig;
 use crate::search_engine::SearchEngineViewModel;
@@ -12,6 +12,7 @@ use crate::settings::Settings;
 use crate::space::{ActiveSpaceModel, SpaceColor, SpaceConfigUpdate};
 use crate::tab::{TabLifecycleState, TabRole};
 use crate::boost::Boost;
+use crate::split_view::SplitViewConfig;
 use crate::traits::shell_renderer::{
     DownloadViewModel, FolderViewModel, NotificationViewModel, PermissionRequest,
     SpaceViewModel, SuggestionViewModel, TabStateUpdate, TabViewModel,
@@ -135,6 +136,8 @@ pub enum LLMRequestContext {
         chat: ChatRequestContext,
     },
 }
+
+pub const SPLIT_VIEW_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -450,6 +453,16 @@ pub enum CoreUpdate {
         old_role: Option<TabRole>,
         new_role: TabRole,
     },
+    SplitViewChanged {
+        window_id: WindowId,
+        config: Option<SplitViewConfig>,
+        schema_version: u32,
+    },
+    ToolAvailabilityChanged {
+        workspace_id: String,
+        server_name: String,
+        available: bool,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -538,3 +551,27 @@ impl CoreUpdate {
         )
     }
 }
+
+use std::sync::{Mutex, OnceLock};
+
+pub type CoreUpdateCallback = dyn Fn(CoreUpdate) + Send + Sync + 'static;
+static CORE_UPDATE_CALLBACK: OnceLock<Mutex<Option<Box<CoreUpdateCallback>>>> = OnceLock::new();
+
+pub fn set_core_update_callback<F>(callback: F)
+where
+    F: Fn(CoreUpdate) + Send + Sync + 'static,
+{
+    let mut lock = CORE_UPDATE_CALLBACK.get_or_init(|| Mutex::new(None)).lock().unwrap();
+    *lock = Some(Box::new(callback));
+}
+
+pub fn emit_core_update(update: CoreUpdate) {
+    if let Some(ref lock) = CORE_UPDATE_CALLBACK.get() {
+        if let Ok(guard) = lock.lock() {
+            if let Some(ref cb) = *guard {
+                cb(update);
+            }
+        }
+    }
+}
+

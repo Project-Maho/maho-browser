@@ -40,9 +40,13 @@ export function ConversationSystemItem(
             </div>
           ) : (
             <div className="grid min-w-0 flex-1 gap-0.5">
-              <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                {item.tone === 'danger' ? 'Issue' : 'Activity'}
-              </span>
+              {item.toolName ? (
+                <span className="truncate font-mono text-[11px] font-semibold text-muted-foreground">{item.toolName}</span>
+              ) : (
+                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                  {item.tone === 'danger' ? 'Issue' : 'Activity'}
+                </span>
+              )}
               <span className="text-sm leading-6 text-foreground/90">{item.text}</span>
             </div>
           )}

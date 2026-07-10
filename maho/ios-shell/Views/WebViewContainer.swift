@@ -4,6 +4,7 @@ import WebKit
 
 struct WebViewContainer: UIViewRepresentable {
     @ObservedObject var viewModel: BrowserViewModel
+    let isPrivate: Bool
     var onPinchSummarize: (() -> Void)?
 
     func makeCoordinator() -> WebViewCoordinator {
@@ -21,6 +22,25 @@ struct WebViewContainer: UIViewRepresentable {
 
         configuration.userContentController.add(context.coordinator, name: "mahoReader")
         Self.installReadabilityUserScript(on: configuration.userContentController)
+        
+        if isPrivate {
+            let darkScriptSource = """
+            (function() {
+                var style = document.createElement('style');
+                style.innerHTML = ':root { color-scheme: dark; } ' +
+                                  'html:not([data-maho-page]) { background: #1c1c1e; } ' +
+                                  'body:not([data-maho-page]) { background: #1c1c1e; color: #f2f2f7; }';
+                document.documentElement.appendChild(style);
+            })();
+            """
+            let darkScript = WKUserScript(
+                source: darkScriptSource,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            )
+            configuration.userContentController.addUserScript(darkScript)
+        }
+        
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
         webView.navigationDelegate = context.coordinator

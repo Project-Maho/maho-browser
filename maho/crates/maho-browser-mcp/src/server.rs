@@ -140,6 +140,158 @@ pub struct PageWaitForSelectorParams {
     pub visible: Option<bool>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrowserTabSwitchParams {
+    #[schemars(description = "Tab ID to activate")]
+    pub tab_id: i64,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrowserScreenshotFullParams {
+    #[schemars(description = "Optional tab ID. Defaults to the active tab.")]
+    pub tab_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrowserScreenshotElementParams {
+    #[schemars(description = "Accessibility @ref of the element from browser_accessibility_snapshot")]
+    pub r#ref: i64,
+    #[schemars(description = "Optional tab ID. Defaults to the active tab.")]
+    pub tab_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrowserAccessibilitySnapshotParams {
+    #[schemars(description = "Optional tab ID. Defaults to the active tab.")]
+    pub tab_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrowserClickParams {
+    #[schemars(description = "Accessibility @ref of the element to click")]
+    pub r#ref: i64,
+    #[schemars(description = "Optional tab ID. Defaults to the active tab.")]
+    pub tab_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrowserTypeParams {
+    #[schemars(description = "Accessibility @ref of the input element")]
+    pub r#ref: i64,
+    #[schemars(description = "Text to type into the element")]
+    pub text: String,
+    #[schemars(description = "Optional tab ID. Defaults to the active tab.")]
+    pub tab_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrowserSelectParams {
+    #[schemars(description = "Accessibility @ref of the select element")]
+    pub r#ref: i64,
+    #[schemars(description = "Option value to select")]
+    pub value: String,
+    #[schemars(description = "Optional tab ID. Defaults to the active tab.")]
+    pub tab_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrowserHoverParams {
+    #[schemars(description = "Accessibility @ref of the element to hover")]
+    pub r#ref: i64,
+    #[schemars(description = "Optional tab ID. Defaults to the active tab.")]
+    pub tab_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrowserScrollParams {
+    #[schemars(description = "Scroll direction: 'up', 'down', 'left', 'right'")]
+    pub direction: String,
+    #[schemars(description = "Pixels to scroll (default: 300)")]
+    pub pixels: Option<i64>,
+    #[schemars(description = "Optional accessibility @ref to anchor the scroll origin")]
+    pub r#ref: Option<i64>,
+    #[schemars(description = "Optional tab ID. Defaults to the active tab.")]
+    pub tab_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrowserKeyPressParams {
+    #[schemars(description = "Key name (Enter, Tab, Escape, ArrowUp, F5, Space, alphanumeric single char, etc.)")]
+    pub key: String,
+    #[schemars(description = "Modifier keys: any of 'shift', 'ctrl', 'alt', 'meta'")]
+    pub modifiers: Option<Vec<String>>,
+    #[schemars(description = "Optional tab ID. Defaults to the active tab.")]
+    pub tab_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrowserSetViewportSizeParams {
+    #[schemars(description = "Viewport width in CSS pixels (100-4096)")]
+    pub width_px: i64,
+    #[schemars(description = "Viewport height in CSS pixels (100-4096)")]
+    pub height_px: i64,
+    #[schemars(description = "Optional tab ID. Defaults to the active tab.")]
+    pub tab_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrowserWaitForNavigationParams {
+    #[schemars(description = "Optional tab ID. Defaults to the active tab.")]
+    pub tab_id: Option<i64>,
+    #[schemars(description = "Only return navigation events after this timestamp (ms since epoch)")]
+    pub since_timestamp_ms: Option<i64>,
+    #[schemars(description = "Client hint for how long to wait; server returns immediately with current state")]
+    pub timeout_ms: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrowserConsoleMessagesParams {
+    #[schemars(description = "Optional tab ID. Defaults to the active tab.")]
+    pub tab_id: Option<i64>,
+    #[schemars(description = "Filter to specific levels: 'debug', 'info', 'log', 'warn', 'error'")]
+    pub level_filter: Option<Vec<String>>,
+    #[schemars(description = "Only return messages after this timestamp (ms since epoch)")]
+    pub since_timestamp_ms: Option<i64>,
+    #[schemars(description = "Maximum messages to return (default: 100)")]
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrowserNetworkCaptureParams {
+    #[schemars(description = "Optional tab ID. Defaults to the active tab.")]
+    pub tab_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrowserSetAllowedDomainsParams {
+    #[schemars(description = "List of domains to allow (exact or wildcard like '*.github.com')")]
+    pub domains: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrowserAcquireLeaseParams {
+    #[schemars(description = "Tab ID to acquire a lease for")]
+    pub tab_id: i64,
+    #[schemars(description = "Lease TTL in seconds (10-300, default 60)")]
+    pub ttl_seconds: Option<i64>,
+    #[schemars(description = "If true, forcibly steal the lease from another session")]
+    pub force_steal: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrowserHeartbeatLeaseParams {
+    #[schemars(description = "Tab ID whose lease to extend")]
+    pub tab_id: i64,
+    #[schemars(description = "New TTL in seconds from now (default: same as acquire)")]
+    pub ttl_seconds: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrowserReleaseLeaseParams {
+    #[schemars(description = "Tab ID whose lease to release")]
+    pub tab_id: i64,
+}
+
 /// The MCP server that bridges stdio (rmcp) to the browser's UDS socket.
 #[derive(Debug, Clone)]
 pub struct MahoBrowserMcpServer {
@@ -177,7 +329,7 @@ impl MahoBrowserMcpServer {
     ) -> Result<String, rmcp::ErrorData> {
         let result = self
             .client
-            .call("ping", json!({}))
+            .call_tool("ping", json!({}))
             .await
             .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
         Ok(serde_json::to_string(&result).unwrap_or_else(|_| r#"{"pong":true}"#.to_string()))
@@ -194,7 +346,7 @@ impl MahoBrowserMcpServer {
     ) -> Result<String, rmcp::ErrorData> {
         let result = self
             .client
-            .call("browser_tab_list", json!({}))
+            .call_tool("browser_tab_list", json!({}))
             .await
             .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
         Ok(serde_json::to_string(&result).unwrap_or_default())
@@ -207,7 +359,7 @@ impl MahoBrowserMcpServer {
     ) -> Result<String, rmcp::ErrorData> {
         let result = self
             .client
-            .call("browser_tab_get", json!({"tab_id": params.tab_id}))
+            .call_tool("browser_tab_get", json!({"tab_id": params.tab_id}))
             .await
             .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
         Ok(serde_json::to_string(&result).unwrap_or_default())
@@ -221,8 +373,7 @@ impl MahoBrowserMcpServer {
         // TODO(#allowed-domains-D1): Reject URLs not in allowed_domains (Wave 3/5.3)
         let result = self
             .client
-            .call(
-                "browser_navigate",
+            .call_tool("browser_navigate",
                 json!({"tab_id": params.tab_id, "url": params.url}),
             )
             .await
@@ -237,7 +388,7 @@ impl MahoBrowserMcpServer {
     ) -> Result<String, rmcp::ErrorData> {
         let result = self
             .client
-            .call("browser_tab_close", json!({"tab_id": params.tab_id}))
+            .call_tool("browser_tab_close", json!({"tab_id": params.tab_id}))
             .await
             .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
         Ok(serde_json::to_string(&result).unwrap_or_default())
@@ -250,7 +401,7 @@ impl MahoBrowserMcpServer {
     ) -> Result<String, rmcp::ErrorData> {
         let result = self
             .client
-            .call("browser_tab_new", json!({"url": params.url}))
+            .call_tool("browser_tab_new", json!({"url": params.url}))
             .await
             .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
         Ok(serde_json::to_string(&result).unwrap_or_default())
@@ -267,8 +418,7 @@ impl MahoBrowserMcpServer {
     ) -> Result<String, rmcp::ErrorData> {
         let result = self
             .client
-            .call(
-                "browser_history_search",
+            .call_tool("browser_history_search",
                 json!({
                     "query": params.query,
                     "since_seconds": params.since_seconds,
@@ -288,7 +438,7 @@ impl MahoBrowserMcpServer {
     ) -> Result<String, rmcp::ErrorData> {
         let result = self
             .client
-            .call("browser_bookmarks_search", json!({"query": params.query}))
+            .call_tool("browser_bookmarks_search", json!({"query": params.query}))
             .await
             .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
         Ok(serde_json::to_string(&result).unwrap_or_default())
@@ -301,8 +451,7 @@ impl MahoBrowserMcpServer {
     ) -> Result<String, rmcp::ErrorData> {
         let result = self
             .client
-            .call(
-                "browser_bookmark_create",
+            .call_tool("browser_bookmark_create",
                 json!({
                     "title": params.title,
                     "url": params.url,
@@ -325,7 +474,7 @@ impl MahoBrowserMcpServer {
     ) -> Result<String, rmcp::ErrorData> {
         let result = self
             .client
-            .call("browser_page_content", json!({"tab_id": params.tab_id}))
+            .call_tool("browser_page_content", json!({"tab_id": params.tab_id}))
             .await
             .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
         Ok(serde_json::to_string(&result).unwrap_or_default())
@@ -338,7 +487,7 @@ impl MahoBrowserMcpServer {
     ) -> Result<String, rmcp::ErrorData> {
         let result = self
             .client
-            .call("browser_page_text", json!({"tab_id": params.tab_id}))
+            .call_tool("browser_page_text", json!({"tab_id": params.tab_id}))
             .await
             .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
         Ok(serde_json::to_string(&result).unwrap_or_default())
@@ -351,8 +500,7 @@ impl MahoBrowserMcpServer {
     ) -> Result<String, rmcp::ErrorData> {
         let result = self
             .client
-            .call(
-                "browser_search_in_page",
+            .call_tool("browser_search_in_page",
                 json!({"query": params.query, "tab_id": params.tab_id}),
             )
             .await
@@ -367,7 +515,7 @@ impl MahoBrowserMcpServer {
     ) -> Result<String, rmcp::ErrorData> {
         let result = self
             .client
-            .call("browser_page_context", json!({"tab_id": params.tab_id}))
+            .call_tool("browser_page_context", json!({"tab_id": params.tab_id}))
             .await
             .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
         Ok(serde_json::to_string(&result).unwrap_or_default())
@@ -380,8 +528,7 @@ impl MahoBrowserMcpServer {
     ) -> Result<String, rmcp::ErrorData> {
         let result = self
             .client
-            .call(
-                "page_query_selector",
+            .call_tool("page_query_selector",
                 json!({"selector": params.selector, "tab_id": params.tab_id}),
             )
             .await
@@ -396,7 +543,7 @@ impl MahoBrowserMcpServer {
     ) -> Result<String, rmcp::ErrorData> {
         let result = self
             .client
-            .call("page_get_text", json!({"ref_id": params.ref_id}))
+            .call_tool("page_get_text", json!({"ref_id": params.ref_id}))
             .await
             .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
         Ok(serde_json::to_string(&result).unwrap_or_default())
@@ -409,8 +556,7 @@ impl MahoBrowserMcpServer {
     ) -> Result<String, rmcp::ErrorData> {
         let result = self
             .client
-            .call(
-                "page_get_attribute",
+            .call_tool("page_get_attribute",
                 json!({"ref_id": params.ref_id, "attribute": params.attribute}),
             )
             .await
@@ -425,14 +571,327 @@ impl MahoBrowserMcpServer {
     ) -> Result<String, rmcp::ErrorData> {
         let result = self
             .client
-            .call(
-                "page_wait_for_selector",
+            .call_tool("page_wait_for_selector",
                 json!({
                     "selector": params.selector,
                     "timeout_ms": params.timeout_ms,
                     "visible": params.visible,
                 }),
             )
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "Switch the active browser tab to the one identified by tab_id")]
+    async fn browser_tab_switch(
+        &self,
+        Parameters(params): Parameters<BrowserTabSwitchParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("browser_tab_switch", json!({"tab_id": params.tab_id}))
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "Capture a full-page PNG screenshot of the tab (password fields overlaid with black rectangles)")]
+    async fn browser_screenshot_full(
+        &self,
+        Parameters(params): Parameters<BrowserScreenshotFullParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("browser_screenshot_full", json!({"tab_id": params.tab_id}))
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "Capture a PNG screenshot of a single element identified by accessibility @ref")]
+    async fn browser_screenshot_element(
+        &self,
+        Parameters(params): Parameters<BrowserScreenshotElementParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("browser_screenshot_element",
+                json!({"ref": params.r#ref, "tab_id": params.tab_id}),
+            )
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "Return the accessibility tree with @ref labels for interactive elements (feed refs to browser_click/type/select/hover/scroll)")]
+    async fn browser_accessibility_snapshot(
+        &self,
+        Parameters(params): Parameters<BrowserAccessibilitySnapshotParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("browser_accessibility_snapshot",
+                json!({"tab_id": params.tab_id}),
+            )
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "Click an element identified by an @ref from a prior browser_accessibility_snapshot")]
+    async fn browser_click(
+        &self,
+        Parameters(params): Parameters<BrowserClickParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("browser_click", json!({"ref": params.r#ref, "tab_id": params.tab_id}))
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "Type text into an input element identified by accessibility @ref")]
+    async fn browser_type(
+        &self,
+        Parameters(params): Parameters<BrowserTypeParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("browser_type",
+                json!({"ref": params.r#ref, "text": params.text, "tab_id": params.tab_id}),
+            )
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "Select an option value on a <select> element identified by accessibility @ref")]
+    async fn browser_select(
+        &self,
+        Parameters(params): Parameters<BrowserSelectParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("browser_select",
+                json!({"ref": params.r#ref, "value": params.value, "tab_id": params.tab_id}),
+            )
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "Hover the mouse over an element identified by accessibility @ref")]
+    async fn browser_hover(
+        &self,
+        Parameters(params): Parameters<BrowserHoverParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("browser_hover", json!({"ref": params.r#ref, "tab_id": params.tab_id}))
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "Scroll the page (or an element identified by @ref) in the given direction by the given pixel amount")]
+    async fn browser_scroll(
+        &self,
+        Parameters(params): Parameters<BrowserScrollParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("browser_scroll",
+                json!({
+                    "direction": params.direction,
+                    "pixels": params.pixels,
+                    "ref": params.r#ref,
+                    "tab_id": params.tab_id,
+                }),
+            )
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "Synthesize a keyboard key press (named keys, F1-F12, Space, or single alphanumeric char) with optional modifiers")]
+    async fn browser_key_press(
+        &self,
+        Parameters(params): Parameters<BrowserKeyPressParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("browser_key_press",
+                json!({
+                    "key": params.key,
+                    "modifiers": params.modifiers,
+                    "tab_id": params.tab_id,
+                }),
+            )
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "Resize the tab's viewport (CSS pixel dimensions between 100 and 4096)")]
+    async fn browser_set_viewport_size(
+        &self,
+        Parameters(params): Parameters<BrowserSetViewportSizeParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("browser_set_viewport_size",
+                json!({
+                    "width_px": params.width_px,
+                    "height_px": params.height_px,
+                    "tab_id": params.tab_id,
+                }),
+            )
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "Return the last observed navigation event for the tab, or current URL if no event since since_timestamp_ms")]
+    async fn browser_wait_for_navigation(
+        &self,
+        Parameters(params): Parameters<BrowserWaitForNavigationParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("browser_wait_for_navigation",
+                json!({
+                    "tab_id": params.tab_id,
+                    "since_timestamp_ms": params.since_timestamp_ms,
+                    "timeout_ms": params.timeout_ms,
+                }),
+            )
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "Return buffered console messages (log/info/warn/error) for the tab, with optional level and timestamp filters")]
+    async fn browser_console_messages(
+        &self,
+        Parameters(params): Parameters<BrowserConsoleMessagesParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("browser_console_messages",
+                json!({
+                    "tab_id": params.tab_id,
+                    "level_filter": params.level_filter,
+                    "since_timestamp_ms": params.since_timestamp_ms,
+                    "limit": params.limit,
+                }),
+            )
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "Start capturing network requests for the tab as a HAR log (credentials redacted before egress)")]
+    async fn browser_network_start_capture(
+        &self,
+        Parameters(params): Parameters<BrowserNetworkCaptureParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("browser_network_start_capture",
+                json!({"tab_id": params.tab_id}),
+            )
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "Stop capturing network requests and return the final HAR log (credential-scrubbed)")]
+    async fn browser_network_stop_capture(
+        &self,
+        Parameters(params): Parameters<BrowserNetworkCaptureParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("browser_network_stop_capture",
+                json!({"tab_id": params.tab_id}),
+            )
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "Return the current HAR log without stopping capture (credential-scrubbed)")]
+    async fn browser_network_get_har(
+        &self,
+        Parameters(params): Parameters<BrowserNetworkCaptureParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("browser_network_get_har", json!({"tab_id": params.tab_id}))
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "Set the session-scoped allowed_domains list (exact or wildcard). MUST be called before browser_navigate.")]
+    async fn browser_set_allowed_domains(
+        &self,
+        Parameters(params): Parameters<BrowserSetAllowedDomainsParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("browser_set_allowed_domains",
+                json!({"domains": params.domains}),
+            )
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "Acquire an exclusive lease on the given tab (blocks other sessions from mutating it)")]
+    async fn browser_acquire_lease(
+        &self,
+        Parameters(params): Parameters<BrowserAcquireLeaseParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("browser_acquire_lease",
+                json!({
+                    "tab_id": params.tab_id,
+                    "ttl_seconds": params.ttl_seconds,
+                    "force_steal": params.force_steal,
+                }),
+            )
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "Refresh an existing lease's TTL to prevent auto-expiry")]
+    async fn browser_heartbeat_lease(
+        &self,
+        Parameters(params): Parameters<BrowserHeartbeatLeaseParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("browser_heartbeat_lease",
+                json!({"tab_id": params.tab_id, "ttl_seconds": params.ttl_seconds}),
+            )
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "Release a lease acquired by browser_acquire_lease")]
+    async fn browser_release_lease(
+        &self,
+        Parameters(params): Parameters<BrowserReleaseLeaseParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("browser_release_lease", json!({"tab_id": params.tab_id}))
             .await
             .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
         Ok(serde_json::to_string(&result).unwrap_or_default())
@@ -504,8 +963,18 @@ mod tests {
                         Ok(_) => {
                             if let Ok(req) = serde_json::from_str::<serde_json::Value>(&line) {
                                 let id = req["id"].as_i64().unwrap_or(0);
-                                let method = req["method"].as_str().unwrap_or("");
-                                let params = req.get("params").cloned().unwrap_or(json!(null));
+                                let wire_method = req["method"].as_str().unwrap_or("");
+                                let raw_params = req.get("params").cloned().unwrap_or(json!(null));
+                                // Wave 9 wraps tool calls in `tools/call`;
+                                // unwrap so echoed `_method` / `_params`
+                                // report the tool name and its arguments.
+                                let (method, params) = if wire_method == "tools/call" {
+                                    let name = req["params"]["name"].as_str().unwrap_or("").to_string();
+                                    let args = req["params"].get("arguments").cloned().unwrap_or(json!({}));
+                                    (name, args)
+                                } else {
+                                    (wire_method.to_string(), raw_params)
+                                };
 
                                 let resp = json!({
                                     "jsonrpc": "2.0",
@@ -564,16 +1033,26 @@ mod tests {
                 buf.push(b'\n');
                 writer.write_all(&buf).await.unwrap();
 
-                // Handle the target call.
+                // Handle the target call. Wave 9 wraps all tool calls in
+                // `tools/call` envelope, so accept either the raw method name
+                // (legacy) or `tools/call` with matching params.name.
                 line.clear();
                 reader.read_line(&mut line).await.unwrap();
                 let req2: serde_json::Value = serde_json::from_str(&line).unwrap();
                 let id2 = req2["id"].as_i64().unwrap();
                 let called_method = req2["method"].as_str().unwrap_or("");
-                assert_eq!(
-                    called_method, method_name,
-                    "Expected call to '{method_name}', got '{called_method}'"
-                );
+                if called_method == "tools/call" {
+                    let inner_name = req2["params"]["name"].as_str().unwrap_or("");
+                    assert_eq!(
+                        inner_name, method_name,
+                        "tools/call: expected name='{method_name}', got '{inner_name}'"
+                    );
+                } else {
+                    assert_eq!(
+                        called_method, method_name,
+                        "Expected call to '{method_name}', got '{called_method}'"
+                    );
+                }
                 let resp2 = json!({
                     "jsonrpc": "2.0",
                     "id": id2,

@@ -122,6 +122,7 @@ class TidyRun {
     llm_client_ = std::make_unique<MahoAiLlmClient>(
         browser_->profile()->GetPrefs(),
         url_loader_factory.get(),
+        nullptr,
         /*provider_adapter_v2_enabled=*/false);
 
     MahoAiLlmClient::CompletionRequest request;

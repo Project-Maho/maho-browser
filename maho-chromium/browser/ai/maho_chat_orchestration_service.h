@@ -1,6 +1,15 @@
 #ifndef MAHO_BROWSER_AI_MAHO_CHAT_ORCHESTRATION_SERVICE_H_
 #define MAHO_BROWSER_AI_MAHO_CHAT_ORCHESTRATION_SERVICE_H_
 
+// [MAHO_AI_EXTENSIBILITY_V1 freeze — 2026-07-09]
+// This file is legacy Path A (MahoChatOrchestrationService). Kept on disk for
+// reference; excluded from BUILD.gn so it is NOT compiled into any target.
+// All runtime traffic goes through MahoUnifiedAgentAdapter (Path B).
+// Do NOT add new callers or resurrect this in the build.
+#if !defined(MAHO_AI_EXTENSIBILITY_V1_LEGACY_PATH_A_FROZEN)
+#error "Path A is frozen. Route through MahoUnifiedAgentAdapter."
+#endif
+
 #include <memory>
 #include <string>
 #include <vector>

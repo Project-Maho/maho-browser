@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 maho-types = { path = "../maho-types" }
 maho-storage = { path = "../maho-storage" }
+maho-core = { path = "../maho-core" }
 async-trait = "0.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -14,13 +15,14 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"
 swiftide-agents = "0.32"
 swiftide-integrations = { version = "0.32", features = ["openai", "anthropic"] }
 async-openai = { version = "=0.30.1" }
-rmcp = { version = "1.7", features = ["client"] }
+rmcp = { version = "1.7", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 futures = "0.3"
 anyhow = "1"
 dyn-clone = "1"
 swiftide-core = "0.32"
 async-anthropic = "0.6"
 uuid = { workspace = true }
+libc = "0.2"
 zeroize = { version = "1", features = ["zeroize_derive"] }
 secrecy = "0.10.3"
 tracing = "0.1"

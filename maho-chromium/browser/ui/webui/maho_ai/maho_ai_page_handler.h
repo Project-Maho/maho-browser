@@ -96,6 +96,56 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   void GetBuyCreditsUrl(int32_t pack_size_usd,
                         GetBuyCreditsUrlCallback callback) override;
 
+  // AI Extensibility:
+  void CreateAiProfile(const std::string& name,
+                       const std::string& system_prompt,
+                       const std::optional<std::string>& model,
+                       CreateAiProfileCallback callback) override;
+  void GetAiProfiles(GetAiProfilesCallback callback) override;
+  void UpdateAiProfile(const std::string& id,
+                       const std::string& profile_json,
+                       UpdateAiProfileCallback callback) override;
+  void DeleteAiProfile(const std::string& id,
+                       DeleteAiProfileCallback callback) override;
+  void ImportProfileFromToml(const std::string& workspace_id,
+                             const std::string& toml_path,
+                             ImportProfileFromTomlCallback callback) override;
+
+  void CreateAiWorkspace(const std::string& name,
+                         const std::optional<std::string>& space_id,
+                         CreateAiWorkspaceCallback callback) override;
+  void GetActiveAiWorkspace(const std::string& space_id,
+                            GetActiveAiWorkspaceCallback callback) override;
+  void GetAiWorkspaces(GetAiWorkspacesCallback callback) override;
+  void SwitchWorkspaceProfile(const std::string& workspace_id,
+                              const std::string& profile_id,
+                              SwitchWorkspaceProfileCallback callback) override;
+
+  void RegisterMcpServer(const std::string& workspace_id,
+                         const std::string& config_json,
+                         RegisterMcpServerCallback callback) override;
+  void RemoveMcpServer(const std::string& workspace_id,
+                       const std::string& server_name,
+                       RemoveMcpServerCallback callback) override;
+  void GetMcpServers(const std::string& workspace_id,
+                     GetMcpServersCallback callback) override;
+  void ApproveMcpServerTrust(const std::string& workspace_id,
+                             const std::string& server_name,
+                             const std::vector<std::string>& tools,
+                             ApproveMcpServerTrustCallback callback) override;
+
+  void RegisterCliTool(const std::string& workspace_id,
+                       const std::string& tool_json,
+                       RegisterCliToolCallback callback) override;
+  void RemoveCliTool(const std::string& workspace_id,
+                     const std::string& tool_name,
+                     RemoveCliToolCallback callback) override;
+  void GetCliTools(const std::string& workspace_id,
+                   GetCliToolsCallback callback) override;
+
+  void GetWorkspaceEffectiveTools(const std::string& workspace_id,
+                                  GetWorkspaceEffectiveToolsCallback callback) override;
+
  private:
   // Translates internal runtime events into Mojo and pushes them to the Page
   // remote. Also maintains chat history for the simple chat UI.

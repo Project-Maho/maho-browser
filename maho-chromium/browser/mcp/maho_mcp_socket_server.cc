@@ -18,6 +18,7 @@
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/posix/eintr_wrapper.h"
+#include "base/task/sequenced_task_runner.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "maho/browser/mcp/maho_mcp_session.h"
@@ -152,73 +153,92 @@ void MahoMcpSocketServer::OnAcceptComplete(int result) {
   ActiveConnection conn;
   conn.socket = std::move(accepted_socket_);
   conn.session = std::move(session);
+  conn.connection_id = next_connection_id_++;
   sessions_.push_back(std::move(conn));
 
   size_t index = sessions_.size() - 1;
-  ReadFromConnection(index);
+  auto io_runner = base::SequencedTaskRunner::GetCurrentDefault();
+  uint64_t conn_id = sessions_[index].connection_id;
+  sessions_[index].session->SetDeferredResponseSender(base::BindRepeating(
+      [](base::WeakPtr<MahoMcpSocketServer> self,
+         scoped_refptr<base::SequencedTaskRunner> runner, uint64_t cid,
+         std::string response) {
+        runner->PostTask(
+            FROM_HERE,
+            base::BindOnce(&MahoMcpSocketServer::OnDeferredResponse, self,
+                           cid, std::move(response)));
+      },
+      weak_factory_.GetWeakPtr(), io_runner, conn_id));
+  LOG(WARNING) << "[MahoMcp] OnAccept: created conn_id=" << conn_id
+               << " total_sessions=" << sessions_.size();
+  ReadFromConnection(conn_id);
 
   // Accept more connections.
   DoAccept();
 }
 
-void MahoMcpSocketServer::ReadFromConnection(size_t connection_index) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+MahoMcpSocketServer::ActiveConnection* MahoMcpSocketServer::FindConnection(
+    uint64_t connection_id) {
+  for (auto& c : sessions_) {
+    if (c.connection_id == connection_id) {
+      return &c;
+    }
+  }
+  return nullptr;
+}
 
-  if (connection_index >= sessions_.size()) {
+void MahoMcpSocketServer::ReadFromConnection(uint64_t connection_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  ActiveConnection* conn = FindConnection(connection_id);
+  if (!conn) {
     return;
   }
-
-  auto& conn = sessions_[connection_index];
-  conn.read_buf = base::MakeRefCounted<net::IOBufferWithSize>(kReadBufferSize);
-
-  int rv = conn.socket->Read(
-      conn.read_buf.get(), kReadBufferSize,
+  conn->read_buf = base::MakeRefCounted<net::IOBufferWithSize>(kReadBufferSize);
+  int rv = conn->socket->Read(
+      conn->read_buf.get(), kReadBufferSize,
       base::BindOnce(&MahoMcpSocketServer::OnReadComplete,
-                     weak_factory_.GetWeakPtr(), connection_index));
+                     weak_factory_.GetWeakPtr(), connection_id));
   if (rv == net::ERR_IO_PENDING) {
     return;
   }
-  OnReadComplete(connection_index, rv);
+  OnReadComplete(connection_id, rv);
 }
 
-void MahoMcpSocketServer::OnReadComplete(size_t connection_index, int result) {
+void MahoMcpSocketServer::OnReadComplete(uint64_t connection_id, int result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  if (connection_index >= sessions_.size()) {
+  ActiveConnection* conn = FindConnection(connection_id);
+  if (!conn) {
     return;
   }
-
   if (result <= 0) {
-    RemoveConnection(connection_index);
+    LOG(WARNING) << "[MahoMcp] OnReadComplete: closing conn_id="
+                 << connection_id << " read_result=" << result;
+    RemoveConnection(connection_id);
     return;
   }
-
-  auto& conn = sessions_[connection_index];
-  if (!conn.read_buf) {
-    RemoveConnection(connection_index);
+  if (!conn->read_buf) {
+    RemoveConnection(connection_id);
     return;
   }
-
-  std::string data(conn.read_buf->data(), result);
-  conn.read_buf.reset();
-
-  MahoMcpSession* session_ptr = conn.session.get();
+  std::string data(conn->read_buf->data(), result);
+  conn->read_buf.reset();
+  MahoMcpSession* session_ptr = conn->session.get();
   content::GetUIThreadTaskRunner({})->PostTaskAndReplyWithResult(
       FROM_HERE,
       base::BindOnce(&MahoMcpSession::ProcessData,
                      base::Unretained(session_ptr), data),
       base::BindOnce(&MahoMcpSocketServer::OnResponsesReady,
-                     weak_factory_.GetWeakPtr(), connection_index));
+                     weak_factory_.GetWeakPtr(), connection_id));
 }
 
 void MahoMcpSocketServer::OnResponsesReady(
-    size_t connection_index,
+    uint64_t connection_id,
     std::vector<std::string> responses) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (connection_index >= sessions_.size()) {
+  ActiveConnection* conn = FindConnection(connection_id);
+  if (!conn) {
     return;
   }
-  auto& conn = sessions_[connection_index];
   for (const auto& response : responses) {
     auto write_buf =
         base::MakeRefCounted<net::StringIOBuffer>(response);
@@ -245,23 +265,105 @@ void MahoMcpSocketServer::OnResponsesReady(
               setting: "Disabled by default; toggled via maho settings."
               policy_exception_justification: "Local IPC only."
             })");
-    conn.socket->Write(write_buf.get(), response.size(),
+    conn->socket->Write(write_buf.get(), response.size(),
                        base::DoNothing(), kAnnotation);
   }
 
-  if (conn.session->state() == MahoMcpSession::State::kClosed) {
-    RemoveConnection(connection_index);
+  if (conn->session->state() == MahoMcpSession::State::kClosed) {
+    RemoveConnection(connection_id);
     return;
   }
 
-  ReadFromConnection(connection_index);
+  ReadFromConnection(connection_id);
 }
 
-void MahoMcpSocketServer::RemoveConnection(size_t connection_index) {
+void MahoMcpSocketServer::OnDeferredResponse(uint64_t connection_id,
+                                             std::string response) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  ActiveConnection* conn_ptr = FindConnection(connection_id);
+  if (!conn_ptr || !conn_ptr->socket) {
+    LOG(WARNING) << "[MahoMcp] OnDeferredResponse: DROPPED conn_id="
+                 << connection_id << " reason="
+                 << (conn_ptr ? "no_socket" : "connection_not_found")
+                 << " total_conns=" << sessions_.size();
+    return;
+  }
+  LOG(WARNING) << "[MahoMcp] OnDeferredResponse: WRITING conn_id="
+               << connection_id << " resp_size=" << response.size();
+  auto& conn = *conn_ptr;
+  auto write_buf = base::MakeRefCounted<net::StringIOBuffer>(response);
+  static const net::NetworkTrafficAnnotationTag kAnnotation =
+      net::DefineNetworkTrafficAnnotation("maho_mcp_local_uds_deferred", R"annotation(
+          semantics {
+            sender: "Maho MCP Socket Server (deferred)"
+            description:
+              "Writes an asynchronously-produced JSON-RPC response (e.g. "
+              "screenshot capture) back to a local Unix domain socket client. "
+              "Local IPC only — no network traffic leaves the machine."
+            trigger:
+              "An authenticated local MCP client sent a tool call whose "
+              "result required async work (viz compositor IPC) that finished "
+              "after ProcessData already returned."
+            data:
+              "JSON-RPC responses containing tool results. Credentials are "
+              "redacted by the credential firewall before egress."
+            destination: LOCAL
+          }
+          policy {
+            cookies_allowed: NO
+            setting: "Disabled by default; toggled via maho settings."
+            policy_exception_justification: "Local IPC only."
+          })annotation");
+  auto drainable = base::MakeRefCounted<net::DrainableIOBuffer>(
+      std::move(write_buf), response.size());
+  auto write_next = std::make_shared<base::RepeatingClosure>();
+  net::StreamSocket* socket_ptr = conn.socket.get();
+  *write_next = base::BindRepeating(
+      [](net::StreamSocket* socket, scoped_refptr<net::DrainableIOBuffer> buf,
+         std::shared_ptr<base::RepeatingClosure> self_closure,
+         const net::NetworkTrafficAnnotationTag& annotation) {
+        while (buf->BytesRemaining() > 0) {
+          int result = socket->Write(
+              buf.get(), buf->BytesRemaining(),
+              base::BindOnce(
+                  [](scoped_refptr<net::DrainableIOBuffer> b,
+                     std::shared_ptr<base::RepeatingClosure> next, int r) {
+                    if (r > 0) {
+                      b->DidConsume(r);
+                    }
+                    if (r < 0) {
+                      LOG(WARNING)
+                          << "[MahoMcp] OnDeferredResponse write err=" << r;
+                      return;
+                    }
+                    if (b->BytesRemaining() > 0) {
+                      next->Run();
+                    }
+                  },
+                  buf, self_closure),
+              annotation);
+          if (result == net::ERR_IO_PENDING) {
+            return;
+          }
+          if (result < 0) {
+            LOG(WARNING)
+                << "[MahoMcp] OnDeferredResponse sync write err=" << result;
+            return;
+          }
+          buf->DidConsume(result);
+        }
+      },
+      socket_ptr, drainable, write_next, std::cref(kAnnotation));
+  write_next->Run();
+}
 
-  if (connection_index < sessions_.size()) {
-    sessions_.erase(sessions_.begin() + connection_index);
+void MahoMcpSocketServer::RemoveConnection(uint64_t connection_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  for (auto it = sessions_.begin(); it != sessions_.end(); ++it) {
+    if (it->connection_id == connection_id) {
+      sessions_.erase(it);
+      return;
+    }
   }
 }
 

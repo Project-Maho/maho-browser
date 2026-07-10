@@ -14,6 +14,7 @@ path = "src/bin/maho-browser-mcp.rs"
 
 [dependencies]
 rmcp = { version = "1", features = ["server", "macros", "transport-io", "schemars"] }
+maho-types = { path = "../maho-types" }
 tokio = { workspace = true, features = ["net", "io-util", "rt-multi-thread", "macros", "signal", "sync", "time"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

@@ -51,6 +51,7 @@ enum class MahoAiRuntimeEventType {
   // payload carries url, title, content_snippet, content_length, status,
   // warnings — mirroring the Mojo BrowserContextPayload.
   kBrowserContextInjected,
+  kToolAvailabilityChanged,
 };
 
 // A single runtime event. Adapters produce these; the proxy/page handler

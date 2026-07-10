@@ -3,6 +3,7 @@
 #ifndef MAHO_BROWSER_AI_MAHO_UNIFIED_AGENT_ADAPTER_H_
 #define MAHO_BROWSER_AI_MAHO_UNIFIED_AGENT_ADAPTER_H_
 
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -87,6 +88,7 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
     std::string custom_api_key;
     std::string custom_base_url;
     std::string custom_model;
+    std::map<std::string, std::string> mcp_credentials;
   };
 
   static MahoAgentPermissionDecision OnAgentPermission(void* user_data,
@@ -101,6 +103,9 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
   static void OnAgentToken(void* user_data, const char* token);
   static void OnAgentComplete(void* user_data, const char* full_text, const char* tool_calls_json);
   static void OnAgentError(void* user_data, const char* error);
+
+  static void OnToolAvailabilityFfi(void* user_data, const char* json_utf8);
+  void OnToolAvailabilityOnSequence(std::string json_utf8);
 
   void OnTokenOnSequence(std::string token);
   void OnCompleteOnSequence(std::string full_text);
@@ -153,6 +158,9 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
 
   std::shared_ptr<os_crypt_async::Encryptor> encryptor_;
   void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
+
+  uint64_t tool_availability_callback_token_ = 0;
+  scoped_refptr<base::SequencedTaskRunner> owning_task_runner_;
 
   base::WeakPtrFactory<MahoUnifiedAgentAdapter> weak_factory_{this};
 

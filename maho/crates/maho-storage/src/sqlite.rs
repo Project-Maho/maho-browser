@@ -31,7 +31,7 @@ pub struct AutofillAddressParams<'a> {
 
 /// SQLite storage for persistent data (history, bookmarks, settings)
 pub struct SqliteStorage {
-    conn: Connection,
+    pub(crate) conn: Connection,
     path: String,
 }
 
@@ -39,6 +39,10 @@ impl SqliteStorage {
     pub fn open(path: &str) -> Result<Self, StorageError> {
         let conn = Connection::open(path).map_err(|e| {
             eprintln!("[SqliteStorage::open] FAIL at Connection::open({path}): {e}");
+            e
+        })?;
+        conn.execute("PRAGMA foreign_keys = ON;", []).map_err(|e| {
+            eprintln!("[SqliteStorage::open] FAIL at PRAGMA foreign_keys: {e}");
             e
         })?;
         let storage = Self { conn, path: path.to_string() };
@@ -62,6 +66,7 @@ impl SqliteStorage {
 
     pub fn open_in_memory() -> Result<Self, StorageError> {
         let conn = Connection::open_in_memory()?;
+        conn.execute("PRAGMA foreign_keys = ON;", [])?;
         let storage = Self { conn, path: ":memory:".to_string() };
         storage.initialize_schema()?;
         storage.run_migrations()?;
@@ -210,6 +215,169 @@ impl SqliteStorage {
                 }
             }
             let _ = self.conn.execute("DROP TABLE session_event_logs", []);
+        }
+
+        self.run_ai_extensibility_migrations()?;
+
+        Ok(())
+    }
+
+    fn run_ai_extensibility_migrations(&self) -> Result<(), StorageError> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS ai_profiles (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                system_prompt TEXT NOT NULL DEFAULT '',
+                preferred_model TEXT,
+                tools_json TEXT NOT NULL DEFAULT '[]',
+                mcp_servers_json TEXT NOT NULL DEFAULT '[]',
+                is_default INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS ai_workspaces (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                profile_id TEXT REFERENCES ai_profiles(id) ON DELETE SET NULL,
+                space_id TEXT,
+                workspace_root TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS ai_mcp_servers (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL REFERENCES ai_workspaces(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                transport TEXT NOT NULL CHECK(transport IN ('stdio', 'http')),
+                command TEXT,
+                url TEXT,
+                auth_keychain_id TEXT,
+                trusted INTEGER NOT NULL DEFAULT 0,
+                trusted_tools_json TEXT,
+                timeout_ms INTEGER NOT NULL DEFAULT 60000,
+                output_cap_bytes INTEGER NOT NULL DEFAULT 10240,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(workspace_id, name)
+            );
+            CREATE TABLE IF NOT EXISTS ai_cli_tools (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL REFERENCES ai_workspaces(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL,
+                command_template TEXT NOT NULL,
+                parameters_schema_json TEXT NOT NULL,
+                sensitive INTEGER NOT NULL DEFAULT 0,
+                timeout_ms INTEGER NOT NULL DEFAULT 60000,
+                output_cap_bytes INTEGER NOT NULL DEFAULT 10240,
+                working_directory TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(workspace_id, name)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ai_workspaces_space ON ai_workspaces(space_id);
+            CREATE INDEX IF NOT EXISTS idx_ai_workspaces_profile ON ai_workspaces(profile_id);
+            CREATE INDEX IF NOT EXISTS idx_ai_mcp_servers_workspace ON ai_mcp_servers(workspace_id);
+            CREATE INDEX IF NOT EXISTS idx_ai_cli_tools_workspace ON ai_cli_tools(workspace_id);"
+        ).map_err(|e| StorageError::Other(format!("Migration failed: {}", e)))?;
+
+        let has_prompt_col: bool = self.conn.query_row(
+            "SELECT 1 FROM pragma_table_info('conversations') WHERE name='system_prompt_snapshot'",
+            [],
+            |_| Ok(true)
+        ).unwrap_or(false);
+        if !has_prompt_col {
+            let _ = self.conn.execute("ALTER TABLE conversations ADD COLUMN system_prompt_snapshot TEXT", []);
+        }
+
+        let count: i64 = self.conn.query_row(
+            "SELECT count(*) FROM ai_profiles",
+            [],
+            |row| row.get(0)
+        ).unwrap_or(0);
+
+        if count == 0 {
+            let now = chrono::Utc::now().to_rfc3339();
+            
+            self.conn.execute(
+                "INSERT INTO ai_profiles (id, name, system_prompt, preferred_model, tools_json, mcp_servers_json, is_default, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![
+                    "blank",
+                    "Blank",
+                    "",
+                    Option::<String>::None,
+                    "[]",
+                    "[]",
+                    1,
+                    now,
+                    now
+                ]
+            ).map_err(|e| StorageError::Other(format!("Seeding Blank profile failed: {}", e)))?;
+
+            self.conn.execute(
+                "INSERT INTO ai_profiles (id, name, system_prompt, preferred_model, tools_json, mcp_servers_json, is_default, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![
+                    "code_reviewer",
+                    "Code Reviewer",
+                    "Review code for bugs, style issues, and improvements",
+                    Option::<String>::None,
+                    "[]",
+                    "[]",
+                    0,
+                    now,
+                    now
+                ]
+            ).map_err(|e| StorageError::Other(format!("Seeding Code Reviewer profile failed: {}", e)))?;
+
+            self.conn.execute(
+                "INSERT INTO ai_profiles (id, name, system_prompt, preferred_model, tools_json, mcp_servers_json, is_default, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![
+                    "researcher",
+                    "Researcher",
+                    "Search the web and synthesize findings into concise answers",
+                    Option::<String>::None,
+                    "[]",
+                    "[]",
+                    0,
+                    now,
+                    now
+                ]
+            ).map_err(|e| StorageError::Other(format!("Seeding Researcher profile failed: {}", e)))?;
+
+            self.conn.execute(
+                "INSERT INTO ai_profiles (id, name, system_prompt, preferred_model, tools_json, mcp_servers_json, is_default, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![
+                    "writer",
+                    "Writer",
+                    "Help write and edit text with clear, concise prose",
+                    Option::<String>::None,
+                    "[]",
+                    "[]",
+                    0,
+                    now,
+                    now
+                ]
+            ).map_err(|e| StorageError::Other(format!("Seeding Writer profile failed: {}", e)))?;
+
+            self.conn.execute(
+                "INSERT INTO ai_profiles (id, name, system_prompt, preferred_model, tools_json, mcp_servers_json, is_default, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![
+                    "debugger",
+                    "Debugger",
+                    "Help diagnose and fix bugs step by step",
+                    Option::<String>::None,
+                    "[]",
+                    "[]",
+                    0,
+                    now,
+                    now
+                ]
+            ).map_err(|e| StorageError::Other(format!("Seeding Debugger profile failed: {}", e)))?;
         }
 
         Ok(())
@@ -2585,6 +2753,39 @@ impl SqliteStorage {
             rusqlite::params![id, title, space_id, model],
         )?;
         Ok(())
+    }
+
+    pub fn set_system_prompt_snapshot_if_absent(
+        &self,
+        conversation_id: &str,
+        system_prompt: &str,
+    ) -> Result<(), StorageError> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO conversations (id) VALUES (?1)",
+            rusqlite::params![conversation_id],
+        )?;
+        self.conn.execute(
+            "UPDATE conversations SET system_prompt_snapshot = ?1 \
+             WHERE id = ?2 AND system_prompt_snapshot IS NULL",
+            rusqlite::params![system_prompt, conversation_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_system_prompt_snapshot(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<String>, StorageError> {
+        let result = self.conn.query_row(
+            "SELECT system_prompt_snapshot FROM conversations WHERE id = ?1",
+            rusqlite::params![conversation_id],
+            |row| row.get::<_, Option<String>>(0),
+        );
+        match result {
+            Ok(v) => Ok(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
     }
 
     pub fn delete_conversation(&self, id: &str) -> Result<bool, StorageError> {

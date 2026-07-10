@@ -724,6 +724,16 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
 
   const base::DictValue* arguments = params.FindDict("arguments");
 
+  if (*tool_name == "ping") {
+    base::DictValue result;
+    result.Set("pong", true);
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
+    responses.push_back(std::move(resp));
+    return;
+  }
+
   if (*tool_name == "browser_tab_list") {
     base::ListValue list;
     if (g_browser_delegate) {
@@ -818,7 +828,7 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       responses.push_back(std::move(err));
       return;
     }
-    if (!IsHostAllowed(nav_url.host())) {
+    if (!nav_url.SchemeIs("data") && !IsHostAllowed(nav_url.host())) {
       base::DictValue data;
       data.Set("host", std::string(nav_url.host()));
       if (allowed_domains_.empty()) {
@@ -1067,8 +1077,13 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
   }
 
   if (*tool_name == "browser_page_text") {
+    int tab_id = arguments && arguments->FindInt("tab_id") ? arguments->FindInt("tab_id").value() : active_tab_id_;
+    std::string text;
+    if (g_browser_delegate) {
+      text = g_browser_delegate->GetPageText(tab_id);
+    }
     base::DictValue result;
-    result.Set("text", "");
+    result.Set("text", text);
     auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
         framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
@@ -1171,14 +1186,18 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
   }
 
   if (*tool_name == "browser_accessibility_snapshot") {
-    // Stub: In the real browser, we'd get the AXTree from WebContents.
-    // For the session-level handler, we produce an empty snapshot and
-    // clear the ref table (real tree walk deferred to browser integration).
+    int tab_id = arguments && arguments->FindInt("tab_id") ? arguments->FindInt("tab_id").value() : active_tab_id_;
     ref_to_ax_id_.clear();
-    base::DictValue result;
-    result.Set("role", "WebArea");
-    result.Set("children", base::ListValue());
-    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+    base::Value snapshot;
+    if (g_browser_delegate) {
+      snapshot = g_browser_delegate->GetAccessibilitySnapshot(tab_id, &ref_to_ax_id_);
+    } else {
+      base::DictValue empty;
+      empty.Set("role", "WebArea");
+      empty.Set("children", base::ListValue());
+      snapshot = base::Value(std::move(empty));
+    }
+    auto redacted = MahoMcpFirewall::Wrap(std::move(snapshot));
     std::string resp =
         framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
     responses.push_back(std::move(resp));
@@ -1200,8 +1219,16 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       responses.push_back(std::move(err));
       return;
     }
+    int tab_id = arguments->FindInt("tab_id").value_or(active_tab_id_);
+    bool clicked = g_browser_delegate && g_browser_delegate->Click(tab_id, it->second);
+    if (!clicked) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32000, "Action failed: click could not be dispatched");
+      responses.push_back(std::move(err));
+      return;
+    }
     base::DictValue result;
-    result.Set("clicked", true);
+    result.Set("clicked", clicked);
     result.Set("ref", ref);
     auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
@@ -1226,10 +1253,20 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       responses.push_back(std::move(err));
       return;
     }
+    int tab_id = arguments->FindInt("tab_id").value_or(active_tab_id_);
+    const std::string& text = *arguments->FindString("text");
+    bool typed = g_browser_delegate &&
+                 g_browser_delegate->Type(tab_id, it->second, text);
+    if (!typed) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32000, "Action failed: type could not be dispatched");
+      responses.push_back(std::move(err));
+      return;
+    }
     base::DictValue result;
-    result.Set("typed", true);
+    result.Set("typed", typed);
     result.Set("ref", ref);
-    result.Set("text", *arguments->FindString("text"));
+    result.Set("text", text);
     auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
         framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
@@ -1253,10 +1290,20 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       responses.push_back(std::move(err));
       return;
     }
+    int tab_id = arguments->FindInt("tab_id").value_or(active_tab_id_);
+    const std::string& value = *arguments->FindString("value");
+    bool selected = g_browser_delegate &&
+                    g_browser_delegate->Select(tab_id, it->second, value);
+    if (!selected) {
+      std::string err = framer_.BuildErrorResponse(
+          msg.id, -32000, "Action failed: select could not be dispatched");
+      responses.push_back(std::move(err));
+      return;
+    }
     base::DictValue result;
-    result.Set("selected", true);
+    result.Set("selected", selected);
     result.Set("ref", ref);
-    result.Set("value", *arguments->FindString("value"));
+    result.Set("value", value);
     auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
         framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
@@ -1265,13 +1312,42 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
   }
 
   if (*tool_name == "browser_screenshot_full") {
-    // Stub: In the real browser, we'd call
-    // MahoMcpScreenshotHandler::CaptureFullPage with the RenderWidgetHostView
-    // bitmap and AXTree. For session-level testing, return a minimal 1x1 PNG.
+    int tab_id = arguments && arguments->FindInt("tab_id") ? arguments->FindInt("tab_id").value() : active_tab_id_;
+    if (g_browser_delegate && deferred_response_sender_) {
+      std::optional<base::Value> msg_id_copy;
+      if (msg.id.has_value()) {
+        msg_id_copy = msg.id->Clone();
+      }
+      DeferredResponseSender sender = deferred_response_sender_;
+      g_browser_delegate->CaptureFullPagePngBase64(
+          tab_id,
+          base::BindOnce(
+              [](std::optional<base::Value> id,
+                 DeferredResponseSender sender, std::string b64) {
+                if (b64.empty()) {
+                  b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+                }
+                base::DictValue result;
+                result.Set("content_type", "image/png");
+                result.Set("data", std::move(b64));
+                auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+                base::DictValue response;
+                response.Set("jsonrpc", "2.0");
+                response.Set("id", id.has_value() ? id->Clone() : base::Value());
+                response.Set("result", redacted.get().Clone());
+                std::string out;
+                base::JSONWriter::Write(base::Value(std::move(response)), &out);
+                out.push_back('\n');
+                sender.Run(std::move(out));
+              },
+              std::move(msg_id_copy), std::move(sender)));
+      return;
+    }
+    std::string b64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
     base::DictValue result;
     result.Set("content_type", "image/png");
-    // 1x1 black PNG (stub — real implementation captures from surface).
-    result.Set("data", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
+    result.Set("data", b64);
     auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
         framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());

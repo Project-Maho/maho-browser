@@ -25,6 +25,8 @@ pub mod split_view;
 pub mod tab;
 pub mod traits;
 pub mod llm;
+pub mod tool;
+pub mod ai;
 
 pub use events::shell_event_kind::ShellEventKind;
 

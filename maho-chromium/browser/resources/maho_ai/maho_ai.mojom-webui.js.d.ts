@@ -117,6 +117,7 @@ export enum RuntimeEventKind {
   kSessionStatus,
   kConnectionStateChanged,
   kBrowserContextInjected,
+  kToolAvailabilityChanged,
 }
 
 export enum ToolCallStatus {
@@ -252,6 +253,29 @@ export class PageHandlerRemote {
   applyTabTidyFolders(folders: TidyFolder[]): Promise<void>;
   getCreditBalance(): Promise<{info: CreditBalanceInfo}>;
   getBuyCreditsUrl(packSizeUsd: number): Promise<{checkoutUrl: string}>;
+
+  // AI Extensibility methods
+  createAiProfile(name: string, systemPrompt: string, model: string | null): Promise<{profileId: string | null}>;
+  getAiProfiles(): Promise<{profilesJson: string}>;
+  updateAiProfile(id: string, profileJson: string): Promise<{success: boolean}>;
+  deleteAiProfile(id: string): Promise<{success: boolean}>;
+  importProfileFromToml(workspaceId: string, tomlPath: string): Promise<{profileIdOrError: string | null}>;
+
+  createAiWorkspace(name: string, spaceId: string | null): Promise<{workspaceJson: string | null}>;
+  getActiveAiWorkspace(spaceId: string): Promise<{workspaceJson: string | null}>;
+  getAiWorkspaces(): Promise<{workspacesJson: string}>;
+  switchWorkspaceProfile(workspaceId: string, profileId: string): Promise<{success: boolean}>;
+
+  registerMcpServer(workspaceId: string, configJson: string): Promise<{success: boolean}>;
+  removeMcpServer(workspaceId: string, serverName: string): Promise<{success: boolean}>;
+  getMcpServers(workspaceId: string): Promise<{serversJson: string}>;
+  approveMcpServerTrust(workspaceId: string, serverName: string, tools: string[]): Promise<{success: boolean}>;
+
+  registerCliTool(workspaceId: string, toolJson: string): Promise<{success: boolean}>;
+  removeCliTool(workspaceId: string, toolName: string): Promise<{success: boolean}>;
+  getCliTools(workspaceId: string): Promise<{toolsJson: string}>;
+
+  getWorkspaceEffectiveTools(workspaceId: string): Promise<{toolsJson: string}>;
 }
 
 export class PageHandlerFactory {

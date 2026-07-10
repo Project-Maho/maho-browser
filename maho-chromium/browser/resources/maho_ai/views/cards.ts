@@ -181,20 +181,23 @@ function renderBlocks(raw: string): string {
 const kMarkdownAttrs = ['rel', 'href', 'target'];
 
 export function renderTrustedMarkdown(raw: string): TrustedHTML {
+  const safeRaw = (raw ?? '').toString();
   try {
-    return sanitizeInnerHtml(renderBlocks(raw), {
+    return sanitizeInnerHtml(renderBlocks(safeRaw), {
       tags: kMarkdownTags,
       attrs: kMarkdownAttrs,
     });
-  } catch (_primaryError) {
+  } catch (primaryError) {
+    console.warn('[Maho AI] renderTrustedMarkdown: primary sanitize failed:', primaryError, {rawLength: safeRaw.length, sample: safeRaw.slice(0, 200)});
     const fallback = `<p>⚠️ 렌더 실패: 안전하지 않은 마크업이 포함되었습니다.</p>` +
-        `<pre>${escapeHtml(raw)}</pre>`;
+        `<pre>${escapeHtml(safeRaw)}</pre>`;
     try {
       return sanitizeInnerHtml(fallback, {
         tags: ['p', 'pre'],
         attrs: [],
       });
-    } catch (_secondaryError) {
+    } catch (secondaryError) {
+      console.error('[Maho AI] renderTrustedMarkdown: fallback sanitize also failed:', secondaryError);
       return '[Maho AI] 렌더링 오류가 발생했습니다.' as unknown as TrustedHTML;
     }
   }

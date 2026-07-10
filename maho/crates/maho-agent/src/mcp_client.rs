@@ -24,6 +24,7 @@ fn get_mcp_runtime() -> &'static Runtime {
 }
 
 pub struct McpClient {
+    workspace_id: String,
     server_name: String,
     peer: Peer<RoleClient>,
     client: Option<RunningService<RoleClient, ()>>,
@@ -39,7 +40,28 @@ impl McpClient {
             Self::connect_internal(&config_clone, auth_token).await
         });
         
-        handle.await?
+        match handle.await? {
+            Ok(client) => {
+                maho_types::events::core_update::emit_core_update(
+                    maho_types::events::core_update::CoreUpdate::ToolAvailabilityChanged {
+                        workspace_id: config.workspace_id.clone(),
+                        server_name: config.name.clone(),
+                        available: true,
+                    }
+                );
+                Ok(client)
+            }
+            Err(e) => {
+                maho_types::events::core_update::emit_core_update(
+                    maho_types::events::core_update::CoreUpdate::ToolAvailabilityChanged {
+                        workspace_id: config.workspace_id.clone(),
+                        server_name: config.name.clone(),
+                        available: false,
+                    }
+                );
+                Err(e)
+            }
+        }
     }
 
     async fn connect_internal(config: &AiMcpServer, auth_token: Option<String>) -> Result<Self> {
@@ -90,6 +112,7 @@ impl McpClient {
                 let peer = client.deref().clone();
 
                 Ok(Self {
+                    workspace_id: config.workspace_id.clone(),
                     server_name,
                     peer,
                     client: Some(client),
@@ -115,6 +138,7 @@ impl McpClient {
                 let peer = client.deref().clone();
 
                 Ok(Self {
+                    workspace_id: config.workspace_id.clone(),
                     server_name,
                     peer,
                     client: Some(client),
@@ -149,8 +173,8 @@ impl McpClient {
                         description,
                         parameters_schema,
                         provenance: ToolProvenance::External(server_name.clone()),
-                        sensitive: false,
-                        permission: ToolPermission::SessionApprove,
+                        sensitive: true,
+                        permission: ToolPermission::AlwaysAsk,
                     }
                 })
                 .collect();
@@ -204,6 +228,8 @@ impl McpClient {
 
     pub async fn disconnect(&mut self) {
         let mut client_opt = self.client.take();
+        let ws_id = self.workspace_id.clone();
+        let s_name = self.server_name.clone();
         
         let handle = get_mcp_runtime().spawn(async move {
             if let Some(client) = client_opt.take() {
@@ -212,5 +238,13 @@ impl McpClient {
         });
         
         let _ = handle.await;
+
+        maho_types::events::core_update::emit_core_update(
+            maho_types::events::core_update::CoreUpdate::ToolAvailabilityChanged {
+                workspace_id: ws_id,
+                server_name: s_name,
+                available: false,
+            }
+        );
     }
 }
