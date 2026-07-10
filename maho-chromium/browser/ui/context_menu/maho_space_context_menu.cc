@@ -21,8 +21,11 @@
 #include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
 #include "maho/browser/ui/theme/maho_space_theme_io.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
+#include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/views/space_config/maho_space_config_dialog.h"
 #include "maho/browser/ui/views/space_create/maho_space_theme_picker_dialog.h"
+#include "ui/base/models/dialog_model.h"
 #include "maho/browser/ui/webui/maho_space_config/maho_space_config.mojom.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "url/gurl.h"
@@ -182,6 +185,23 @@ void RecolorSpaceOnPool(const std::string& space_id,
   std::string color_json;
   base::JSONWriter::Write(color_dict, &color_json);
   maho_core_recolor_space(core, space_id.c_str(), color_json.c_str());
+}
+
+void DeleteSpaceOnPool(const std::string& space_id) {
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return;
+  }
+  maho_core_delete_space(core, space_id.c_str());
+
+  content::GetUIThreadTaskRunner({})->PostTask(
+      FROM_HERE,
+      base::BindOnce([]() {
+        auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+        if (bridge) {
+          bridge->NotifyChanged(/*is_structural=*/true);
+        }
+      }));
 }
 
 }  // namespace
@@ -412,9 +432,39 @@ void MahoSpaceContextMenu::ExecuteCommand(int command_id, int event_flags) {
               space_id_));
       break;
     }
-    case IDC_MAHO_SPACE_DELETE:
-      LOG(INFO) << "MahoSpaceContextMenu: delete space confirmation pending";
+    case IDC_MAHO_SPACE_DELETE: {
+      if (!browser_) {
+        break;
+      }
+      MahoCore* core = maho::GetCore();
+      if (!core) {
+        break;
+      }
+      std::string space_name = GetSpaceName(core, space_id_);
+      std::u16string name_16 = base::UTF8ToUTF16(space_name);
+
+      ui::DialogModel::Builder builder;
+      builder.SetTitle(u"Delete Space?")
+          .AddParagraph(ui::DialogModelLabel(
+              u"Are you sure you want to delete \"" + name_16 +
+              u"\"? This will also close all tabs parked in this space."))
+          .AddOkButton(
+              base::BindOnce(
+                  [](std::string space_id) {
+                    base::ThreadPool::PostTask(
+                        FROM_HERE,
+                        {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
+                        base::BindOnce(&DeleteSpaceOnPool, space_id));
+                  },
+                  space_id_),
+              ui::DialogModel::Button::Params()
+                  .SetLabel(u"Delete")
+                  .SetStyle(ui::ButtonStyle::kProminent))
+          .AddCancelButton(base::DoNothing());
+
+      chrome::ShowBrowserModal(browser_, builder.Build());
       break;
+    }
     case IDC_MAHO_SPACE_NEW_FOLDER:
       base::ThreadPool::PostTask(
           FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},

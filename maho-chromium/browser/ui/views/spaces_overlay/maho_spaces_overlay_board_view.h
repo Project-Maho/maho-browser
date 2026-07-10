@@ -29,11 +29,16 @@ class MahoSpacesOverlayBoardView : public views::View {
 
  public:
   using SpaceSelectedCallback = base::RepeatingCallback<void(const std::string&)>;
+  using TabSelectedCallback =
+      base::RepeatingCallback<void(const std::string& space_id,
+                                   const std::string& tab_id)>;
 
-  MahoSpacesOverlayBoardView(Browser* browser,
-                             SpacesBoardRenderMode render_mode,
-                             const SpaceBoardModel& model,
-                             SpaceSelectedCallback callback);
+  MahoSpacesOverlayBoardView(
+      Browser* browser,
+      SpacesBoardRenderMode render_mode,
+      const SpaceBoardModel& model,
+      SpaceSelectedCallback callback,
+      TabSelectedCallback tab_callback = TabSelectedCallback());
   MahoSpacesOverlayBoardView(const MahoSpacesOverlayBoardView&) = delete;
   MahoSpacesOverlayBoardView& operator=(
       const MahoSpacesOverlayBoardView&) = delete;
@@ -46,6 +51,7 @@ class MahoSpacesOverlayBoardView : public views::View {
   SpacesBoardRenderMode render_mode_;
   SpaceBoardModel model_;
   SpaceSelectedCallback space_selected_callback_;
+  TabSelectedCallback tab_selected_callback_;
   raw_ptr<views::Label> empty_state_label_ = nullptr;
 };
 

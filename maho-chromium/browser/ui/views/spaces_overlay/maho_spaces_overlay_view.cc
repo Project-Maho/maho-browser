@@ -10,8 +10,12 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/vector_icons/vector_icons.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/theme/maho_color_id.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho_spaces_overlay_board_view.h"
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "ui/views/controls/button/image_button_factory.h"
@@ -103,6 +107,8 @@ void MahoSpacesOverlayView::Init(SpaceBoardModel model,
           SpacesBoardRenderMode::kFullViewport,
           model_,
           base::BindRepeating(&MahoSpacesOverlayView::HandleSpaceSelected,
+                              base::Unretained(this)),
+          base::BindRepeating(&MahoSpacesOverlayView::HandleTabSelected,
                               base::Unretained(this))));
 
   // Hairline separator
@@ -159,6 +165,34 @@ void MahoSpacesOverlayView::HandleSpaceSelected(const std::string& space_id) {
   if (bridge && bridge->SwitchToSpace(browser_, space_id)) {
     DismissAction();
   }
+}
+
+void MahoSpacesOverlayView::HandleTabSelected(const std::string& space_id,
+                                              const std::string& tab_id) {
+  if (!browser_) {
+    DismissAction();
+    return;
+  }
+  auto* bridge = MahoSpaceProfileBridge::GetInstance();
+  if (bridge) {
+    if (space_id != bridge->GetActiveSpaceId(browser_)) {
+      bridge->SwitchToSpace(browser_, space_id);
+    }
+  }
+
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser_);
+  if (browser_view && browser_view->maho_sidebar_container()) {
+    auto* sidebar_container = static_cast<MahoSidebarContainerView*>(
+        browser_view->maho_sidebar_container());
+    if (auto* sidebar = static_cast<MahoSidebarView*>(
+            sidebar_container->sidebar_view())) {
+      if (auto* tab_list = sidebar->tab_list_view()) {
+        tab_list->ActivateTabById(tab_id);
+      }
+    }
+  }
+
+  DismissAction();
 }
 
 }  // namespace maho

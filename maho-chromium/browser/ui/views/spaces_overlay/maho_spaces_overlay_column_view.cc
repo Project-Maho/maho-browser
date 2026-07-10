@@ -201,12 +201,14 @@ MahoSpacesOverlayColumnView::MahoSpacesOverlayColumnView(
     SpacesBoardRenderMode render_mode,
     const SpaceBoardColumn& column,
     bool is_active,
-    SpaceSelectedCallback callback)
+    SpaceSelectedCallback callback,
+    TabSelectedCallback tab_callback)
     : browser_(browser),
       render_mode_(render_mode),
       column_(column),
       is_active_(is_active),
-      space_selected_callback_(std::move(callback)) {
+      space_selected_callback_(std::move(callback)),
+      tab_selected_callback_(std::move(tab_callback)) {
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical,
       gfx::Insets::VH(kColumnInsetDp, kColumnInsetDp), kColumnSpacingDp));
@@ -368,7 +370,8 @@ MahoSpacesOverlayColumnView::MahoSpacesOverlayColumnView(
       for (const SpaceBoardTabItem* tab : section.tabs) {
         section_view->AddChildView(
             std::make_unique<MahoSpacesOverlayTabRowView>(
-                browser_ ? browser_->profile() : nullptr, *tab));
+                browser_ ? browser_->profile() : nullptr, *tab,
+                column_.space_id, tab_selected_callback_));
       }
     }
   }

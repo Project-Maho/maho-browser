@@ -32,6 +32,9 @@ class MahoSpacesOverlayView : public views::View {
  public:
   using CancelCallback = base::OnceClosure;
   using ActionCallback = base::OnceClosure;
+  using TabSelectedCallback =
+      base::RepeatingCallback<void(const std::string& space_id,
+                                   const std::string& tab_id)>;
 
   MahoSpacesOverlayView(Browser* browser,
                         CancelCallback cancel_callback,
@@ -63,6 +66,7 @@ class MahoSpacesOverlayView : public views::View {
   void DismissCancel();
   void DismissAction();
   void HandleSpaceSelected(const std::string& space_id);
+  void HandleTabSelected(const std::string& space_id, const std::string& tab_id);
 
   raw_ptr<Browser> browser_;
   CancelCallback cancel_callback_;

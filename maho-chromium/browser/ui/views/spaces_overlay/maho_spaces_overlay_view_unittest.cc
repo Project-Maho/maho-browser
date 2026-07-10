@@ -11,6 +11,7 @@
 #include "maho/browser/ui/views/sidebar/maho_spaces_board_data.h"
 #include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_board_view.h"
 #include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_column_view.h"
+#include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_tab_row_view.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/test/views_test_base.h"
@@ -172,6 +173,61 @@ TEST_F(MahoSpacesOverlayColumnViewTest,
   auto* view = CreateColumnView(col, /*is_active=*/false);
 
   EXPECT_TRUE(view->GetSectionTitlesForTesting().empty());
+}
+
+// ---------------------------------------------------------------------------
+// Tab row view — click activation and callback execution
+// ---------------------------------------------------------------------------
+
+class MahoSpacesOverlayTabRowViewTest : public views::ViewsTestBase {
+ protected:
+  MahoSpacesOverlayTabRowViewTest() = default;
+  ~MahoSpacesOverlayTabRowViewTest() override = default;
+
+  void SetUp() override {
+    views::ViewsTestBase::SetUp();
+    host_widget_ = CreateTestWidget(
+        views::Widget::InitParams::CLIENT_OWNS_WIDGET,
+        views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
+    host_widget_->Show();
+  }
+
+  void TearDown() override {
+    host_widget_.reset();
+    views::ViewsTestBase::TearDown();
+  }
+
+  std::unique_ptr<views::Widget> host_widget_;
+};
+
+TEST_F(MahoSpacesOverlayTabRowViewTest, ClickTabRowFiresCallback) {
+  SpaceBoardTabItem tab;
+  tab.id = "tab1";
+  tab.title = u"Tab 1";
+
+  std::string clicked_space;
+  std::string clicked_tab;
+
+  auto view = std::make_unique<MahoSpacesOverlayTabRowView>(
+      nullptr, tab, "space1",
+      base::BindRepeating(
+          [](std::string* out_space, std::string* out_tab,
+             const std::string& space_id, const std::string& tab_id) {
+            *out_space = space_id;
+            *out_tab = tab_id;
+          },
+          &clicked_space, &clicked_tab));
+
+  auto* raw_view = host_widget_->SetContentsView(std::move(view));
+
+  // Simulate mouse click
+  ui::MouseEvent click_event(ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
+                             base::TimeTicks(), ui::EF_LEFT_MOUSE_BUTTON,
+                             ui::EF_LEFT_MOUSE_BUTTON);
+  raw_view->OnMousePressed(click_event);
+
+  EXPECT_EQ("space1", clicked_space);
+  EXPECT_EQ("tab1", clicked_tab);
 }
 
 }  // namespace

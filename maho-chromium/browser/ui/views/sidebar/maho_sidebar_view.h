@@ -87,6 +87,8 @@ class MahoSidebarView
   ~MahoSidebarView() override;
 
   void OnThemeChanged() override;
+  void ViewHierarchyChanged(
+      const views::ViewHierarchyChangedDetails& details) override;
   void Layout(PassKey) override;
 
   bool GetDropFormats(int* formats,
@@ -124,6 +126,7 @@ class MahoSidebarView
   MahoSidebarFavoritesGridView* favorites_view_for_testing() {
     return favorites_view_;
   }
+  MahoSidebarTabListView* tab_list_view() { return tab_list_view_; }
   MahoSidebarTabListView* tab_list_view_for_testing() {
     return tab_list_view_;
   }

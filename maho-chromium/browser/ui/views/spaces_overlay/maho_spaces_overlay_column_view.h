@@ -37,12 +37,17 @@ class MahoSpacesOverlayColumnView : public views::View {
 
  public:
   using SpaceSelectedCallback = base::RepeatingCallback<void(const std::string&)>;
+  using TabSelectedCallback =
+      base::RepeatingCallback<void(const std::string& space_id,
+                                   const std::string& tab_id)>;
 
-  MahoSpacesOverlayColumnView(Browser* browser,
-                              SpacesBoardRenderMode render_mode,
-                              const SpaceBoardColumn& column,
-                              bool is_active,
-                              SpaceSelectedCallback callback);
+  MahoSpacesOverlayColumnView(
+      Browser* browser,
+      SpacesBoardRenderMode render_mode,
+      const SpaceBoardColumn& column,
+      bool is_active,
+      SpaceSelectedCallback callback,
+      TabSelectedCallback tab_callback = TabSelectedCallback());
   MahoSpacesOverlayColumnView(const MahoSpacesOverlayColumnView&) = delete;
   MahoSpacesOverlayColumnView& operator=(
       const MahoSpacesOverlayColumnView&) = delete;
@@ -67,6 +72,7 @@ class MahoSpacesOverlayColumnView : public views::View {
   SpaceBoardColumn column_;
   const bool is_active_;
   SpaceSelectedCallback space_selected_callback_;
+  TabSelectedCallback tab_selected_callback_;
   raw_ptr<views::View> badge_container_ = nullptr;
   raw_ptr<views::Label> badge_label_ = nullptr;
   raw_ptr<views::Label> title_label_ = nullptr;

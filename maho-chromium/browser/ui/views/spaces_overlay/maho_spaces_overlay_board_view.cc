@@ -29,8 +29,13 @@ MahoSpacesOverlayBoardView::MahoSpacesOverlayBoardView(
     Browser* browser,
     SpacesBoardRenderMode render_mode,
     const SpaceBoardModel& model,
-    SpaceSelectedCallback callback)
-    : browser_(browser), render_mode_(render_mode), model_(model), space_selected_callback_(std::move(callback)) {
+    SpaceSelectedCallback callback,
+    TabSelectedCallback tab_callback)
+    : browser_(browser),
+      render_mode_(render_mode),
+      model_(model),
+      space_selected_callback_(std::move(callback)),
+      tab_selected_callback_(std::move(tab_callback)) {
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kHorizontal,
       gfx::Insets::TLBR(0, 0, 0, kBoardRightPaddingDp), kBoardSpacingDp));
@@ -57,7 +62,8 @@ MahoSpacesOverlayBoardView::MahoSpacesOverlayBoardView(
                            (!model_.active_space_id.empty() &&
                             column.space_id == model_.active_space_id);
     AddChildView(std::make_unique<MahoSpacesOverlayColumnView>(
-        browser_, render_mode_, column, is_active, space_selected_callback_));
+        browser_, render_mode_, column, is_active, space_selected_callback_,
+        tab_selected_callback_));
   }
 }
 

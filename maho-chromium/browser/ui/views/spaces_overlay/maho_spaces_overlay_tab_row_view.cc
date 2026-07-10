@@ -6,6 +6,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "components/favicon/core/favicon_service.h"
 #include "components/favicon_base/favicon_types.h"
+#include "ui/base/cursor/cursor.h"
+#include "ui/base/cursor/mojom/cursor_type.mojom-shared.h"
 #include "ui/views/controls/image_view.h"
 #include "url/gurl.h"
 
@@ -56,11 +58,13 @@ END_METADATA
 
 MahoSpacesOverlayTabRowView::MahoSpacesOverlayTabRowView(
     Profile* profile,
-    const SpaceBoardTabItem& tab)
-    : tab_(tab) {
+    const SpaceBoardTabItem& tab,
+    const std::string& space_id,
+    TabSelectedCallback callback)
+    : tab_(tab), space_id_(space_id), callback_(std::move(callback)) {
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kHorizontal,
-      gfx::Insets::VH(kRowPaddingVerticalDp, 0), kHeaderSpacingDp));
+      gfx::Insets::VH(kRowPaddingVerticalDp, 6), kHeaderSpacingDp));
   layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
 
@@ -182,7 +186,12 @@ void MahoSpacesOverlayTabRowView::UpdateColors() {
   const SkColor glyph_border = SkColorSetA(
       color_provider->GetColor(kMahoColorAccentBlue), 0x18);
 
-  SetBackground(nullptr);
+  if (IsMouseHovered() && !callback_.is_null()) {
+    SetBackground(views::CreateRoundedRectBackground(
+        color_provider->GetColor(kMahoColorTabRowHoverBackground), 6));
+  } else {
+    SetBackground(nullptr);
+  }
   SetBorder(nullptr);
   glyph_container_->SetBackground(
       views::CreateRoundedRectBackground(glyph_fill, kGlyphCornerRadiusDp));
@@ -217,6 +226,28 @@ views::View* MahoSpacesOverlayTabRowView::AddStatusChip(
   chip_labels_.push_back(label);
   chip_row_->AddChildView(std::move(chip));
   return chip_ptr;
+}
+
+bool MahoSpacesOverlayTabRowView::OnMousePressed(const ui::MouseEvent& event) {
+  if (event.IsLeftMouseButton() && !callback_.is_null()) {
+    callback_.Run(space_id_, tab_.id);
+    return true;
+  }
+  return views::View::OnMousePressed(event);
+}
+
+ui::Cursor MahoSpacesOverlayTabRowView::GetCursor(const ui::MouseEvent& event) {
+  return ui::mojom::CursorType::kHand;
+}
+
+void MahoSpacesOverlayTabRowView::OnMouseEntered(const ui::MouseEvent& event) {
+  views::View::OnMouseEntered(event);
+  UpdateColors();
+}
+
+void MahoSpacesOverlayTabRowView::OnMouseExited(const ui::MouseEvent& event) {
+  views::View::OnMouseExited(event);
+  UpdateColors();
 }
 
 }  // namespace maho
