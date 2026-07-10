@@ -32,7 +32,7 @@ MahoInlineEditHandler::MahoInlineEditHandler(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
     : browser_(browser),
       prefs_(prefs),
-      llm_client_(prefs, std::move(url_loader_factory), false) {
+      llm_client_(prefs, std::move(url_loader_factory), nullptr, false) {
   DCHECK(prefs_);
 }
 

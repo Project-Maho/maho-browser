@@ -119,6 +119,12 @@ source_set("maho_sidebar_core") {
     "maho_sidebar_update_notification_model.h",
     "maho_sidebar_update_notification_view.cc",
     "maho_sidebar_update_notification_view.h",
+    "maho_now_playing_card.cc",
+    "maho_now_playing_card.h",
+    "maho_sidebar_now_playing_view.cc",
+    "maho_sidebar_now_playing_view.h",
+    "maho_sidebar_grain_overlay_view.cc",
+    "maho_sidebar_grain_overlay_view.h",
     "maho_sidebar_view.cc",
     "maho_sidebar_view.h",
     "maho_traffic_light_geometry.h",
@@ -134,6 +140,7 @@ source_set("maho_sidebar_core") {
     ":maho_sidebar_downloads",
     ":maho_sidebar_library",
     ":maho_sidebar_prefs",
+    ":maho_spaces_board_data",
     "//base",
     "//base:i18n",
     "//cc/paint",
@@ -144,6 +151,9 @@ source_set("maho_sidebar_core") {
     "//chrome/browser/ui/tabs:tab_strip",
     "//chrome/browser/ui/views/frame",
     "//components/prefs",
+    "//components/global_media_controls",
+    "//components/media_message_center",
+    "//chrome/browser/ui/global_media_controls",
     "//components/translate/content/browser",
     "//components/translate/core/browser",
     "//components/version_info",
@@ -161,6 +171,7 @@ source_set("maho_sidebar_core") {
     "//maho/third_party/maho:maho_bridge",
     "//maho/third_party/maho:maho_ffi_headers",
     "//net",
+    "//maho/browser/ui/views/spaces_overlay:maho_spaces_overlay",
     "//skia",
     "//ui/base",
     "//ui/color",
@@ -230,10 +241,10 @@ source_set("maho_spaces_board_data") {
   ]
 
   deps = [
-    ":maho_sidebar_core",
     "//base",
     "//maho/browser:maho_core_holder",
     "//maho/third_party/maho:maho_ffi_headers",
+    "//skia",
     "//url",
   ]
 }

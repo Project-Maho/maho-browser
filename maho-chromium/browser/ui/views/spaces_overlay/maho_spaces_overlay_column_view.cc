@@ -2,6 +2,23 @@
 
 #include "maho_spaces_overlay_column_view.h"
 
+#include "chrome/browser/ui/browser.h"
+#include "ui/gfx/canvas.h"
+#include "third_party/skia/include/core/SkTileMode.h"
+#include "maho/browser/ui/context_menu/maho_space_context_menu.h"
+#include "maho/browser/ui/views/space_config/maho_space_config_dialog.h"
+#include "ui/base/cursor/cursor.h"
+#include "ui/base/cursor/mojom/cursor_type.mojom-shared.h"
+#include "ui/views/controls/button/image_button_factory.h"
+#include "ui/views/animation/ink_drop.h"
+#include "ui/views/controls/image_view.h"
+#include "ui/views/controls/menu/menu_runner.h"
+#include "ui/views/widget/widget.h"
+#include "ui/views/controls/highlight_path_generator.h"
+#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
+#include "cc/paint/paint_shader.h"
+
 #include <memory>
 #include <vector>
 
@@ -29,8 +46,7 @@ namespace maho {
 
 namespace {
 
-constexpr int kColumnWidthDp = 184;
-constexpr int kColumnHeightDp = 560;
+constexpr int kColumnMinHeightDp = 240;
 constexpr int kColumnCornerRadiusDp = 16;
 constexpr int kColumnInsetDp = 10;
 constexpr int kColumnSpacingDp = 8;
@@ -43,7 +59,6 @@ constexpr int kHeaderBadgeCornerRadiusDp = 5;
 constexpr int kHeaderSpacingDp = 8;
 constexpr int kHeaderTextSpacingDp = 3;
 constexpr int kMetaSpacingDp = 4;
-constexpr int kActionButtonCornerRadiusDp = 10;
 
 SkColor ParseSpaceAccentColor(const std::string& color_string,
                               SkColor fallback_color) {
@@ -68,14 +83,6 @@ SkColor SpaceThemeAccentColor(const SpaceBoardColumn& column,
                               SkColor fallback_color) {
   return ParseSpaceAccentColor(
       GetMahoSpaceDisplayPrimaryColor(column.theme, column.color),
-      fallback_color);
-}
-
-SkColor SpaceThemeSecondaryColor(const SpaceBoardColumn& column,
-                                 SkColor fallback_color) {
-  return ParseSpaceAccentColor(
-      GetMahoSpaceDisplaySecondaryColor(
-          column.theme, GetMahoSpaceDisplayPrimaryColor(column.theme, column.color)),
       fallback_color);
 }
 
@@ -121,24 +128,99 @@ std::u16string SectionAccessibleName(const std::u16string& title) {
   return title;
 }
 
+
+class ColumnThemeBackground : public views::Background {
+ public:
+  ColumnThemeBackground(SkColor base_fill_color,
+                        SkColor theme_primary_color,
+                        bool is_active)
+      : base_fill_color_(base_fill_color),
+        theme_primary_color_(theme_primary_color),
+        is_active_(is_active) {}
+  ~ColumnThemeBackground() override = default;
+
+  void Paint(gfx::Canvas* canvas, views::View* view) const override {
+    gfx::Rect bounds = view->GetLocalBounds();
+    if (bounds.IsEmpty()) {
+      return;
+    }
+
+    cc::PaintFlags flags;
+    flags.setAntiAlias(true);
+    flags.setStyle(cc::PaintFlags::kFill_Style);
+    flags.setColor(base_fill_color_);
+    canvas->DrawRoundRect(gfx::RectF(bounds), kColumnCornerRadiusDp, flags);
+
+    cc::PaintFlags gradient_flags;
+    gradient_flags.setAntiAlias(true);
+    gradient_flags.setStyle(cc::PaintFlags::kFill_Style);
+
+    const SkAlpha top_alpha = is_active_ ? 0x40 : 0x20;
+    const SkAlpha bottom_alpha = is_active_ ? 0x20 : 0x10;
+
+    const SkColor4f colors[2] = {
+        SkColor4f::FromColor(SkColorSetA(theme_primary_color_, top_alpha)),
+        SkColor4f::FromColor(SkColorSetA(theme_primary_color_, bottom_alpha))};
+    const SkScalar stops[2] = {0.0f, 1.0f};
+    const SkPoint pts[2] = {SkPoint::Make(0.0f, 0.0f),
+                            SkPoint::Make(0.0f, bounds.height())};
+    gradient_flags.setShader(cc::PaintShader::MakeLinearGradient(
+        pts, colors, stops, 2, SkTileMode::kClamp));
+
+    canvas->DrawRoundRect(gfx::RectF(bounds), kColumnCornerRadiusDp,
+                          gradient_flags);
+  }
+
+ private:
+  const SkColor base_fill_color_;
+  const SkColor theme_primary_color_;
+  const bool is_active_;
+};
+
+class GrabImageView : public views::ImageView {
+  METADATA_HEADER(GrabImageView, views::ImageView)
+ public:
+  GrabImageView() = default;
+  ~GrabImageView() override = default;
+
+  ui::Cursor GetCursor(const ui::MouseEvent& event) override {
+    return ui::mojom::CursorType::kGrab;
+  }
+};
+
+BEGIN_METADATA(GrabImageView)
+END_METADATA
+
 }  // namespace
 
 BEGIN_METADATA(MahoSpacesOverlayColumnView)
 END_METADATA
 
 MahoSpacesOverlayColumnView::MahoSpacesOverlayColumnView(
+    Browser* browser,
+    SpacesBoardRenderMode render_mode,
     const SpaceBoardColumn& column,
     bool is_active,
     SpaceSelectedCallback callback)
-    : column_(column),
+    : browser_(browser),
+      render_mode_(render_mode),
+      column_(column),
       is_active_(is_active),
       space_selected_callback_(std::move(callback)) {
-  SetPreferredSize(gfx::Size(kColumnWidthDp, kColumnHeightDp));
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical,
       gfx::Insets::VH(kColumnInsetDp, kColumnInsetDp), kColumnSpacingDp));
   layout->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kStretch);
+
+  if (render_mode_ == SpacesBoardRenderMode::kEmbedded) {
+    SetPreferredSize(gfx::Size(sidebar_layout::kDefaultRailWidthDp,
+                               kColumnMinHeightDp));
+  } else {
+    SetPreferredSize(gfx::Size(sidebar_layout::kDefaultRailWidthDp, 0));
+  }
+
+  SetNotifyEnterExitOnChild(true);
 
   SetBackground(views::CreateRoundedRectBackground(kMahoColorCardBackground,
                                                    kColumnCornerRadiusDp));
@@ -174,13 +256,35 @@ MahoSpacesOverlayColumnView::MahoSpacesOverlayColumnView(
       views::BoxLayout::CrossAxisAlignment::kStretch);
   header_layout->SetFlexForView(heading_stack, 1);
 
-  title_label_ = heading_stack->AddChildView(std::make_unique<views::Label>(
+  auto* title_row = heading_stack->AddChildView(std::make_unique<views::View>());
+  auto* title_row_layout = title_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
+      views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 4));
+  title_row_layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kCenter);
+
+  title_label_ = title_row->AddChildView(std::make_unique<views::Label>(
       column_.name, views::style::CONTEXT_LABEL,
       views::style::STYLE_BODY_4_MEDIUM));
   title_label_->SetAutoColorReadabilityEnabled(false);
   title_label_->SetSubpixelRenderingEnabled(false);
   title_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   title_label_->SetElideBehavior(gfx::ELIDE_TAIL);
+  title_row_layout->SetFlexForView(title_label_, 1);
+
+  tag_chip_ = title_row->AddChildView(std::make_unique<views::Label>(
+      u"Default", views::style::CONTEXT_LABEL, views::style::STYLE_BODY_5));
+  tag_chip_->SetAutoColorReadabilityEnabled(false);
+  tag_chip_->SetSubpixelRenderingEnabled(false);
+  tag_chip_->SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(1, 4)));
+
+  edit_button_ = title_row->AddChildView(
+      views::CreateVectorImageButton(base::BindRepeating(
+          &MahoSpacesOverlayColumnView::HandleEditPressed,
+          base::Unretained(this))));
+  edit_button_->SetPreferredSize(gfx::Size(16, 16));
+  edit_button_->SetTooltipText(u"Edit Space");
+  edit_button_->SetAccessibleName(u"Edit Space");
+  views::InstallCircleHighlightPathGenerator(edit_button_);
 
   auto* meta_row = heading_stack->AddChildView(std::make_unique<views::View>());
   auto* meta_layout = meta_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -194,29 +298,6 @@ MahoSpacesOverlayColumnView::MahoSpacesOverlayColumnView(
   subtitle_label_->SetAutoColorReadabilityEnabled(false);
   subtitle_label_->SetSubpixelRenderingEnabled(false);
   subtitle_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-
-  auto* current_chip = meta_row->AddChildView(std::make_unique<views::View>());
-  current_chip->SetVisible(is_active_);
-  current_chip->SetBorder(views::CreateEmptyBorder(gfx::Insets()));
-  current_chip->SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::Orientation::kHorizontal));
-  current_chip_label_ = current_chip->AddChildView(std::make_unique<views::Label>(
-      u"Current", views::style::CONTEXT_LABEL, views::style::STYLE_BODY_5));
-  current_chip_label_->SetAutoColorReadabilityEnabled(false);
-  current_chip_label_->SetSubpixelRenderingEnabled(false);
-  current_chip_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
-
-  action_button_ = header_row->AddChildView(
-      std::make_unique<views::MdTextButton>(
-          base::BindRepeating(&MahoSpacesOverlayColumnView::HandleOpenPressed,
-                              base::Unretained(this)),
-          is_active_ ? u"Open" : u"Switch"));
-  action_button_->SetStyle(ui::ButtonStyle::kText);
-  action_button_->SetCornerRadius(kActionButtonCornerRadiusDp);
-  action_button_->SetMinSize(gfx::Size(0, 20));
-  action_button_->SetMaxSize(gfx::Size(0, 20));
-  action_button_->SetRequestFocusOnPress(false);
-  action_button_->SetAccessibleName(u"Switch to " + column_.name);
 
   tab_scroll_view_ = AddChildView(std::make_unique<views::ScrollView>());
   tab_scroll_view_->SetBackgroundColor(std::nullopt);
@@ -246,7 +327,9 @@ MahoSpacesOverlayColumnView::MahoSpacesOverlayColumnView(
     empty_state_label_->SetMultiLine(true);
     empty_state_label_->SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(10, 0)));
   } else {
-    for (TabSectionSpec& section : BuildTabSections(column_)) {
+    std::vector<TabSectionSpec> sections = BuildTabSections(column_);
+    for (size_t i = 0; i < sections.size(); ++i) {
+      TabSectionSpec& section = sections[i];
       auto* section_view = tab_list_->AddChildView(std::make_unique<views::View>());
       auto* section_layout =
           section_view->SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -258,53 +341,90 @@ MahoSpacesOverlayColumnView::MahoSpacesOverlayColumnView(
       section_view->GetViewAccessibility().SetName(
           SectionAccessibleName(section.title));
 
-      auto* section_label = section_view->AddChildView(
-          std::make_unique<views::Label>(section.title,
-                                         views::style::CONTEXT_LABEL,
-                                         views::style::STYLE_BODY_5_MEDIUM));
-      section_label->SetAutoColorReadabilityEnabled(false);
-      section_label->SetSubpixelRenderingEnabled(false);
-      section_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-      section_label->SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(
-          kTabSectionLabelTopInsetDp, 0, kTabSectionLabelBottomInsetDp, 0)));
-      section_labels_.push_back(section_label);
+      if (i > 0) {
+        auto* separator_row = section_view->AddChildView(std::make_unique<views::View>());
+        auto* sep_layout = separator_row->SetLayoutManager(
+            std::make_unique<views::BoxLayout>(
+                views::BoxLayout::Orientation::kHorizontal,
+                gfx::Insets::TLBR(kTabSectionLabelTopInsetDp, 0, kTabSectionLabelBottomInsetDp, 0),
+                4));
+        sep_layout->set_cross_axis_alignment(
+            views::BoxLayout::CrossAxisAlignment::kCenter);
+
+        auto* spacer = separator_row->AddChildView(std::make_unique<views::View>());
+        sep_layout->SetFlexForView(spacer, 1);
+
+        clear_arrow_ = separator_row->AddChildView(std::make_unique<views::ImageView>());
+        // Styled in UpdateColors()
+
+        clear_label_ = separator_row->AddChildView(std::make_unique<views::Label>(
+            u"Clear", views::style::CONTEXT_LABEL,
+            views::style::STYLE_BODY_5_MEDIUM));
+        clear_label_->SetAutoColorReadabilityEnabled(false);
+        clear_label_->SetSubpixelRenderingEnabled(false);
+        clear_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+      }
 
       for (const SpaceBoardTabItem* tab : section.tabs) {
         section_view->AddChildView(
-            std::make_unique<MahoSpacesOverlayTabRowView>(*tab));
+            std::make_unique<MahoSpacesOverlayTabRowView>(
+                browser_ ? browser_->profile() : nullptr, *tab));
       }
     }
   }
 
   GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
-  GetViewAccessibility().SetName(column_.name);
+  GetViewAccessibility().SetName(
+      is_active_ ? column_.name + u" (current space)" : column_.name);
+
+  // Add Footer (Grip + Ellipsis Menu)
+  auto* footer_row = AddChildView(std::make_unique<views::View>());
+  auto* footer_layout = footer_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
+      views::BoxLayout::Orientation::kHorizontal, gfx::Insets(), 0));
+  footer_layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kCenter);
+
+  auto* drag_handle = footer_row->AddChildView(std::make_unique<GrabImageView>());
+  drag_handle->SetImage(ui::ImageModel::FromVectorIcon(
+      maho_lucide_icons::kMoveIcon, ui::kColorSysOnSurfaceSubtle, 16));
+
+  auto* spacer = footer_row->AddChildView(std::make_unique<views::View>());
+  footer_layout->SetFlexForView(spacer, 1);
+
+  menu_button_ = footer_row->AddChildView(
+      views::CreateVectorImageButton(base::BindRepeating(
+          &MahoSpacesOverlayColumnView::HandleMenuPressed,
+          base::Unretained(this))));
+  menu_button_->SetTooltipText(u"Space Menu");
+  menu_button_->SetAccessibleName(u"Space Menu");
+  views::InstallCircleHighlightPathGenerator(menu_button_);
 
   UpdateColors();
 }
 
 MahoSpacesOverlayColumnView::~MahoSpacesOverlayColumnView() = default;
 
-bool MahoSpacesOverlayColumnView::IsCurrentChipVisibleForTesting() const {
-  return current_chip_label_ && current_chip_label_->parent() &&
-         current_chip_label_->parent()->GetVisible();
+bool MahoSpacesOverlayColumnView::OnMousePressed(const ui::MouseEvent& event) {
+  if (event.IsOnlyLeftMouseButton() && space_selected_callback_) {
+    space_selected_callback_.Run(column_.space_id);
+    return true;
+  }
+  return false;
+}
+
+ui::Cursor MahoSpacesOverlayColumnView::GetCursor(const ui::MouseEvent& event) {
+  return ui::mojom::CursorType::kHand;
 }
 
 std::u16string MahoSpacesOverlayColumnView::GetTitleTextForTesting() const {
   return title_label_ ? std::u16string(title_label_->GetText()) : std::u16string();
 }
 
-std::u16string MahoSpacesOverlayColumnView::GetActionButtonTextForTesting()
-    const {
-  return action_button_ ? std::u16string(action_button_->GetText()) : std::u16string();
-}
-
 std::vector<std::u16string>
 MahoSpacesOverlayColumnView::GetSectionTitlesForTesting() const {
   std::vector<std::u16string> titles;
-  titles.reserve(section_labels_.size());
-  for (const views::Label* section_label : section_labels_) {
-    titles.push_back(section_label ? std::u16string(section_label->GetText())
-                                   : std::u16string());
+  if (clear_label_) {
+    titles.push_back(u"Clear");
   }
   return titles;
 }
@@ -312,6 +432,10 @@ MahoSpacesOverlayColumnView::GetSectionTitlesForTesting() const {
 void MahoSpacesOverlayColumnView::OnThemeChanged() {
   views::View::OnThemeChanged();
   UpdateColors();
+}
+
+gfx::Size MahoSpacesOverlayColumnView::GetMinimumSize() const {
+  return gfx::Size(sidebar_layout::kDefaultRailWidthDp, kColumnMinHeightDp);
 }
 
 void MahoSpacesOverlayColumnView::UpdateColors() {
@@ -322,17 +446,13 @@ void MahoSpacesOverlayColumnView::UpdateColors() {
 
   const SkColor fallback_accent = color_provider->GetColor(kMahoColorAccentBlue);
   const SkColor accent = SpaceThemeAccentColor(column_, fallback_accent);
-  const SkColor secondary = SpaceThemeSecondaryColor(column_, accent);
-  const SkColor column_fill = SkColorSetA(secondary, is_active_ ? 0x2F : 0x20);
-  const SkColor column_border = is_active_
-                                    ? SkColorSetA(accent, 0x6A)
-                                    : SkColorSetA(color_provider->GetColor(
-                                                      kMahoColorCardBorder),
-                                                  0x86);
+  const SkColor column_border = SkColorSetA(
+      color_provider->GetColor(kMahoColorCardBorder), 0x60);
   const SkColor accent_dot = SkColorSetA(accent, 0xD0);
 
-  SetBackground(
-      views::CreateRoundedRectBackground(column_fill, kColumnCornerRadiusDp));
+  const SkColor base_fill = color_provider->GetColor(kMahoColorContentBackground);
+  SetBackground(std::make_unique<ColumnThemeBackground>(base_fill, accent,
+                                                         is_active_));
   SetBorder(views::CreateRoundedRectBorder(1, kColumnCornerRadiusDp,
                                            column_border));
   badge_container_->SetBackground(
@@ -343,31 +463,74 @@ void MahoSpacesOverlayColumnView::UpdateColors() {
 
   const SkColor section_label_color =
       SkColorSetA(color_provider->GetColor(kMahoColorTertiaryText), 0xCC);
-  for (views::Label* section_label : section_labels_) {
-    section_label->SetEnabledColor(section_label_color);
+
+  if (clear_label_) {
+    clear_label_->SetEnabledColor(section_label_color);
   }
 
-  if (current_chip_label_ && current_chip_label_->parent()) {
-    current_chip_label_->parent()->SetBackground(nullptr);
-    current_chip_label_->parent()->SetBorder(nullptr);
-    current_chip_label_->SetEnabledColor(accent);
-  }
-
-  if (action_button_) {
-    action_button_->SetBackground(nullptr);
-    action_button_->SetBorder(nullptr);
-    action_button_->SetEnabledTextColors(accent);
+  if (clear_arrow_) {
+    clear_arrow_->SetImage(ui::ImageModel::FromVectorIcon(
+        maho_lucide_icons::kArrowUpIcon, section_label_color, 12));
   }
 
   if (empty_state_label_) {
     empty_state_label_->SetEnabledColor(kMahoColorSecondaryText);
   }
+
+  if (tag_chip_) {
+    const SkColor tag_bg = SkColorSetA(color_provider->GetColor(kMahoColorContentBackground), 0x80);
+    tag_chip_->SetBackground(views::CreateRoundedRectBackground(tag_bg, 4));
+    tag_chip_->SetEnabledColor(kMahoColorSecondaryText);
+  }
+
+  if (edit_button_) {
+    edit_button_->SetImageModel(
+        views::Button::STATE_NORMAL,
+        ui::ImageModel::FromVectorIcon(maho_lucide_icons::kPencilLineIcon,
+                                       accent, 16));
+  }
+
+  if (menu_button_) {
+    menu_button_->SetImageModel(
+        views::Button::STATE_NORMAL,
+        ui::ImageModel::FromVectorIcon(maho_lucide_icons::kEllipsisIcon,
+                                       color_provider->GetColor(kMahoColorTertiaryText), 16));
+  }
 }
 
-void MahoSpacesOverlayColumnView::HandleOpenPressed() {
-  if (space_selected_callback_) {
-    space_selected_callback_.Run(column_.space_id);
+
+void MahoSpacesOverlayColumnView::HandleEditPressed() {
+  if (browser_) {
+    MahoSpaceConfigDialog::Open(
+        browser_->profile(), GetWidget()->GetNativeWindow(),
+        column_.space_id, maho_space_config::mojom::InitialFocus::kName);
   }
+}
+
+void MahoSpacesOverlayColumnView::HandleMenuPressed() {
+  if (!browser_ || !menu_button_) {
+    return;
+  }
+  // Guard against re-entry while the menu is already showing.
+  if (context_menu_runner_ && context_menu_runner_->IsRunning()) {
+    context_menu_runner_->Cancel();
+    return;
+  }
+  active_space_context_menu_.reset();
+  active_context_menu_model_.reset();
+  context_menu_runner_.reset();
+
+  active_space_context_menu_ =
+      std::make_unique<MahoSpaceContextMenu>(browser_, column_.space_id);
+  active_context_menu_model_ = active_space_context_menu_->BuildMenuModel();
+  context_menu_runner_ = std::make_unique<views::MenuRunner>(
+      active_context_menu_model_.get(), views::MenuRunner::CONTEXT_MENU);
+
+  context_menu_runner_->RunMenuAt(
+      GetWidget(), nullptr,
+      menu_button_->GetBoundsInScreen(),
+      views::MenuAnchorPosition::kBubbleTopRight,
+      ui::mojom::MenuSourceType::kMouse);
 }
 
 }  // namespace maho

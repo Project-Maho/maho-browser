@@ -489,15 +489,14 @@ body {
   justify-content: center;
   width: 200px;
   height: 200px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--maho-primary-color, #5b4fcf) 12%, transparent);
-  color: var(--maho-primary-color, #5b4fcf);
 }
 
 .welcome-default-browser__icon img {
-  width: 120px;
-  height: 120px;
+  width: 176px;
+  height: 176px;
   display: block;
+  border-radius: 40px;
+  box-shadow: 0 12px 32px rgba(46, 30, 90, 0.28);
 }
 
 .welcome-button--ghost {

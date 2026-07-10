@@ -58,6 +58,7 @@ build_webui("build") {
     "icons/search-engines/daum.svg",
     "icons/search-engines/coccoc.svg",
     "icons/onboarding/globe.svg",
+    "icons/onboarding/maho-logo.png",
   ]
 
   ts_files = [ "app.ts" ]

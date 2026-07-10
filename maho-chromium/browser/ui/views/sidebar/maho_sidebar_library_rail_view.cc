@@ -256,7 +256,7 @@ MahoSidebarLibraryRailView::MahoSidebarLibraryRailView() {
       views::BoxLayout::CrossAxisAlignment::kCenter);
 
   SetPreferredSize(gfx::Size(sidebar_layout::kLibraryRailWidthDp, 0));
-  SetBackground(views::CreateSolidBackground(kMahoColorLibraryRailBackground));
+  SetBackground(views::CreateSolidBackground(kMahoColorSidebarBackground));
 
   utility_host_ = AddChildView(std::make_unique<views::View>());
   utility_host_->SetProperty(views::kViewIgnoredByLayoutKey, true);
@@ -373,6 +373,11 @@ void MahoSidebarLibraryRailView::SetSelectedCategory(Category category) {
   UpdateSelection();
 }
 
+void MahoSidebarLibraryRailView::ClearSelection() {
+  selected_category_ = static_cast<Category>(-1);
+  UpdateSelection();
+}
+
 void MahoSidebarLibraryRailView::SetCategorySelectedCallback(
     CategorySelectedCallback callback) {
   category_selected_callback_ = std::move(callback);
@@ -386,7 +391,7 @@ void MahoSidebarLibraryRailView::SetBackCallback(
 
 void MahoSidebarLibraryRailView::OnThemeChanged() {
   views::View::OnThemeChanged();
-  SetBackground(views::CreateSolidBackground(kMahoColorLibraryRailBackground));
+  SetBackground(views::CreateSolidBackground(kMahoColorSidebarBackground));
   UpdateSelection();
   UpdateBackButtonAppearance();
 }
@@ -447,13 +452,7 @@ void MahoSidebarLibraryRailView::UpdateBackButtonAppearance() {
 
   const bool enabled = !back_callback_.is_null();
   back_button_->SetEnabled(enabled);
-  if (enabled) {
-    back_button_->SetBackground(views::CreateRoundedRectBackground(
-        kMahoColorLibraryRailItemHover,
-        sidebar_layout::kLibraryRailUtilityButtonCornerRadiusDp));
-  } else {
-    back_button_->SetBackground(nullptr);
-  }
+  back_button_->SetBackground(nullptr);
   back_button_->SetBorder(nullptr);
 
   const ui::ColorId back_color = enabled ? kMahoColorLibraryRailItemSelectedText

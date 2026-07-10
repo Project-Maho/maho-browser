@@ -5,8 +5,10 @@
 
 #include <memory>
 
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "maho/browser/maho_space_profile_bridge.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/view_tracker.h"
 #include "ui/views/widget/widget_observer.h"
@@ -20,8 +22,10 @@ class Widget;
 namespace maho {
 
 class MahoSpacesOverlayView;
+class MahoSidebarContainerView;
 
-class MahoSpacesOverlayController : public views::WidgetObserver {
+class MahoSpacesOverlayController : public views::WidgetObserver,
+                                    public MahoSpaceProfileBridge::Observer {
  public:
   enum class DismissReason {
     kExplicitCancel,
@@ -42,14 +46,29 @@ class MahoSpacesOverlayController : public views::WidgetObserver {
 
   views::Widget* GetOverlayWidgetForTesting() const { return widget_.get(); }
 
+  void set_dismiss_callback(base::RepeatingClosure callback) {
+    dismiss_callback_ = std::move(callback);
+  }
+
+  void set_sidebar_container(MahoSidebarContainerView* container) {
+    sidebar_container_ = container;
+  }
+
+  void set_disable_animation_for_testing(bool disable) {
+    disable_animation_for_testing_ = disable;
+  }
+
   void OnWidgetDestroying(views::Widget* widget) override;
   void OnWidgetBoundsChanged(views::Widget* widget,
                              const gfx::Rect& new_bounds) override;
   void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
 
+  void OnSpaceProfileBridgeChanged(bool is_structural) override;
+  void OnSpaceProfileBridgeChanged() override;
+
  private:
   void Hide();
-  void CloseWidget(bool restore_focus);
+  void CloseWidget(bool restore_focus, bool suppress_dismiss_callback = false);
   void FinishHide();
   gfx::Rect ComputeOverlayBounds() const;
   void UpdateBounds();
@@ -57,6 +76,7 @@ class MahoSpacesOverlayController : public views::WidgetObserver {
   friend class MahoSpacesOverlayControllerTest;
 
   raw_ptr<Browser> browser_;
+  raw_ptr<MahoSidebarContainerView> sidebar_container_ = nullptr;
   std::unique_ptr<views::Widget> widget_;
   raw_ptr<MahoSpacesOverlayView> overlay_view_ = nullptr;
   raw_ptr<views::Widget> parent_widget_ = nullptr;
@@ -68,6 +88,8 @@ class MahoSpacesOverlayController : public views::WidgetObserver {
   // activation handoff window, when widget_->IsActive() may not yet reflect
   // the new active state.
   bool is_showing_ = false;
+  bool disable_animation_for_testing_ = false;
+  base::RepeatingClosure dismiss_callback_;
   base::WeakPtrFactory<MahoSpacesOverlayController> weak_factory_{this};
 };
 

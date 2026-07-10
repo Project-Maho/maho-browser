@@ -6,11 +6,16 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "base/logging.h"
+#include "base/functional/bind.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/prefs/pref_service.h"
 #include "base/time/time.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
+#include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_controller.h"
+#include "maho/browser/ui/views/spaces_overlay/maho_browser_frame_overlay_host.h"
+#include "maho_sidebar_now_playing_view.h"
 #include "ui/display/screen.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -55,6 +60,9 @@ MahoSidebarContainerView::MahoSidebarContainerView(Browser* browser)
   reveal_animation_.SetTweenType(gfx::Tween::EASE_OUT);
 
   sidebar_view_ = AddChildView(std::make_unique<MahoSidebarView>(browser));
+  auto* sidebar = static_cast<MahoSidebarView*>(sidebar_view_);
+  now_playing_view_ = sidebar->AddNowPlayingView(
+      std::make_unique<MahoSidebarNowPlayingView>(browser));
   resize_handle_view_ = AddChildView(std::make_unique<views::ResizeArea>(this));
 
   PrefService* prefs = browser->profile()->GetPrefs();
@@ -109,8 +117,6 @@ void MahoSidebarContainerView::ShowCommandOverlayForSearch(
 
 void MahoSidebarContainerView::OnThemeChanged() {
   views::View::OnThemeChanged();
-  LOG(ERROR) << "MahoThemeDebug Container::OnThemeChanged fired this=" << this
-             << " sidebar_view_=" << sidebar_view_.get();
 }
 
 void MahoSidebarContainerView::Layout(PassKey) {
@@ -230,18 +236,37 @@ void MahoSidebarContainerView::ApplyPanelState() {
       PreferredSizeChanged();
     }
   }
+  if (now_playing_view_) {
+    now_playing_view_->UpdateVisibilityState();
+  }
 
   was_panel_expanded_ = pinned;
 
   UpdateResizeHandleBounds();
-  RelayoutParent(this);
-
+  CheckAndNotifyAutoHide();
 }
 
 void MahoSidebarContainerView::ApplyPreferredWidthFromPrefs() {
   PrefService* prefs = browser_->profile()->GetPrefs();
-  const int width = sidebar_prefs::GetSidebarWidthForLayout(
+  int width = sidebar_prefs::GetSidebarWidthForLayout(
       prefs->GetInteger(sidebar_prefs::kSidebarWidth));
+  if (sidebar_view_) {
+    auto* sidebar = static_cast<MahoSidebarView*>(sidebar_view_);
+    if (sidebar->IsInLibraryMode()) {
+      const auto active = sidebar->GetActiveLibraryCategory();
+      const bool overlay_flag =
+          prefs->GetBoolean(sidebar_prefs::kSpacesFullViewport);
+      if (active == MahoSidebarLibraryRailView::Category::kSpaces &&
+          overlay_flag) {
+        const int rail_width = GetLibraryRailWidth();
+        if (rail_width > 0) {
+          width = rail_width;
+        }
+      } else if (active == MahoSidebarLibraryRailView::Category::kSpaces) {
+        width = std::max(width, 1400);
+      }
+    }
+  }
   SetPreferredSize(gfx::Size(width, 0));
   PreferredSizeChanged();
 }
@@ -418,7 +443,6 @@ void MahoSidebarContainerView::AnimationProgressed(
 
   SetPreferredSize(gfx::Size(animated_width, 0));
   PreferredSizeChanged();
-  RelayoutParent(this);
 }
 
 void MahoSidebarContainerView::AnimationEnded(
@@ -430,6 +454,7 @@ void MahoSidebarContainerView::AnimationEnded(
         gfx::Size(sidebar_layout::kHoverTriggerWidthDp, 0));
     PreferredSizeChanged();
     RelayoutParent(this);
+    CheckAndNotifyAutoHide();
   }
 }
 
@@ -447,6 +472,89 @@ double MahoSidebarContainerView::GetRevealFraction() const {
 bool MahoSidebarContainerView::IsOverlayVisible() const {
   return IsAutoHideMode() &&
          (is_hover_revealed_ || reveal_animation_.is_animating());
+}
+
+void MahoSidebarContainerView::AddedToWidget() {
+  views::View::AddedToWidget();
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(&MahoSidebarContainerView::AttachOverlayHost,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void MahoSidebarContainerView::AttachOverlayHost() {
+  if (overlay_host_) {
+    return;
+  }
+  if (auto* browser_view = views::AsViewClass<BrowserView>(parent())) {
+    auto host = std::make_unique<MahoBrowserFrameOverlayHost>(browser_, this);
+    overlay_host_ = browser_view->AddChildView(std::move(host));
+  }
+}
+
+void MahoSidebarContainerView::ToggleSpacesOverlay() {
+  if (overlay_host_) {
+    overlay_host_->ToggleSpacesOverlay();
+  }
+}
+
+void MahoSidebarContainerView::DismissSpacesOverlay() {
+  if (overlay_host_) {
+    overlay_host_->DismissSpacesOverlay();
+  }
+}
+
+bool MahoSidebarContainerView::IsSpacesOverlayVisible() const {
+  return overlay_host_ && overlay_host_->IsSpacesOverlayVisible();
+}
+
+int MahoSidebarContainerView::GetLibraryRailWidth() const {
+  if (sidebar_view_) {
+    auto* sidebar = static_cast<MahoSidebarView*>(sidebar_view_);
+    if (sidebar->library_rail_view()) {
+      return sidebar->library_rail_view()->GetPreferredSize().width();
+    }
+  }
+  return 0;
+}
+
+gfx::Insets MahoSidebarContainerView::GetSidebarSlotInsets() const {
+  if (IsFullyAutoHidden()) {
+    return gfx::Insets();
+  }
+  PrefService* prefs = browser_->profile()->GetPrefs();
+  int width = sidebar_prefs::GetSidebarWidthForLayout(
+      prefs->GetInteger(sidebar_prefs::kSidebarWidth));
+  if (sidebar_view_) {
+    auto* sidebar = static_cast<MahoSidebarView*>(sidebar_view_);
+    if (sidebar->IsInLibraryMode()) {
+      const auto active = sidebar->GetActiveLibraryCategory();
+      const bool overlay_flag =
+          prefs->GetBoolean(sidebar_prefs::kSpacesFullViewport);
+      if (active == MahoSidebarLibraryRailView::Category::kSpaces &&
+          overlay_flag) {
+        const int rail_width = GetLibraryRailWidth();
+        if (rail_width > 0) {
+          width = rail_width;
+        }
+      } else if (active == MahoSidebarLibraryRailView::Category::kSpaces) {
+        width = std::max(width, 1400);
+      }
+    }
+  }
+  return gfx::Insets::TLBR(0, width, 0, 0);
+}
+
+bool MahoSidebarContainerView::IsFullyAutoHidden() const {
+  return IsAutoHideMode() && reveal_animation_.GetCurrentValue() == 0.0 && !is_hover_revealed_;
+}
+
+void MahoSidebarContainerView::CheckAndNotifyAutoHide() {
+  if (IsFullyAutoHidden()) {
+    if (overlay_host_) {
+      overlay_host_->DismissSpacesOverlay();
+    }
+  }
 }
 
 }  // namespace maho

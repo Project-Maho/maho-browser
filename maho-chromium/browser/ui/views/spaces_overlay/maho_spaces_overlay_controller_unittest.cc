@@ -5,11 +5,13 @@
 #include <memory>
 
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/view.h"
 #include "ui/views/view_tracker.h"
 #include "ui/views/widget/widget.h"
+#include "ui/compositor/layer.h"
 
 namespace maho {
 
@@ -25,13 +27,16 @@ namespace maho {
 
 class MahoSpacesOverlayControllerTest : public views::ViewsTestBase {
  protected:
-  MahoSpacesOverlayControllerTest() = default;
+  MahoSpacesOverlayControllerTest()
+      : non_zero_duration_(gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION) {}
   ~MahoSpacesOverlayControllerTest() override = default;
 
   // Factory — passes null Browser (sufficient for unit tests that do not
   // exercise browser-dependent view content).
   std::unique_ptr<MahoSpacesOverlayController> MakeController() {
-    return std::make_unique<MahoSpacesOverlayController>(/*browser=*/nullptr);
+    auto ctrl = std::make_unique<MahoSpacesOverlayController>(/*browser=*/nullptr);
+    ctrl->set_disable_animation_for_testing(true);
+    return ctrl;
   }
 
   // --- Private-state accessors ---
@@ -88,6 +93,11 @@ class MahoSpacesOverlayControllerTest : public views::ViewsTestBase {
     parent->AddObserver(&ctrl);
     auto owned = CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
     owned->Show();
+    auto* root_view = owned->GetRootView();
+    if (root_view) {
+      root_view->SetPaintToLayer();
+      root_view->layer()->SetFillsBoundsOpaquely(false);
+    }
     owned->AddObserver(&ctrl);
     ctrl.widget_ = std::move(owned);
     ctrl.is_hiding_ = false;
@@ -120,6 +130,9 @@ class MahoSpacesOverlayControllerTest : public views::ViewsTestBase {
                               views::Widget* widget) {
     ctrl.OnWidgetDestroying(widget);
   }
+
+ private:
+  gfx::ScopedAnimationDurationScaleMode non_zero_duration_;
 };
 
 namespace {
@@ -261,6 +274,7 @@ TEST_F(MahoSpacesOverlayControllerTest,
   ASSERT_NE(overlay_raw, nullptr);
 
   CallOnWidgetDestroying(*ctrl, overlay_raw);
+  overlay_raw->CloseNow();
 
   EXPECT_FALSE(GetIsHiding(*ctrl));
   EXPECT_FALSE(GetIsShowing(*ctrl));
@@ -298,6 +312,8 @@ TEST_F(MahoSpacesOverlayControllerTest,
   // Our injected widget is separate from parent, and GetWidget() returns it.
   // Since it was not Activated via Show(), IsActive() is false on it → the
   // guard condition `widget_->IsActive()` is false → Dismiss fires.
+  parent->Activate();
+  GetWidget(*ctrl)->Deactivate();
   CallOnWidgetActivationChanged(*ctrl, parent.get(), false);
 
   EXPECT_TRUE(GetIsHiding(*ctrl));

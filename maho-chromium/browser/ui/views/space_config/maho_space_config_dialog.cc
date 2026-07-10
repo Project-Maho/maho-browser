@@ -1,5 +1,8 @@
 #include "maho/browser/ui/views/space_config/maho_space_config_dialog.h"
 
+#include <memory>
+#include <utility>
+
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/profiles/profile.h"
@@ -7,7 +10,9 @@
 #include "maho/components/constants/webui_url_constants.h"
 #include "net/base/url_util.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/mojom/ui_base_types.mojom.h"
 #include "ui/color/color_provider_manager.h"
+#include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/widget/widget.h"
@@ -41,22 +46,29 @@ class MahoSpaceConfigDialogDelegate : public views::DialogDelegate {
  public:
   MahoSpaceConfigDialogDelegate(Profile* profile, const GURL& url) {
     SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
-    SetModalType(ui::mojom::ModalType::kWindow);
+    // Intentionally NOT kWindow: on macOS, ModalType::kWindow forces
+    // NSWindowStyleMaskTitled in native_widget_mac.mm StyleMaskForParams()
+    // regardless of remove_standard_frame, which puts a native titlebar on
+    // top of our WebUI. We use ModalType::kNone + z-order floating +
+    // parent-child window relationship instead (see Open()).
+    SetModalType(ui::mojom::ModalType::kNone);
     SetShowCloseButton(false);
     SetShowTitle(false);
     SetCanResize(false);
     set_fixed_width(kDialogWidth);
+    set_margins(gfx::Insets());
+    set_corner_radius(12);
 
-    web_view_ = new views::WebView(profile);
+    auto web_view = std::make_unique<views::WebView>(profile);
+    web_view_ = web_view.get();
     web_view_->SetPreferredSize(gfx::Size(kDialogWidth, kDialogHeight));
     web_view_->LoadInitialURL(url);
+    SetContentsView(std::move(web_view));
   }
 
   MahoSpaceConfigDialogDelegate(const MahoSpaceConfigDialogDelegate&) = delete;
   MahoSpaceConfigDialogDelegate& operator=(
       const MahoSpaceConfigDialogDelegate&) = delete;
-
-  views::View* GetContentsView() override { return web_view_; }
 
   void WindowClosing() override {
     g_space_config_dialog_widget = nullptr;
@@ -74,8 +86,6 @@ class MahoSpaceConfigDialogDelegate : public views::DialogDelegate {
   }
 
  private:
-  ~MahoSpaceConfigDialogDelegate() override = default;
-
   raw_ptr<views::WebView> web_view_ = nullptr;
 };
 
@@ -104,12 +114,14 @@ void MahoSpaceConfigDialog::Open(
   url = net::AppendQueryParameter(url, "space_id", space_id);
   url = net::AppendQueryParameter(url, "focus", FocusToString(focus));
 
-  auto* dialog = new MahoSpaceConfigDialogDelegate(profile, url);
-  views::Widget* widget =
-      dialog->CreateDialogWidget(dialog, parent_window, gfx::NativeView());
+  auto dialog = std::make_unique<MahoSpaceConfigDialogDelegate>(profile, url);
+  views::Widget* widget = views::DialogDelegate::CreateDialogWidget(
+      std::move(dialog), parent_window, gfx::NativeView());
   if (!widget) {
     return;
   }
+
+  widget->SetZOrderLevel(ui::ZOrderLevel::kFloatingWindow);
 
   g_space_config_dialog_widget = widget;
   g_active_mode = ActiveMode::kEdit;

@@ -2,6 +2,7 @@
 
 #include "maho/browser/ui/views/space_create/maho_space_theme_picker_dialog.h"
 
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -16,6 +17,7 @@
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/mojom/ui_base_types.mojom.h"
 #include "ui/color/color_provider_manager.h"
+#include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/widget/widget.h"
@@ -46,23 +48,25 @@ class MahoSpaceThemePickerDialogDelegate : public views::DialogDelegate {
       : initial_theme_json_(std::move(initial_theme_json)),
         result_callback_(std::move(on_result)) {
     SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
-    SetModalType(ui::mojom::ModalType::kWindow);
+    SetModalType(ui::mojom::ModalType::kNone);
     SetShowCloseButton(false);
     SetShowTitle(false);
     SetCanResize(false);
     set_fixed_width(kThemeDialogWidth);
+    set_margins(gfx::Insets());
+    set_corner_radius(12);
 
-    web_view_ = new views::WebView(profile);
+    auto web_view = std::make_unique<views::WebView>(profile);
+    web_view_ = web_view.get();
     web_view_->SetPreferredSize(gfx::Size(kThemeDialogWidth, kThemeDialogHeight));
     web_view_->LoadInitialURL(GURL(maho::kMahoSpaceCreateURL));
+    SetContentsView(std::move(web_view));
   }
 
   MahoSpaceThemePickerDialogDelegate(
       const MahoSpaceThemePickerDialogDelegate&) = delete;
   MahoSpaceThemePickerDialogDelegate& operator=(
       const MahoSpaceThemePickerDialogDelegate&) = delete;
-
-  views::View* GetContentsView() override { return web_view_; }
 
   void WindowClosing() override {
     g_active_widget = nullptr;
@@ -104,8 +108,6 @@ class MahoSpaceThemePickerDialogDelegate : public views::DialogDelegate {
   const std::string& initial_theme_json() const { return initial_theme_json_; }
 
  private:
-  ~MahoSpaceThemePickerDialogDelegate() override = default;
-
   raw_ptr<views::WebView> web_view_ = nullptr;
   std::string initial_theme_json_;
   MahoSpaceThemePickerDialog::ResultCallback result_callback_;
@@ -136,22 +138,25 @@ views::Widget* MahoSpaceThemePickerDialog::Open(
 
   GetPendingInitialThemeJsonStorage() = initial_theme_json;
 
-  auto* delegate = new MahoSpaceThemePickerDialogDelegate(
+  auto delegate = std::make_unique<MahoSpaceThemePickerDialogDelegate>(
       profile, initial_theme_json, std::move(on_result));
+  MahoSpaceThemePickerDialogDelegate* delegate_raw = delegate.get();
 
   gfx::NativeWindow parent_window =
       browser->window() ? browser->window()->GetNativeWindow()
                         : gfx::NativeWindow();
 
-  views::Widget* widget =
-      delegate->CreateDialogWidget(delegate, parent_window, gfx::NativeView());
+  views::Widget* widget = views::DialogDelegate::CreateDialogWidget(
+      std::move(delegate), parent_window, gfx::NativeView());
   if (!widget) {
     GetPendingInitialThemeJsonStorage().clear();
     return nullptr;
   }
 
+  widget->SetZOrderLevel(ui::ZOrderLevel::kFloatingWindow);
+
   g_active_widget = widget;
-  g_active_delegate = delegate;
+  g_active_delegate = delegate_raw;
 
   widget->Show();
   widget->Activate();

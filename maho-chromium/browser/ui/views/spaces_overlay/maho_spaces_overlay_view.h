@@ -50,7 +50,6 @@ class MahoSpacesOverlayView : public views::View {
   ~MahoSpacesOverlayView() override;
 
   // Testing accessors.
-  std::u16string GetSummaryTextForTesting() const;
   MahoSpacesOverlayBoardView* GetBoardViewForTesting() { return board_view_; }
 
   void RequestFocus() override;
@@ -58,10 +57,11 @@ class MahoSpacesOverlayView : public views::View {
   bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
 
  private:
-  void UpdateSummaryText();
+  void Init(SpaceBoardModel model,
+            CancelCallback cancel_callback,
+            ActionCallback action_callback);
   void DismissCancel();
   void DismissAction();
-  void HandleClosePressed();
   void HandleSpaceSelected(const std::string& space_id);
 
   raw_ptr<Browser> browser_;
@@ -69,10 +69,9 @@ class MahoSpacesOverlayView : public views::View {
   ActionCallback action_callback_;
   SpaceBoardModel model_;
   raw_ptr<views::View> surface_ = nullptr;
-  raw_ptr<views::Label> summary_label_ = nullptr;
-  raw_ptr<views::ImageButton> close_button_ = nullptr;
   raw_ptr<views::ScrollView> board_scroll_view_ = nullptr;
   raw_ptr<MahoSpacesOverlayBoardView> board_view_ = nullptr;
+  raw_ptr<views::View> separator_ = nullptr;
 };
 
 }  // namespace maho

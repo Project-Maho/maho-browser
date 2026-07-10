@@ -17,6 +17,7 @@
 #include "base/json/string_escape.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
+#include "base/task/thread_pool.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
@@ -329,6 +330,7 @@ class ArchiveRowView : public views::View,
       if (!fallback_letter.empty()) {
         tile_label_ = tile_container_->AddChildView(
             std::make_unique<views::Label>(fallback_letter));
+        tile_label_->SetSkipSubpixelRenderingOpacityCheck(true);
         tile_label_->SetTextStyle(views::style::STYLE_BODY_5_BOLD);
         tile_label_->SetFontList(tile_label_->font_list().Derive(
             1, gfx::Font::NORMAL, gfx::Font::Weight::BOLD));
@@ -358,6 +360,7 @@ class ArchiveRowView : public views::View,
 
     title_label_ = text_container_->AddChildView(
         std::make_unique<views::Label>(GetArchiveRowTitleText(item)));
+    title_label_->SetSkipSubpixelRenderingOpacityCheck(true);
     title_label_->GetViewAccessibility().SetIsIgnored(true);
     title_label_->SetTextStyle(views::style::STYLE_BODY_4_MEDIUM);
     title_label_->SetEnabledColor(kMahoColorPrimaryText);
@@ -368,6 +371,7 @@ class ArchiveRowView : public views::View,
 
     subtitle_label_ = text_container_->AddChildView(
         std::make_unique<views::Label>(GetArchiveRowSubtitleText(item)));
+    subtitle_label_->SetSkipSubpixelRenderingOpacityCheck(true);
     subtitle_label_->GetViewAccessibility().SetIsIgnored(true);
     subtitle_label_->SetTextStyle(views::style::STYLE_BODY_5);
     subtitle_label_->SetEnabledColor(kMahoColorSecondaryText);
@@ -869,22 +873,34 @@ void MahoSidebarArchiveView::ReloadArchivedTabs() {
     return;
   }
 
-  MahoCore* core = maho::GetCore();
-  if (!core) {
-    ApplyFilters();
-    return;
-  }
-
   std::string space_id_json = base::GetQuotedJSONString(active_space_id);
-  char* json_str = maho_core_get_archived_tabs(core, space_id_json.c_str());
-  if (!json_str) {
-    DLOG(WARNING) << "maho_core_get_archived_tabs returned null";
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE,
+      {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+      base::BindOnce(
+          [](std::string space_id_json) -> std::string {
+            MahoCore* core = maho::GetCore();
+            if (!core) {
+              return "";
+            }
+            char* json_str = maho_core_get_archived_tabs(core, space_id_json.c_str());
+            if (!json_str) {
+              return "";
+            }
+            std::string json(json_str);
+            maho_string_free(json_str);
+            return json;
+          },
+          space_id_json),
+      base::BindOnce(&MahoSidebarArchiveView::OnArchivedTabsLoaded,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void MahoSidebarArchiveView::OnArchivedTabsLoaded(std::string json) {
+  if (json.empty()) {
     ApplyFilters();
     return;
   }
-
-  std::string json(json_str);
-  maho_string_free(json_str);
 
   std::optional<base::Value> parsed =
       base::JSONReader::Read(json, base::JSON_PARSE_RFC);

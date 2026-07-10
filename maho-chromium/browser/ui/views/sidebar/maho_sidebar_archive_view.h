@@ -152,6 +152,8 @@ class MahoSidebarArchiveView : public views::View,
   DeleteCallback delete_callback_;
   base::OneShotTimer search_debounce_timer_;
 
+  void OnArchivedTabsLoaded(std::string json);
+
   base::WeakPtrFactory<MahoSidebarArchiveView> weak_factory_{this};
 };
 

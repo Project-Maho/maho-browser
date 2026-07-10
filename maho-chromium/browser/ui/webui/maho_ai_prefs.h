@@ -33,6 +33,7 @@ inline constexpr char kAiViewMode[] = "maho.ai.view_mode";
 inline constexpr char kByokOpenAIEncryptedB64[] = "maho.ai.byok.openai.encrypted_b64";
 inline constexpr char kByokAnthropicEncryptedB64[] = "maho.ai.byok.anthropic.encrypted_b64";
 inline constexpr char kAgentToolGrants[] = "maho.ai.extensions.agent_tool_grants";
+inline constexpr char kMcpCredentials[] = "maho.ai.byok.mcp_credentials";
 
 // One-time migration flag: true once macOS defaults have been copied into
 // Chromium prefs. Prevents re-migration on subsequent launches.

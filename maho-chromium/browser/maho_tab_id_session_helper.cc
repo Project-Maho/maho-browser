@@ -28,6 +28,7 @@
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/maho_tab_registry.h"
+#include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
 #include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
 
@@ -366,6 +367,9 @@ void MahoTabIdSessionHelper::PerformSessionMigration(Profile* profile, MahoCore*
         migrated_count++;
       }
     }
+
+    // Restore split views for the browser window if any were saved.
+    MahoSplitViewController::RestoreForWindow(target_browser);
   }
   LOG(INFO) << "One-shot session restore migration completed: migrated " << migrated_count << " tabs.";
 }

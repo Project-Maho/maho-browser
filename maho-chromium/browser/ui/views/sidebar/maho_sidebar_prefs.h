@@ -22,6 +22,7 @@ extern const char kSidebarWidth[];
 // in the empty favorites slot. Persistent across sessions per profile.
 extern const char kFavoritesDragHintDismissed[];
 extern const char kLiveFolders[];
+extern const char kSpacesFullViewport[];
 
 int ClampSidebarWidthForLayout(int width);
 int GetSidebarWidthForLayout(int pref_width);

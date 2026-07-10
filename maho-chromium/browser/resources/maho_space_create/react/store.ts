@@ -39,7 +39,7 @@ import type {
 
 type Listener = () => void;
 
-const PREVIEW_DEBOUNCE_MS = 50;
+const PREVIEW_DEBOUNCE_MS = 0;
 
 function notifyListeners(listeners: Set<Listener>): void {
   for (const listener of listeners) {

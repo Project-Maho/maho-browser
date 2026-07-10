@@ -63,13 +63,8 @@ function DefaultBrowserChoice({store}: {
   return (
     <div className="welcome-default-browser">
       <div className="welcome-default-browser__icon" aria-hidden="true">
-        <svg width="120" height="120" viewBox="0 0 24 24" fill="none"
-             stroke="currentColor" strokeWidth="1.4"
-             strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="10"/>
-          <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/>
-          <path d="M2 12h20"/>
-        </svg>
+        <img src="chrome://maho-welcome/icons/onboarding/maho-logo.png"
+             alt="Maho" width="176" height="176" />
       </div>
     </div>
   );

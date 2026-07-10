@@ -22,6 +22,7 @@
 #include "base/pickle.h"
 #include "base/strings/string_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/values.h"
@@ -49,6 +50,8 @@
 #include "chrome/browser/ui/tabs/tab_muted_utils.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/profiles/profile.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/web_contents.h"
 #include "components/tabs/public/tab_interface.h"
 #include "maho/browser/ui/tab_preview/maho_tab_preview_controller.h"
@@ -68,6 +71,8 @@
 #include "maho/third_party/maho/maho_ffi.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
+#include "ui/accessibility/ax_enums.mojom.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
@@ -100,6 +105,7 @@
 #include "ui/views/layout/box_layout_view.h"
 #include "ui/views/layout/layout_manager_base.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_visibility_manager.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/view_utils.h"
@@ -1679,6 +1685,32 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
                 model->AddToNewSplit(
                     {source_tab_strip_index}, visual_data,
                     split_tabs::SplitTabCreatedSource::kDragAndDropTab);
+
+                // Mirror to Rust for persistence (matches MahoSplitViewController path).
+                auto get_stable_id = [&](int index) -> std::string {
+                  content::WebContents* contents =
+                      model->GetWebContentsAt(index);
+                  if (!contents) return "";
+                  auto* helper = MahoTabIdHelper::FromWebContents(contents);
+                  return helper ? helper->stable_tab_id() : "";
+                };
+                std::string target_id = get_stable_id(target_tab_strip_index);
+                std::string source_id = get_stable_id(source_tab_strip_index);
+                if (!target_id.empty() && !source_id.empty()) {
+                  std::string event_json = base::StringPrintf(
+                      "{\"kind\":\"create_split\",\"window_id\":\"%s\","
+                      "\"tab_ids\":[\"%s\",\"%s\"],"
+                      "\"orientation\":\"horizontal\"}",
+                      std::to_string(browser->session_id().id()).c_str(),
+                      target_id.c_str(), source_id.c_str());
+                  if (auto* core = maho::GetCore()) {
+                    char* result =
+                        maho_core_handle_event(core, event_json.c_str());
+                    if (result) {
+                      maho_core_free_string(result);
+                    }
+                  }
+                }
                 return;
               }
             }
@@ -1891,7 +1923,7 @@ void SidebarTabRowView::WriteDragDataForView(views::View* sender,
   audio_button_->SetVisible(audio_was_visible);
   close_button_->SetVisible(close_was_visible);
 
-  data->provider().SetDragImage(drag_image, press_pt.OffsetFromOrigin());
+  data->provider().SetDragImage(drag_image, gfx::Vector2d());
 }
 
 int SidebarTabRowView::GetDragOperationsForView(views::View* sender,
@@ -3513,15 +3545,8 @@ void MahoSidebarTabListView::RebuildTreeNodes(
                                 base::Unretained(this)));
       }
     } else if (node.kind == SidebarNodeKind::kSplitGroup) {
-      auto split_container = std::make_unique<views::BoxLayoutView>();
-      split_container->SetOrientation(views::LayoutOrientation::kVertical);
-      split_container->SetInsideBorderInsets(gfx::Insets::TLBR(0, 4, 0, 0));
-      split_container->SetBorder(views::CreateSolidSidedBorder(
-          gfx::Insets::TLBR(0, 2, 0, 0),
-          SkColorSetA(SK_ColorGRAY, 0x60)));
-      auto* container_ptr = parent->AddChildView(std::move(split_container));
-      RebuildTreeNodes(container_ptr, node.children, section, browser,
-                       parent_folder_id);
+      RebuildSplitGroupContainer(parent, node, section, browser,
+                                 parent_folder_id);
     } else {
       const int live_index = node.tab_strip_index >= 0
                                  ? node.tab_strip_index
@@ -3621,6 +3646,81 @@ void MahoSidebarTabListView::RebuildTreeNodes(
             base::BindRepeating(&MahoSidebarTabListView::RevealEmptyPinnedDropLane,
                                 base::Unretained(this)));
       }
+    }
+  }
+}
+
+void MahoSidebarTabListView::RebuildSplitGroupContainer(
+    views::View* parent,
+    const SidebarTreeNode& group_node,
+    MahoSidebarTabSection section,
+    Browser* browser,
+    const std::string& parent_folder_id) {
+  auto split_container = std::make_unique<views::BoxLayoutView>();
+
+  // Zen parity: side-by-side only when sidebar is wide enough for each pane
+  // to render as a proper tab row (favicon + title + close). Below threshold,
+  // fall back to vertical stack — matches Zen's `flex-direction: column`
+  // pivot in icon-only sidebar mode.
+  constexpr int kSideBySideMinPerPaneDp = 130;
+  constexpr int kSideBySideMinTotalDp = kSideBySideMinPerPaneDp * 2 + 20;
+
+  int effective_width = parent ? parent->width() : 0;
+  if (effective_width <= 0 && browser && browser->profile()) {
+    effective_width = sidebar_prefs::GetSidebarWidthForLayout(
+        browser->profile()->GetPrefs()->GetInteger(
+            sidebar_prefs::kSidebarWidth));
+  }
+  const bool panel_expanded =
+      browser && browser->profile()
+          ? sidebar_prefs::IsSidebarPanelExpanded(browser->profile()->GetPrefs())
+          : true;
+  const bool wide_enough_for_row =
+      effective_width == 0 ? panel_expanded
+                           : effective_width >= kSideBySideMinTotalDp;
+  const bool is_side_by_side = panel_expanded && wide_enough_for_row &&
+                                group_node.split_orientation == "vertical";
+
+  split_container->SetOrientation(
+      is_side_by_side ? views::LayoutOrientation::kHorizontal
+                      : views::LayoutOrientation::kVertical);
+
+  constexpr int kSplitCapsuleRadiusDp = 6;
+  split_container->SetInsideBorderInsets(gfx::Insets::VH(0, 2));
+
+  const bool has_active_child = std::any_of(
+      group_node.children.begin(), group_node.children.end(),
+      [](const SidebarTreeNode& c) { return c.is_active; });
+
+  if (has_active_child) {
+    split_container->SetBackground(views::CreateRoundedRectBackground(
+        ui::kColorSysStateHoverOnSubtle, kSplitCapsuleRadiusDp));
+  } else {
+    split_container->SetBackground(views::CreateRoundedRectBackground(
+        SK_ColorTRANSPARENT, kSplitCapsuleRadiusDp));
+  }
+
+  split_container->GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
+  split_container->GetViewAccessibility().SetName(u"Split view");
+
+  auto* container_ptr = parent->AddChildView(std::move(split_container));
+
+  for (size_t i = 0; i < group_node.children.size(); ++i) {
+    const size_t child_start = container_ptr->children().size();
+    
+    RebuildTreeNodes(container_ptr, {group_node.children[i]}, section,
+                     browser, parent_folder_id);
+                     
+    for (size_t v = child_start; v < container_ptr->children().size(); ++v) {
+      container_ptr->SetFlexForView(container_ptr->children()[v], 1);
+    }
+
+    if (i + 1 < group_node.children.size()) {
+      auto divider = std::make_unique<views::View>();
+      divider->SetBackground(views::CreateSolidBackground(ui::kColorSysDivider));
+      divider->SetPreferredSize(
+          is_side_by_side ? gfx::Size(1, 16) : gfx::Size(16, 1));
+      container_ptr->AddChildView(std::move(divider));
     }
   }
 }

@@ -17,7 +17,7 @@ inline constexpr int kCollapsedRailWidthDp = 40;
 // still has usable room at narrow persisted widths.
 inline constexpr int kDefaultRailWidthDp = 288;
 inline constexpr int kRuntimeRailWidthMinDp = 280;
-inline constexpr int kRuntimeRailWidthMaxDp = 400;
+inline constexpr int kRuntimeRailWidthMaxDp = 1600;
 inline constexpr int kLegacyRailWidthResetThresholdDp = 80;
 inline constexpr int kCompactNavigationThresholdDp = 208;
 inline constexpr int kRailCornerRadiusDp = 18;

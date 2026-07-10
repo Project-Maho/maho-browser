@@ -20,6 +20,10 @@ class Browser;
 
 namespace maho {
 
+class MahoSidebarNowPlayingView;
+class MahoSpacesOverlayController;
+class MahoBrowserFrameOverlayHost;
+
 class MahoSidebarContainerView : public views::View,
                                   public views::ResizeAreaDelegate,
                                   public gfx::AnimationDelegate {
@@ -46,6 +50,11 @@ class MahoSidebarContainerView : public views::View,
   double GetRevealFraction() const;
   bool IsAutoHideMode() const;
   bool IsOverlayVisible() const;
+  void ToggleSpacesOverlay();
+  void DismissSpacesOverlay();
+  bool IsSpacesOverlayVisible() const;
+  int GetLibraryRailWidth() const;
+  MahoBrowserFrameOverlayHost* overlay_host() { return overlay_host_; }
 
   bool IsResizeDragEnabled() const;
   bool IsResizeDragging() const;
@@ -59,6 +68,7 @@ class MahoSidebarContainerView : public views::View,
   void OnMouseEntered(const ui::MouseEvent& event) override;
   void OnMouseExited(const ui::MouseEvent& event) override;
   void OnThemeChanged() override;
+  void AddedToWidget() override;
 
   // views::ResizeAreaDelegate:
   void OnResize(int resize_amount, bool done_resizing) override;
@@ -67,11 +77,23 @@ class MahoSidebarContainerView : public views::View,
   void AnimationProgressed(const gfx::Animation* animation) override;
   void AnimationEnded(const gfx::Animation* animation) override;
 
+  gfx::Insets GetSidebarSlotInsets() const;
+  bool IsFullyAutoHidden() const;
+
  private:
   void OnPanelExpandedChanged();
   void OnSidebarWidthChanged();
   void ApplyPanelState();
+  void CheckAndNotifyAutoHide();
+  // Attaches the overlay host as a BrowserView child. Called via PostTask
+  // from AddedToWidget() to avoid mutating the parent's child list while
+  // the view tree is still iterating our attachment.
+  void AttachOverlayHost();
+
+ public:
   void ApplyPreferredWidthFromPrefs();
+
+ private:
   void MaybePersistSidebarWidth(int width);
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
   bool IsCursorInsideContainerScreenBounds() const;
@@ -84,6 +106,7 @@ class MahoSidebarContainerView : public views::View,
   raw_ptr<Browser> browser_;
   raw_ptr<views::View> sidebar_view_ = nullptr;
   raw_ptr<views::View> resize_handle_view_ = nullptr;
+  raw_ptr<MahoSidebarNowPlayingView> now_playing_view_ = nullptr;
   PrefChangeRegistrar pref_registrar_;
 
   gfx::SlideAnimation reveal_animation_;
@@ -94,6 +117,7 @@ class MahoSidebarContainerView : public views::View,
   bool was_panel_expanded_ = false;
   bool is_resizing_ = false;
   int resize_drag_start_width_ = -1;
+  raw_ptr<MahoBrowserFrameOverlayHost> overlay_host_ = nullptr;
 
   base::WeakPtrFactory<MahoSidebarContainerView> weak_factory_{this};
 };

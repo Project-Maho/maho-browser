@@ -85,6 +85,17 @@ def build_rust_prebuilt(target=None):
     print(f'Copied {src_lib} -> {dst_lib}')
     print(f'Size: {os.path.getsize(dst_lib) / 1024 / 1024:.1f} MB')
 
+    # Run cbindgen to update the FFI header
+    print('Generating maho_ffi.h using cbindgen...')
+    header_path = os.path.join(MAHO_CHROMIUM_ROOT, 'third_party', 'maho', 'maho_ffi.h')
+    cbindgen_config = os.path.join(MAHO_ROOT, 'crates', 'maho-ffi', 'cbindgen.toml')
+    subprocess.run(
+        ['cbindgen', '--config', cbindgen_config, '--crate', 'maho-ffi', '--output', header_path],
+        cwd=os.path.join(MAHO_ROOT, 'crates', 'maho-ffi'),
+        check=True,
+    )
+    print(f'Generated {header_path}')
+
 
 def main():
     parser = argparse.ArgumentParser(description='Build maho-core Rust static library.')

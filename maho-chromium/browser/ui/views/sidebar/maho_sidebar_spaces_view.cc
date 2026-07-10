@@ -67,6 +67,8 @@ void MahoSidebarSpacesView::ReloadSpaces() {
   scroll_contents_->RemoveAllChildViews();
   board_view_ = scroll_contents_->AddChildView(
       std::make_unique<MahoSpacesOverlayBoardView>(
+          browser_,
+          SpacesBoardRenderMode::kEmbedded,
           BuildSpacesBoardModel(),
           base::BindRepeating(&MahoSidebarSpacesView::HandleSpaceSelected,
                               base::Unretained(this))));

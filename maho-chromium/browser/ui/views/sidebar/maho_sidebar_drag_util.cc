@@ -3,8 +3,12 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_drag_util.h"
 
 #include "base/check.h"
+#include "third_party/skia/include/core/SkCanvas.h"
+#include "third_party/skia/include/core/SkPaint.h"
+#include "third_party/skia/include/core/SkRect.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/canvas_painter.h"
+#include "ui/compositor/paint_recorder.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/paint_info.h"
@@ -57,6 +61,43 @@ gfx::ImageSkia CreateSidebarDragImage(views::View* view) {
     drag_image = gfx::ImageSkia::CreateFromBitmap(fallback_bitmap, 1.0f);
   }
   return drag_image;
+}
+
+gfx::ImageSkia CreateSidebarDragImageWithBackground(views::View* view,
+                                                    SkColor bg_color,
+                                                    float corner_radius_dp) {
+  gfx::ImageSkia inner = CreateSidebarDragImage(view);
+  if (inner.isNull() || inner.size().IsEmpty()) {
+    return inner;
+  }
+  const gfx::Size size = inner.size();
+  const float scale_factor = GetSidebarDragImageScaleFactor(view);
+  const int pw = std::max(1, static_cast<int>(size.width() * scale_factor));
+  const int ph = std::max(1, static_cast<int>(size.height() * scale_factor));
+
+  SkBitmap bitmap;
+  bitmap.allocN32Pixels(pw, ph, true);
+  bitmap.eraseColor(SK_ColorTRANSPARENT);
+  {
+    SkCanvas sk_canvas(bitmap);
+    sk_canvas.scale(scale_factor, scale_factor);
+    SkPaint paint;
+    paint.setAntiAlias(true);
+    paint.setStyle(SkPaint::kFill_Style);
+    paint.setColor(bg_color);
+    const SkRect rect = SkRect::MakeIWH(size.width(), size.height());
+    sk_canvas.drawRoundRect(rect, corner_radius_dp, corner_radius_dp, paint);
+    const SkBitmap inner_bitmap = *inner.bitmap();
+    sk_canvas.drawImage(inner_bitmap.asImage(), 0, 0);
+  }
+  return gfx::ImageSkia::CreateFromBitmap(bitmap, scale_factor);
+}
+
+gfx::ImageSkia CreateTransparentPixelDragImage() {
+  SkBitmap bmp;
+  bmp.allocN32Pixels(1, 1, true);
+  bmp.eraseColor(SK_ColorTRANSPARENT);
+  return gfx::ImageSkia::CreateFromBitmap(bmp, 1.f);
 }
 
 }  // namespace maho

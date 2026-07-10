@@ -24,6 +24,8 @@
 #include "chrome/browser/ui/tab_ui_helper.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/split_tabs/split_tab_id.h"
+#include "components/tabs/public/split_tab_data.h"
+#include "components/split_tabs/split_tab_visual_data.h"
 #include "components/translate/core/browser/language_state.h"
 #include "components/translate/core/browser/translate_manager.h"
 #include "content/public/browser/web_contents.h"
@@ -521,10 +523,18 @@ void GroupSplitTabs(std::vector<SidebarTreeNode>& nodes,
           SidebarTreeNode group;
           group.kind = SidebarNodeKind::kSplitGroup;
           group.split_id = split_id.value().ToString();
-          group.split_ratio = 0.5;
-          // TODO(maho): Read orientation/ratio from SplitTabVisualData
-          // once upstream exposes GetVisualDataForSplit.
-          group.split_orientation = "vertical";
+          
+          if (auto* split_data = model->GetSplitData(split_id.value())) {
+            group.split_ratio = split_data->visual_data()->split_ratio();
+            group.split_orientation =
+                (split_data->visual_data()->split_layout() == split_tabs::SplitTabLayout::kVertical)
+                    ? "vertical"
+                    : "horizontal";
+          } else {
+            group.split_ratio = 0.5;
+            group.split_orientation = "vertical";
+          }
+
           group.depth = node.depth;
           for (size_t idx : it->second) {
             nodes[idx].is_in_split = true;

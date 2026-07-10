@@ -40,6 +40,17 @@ aggregate_vector_icons("maho_lucide_icons") {
     "x.icon",
     "zoom_in.icon",
     "zoom_out.icon",
+    "play.icon",
+    "pause.icon",
+    "skip_back.icon",
+    "skip_forward.icon",
+    "volume_2.icon",
+    "volume_x.icon",
+    "grip_vertical.icon",
+    "move.icon",
+    "arrow_up.icon",
+    "arrow_left.icon",
+    "gift.icon",
   ]
 }
 

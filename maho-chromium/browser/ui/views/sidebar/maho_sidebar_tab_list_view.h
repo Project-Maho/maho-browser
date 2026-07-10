@@ -183,6 +183,11 @@ class MahoSidebarTabListView : public views::View,
                         MahoSidebarTabSection section,
                         Browser* browser,
                         const std::string& parent_folder_id);
+  void RebuildSplitGroupContainer(views::View* parent,
+                                  const SidebarTreeNode& group_node,
+                                  MahoSidebarTabSection section,
+                                  Browser* browser,
+                                  const std::string& parent_folder_id);
   std::u16string GetNodeDisplayText(const SidebarTreeNode& node) const;
   std::u16string GetNodeTooltipText(const SidebarTreeNode& node) const;
   void ActivateTab(int tab_index);

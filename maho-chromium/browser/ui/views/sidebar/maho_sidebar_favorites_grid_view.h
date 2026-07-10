@@ -22,8 +22,7 @@
 #include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/views/animation/bounds_animator.h"
-#include "ui/views/animation/bounds_animator_observer.h"
+
 #include "ui/views/context_menu_controller.h"
 #include "ui/views/view.h"
 #include "url/gurl.h"
@@ -37,7 +36,6 @@ class SimpleMenuModel;
 }
 
 namespace views {
-class BoundsAnimator;
 class Button;
 class ImageView;
 class Label;
@@ -47,8 +45,7 @@ class View;
 
 namespace maho {
 
-class MahoSidebarFavoritesGridView : public views::View,
-                                     public views::BoundsAnimatorObserver {
+class MahoSidebarFavoritesGridView : public views::View {
   METADATA_HEADER(MahoSidebarFavoritesGridView, views::View)
 
  public:
@@ -91,9 +88,11 @@ class MahoSidebarFavoritesGridView : public views::View,
   void CleanupAfterDrop();
   void HideOverlayAndPhantom();
 
-  // views::BoundsAnimatorObserver:
-  void OnBoundsAnimatorProgressed(views::BoundsAnimator* animator) override;
-  void OnBoundsAnimatorDone(views::BoundsAnimator* animator) override;
+  // Fix 3: Called by MahoSidebarView when cursor exits favorites subarea.
+  void OnFavoritesZoneExited();
+
+  // Fix 4: Force a synchronous refresh after drop to pick up Rust state.
+  void ForceRefreshFromDrop();
 
   ui::DropTargetEvent ForwardDropEventToGrid(
       const ui::DropTargetEvent& event,
@@ -173,12 +172,6 @@ class MahoSidebarFavoritesGridView : public views::View,
 
   ui::ImageModel ResolveFaviconForTabId(const std::string& tab_id);
 
-  // Flat drag-preview mode (external tab drag into favorites).
-  void EnterDragPreview(int preview_slot, const std::string& dragged_tab_id);
-  void UpdateDragPreview(int preview_slot);
-  void ExitDragPreview(bool animate);
-  void FinalizeExitDragPreview();
-
   raw_ptr<Browser> browser_ = nullptr;
   raw_ptr<PrefService> prefs_ = nullptr;
   raw_ptr<views::View> content_view_ = nullptr;
@@ -221,13 +214,6 @@ class MahoSidebarFavoritesGridView : public views::View,
   GURL drag_preview_url_;
   int drag_preview_slot_ = -1;
   base::CancelableTaskTracker drag_preview_task_tracker_;
-
-  // Flat drag-preview mode state.
-  bool drag_preview_active_ = false;
-  bool finalize_in_progress_ = false;
-  std::string drag_preview_source_tab_id_;
-  std::vector<size_t> drag_preview_tile_order_;
-  std::unique_ptr<views::BoundsAnimator> drag_bounds_animator_;
 
   // Animation helpers
   void SnapshotCurrentBounds();

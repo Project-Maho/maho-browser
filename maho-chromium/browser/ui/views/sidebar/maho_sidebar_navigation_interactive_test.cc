@@ -31,6 +31,7 @@
 #include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_archive_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_downloads_view.h"
@@ -884,6 +885,10 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   SeedProfile(2);
   ResolveViews();
 
+  // Disable full viewport preference to test inline path
+  browser()->profile()->GetPrefs()->SetBoolean(
+      maho::sidebar_prefs::kSpacesFullViewport, false);
+
   auto* sidebar = GetSidebarView();
   ASSERT_TRUE(sidebar);
   auto* rail = sidebar->library_rail_view_for_testing();
@@ -907,9 +912,124 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   EXPECT_EQ(MahoSidebarLibraryRailView::Category::kSpaces,
             rail->selected_category());
   EXPECT_GT(sidebar->spaces_view_for_testing()->GetBoundsInScreen().height(), 0);
-  EXPECT_TRUE(sidebar->spaces_view_for_testing()->scroll_view_for_testing());
   ASSERT_TRUE(sidebar->archive_view_for_testing());
   EXPECT_FALSE(sidebar->archive_view_for_testing()->GetVisible());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
+                        LibraryOpensSpacesPaneInOverlay) {
+  SeedProfile(2);
+  ResolveViews();
+
+  auto* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+  auto* rail = sidebar->library_rail_view_for_testing();
+  ASSERT_TRUE(rail);
+  auto* spaces_button = rail->button_for_category_for_testing(
+      MahoSidebarLibraryRailView::Category::kSpaces);
+  ASSERT_TRUE(spaces_button);
+
+  sidebar->OpenLibrary(MahoSidebarLibraryRailView::Category::kArchivedTabs);
+  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(sidebar->is_library_mode_for_testing());
+
+  // Confirm default is true (opens overlay)
+  browser()->profile()->GetPrefs()->SetBoolean(
+      maho::sidebar_prefs::kSpacesFullViewport, true);
+
+  views::test::ButtonTestApi(spaces_button).NotifyClick(ui::test::TestEvent());
+  base::RunLoop().RunUntilIdle();
+
+  // Overlay should be visible
+  auto* container = GetContainerView();
+  ASSERT_TRUE(container);
+  EXPECT_TRUE(container->IsSpacesOverlayVisible());
+
+  // Dismiss overlay by toggling it again
+  container->ToggleSpacesOverlay();
+  base::RunLoop().RunUntilIdle();
+
+  // Verify that the selection is cleared on the library rail
+  EXPECT_FALSE(container->IsSpacesOverlayVisible());
+  EXPECT_EQ(static_cast<MahoSidebarLibraryRailView::Category>(-1), rail->selected_category());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
+                       LibraryDismissesSpacesOverlayOnCategorySwitch) {
+  SeedProfile(2);
+  ResolveViews();
+
+  auto* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+  auto* rail = sidebar->library_rail_view_for_testing();
+  ASSERT_TRUE(rail);
+  auto* spaces_button = rail->button_for_category_for_testing(
+      MahoSidebarLibraryRailView::Category::kSpaces);
+  ASSERT_TRUE(spaces_button);
+
+  sidebar->OpenLibrary(MahoSidebarLibraryRailView::Category::kArchivedTabs);
+  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(sidebar->is_library_mode_for_testing());
+
+  // Enable overlay pref
+  browser()->profile()->GetPrefs()->SetBoolean(
+      maho::sidebar_prefs::kSpacesFullViewport, true);
+
+  // Click Spaces to open overlay
+  views::test::ButtonTestApi(spaces_button).NotifyClick(ui::test::TestEvent());
+  base::RunLoop().RunUntilIdle();
+
+  auto* container = GetContainerView();
+  ASSERT_TRUE(container);
+  EXPECT_TRUE(container->IsSpacesOverlayVisible());
+
+  // Switch to Archived Tabs category (non-Spaces)
+  auto* archived_button = rail->button_for_category_for_testing(
+      MahoSidebarLibraryRailView::Category::kArchivedTabs);
+  ASSERT_TRUE(archived_button);
+  views::test::ButtonTestApi(archived_button).NotifyClick(ui::test::TestEvent());
+  base::RunLoop().RunUntilIdle();
+
+  // Verify that the overlay is dismissed
+  EXPECT_FALSE(container->IsSpacesOverlayVisible());
+  EXPECT_EQ(MahoSidebarLibraryRailView::Category::kArchivedTabs, rail->selected_category());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
+                       LibraryDismissesSpacesOverlayOnAutoHide) {
+  SeedProfile(2);
+  ResolveViews();
+
+  auto* sidebar = GetSidebarView();
+  ASSERT_TRUE(sidebar);
+  auto* rail = sidebar->library_rail_view_for_testing();
+  ASSERT_TRUE(rail);
+  auto* spaces_button = rail->button_for_category_for_testing(
+      MahoSidebarLibraryRailView::Category::kSpaces);
+  ASSERT_TRUE(spaces_button);
+
+  sidebar->OpenLibrary(MahoSidebarLibraryRailView::Category::kArchivedTabs);
+  base::RunLoop().RunUntilIdle();
+
+  // Enable overlay pref
+  browser()->profile()->GetPrefs()->SetBoolean(
+      maho::sidebar_prefs::kSpacesFullViewport, true);
+
+  // Click Spaces to open overlay
+  views::test::ButtonTestApi(spaces_button).NotifyClick(ui::test::TestEvent());
+  base::RunLoop().RunUntilIdle();
+
+  auto* container = GetContainerView();
+  ASSERT_TRUE(container);
+  EXPECT_TRUE(container->IsSpacesOverlayVisible());
+
+  // Simulate auto-hide transition by collapsing the panel (unpinning)
+  browser()->profile()->GetPrefs()->SetBoolean(
+      maho::sidebar_prefs::kSidebarPanelExpanded, false);
+  base::RunLoop().RunUntilIdle();
+
+  // Verify that the overlay is dismissed automatically
+  EXPECT_FALSE(container->IsSpacesOverlayVisible());
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,

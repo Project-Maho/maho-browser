@@ -11,11 +11,18 @@
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/view.h"
 
+class Browser;
+
 namespace views {
 class Label;
 }  // namespace views
 
 namespace maho {
+
+enum class SpacesBoardRenderMode {
+  kEmbedded,
+  kFullViewport,
+};
 
 class MahoSpacesOverlayBoardView : public views::View {
   METADATA_HEADER(MahoSpacesOverlayBoardView, views::View)
@@ -23,7 +30,9 @@ class MahoSpacesOverlayBoardView : public views::View {
  public:
   using SpaceSelectedCallback = base::RepeatingCallback<void(const std::string&)>;
 
-  MahoSpacesOverlayBoardView(const SpaceBoardModel& model,
+  MahoSpacesOverlayBoardView(Browser* browser,
+                             SpacesBoardRenderMode render_mode,
+                             const SpaceBoardModel& model,
                              SpaceSelectedCallback callback);
   MahoSpacesOverlayBoardView(const MahoSpacesOverlayBoardView&) = delete;
   MahoSpacesOverlayBoardView& operator=(
@@ -33,6 +42,8 @@ class MahoSpacesOverlayBoardView : public views::View {
   void OnThemeChanged() override;
 
  private:
+  raw_ptr<Browser> browser_;
+  SpacesBoardRenderMode render_mode_;
   SpaceBoardModel model_;
   SpaceSelectedCallback space_selected_callback_;
   raw_ptr<views::Label> empty_state_label_ = nullptr;

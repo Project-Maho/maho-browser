@@ -27,6 +27,8 @@ class MahoSplitViewController {
   MahoSplitViewController(const MahoSplitViewController&) = delete;
   MahoSplitViewController& operator=(const MahoSplitViewController&) = delete;
 
+  static void RestoreForWindow(Browser* browser);
+
   void AddSplit();
   void AddSplitWithURL(const GURL& url);
   void RemoveSplit();

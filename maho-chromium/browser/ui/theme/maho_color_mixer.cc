@@ -29,6 +29,11 @@ constexpr SkColor kTitlebarGlassDark = SkColorSetARGB(209, 34, 31, 50);
 constexpr SkColor kTitlebarGlassLight = SkColorSetARGB(235, 237, 238, 247);
 constexpr SkColor kSidebarBackgroundDark = SkColorSetARGB(255, 39, 35, 54);
 constexpr SkColor kSidebarBackgroundLight = SkColorSetARGB(255, 228, 229, 238);
+
+// Minimum alpha for kMahoColorSidebarBackground when the theme opacity slider
+// is at 0.0. Below this the vibrancy backdrop drowns the tab labels.
+// Matches Chromium's kBrowserFrameAlphaLight (95) used by kGlassFrame.
+constexpr SkAlpha kSidebarMinAlpha = 95;
 constexpr SkColor kContentBackgroundDark = SkColorSetARGB(255, 28, 27, 45);
 constexpr SkColor kContentBackgroundLight = SkColorSetARGB(255, 246, 247, 251);
 constexpr SkColor kContentGradientTopDark = SkColorSetARGB(255, 35, 33, 55);
@@ -395,7 +400,7 @@ SkColor AdjustThemeTint(const MahoSpaceThemeState::SpaceHSV& hsv,
   return SkHSVToColor(alpha, adjusted);
 }
 
-float GetSidebarBlendForKind(MahoSpaceThemeState::ThemeKind kind) {
+[[maybe_unused]] float GetSidebarBlendForKind(MahoSpaceThemeState::ThemeKind kind) {
   switch (kind) {
     case MahoSpaceThemeState::ThemeKind::kSolid:
       return 0.08f;
@@ -525,29 +530,33 @@ void AddMahoColorMixers(ui::ColorProvider* provider,
 
     const float opacity_bias = 0.65f + theme_data->opacity * 0.35f;
     const float texture_bias = 0.04f + theme_data->texture * 0.08f;
-    const float grain_bias = theme_data->grain * 0.04f;
 
-    const SkColor primary_tint = AdjustThemeTint(
+    const SkColor primary_tint = SkColorSetA(AdjustThemeTint(
         theme_data->primary_hsv, dark_mode,
         theme_data->kind == MahoSpaceThemeState::ThemeKind::kSolid ? 22 : 18,
-        1.0f, dark_mode ? 0.02f : 0.0f, 0.85f, 1.08f);
+        1.0f, dark_mode ? 0.02f : 0.0f, 0.85f, 1.08f), 255);
 
     const MahoSpaceThemeState::SpaceHSV& secondary_hsv =
         theme_data->secondary_hsv.value_or(theme_data->primary_hsv);
-    const SkColor secondary_tint = AdjustThemeTint(
+    const SkColor secondary_tint = SkColorSetA(AdjustThemeTint(
         secondary_hsv, dark_mode,
         theme_data->kind == MahoSpaceThemeState::ThemeKind::kZen ? 15 : 18,
         theme_data->kind == MahoSpaceThemeState::ThemeKind::kZen ? 0.72f : 0.9f,
         dark_mode ? -0.03f : 0.0f, 0.78f,
-        theme_data->kind == MahoSpaceThemeState::ThemeKind::kZen ? 1.02f : 1.05f);
+        theme_data->kind == MahoSpaceThemeState::ThemeKind::kZen ? 1.02f : 1.05f), 255);
 
     ui::ColorMixer& tint_mixer = provider->AddMixer();
     tint_mixer[kMahoColorTitlebarGlass] = {maho_theme::BlendColors(
         base_titlebar, primary_tint,
         GetTitlebarBlendForKind(theme_data->kind) * opacity_bias)};
-    tint_mixer[kMahoColorSidebarBackground] = {maho_theme::BlendColors(
+    const SkColor sidebar_blended = maho_theme::BlendColors(
         base_sidebar, primary_tint,
-        GetSidebarBlendForKind(theme_data->kind) * opacity_bias + grain_bias)};
+        GetSidebarBlendForKind(theme_data->kind) * opacity_bias);
+    const SkAlpha sidebar_alpha = static_cast<SkAlpha>(
+        kSidebarMinAlpha +
+        (255 - kSidebarMinAlpha) * std::clamp(theme_data->opacity, 0.0f, 1.0f));
+    tint_mixer[kMahoColorSidebarBackground] = {
+        SkColorSetA(sidebar_blended, sidebar_alpha)};
     tint_mixer[kMahoColorContentBackground] = {maho_theme::BlendColors(
         base_content, primary_tint,
         GetContentBlendForKind(theme_data->kind) * opacity_bias)};

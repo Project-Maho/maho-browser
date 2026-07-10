@@ -47,6 +47,8 @@ source_set("unit_tests") {
 
 source_set("maho_spaces_overlay") {
   sources = [
+    "maho_browser_frame_overlay_host.cc",
+    "maho_browser_frame_overlay_host.h",
     "maho_spaces_overlay_board_view.cc",
     "maho_spaces_overlay_board_view.h",
     "maho_spaces_overlay_column_view.cc",
@@ -70,5 +72,10 @@ source_set("maho_spaces_overlay") {
     "//ui/events",
     "//ui/gfx",
     "//ui/views",
+    "//skia",
+    "//maho/browser/ui/views/maho_lucide_icons:maho_lucide_icon_library",
+    "//chrome/browser/favicon",
+    "//components/favicon/core",
+    "//components/favicon_base",
   ]
 }

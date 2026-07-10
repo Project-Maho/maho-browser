@@ -10,6 +10,16 @@
 #include "base/values.h"
 #include "maho/browser/ui/theme/maho_space_theme_io.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "maho/browser/ai/maho_ai_llm_client.h"
+#include "maho/browser/ai/maho_model_list_fetcher.h"
+#include "base/test/task_environment.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "components/prefs/testing_pref_service.h"
+#include "components/prefs/pref_registry_simple.h"
+#include "maho/browser/ai/maho_unified_agent_adapter.h"
+#include "maho/browser/ui/webui/maho_auth_utils.h"
+#include "maho/browser/ui/webui/maho_account_prefs.h"
+#include "maho/browser/ui/webui/maho_ai_prefs.h"
 
 namespace maho_theme {
 namespace {
@@ -966,3 +976,123 @@ TEST_F(MahoSpaceThemeIoValidationTest, RejectsZenTypeWithInvalidHarmony) {
 
 }  // namespace
 }  // namespace maho_theme
+
+class MahoModelListFetcherTestHelper {
+ public:
+  static std::vector<std::string> GetHardcodedFallback(const maho::ai::MahoModelListFetcher& fetcher, const std::string& provider_id) {
+    return fetcher.GetHardcodedFallback(provider_id);
+  }
+};
+
+class MahoAiLlmClientTestHelper {
+ public:
+  static void SetIsRetry(MahoAiLlmClient* client, bool is_retry) {
+    client->is_retry_ = is_retry;
+  }
+  static bool GetIsRetry(const MahoAiLlmClient* client) {
+    return client->is_retry_;
+  }
+  static void SetPendingRequest(MahoAiLlmClient* client, MahoAiLlmClient::CompletionRequest req) {
+    client->pending_request_ = MahoAiLlmClient::PendingRequest(
+        std::move(req),
+        MahoAiLlmClient::TokenCallback(),
+        MahoAiLlmClient::CompleteCallback(),
+        MahoAiLlmClient::ErrorCallback());
+  }
+  static bool HasPendingRequest(const MahoAiLlmClient* client) {
+    return client->pending_request_.has_value();
+  }
+};
+
+TEST(MahoModelListFetcherTest, GetHardcodedFallback) {
+  base::test::TaskEnvironment task_environment;
+  maho::ai::MahoModelListFetcher fetcher(nullptr, nullptr);
+  std::vector<std::string> anthropic_models =
+      MahoModelListFetcherTestHelper::GetHardcodedFallback(fetcher, "anthropic");
+  ASSERT_EQ(anthropic_models.size(), 3u);
+  EXPECT_EQ(anthropic_models[0], "claude-sonnet-4-20250514");
+  EXPECT_EQ(anthropic_models[1], "claude-opus-4-20250514");
+  EXPECT_EQ(anthropic_models[2], "claude-3-5-haiku-20241022");
+}
+
+TEST(MahoAiLlmClientTest, ResetClearsRetryAndPendingRequest) {
+  base::test::TaskEnvironment task_environment;
+  TestingPrefServiceSimple prefs;
+  prefs.registry()->RegisterStringPref("maho.ai.provider", "maho-managed");
+  MahoAiLlmClient client(&prefs, nullptr, nullptr, false);
+  MahoAiLlmClientTestHelper::SetIsRetry(&client, true);
+  
+  MahoAiLlmClient::CompletionRequest req;
+  req.endpoint = "http://localhost:8000";
+  req.model = "test-model";
+  MahoAiLlmClientTestHelper::SetPendingRequest(&client, std::move(req));
+
+  EXPECT_TRUE(MahoAiLlmClientTestHelper::GetIsRetry(&client));
+  EXPECT_TRUE(MahoAiLlmClientTestHelper::HasPendingRequest(&client));
+
+  client.Reset();
+
+  EXPECT_FALSE(MahoAiLlmClientTestHelper::GetIsRetry(&client));
+  EXPECT_FALSE(MahoAiLlmClientTestHelper::HasPendingRequest(&client));
+}
+
+class MahoUnifiedAgentAdapterTestHelper {
+ public:
+  static MahoAgentPermissionDecision OnAgentPermissionOnSequence(
+      MahoUnifiedAgentAdapter* adapter,
+      const char* tool_name,
+      const char* arguments) {
+    return adapter->OnAgentPermissionOnSequence(tool_name, arguments);
+  }
+};
+
+TEST(MahoUnifiedAgentAdapterTest, ApprovalPolicyThreeWaySplit) {
+  base::test::TaskEnvironment task_environment;
+  TestingPrefServiceSimple prefs;
+  prefs.registry()->RegisterStringPref(maho::ai_prefs::kApprovalPolicy, "prompt");
+  
+  MahoUnifiedAgentAdapter adapter(&prefs, nullptr);
+
+  // 1. With "allow" policy: should return Allow immediately for fs_read
+  prefs.SetString(maho::ai_prefs::kApprovalPolicy, "allow");
+  EXPECT_EQ(MahoUnifiedAgentAdapterTestHelper::OnAgentPermissionOnSequence(&adapter, "fs_read", "{}"),
+            MahoAgentPermissionDecision_Allow);
+
+  // 2. With "deny" policy: should return Deny immediately for fs_read
+  prefs.SetString(maho::ai_prefs::kApprovalPolicy, "deny");
+  EXPECT_EQ(MahoUnifiedAgentAdapterTestHelper::OnAgentPermissionOnSequence(&adapter, "fs_read", "{}"),
+            MahoAgentPermissionDecision_Deny);
+
+  // 3. With "prompt" policy: when permission_extension_id_ is empty and tool is shell_exec, should return Deny
+  prefs.SetString(maho::ai_prefs::kApprovalPolicy, "prompt");
+  EXPECT_EQ(MahoUnifiedAgentAdapterTestHelper::OnAgentPermissionOnSequence(&adapter, "shell_exec", "{}"),
+            MahoAgentPermissionDecision_Deny);
+}
+
+TEST(MahoAuthUtilsTest, HasValidRelaySession) {
+  base::test::TaskEnvironment task_environment;
+  TestingPrefServiceSimple prefs;
+  prefs.registry()->RegisterStringPref(maho::account_prefs::kRelayAccessTokenEncryptedB64, "");
+  prefs.registry()->RegisterInt64Pref(maho::account_prefs::kRelayAccessTokenExpiresAt, 0);
+  prefs.registry()->RegisterStringPref(maho::account_prefs::kRelayRefreshTokenEncryptedB64, "");
+  prefs.registry()->RegisterInt64Pref(maho::account_prefs::kRelayRefreshTokenExpiresAt, 0);
+
+  // 1. Initially empty should be invalid
+  EXPECT_FALSE(maho::auth::HasValidRelaySession(&prefs));
+
+  // 2. Access token set and not expired (expires in future)
+  prefs.SetString(maho::account_prefs::kRelayAccessTokenEncryptedB64, "some-token");
+  prefs.SetInt64(maho::account_prefs::kRelayAccessTokenExpiresAt, base::Time::Now().ToTimeT() + 3600);
+  EXPECT_TRUE(maho::auth::HasValidRelaySession(&prefs));
+
+  // 3. Access token expired but refresh token valid
+  prefs.SetInt64(maho::account_prefs::kRelayAccessTokenExpiresAt, base::Time::Now().ToTimeT() - 3600);
+  prefs.SetString(maho::account_prefs::kRelayRefreshTokenEncryptedB64, "some-refresh");
+  prefs.SetInt64(maho::account_prefs::kRelayRefreshTokenExpiresAt, base::Time::Now().ToTimeT() + 3600);
+  EXPECT_TRUE(maho::auth::HasValidRelaySession(&prefs));
+
+  // 4. Both expired
+  prefs.SetInt64(maho::account_prefs::kRelayRefreshTokenExpiresAt, base::Time::Now().ToTimeT() - 3600);
+  EXPECT_FALSE(maho::auth::HasValidRelaySession(&prefs));
+}
+

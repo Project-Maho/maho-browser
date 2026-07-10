@@ -23,6 +23,7 @@
 #include "ui/base/clipboard/clipboard_format_type.h"
 #include "ui/base/dragdrop/drop_target_event.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
+#include "ui/gfx/image/image_skia.h"
 #include "ui/views/view.h"
 #include "ui/views/view_observer.h"
 #include "ui/views/controls/scroll_view.h"
@@ -54,8 +55,10 @@ enum class MahoSidebarBodyMode {
 class MahoSidebarArchiveView;
 class MahoSidebarCreateSpaceView;
 class MahoSidebarDownloadsView;
+
 class MahoSidebarFavoritesGridView;
 class MahoSidebarFooterView;
+class MahoSidebarGrainOverlayView;
 class MahoSidebarLibraryActionPaneView;
 class MahoSidebarMediaView;
 class MahoSidebarNowPlayingView;
@@ -67,6 +70,7 @@ class MahoSidebarTopBarView;
 class MahoSidebarNotesView;
 class MahoSidebarEaselsView;
 class MahoSidebarSpacesView;
+class MahoSpacesOverlayBoardView;
 
 class MahoSidebarView
     : public views::View,
@@ -83,6 +87,7 @@ class MahoSidebarView
   ~MahoSidebarView() override;
 
   void OnThemeChanged() override;
+  void Layout(PassKey) override;
 
   bool GetDropFormats(int* formats,
                       std::set<ui::ClipboardFormatType>* format_types) override;
@@ -145,10 +150,14 @@ class MahoSidebarView
            active_library_category_ ==
                MahoSidebarLibraryRailView::Category::kArchivedTabs;
   }
-  bool is_library_mode_for_testing() const {
+  bool IsInLibraryMode() const {
     return current_body_mode_ == MahoSidebarBodyMode::kLibrary;
   }
-  MahoSidebarSpacesView* spaces_view_for_testing() {
+  MahoSidebarLibraryRailView::Category GetActiveLibraryCategory() const {
+    return active_library_category_;
+  }
+  bool is_library_mode_for_testing() const { return IsInLibraryMode(); }
+  MahoSpacesOverlayBoardView* spaces_view_for_testing() {
     return spaces_view_;
   }
   MahoSidebarEaselsView* easel_view_for_testing() {
@@ -167,6 +176,7 @@ class MahoSidebarView
  private:
   void BuildUi();
   void OnTabListScrolled();
+  void UpdateSidebarBorderForOverlay();
   void SetBodyMode(MahoSidebarBodyMode mode);
   void CaptureLastFocusedBodyView();
   void RestoreLastFocusedBodyView();
@@ -218,6 +228,7 @@ class MahoSidebarView
       TabStripModel* tab_strip_model,
       const TabStripModelChange& change,
       const TabStripSelectionChange& selection) override;
+  void OnSplitTabChanged(const SplitTabChange& change) override;
   void OnTabChangedAt(tabs::TabInterface* tab,
                       int index,
                       TabChangeType change_type) override;
@@ -240,7 +251,7 @@ class MahoSidebarView
   raw_ptr<MahoSidebarArchiveView> archive_view_ = nullptr;
   raw_ptr<MahoSidebarDownloadsView> downloads_view_ = nullptr;
   raw_ptr<MahoSidebarMediaView> media_view_ = nullptr;
-  raw_ptr<MahoSidebarSpacesView> spaces_view_ = nullptr;
+  raw_ptr<MahoSpacesOverlayBoardView> spaces_view_ = nullptr;
   raw_ptr<MahoSidebarEaselsView> easel_view_ = nullptr;
   raw_ptr<MahoSidebarNotesView> notes_view_ = nullptr;
   raw_ptr<MahoSidebarLibraryRailView> library_rail_view_ = nullptr;
@@ -258,6 +269,7 @@ class MahoSidebarView
   raw_ptr<MahoSidebarUpdateNotificationView> update_notification_view_ =
       nullptr;
   raw_ptr<MahoSidebarCreateSpaceView> create_space_view_ = nullptr;
+  raw_ptr<MahoSidebarGrainOverlayView> grain_overlay_ = nullptr;
   std::unique_ptr<views::ViewTracker> last_focused_body_view_tracker_;
   MahoSidebarStateAdapter state_adapter_;
   MahoSidebarBodyMode current_body_mode_ = MahoSidebarBodyMode::kTabs;
@@ -276,6 +288,8 @@ class MahoSidebarView
       translate_observation_{this};
 
   void OnBackgroundStateReady(SidebarStateBackgroundResult result);
+
+  bool last_over_favorites_ = false;
 
   base::WeakPtrFactory<MahoSidebarView> weak_factory_{this};
 };

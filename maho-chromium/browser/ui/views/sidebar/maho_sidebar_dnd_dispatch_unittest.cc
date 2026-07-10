@@ -25,6 +25,14 @@
 #include "ui/views/test/button_test_api.h"
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/widget/widget.h"
+#include "chrome/test/base/testing_profile.h"
+#include "chrome/test/base/test_browser_window.h"
+#include "chrome/browser/ui/browser.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
+#include "components/prefs/pref_service.h"
+#include "ui/views/layout/box_layout_view.h"
+#include "ui/views/layout/box_layout.h"
+#include "content/public/test/browser_task_environment.h"
 
 namespace maho {
 namespace {
@@ -4054,11 +4062,213 @@ TEST_F(SidebarDnDDispatchTest,
   views::View* divider = separator->children().front();
   EXPECT_EQ(divider->GetPreferredSize().height(), 1)
       << "Child divider must report a preferred height of 1dp; a zero or "
-         "missing height would make the separator invisible without a failing "
-         "pixel test";
+          "missing height would make the separator invisible without a failing "
+          "pixel test";
   EXPECT_NE(divider->background(), nullptr)
       << "Child divider must have a non-null background; an empty/transparent "
-         "background would silently revert the separator to invisible";
+          "background would silently revert the separator to invisible";
+}
+
+class SidebarSplitGroupRenderTest : public views::ViewsTestBase {
+ public:
+  SidebarSplitGroupRenderTest()
+      : views::ViewsTestBase(
+            std::unique_ptr<base::test::TaskEnvironment>(
+                std::make_unique<content::BrowserTaskEnvironment>())) {}
+};
+
+views::BoxLayoutView* FindSplitGroupContainer(views::View* root) {
+  if (root && root->GetClassName() == "BoxLayoutView") {
+    return static_cast<views::BoxLayoutView*>(root);
+  }
+  if (root) {
+    for (views::View* child : root->children()) {
+      if (auto* found = FindSplitGroupContainer(child)) {
+        return found;
+      }
+    }
+  }
+  return nullptr;
+}
+
+TEST_F(SidebarSplitGroupRenderTest, SplitGroup_HorizontalOrientation_RendersRow) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+
+  SidebarTreeNode split_group;
+  split_group.kind = SidebarNodeKind::kSplitGroup;
+  split_group.split_id = "split-1";
+  split_group.split_orientation = "vertical";
+  split_group.children.push_back(MakeTabNode("tab-1", 0));
+  split_group.children.push_back(MakeTabNode("tab-2", 1));
+  model.normal_tree.push_back(split_group);
+
+  list.Update(model, /*browser=*/nullptr);
+
+  views::View* normal_section = list.FindSectionDropTargetForTesting(MahoSidebarTabSection::kNormal);
+  ASSERT_NE(normal_section, nullptr);
+
+  views::BoxLayoutView* split_container = FindSplitGroupContainer(normal_section);
+  ASSERT_NE(split_container, nullptr);
+
+  // Vertical split in viewport -> horizontal layout orientation in sidebar
+  EXPECT_EQ(split_container->GetOrientation(), views::LayoutOrientation::kHorizontal);
+}
+
+TEST_F(SidebarSplitGroupRenderTest, SplitGroup_HorizontalOrientation_WhenPanelCollapsed_RendersColumn) {
+  TestingProfile profile;
+  TestBrowserWindow* window = new TestBrowserWindow();
+  Browser::CreateParams params(&profile, true);
+  params.window = window;
+  Browser* browser = Browser::Create(params);
+
+  // Set pref to collapsed (expanded = false)
+  profile.GetPrefs()->SetBoolean(sidebar_prefs::kSidebarPanelExpanded, false);
+
+  MahoSidebarTabListView list(browser);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+
+  SidebarTreeNode split_group;
+  split_group.kind = SidebarNodeKind::kSplitGroup;
+  split_group.split_id = "split-1";
+  split_group.split_orientation = "vertical";
+  split_group.children.push_back(MakeTabNode("tab-1", 0));
+  split_group.children.push_back(MakeTabNode("tab-2", 1));
+  model.normal_tree.push_back(split_group);
+
+  list.Update(model, browser);
+
+  views::View* normal_section = list.FindSectionDropTargetForTesting(MahoSidebarTabSection::kNormal);
+  ASSERT_NE(normal_section, nullptr);
+
+  views::BoxLayoutView* split_container = FindSplitGroupContainer(normal_section);
+  ASSERT_NE(split_container, nullptr);
+
+  // Forced to kVertical because panel is collapsed (narrow mode)
+  EXPECT_EQ(split_container->GetOrientation(), views::LayoutOrientation::kVertical);
+}
+
+TEST_F(SidebarSplitGroupRenderTest, SplitGroup_EqualFlex_IgnoresRatio) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+
+  SidebarTreeNode split_group;
+  split_group.kind = SidebarNodeKind::kSplitGroup;
+  split_group.split_id = "split-1";
+  split_group.split_orientation = "vertical";
+  split_group.split_ratio = 0.7; // ratio should be ignored
+  split_group.children.push_back(MakeTabNode("tab-1", 0));
+  split_group.children.push_back(MakeTabNode("tab-2", 1));
+  model.normal_tree.push_back(split_group);
+
+  list.Update(model, /*browser=*/nullptr);
+
+  views::View* normal_section = list.FindSectionDropTargetForTesting(MahoSidebarTabSection::kNormal);
+  ASSERT_NE(normal_section, nullptr);
+
+  views::BoxLayoutView* split_container = FindSplitGroupContainer(normal_section);
+  ASSERT_NE(split_container, nullptr);
+
+  // Trigger layout
+  list.SetBounds(0, 0, 200, 400);
+  list.DeprecatedLayoutImmediately();
+
+  // Children layout: tab1 (lane, row, lane) -> divider -> tab2 (lane, row, lane)
+  views::View* tab1 = split_container->children()[1];
+  views::View* tab2 = split_container->children()[5];
+  
+  EXPECT_GT(tab1->bounds().width(), 0);
+  EXPECT_LE(std::abs(tab1->bounds().width() - tab2->bounds().width()), 1);
+}
+
+TEST_F(SidebarSplitGroupRenderTest, SplitGroup_DividerInsertedBetweenChildren) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+
+  SidebarTreeNode split_group;
+  split_group.kind = SidebarNodeKind::kSplitGroup;
+  split_group.split_id = "split-1";
+  split_group.split_orientation = "vertical";
+  split_group.children.push_back(MakeTabNode("tab-1", 0));
+  split_group.children.push_back(MakeTabNode("tab-2", 1));
+  model.normal_tree.push_back(split_group);
+
+  list.Update(model, /*browser=*/nullptr);
+
+  views::View* normal_section = list.FindSectionDropTargetForTesting(MahoSidebarTabSection::kNormal);
+  ASSERT_NE(normal_section, nullptr);
+
+  views::BoxLayoutView* split_container = FindSplitGroupContainer(normal_section);
+  ASSERT_NE(split_container, nullptr);
+
+  // Container must have 7 children: tab1 (3 views) -> divider (1 view) -> tab2 (3 views)
+  ASSERT_EQ(split_container->children().size(), 7u);
+  
+  views::View* divider = split_container->children()[3];
+  EXPECT_EQ(divider->GetClassName(), "View");
+  EXPECT_EQ(divider->GetPreferredSize().width(), 1);
+  EXPECT_EQ(divider->GetPreferredSize().height(), 16);
+}
+
+TEST_F(SidebarSplitGroupRenderTest, SplitGroup_ActiveChildHighlights) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+
+  SidebarTreeNode split_group;
+  split_group.kind = SidebarNodeKind::kSplitGroup;
+  split_group.split_id = "split-1";
+  split_group.split_orientation = "vertical";
+  
+  SidebarTreeNode tab1 = MakeTabNode("tab-1", 0);
+  tab1.is_active = true; // active tab
+  split_group.children.push_back(tab1);
+  split_group.children.push_back(MakeTabNode("tab-2", 1));
+  model.normal_tree.push_back(split_group);
+
+  list.Update(model, /*browser=*/nullptr);
+
+  views::View* normal_section = list.FindSectionDropTargetForTesting(MahoSidebarTabSection::kNormal);
+  ASSERT_NE(normal_section, nullptr);
+
+  views::BoxLayoutView* split_container = FindSplitGroupContainer(normal_section);
+  ASSERT_NE(split_container, nullptr);
+
+  // Active child -> background is non-null
+  EXPECT_NE(split_container->background(), nullptr);
+}
+
+TEST_F(SidebarSplitGroupRenderTest, SplitGroup_TwoLayoutOrientationsHaveDifferentDividerAxis) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+
+  SidebarTreeNode split_group;
+  split_group.kind = SidebarNodeKind::kSplitGroup;
+  split_group.split_id = "split-1";
+  split_group.split_orientation = "horizontal";
+  split_group.children.push_back(MakeTabNode("tab-1", 0));
+  split_group.children.push_back(MakeTabNode("tab-2", 1));
+  model.normal_tree.push_back(split_group);
+
+  list.Update(model, /*browser=*/nullptr);
+
+  views::View* normal_section = list.FindSectionDropTargetForTesting(MahoSidebarTabSection::kNormal);
+  ASSERT_NE(normal_section, nullptr);
+
+  views::BoxLayoutView* split_container = FindSplitGroupContainer(normal_section);
+  ASSERT_NE(split_container, nullptr);
+
+  EXPECT_EQ(split_container->GetOrientation(), views::LayoutOrientation::kVertical);
+  
+  ASSERT_EQ(split_container->children().size(), 7u);
+  views::View* divider = split_container->children()[3];
+  EXPECT_EQ(divider->GetPreferredSize().width(), 16);
+  EXPECT_EQ(divider->GetPreferredSize().height(), 1);
 }
 
 }  // namespace

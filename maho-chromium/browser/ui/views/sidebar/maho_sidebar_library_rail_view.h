@@ -50,6 +50,7 @@ class MahoSidebarLibraryRailView : public views::View {
   ~MahoSidebarLibraryRailView() override;
 
   void SetSelectedCategory(Category category);
+  void ClearSelection();
   Category selected_category() const { return selected_category_; }
 
   void SetCategorySelectedCallback(CategorySelectedCallback callback);

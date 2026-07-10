@@ -1132,12 +1132,13 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '#include "maho/browser/ui/tabs/maho_mru_tab_tracker.h"\n'
                 '#include "maho/browser/maho_tab_id_session_helper.h"\n'
                 '#include "maho/browser/maho_tab_preview_capture.h"\n'
+                '#include "maho/third_party/maho/maho_ffi.h"\n'
+                '#include "maho/browser/maho_core_holder.h"\n'
             ),
             description=(
-                "Include MahoMruTabTracker header in browser_view.cc for the "
-                "Ctrl+Tab MRU switcher feature"
+                "Include MahoMruTabTracker and MahoCore FFI headers in browser_view.cc"
             ),
-            guard='#include "maho/browser/maho_tab_id_session_helper.h"',
+            guard='#include "maho/third_party/maho/maho_ffi.h"',
         ),
         Replacement(
             old='#include "maho/browser/ui/tabs/maho_mru_tab_tracker.h"\n',
@@ -1779,6 +1780,26 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "FindCommandIdForAccelerator path unchanged"
             ),
             guard="Maho: Try to dispatch as a Maho shortcut first",
+        ),
+        Replacement(
+            old=(
+                "BrowserView::~BrowserView() {\n"
+                "  // Remove the layout manager to avoid dangling. This needs to be earlier than\n"
+                "  // other cleanups that destroy views referenced in the layout manager.\n"
+                "  SetLayoutManager(nullptr);\n"
+            ),
+            new=(
+                "BrowserView::~BrowserView() {\n"
+                "  // Remove the layout manager to avoid dangling. This needs to be earlier than\n"
+                "  // other cleanups that destroy views referenced in the layout manager.\n"
+                "  SetLayoutManager(nullptr);\n"
+                "\n"
+                "  if (auto* core = maho::GetCore()) {\n"
+                "    maho_core_window_closed(core, std::to_string(browser_->session_id().id()).c_str());\n"
+                "  }\n"
+            ),
+            description="Call maho_core_window_closed in BrowserView destructor",
+            guard="maho_core_window_closed(core",
         ),
     ],
     # ── browser.cc ───────────────────────────────────────────────────────────
@@ -2471,6 +2492,46 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  }"
             ),
             description="Suppress upstream MediaToolbarButtonView addition",
+        ),
+    ],
+    "chrome/app/chrome_main_delegate.cc": [
+        Replacement(
+            old=(
+                "std::optional<int> ChromeMainDelegate::BasicStartupComplete() {\n"
+                "#if BUILDFLAG(IS_CHROMEOS)\n"
+                "  ash::BootTimesRecorder::Get()->SaveChromeMainStats();\n"
+                "#endif\n"
+            ),
+            new=(
+                "std::optional<int> ChromeMainDelegate::BasicStartupComplete() {\n"
+                "#if BUILDFLAG(IS_CHROMEOS)\n"
+                "  ash::BootTimesRecorder::Get()->SaveChromeMainStats();\n"
+                "#endif\n"
+                "\n"
+                "  // Maho: enable kGlassFrame by default on macOS.\n"
+                "  // Must run before base::FeatureList::InitializeInstance to take\n"
+                "  // effect. Users can still opt out with --disable-features=GlassFrame.\n"
+                "#if BUILDFLAG(IS_MAC)\n"
+                "  {\n"
+                "    auto* cmd = base::CommandLine::ForCurrentProcess();\n"
+                "    const std::string disabled =\n"
+                "        cmd->GetSwitchValueASCII(\"disable-features\");\n"
+                "    if (disabled.find(\"GlassFrame\") == std::string::npos) {\n"
+                "      const std::string existing =\n"
+                "          cmd->GetSwitchValueASCII(\"enable-features\");\n"
+                "      cmd->AppendSwitchASCII(\n"
+                "          \"enable-features\",\n"
+                "          existing.empty() ? std::string(\"GlassFrame\")\n"
+                "                           : existing + \",GlassFrame\");\n"
+                "    }\n"
+                "  }\n"
+                "#endif\n"
+            ),
+            description=(
+                "Maho: enable kGlassFrame by default on macOS for NSWindow "
+                "transparency + NSVisualEffectView sidebar vibrancy"
+            ),
+            guard="Maho: enable kGlassFrame by default on macOS",
         ),
     ],
 }

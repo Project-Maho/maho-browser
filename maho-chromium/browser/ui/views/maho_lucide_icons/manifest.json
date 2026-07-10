@@ -36,6 +36,17 @@
     { "name": "wand-sparkles", "file": "wand_sparkles.icon" },
     { "name": "x", "file": "x.icon" },
     { "name": "zoom-in", "file": "zoom_in.icon" },
-    { "name": "zoom-out", "file": "zoom_out.icon" }
+    { "name": "zoom-out", "file": "zoom_out.icon" },
+    { "name": "play", "file": "play.icon" },
+    { "name": "pause", "file": "pause.icon" },
+    { "name": "skip-back", "file": "skip_back.icon" },
+    { "name": "skip-forward", "file": "skip_forward.icon" },
+    { "name": "volume-2", "file": "volume_2.icon" },
+    { "name": "volume-x", "file": "volume_x.icon" },
+    { "name": "grip-vertical", "file": "grip_vertical.icon" },
+    { "name": "move", "file": "move.icon" },
+    { "name": "arrow-up", "file": "arrow_up.icon" },
+    { "name": "arrow-left", "file": "arrow_left.icon" },
+    { "name": "gift", "file": "gift.icon" }
   ]
 }

@@ -270,16 +270,7 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
   } else if (action_id == "prev_split_view") {
     ToggleActiveSplitPane(browser);
   } else if (action_id == "swap_split_view") {
-    TabStripModel* model = browser->tab_strip_model();
-    if (model) {
-      int active_index = model->active_index();
-      if (active_index != TabStripModel::kNoTab) {
-        auto split_id = model->GetSplitForTab(active_index);
-        if (split_id.has_value()) {
-          model->ReverseTabsInSplit(split_id.value());
-        }
-      }
-    }
+    MahoSplitViewController(browser).SwapSplit();
   } else if (action_id == "toggle_split_view") {
     MahoSplitViewController(browser).ToggleSplit();
   } else if (action_id == "toggle_sidebar") {

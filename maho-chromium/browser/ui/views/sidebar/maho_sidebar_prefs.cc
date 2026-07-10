@@ -17,6 +17,7 @@ const char kSidebarWidth[] = "maho.sidebar.width";
 const char kFavoritesDragHintDismissed[] =
     "maho.sidebar.favorites_drag_hint_dismissed";
 const char kLiveFolders[] = "maho.live_folders";
+const char kSpacesFullViewport[] = "maho.spaces.full_viewport";
 
 int ClampSidebarWidthForLayout(int width) {
   if (width <= sidebar_layout::kLegacyRailWidthResetThresholdDp) {
@@ -57,6 +58,7 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
                                 sidebar_layout::kDefaultRailWidthDp);
   registry->RegisterBooleanPref(kFavoritesDragHintDismissed, false);
   registry->RegisterListPref(kLiveFolders);
+  registry->RegisterBooleanPref(kSpacesFullViewport, true);
 }
 
 void MigrateFromLegacyVisiblePref(PrefService* prefs) {

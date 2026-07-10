@@ -71,6 +71,7 @@
 #include "ui/views/context_menu_controller.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/paint_info.h"
+#include "ui/views/view_class_properties.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/image_button_factory.h"
@@ -79,7 +80,6 @@
 #include "ui/views/controls/label.h"
 #include "ui/views/drag_controller.h"
 #include "ui/views/animation/animation_builder.h"
-#include "ui/views/animation/bounds_animator.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/view_utils.h"
@@ -698,35 +698,24 @@ MahoSidebarFavoritesGridView::MahoSidebarFavoritesGridView(Browser* browser)
 }
 
 MahoSidebarFavoritesGridView::~MahoSidebarFavoritesGridView() {
-  if (drag_bounds_animator_) {
-    drag_bounds_animator_->RemoveObserver(this);
-    drag_bounds_animator_->Cancel();
+  for (size_t i = 0; i < kTileCount; ++i) {
+    if (tile_views_[i] && tile_views_[i]->layer()) {
+      tile_views_[i]->layer()->GetAnimator()->StopAnimating();
+    }
   }
 }
 
 void MahoSidebarFavoritesGridView::CleanupAfterDrop() {
-  if (drag_preview_active_) {
-    ExitDragPreview(false);
-  }
   HideInsertionPreview();
   pending_external_drag_tab_id_.clear();
 }
 
 void MahoSidebarFavoritesGridView::HideOverlayAndPhantom() {
-  if (drag_preview_active_) {
-    ExitDragPreview(false);
-  }
   HideInsertionPreview();
 }
 
 void MahoSidebarFavoritesGridView::OnBoundsChanged(
     const gfx::Rect& previous_bounds) {
-  if (drag_preview_active_) {
-    if (drag_bounds_animator_) {
-      drag_bounds_animator_->Cancel();
-    }
-    return;
-  }
   CancelAnimations();
   views::View::OnBoundsChanged(previous_bounds);
   if (bounds().size() != previous_bounds.size()) {
@@ -736,9 +725,6 @@ void MahoSidebarFavoritesGridView::OnBoundsChanged(
 }
 
 void MahoSidebarFavoritesGridView::Layout(PassKey) {
-  if (drag_preview_active_) {
-    return;
-  }
   LayoutSuperclass<views::View>(this);
   if (drag_preview_tile_ && drag_preview_tile_->GetVisible() &&
       drag_preview_slot_ >= 0) {
@@ -754,9 +740,6 @@ void MahoSidebarFavoritesGridView::Layout(PassKey) {
 
 void MahoSidebarFavoritesGridView::Update(
     const MahoSidebarFavoritesModel& model) {
-  if (drag_preview_active_) {
-    FinalizeExitDragPreview();
-  }
   cancelable_task_tracker_.TryCancelAll();
   SnapshotCurrentBounds();
   const size_t old_count = favorite_count_;
@@ -893,13 +876,11 @@ void MahoSidebarFavoritesGridView::Update(
       tile_labels_[index]->SetText(specs[index].text);
       tile_labels_[index]->SetVisible(false);
       if (tile_views_[index]->layer()) {
-        if (tile_tab_ids_[index] == active_drag_tab_id_ ||
-            tile_tab_ids_[index] == pending_external_drag_tab_id_) {
-          tile_views_[index]->layer()->SetOpacity(0.f);
-        } else {
-          tile_views_[index]->layer()->SetOpacity(1.f);
-          tile_views_[index]->layer()->SetTransform(gfx::Transform());
-        }
+        const bool masked = drag_accepted_tab_id_.empty() &&
+            (tile_tab_ids_[index] == active_drag_tab_id_ ||
+             tile_tab_ids_[index] == pending_external_drag_tab_id_);
+        tile_views_[index]->layer()->SetOpacity(masked ? 0.f : 1.f);
+        if (!masked) tile_views_[index]->layer()->SetTransform(gfx::Transform());
       }
     } else {
       tile_labels_[index]->SetVisible(false);
@@ -1215,21 +1196,15 @@ int MahoSidebarFavoritesGridView::OnDragUpdated(
         event.location(), payload.node_id,
         payload.origin == SidebarDragOrigin::kFavorites);
 
-    if (payload.origin != SidebarDragOrigin::kFavorites) {
-      if (!drag_preview_active_) {
-        EnterDragPreview(preview_index, payload.node_id);
-      } else if (preview_index != current_drag_preview_index_) {
-        current_drag_preview_index_ = preview_index;
-        UpdateDragPreview(preview_index);
+    if (preview_index != current_drag_preview_index_) {
+      AnimateDragPreview(preview_index, payload.node_id);
+      if (payload.origin != SidebarDragOrigin::kFavorites) {
+        ShowInsertionPreview(preview_index, payload.node_id);
+      } else {
+        HideInsertionPreview();
       }
-    } else {
-      if (preview_index != current_drag_preview_index_) {
-        current_drag_preview_index_ = preview_index;
-        AnimateDragPreview(preview_index, payload.node_id);
-      }
-      HideInsertionPreview();
+      current_drag_preview_index_ = preview_index;
     }
-    current_drag_preview_index_ = preview_index;
     SetBorder(nullptr);
   } else {
     current_drag_preview_index_ = 0;
@@ -1299,7 +1274,15 @@ views::View::DropCallback MahoSidebarFavoritesGridView::GetDropCallback(
         }
 
         if (weak_grid) {
+          weak_grid->active_drag_tab_id_.clear();
+          weak_grid->pending_external_drag_tab_id_.clear();
+          weak_grid->drag_accepted_tab_id_.clear();
           weak_grid->CleanupAfterDrop();
+          base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+              FROM_HERE,
+              base::BindOnce(
+                  &MahoSidebarFavoritesGridView::ForceRefreshFromDrop,
+                  weak_grid));
         }
       },
       target_index, favorite_count, weak_factory_.GetWeakPtr());
@@ -1348,9 +1331,6 @@ void MahoSidebarFavoritesGridView::OnDragStarted(const std::string& tab_id) {
 }
 
 void MahoSidebarFavoritesGridView::OnDragEnded() {
-  if (drag_preview_active_) {
-    ExitDragPreview(false);
-  }
   active_drag_tab_id_.clear();
   pending_external_drag_tab_id_.clear();
   current_drag_preview_index_ = -1;
@@ -1391,9 +1371,6 @@ void MahoSidebarFavoritesGridView::OnExternalDragStarted(
 }
 
 void MahoSidebarFavoritesGridView::OnDragExited() {
-  if (drag_preview_active_) {
-    ExitDragPreview(true);
-  }
   current_drag_preview_index_ = -1;
   drag_over_drop_target_ = false;
   SetBorder(nullptr);
@@ -1821,11 +1798,15 @@ void MahoSidebarFavoritesGridView::AnimateDragPreview(
       gfx::Transform offset;
       offset.Translate(dx, dy);
 
+      tile_views_[i]->layer()->GetAnimator()->StopAnimating();
       views::AnimationBuilder()
           .Once()
           .SetDuration(base::Milliseconds(180))
           .SetTransform(tile_views_[i]->layer(), offset,
                         gfx::Tween::EASE_IN_OUT);
+    } else {
+      tile_views_[i]->layer()->GetAnimator()->StopAnimating();
+      tile_views_[i]->layer()->SetTransform(gfx::Transform());
     }
     slot++;
   }
@@ -1857,9 +1838,11 @@ void MahoSidebarFavoritesGridView::ShowInsertionPreview(
     tile->SetVisible(false);
     tile->SetCanProcessEventsWithinSubtree(false);
     tile->SetBackground(views::CreateRoundedRectBackground(
-        kMahoColorInteractiveChipIdleBackground,
+        SkColorSetARGB(255, 255, 220, 0),
         sidebar_layout::kFavoriteTileCornerRadiusDp));
-    tile->SetBorder(views::CreateEmptyBorder(gfx::Insets(1)));
+    tile->SetBorder(views::CreateRoundedRectBorder(
+        3, sidebar_layout::kFavoriteTileCornerRadiusDp,
+        SkColorSetARGB(255, 255, 0, 0)));
 
     auto* tile_layout = tile->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical,
@@ -1889,6 +1872,12 @@ void MahoSidebarFavoritesGridView::ShowInsertionPreview(
     tile->AddChildView(std::move(glyph_container));
 
     drag_preview_tile_ = AddChildView(std::move(tile));
+    drag_preview_tile_->SetProperty(views::kViewIgnoredByLayoutKey, true);
+    drag_preview_tile_->SetPreferredSize(
+        gfx::Size(sidebar_layout::kFavoriteTileHeightDp,
+                  sidebar_layout::kFavoriteTileHeightDp));
+    LOG(INFO) << "[MahoPhantom] Created drag_preview_tile_ has_layer="
+              << (drag_preview_tile_->layer() != nullptr);
   }
 
   // Compute target slot bounds in grid-view coordinates.
@@ -1897,6 +1886,11 @@ void MahoSidebarFavoritesGridView::ShowInsertionPreview(
   const int clamped_index = std::clamp(preview_index, 0, slot_count - 1);
   const auto slot_bounds = GetTileBoundsForCount(slot_count);
   const gfx::Rect target_bounds = slot_bounds[clamped_index];
+  LOG(INFO) << "[MahoPhantom] ShowInsertionPreview preview_index="
+            << preview_index << " clamped=" << clamped_index
+            << " slot_count=" << slot_count
+            << " target_bounds=" << target_bounds.ToString()
+            << " grid_bounds=" << bounds().ToString();
   if (target_bounds.IsEmpty()) {
     HideInsertionPreview();
     return;
@@ -1906,6 +1900,15 @@ void MahoSidebarFavoritesGridView::ShowInsertionPreview(
   drag_preview_tile_->SetBoundsRect(target_bounds);
   drag_preview_tile_->SetVisible(true);
   drag_preview_tile_->layer()->SetOpacity(1.f);
+  drag_preview_tile_->parent()->ReorderChildView(drag_preview_tile_.get(), -1);
+  LOG(INFO) << "[MahoPhantom] Set visible bounds="
+            << drag_preview_tile_->bounds().ToString()
+            << " visible=" << drag_preview_tile_->GetVisible()
+            << " parent=" << drag_preview_tile_->parent()
+            << " parent_bounds="
+            << (drag_preview_tile_->parent()
+                    ? drag_preview_tile_->parent()->bounds().ToString()
+                    : std::string("null"));
 
   if (drag_preview_tab_id_ == tab_id && drag_preview_url_.is_valid()) {
     return;
@@ -2017,180 +2020,18 @@ ui::ImageModel MahoSidebarFavoritesGridView::ResolveFaviconForTabId(
   return ui::ImageModel::FromVectorIcon(vector_icons::kGlobeIcon);
 }
 
-void MahoSidebarFavoritesGridView::EnterDragPreview(
-    int preview_slot,
-    const std::string& dragged_tab_id) {
-  DCHECK(!drag_preview_active_);
-  SnapshotCurrentBounds();
 
-  content_view_->SetLayoutManager(
-      std::unique_ptr<views::LayoutManager>(nullptr));
-
-  drag_preview_tile_order_.clear();
-  for (size_t i = 0; i < kTileCount; ++i) {
-    if (tile_views_[i] && tile_views_[i]->GetVisible() &&
-        tile_tab_ids_[i] != dragged_tab_id) {
-      drag_preview_tile_order_.push_back(i);
-    }
-  }
-
-  for (size_t i : drag_preview_tile_order_) {
-    views::View* tile = tile_views_[i];
-    gfx::Rect seed = snapshot_bounds_[i];
-    gfx::Point origin = seed.origin();
-    views::View::ConvertPointToTarget(this, content_view_, &origin);
-    seed.set_origin(origin);
-
-    views::View* old_parent = tile->parent();
-    auto owned = old_parent->RemoveChildViewT(tile);
-    tile_views_[i] = static_cast<views::Button*>(
-        content_view_->AddChildView(std::move(owned)));
-    tile_views_[i]->SetBoundsRect(seed);
-  }
-
-  row_views_.clear();
-  std::vector<views::View*> to_remove;
-  for (views::View* child : content_view_->children()) {
-    bool is_tile = false;
-    for (size_t i : drag_preview_tile_order_) {
-      if (tile_views_[i] == child) {
-        is_tile = true;
-        break;
-      }
-    }
-    if (!is_tile && child != drag_preview_tile_) {
-      to_remove.push_back(child);
-    }
-  }
-  for (views::View* child : to_remove) {
-    content_view_->RemoveChildViewT(child);
-  }
-
-  UpdateContainerOwnedPreferredHeight(favorite_count_ + 1);
-
-  ShowInsertionPreview(preview_slot, dragged_tab_id);
-  if (drag_preview_tile_ && drag_preview_tile_->parent() != content_view_) {
-    views::View* old_parent = drag_preview_tile_->parent();
-    if (old_parent) {
-      auto owned = old_parent->RemoveChildViewT(drag_preview_tile_.get());
-      drag_preview_tile_ = content_view_->AddChildView(std::move(owned));
-    }
-  }
-  if (drag_preview_tile_) {
-    drag_preview_tile_->SetVisible(true);
-  }
-
-  if (!drag_bounds_animator_) {
-    drag_bounds_animator_ =
-        std::make_unique<views::BoundsAnimator>(content_view_);
-    drag_bounds_animator_->SetAnimationDuration(base::Milliseconds(220));
-    drag_bounds_animator_->set_tween_type(gfx::Tween::EASE_IN_OUT);
-    drag_bounds_animator_->AddObserver(this);
-  }
-
-  drag_preview_active_ = true;
-  drag_preview_source_tab_id_ = dragged_tab_id;
-  UpdateDragPreview(preview_slot);
+void MahoSidebarFavoritesGridView::OnFavoritesZoneExited() {
+  HideInsertionPreview();
+  current_drag_preview_index_ = -1;
+  drag_over_drop_target_ = false;
+  UpdateEmptyStateHighlight(false);
 }
 
-void MahoSidebarFavoritesGridView::UpdateDragPreview(int preview_slot) {
-  DCHECK(drag_preview_active_);
-  const int N = static_cast<int>(drag_preview_tile_order_.size());
-  const int slot_count = std::min(N + 1, static_cast<int>(kTileCount));
-  drag_preview_slot_ = std::clamp(preview_slot, 0, slot_count - 1);
-
-  auto targets = GetTileBoundsForCount(slot_count);
-  for (auto& r : targets) {
-    gfx::Point origin = r.origin();
-    views::View::ConvertPointToTarget(this, content_view_, &origin);
-    r.set_origin(origin);
-  }
-
-  for (int j = 0; j < N; ++j) {
-    const int slot = (j >= drag_preview_slot_) ? j + 1 : j;
-    if (slot >= slot_count) {
-      break;
-    }
-    views::View* tile = tile_views_[drag_preview_tile_order_[j]];
-    if (!targets[slot].IsEmpty()) {
-      drag_bounds_animator_->AnimateViewTo(tile, targets[slot]);
-    }
-  }
-
-  if (drag_preview_tile_ && !targets[drag_preview_slot_].IsEmpty()) {
-    drag_preview_tile_->SetBoundsRect(targets[drag_preview_slot_]);
-  }
-}
-
-void MahoSidebarFavoritesGridView::ExitDragPreview(bool animate) {
-  if (!drag_preview_active_) {
-    return;
-  }
-  drag_preview_active_ = false;
-
-  if (animate && drag_bounds_animator_) {
-    for (size_t j = 0; j < drag_preview_tile_order_.size(); ++j) {
-      const size_t i = drag_preview_tile_order_[j];
-      gfx::Rect target = snapshot_bounds_[i];
-      gfx::Point origin = target.origin();
-      views::View::ConvertPointToTarget(this, content_view_, &origin);
-      target.set_origin(origin);
-      drag_bounds_animator_->AnimateViewTo(tile_views_[i], target);
-    }
-    if (drag_preview_tile_) {
-      drag_preview_tile_->SetVisible(false);
-    }
-    if (!drag_bounds_animator_->IsAnimating()) {
-      FinalizeExitDragPreview();
-    }
-  } else {
-    FinalizeExitDragPreview();
-  }
-}
-
-void MahoSidebarFavoritesGridView::FinalizeExitDragPreview() {
-  if (finalize_in_progress_) {
-    return;
-  }
-  base::AutoReset<bool> guard(&finalize_in_progress_, true);
-  drag_preview_active_ = false;
-  auto tile_order = std::move(drag_preview_tile_order_);
-
-  if (drag_bounds_animator_) {
-    drag_bounds_animator_->Cancel();
-  }
-
-  if (drag_preview_tile_ && drag_preview_tile_->parent()) {
-    drag_preview_tile_->parent()->RemoveChildViewT(drag_preview_tile_.get());
-    drag_preview_tile_ = nullptr;
-    drag_preview_icon_ = nullptr;
-  }
-
-  auto* content_layout = content_view_->SetLayoutManager(
-      std::make_unique<views::BoxLayout>(
-          views::BoxLayout::Orientation::kVertical, gfx::Insets(),
-          sidebar_layout::kFavoriteTileSpacingDp));
-  content_layout->set_cross_axis_alignment(
-      views::BoxLayout::CrossAxisAlignment::kStretch);
-
-  current_layout_spec_ = LayoutSpec{};
-  RebuildGridRows(favorite_count_);
-  UpdateContainerOwnedPreferredHeight(favorite_count_);
-
-  drag_preview_source_tab_id_.clear();
-  drag_preview_slot_ = -1;
-}
-
-void MahoSidebarFavoritesGridView::OnBoundsAnimatorProgressed(
-    views::BoundsAnimator* /*animator*/) {}
-
-void MahoSidebarFavoritesGridView::OnBoundsAnimatorDone(
-    views::BoundsAnimator* /*animator*/) {
-  if (!drag_preview_active_ && !drag_preview_tile_order_.empty()) {
-    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE,
-        base::BindOnce(&MahoSidebarFavoritesGridView::FinalizeExitDragPreview,
-                       weak_factory_.GetWeakPtr()));
+void MahoSidebarFavoritesGridView::ForceRefreshFromDrop() {
+  auto* sidebar_view = FindSidebarViewAncestor(this);
+  if (sidebar_view) {
+    sidebar_view->ScheduleRefreshAll();
   }
 }
 

@@ -9,14 +9,26 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "maho/browser/ui/views/sidebar/maho_spaces_board_data.h"
+#include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_board_view.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/view.h"
+
+class Browser;
+
+namespace ui {
+class SimpleMenuModel;
+}  // namespace ui
 
 namespace views {
 class Label;
 class MdTextButton;
 class ScrollView;
+class ImageButton;
+class MenuRunner;
+class ImageView;
 }  // namespace views
+
+class MahoSpaceContextMenu;
 
 namespace maho {
 
@@ -26,7 +38,9 @@ class MahoSpacesOverlayColumnView : public views::View {
  public:
   using SpaceSelectedCallback = base::RepeatingCallback<void(const std::string&)>;
 
-  MahoSpacesOverlayColumnView(const SpaceBoardColumn& column,
+  MahoSpacesOverlayColumnView(Browser* browser,
+                              SpacesBoardRenderMode render_mode,
+                              const SpaceBoardColumn& column,
                               bool is_active,
                               SpaceSelectedCallback callback);
   MahoSpacesOverlayColumnView(const MahoSpacesOverlayColumnView&) = delete;
@@ -35,16 +49,21 @@ class MahoSpacesOverlayColumnView : public views::View {
   ~MahoSpacesOverlayColumnView() override;
 
   void OnThemeChanged() override;
+  gfx::Size GetMinimumSize() const override;
 
-  bool IsCurrentChipVisibleForTesting() const;
+  bool OnMousePressed(const ui::MouseEvent& event) override;
+  ui::Cursor GetCursor(const ui::MouseEvent& event) override;
+
   std::u16string GetTitleTextForTesting() const;
-  std::u16string GetActionButtonTextForTesting() const;
   std::vector<std::u16string> GetSectionTitlesForTesting() const;
 
  private:
   void UpdateColors();
-  void HandleOpenPressed();
+  void HandleEditPressed();
+  void HandleMenuPressed();
 
+  raw_ptr<Browser> browser_;
+  SpacesBoardRenderMode render_mode_;
   SpaceBoardColumn column_;
   const bool is_active_;
   SpaceSelectedCallback space_selected_callback_;
@@ -52,12 +71,20 @@ class MahoSpacesOverlayColumnView : public views::View {
   raw_ptr<views::Label> badge_label_ = nullptr;
   raw_ptr<views::Label> title_label_ = nullptr;
   raw_ptr<views::Label> subtitle_label_ = nullptr;
-  raw_ptr<views::Label> current_chip_label_ = nullptr;
-  raw_ptr<views::MdTextButton> action_button_ = nullptr;
   raw_ptr<views::ScrollView> tab_scroll_view_ = nullptr;
   raw_ptr<views::View> tab_list_ = nullptr;
   raw_ptr<views::Label> empty_state_label_ = nullptr;
-  std::vector<raw_ptr<views::Label>> section_labels_;
+
+  raw_ptr<views::ImageView> clear_arrow_ = nullptr;
+  raw_ptr<views::Label> clear_label_ = nullptr;
+
+  raw_ptr<views::Label> tag_chip_ = nullptr;
+  raw_ptr<views::ImageButton> edit_button_ = nullptr;
+  raw_ptr<views::ImageButton> menu_button_ = nullptr;
+
+  std::unique_ptr<MahoSpaceContextMenu> active_space_context_menu_;
+  std::unique_ptr<ui::SimpleMenuModel> active_context_menu_model_;
+  std::unique_ptr<views::MenuRunner> context_menu_runner_;
 };
 
 }  // namespace maho

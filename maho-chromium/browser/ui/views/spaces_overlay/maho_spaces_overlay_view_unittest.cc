@@ -49,115 +49,6 @@ SpaceBoardColumn MakeColumn(const std::string& id,
 }
 
 // ---------------------------------------------------------------------------
-// Test fixture — MahoSpacesOverlayView
-// ---------------------------------------------------------------------------
-
-class MahoSpacesOverlayViewTest : public views::ViewsTestBase {
- protected:
-  MahoSpacesOverlayViewTest() = default;
-  ~MahoSpacesOverlayViewTest() override = default;
-
-  MahoSpacesOverlayView* CreateView(SpaceBoardModel model) {
-    host_widget_ = CreateTestWidget(
-        views::Widget::InitParams::CLIENT_OWNS_WIDGET,
-        views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
-    host_widget_->Show();
-
-    auto view = std::make_unique<MahoSpacesOverlayView>(
-        MahoSpacesOverlayView::ForTestingTag{},
-        std::move(model),
-        base::DoNothing(),
-        base::DoNothing());
-
-    auto* raw = view.get();
-    host_widget_->SetContentsView(std::move(view));
-    return raw;
-  }
-
-  void TearDown() override {
-    host_widget_.reset();
-    views::ViewsTestBase::TearDown();
-  }
-
- private:
-  std::unique_ptr<views::Widget> host_widget_;
-};
-
-// ---------------------------------------------------------------------------
-// Summary text — count / plural / active name
-// ---------------------------------------------------------------------------
-
-TEST_F(MahoSpacesOverlayViewTest,
-       SummaryTextReflectsSingleSpaceCount) {
-  auto* view = CreateView(MakeModelWithColumns({MakeColumn("s1", u"Work", 3)}));
-
-  EXPECT_NE(std::u16string::npos,
-            view->GetSummaryTextForTesting().find(u"1 space"))
-      << base::UTF16ToUTF8(view->GetSummaryTextForTesting());
-}
-
-TEST_F(MahoSpacesOverlayViewTest,
-       SummaryTextReflectsPluralSpaceCount) {
-  auto* view = CreateView(MakeModelWithColumns(
-      {MakeColumn("s1", u"Work", 2), MakeColumn("s2", u"Personal", 5)}));
-
-  EXPECT_NE(std::u16string::npos,
-            view->GetSummaryTextForTesting().find(u"2 spaces"))
-      << base::UTF16ToUTF8(view->GetSummaryTextForTesting());
-}
-
-TEST_F(MahoSpacesOverlayViewTest,
-       SummaryTextReflectsTotalTabCount) {
-  auto* view = CreateView(MakeModelWithColumns(
-      {MakeColumn("s1", u"Alpha", 3), MakeColumn("s2", u"Beta", 4)}));
-
-  EXPECT_NE(std::u16string::npos,
-            view->GetSummaryTextForTesting().find(u"7 tabs"))
-      << base::UTF16ToUTF8(view->GetSummaryTextForTesting());
-}
-
-TEST_F(MahoSpacesOverlayViewTest,
-       SummaryTextIncludesActiveNameWhenIsActiveSet) {
-  SpaceBoardColumn active_col = MakeColumn("s1", u"Research", 2, /*is_active=*/true);
-  auto* view = CreateView(MakeModelWithColumns({active_col}));
-
-  const std::u16string text = view->GetSummaryTextForTesting();
-  EXPECT_NE(std::u16string::npos, text.find(u"Active: ")) << base::UTF16ToUTF8(text);
-  EXPECT_NE(std::u16string::npos, text.find(u"Research")) << base::UTF16ToUTF8(text);
-}
-
-TEST_F(MahoSpacesOverlayViewTest,
-       SummaryTextIncludesActiveNameWhenResolvedViaActiveSpaceId) {
-  SpaceBoardColumn col = MakeColumn("space-42", u"Focus", 1);
-  auto* view = CreateView(MakeModelWithColumns({col}, "space-42"));
-
-  const std::u16string text = view->GetSummaryTextForTesting();
-  EXPECT_NE(std::u16string::npos, text.find(u"Focus")) << base::UTF16ToUTF8(text);
-}
-
-TEST_F(MahoSpacesOverlayViewTest,
-       SummaryTextOmitsActiveSegmentWhenNoActiveSpace) {
-  auto* view = CreateView(MakeModelWithColumns(
-      {MakeColumn("s1", u"Misc", 1), MakeColumn("s2", u"Other", 0)}));
-
-  EXPECT_EQ(std::u16string::npos,
-            view->GetSummaryTextForTesting().find(u"Active:"))
-      << base::UTF16ToUTF8(view->GetSummaryTextForTesting());
-}
-
-TEST_F(MahoSpacesOverlayViewTest,
-       SummaryTextSingularTabWhenExactlyOne) {
-  auto* view = CreateView(MakeModelWithColumns({MakeColumn("s1", u"Solo", 1)}));
-
-  EXPECT_NE(std::u16string::npos,
-            view->GetSummaryTextForTesting().find(u"1 tab"))
-      << base::UTF16ToUTF8(view->GetSummaryTextForTesting());
-  EXPECT_EQ(std::u16string::npos,
-            view->GetSummaryTextForTesting().find(u"1 tabs"))
-      << base::UTF16ToUTF8(view->GetSummaryTextForTesting());
-}
-
-// ---------------------------------------------------------------------------
 // Board view — empty-state rendering
 // ---------------------------------------------------------------------------
 
@@ -173,7 +64,7 @@ class MahoSpacesOverlayBoardViewTest : public views::ViewsTestBase {
     host_widget_->Show();
 
     auto view = std::make_unique<MahoSpacesOverlayBoardView>(
-        model, base::DoNothing());
+        nullptr, SpacesBoardRenderMode::kFullViewport, model, base::DoNothing());
     auto* raw = view.get();
     host_widget_->SetContentsView(std::move(view));
     return raw;
@@ -212,7 +103,7 @@ TEST_F(MahoSpacesOverlayBoardViewTest,
 }
 
 // ---------------------------------------------------------------------------
-// Column view — current-chip / action-button rendering distinction
+// Column view — custom rendering tests
 // ---------------------------------------------------------------------------
 
 class MahoSpacesOverlayColumnViewTest : public views::ViewsTestBase {
@@ -228,7 +119,7 @@ class MahoSpacesOverlayColumnViewTest : public views::ViewsTestBase {
     host_widget_->Show();
 
     auto view = std::make_unique<MahoSpacesOverlayColumnView>(
-        column, is_active, base::DoNothing());
+        nullptr, SpacesBoardRenderMode::kFullViewport, column, is_active, base::DoNothing());
     auto* raw = view.get();
     host_widget_->SetContentsView(std::move(view));
     return raw;
@@ -242,38 +133,6 @@ class MahoSpacesOverlayColumnViewTest : public views::ViewsTestBase {
  private:
   std::unique_ptr<views::Widget> host_widget_;
 };
-
-TEST_F(MahoSpacesOverlayColumnViewTest,
-       ActiveColumnCurrentChipIsVisible) {
-  SpaceBoardColumn col = MakeColumn("s1", u"Active Space", 2, /*is_active=*/true);
-  auto* view = CreateColumnView(col, /*is_active=*/true);
-
-  EXPECT_TRUE(view->IsCurrentChipVisibleForTesting());
-}
-
-TEST_F(MahoSpacesOverlayColumnViewTest,
-       InactiveColumnCurrentChipIsHidden) {
-  SpaceBoardColumn col = MakeColumn("s2", u"Inactive Space", 3, /*is_active=*/false);
-  auto* view = CreateColumnView(col, /*is_active=*/false);
-
-  EXPECT_FALSE(view->IsCurrentChipVisibleForTesting());
-}
-
-TEST_F(MahoSpacesOverlayColumnViewTest,
-       ActiveColumnActionButtonSaysOpen) {
-  SpaceBoardColumn col = MakeColumn("s1", u"Current", 1, /*is_active=*/true);
-  auto* view = CreateColumnView(col, /*is_active=*/true);
-
-  EXPECT_EQ(u"Open", view->GetActionButtonTextForTesting());
-}
-
-TEST_F(MahoSpacesOverlayColumnViewTest,
-       InactiveColumnActionButtonSaysSwitch) {
-  SpaceBoardColumn col = MakeColumn("s2", u"Other", 0, /*is_active=*/false);
-  auto* view = CreateColumnView(col, /*is_active=*/false);
-
-  EXPECT_EQ(u"Switch", view->GetActionButtonTextForTesting());
-}
 
 TEST_F(MahoSpacesOverlayColumnViewTest,
        ColumnTitleMatchesModelName) {
@@ -298,12 +157,12 @@ TEST_F(MahoSpacesOverlayColumnViewTest,
 
   auto* view = CreateColumnView(col, /*is_active=*/false);
 
-  EXPECT_EQ((std::vector<std::u16string>{u"BOOKMARKS", u"TABS"}),
+  EXPECT_EQ((std::vector<std::u16string>{u"Clear"}),
             view->GetSectionTitlesForTesting());
 }
 
 TEST_F(MahoSpacesOverlayColumnViewTest,
-       RegularOnlyTabsRenderTabsSectionOnly) {
+       RegularOnlyTabsRenderNoSections) {
   SpaceBoardColumn col = MakeColumn("s1", u"Grouped", 1);
 
   SpaceBoardTabItem regular_tab;
@@ -312,8 +171,7 @@ TEST_F(MahoSpacesOverlayColumnViewTest,
 
   auto* view = CreateColumnView(col, /*is_active=*/false);
 
-  EXPECT_EQ((std::vector<std::u16string>{u"TABS"}),
-            view->GetSectionTitlesForTesting());
+  EXPECT_TRUE(view->GetSectionTitlesForTesting().empty());
 }
 
 }  // namespace

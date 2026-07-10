@@ -13,6 +13,7 @@
 #include "maho/browser/ui/webui/maho_space_config/maho_space_config_page_handler.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "net/base/url_util.h"
+#include "services/network/public/mojom/content_security_policy.mojom.h"
 #include "ui/webui/webui_util.h"
 
 namespace {
@@ -44,6 +45,9 @@ MahoSpaceConfigUI::MahoSpaceConfigUI(content::WebUI* web_ui)
       Profile::FromWebUI(web_ui), maho::kMahoSpaceConfigHost);
   webui::SetupWebUIDataSource(source, kMahoSpaceConfigResources,
                               IDR_MAHO_SPACE_CONFIG_SPACE_CONFIG_HTML);
+  source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::TrustedTypes,
+      "trusted-types default static-types;");
 
   const GURL& url = web_ui->GetWebContents()->GetLastCommittedURL();
   std::string space_id_param;

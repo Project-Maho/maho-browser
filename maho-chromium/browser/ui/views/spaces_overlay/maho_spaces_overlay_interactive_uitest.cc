@@ -9,6 +9,7 @@
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_view.h"
 #include "ui/base/test/ui_controls.h"
 #include "ui/events/keycodes/keyboard_codes.h"
@@ -82,7 +83,7 @@ class MahoSpacesOverlayInteractiveUiTest : public InProcessBrowserTest {
     base::RunLoop().RunUntilIdle();
   }
 
-  views::View* WaitForCloseButton(MahoSpacesOverlayController* controller) {
+  views::View* WaitForBackButton(MahoSpacesOverlayController* controller) {
     views::View* result = nullptr;
     EXPECT_TRUE(base::test::RunUntil([&]() {
       views::Widget* overlay = controller->GetOverlayWidgetForTesting();
@@ -90,7 +91,7 @@ class MahoSpacesOverlayInteractiveUiTest : public InProcessBrowserTest {
         return false;
       }
       result = FindViewByAccessibleName(overlay->GetRootView(),
-                                       u"Close spaces overlay");
+                                       u"Back");
       return result != nullptr;
     }));
     return result;
@@ -184,7 +185,7 @@ IN_PROC_BROWSER_TEST_F(MahoSpacesOverlayInteractiveUiTest,
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSpacesOverlayInteractiveUiTest,
-                       CloseButtonClickDismissesOverlay) {
+                       BackButtonClickDismissesOverlay) {
   views::Widget* parent_widget = GetBrowserWidget();
   ASSERT_TRUE(parent_widget);
 
@@ -194,15 +195,15 @@ IN_PROC_BROWSER_TEST_F(MahoSpacesOverlayInteractiveUiTest,
   ASSERT_TRUE(base::test::RunUntil(
       [&]() { return controller->IsVisible(); }));
 
-  views::View* close_button = WaitForCloseButton(controller.get());
-  ASSERT_TRUE(close_button);
+  views::View* back_button = WaitForBackButton(controller.get());
+  ASSERT_TRUE(back_button);
 
-  ClickScreenPoint(close_button->GetBoundsInScreen().CenterPoint());
+  ClickScreenPoint(back_button->GetBoundsInScreen().CenterPoint());
 
   ASSERT_TRUE(base::test::RunUntil(
       [&]() { return !controller->IsVisible(); }));
   EXPECT_FALSE(controller->IsVisible())
-      << "Clicking the close button must dismiss the spaces overlay";
+      << "Clicking the back button must dismiss the spaces overlay";
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSpacesOverlayInteractiveUiTest,
@@ -216,16 +217,28 @@ IN_PROC_BROWSER_TEST_F(MahoSpacesOverlayInteractiveUiTest,
   ASSERT_TRUE(base::test::RunUntil(
       [&]() { return controller->IsVisible(); }));
 
-  views::View* close_button = WaitForCloseButton(controller.get());
-  ASSERT_TRUE(close_button) << "Close button not found in overlay";
+  views::View* back_button = WaitForBackButton(controller.get());
+  ASSERT_TRUE(back_button) << "Back button not found in overlay";
 
-  views::Widget* overlay_widget = close_button->GetWidget();
+  views::Widget* overlay_widget = back_button->GetWidget();
   ASSERT_TRUE(overlay_widget);
+
+  BrowserView* bv = BrowserView::GetBrowserViewForBrowser(browser());
+  ASSERT_TRUE(bv);
+  int rail_width = 0;
+  auto* sidebar_container = static_cast<MahoSidebarContainerView*>(
+      bv->maho_sidebar_container());
+  if (sidebar_container) {
+    rail_width = sidebar_container->GetLibraryRailWidth();
+  }
 
   const gfx::Rect parent_client = parent_widget->GetClientAreaBoundsInScreen();
   const gfx::Rect overlay_bounds = overlay_widget->GetWindowBoundsInScreen();
-  EXPECT_EQ(parent_client, overlay_bounds)
-      << "Overlay bounds must fill the browser window client area";
+
+  EXPECT_EQ(parent_client.x() + rail_width, overlay_bounds.x());
+  EXPECT_EQ(parent_client.width() - rail_width, overlay_bounds.width());
+  EXPECT_EQ(parent_client.y(), overlay_bounds.y());
+  EXPECT_EQ(parent_client.height(), overlay_bounds.height());
 
   controller->Dismiss(MahoSpacesOverlayController::DismissReason::kExplicitCancel);
 }
@@ -263,12 +276,12 @@ IN_PROC_BROWSER_TEST_F(MahoSpacesOverlayInteractiveUiTest,
   ASSERT_TRUE(base::test::RunUntil(
       [&]() { return controller->IsVisible(); }));
 
-  views::View* close_button = WaitForCloseButton(controller.get());
-  EXPECT_TRUE(close_button)
-      << "Close button must be reachable from the overlay widget root view";
-  if (close_button) {
-    EXPECT_TRUE(close_button->GetVisible());
-    EXPECT_FALSE(close_button->GetBoundsInScreen().IsEmpty());
+  views::View* back_button = WaitForBackButton(controller.get());
+  EXPECT_TRUE(back_button)
+      << "Back button must be reachable from the overlay widget root view";
+  if (back_button) {
+    EXPECT_TRUE(back_button->GetVisible());
+    EXPECT_FALSE(back_button->GetBoundsInScreen().IsEmpty());
   }
 
   controller->Dismiss(MahoSpacesOverlayController::DismissReason::kExplicitCancel);

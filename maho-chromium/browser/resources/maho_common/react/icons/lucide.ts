@@ -26,6 +26,7 @@ export {
   ArrowRight,
   Shield,
   ShieldAlert,
+  Sliders,
   Laptop,
   Moon,
   Sun,
@@ -48,5 +49,8 @@ export {
   Volume2,
   VolumeX,
   StopCircle,
+  Square,
   Globe,
+  Pin,
+  Code,
 } from "lucide-react";

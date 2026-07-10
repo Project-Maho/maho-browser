@@ -1,6 +1,7 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_drag_util.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_now_playing_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
@@ -58,9 +59,14 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_archive_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_create_space_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_grain_overlay_view.h"
+#include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_notes_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_easels_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_spaces_view.h"
+#include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_board_view.h"
+#include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/ui/views/sidebar/maho_spaces_board_data.h"
 #include "net/base/url_util.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/compositor/layer_tree_owner.h"
@@ -141,22 +147,39 @@ MahoSidebarNowPlayingView* MahoSidebarView::AddNowPlayingView(std::unique_ptr<Ma
   if (!body_host_ || !footer_view_) {
     return nullptr;
   }
-  now_playing_view_ = AddChildView(std::move(view));
-  now_playing_view_->SetProperty(views::kViewIgnoredByLayoutKey, true);
-  now_playing_view_->AddObserver(this);
+  size_t footer_index = body_host_->GetIndexOf(footer_view_).value_or(0);
+  now_playing_view_ = body_host_->AddChildViewAt(std::move(view), footer_index);
   return now_playing_view_;
+}
+
+void MahoSidebarView::UpdateSidebarBorderForOverlay() {
+  if (IsInLibraryMode()) {
+    SetBorder(nullptr);
+  } else {
+    SetBorder(views::CreateRoundedRectBorder(
+        1, sidebar_layout::kRailCornerRadiusDp, ui::kColorSysSurfaceVariant));
+  }
 }
 
 void MahoSidebarView::OnThemeChanged() {
   views::View::OnThemeChanged();
+
+  std::optional<MahoSpaceThemeState::ThemeData> theme_data =
+      MahoSpaceThemeState::GetThemeData();
+  const float texture = theme_data ? theme_data->texture : 0.0f;
+
   SetBackground(views::CreateRoundedRectBackground(
       kMahoColorSidebarBackground, sidebar_layout::kRailCornerRadiusDp));
-  SetBorder(views::CreateRoundedRectBorder(
-      1, sidebar_layout::kRailCornerRadiusDp, ui::kColorSysSurfaceVariant));
+  UpdateSidebarBorderForOverlay();
   if (library_divider_) {
     library_divider_->SetBackground(
         views::CreateSolidBackground(ui::kColorSeparator));
   }
+
+  if (grain_overlay_) {
+    grain_overlay_->SetTexture(texture);
+  }
+
   auto model = state_adapter_.BuildViewStateModel(browser_);
   UpdateTopBar(model.top_bar);
   UpdateSearch(model.search);
@@ -353,6 +376,16 @@ void MahoSidebarView::BuildUi() {
   create_space_view_->SetCloseCallback(base::BindRepeating(
       &MahoSidebarView::HideCreateSpace, weak_factory_.GetWeakPtr()));
   root_layout->SetFlexForView(create_space_view_, 1, true);
+
+  grain_overlay_ = AddChildView(std::make_unique<MahoSidebarGrainOverlayView>());
+  grain_overlay_->SetProperty(views::kViewIgnoredByLayoutKey, true);
+}
+
+void MahoSidebarView::Layout(PassKey pass_key) {
+  LayoutSuperclass<views::View>(this);
+  if (grain_overlay_) {
+    grain_overlay_->SetBoundsRect(GetLocalBounds());
+  }
 }
 
 void MahoSidebarView::SetBodyMode(MahoSidebarBodyMode mode) {
@@ -372,8 +405,14 @@ void MahoSidebarView::SetBodyMode(MahoSidebarBodyMode mode) {
   if (library_container_) {
     library_container_->SetVisible(mode == MahoSidebarBodyMode::kLibrary);
   }
+  if (mode != previous_mode) {
+    if (auto* container =
+            views::AsViewClass<MahoSidebarContainerView>(parent())) {
+      container->ApplyPreferredWidthFromPrefs();
+    }
+  }
   if (footer_view_) {
-    footer_view_->SetVisible(true);
+    footer_view_->SetVisible(mode != MahoSidebarBodyMode::kLibrary);
     footer_view_->RefreshPreferredSize();
   }
   if (mode == MahoSidebarBodyMode::kLibrary) {
@@ -438,18 +477,31 @@ void MahoSidebarView::HandleLibraryCategorySelected(
   if (!library_rail_view_) {
     return;
   }
+  PrefService* prefs = browser_->profile()->GetPrefs();
+  const bool use_overlay =
+      prefs->GetBoolean(sidebar_prefs::kSpacesFullViewport);
+  auto* container = views::AsViewClass<MahoSidebarContainerView>(parent());
 
-  if (category == MahoSidebarLibraryRailView::Category::kSpaces) {
-    PrefService* prefs = browser_->profile()->GetPrefs();
-    if (prefs && prefs->GetBoolean(maho::sidebar_prefs::kSpacesFullViewport)) {
-      auto* container = views::AsViewClass<MahoSidebarContainerView>(parent());
-      if (container) {
-        container->ToggleSpacesOverlay();
-      }
-      return;
+  if (category == MahoSidebarLibraryRailView::Category::kSpaces && use_overlay) {
+    // D-11: Hide embedded library content instead of destroying views to avoid dangling pointers
+    library_content_host_->SetVisible(false);
+    if (library_divider_) {
+      library_divider_->SetVisible(false);
     }
+    active_library_category_ = category;
+    UpdateSidebarBorderForOverlay();
+    if (container) {
+      container->ApplyPreferredWidthFromPrefs();
+      container->ToggleSpacesOverlay();
+    }
+    return;
   }
 
+  // Non-Spaces category (or Spaces with flag=false): if overlay is showing,
+  // dismiss it before switching the embedded library pane.
+  if (container && container->IsSpacesOverlayVisible()) {
+    container->DismissSpacesOverlay();
+  }
   ShowLibraryPane(category);
 }
 
@@ -560,8 +612,23 @@ views::View* MahoSidebarView::GetOrCreateLibraryPane(
     }
     case MahoSidebarLibraryRailView::Category::kSpaces: {
       if (!spaces_view_) {
-        spaces_view_ = library_content_host_->AddChildView(
-            std::make_unique<MahoSidebarSpacesView>(browser_));
+        auto view = std::make_unique<MahoSpacesOverlayBoardView>(
+            browser_,
+            SpacesBoardRenderMode::kEmbedded,
+            BuildSpacesBoardModel(),
+            base::BindRepeating(
+                [](base::WeakPtr<Browser> browser,
+                   const std::string& space_id) {
+                  if (!browser) {
+                    return;
+                  }
+                  auto* bridge = MahoSpaceProfileBridge::GetInstance();
+                  if (bridge) {
+                    bridge->SwitchToSpace(browser.get(), space_id);
+                  }
+                },
+                browser_->AsWeakPtr()));
+        spaces_view_ = library_content_host_->AddChildView(std::move(view));
         spaces_view_->SetVisible(false);
       }
       pane = spaces_view_;
@@ -595,6 +662,12 @@ views::View* MahoSidebarView::GetOrCreateLibraryPane(
 
 void MahoSidebarView::ShowLibraryPane(
     MahoSidebarLibraryRailView::Category category) {
+  library_content_host_->SetVisible(true);
+  if (library_divider_) {
+    library_divider_->SetVisible(false);
+  }
+  UpdateSidebarBorderForOverlay();
+
   // Hide the previously active pane.
   views::View* old_pane = ActiveLibraryPane();
   if (old_pane) {
@@ -604,6 +677,18 @@ void MahoSidebarView::ShowLibraryPane(
   active_library_category_ = category;
   if (library_rail_view_) {
     library_rail_view_->SetSelectedCategory(category);
+  }
+  if (auto* container = views::AsViewClass<MahoSidebarContainerView>(parent())) {
+    container->ApplyPreferredWidthFromPrefs();
+  }
+
+  // Rebuild the Spaces board on every activation so it reflects the latest
+  // space list (previous view is torn down before recreation below).
+  if (category == MahoSidebarLibraryRailView::Category::kSpaces &&
+      spaces_view_) {
+    library_content_host_->RemoveChildViewT(spaces_view_.get());
+    spaces_view_ = nullptr;
+    library_pane_cache_.erase(category);
   }
 
   views::View* new_pane = GetOrCreateLibraryPane(category);
@@ -623,9 +708,6 @@ void MahoSidebarView::ShowLibraryPane(
   } else if (category == MahoSidebarLibraryRailView::Category::kMedia &&
               media_view_) {
     media_view_->ReloadMedia();
-  } else if (category == MahoSidebarLibraryRailView::Category::kSpaces &&
-             spaces_view_) {
-    spaces_view_->ReloadSpaces();
   } else if (category == MahoSidebarLibraryRailView::Category::kNotes &&
              notes_view_) {
     notes_view_->EnsureWebUILoaded();
@@ -836,27 +918,17 @@ void MahoSidebarView::OnViewPreferredSizeChanged(views::View* observed_view) {
   if (observed_view == update_notification_view_) {
     PositionUpdateNotification();
   }
-  if (observed_view == now_playing_view_) {
-    PositionNowPlayingView();
-  }
 }
 
 void MahoSidebarView::OnViewBoundsChanged(views::View* observed_view) {
   if (observed_view == footer_view_ || observed_view == this) {
     PositionUpdateNotification();
-    PositionNowPlayingView();
-  }
-  if (observed_view == now_playing_view_) {
-    PositionNowPlayingView();
   }
 }
 
 void MahoSidebarView::OnViewVisibilityChanged(views::View* observed_view,
                                               views::View* starting_view,
                                               bool visible) {
-  if (observed_view == now_playing_view_) {
-    PositionNowPlayingView();
-  }
 }
 
 void MahoSidebarView::PositionUpdateNotification() {
@@ -974,6 +1046,10 @@ void MahoSidebarView::OnTabStripModelChanged(
   ScheduleRefreshAll();
   LOG(INFO) << "[MAHO_PERF] Sidebar::OnTabStripModelChanged END(slow) "
             << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
+}
+
+void MahoSidebarView::OnSplitTabChanged(const SplitTabChange& change) {
+  ScheduleRefreshAll();
 }
 
 void MahoSidebarView::OnTabChangedAt(tabs::TabInterface* tab,
@@ -1095,6 +1171,15 @@ int MahoSidebarView::OnDragUpdated(const ui::DropTargetEvent& event) {
 
   gfx::Point fav_location = event.location();
   views::View::ConvertPointToTarget(this, favorites_view_, &fav_location);
+
+  const bool now_over =
+      gfx::Rect(favorites_view_->size()).Contains(fav_location);
+
+  if (last_over_favorites_ && !now_over) {
+    favorites_view_->OnFavoritesZoneExited();
+  }
+  last_over_favorites_ = now_over;
+
   ui::DropTargetEvent fav_event(event.data(), gfx::PointF(fav_location),
                                 event.root_location_f(),
                                 event.source_operations());
@@ -1120,6 +1205,7 @@ views::View::DropCallback MahoSidebarView::GetDropCallback(
 }
 
 void MahoSidebarView::OnDragExited() {
+  last_over_favorites_ = false;
   if (favorites_view_) {
     favorites_view_->OnDragExited();
     favorites_view_->CollapseFromDrag();
@@ -1127,6 +1213,7 @@ void MahoSidebarView::OnDragExited() {
 }
 
 void MahoSidebarView::OnDragEnded() {
+  last_over_favorites_ = false;
   if (favorites_view_) {
     favorites_view_->OnDragEnded();
   }
@@ -1136,6 +1223,7 @@ void MahoSidebarView::OnDragStarted(const std::string& tab_id) {
   if (favorites_view_) {
     favorites_view_->OnExternalDragStarted(tab_id);
   }
+  last_over_favorites_ = false;
 }
 
 void MahoSidebarView::OnTranslateEnabledChanged(content::WebContents* source) {

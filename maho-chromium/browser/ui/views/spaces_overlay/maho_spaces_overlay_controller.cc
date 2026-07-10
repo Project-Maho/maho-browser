@@ -7,6 +7,8 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "maho_spaces_overlay_view.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/animation/animation.h"
 #include "ui/gfx/animation/tween.h"
@@ -28,9 +30,16 @@ constexpr int kShowSlideOffsetDp = 12;
 }  // namespace
 
 MahoSpacesOverlayController::MahoSpacesOverlayController(Browser* browser)
-    : browser_(browser) {}
+    : browser_(browser) {
+  if (auto* bridge = MahoSpaceProfileBridge::GetInstance(); bridge) {
+    bridge->AddObserver(this);
+  }
+}
 
 MahoSpacesOverlayController::~MahoSpacesOverlayController() {
+  if (auto* bridge = MahoSpaceProfileBridge::GetInstance(); bridge) {
+    bridge->RemoveObserver(this);
+  }
   CloseWidget(false);
 }
 
@@ -91,6 +100,7 @@ void MahoSpacesOverlayController::Show(views::Widget* parent_widget) {
   params.parent = parent_widget_->GetNativeView();
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
   params.activatable = views::Widget::InitParams::Activatable::kYes;
+  params.shadow_type = views::Widget::InitParams::ShadowType::kNone;
   widget_->Init(std::move(params));
 
   overlay_view_ = widget_->SetContentsView(std::move(overlay_view));
@@ -164,6 +174,10 @@ void MahoSpacesOverlayController::OnWidgetDestroying(views::Widget* widget) {
       parent_widget_->RemoveObserver(this);
       parent_widget_ = nullptr;
     }
+    if (dismiss_callback_) {
+      dismiss_callback_.Run();
+      dismiss_callback_.Reset();
+    }
     // Under CLIENT_OWNS_WIDGET the controller must retain ownership of
     // widget_ so that CloseWidget() / the destructor can call widget_.reset()
     // to cleanly destroy the widget after native teardown completes.
@@ -206,6 +220,10 @@ void MahoSpacesOverlayController::Hide() {
     parent_widget_ = nullptr;
   }
 
+  if (disable_animation_for_testing_) {
+    return;
+  }
+
   auto* root_view = widget_->GetRootView();
   if (!root_view || !root_view->layer()) {
     CloseWidget(restore_focus_on_hide_);
@@ -225,8 +243,13 @@ void MahoSpacesOverlayController::Hide() {
                     gfx::Tween::EASE_IN);
 }
 
-void MahoSpacesOverlayController::CloseWidget(bool restore_focus) {
+void MahoSpacesOverlayController::CloseWidget(bool restore_focus,
+                                              bool suppress_dismiss_callback) {
   weak_factory_.InvalidateWeakPtrs();
+  if (dismiss_callback_ && !suppress_dismiss_callback) {
+    dismiss_callback_.Run();
+    dismiss_callback_.Reset();
+  }
 
   if (parent_widget_) {
     parent_widget_->RemoveObserver(this);
@@ -263,13 +286,33 @@ void MahoSpacesOverlayController::FinishHide() {
 }
 
 gfx::Rect MahoSpacesOverlayController::ComputeOverlayBounds() const {
-  return parent_widget_ ? parent_widget_->GetClientAreaBoundsInScreen()
-                        : gfx::Rect();
+  if (!parent_widget_) return gfx::Rect();
+  gfx::Rect bounds = parent_widget_->GetClientAreaBoundsInScreen();
+  if (sidebar_container_) {
+    bounds.Inset(sidebar_container_->GetSidebarSlotInsets());
+  }
+  return bounds;
 }
 
 void MahoSpacesOverlayController::UpdateBounds() {
   if (widget_) {
     widget_->SetBounds(ComputeOverlayBounds());
+  }
+}
+
+void MahoSpacesOverlayController::OnSpaceProfileBridgeChanged(
+    bool is_structural) {
+  OnSpaceProfileBridgeChanged();
+}
+
+void MahoSpacesOverlayController::OnSpaceProfileBridgeChanged() {
+  if (widget_ && widget_->IsVisible() && !is_hiding_) {
+    views::Widget* parent = parent_widget_;
+    if (parent) {
+      // Internal rebuild: skip dismiss callback so rail selection stays.
+      CloseWidget(/*restore_focus=*/false, /*suppress_dismiss_callback=*/true);
+      Show(parent);
+    }
   }
 }
 
