@@ -375,11 +375,29 @@ if (is_mac) {
 }
 
 if (is_win) {
-  # Windows Little Arc plumbing is intentionally stubbed for now.
+  source_set("maho_little_arc") {
+    sources = [
+      "ui/views/little_arc/maho_little_arc_window.h",
+      "ui/views/little_arc/maho_little_arc_window_stub.cc",
+    ]
+    deps = [
+      "//base",
+      "//chrome/browser/ui",
+    ]
+  }
 }
 
 if (is_linux) {
-  # Linux Little Arc plumbing is intentionally stubbed for now.
+  source_set("maho_little_arc") {
+    sources = [
+      "ui/views/little_arc/maho_little_arc_window.h",
+      "ui/views/little_arc/maho_little_arc_window_stub.cc",
+    ]
+    deps = [
+      "//base",
+      "//chrome/browser/ui",
+    ]
+  }
 }
 
 source_set("maho_theme_support") {
@@ -677,21 +695,6 @@ source_set("maho_unified_agent_adapter") {
   ]
 }
 
-source_set("maho_unified_agent_adapter_unittests") {
-  testonly = true
-  sources = [
-    "ai/maho_unified_agent_adapter_unittest.cc",
-  ]
-  deps = [
-    ":maho_unified_agent_adapter",
-    "//base",
-    "//base/test:test_support",
-    "//components/prefs:test_support",
-    "//maho/browser/ui/webui/maho_ai:mojo_bindings",
-    "//testing/gtest",
-  ]
-}
-
 source_set("maho_auth_utils_unittests") {
   testonly = true
   sources = [
@@ -757,6 +760,7 @@ source_set("maho_context_menus_unittests") {
 source_set("maho_theme_io_unittests") {
   testonly = true
   sources = [
+    "ai/maho_unified_agent_adapter_lifecycle_unittest.cc",
     "ui/theme/maho_space_theme_io_unittest.cc",
     "ui/notifications/maho_notification_overlay_unittest.cc",
     "maho_tab_id_helper_unittest.cc",
@@ -764,9 +768,11 @@ source_set("maho_theme_io_unittests") {
   deps = [
     ":maho_tab_id_helper",
     ":maho_theme_support",
+    ":maho_unified_agent_adapter",
     "//base",
     "//base/test:test_support",
     "//chrome/test:test_support",
+    "//maho/browser/ui/webui/maho_ai:mojo_bindings",
     "//testing/gtest",
     "//ui/views:test_support",
   ]

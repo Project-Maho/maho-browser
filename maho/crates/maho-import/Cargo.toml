@@ -20,6 +20,7 @@ lz4_flex = "0.11"
 tempfile = "3"
 base64 = "0.22"
 aes = "0.8"
+aes-gcm = "0.10"
 cbc = "0.1"
 des = "0.8"
 pbkdf2 = "0.12"
@@ -30,6 +31,12 @@ zeroize = { version = "1", features = ["zeroize_derive"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "2.11"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+secret-service = "3.0"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = ["Win32_System_Com", "Win32_Security_Cryptography", "Win32_Foundation"] }
 
 [dev-dependencies]
 serde_json = { workspace = true }

@@ -24,7 +24,9 @@ source_set("maho_updates_lib") {
     "rollout_bucket.h",
   ]
   if (is_mac) {
-    sources += [ "maho_update_delegate_stub.cc" ]
+    sources += [ "maho_update_delegate_mac.mm" ]
+    frameworks = [ "Sparkle.framework" ]
+    framework_dirs = [ rebase_path("//maho/third_party/sparkle") ]
   }
   if (is_win) {
     sources += [

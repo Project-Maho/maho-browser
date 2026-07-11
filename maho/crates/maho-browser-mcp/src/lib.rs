@@ -14,4 +14,7 @@ pub mod redacted;
 pub mod server;
 pub mod win_token;
 
+#[cfg(windows)]
+pub mod win_transport;
+
 pub use redacted::Redacted;

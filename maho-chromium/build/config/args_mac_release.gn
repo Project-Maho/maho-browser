@@ -1,0 +1,13 @@
+# Release settings for macOS builds.
+is_official_build = true
+is_debug = false
+symbol_level = 2
+strip_debug_info = true
+dcheck_always_on = false
+is_chrome_branded = false
+enable_google_update = false
+
+target_os = "mac"
+target_cpu = "arm64"
+maho_root = "//maho"
+enable_traffic_annotation_auditor = true

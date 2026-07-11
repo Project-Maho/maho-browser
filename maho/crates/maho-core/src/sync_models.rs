@@ -13,6 +13,8 @@ pub enum DeviceType {
     IPhone,
     IPad,
     Android,
+    Windows,
+    Linux,
     Unknown,
 }
 
@@ -30,7 +32,21 @@ impl DeviceType {
         {
             DeviceType::Android
         }
-        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
+        #[cfg(target_os = "windows")]
+        {
+            DeviceType::Windows
+        }
+        #[cfg(target_os = "linux")]
+        {
+            DeviceType::Linux
+        }
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "android",
+            target_os = "windows",
+            target_os = "linux"
+        )))]
         {
             DeviceType::Unknown
         }
@@ -241,7 +257,13 @@ fn hostname() -> String {
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|| "Unknown Device".to_string())
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var("COMPUTERNAME")
+            .or_else(|_| std::env::var("USERDOMAIN"))
+            .unwrap_or_else(|_| "Windows Device".to_string())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         "Unknown Device".to_string()
     }

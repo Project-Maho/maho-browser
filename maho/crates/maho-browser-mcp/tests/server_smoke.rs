@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#![cfg(unix)]
+
 //! End-to-end smoke test: spawns a fake browser socket, launches the
 //! `maho-browser-mcp` binary, and verifies MCP protocol flow over stdio.
 

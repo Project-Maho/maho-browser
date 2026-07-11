@@ -1,0 +1,13 @@
+# Release settings for Linux builds.
+is_official_build = true
+is_debug = false
+symbol_level = 2
+strip_debug_info = true
+dcheck_always_on = false
+is_chrome_branded = false
+enable_google_update = false
+
+target_os = "linux"
+target_cpu = "x64"
+maho_root = "//maho"
+use_sysroot = true

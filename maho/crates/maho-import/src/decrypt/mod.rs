@@ -16,3 +16,11 @@ pub use firefox_nss::{NssError, NssMasterKey, decrypt_nss_value, unlock_nss_mast
 
 #[cfg(target_os = "macos")]
 pub use chromium_keychain::MacOsKeychain;
+
+pub mod linux_keyring;
+pub use linux_keyring::fetch_linux_keyring_key;
+
+#[cfg(target_os = "windows")]
+pub mod win_app_bound;
+#[cfg(target_os = "windows")]
+pub use win_app_bound::WindowsAppBoundDecryptor;

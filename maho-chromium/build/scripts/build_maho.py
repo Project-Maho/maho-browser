@@ -4,9 +4,11 @@
 import argparse
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
+from subprocess import SubprocessError
 
 _SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 _MAHO_CHROMIUM_DIR = os.path.normpath(os.path.join(_SCRIPT_DIR, '..', '..'))
@@ -16,6 +18,7 @@ _CHROMIUM_SRC_ROOT = os.path.join(_WORKSPACE_ROOT, 'chromium', 'src')
 _DEPOT_TOOLS_DIR = os.path.join(_CHROMIUM_SRC_ROOT, 'third_party', 'depot_tools')
 _APPLY_OVERRIDES_SCRIPT = os.path.join(_SCRIPT_DIR, 'apply_chromium_src_overrides.py')
 _BUILD_CONFIG_DIR = os.path.join(_MAHO_CHROMIUM_DIR, 'build', 'config')
+_MAHO_APP_PATH = os.path.join(_CHROMIUM_SRC_ROOT, 'out', 'Default', 'Maho.app')
 
 
 def host_platform() -> str:
@@ -104,9 +107,141 @@ def ensure_overlay_mount(chromium_src, skip):
         os.symlink(rel_target, mount_path)
 
 
-def ensure_args_gn(chromium_src, out_dir, platform, force):
+def find_codesign_identity() -> str | None:
+    try:
+        res = subprocess.run(
+            ['security', 'find-identity', '-v', '-p', 'codesigning'],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if res.returncode != 0:
+            return None
+        sha_re = re.compile(r'^\s*\d+\)\s+([a-fA-F0-9]{40})\s+"')
+        for line in res.stdout.splitlines():
+            m = sha_re.match(line)
+            if m:
+                return m.group(1).upper()
+        return None
+    except Exception:
+        return None
+
+
+def codesign_app(identity: str, app_path: str) -> bool:
+    if not os.path.isdir(app_path):
+        print(f"error: app bundle not found: {app_path}", file=sys.stderr)
+        return False
+    try:
+        frameworks_dir = os.path.join(app_path, 'Contents', 'Frameworks')
+        sparkle_path = os.path.join(frameworks_dir, 'Sparkle.framework')
+        
+        if os.path.isdir(sparkle_path):
+            print("Signing Sparkle framework components...")
+            installer_xpc = os.path.join(sparkle_path, 'Versions', 'B', 'XPCServices', 'Installer.xpc')
+            if os.path.isdir(installer_xpc):
+                subprocess.run(['codesign', '--force', '--sign', identity, '--options', 'runtime', installer_xpc], check=True, timeout=120)
+            
+            downloader_xpc = os.path.join(sparkle_path, 'Versions', 'B', 'XPCServices', 'Downloader.xpc')
+            if os.path.isdir(downloader_xpc):
+                subprocess.run(['codesign', '--force', '--sign', identity, '--options', 'runtime', '--preserve-metadata=entitlements', downloader_xpc], check=True, timeout=120)
+                
+            autoupdate = os.path.join(sparkle_path, 'Versions', 'B', 'Autoupdate')
+            if os.path.isfile(autoupdate):
+                subprocess.run(['codesign', '--force', '--sign', identity, '--options', 'runtime', autoupdate], check=True, timeout=120)
+                
+            updater_app = os.path.join(sparkle_path, 'Versions', 'B', 'Updater.app')
+            if os.path.isdir(updater_app):
+                subprocess.run(['codesign', '--force', '--sign', identity, '--options', 'runtime', updater_app], check=True, timeout=120)
+                
+            subprocess.run(['codesign', '--force', '--sign', identity, '--options', 'runtime', sparkle_path], check=True, timeout=120)
+
+        entitlements_path = os.path.join(_MAHO_CHROMIUM_DIR, 'branding', 'mac', 'entitlements.plist')
+        cmd = ['codesign', '--force', '--sign', identity, '--options', 'runtime']
+        if os.path.isfile(entitlements_path):
+            cmd += ['--entitlements', entitlements_path]
+        cmd += [app_path]
+        
+        print(f"Signing app bundle: {app_path}")
+        subprocess.run(cmd, check=True, timeout=120)
+        return True
+    except (SubprocessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
+        print(f"codesign failed: {e}", file=sys.stderr)
+        return False
+
+
+def notarize_app(app_path: str) -> bool:
+    import tempfile
+    api_key = os.environ.get('APPLE_API_KEY')
+    key_id = os.environ.get('APPLE_API_KEY_ID')
+    issuer_id = os.environ.get('APPLE_API_ISSUER')
+    
+    if not (api_key and key_id and issuer_id):
+        print("warning: APPLE_API_KEY, APPLE_API_KEY_ID, or APPLE_API_ISSUER environment variables are missing; skipping notarization", file=sys.stderr)
+        return False
+        
+    print("Preparing app bundle for notarization...")
+    zip_path = app_path + '.zip'
+    if os.path.exists(zip_path):
+        os.remove(zip_path)
+        
+    try:
+        subprocess.run(['ditto', '-c', '-k', '--keepParent', app_path, zip_path], check=True)
+    except Exception as e:
+        print(f"error: failed to zip app bundle: {e}", file=sys.stderr)
+        return False
+        
+    key_path = None
+    try:
+        # Write API key to temp file
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.p8') as f:
+            f.write(api_key)
+            key_path = f.name
+            
+        print("Submitting to Apple Notary Service...")
+        cmd = [
+            'xcrun', 'notarytool', 'submit', zip_path,
+            '--key-id', key_id,
+            '--issuer', issuer_id,
+            '--key', key_path,
+            '--wait'
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        print(res.stdout)
+        if res.returncode != 0:
+            print(f"error: notarization submission failed:\n{res.stderr}", file=sys.stderr)
+            return False
+            
+        print("Stapling notarization ticket to app bundle...")
+        subprocess.run(['xcrun', 'stapler', 'staple', app_path], check=True)
+        
+        print("Verifying gatekeeper status...")
+        subprocess.run(['spctl', '-a', '-t', 'exec', '-vv', app_path], check=True)
+        print("Notarization and verification succeeded!")
+        return True
+    except Exception as e:
+        print(f"error: notarization/stapling failed: {e}", file=sys.stderr)
+        return False
+    finally:
+        if key_path and os.path.exists(key_path):
+            os.remove(key_path)
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+
+
+def launch_app(app_path: str) -> None:
+    if sys.platform != 'darwin':
+        return
+    if not os.path.isdir(app_path):
+        print(f"warning: app bundle not found: {app_path}; skipping launch", file=sys.stderr)
+        return
+    print(f"Launching app: {app_path}")
+    subprocess.Popen(['open', app_path])
+
+
+def ensure_args_gn(chromium_src, out_dir, platform, force, release=False):
     args_gn_path = os.path.join(chromium_src, out_dir, 'args.gn')
-    template_path = os.path.join(_BUILD_CONFIG_DIR, f'args_{platform}.gn')
+    suffix = '_release' if release else ''
+    template_path = os.path.join(_BUILD_CONFIG_DIR, f'args_{platform}{suffix}.gn')
 
     if not os.path.isfile(template_path):
         print(
@@ -238,6 +373,11 @@ def main():
         action='store_true',
         help='Run gn gen even if <out-dir>/build.ninja already exists.',
     )
+    parser.add_argument('--skip-codesign', action='store_true', help='Skip codesigning on macOS.')
+    parser.add_argument('--notarize', action='store_true', help='Notarize the built app on macOS.')
+    parser.add_argument('--no-launch', action='store_true', help='Do not launch the built app on macOS.')
+    parser.add_argument('--codesign-identity', help='Explicit codesigning identity to use.')
+    parser.add_argument('--release', action='store_true', help='Build in production release mode.')
     parser.add_argument('autoninja_args', nargs=argparse.REMAINDER, help='Extra args passed to autoninja after --.')
     args = parser.parse_args()
 
@@ -253,12 +393,27 @@ def main():
             build_maho_core.build_rust_prebuilt(args.target)
         if not args.skip_chromium:
             ensure_overlay_mount(_CHROMIUM_SRC_ROOT, args.skip_overlay_mount)
-            ensure_args_gn(_CHROMIUM_SRC_ROOT, out_dir, platform, args.force_args_template)
+            ensure_args_gn(_CHROMIUM_SRC_ROOT, out_dir, platform, args.force_args_template, args.release)
             apply_tracked_chromium_overrides(platform)
             build_ninja_path = os.path.join(_CHROMIUM_SRC_ROOT, out_dir, 'build.ninja')
             if not os.path.isfile(build_ninja_path) or args.force_gn_gen:
                 run_gn_gen(_CHROMIUM_SRC_ROOT, out_dir, _DEPOT_TOOLS_DIR)
             build_chromium_app(out_dir, extra_args)
+
+            app_path = os.path.join(_CHROMIUM_SRC_ROOT, out_dir, 'Maho.app')
+            if platform == 'mac' and not args.skip_codesign:
+                identity = args.codesign_identity
+                if not identity:
+                    identity = find_codesign_identity()
+                if identity:
+                    if codesign_app(identity, app_path):
+                        if args.notarize:
+                            notarize_app(app_path)
+                else:
+                    print("warning: no valid code signing identity found; built app will not be signed", file=sys.stderr)
+            
+            if not args.no_launch:
+                launch_app(app_path)
 
 
 if __name__ == '__main__':

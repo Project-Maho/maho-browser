@@ -42,6 +42,13 @@ source_set("maho_command_overlay") {
     "//maho/browser:maho_core_holder",
     "//maho/browser:maho_tab_id_helper",
     "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",
+    # maho_little_arc dep intentionally omitted: adding it creates a dependency
+    # cycle (command → maho_little_arc → chrome/browser/ui → command, because
+    # maho_little_arc depends on //chrome/browser:browser + //chrome/browser/ui).
+    # The header is included with // nogncheck in maho_command_action_handler.cc
+    # and the symbols resolve at final link into //chrome/browser:browser.
+    # Same pattern as split_view below and the browser.h nogncheck include.
+    # "//maho/browser:maho_little_arc",
     # split_view dep intentionally omitted: adding it creates a dependency
     # cycle (command → split_view → chrome/browser/ui → command). The header
     # is reachable through transitive deps. Track cleanup in the split_view

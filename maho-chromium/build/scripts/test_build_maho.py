@@ -124,17 +124,32 @@ class TestFindCodesignIdentity(unittest.TestCase):
 
 class TestCodesignApp(unittest.TestCase):
 
-    def test_signs_existing_bundle(self):
-        with patch('os.path.isdir', return_value=True), \
+    def test_signs_existing_bundle_no_sparkle(self):
+        def _isdir(path):
+            if path == '/fake/Maho.app':
+                return True
+            return False
+
+        with patch('os.path.isdir', side_effect=_isdir), \
+             patch('os.path.isfile', return_value=False), \
              patch('subprocess.run') as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             result = codesign_app('DEADBEEF', '/fake/Maho.app')
         self.assertTrue(result)
         mock_run.assert_called_once_with(
-            ['codesign', '--force', '--deep', '--sign', 'DEADBEEF', '/fake/Maho.app'],
+            ['codesign', '--force', '--sign', 'DEADBEEF', '--options', 'runtime', '/fake/Maho.app'],
             check=True,
             timeout=120,
         )
+
+    def test_signs_existing_bundle_with_sparkle(self):
+        with patch('os.path.isdir', return_value=True), \
+             patch('os.path.isfile', return_value=True), \
+             patch('subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            result = codesign_app('DEADBEEF', '/fake/Maho.app')
+        self.assertTrue(result)
+        self.assertEqual(mock_run.call_count, 6)
 
     def test_returns_false_when_bundle_missing(self):
         with patch('os.path.isdir', return_value=False):

@@ -12,7 +12,9 @@ use std::time::Duration;
 
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+#[cfg(unix)]
 use tokio::net::unix::OwnedWriteHalf;
+#[cfg(unix)]
 use tokio::net::UnixStream;
 use tokio::sync::{Mutex, oneshot};
 use tokio::task::JoinHandle;
@@ -22,6 +24,11 @@ use crate::protocol::{
     ClientInfo, InitializeParams, InitializeResult, JsonRpcId, JsonRpcNotification, JsonRpcRequest,
     JsonRpcResponse,
 };
+
+#[cfg(unix)]
+type WriterHalf = OwnedWriteHalf;
+#[cfg(windows)]
+type WriterHalf = crate::win_transport::WriterHalf;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(90);
 const EXPECTED_SERVER_NAME: &str = "maho-browser";
@@ -35,7 +42,7 @@ const EXPECTED_SERVER_NAME: &str = "maho-browser";
 #[derive(Debug)]
 pub struct BrowserClient {
     path: PathBuf,
-    writer: Mutex<OwnedWriteHalf>,
+    writer: Mutex<WriterHalf>,
     read_task: Mutex<JoinHandle<()>>,
     pending: Arc<Mutex<HashMap<i64, oneshot::Sender<JsonRpcResponse>>>>,
     next_id: AtomicI64,
@@ -69,43 +76,72 @@ impl BrowserClient {
         Ok(client)
     }
 
+    #[cfg(unix)]
     async fn open_stream(
         path: &Path,
         pending: Arc<Mutex<HashMap<i64, oneshot::Sender<JsonRpcResponse>>>>,
-    ) -> Result<(OwnedWriteHalf, JoinHandle<()>)> {
+    ) -> Result<(WriterHalf, JoinHandle<()>)> {
         let stream = UnixStream::connect(path)
             .await
             .map_err(McpBridgeError::SocketConnect)?;
 
         let (read_half, write_half) = stream.into_split();
-
-        let handle = tokio::spawn(async move {
-            let mut reader = BufReader::new(read_half);
-            let mut line = String::new();
-            loop {
-                line.clear();
-                match reader.read_line(&mut line).await {
-                    Ok(0) => break,
-                    Ok(_) => {
-                        if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&line) {
-                            if let Some(ref id) = resp.id {
-                                if let JsonRpcId::Num(n) = id {
-                                    let mut map = pending.lock().await;
-                                    if let Some(tx) = map.remove(n) {
-                                        let _ = tx.send(resp);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
+        let handle = spawn_read_loop(read_half, pending);
 
         Ok((write_half, handle))
     }
 
+    #[cfg(windows)]
+    async fn open_stream(
+        path: &Path,
+        pending: Arc<Mutex<HashMap<i64, oneshot::Sender<JsonRpcResponse>>>>,
+    ) -> Result<(WriterHalf, JoinHandle<()>)> {
+        // Delegates to the named-pipe transport, which handles the
+        // ERROR_PIPE_BUSY wait-and-retry handshake before returning a
+        // connected client. Framing is byte-mode newline-delimited JSON,
+        // identical to the Unix domain socket transport.
+        let stream = crate::win_transport::connect(path).await?;
+
+        let (read_half, write_half) = tokio::io::split(stream);
+        let handle = spawn_read_loop(read_half, pending);
+
+        Ok((write_half, handle))
+    }
+}
+
+fn spawn_read_loop<R>(
+    read_half: R,
+    pending: Arc<Mutex<HashMap<i64, oneshot::Sender<JsonRpcResponse>>>>,
+) -> JoinHandle<()>
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        let mut reader = BufReader::new(read_half);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line).await {
+                Ok(0) => break,
+                Ok(_) => {
+                    if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&line) {
+                        if let Some(ref id) = resp.id {
+                            if let JsonRpcId::Num(n) = id {
+                                let mut map = pending.lock().await;
+                                if let Some(tx) = map.remove(n) {
+                                    let _ = tx.send(resp);
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    })
+}
+
+impl BrowserClient {
     async fn perform_handshake(&self) -> Result<()> {
         let auth_token = Self::load_auth_token();
         let init_params = InitializeParams {
@@ -276,7 +312,7 @@ fn should_retry_after_reconnect(err: &McpBridgeError) -> bool {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use serde_json::json;

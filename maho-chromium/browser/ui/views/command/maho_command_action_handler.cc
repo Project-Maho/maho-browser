@@ -38,7 +38,7 @@
 #include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/ui/maho_settings_navigation.h"
 #include "maho/browser/ui/views/command/maho_command_model.h"
-#include "maho/browser/ui/views/little_arc/maho_little_arc_window.h"
+#include "maho/browser/ui/views/little_arc/maho_little_arc_window.h"  // nogncheck
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/browser/ui/views/boost/maho_boost_window_controller.h"

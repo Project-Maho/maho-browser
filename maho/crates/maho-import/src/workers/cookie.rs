@@ -16,10 +16,11 @@ use crate::parsers;
 use crate::parsers::chromium::cookies::EncryptionVersion;
 use crate::{BrowserType, DetectedBrowser, ImportResult};
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use crate::decrypt::chromium_keychain::{decrypt_cookie_v10, ChromiumKey};
+
 #[cfg(target_os = "macos")]
-use crate::decrypt::chromium_keychain::{
-    decrypt_cookie_v10, fetch_and_derive_key, ChromiumKey, MacOsKeychain,
-};
+use crate::decrypt::chromium_keychain::{fetch_and_derive_key, MacOsKeychain};
 
 use super::{is_cancelled, send_update, ImportWorker};
 
@@ -125,6 +126,33 @@ impl ImportWorker for CookieWorker {
                         fetch_keychain_with_timeout(service, account, std::time::Duration::from_secs(5))
                     });
 
+                #[cfg(target_os = "linux")]
+                let decryption_key: Option<ChromiumKey> = {
+                    let browser_name = match browser.browser_type {
+                        BrowserType::Chrome => "Chrome",
+                        BrowserType::Brave => "Brave",
+                        BrowserType::Edge => "Edge",
+                        BrowserType::Vivaldi => "Vivaldi",
+                        BrowserType::Opera => "Opera",
+                        _ => "Chromium",
+                    };
+                    crate::decrypt::linux_keyring::fetch_linux_keyring_key(browser_name)
+                };
+
+                #[cfg(target_os = "windows")]
+                let windows_decryptor = find_local_state(profile_dir)
+                    .and_then(|local_state_path| {
+                        let browser_name = match browser.browser_type {
+                            BrowserType::Chrome => "Chrome",
+                            BrowserType::Brave => "Brave",
+                            BrowserType::Edge => "Edge",
+                            BrowserType::Vivaldi => "Vivaldi",
+                            BrowserType::Opera => "Opera",
+                            _ => "Chromium",
+                        };
+                        crate::decrypt::win_app_bound::WindowsAppBoundDecryptor::for_browser(browser_name, &local_state_path).ok()
+                    });
+
                 for entry in &entries {
                     if is_cancelled(cancelled) {
                         break;
@@ -136,18 +164,39 @@ impl ImportWorker for CookieWorker {
 
                     let decrypted_value: Option<String> = if !c.value.is_empty() {
                         Some(c.value.clone())
-                    } else if entry.encryption_version == EncryptionVersion::V10
-                        && !entry.encrypted_value.is_empty()
-                    {
-                        #[cfg(target_os = "macos")]
-                        {
-                            decryption_key
-                                .as_ref()
-                                .and_then(|key| decrypt_cookie_v10(&entry.encrypted_value, key).ok())
-                        }
-                        #[cfg(not(target_os = "macos"))]
-                        {
-                            None
+                    } else if !entry.encrypted_value.is_empty() {
+                        match entry.encryption_version {
+                            EncryptionVersion::V10 => {
+                                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                                {
+                                    decryption_key
+                                        .as_ref()
+                                        .and_then(|key| decrypt_cookie_v10(&entry.encrypted_value, key).ok())
+                                }
+                                #[cfg(target_os = "windows")]
+                                {
+                                    windows_decryptor
+                                        .as_ref()
+                                        .and_then(|dec| dec.decrypt_cookie(&entry.encrypted_value[3..]).ok())
+                                }
+                                #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+                                {
+                                    None
+                                }
+                            }
+                            EncryptionVersion::V20 => {
+                                #[cfg(target_os = "windows")]
+                                {
+                                    windows_decryptor
+                                        .as_ref()
+                                        .and_then(|dec| dec.decrypt_cookie(&entry.encrypted_value[3..]).ok())
+                                }
+                                #[cfg(not(target_os = "windows"))]
+                                {
+                                    None
+                                }
+                            }
+                            _ => None,
                         }
                     } else {
                         None
@@ -172,9 +221,25 @@ impl ImportWorker for CookieWorker {
             }
             _ => {}
         }
-
         Ok(count)
     }
+}
+
+#[cfg(target_os = "windows")]
+fn find_local_state(start_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut current = start_dir.to_path_buf();
+    for _ in 0..4 {
+        let candidate = current.join("Local State");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        if let Some(parent) = current.parent() {
+            current = parent.to_path_buf();
+        } else {
+            break;
+        }
+    }
+    None
 }
 
 #[cfg(test)]

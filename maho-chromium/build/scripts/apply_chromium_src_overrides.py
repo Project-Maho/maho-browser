@@ -130,17 +130,34 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         Replacement(
             old=(
                 "\t<key>LSFileQuarantineEnabled</key>\n"
-                "\t<true/>\n"
+                "\t<false/>\n"
             ),
             new=(
                 "\t<key>LSFileQuarantineEnabled</key>\n"
                 "\t<false/>\n"
+                "\t<key>SUFeedURL</key>\n"
+                "\t<string>https://github.com/Project-Maho/release/releases/latest/download/appcast.xml</string>\n"
+                "\t<key>SUPublicEDKey</key>\n"
+                "\t<string>iwdrdct4loEJl8WbHsfhhHMNcUygZ54N6uIveroNTbw=</string>\n"
+                "\t<key>SUEnableAutomaticChecks</key>\n"
+                "\t<false/>\n"
+                "\t<key>SUScheduledCheckInterval</key>\n"
+                "\t<integer>86400</integer>\n"
             ),
             description=(
-                "Disable LSFileQuarantineEnabled so files written by Maho "
-                "and its child processes (notably Bun-extracted native dylibs "
-                "from `opencode acp`) are not quarantined and dlopen-blocked"
+                "Disable LSFileQuarantineEnabled and inject Sparkle update keys to app-Info.plist"
             ),
+        ),
+        Replacement(
+            old=(
+                "\t<key>LSMinimumSystemVersion</key>\n"
+                "\t<string>${CHROMIUM_MIN_SYSTEM_VERSION}</string>\n"
+            ),
+            new=(
+                "\t<key>LSMinimumSystemVersion</key>\n"
+                "\t<string>14.0</string>\n"
+            ),
+            description="Raise minimum macOS version to Sonoma (14.0)",
         ),
     ],
     # ── location_bar_view.cc ──────────────────────────────────────────────────
@@ -2492,6 +2509,88 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  }"
             ),
             description="Suppress upstream MediaToolbarButtonView addition",
+        ),
+    ],
+    "chrome/browser/ui/views/frame/contents_web_view.cc": [
+        Replacement(
+            old=(
+                '#include "ui/base/metadata/metadata_impl_macros.h"\n'
+            ),
+            new=(
+                '#include "ui/base/metadata/metadata_impl_macros.h"\n'
+                '#include "ui/base/ui_base_features.h"\n'
+            ),
+            description=(
+                "Maho: include ui_base_features for the kGlassFrame blank-content "
+                "transparency guard"
+            ),
+            guard='#include "ui/base/ui_base_features.h"',
+        ),
+        Replacement(
+            old=(
+                "void ContentsWebView::UpdateBackgroundColor() {\n"
+                "  const SkColor color = GetColorProvider()->GetColor(\n"
+            ),
+            new=(
+                "void ContentsWebView::UpdateBackgroundColor() {\n"
+                "  // Maho kGlassFrame: in the blank/zero-tab state (no active\n"
+                "  // WebContents) make the content layer transparent so the window\n"
+                "  // NSVisualEffectView vibrancy shows through instead of the opaque\n"
+                "  // kColorWebContentsBackground gray.\n"
+                "  if (features::IsGlassFrameEnabled() && !web_contents()) {\n"
+                "    layer()->SetColor(SK_ColorTRANSPARENT);\n"
+                "    layer()->SetFillsBoundsOpaquely(false);\n"
+                "    return;\n"
+                "  }\n"
+                "  const SkColor color = GetColorProvider()->GetColor(\n"
+            ),
+            description=(
+                "Maho: make ContentsWebView transparent in the blank/zero-tab "
+                "state under kGlassFrame so the window vibrancy shows through"
+            ),
+            guard="Maho kGlassFrame: in the blank/zero-tab state",
+        ),
+    ],
+    "chrome/browser/ui/views/frame/browser_native_widget_mac.mm": [
+        Replacement(
+            old=(
+                "      effect_view.material = NSVisualEffectMaterialUnderWindowBackground;\n"
+            ),
+            new=(
+                "      // Maho: use a high-transmittance material so the window\n"
+                "      // vibrancy clearly reveals the desktop behind it. The\n"
+                "      // default UnderWindowBackground is nearly opaque frosted.\n"
+                "      effect_view.material = NSVisualEffectMaterialHUDWindow;\n"
+            ),
+            description=(
+                "Maho: switch the kGlassFrame NSVisualEffectView material to "
+                "HUDWindow for a much more see-through desktop blur"
+            ),
+            guard="NSVisualEffectMaterialHUDWindow",
+        ),
+    ],
+    "chrome/browser/ui/views/frame/browser_frame_view_mac.mm": [
+        Replacement(
+            old=(
+                "  if (features::IsGlassFrameEnabled()) {\n"
+                "    const SkAlpha frame_alpha = color_utils::IsDark(frame_color)\n"
+                "                                    ? kBrowserFrameAlphaDark\n"
+                "                                    : kBrowserFrameAlphaLight;\n"
+                "    canvas->DrawColor(SkColorSetA(frame_color, frame_alpha));\n"
+                "  } else {\n"
+            ),
+            new=(
+                "  if (features::IsGlassFrameEnabled()) {\n"
+                "    // Maho: paint no frame wash under kGlassFrame so the whole\n"
+                "    // window (incl. the sidebar) reveals the NSVisualEffectView\n"
+                "    // desktop blur. The upstream ~71%-opaque wash would hide it.\n"
+                "  } else {\n"
+            ),
+            description=(
+                "Maho: drop the kGlassFrame frame wash entirely so the whole "
+                "window reveals the NSVisualEffectView desktop blur"
+            ),
+            guard="paint no frame wash under kGlassFrame",
         ),
     ],
     "chrome/app/chrome_main_delegate.cc": [
