@@ -111,3 +111,43 @@ A failed run usually falls into one of these buckets:
 - `Maho exited early with code ...`, which means the app process crashed or quit before the scenario could finish.
 
 If you need to keep the temporary profile for inspection, set `MAHO_E2E_KEEP_PROFILE=1` before running the harness.
+
+## AI panel harness (chrome://maho-ai)
+
+The sidebar harness above drives Accessibility APIs. The AI panel is a WebUI
+(React), so a companion harness drives it over the Chrome DevTools Protocol,
+which is far easier for DOM inspection and text entry on a web surface:
+
+```bash
+node maho-chromium/build/scripts/e2e_chromium_ai.js --list
+node maho-chromium/build/scripts/e2e_chromium_ai.js
+node maho-chromium/build/scripts/e2e_chromium_ai.js --scenario ai_real_turn
+```
+
+It seeds a temporary profile with the `maho.ai` provider config (read from the
+real profile by default, or overridden via env) and launches the app bundle
+with `--remote-debugging-port`, then connects over CDP (Node's built-in
+`WebSocket`, no extra deps). Credentials are never hardcoded.
+
+Scenarios:
+
+- `ai_panel_renders` — asserts the AI WebUI mounts (title, prompt input, DOM).
+  Deterministic; needs no LLM.
+- `ai_real_turn` — types a marker prompt, submits, and asserts the model echoes
+  the marker. Runs a real agent turn end-to-end (WebUI → Mojo → adapter → FFI →
+  Rust backend → configured LLM endpoint), so it requires a reachable provider.
+
+Env:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MAHO_APP_PATH` | `chromium/src/out/Default/Maho.app` | App bundle to launch. |
+| `MAHO_E2E_SOURCE_PROFILE` | `~/Library/Application Support/Maho` | Profile whose `maho.ai.*` prefs seed the temp profile. |
+| `MAHO_E2E_AI_PROVIDER` / `_API_KEY` / `_BASE_URL` / `_MODEL` | from source profile | Explicit provider overrides. |
+| `MAHO_E2E_CDP_PORT` | `9422` | Remote debugging port. |
+| `MAHO_E2E_KEEP_PROFILE=1` | unset | Keep the temp profile after the run. |
+
+Not yet covered (require MahoCore workspace/MCP seeding to expose a sensitive
+tool, plus a stable window-frame/theme layer): permission-dialog allow/deny,
+`approval_policy=deny` tool blocking, `profile.tools`/`mcp_servers` scoping, and
+MCP liveness — these are covered at the unit/integration level today.
