@@ -10,6 +10,7 @@ use crate::{BrowserType, DetectedBrowser, ImportServices};
 struct ChromiumBrowserInfo {
     browser_type: BrowserType,
     display_name: &'static str,
+    #[cfg_attr(any(target_os = "windows", target_os = "linux"), allow(dead_code))]
     app_data_subdir: &'static str,
     has_profiles: bool,
 }
@@ -56,6 +57,7 @@ const CHROMIUM_BROWSERS: &[ChromiumBrowserInfo] = &[
 struct GeckoBrowserInfo {
     browser_type: BrowserType,
     display_name: &'static str,
+    #[cfg_attr(any(target_os = "windows", target_os = "linux"), allow(dead_code))]
     app_data_subdir: &'static str,
 }
 
@@ -73,22 +75,104 @@ const GECKO_BROWSERS: &[GeckoBrowserInfo] = &[
 ];
 
 pub fn detect_installed_browsers() -> Vec<DetectedBrowser> {
-    let Some(app_support) = dirs::data_dir() else {
-        return Vec::new();
-    };
-
     let mut results = Vec::new();
 
-    detect_chromium_browsers(&app_support, &mut results);
-    detect_gecko_browsers(&app_support, &mut results);
+    if let Some(chromium_base) = chromium_base_dir() {
+        detect_chromium_browsers(&chromium_base, &mut results);
+    }
+    if let Some(gecko_base) = gecko_base_dir() {
+        detect_gecko_browsers(&gecko_base, &mut results);
+    }
     detect_safari(&mut results);
 
     results
 }
 
+fn chromium_base_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        dirs::data_local_dir()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        dirs::config_dir()
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        dirs::data_dir()
+    }
+}
+
+fn gecko_base_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        dirs::home_dir()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        dirs::data_dir()
+    }
+}
+
+fn chromium_subdir(info: &ChromiumBrowserInfo) -> Option<&'static str> {
+    #[cfg(target_os = "windows")]
+    {
+        Some(match info.browser_type {
+            BrowserType::Chrome => "Google/Chrome/User Data",
+            BrowserType::Arc => "Arc/User Data",
+            BrowserType::Brave => "BraveSoftware/Brave-Browser/User Data",
+            BrowserType::Edge => "Microsoft/Edge/User Data",
+            BrowserType::Vivaldi => "Vivaldi/User Data",
+            BrowserType::Opera => "Opera Software/Opera Stable",
+            _ => return None,
+        })
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Some(match info.browser_type {
+            BrowserType::Chrome => "google-chrome",
+            BrowserType::Brave => "BraveSoftware/Brave-Browser",
+            BrowserType::Edge => "microsoft-edge",
+            BrowserType::Vivaldi => "vivaldi",
+            BrowserType::Opera => "opera",
+            _ => return None,
+        })
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        Some(info.app_data_subdir)
+    }
+}
+
+fn gecko_subdir(info: &GeckoBrowserInfo) -> Option<&'static str> {
+    #[cfg(target_os = "windows")]
+    {
+        Some(match info.browser_type {
+            BrowserType::Firefox => "Mozilla/Firefox",
+            BrowserType::Zen => "zen",
+            _ => return None,
+        })
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Some(match info.browser_type {
+            BrowserType::Firefox => ".mozilla/firefox",
+            BrowserType::Zen => ".zen",
+            _ => return None,
+        })
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        Some(info.app_data_subdir)
+    }
+}
+
 fn detect_chromium_browsers(app_support: &Path, results: &mut Vec<DetectedBrowser>) {
     for info in CHROMIUM_BROWSERS {
-        let browser_dir = app_support.join(info.app_data_subdir);
+        let Some(subdir) = chromium_subdir(info) else {
+            continue;
+        };
+        let browser_dir = app_support.join(subdir);
 
         let profile_dirs: Vec<PathBuf> = if info.has_profiles {
             let mut dirs = Vec::new();
@@ -180,7 +264,10 @@ fn read_chromium_profile_name(profile_dir: &Path) -> Option<String> {
 
 fn detect_gecko_browsers(app_support: &Path, results: &mut Vec<DetectedBrowser>) {
     for info in GECKO_BROWSERS {
-        let browser_dir = app_support.join(info.app_data_subdir);
+        let Some(subdir) = gecko_subdir(info) else {
+            continue;
+        };
+        let browser_dir = app_support.join(subdir);
         let profiles_ini = browser_dir.join("profiles.ini");
 
         if !profiles_ini.exists() {
