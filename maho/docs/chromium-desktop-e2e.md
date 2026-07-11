@@ -120,8 +120,10 @@ which is far easier for DOM inspection and text entry on a web surface:
 
 ```bash
 node maho-chromium/build/scripts/e2e_chromium_ai.js --list
-node maho-chromium/build/scripts/e2e_chromium_ai.js
+node maho-chromium/build/scripts/e2e_chromium_ai.js                       # launch, run all, exit
 node maho-chromium/build/scripts/e2e_chromium_ai.js --scenario ai_real_turn
+node maho-chromium/build/scripts/e2e_chromium_ai.js --serve               # keep a persistent instance alive
+MAHO_E2E_CDP_PORT=9422 node maho-chromium/build/scripts/e2e_chromium_ai.js --attach --scenario ai_panel_renders
 ```
 
 It seeds a temporary profile with the `maho.ai` provider config (read from the
@@ -146,6 +148,56 @@ Env:
 | `MAHO_E2E_AI_PROVIDER` / `_API_KEY` / `_BASE_URL` / `_MODEL` | from source profile | Explicit provider overrides. |
 | `MAHO_E2E_CDP_PORT` | `9422` | Remote debugging port. |
 | `MAHO_E2E_KEEP_PROFILE=1` | unset | Keep the temp profile after the run. |
+
+### Session-independent testing (`--serve` / `--attach`)
+
+Other dev sessions constantly rebuild `chromium/src/out/Default` and may kill
+the app. Two properties make testing robust against that churn:
+
+1. **A running instance survives `out/Default` file churn.** A macOS process
+   keeps its `mmap`'d dylib inodes even after the files on disk are relinked by
+   a rebuild. So start a long-lived instance with `--serve` (it prints
+   `CDP_PORT=`, `PID=`, `PROFILE=`, then stays up until `SIGINT`/`SIGTERM`), and
+   drive it repeatedly with `--attach` — each `--attach` run connects to the
+   existing `MAHO_E2E_CDP_PORT` instead of launching. The served instance keeps
+   working across rebuilds of the very directory it was launched from.
+
+2. **Relocating the app does NOT work.** The dev build is a component build:
+   `Maho.app` is not self-contained — its main binary and helpers resolve ~530
+   sibling dylibs from the `out/Default` top level via rpath. Copying the bundle
+   plus the dylibs elsewhere (even with `codesign --force --deep`) produces an
+   app that binds its debugging port but hangs during init and never serves
+   `/json`. There is therefore no supported way to freeze a component build off
+   `out/Default`; do not attempt to snapshot/clone the runtime set.
+
+For a binary that is also immune to `out/Default` rebuilds **at rest** (not just
+while running), build into a dedicated output directory once and point
+`MAHO_APP_PATH` at it:
+
+```bash
+python3 maho-chromium/build/scripts/build_maho.py --out-dir out/E2E --no-launch
+MAHO_APP_PATH=$PWD/chromium/src/out/E2E/Maho.app \
+  node maho-chromium/build/scripts/e2e_chromium_ai.js --serve
+```
+
+**Caveat:** a broad `pkill Maho` from another session still kills any instance
+(shared process name) — this is unavoidable. Restart `--serve` to recover.
+
+### Self-test
+
+`maho-chromium/build/scripts/e2e_isolate_selftest.sh` proves the mechanics
+against a rendered `out/Default`:
+
+```bash
+maho-chromium/build/scripts/e2e_isolate_selftest.sh
+MAHO_E2E_CHURN_TEST=1 maho-chromium/build/scripts/e2e_isolate_selftest.sh
+```
+
+It runs `S1` (serve + attach render), `S3` (two concurrent `--serve` instances
+on distinct ports, both attachable), and `S4` (default one-shot mode). `S2`
+(inode-swap survival) is **off by default** because it mutates the shared
+`out/Default`; enable it with `MAHO_E2E_CHURN_TEST=1` only when no concurrent
+build holds `.build.lock`.
 
 Not yet covered (require MahoCore workspace/MCP seeding to expose a sensitive
 tool, plus a stable window-frame/theme layer): permission-dialog allow/deny,
