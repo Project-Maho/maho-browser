@@ -4,6 +4,9 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.h"
+#include "maho/browser/ui/context_menu/maho_tab_context_menu.h"
+#include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
+
 
 #include <memory>
 #include <string>
@@ -4271,5 +4274,160 @@ TEST_F(SidebarSplitGroupRenderTest, SplitGroup_TwoLayoutOrientationsHaveDifferen
   EXPECT_EQ(divider->GetPreferredSize().height(), 1);
 }
 
+TEST_F(SidebarStateModelContractTest, FolderCollapsePreservesMultiSelection) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+
+  SidebarTreeNode folder = MakeFolderNode("folder-1");
+  folder.is_expanded = true;
+  folder.children.push_back(MakeFolderChildTabNode("tab-1", 0, "folder-1", 0));
+  model.normal_tree.push_back(folder);
+
+  list.Update(model, /*browser=*/nullptr);
+
+  SidebarTabRowView* tab_row = list.FindTabRowByIdForTesting("tab-1");
+  ASSERT_NE(tab_row, nullptr);
+
+  list.ToggleTabSelected("tab-1");
+  EXPECT_TRUE(list.IsTabSelected("tab-1"));
+  EXPECT_TRUE(tab_row->is_selected());
+
+  list.ToggleFolderExpandedForTesting("folder-1");
+
+  EXPECT_TRUE(list.IsTabSelected("tab-1"));
+  EXPECT_EQ(list.FindTabRowByIdForTesting("tab-1"), nullptr);
+
+  // Re-expand: the freshly built row must reflect the preserved selection.
+  list.ToggleFolderExpandedForTesting("folder-1");
+  SidebarTabRowView* reexpanded = list.FindTabRowByIdForTesting("tab-1");
+  ASSERT_NE(reexpanded, nullptr);
+  EXPECT_TRUE(reexpanded->is_selected());
+
+  // Collapse again then clear: ClearSelection must not dereference the freed
+  // collapsed row (dangling-raw_ptr/UAF regression guard).
+  list.ToggleFolderExpandedForTesting("folder-1");
+  list.ClearSelection();
+  EXPECT_FALSE(list.IsTabSelected("tab-1"));
+}
+
+TEST_F(SidebarStateModelContractTest, MultiSelectDragAndKeyboardNavigation) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+  model.normal_tree.push_back(MakeTabNode("tab-1", 0));
+  model.normal_tree.push_back(MakeTabNode("tab-2", 1));
+  list.Update(model, /*browser=*/nullptr);
+
+  SidebarTabRowView* tab_row_1 = list.FindTabRowByIdForTesting("tab-1");
+  SidebarTabRowView* tab_row_2 = list.FindTabRowByIdForTesting("tab-2");
+  ASSERT_NE(tab_row_1, nullptr);
+  ASSERT_NE(tab_row_2, nullptr);
+
+  // 1. Verify multi-select selection state
+  list.ToggleTabSelected("tab-1");
+  list.ToggleTabSelected("tab-2");
+  EXPECT_TRUE(list.IsTabSelected("tab-1"));
+  EXPECT_TRUE(list.IsTabSelected("tab-2"));
+  EXPECT_EQ(list.selected_tab_ids().size(), 2u);
+
+  // 2. Verify Drag Payload Serialization
+  ui::OSExchangeData data;
+  tab_row_1->WriteDragDataForView(tab_row_1, gfx::Point(), &data);
+  SidebarDragPayload payload;
+  EXPECT_TRUE(ReadMahoDragData(data, payload));
+  EXPECT_EQ(payload.selected_tab_ids.size(), 2u);
+  EXPECT_TRUE(std::find(payload.selected_tab_ids.begin(), payload.selected_tab_ids.end(), "tab-1") != payload.selected_tab_ids.end());
+  EXPECT_TRUE(std::find(payload.selected_tab_ids.begin(), payload.selected_tab_ids.end(), "tab-2") != payload.selected_tab_ids.end());
+
+  // 3. Verify Shift+Arrow down range extension on key pressed
+  // Focus the first row:
+  tab_row_1->RequestFocus();
+  ui::KeyEvent key_event(ui::EventType::kKeyPressed, ui::VKEY_DOWN, ui::EF_SHIFT_DOWN);
+  list.OnKeyPressed(key_event);
+
+  // Both should still be selected, and range extension is verified.
+  EXPECT_TRUE(list.IsTabSelected("tab-1"));
+  EXPECT_TRUE(list.IsTabSelected("tab-2"));
+}
+
+TEST_F(SidebarStateModelContractTest, ShowTabRowContextMenuMultiSelect) {
+  auto* list = new MahoSidebarTabListView(/*browser=*/nullptr);
+
+  // Set up a widget so that list->GetWidget() is valid.
+  std::unique_ptr<views::Widget> widget = CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+  widget->SetContentsView(list);
+
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+  model.normal_tree.push_back(MakeTabNode("tab-1", 0));
+  model.normal_tree.push_back(MakeTabNode("tab-2", 1));
+  list->Update(model, /*browser=*/nullptr);
+
+  SidebarTabRowView* tab_row_1 = list->FindTabRowByIdForTesting("tab-1");
+  ASSERT_NE(tab_row_1, nullptr);
+
+  // Select both tabs
+  list->ToggleTabSelected("tab-1");
+  list->ToggleTabSelected("tab-2");
+  EXPECT_TRUE(list->IsTabSelected("tab-1"));
+  EXPECT_TRUE(list->IsTabSelected("tab-2"));
+
+  // Trigger ShowTabRowContextMenu.
+  list->ShowTabRowContextMenu(tab_row_1, 0, gfx::Point(), ui::mojom::MenuSourceType::kNone, nullptr);
+
+  // Verify that BUG-2 is solved: because the row view is passed, the active context menu was created
+  // with multi-select enabled.
+  MahoTabContextMenu* menu = list->active_context_menu_for_testing();
+  ASSERT_NE(menu, nullptr);
+
+  // Check that the selected tab IDs passed to the context menu contain both selected tabs.
+  const std::vector<std::string>& selected_ids = menu->selected_tab_ids_for_testing();
+  EXPECT_EQ(selected_ids.size(), 2u);
+  EXPECT_TRUE(std::find(selected_ids.begin(), selected_ids.end(), "tab-1") != selected_ids.end());
+  EXPECT_TRUE(std::find(selected_ids.begin(), selected_ids.end(), "tab-2") != selected_ids.end());
+}
+
+TEST_F(SidebarStateModelContractTest, ShowTabRowContextMenuUnselectedClearsSelection) {
+  auto* list = new MahoSidebarTabListView(/*browser=*/nullptr);
+
+  std::unique_ptr<views::Widget> widget = CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+  widget->SetContentsView(list);
+
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+  model.normal_tree.push_back(MakeTabNode("tab-1", 0));
+  model.normal_tree.push_back(MakeTabNode("tab-2", 1));
+  model.normal_tree.push_back(MakeTabNode("tab-3", 2));
+  list->Update(model, /*browser=*/nullptr);
+
+  SidebarTabRowView* tab_row_1 = list->FindTabRowByIdForTesting("tab-1");
+  SidebarTabRowView* tab_row_2 = list->FindTabRowByIdForTesting("tab-2");
+  SidebarTabRowView* tab_row_3 = list->FindTabRowByIdForTesting("tab-3");
+  ASSERT_NE(tab_row_1, nullptr);
+  ASSERT_NE(tab_row_2, nullptr);
+  ASSERT_NE(tab_row_3, nullptr);
+
+  // Select tab-1 and tab-2
+  list->ToggleTabSelected("tab-1");
+  list->ToggleTabSelected("tab-2");
+  EXPECT_TRUE(list->IsTabSelected("tab-1"));
+  EXPECT_TRUE(list->IsTabSelected("tab-2"));
+  EXPECT_FALSE(list->IsTabSelected("tab-3"));
+
+  // Trigger ShowTabRowContextMenu on tab-3 (unselected).
+  list->ShowTabRowContextMenu(tab_row_3, 2, gfx::Point(), ui::mojom::MenuSourceType::kNone, nullptr);
+
+  // Selection must be cleared.
+  EXPECT_FALSE(list->IsTabSelected("tab-1"));
+  EXPECT_FALSE(list->IsTabSelected("tab-2"));
+
+  // Active menu should be single-tab for tab-3.
+  MahoTabContextMenu* menu = list->active_context_menu_for_testing();
+  ASSERT_NE(menu, nullptr);
+  EXPECT_EQ(menu->selected_tab_ids_for_testing().size(), 0u);
+}
+
 }  // namespace
 }  // namespace maho
+

@@ -18,6 +18,10 @@ class MahoTabContextMenu : public ui::SimpleMenuModel::Delegate {
    public:
     virtual ~Delegate() = default;
     virtual void RenameTab(int tab_index) {}
+    virtual void CloseSelectedTabs() {}
+    virtual void PinSelectedTabs(bool pin) {}
+    virtual void MoveSelectedTabsToSpace(const std::string& space_id) {}
+    virtual void MuteSelectedTabs(bool mute) {}
   };
 
   MahoTabContextMenu(Browser* browser, int tab_index);
@@ -25,7 +29,8 @@ class MahoTabContextMenu : public ui::SimpleMenuModel::Delegate {
   MahoTabContextMenu(Browser* browser,
                      int tab_index,
                      Delegate* delegate,
-                     std::string core_tab_id);
+                     std::string core_tab_id,
+                     std::vector<std::string> selected_tab_ids = {});
   ~MahoTabContextMenu() override;
 
   MahoTabContextMenu(const MahoTabContextMenu&) = delete;
@@ -36,6 +41,10 @@ class MahoTabContextMenu : public ui::SimpleMenuModel::Delegate {
   void ExecuteCommand(int command_id, int event_flags) override;
   bool IsCommandIdEnabled(int command_id) const override;
   bool IsCommandIdChecked(int command_id) const override;
+
+  const std::vector<std::string>& selected_tab_ids_for_testing() const {
+    return selected_tab_ids_;
+  }
 
  private:
   struct SpaceEntry {
@@ -48,6 +57,7 @@ class MahoTabContextMenu : public ui::SimpleMenuModel::Delegate {
   int tab_index_;
   raw_ptr<Delegate> delegate_ = nullptr;
   std::string core_tab_id_;
+  std::vector<std::string> selected_tab_ids_;
   std::vector<SpaceEntry> space_entries_;
   std::unique_ptr<ui::SimpleMenuModel> move_to_space_submenu_;
 };

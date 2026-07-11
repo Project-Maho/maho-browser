@@ -81,6 +81,16 @@ void UpdateSidebarSpaceHeaderRow(views::View* row,
                                  const std::string& icon,
                                  const std::u16string& name);
 
+class MahoSidebarTabListView;
+
+class RebuildRowsBatchScoper {
+ public:
+  explicit RebuildRowsBatchScoper(MahoSidebarTabListView* view);
+  ~RebuildRowsBatchScoper();
+ private:
+  raw_ptr<MahoSidebarTabListView> view_;
+};
+
 class MahoSidebarTabListView : public views::View,
                                public views::ContextMenuController,
                                public ui::SimpleMenuModel::Delegate {
@@ -120,6 +130,7 @@ class MahoSidebarTabListView : public views::View,
   // Called by MahoSidebarView when the scroll position changes.
   // Invalidates tab_rows_ layout to recalculate visible set.
   void OnScrollChanged();
+  bool OnKeyPressed(const ui::KeyEvent& event) override;
   void ActivateTabById(const std::string& tab_id);
 
   views::View* FindSectionDropTargetForTesting(MahoSidebarTabSection section);
@@ -137,6 +148,7 @@ class MahoSidebarTabListView : public views::View,
   views::View* tab_rows_for_testing() { return tab_rows_; }
   views::View* pinned_separator_for_testing() { return pinned_separator_; }
 
+  void ToggleFolderExpandedForTesting(const std::string& folder_id);
   bool IsTabPreviewShowingForTesting() const;
   views::Widget* tab_preview_widget_for_testing() const;
   const std::u16string& tab_preview_title_for_testing() const;
@@ -145,8 +157,13 @@ class MahoSidebarTabListView : public views::View,
   bool is_pinned_drop_lane_revealed_for_testing() const {
     return pinned_drop_lane_revealed_;
   }
+  MahoTabContextMenu* active_context_menu_for_testing() {
+    return active_context_menu_.get();
+  }
+
   // Returns the maho-core tab_id for the given WebContents, or empty string.
   std::string FindCoreTabIdByWebContents(content::WebContents* contents) const;
+
 
   void ShowTabRowContextMenu(views::View* source,
                              int live_index,
@@ -166,7 +183,23 @@ class MahoSidebarTabListView : public views::View,
                                   const gfx::Point& point,
                                   ui::mojom::MenuSourceType source_type) override;
 
+  // Multi-selection public APIs
+  void ToggleTabSelected(const std::string& tab_id);
+  void SelectRangeTo(const std::string& tab_id);
+  void ClearSelection();
+  bool IsTabSelected(const std::string& tab_id) const;
+  const std::unordered_set<std::string>& selected_tab_ids() const {
+    return selected_tab_ids_;
+  }
+
+  void CloseSelected();
+  void PinSelected(bool pin);
+  void MoveSelectedToSpace(const std::string& space_id);
+  void MuteSelected(bool mute);
+
  private:
+  friend class RebuildRowsBatchScoper;
+
   void RebuildRows(const MahoSidebarTabListModel& model, Browser* browser);
   static std::string ComputeModelFingerprint(
       const MahoSidebarTabListModel& model);
@@ -271,6 +304,19 @@ class MahoSidebarTabListView : public views::View,
   // Rebuilt at end of RebuildRows; cleared on teardown via RemoveAllChildViews.
   std::unordered_map<std::string, raw_ptr<SidebarTabRowView>> tab_id_to_row_view_;
 
+  // Split IDs rendered in the previous rebuild, used to detect newly-created
+  // splits so their creation animates once instead of on every rebuild.
+  std::set<std::string> last_rendered_split_ids_;
+  std::set<std::string> current_rebuild_split_ids_;
+
+  // Selection states
+  std::unordered_set<std::string> selected_tab_ids_;
+  std::string selection_anchor_tab_id_;
+  bool batch_in_progress_ = false;
+  bool batch_rebuild_needed_ = false;
+
+  std::vector<SidebarTabRowView*> GetTabRowsInVisualOrder();
+
   base::WeakPtrFactory<MahoSidebarTabListView> weak_factory_{this};
 };
 
@@ -306,6 +352,9 @@ class SidebarTabRowView : public views::View,
   void OnFocus() override;
   gfx::Size CalculatePreferredSize(
       const views::SizeBounds& available_size) const override;
+
+  void SetSplitCompactMode(bool compact);
+
   bool OnMousePressed(const ui::MouseEvent& event) override;
   void OnMouseReleased(const ui::MouseEvent& event) override;
   void OnMouseEntered(const ui::MouseEvent& event) override;
@@ -319,6 +368,10 @@ class SidebarTabRowView : public views::View,
 
   // MahoTabContextMenu::Delegate:
   void RenameTab(int tab_index) override;
+  void CloseSelectedTabs() override;
+  void PinSelectedTabs(bool pin) override;
+  void MoveSelectedTabsToSpace(const std::string& space_id) override;
+  void MuteSelectedTabs(bool mute) override;
 
   bool GetDropFormats(int* formats,
                       std::set<ui::ClipboardFormatType>* format_types) override;
@@ -383,6 +436,9 @@ class SidebarTabRowView : public views::View,
   // MahoSidebarTabListView that skips ~2s RebuildRows() on tab activation.
   void SetActive(bool active);
 
+  void SetSelected(bool selected);
+  bool is_selected() const { return is_selected_; }
+
   void SetFavicon(ui::ImageModel image);
   const std::string& tab_id() const { return tab_id_; }
   const std::string& containing_folder_id() const { return source_parent_folder_id_; }
@@ -390,6 +446,7 @@ class SidebarTabRowView : public views::View,
   void UpdateAudioState(bool audible, bool muted);
 
  private:
+  MahoSidebarTabListView* GetTabListView();
   void ActivateTabFromEvent(const ui::Event& event);
   void ActivateFromRowClick(const ui::MouseEvent& event);
   void OnAudioButtonPressed(const ui::Event& event);
@@ -431,11 +488,12 @@ class SidebarTabRowView : public views::View,
   bool activate_pending_ = false;
   bool activation_handled_for_current_press_ = false;
   bool is_suspended_ = false;
+  bool is_selected_ = false;
 
   // P3: Skip redundant SetBackground/SetBorder when visual state is unchanged.
   // UpdateAppearance() called ~870×/hover cycle; early-exit saves allocation.
   enum class AppearanceVisualState {
-    kIdle, kHovered, kActive, kDropTarget
+    kUninitialized, kIdle, kHovered, kActive, kDropTarget, kSelected
   };
   AppearanceVisualState last_visual_state_ = AppearanceVisualState::kIdle;
 
@@ -443,6 +501,7 @@ class SidebarTabRowView : public views::View,
   // minus/X state hasn't toggled. Called ~870×/hover cycle.
   bool last_close_button_show_minus_ = false;
   ui::ColorId last_title_color_id_ = ui::ColorId{};
+  bool split_compact_ = false;
 };
 
 class SidebarFolderRowView : public views::View,

@@ -320,6 +320,7 @@ struct SidebarDragPayload {
   int tab_strip_index = -1;
   std::string source_parent_folder_id;
   int source_folder_child_index = -1;
+  std::vector<std::string> selected_tab_ids;
 };
 
 struct MahoSidebarFooterUpdatePillModel {
