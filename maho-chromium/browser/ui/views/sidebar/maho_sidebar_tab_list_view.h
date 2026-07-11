@@ -132,6 +132,10 @@ class MahoSidebarTabListView : public views::View,
   void OnScrollChanged();
   bool OnKeyPressed(const ui::KeyEvent& event) override;
   void ActivateTabById(const std::string& tab_id);
+  // Materializes a Maho core-only "suspended" tab into the TabStripModel via a
+  // foreground navigation and returns the new WebContents (nullptr on failure).
+  // Public so the sidebar drop path can wake tabs before splitting them.
+  content::WebContents* WakeSuspendedTab(const std::string& tab_id);
 
   views::View* FindSectionDropTargetForTesting(MahoSidebarTabSection section);
   SidebarTabRowView* FindTabRowByIdForTesting(const std::string& tab_id);
@@ -197,6 +201,9 @@ class MahoSidebarTabListView : public views::View,
   void PinSelected(bool pin);
   void MoveSelectedToSpace(const std::string& space_id);
   void MuteSelected(bool mute);
+  void ArchiveSelected();
+  void OpenSelectedInSplit();
+  void NewFolderWithSelected();
 
  private:
   friend class RebuildRowsBatchScoper;
@@ -226,7 +233,6 @@ class MahoSidebarTabListView : public views::View,
   std::u16string GetNodeDisplayText(const SidebarTreeNode& node) const;
   std::u16string GetNodeTooltipText(const SidebarTreeNode& node) const;
   void ActivateTab(int tab_index);
-  void WakeSuspendedTab(const std::string& tab_id);
   void CloseTab(int tab_index);
   void CloseTabById(const std::string& tab_id);
   int ResolveTabStripIndexForTabId(const std::string& tab_id) const;
@@ -386,6 +392,9 @@ class SidebarTabRowView : public views::View,
   void PinSelectedTabs(bool pin) override;
   void MoveSelectedTabsToSpace(const std::string& space_id) override;
   void MuteSelectedTabs(bool mute) override;
+  void ArchiveSelectedTabs() override;
+  void OpenSelectedTabsInSplit() override;
+  void NewFolderWithSelectedTabs() override;
 
   bool GetDropFormats(int* formats,
                       std::set<ui::ClipboardFormatType>* format_types) override;

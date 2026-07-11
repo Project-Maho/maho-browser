@@ -137,6 +137,12 @@ std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
 
     model->AddSeparator(ui::NORMAL_SEPARATOR);
 
+    model->AddItem(IDC_MAHO_TAB_OPEN_SPLIT, u"Open in Split View");
+    model->AddItem(
+        IDC_MAHO_TAB_NEW_FOLDER,
+        base::UTF8ToUTF16("New Folder with " +
+                          std::to_string(selected_tab_ids_.size()) + " Items"));
+
     move_to_space_submenu_ = std::make_unique<ui::SimpleMenuModel>(this);
     space_entries_.clear();
 
@@ -184,11 +190,8 @@ std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
       const std::string label_base =
           (entry.icon.empty() ? std::string() : entry.icon + " ") + entry.name;
       move_to_space_submenu_->AddItem(
-          IDC_MAHO_TAB_MOVE_SPACE_BASE + static_cast<int>(i * 2),
-          base::UTF8ToUTF16(label_base + " (Pinned)"));
-      move_to_space_submenu_->AddItem(
-          IDC_MAHO_TAB_MOVE_SPACE_BASE + static_cast<int>(i * 2) + 1,
-          base::UTF8ToUTF16(label_base + " (Today)"));
+          IDC_MAHO_TAB_MOVE_SPACE_BASE + static_cast<int>(i),
+          base::UTF8ToUTF16(label_base));
     }
 
     space_entries_ = std::move(visible_spaces);
@@ -199,6 +202,9 @@ std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
 
     model->AddSubMenu(IDC_MAHO_TAB_MOVE_TO_SPACE, u"Move Selected Tabs to Space",
                       move_to_space_submenu_.get());
+
+    model->AddSeparator(ui::NORMAL_SEPARATOR);
+    model->AddItem(IDC_MAHO_TAB_ARCHIVE, u"Archive Tabs");
 
     return model;
   }
@@ -305,11 +311,8 @@ std::unique_ptr<ui::SimpleMenuModel> MahoTabContextMenu::BuildMenuModel() {
     const std::string label_base =
         (entry.icon.empty() ? std::string() : entry.icon + " ") + entry.name;
     move_to_space_submenu_->AddItem(
-        IDC_MAHO_TAB_MOVE_SPACE_BASE + static_cast<int>(i * 2),
-        base::UTF8ToUTF16(label_base + " (Pinned)"));
-    move_to_space_submenu_->AddItem(
-        IDC_MAHO_TAB_MOVE_SPACE_BASE + static_cast<int>(i * 2) + 1,
-        base::UTF8ToUTF16(label_base + " (Today)"));
+        IDC_MAHO_TAB_MOVE_SPACE_BASE + static_cast<int>(i),
+        base::UTF8ToUTF16(label_base));
   }
 
   space_entries_ = std::move(visible_spaces);
@@ -353,6 +356,15 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
         break;
       case IDC_MAHO_TAB_UNMUTE:
         delegate_->MuteSelectedTabs(false);
+        break;
+      case IDC_MAHO_TAB_ARCHIVE:
+        delegate_->ArchiveSelectedTabs();
+        break;
+      case IDC_MAHO_TAB_OPEN_SPLIT:
+        delegate_->OpenSelectedTabsInSplit();
+        break;
+      case IDC_MAHO_TAB_NEW_FOLDER:
+        delegate_->NewFolderWithSelectedTabs();
         break;
       default:
         if (IsMoveToSpaceCommand(command_id)) {
@@ -619,10 +631,27 @@ void MahoTabContextMenu::ExecuteCommand(int command_id, int event_flags) {
       if (!has_valid_tab_index) {
         break;
       }
+      if (content::WebContents* wc =
+              tab_strip_model->GetWebContentsAt(tab_index_)) {
+        if (auto* helper = MahoTabIdHelper::FromWebContents(wc);
+            helper && !helper->stable_tab_id().empty()) {
+          maho::DispatchShellEvent("archive_tab_by_id",
+                                   {{"tab_id", helper->stable_tab_id()}});
+        }
+      }
       break;
     case IDC_MAHO_TAB_ARCHIVE_BELOW:
       if (!has_valid_tab_index) {
         break;
+      }
+      for (int i = tab_strip_model->count() - 1; i > tab_index_; --i) {
+        if (content::WebContents* wc = tab_strip_model->GetWebContentsAt(i)) {
+          if (auto* helper = MahoTabIdHelper::FromWebContents(wc);
+              helper && !helper->stable_tab_id().empty()) {
+            maho::DispatchShellEvent("archive_tab_by_id",
+                                     {{"tab_id", helper->stable_tab_id()}});
+          }
+        }
       }
       break;
     case IDC_MAHO_TAB_MOVE_TO_SPACE:
@@ -656,6 +685,9 @@ bool MahoTabContextMenu::IsCommandIdEnabled(int command_id) const {
       case IDC_MAHO_TAB_MUTE:
       case IDC_MAHO_TAB_UNMUTE:
       case IDC_MAHO_TAB_MOVE_TO_SPACE:
+      case IDC_MAHO_TAB_ARCHIVE:
+      case IDC_MAHO_TAB_OPEN_SPLIT:
+      case IDC_MAHO_TAB_NEW_FOLDER:
         return true;
       default:
         if (IsMoveToSpaceCommand(command_id)) {

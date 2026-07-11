@@ -4,7 +4,7 @@ use crate::autofill::{AutofillAddress, AutofillPayment};
 use crate::boost::BoostUpdate;
 use crate::chat::{ChatRequestContext, ChatRequestMode, PageContext};
 use crate::common::{ImageData, MemoryPressureLevel, Size, Url};
-use crate::identifiers::{BoostId, FolderId, NoteId, ProfileId, SpaceId, TabId};
+use crate::identifiers::{BoostId, FolderId, NoteId, ProfileId, SpaceId, TabId, WindowId};
 use crate::settings::SettingsUpdate;
 use crate::space::{SpaceColor, SpaceConfigUpdate};
 use crate::tab::TabRole;
@@ -90,12 +90,26 @@ pub enum ShellEvent {
         /// window ownership for per-window tab isolation.
         #[serde(default)]
         window_id: Option<i64>,
+        #[serde(default)]
+        is_private: bool,
     },
     CreateSplit {
+        window_id: WindowId,
         tab_ids: Vec<TabId>,
         orientation: crate::common::Orientation,
     },
-    ClearSplitView,
+    ClearSplitView {
+        window_id: WindowId,
+    },
+    RemoveSplit {
+        window_id: WindowId,
+        pane_id: String,
+    },
+    ResizeSplit {
+        window_id: WindowId,
+        pane_id: String,
+        ratio: f64,
+    },
     CloseTab {
         tab_id: TabId,
         #[serde(default)]
@@ -179,6 +193,9 @@ pub enum ShellEvent {
         tab_id: TabId,
     },
     ReopenLastClosed,
+    ArchiveTabById {
+        tab_id: TabId,
+    },
     RestoreArchivedTab {
         tab_id: TabId,
     },
@@ -231,6 +248,11 @@ pub enum ShellEvent {
         provider_type: Option<String>,
         #[serde(default)]
         config_json: Option<String>,
+    },
+    CreateFolderWithTabs {
+        space_id: SpaceId,
+        name: String,
+        tab_ids: Vec<TabId>,
     },
     RenameFolder {
         space_id: SpaceId,
@@ -307,6 +329,8 @@ pub enum ShellEvent {
         text: String,
         #[serde(default)]
         mode: Option<String>,
+        #[serde(default)]
+        is_incognito: bool,
     },
     CommandBarSelect {
         index: usize,
@@ -463,6 +487,8 @@ pub enum ShellEvent {
     SearchHistory {
         query: String,
         limit: usize,
+        #[serde(default)]
+        is_incognito: bool,
     },
     ClearHistory,
     DeleteHistoryEntry {

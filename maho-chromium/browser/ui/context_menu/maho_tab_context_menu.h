@@ -22,6 +22,9 @@ class MahoTabContextMenu : public ui::SimpleMenuModel::Delegate {
     virtual void PinSelectedTabs(bool pin) {}
     virtual void MoveSelectedTabsToSpace(const std::string& space_id) {}
     virtual void MuteSelectedTabs(bool mute) {}
+    virtual void ArchiveSelectedTabs() {}
+    virtual void OpenSelectedTabsInSplit() {}
+    virtual void NewFolderWithSelectedTabs() {}
   };
 
   MahoTabContextMenu(Browser* browser, int tab_index);

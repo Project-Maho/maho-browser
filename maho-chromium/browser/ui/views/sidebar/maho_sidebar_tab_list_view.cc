@@ -4,6 +4,7 @@
 #include "ui/views/controls/button/image_button.h"
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
+#include "maho/browser/maho_tab_registry.h"
 
 #include <functional>
 #include <algorithm>
@@ -90,6 +91,7 @@
 #include "ui/base/dragdrop/drop_target_event.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/color/color_id.h"
+#include "ui/color/color_provider.h"
 #include "ui/events/event.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
@@ -154,6 +156,8 @@ constexpr int kFolderRowLeadingInsetDp = 8;
 constexpr int kDragStartThresholdDp = 5;
 constexpr int kDropIndicatorThicknessDp = 2;
 constexpr int kDropIndicatorOutlineThicknessDp = 1;
+constexpr int kSplitPreviewDividerInsetDp = 4;
+constexpr int kSplitPreviewDividerWidthDp = 2;
 constexpr int kInlineActionIconSizeDp = 17;
 constexpr int kInlineActionsSpacingDp = 6;
 [[maybe_unused]] constexpr int kAudioIndicatorSizeDp = 14;
@@ -164,6 +168,48 @@ const gfx::Insets kPlaceholderInsets = gfx::Insets::TLBR(1, 12, 0, 9);
 const gfx::Insets kNewTabRowMargins = gfx::Insets::TLBR(0, 0, 0, 0);
 const gfx::Insets kSectionInsets = gfx::Insets::TLBR(0, 0, 0, 0);
 const gfx::Insets kSectionSeparatorInsets = gfx::Insets::TLBR(2, 8, 2, 8);
+
+class SidebarSplitDropTargetBackground : public views::Background {
+ public:
+  SidebarSplitDropTargetBackground() = default;
+
+  void Paint(gfx::Canvas* canvas, views::View* view) const override {
+    const ui::ColorProvider* color_provider = view->GetColorProvider();
+    if (!color_provider) {
+      return;
+    }
+
+    const gfx::Rect bounds = view->GetLocalBounds();
+    if (bounds.IsEmpty()) {
+      return;
+    }
+
+    cc::PaintFlags fill_flags;
+    fill_flags.setAntiAlias(true);
+    fill_flags.setStyle(cc::PaintFlags::kFill_Style);
+    fill_flags.setColor(color_provider->GetColor(ui::kColorSysSurface4));
+    canvas->DrawRoundRect(gfx::RectF(bounds), kRowCornerRadiusDp, fill_flags);
+
+    const float divider_height =
+        bounds.height() - (kSplitPreviewDividerInsetDp * 2.0f);
+    if (divider_height <= 0.0f) {
+      return;
+    }
+
+    cc::PaintFlags divider_flags;
+    divider_flags.setAntiAlias(false);
+    divider_flags.setStyle(cc::PaintFlags::kFill_Style);
+    divider_flags.setColor(color_provider->GetColor(ui::kColorSysPrimary));
+    const float divider_x =
+        bounds.x() + ((bounds.width() - kSplitPreviewDividerWidthDp) / 2.0f);
+    canvas->DrawRect(
+        gfx::RectF(divider_x, bounds.y() + kSplitPreviewDividerInsetDp,
+                   kSplitPreviewDividerWidthDp, divider_height),
+        divider_flags);
+  }
+
+  void OnViewThemeChanged(views::View* view) override { view->SchedulePaint(); }
+};
 
 ui::DropTargetEvent ForwardDropTargetEventToView(const ui::DropTargetEvent& event,
                                                  views::View* source,
@@ -194,6 +240,19 @@ void NotifySidebarDragStarted(views::View* start_view,
     if (v->GetClassName() == std::string("MahoSidebarView")) {
       MahoSidebarView* sidebar_view = static_cast<MahoSidebarView*>(v);
       sidebar_view->OnDragStarted(tab_id);
+      break;
+    }
+    v = v->parent();
+  }
+}
+
+void NotifySidebarDragGhostImage(views::View* start_view,
+                                 const gfx::ImageSkia& image,
+                                 const gfx::Vector2d& offset) {
+  views::View* v = start_view;
+  while (v) {
+    if (v->GetClassName() == std::string("MahoSidebarView")) {
+      static_cast<MahoSidebarView*>(v)->SetActiveDragGhostImage(image, offset);
       break;
     }
     v = v->parent();
@@ -362,6 +421,7 @@ class SidebarDropForwardingLabelButton : public views::LabelButton {
     if (!drop_target_) {
       return static_cast<int>(ui::mojom::DragOperation::kNone);
     }
+    LOG(WARNING) << "[MAHO_HOVER_DBG] FWD_LABELBTN OnDragUpdated";
     return drop_target_->OnDragUpdated(
         ForwardDropTargetEventToView(event, this, drop_target_));
   }
@@ -412,6 +472,7 @@ class SidebarDropForwardingView : public views::View {
     if (!drop_target_) {
       return static_cast<int>(ui::mojom::DragOperation::kNone);
     }
+    LOG(WARNING) << "[MAHO_HOVER_DBG] FWD_VIEW OnDragUpdated";
     return drop_target_->OnDragUpdated(
         ForwardDropTargetEventToView(event, this, drop_target_));
   }
@@ -1706,7 +1767,9 @@ void SidebarTabRowView::ShowContextMenuForViewImpl(
   }
   TabStripModel* tab_strip_model = browser_ ? browser_->tab_strip_model() : nullptr;
   const int live_index = resolve_tab_index_ ? resolve_tab_index_.Run(tab_id_) : tab_index_;
-  if (!tab_strip_model || !tab_strip_model->ContainsIndex(live_index)) {
+  // Suspended tabs have live_index == -1 but must still open the menu; do not
+  // gate on ContainsIndex. Single-tab ops self-guard on a valid index.
+  if (!tab_strip_model) {
     return;
   }
 
@@ -1762,6 +1825,8 @@ int SidebarTabRowView::OnDragUpdated(const ui::DropTargetEvent& event) {
   }
   drag_over_drop_target_ = true;
   UpdateAppearance();
+  LOG(WARNING) << "[MAHO_HOVER_DBG] row OnDragUpdated zone="
+               << static_cast<int>(active_drop_zone_) << " tab=" << tab_id_;
   return static_cast<int>(ui::mojom::DragOperation::kMove);
 }
 
@@ -1824,7 +1889,13 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
             }
             SidebarDragPayload single_payload = payload;
             single_payload.node_id = move_id;
-            single_payload.tab_strip_index = resolve_tab_index ? resolve_tab_index.Run(move_id) : -1;
+            // Prefer the strip index captured when the drag began: re-resolving
+            // by id here is racy (the id->index cache can be stale mid-drag and
+            // the fallback scan misses tabs whose helper isn't attached yet).
+            single_payload.tab_strip_index =
+                (move_id == payload.node_id && payload.tab_strip_index >= 0)
+                    ? payload.tab_strip_index
+                    : (resolve_tab_index ? resolve_tab_index.Run(move_id) : -1);
 
             const SidebarDropPlan plan =
                 ResolveDropPlan(SectionKindFromTabSection(section), single_payload);
@@ -1840,30 +1911,48 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
               if (is_multi_drag) {
                 continue;
               }
-              const int target_tab_strip_index =
-                  resolve_tab_index ? resolve_tab_index.Run(tab_id) : -1;
-              const int source_tab_strip_index =
-                  resolve_tab_index ? resolve_tab_index.Run(single_payload.node_id) : -1;
-              TabStripModel* dbg_model =
+              TabStripModel* model =
                   browser ? browser->tab_strip_model() : nullptr;
-              LOG(WARNING) << "[MAHO_DROP_DBG] kSplit tgt=" << target_tab_strip_index
-                           << " src=" << source_tab_strip_index
-                           << " src_in_split="
-                           << (dbg_model && dbg_model->ContainsIndex(source_tab_strip_index)
-                                   ? dbg_model->GetSplitForTab(source_tab_strip_index).has_value()
-                                   : -1)
-                           << " tgt_in_split="
-                           << (dbg_model && dbg_model->ContainsIndex(target_tab_strip_index)
-                                   ? dbg_model->GetSplitForTab(target_tab_strip_index).has_value()
-                                   : -1);
-              if (target_tab_strip_index >= 0 &&
+              if (!model) {
+                continue;
+              }
+              const std::string drag_source_id = single_payload.node_id;
+              // A Maho "suspended" tab lives only in the Rust core and has NO
+              // TabStripModel entry, so its index resolves to -1. Capture the
+              // WebContents of any already-in-strip tab BEFORE waking (pointers
+              // survive later insertions), materialize any suspended tab via
+              // WakeSuspendedTab (foreground nav, same as click-to-open), then
+              // re-resolve both indices from the stable pointers — waking
+              // inserts tabs and shifts strip indices.
+              const int src_idx0 =
+                  resolve_tab_index ? resolve_tab_index.Run(drag_source_id) : -1;
+              const int tgt_idx0 =
+                  resolve_tab_index ? resolve_tab_index.Run(tab_id) : -1;
+              content::WebContents* src_wc =
+                  (src_idx0 >= 0 && model->ContainsIndex(src_idx0))
+                      ? model->GetWebContentsAt(src_idx0)
+                      : nullptr;
+              content::WebContents* tgt_wc =
+                  (tgt_idx0 >= 0 && model->ContainsIndex(tgt_idx0))
+                      ? model->GetWebContentsAt(tgt_idx0)
+                      : nullptr;
+              if (!src_wc && list_view) {
+                src_wc = list_view->WakeSuspendedTab(drag_source_id);
+              }
+              if (!tgt_wc && list_view) {
+                tgt_wc = list_view->WakeSuspendedTab(tab_id);
+              }
+              const int source_tab_strip_index =
+                  src_wc ? model->GetIndexOfWebContents(src_wc) : -1;
+              const int target_tab_strip_index =
+                  tgt_wc ? model->GetIndexOfWebContents(tgt_wc) : -1;
+              LOG(WARNING) << "[MAHO_DROP_DBG] kSplit(woken) tgt="
+                           << target_tab_strip_index
+                           << " src=" << source_tab_strip_index;
+              if (src_wc && tgt_wc && src_wc != tgt_wc &&
                   source_tab_strip_index >= 0 &&
-                  target_tab_strip_index != source_tab_strip_index) {
-                TabStripModel* model =
-                    browser ? browser->tab_strip_model() : nullptr;
-                if (model && model->ContainsIndex(source_tab_strip_index) &&
-                    model->ContainsIndex(target_tab_strip_index) &&
-                    !model->GetSplitForTab(source_tab_strip_index).has_value() &&
+                  target_tab_strip_index >= 0) {
+                if (!model->GetSplitForTab(source_tab_strip_index).has_value() &&
                     !model->GetSplitForTab(target_tab_strip_index).has_value()) {
                   output_drag_op = ui::mojom::DragOperation::kMove;
                   split_tabs::SplitTabVisualData visual_data(
@@ -2190,6 +2279,7 @@ void SidebarTabRowView::WriteDragDataForView(views::View* sender,
   }
 
   data->provider().SetDragImage(drag_image, gfx::Vector2d());
+  NotifySidebarDragGhostImage(this, drag_image, gfx::Vector2d());
 
   SetPaintToLayer();
   layer()->SetFillsBoundsOpaquely(false);
@@ -2245,8 +2335,13 @@ void SidebarTabRowView::UpdateAppearance() {
     } else {
       switch (current_state) {
         case AppearanceVisualState::kDropTarget:
-          SetBackground(views::CreateRoundedRectBackground(ui::kColorSysSurface4,
-                                                           kRowCornerRadiusDp));
+          if (active_drop_zone_ == SidebarTabDropZone::kSplit) {
+            SetBackground(
+                std::make_unique<SidebarSplitDropTargetBackground>());
+          } else {
+            SetBackground(views::CreateRoundedRectBackground(
+                ui::kColorSysSurface4, kRowCornerRadiusDp));
+          }
           SetBorder(views::CreateRoundedRectBorder(
               kDropIndicatorOutlineThicknessDp, kRowCornerRadiusDp,
               ui::kColorSysPrimary));
@@ -3539,6 +3634,8 @@ int MahoSidebarTabListView::OnDragUpdated(const ui::DropTargetEvent& event) {
       RevealEmptyPinnedDropLane();
     }
   }
+  LOG(WARNING) << "[MAHO_HOVER_DBG] CONTAINER OnDragUpdated y="
+               << event.location().y();
   return static_cast<int>(ui::mojom::DragOperation::kCopy);
 }
 
@@ -3767,8 +3864,10 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
     // so the reveal animation plays once, on the settled container, instead of
     // being torn down mid-flight by the next rebuild.
     if (!splits_awaiting_anim_.empty()) {
+      LOG(WARNING) << "[MAHO_DROP_DBG] debounce start awaiting="
+                   << splits_awaiting_anim_.size();
       split_anim_debounce_timer_.Start(
-          FROM_HERE, base::Milliseconds(180),
+          FROM_HERE, base::Milliseconds(60),
           base::BindOnce(&MahoSidebarTabListView::AnimateAwaitingSplits,
                          weak_factory_.GetWeakPtr()));
     }
@@ -3956,7 +4055,7 @@ void MahoSidebarTabListView::RebuildTreeNodes(
       const int live_index = node.tab_strip_index >= 0
                                  ? node.tab_strip_index
                                  : ResolveTabStripIndexForTabId(node.tab_id);
-      const bool is_suspended = (live_index < 0);
+      const bool is_suspended = (live_index < 0) || node.is_suspended;
       content::WebContents* contents = nullptr;
       tabs::TabInterface* tab_iface = nullptr;
       if (browser && browser->tab_strip_model() && live_index >= 0) {
@@ -4133,21 +4232,30 @@ void MahoSidebarTabListView::RebuildSplitGroupContainer(
       splits_awaiting_anim_.count(group_node.split_id)) {
     container_ptr->SetPaintToLayer(ui::LAYER_TEXTURED);
     container_ptr->layer()->SetFillsBoundsOpaquely(false);
+    // Start hidden so the split does not flash in at full size before the
+    // debounced reveal animation runs; AnimateAwaitingSplits fades/expands it.
+    container_ptr->layer()->SetOpacity(0.0f);
   }
 }
 
 void MahoSidebarTabListView::AnimateAwaitingSplits() {
+  LOG(WARNING) << "[MAHO_DROP_DBG] AnimateAwaitingSplits fired count="
+               << splits_awaiting_anim_.size();
   for (const auto& split_id : splits_awaiting_anim_) {
     auto it = split_id_to_container_.find(split_id);
     if (it == split_id_to_container_.end() || !it->second) {
+      LOG(WARNING) << "[MAHO_DROP_DBG] anim skip: no container for " << split_id;
       continue;
     }
     views::View* container = it->second;
     if (!container->layer()) {
+      LOG(WARNING) << "[MAHO_DROP_DBG] anim skip: no layer";
       continue;
     }
     const int w = container->width();
     const int h = container->height();
+    LOG(WARNING) << "[MAHO_DROP_DBG] anim split=" << split_id
+                 << " w=" << w << " h=" << h;
     if (w <= 0 || h <= 0) {
       continue;
     }
@@ -4253,7 +4361,8 @@ void MahoSidebarTabListView::ActivateTabById(const std::string& tab_id) {
   }
 }
 
-void MahoSidebarTabListView::WakeSuspendedTab(const std::string& tab_id) {
+content::WebContents* MahoSidebarTabListView::WakeSuspendedTab(
+    const std::string& tab_id) {
   TRACE_EVENT1("browser", "WakeSuspendedTab", "tab_id", tab_id);
   base::ElapsedTimer maho_perf_t;
   LOG(INFO) << "[MAHO_PERF] WakeSuspendedTab START tab_id=" << tab_id;
@@ -4269,12 +4378,12 @@ void MahoSidebarTabListView::WakeSuspendedTab(const std::string& tab_id) {
   if (!persisted) {
     LOG(INFO) << "[MAHO_PERF] WakeSuspendedTab END(no_persisted) "
               << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
-    return;
+    return nullptr;
   }
 
   if (persisted->role_type == "favorite") {
     LOG(ERROR) << "BUG: favorite should never be suspended";
-    return;
+    return nullptr;
   }
 
   MahoTabIdHelper::SetPendingRestoredTabId(tab_id);
@@ -4309,6 +4418,7 @@ void MahoSidebarTabListView::WakeSuspendedTab(const std::string& tab_id) {
             << " query=" << query_ms << "ms"
             << " navigate=" << navigate_ms << "ms"
             << " total=" << total_ms << "ms";
+  return params.navigated_or_inserted_contents;
 }
 
 void MahoSidebarTabListView::CloseTab(int tab_index) {
@@ -4344,7 +4454,21 @@ void MahoSidebarTabListView::CloseTab(int tab_index) {
 void MahoSidebarTabListView::CloseTabById(const std::string& tab_id) {
   const int index = ResolveTabStripIndexForTabId(tab_id);
   if (index >= 0) {
-    CloseTab(index);
+    if (maho::IsCorePinnedTab(tab_id)) {
+      // Stage 1 of the pinned two-stage close: suspend in core and drop the
+      // live WebContents. The row then resolves to index -1 on rebuild,
+      // flipping "−" to "X" and routing the next press to real-delete below.
+      // StripObserver's IsCorePinnedTab guard suppresses the kRemoved close_tab
+      // dispatch, so the core record survives as Suspended (not deleted here).
+      maho::DispatchShellEvent("suspend_tab", {{"tab_id", tab_id}});
+      if (TabStripModel* model =
+              browser_ ? browser_->tab_strip_model() : nullptr;
+          model && model->ContainsIndex(index)) {
+        model->CloseWebContentsAt(index, TabCloseTypes::CLOSE_USER_GESTURE);
+      }
+    } else {
+      CloseTab(index);
+    }
   } else {
     // If it's a suspended tab (index < 0), close it directly in rust core
     auto* bridge = MahoSpaceProfileBridge::GetInstance();
@@ -5133,6 +5257,16 @@ void MahoSidebarTabListView::ApplyCosmeticRefresh() {
 }
 
 void MahoSidebarTabListView::ToggleTabSelected(const std::string& tab_id) {
+  if (selected_tab_ids_.empty() && !last_active_tab_id_.empty() &&
+      last_active_tab_id_ != tab_id &&
+      tab_id_to_row_view_.count(last_active_tab_id_) > 0) {
+    selected_tab_ids_.insert(last_active_tab_id_);
+    auto active_it = tab_id_to_row_view_.find(last_active_tab_id_);
+    if (active_it != tab_id_to_row_view_.end() && active_it->second) {
+      active_it->second->SetSelected(true);
+    }
+  }
+
   auto it = selected_tab_ids_.find(tab_id);
   if (it != selected_tab_ids_.end()) {
     selected_tab_ids_.erase(it);
@@ -5151,7 +5285,10 @@ void MahoSidebarTabListView::ToggleTabSelected(const std::string& tab_id) {
 }
 
 void MahoSidebarTabListView::SelectRangeTo(const std::string& tab_id) {
-  if (selection_anchor_tab_id_.empty()) {
+  std::string anchor = selection_anchor_tab_id_.empty()
+                           ? last_active_tab_id_
+                           : selection_anchor_tab_id_;
+  if (anchor.empty()) {
     ToggleTabSelected(tab_id);
     return;
   }
@@ -5160,7 +5297,7 @@ void MahoSidebarTabListView::SelectRangeTo(const std::string& tab_id) {
   int anchor_idx = -1;
   int target_idx = -1;
   for (size_t i = 0; i < rows.size(); ++i) {
-    if (rows[i]->tab_id() == selection_anchor_tab_id_) {
+    if (rows[i]->tab_id() == anchor) {
       anchor_idx = static_cast<int>(i);
     }
     if (rows[i]->tab_id() == tab_id) {
@@ -5180,6 +5317,7 @@ void MahoSidebarTabListView::SelectRangeTo(const std::string& tab_id) {
   for (int i = start; i <= end; ++i) {
     selected_tab_ids_.insert(rows[i]->tab_id());
   }
+  selection_anchor_tab_id_ = anchor;
 
   for (auto* row : rows) {
     row->SetSelected(selected_tab_ids_.count(row->tab_id()) > 0);
@@ -5359,6 +5497,92 @@ void MahoSidebarTabListView::MuteSelected(bool mute) {
   }
 }
 
+void MahoSidebarTabListView::ArchiveSelected() {
+  std::vector<std::string> snapshot_ids(selected_tab_ids_.begin(), selected_tab_ids_.end());
+  std::erase_if(snapshot_ids, [this](const std::string& tab_id) {
+    return tab_id_to_row_view_.find(tab_id) == tab_id_to_row_view_.end();
+  });
+  if (snapshot_ids.empty()) {
+    return;
+  }
+  RebuildRowsBatchScoper scoper(this);
+  for (const auto& tab_id : snapshot_ids) {
+    maho::DispatchShellEvent("archive_tab_by_id", {{"tab_id", tab_id}});
+  }
+  selected_tab_ids_.clear();
+  selection_anchor_tab_id_.clear();
+}
+
+void MahoSidebarTabListView::OpenSelectedInSplit() {
+  TabStripModel* model = browser_ ? browser_->tab_strip_model() : nullptr;
+  if (!model) {
+    return;
+  }
+  std::vector<std::pair<int, std::string>> live;
+  for (const auto& tab_id : selected_tab_ids_) {
+    int idx = ResolveTabStripIndexForTabId(tab_id);
+    if (idx >= 0 && model->ContainsIndex(idx) &&
+        !model->GetSplitForTab(idx).has_value()) {
+      live.emplace_back(idx, tab_id);
+    }
+  }
+  if (live.size() < 2) {
+    return;
+  }
+  std::sort(live.begin(), live.end());
+  const int first_idx = live[0].first;
+  const int second_idx = live[1].first;
+
+  split_tabs::SplitTabVisualData visual_data(
+      split_tabs::SplitTabLayout::kVertical, 0.5);
+  model->ActivateTabAt(first_idx,
+                       TabStripUserGestureDetails(
+                           TabStripUserGestureDetails::GestureType::kOther));
+  model->AddToNewSplit({second_idx}, visual_data,
+                       split_tabs::SplitTabCreatedSource::kTabContextMenu);
+
+  if (browser_) {
+    std::string event_json = base::StringPrintf(
+        "{\"kind\":\"create_split\",\"window_id\":\"%s\","
+        "\"tab_ids\":[\"%s\",\"%s\"],\"orientation\":\"horizontal\"}",
+        std::to_string(browser_->session_id().id()).c_str(),
+        live[0].second.c_str(), live[1].second.c_str());
+    if (auto* core = maho::GetCore()) {
+      if (char* result = maho_core_handle_event(core, event_json.c_str())) {
+        maho_core_free_string(result);
+      }
+    }
+  }
+}
+
+void MahoSidebarTabListView::NewFolderWithSelected() {
+  std::vector<std::string> snapshot_ids(selected_tab_ids_.begin(), selected_tab_ids_.end());
+  std::erase_if(snapshot_ids, [this](const std::string& tab_id) {
+    return tab_id_to_row_view_.find(tab_id) == tab_id_to_row_view_.end();
+  });
+  if (snapshot_ids.empty()) {
+    return;
+  }
+  auto* bridge = MahoSpaceProfileBridge::GetInstance();
+  std::string active_space_id =
+      bridge ? bridge->GetActiveSpaceId(browser_) : std::string();
+  if (active_space_id.empty()) {
+    return;
+  }
+  base::ListValue ids;
+  for (const auto& tab_id : snapshot_ids) {
+    ids.Append(tab_id);
+  }
+  base::DictValue dict;
+  dict.Set("space_id", active_space_id);
+  dict.Set("name", "New Folder");
+  dict.Set("tab_ids", std::move(ids));
+  DispatchShellEventDict("create_folder_with_tabs", std::move(dict));
+
+  selected_tab_ids_.clear();
+  selection_anchor_tab_id_.clear();
+}
+
 void SidebarTabRowView::SetSelected(bool selected) {
   if (is_selected_ == selected) {
     return;
@@ -5412,6 +5636,24 @@ RebuildRowsBatchScoper::~RebuildRowsBatchScoper() {
 void SidebarTabRowView::MuteSelectedTabs(bool mute) {
   if (MahoSidebarTabListView* list_view = GetTabListView()) {
     list_view->MuteSelected(mute);
+  }
+}
+
+void SidebarTabRowView::ArchiveSelectedTabs() {
+  if (MahoSidebarTabListView* list_view = GetTabListView()) {
+    list_view->ArchiveSelected();
+  }
+}
+
+void SidebarTabRowView::OpenSelectedTabsInSplit() {
+  if (MahoSidebarTabListView* list_view = GetTabListView()) {
+    list_view->OpenSelectedInSplit();
+  }
+}
+
+void SidebarTabRowView::NewFolderWithSelectedTabs() {
+  if (MahoSidebarTabListView* list_view = GetTabListView()) {
+    list_view->NewFolderWithSelected();
   }
 }
 

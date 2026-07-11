@@ -13,8 +13,8 @@ use maho_types::traits::shell_renderer::{
 use crate::space_manager::FolderError;
 
 pub trait TabManagerInterface {
-    fn create_tab(&mut self, space_id: SpaceId, url: Option<Url>, parent_id: Option<TabId>, window_id: Option<i64>) -> Tab;
-    fn create_tab_with_id(&mut self, tab_id: TabId, space_id: SpaceId, url: Option<Url>, parent_id: Option<TabId>, window_id: Option<i64>) -> Tab;
+    fn create_tab(&mut self, space_id: SpaceId, url: Option<Url>, parent_id: Option<TabId>, window_id: Option<i64>, is_private: bool) -> Tab;
+    fn create_tab_with_id(&mut self, tab_id: TabId, space_id: SpaceId, url: Option<Url>, parent_id: Option<TabId>, window_id: Option<i64>, is_private: bool) -> Tab;
     fn close_tab(&mut self, tab_id: &TabId) -> Option<Tab>;
     fn activate_tab(&mut self, tab_id: &TabId);
     fn duplicate_tab(&mut self, tab_id: &TabId) -> Option<Tab>;
@@ -261,8 +261,12 @@ impl EventDispatcher {
             ShellEvent::GoForward { .. } => vec![],
             ShellEvent::Reload { .. } => vec![],
             ShellEvent::Stop { .. } => vec![],
-            ShellEvent::ClearSplitView => vec![],
-            ShellEvent::CreateSplit { .. } => vec![],
+            ShellEvent::ClearSplitView { .. }
+            | ShellEvent::CreateSplit { .. }
+            | ShellEvent::RemoveSplit { .. }
+            | ShellEvent::ResizeSplit { .. } => {
+                unreachable!("Split view events are handled by MahoCore::handle_event before dispatch; this branch must never be reached")
+            }
 
             // Tab management
             ShellEvent::CreateTab {
@@ -271,6 +275,7 @@ impl EventDispatcher {
                 parent_id,
                 tab_id,
                 window_id,
+                is_private,
             } => {
                 // In the Chromium-facing path every tab must have an explicit URL so the
                 // browser knows which page to load. Substitute None with the canonical NTP
@@ -307,10 +312,10 @@ impl EventDispatcher {
                              propagation may have failed",
                             explicit_id
                         );
-                        tab_mgr.create_tab_with_id(explicit_id, space_id.clone(), resolved_url, parent_id, window_id)
+                        tab_mgr.create_tab_with_id(explicit_id, space_id.clone(), resolved_url, parent_id, window_id, is_private)
                     }
                 } else {
-                    tab_mgr.create_tab(space_id.clone(), resolved_url, parent_id, window_id)
+                    tab_mgr.create_tab(space_id.clone(), resolved_url, parent_id, window_id, is_private)
                 };
                 space_mgr.add_tab_to_space(&space_id, tab.id.clone(), None);
                 if let Some(explicit_id) = tab_id_clone {
@@ -598,6 +603,11 @@ impl EventDispatcher {
                     vec![]
                 }
             }
+            ShellEvent::ArchiveTabById { tab_id } => {
+                tab_mgr.suspend_tab(&tab_id);
+                tab_mgr.archive_tab(&tab_id);
+                vec![]
+            }
             ShellEvent::RestoreArchivedTab { tab_id } => {
                 tab_mgr.restore_archived_tab(&tab_id);
                 vec![]
@@ -729,6 +739,21 @@ impl EventDispatcher {
                 if let Some(folder) = space_mgr.create_folder_with_provider(
                     &space_id, &name, is_pinned, parent_folder_id, provider_type, config_json,
                 ) {
+                    vec![CoreUpdate::FolderCreated { folder }]
+                } else {
+                    vec![]
+                }
+            }
+            ShellEvent::CreateFolderWithTabs {
+                space_id,
+                name,
+                tab_ids,
+            } => {
+                if let Some(folder) = space_mgr.create_folder(&space_id, &name, false, None) {
+                    let folder_id = folder.id.clone();
+                    for tab_id in tab_ids {
+                        space_mgr.add_tab_to_folder(&space_id, &folder_id, tab_id);
+                    }
                     vec![CoreUpdate::FolderCreated { folder }]
                 } else {
                     vec![]
@@ -969,8 +994,10 @@ impl EventDispatcher {
             // Command bar
             ShellEvent::CommandBarOpened => vec![],
             ShellEvent::CommandBarClosed => vec![],
-            ShellEvent::CommandBarQuery { text, mode } => {
-                let suggestions = cmd_bar.search(&text, mode.as_deref(), ctx);
+            ShellEvent::CommandBarQuery { text, mode, is_incognito } => {
+                let mut search_ctx = ctx.clone();
+                search_ctx.is_incognito = is_incognito;
+                let suggestions = cmd_bar.search(&text, mode.as_deref(), &search_ctx);
                 vec![CoreUpdate::CommandBarResults { suggestions }]
             }
             ShellEvent::CommandBarSelect { .. } => vec![],

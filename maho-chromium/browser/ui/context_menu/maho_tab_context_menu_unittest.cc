@@ -303,8 +303,7 @@ TEST(MahoTabContextMenuTest, MoveToSubmenuFallbackHasOneNoOtherSpacesItem) {
 }
 
 // ---------------------------------------------------------------------------
-// Helper boundary tests: IsMoveToSpaceCommand, MoveToSpaceIndex,
-// IsMoveToSpacePinned
+// Helper boundary tests: IsMoveToSpaceCommand, MoveToSpaceIndex
 // ---------------------------------------------------------------------------
 
 TEST(MahoTabContextMenuTest, IsMoveToSpaceCommandBoundaries) {
@@ -328,35 +327,9 @@ TEST(MahoTabContextMenuTest, IsMoveToSpaceCommandBoundaries) {
 }
 
 TEST(MahoTabContextMenuTest, MoveToSpaceIndexDecoding) {
-  // space index 0, pinned → base + 0
   EXPECT_EQ(MoveToSpaceIndex(IDC_MAHO_TAB_MOVE_SPACE_BASE), 0);
-
-  // space index 0, today → base + 1
-  EXPECT_EQ(MoveToSpaceIndex(IDC_MAHO_TAB_MOVE_SPACE_BASE + 1), 0);
-
-  // space index 1, pinned → base + 2
-  EXPECT_EQ(MoveToSpaceIndex(IDC_MAHO_TAB_MOVE_SPACE_BASE + 2), 1);
-
-  // space index 1, today → base + 3
-  EXPECT_EQ(MoveToSpaceIndex(IDC_MAHO_TAB_MOVE_SPACE_BASE + 3), 1);
-
-  // space index 5, pinned → base + 10
-  EXPECT_EQ(MoveToSpaceIndex(IDC_MAHO_TAB_MOVE_SPACE_BASE + 10), 5);
-
-  // space index 5, today → base + 11
-  EXPECT_EQ(MoveToSpaceIndex(IDC_MAHO_TAB_MOVE_SPACE_BASE + 11), 5);
-}
-
-TEST(MahoTabContextMenuTest, IsMoveToSpacePinnedDecoding) {
-  // Even offset → pinned.
-  EXPECT_TRUE(IsMoveToSpacePinned(IDC_MAHO_TAB_MOVE_SPACE_BASE));      // +0
-  EXPECT_TRUE(IsMoveToSpacePinned(IDC_MAHO_TAB_MOVE_SPACE_BASE + 2));  // +2
-  EXPECT_TRUE(IsMoveToSpacePinned(IDC_MAHO_TAB_MOVE_SPACE_BASE + 10)); // +10
-
-  // Odd offset → today (not pinned).
-  EXPECT_FALSE(IsMoveToSpacePinned(IDC_MAHO_TAB_MOVE_SPACE_BASE + 1)); // +1
-  EXPECT_FALSE(IsMoveToSpacePinned(IDC_MAHO_TAB_MOVE_SPACE_BASE + 3)); // +3
-  EXPECT_FALSE(IsMoveToSpacePinned(IDC_MAHO_TAB_MOVE_SPACE_BASE + 11));// +11
+  EXPECT_EQ(MoveToSpaceIndex(IDC_MAHO_TAB_MOVE_SPACE_BASE + 1), 1);
+  EXPECT_EQ(MoveToSpaceIndex(IDC_MAHO_TAB_MOVE_SPACE_BASE + 5), 5);
 }
 
 // ---------------------------------------------------------------------------
@@ -436,4 +409,24 @@ TEST(MahoTabContextMenuTest, ArchiveTabSilentWithNullBrowser) {
   menu.ExecuteCommand(IDC_MAHO_TAB_ARCHIVE, 0);
 }
 
+TEST(MahoTabContextMenuTest, BuildMenuModelMultiSelect) {
+  std::vector<std::string> selected_ids = {"tab-1", "tab-2"};
+  MahoTabContextMenu menu(nullptr, 0, nullptr, "tab-1", selected_ids);
+  std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
+  ASSERT_NE(model, nullptr);
+
+  // Multi-select items must be present
+  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_TAB_CLOSE));
+  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_TAB_PIN));
+  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_TAB_UNMUTE));
+  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_TAB_MOVE_TO_SPACE));
+
+  // Single-only items must not be present
+  EXPECT_FALSE(ModelContainsCommand(*model, IDC_MAHO_TAB_COPY_URL));
+  EXPECT_FALSE(ModelContainsCommand(*model, IDC_MAHO_TAB_RENAME));
+  EXPECT_FALSE(ModelContainsCommand(*model, IDC_MAHO_TAB_DUPLICATE));
+  EXPECT_FALSE(ModelContainsCommand(*model, IDC_MAHO_TAB_BOOST));
+}
+
 }  // namespace
+

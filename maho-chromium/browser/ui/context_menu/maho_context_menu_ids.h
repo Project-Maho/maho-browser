@@ -28,6 +28,7 @@ enum MahoTabContextMenuCommand {
   IDC_MAHO_TAB_OPEN_SPLIT = 57016,
   IDC_MAHO_TAB_BOOST = 57017,
   IDC_MAHO_TAB_REMOVE_SPLIT = 57018,
+  IDC_MAHO_TAB_NEW_FOLDER = 57019,
   // Extended tab actions: 57020-57024
   IDC_MAHO_TAB_SHARE = 57020,
   IDC_MAHO_TAB_CHANGE_ICON = 57021,
@@ -92,8 +93,7 @@ enum MahoFolderContextMenuCommand {
 };
 
 // Dynamic "Move Tab to Space" submenu: 57200-57299
-// 57200 + (space_index * 2) = Move to space[i] Pinned
-// 57200 + (space_index * 2) + 1 = Move to space[i] Today
+// 57200 + space_index = Move to space[i]
 constexpr int IDC_MAHO_TAB_MOVE_SPACE_BASE = 57200;
 constexpr int IDC_MAHO_TAB_MOVE_SPACE_MAX = 57299;
 
@@ -102,11 +102,7 @@ inline bool IsMoveToSpaceCommand(int id) {
 }
 
 inline int MoveToSpaceIndex(int id) {
-  return (id - IDC_MAHO_TAB_MOVE_SPACE_BASE) / 2;
-}
-
-inline bool IsMoveToSpacePinned(int id) {
-  return (id - IDC_MAHO_TAB_MOVE_SPACE_BASE) % 2 == 0;
+  return id - IDC_MAHO_TAB_MOVE_SPACE_BASE;
 }
 
 #endif  // MAHO_CHROMIUM_BROWSER_UI_CONTEXT_MENU_MAHO_CONTEXT_MENU_IDS_H_
