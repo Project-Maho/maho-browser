@@ -1,7 +1,7 @@
-import { splitHeadline } from "./HeroSection";
+import { ScrollReveal } from "../motion/ScrollReveal";
 
 export type WhyConfig = {
-  badge: string;
+  eyebrow: string;
   headline: string;
   body: string;
 };
@@ -11,20 +11,16 @@ type WhySectionProps = {
 };
 
 export function WhySection({ config }: WhySectionProps) {
-  const lines = splitHeadline(config.headline);
-
   return (
-    <section className="py-24 px-6 border-t border-border">
-      <div className="max-w-6xl mx-auto">
-        <div className="max-w-3xl">
-          <span className="inline-block border border-border text-muted-foreground text-xs px-3 py-1 rounded-full mb-6">
-            {config.badge}
-          </span>
-          <h2 className="heading-serif text-4xl sm:text-5xl mb-6 whitespace-pre-line">
-            {lines.join("\n")}
-          </h2>
-          <p className="text-muted-foreground leading-relaxed text-lg">{config.body}</p>
-        </div>
+    <section className="section-rhythm pad-x-ladder border-t border-border bg-background text-foreground">
+      <div className="container-marketing">
+        <ScrollReveal variant="slide">
+          <div className="max-w-3xl space-y-4 sm:space-y-5">
+            <p className="landing-eyebrow text-muted-foreground">{config.eyebrow}</p>
+            <h2 className="landing-section-title">{config.headline}</h2>
+            <p className="landing-body max-w-2xl text-muted-foreground sm:text-lg">{config.body}</p>
+          </div>
+        </ScrollReveal>
       </div>
     </section>
   );

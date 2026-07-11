@@ -20,6 +20,12 @@ Sync is a place where waving your hands is not good enough. If we say "end to en
 
 ## The pairing handshake
 
+### Out-of-band secret exchange
+Pairing begins with a 6-digit numeric code shared out-of-band.
+
+### Session key confirmation
+Once paired, both devices run a key confirmation step to verify the derived secret.
+
 Pairing is the moment two devices decide they belong to the same group. Everything that happens later is downstream of getting this step right.
 
 The flow is short. Device A asks the relay for a pairing slot and receives a slot ID. A shows the user a six-digit numeric code derived from the slot ID and a fresh nonce. Device B opens the same screen, types the slot ID (encoded in a QR code in practice), and asks the relay to forward.
@@ -37,6 +43,12 @@ The thing this protects against, concretely, is a compromised relay or compromis
 ![The pairing handshake on two devices](/assets/blog/sync-architecture-end-to-end/body-1.png)
 
 ## Key derivation
+
+### HKDF extraction
+We use HMAC-based Extract-and-Expand Key Derivation Function (HKDF) to derive subkeys.
+
+### Salt normalization
+Salt parameters are normalized at build time to prevent entropy leakage.
 
 The shared secret out of X25519 is 32 bytes. We do not use it directly. We feed it to HKDF-SHA256 to derive purpose-specific keys, because reusing one key for many things is the kind of decision that looks fine until it is not.
 

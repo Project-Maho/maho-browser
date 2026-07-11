@@ -1,7 +1,11 @@
+import { CtaButton } from "../marketing/CtaButton";
+import { ScrollReveal } from "../motion/ScrollReveal";
+
 export type FinalCtaConfig = {
   headline: string;
   subheadline: string;
-  cta: { label: string; href: string };
+  primaryCta: { label: string; href: string };
+  secondaryCta?: { label: string; href: string };
 };
 
 type FinalCtaSectionProps = {
@@ -10,32 +14,26 @@ type FinalCtaSectionProps = {
 
 export function FinalCtaSection({ config }: FinalCtaSectionProps) {
   return (
-    <section className="py-24 px-6 border-t border-border">
-      <div className="max-w-6xl mx-auto text-center">
-        <h2 className="heading-serif text-4xl sm:text-5xl mb-6">{config.headline}</h2>
-        <p className="text-muted-foreground mb-8 max-w-xl mx-auto">{config.subheadline}</p>
-        <a
-          href={config.cta.href}
-          className="inline-flex items-center gap-2 px-6 py-3 bg-foreground text-background rounded-md text-sm font-medium hover:opacity-90 transition-opacity"
-        >
-          {config.cta.label}
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            aria-hidden="true"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="w-4 h-4"
-          >
-            <path d="M5 12h14" />
-            <path d="m12 5 7 7-7 7" />
-          </svg>
-        </a>
+    <section className="section-rhythm pad-x-ladder border-t border-border bg-background text-foreground">
+      <div className="container-marketing">
+        <ScrollReveal variant="fade">
+          <div className="rounded-squircle-xl squircle-enhanced border border-border bg-card/70 px-6 py-12 text-center sm:px-10 sm:py-16 lg:px-16">
+            <div className="mx-auto flex max-w-3xl flex-col items-center gap-5 sm:gap-6">
+              <h2 className="landing-section-title">{config.headline}</h2>
+              <p className="landing-body max-w-2xl text-muted-foreground sm:text-lg">{config.subheadline}</p>
+              <div className="flex w-full flex-col items-center justify-center gap-3 sm:flex-row sm:flex-wrap">
+                <CtaButton variant="primary" href={config.primaryCta.href}>
+                  {config.primaryCta.label}
+                </CtaButton>
+                {config.secondaryCta && (
+                  <CtaButton variant="ghost" href={config.secondaryCta.href}>
+                    {config.secondaryCta.label}
+                  </CtaButton>
+                )}
+              </div>
+            </div>
+          </div>
+        </ScrollReveal>
       </div>
     </section>
   );

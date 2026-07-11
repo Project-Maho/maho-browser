@@ -11,15 +11,17 @@ import type {BrowserProfile, EssentialSite, SearchEngineInfo} from '../maho_welc
 
 export enum WelcomePage {
   Splash = 0,
-  SourceSelect = 1,
-  ImportProgress = 2,
-  SearchEngine = 3,
-  Essentials = 4,
-  Completion = 5,
+  Appearance = 1,
+  SourceSelect = 2,
+  ImportProgress = 3,
+  SearchEngine = 4,
+  Essentials = 5,
+  Completion = 6,
 }
 
-export const TOTAL_PAGES = 6;
+export const TOTAL_PAGES = 7;
 
+export type AppearanceMode = 'system' | 'light' | 'dark';
 export type ImportStage = 'A' | 'B';
 
 // Mojo-generated constants are imported directly from maho_welcome.mojom-webui.js.
@@ -36,6 +38,7 @@ export interface ImportState {
 export interface WelcomeState {
   readonly currentPage: WelcomePage;
   readonly direction: 'forward' | 'backward';
+  readonly appearance: AppearanceMode;
 
   readonly availableBrowsers: readonly BrowserProfile[];
   readonly importState: ImportState;
@@ -58,6 +61,7 @@ export function createInitialState(): WelcomeState {
   return {
     currentPage: WelcomePage.Splash,
     direction: 'forward',
+    appearance: 'system',
     availableBrowsers: [],
     importState: {phase: 'idle', statusMessage: '', browserIndex: null},
     importItemSelections: new Map(),

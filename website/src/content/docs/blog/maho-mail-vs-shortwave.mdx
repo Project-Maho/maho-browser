@@ -1,0 +1,116 @@
+---
+title: "Maho Mail vs Shortwave: Which Email Client Is Better in 2026?"
+description: "Maho Mail vs Shortwave. AI-wrapper email vs AI-native architecture. Local IMAP with CLI + MCP vs a polished cloud Gmail client with built-in AI chat."
+date: 2026-04-12
+tags:
+  - mail
+  - comparison
+excerpt: "AI wrapper vs AI-native architecture. Two AI-forward email clients with very different foundations."
+authors:
+  - name: Maho Team
+---
+
+![A cream envelope in a translucent shell for Shortwave's AI wrapper, next to a charcoal envelope with terminal and persimmon for Maho Mail.](/assets/blog/maho-mail-vs-shortwave/hero.png)
+
+AI wrapper vs AI-native architecture. Two AI-forward email clients with very different foundations.
+
+## Quick verdict
+
+**Choose Shortwave** if you use Gmail and want the most polished AI email experience, auto-labeling, AI chat, and smart summaries built into a beautiful interface. **Choose Maho Mail** if you want AI as one of three interfaces (GUI, CLI, MCP), with provider choice, local privacy, and support for any IMAP account.
+
+## Side-by-side comparison
+
+| Feature | Maho Mail | Shortwave |
+| --- | --- | --- |
+| Desktop GUI | Yes, native desktop app | Yes, web-based and mobile apps |
+| CLI | Yes, full email CLI with JSON output | No |
+| MCP Server | Yes, AI agents connect via stdio | No |
+| AI Features | Yes, bring your own provider | Yes, deep Gmail AI integration |
+| Email Providers | Any IMAP account | Gmail and Google Workspace only |
+| Auto-labeling | No, buildable via CLI + AI | Yes, automatic AI categorization |
+| Local & Private | Yes, everything on your device | No, cloud-based |
+| Open Source | No, proprietary | No, proprietary |
+
+## Category comparison
+
+### AI philosophy
+
+Shortwave has gone all-in on AI as the primary interface to email. Their AI chat lets you ask questions about your inbox in natural language, "What did Alice say about the budget?", and get answers drawn from your email history. Auto-labeling categorizes incoming mail. Summaries appear automatically on threads. The AI is deeply integrated into every part of the experience.
+
+Maho Mail treats AI as one of three equal interfaces. The GUI is for visual email. The CLI is for automation. The MCP server is for AI agents. You choose your provider, OpenAI, Anthropic, or Ollama for local inference, and you control how AI interacts with your data. Shortwave's approach is more turnkey. Maho's approach is more composable.
+
+### Email provider support
+
+Shortwave only works with Gmail and Google Workspace accounts. If you use Outlook, Fastmail, ProtonMail, or a self-hosted server, Shortwave is not an option. This is a hard constraint, their architecture depends on Gmail's API.
+
+Maho Mail works with any IMAP account. Gmail, Outlook, Fastmail, ProtonMail (via Bridge), Yahoo, self-hosted, if it speaks IMAP, Maho can connect. For users with multiple non-Gmail accounts or anyone not on Google, this is a decisive difference.
+
+### Programmability
+
+Shortwave is a GUI-only experience. You interact with email through their web and mobile apps. There is no CLI, no API, and no way for external tools to access your inbox programmatically. The AI features are powerful but they are Shortwave's AI, not yours to customize.
+
+Maho Mail exposes your inbox through three interfaces. The CLI lets you build shell scripts and automation. The MCP server lets AI agents operate on your email. You can build workflows like `maho search --unread --json | llm 'categorize these emails'` that Shortwave's GUI cannot express. The tradeoff is that you build these yourself rather than getting them out of the box.
+
+### Privacy & architecture
+
+Shortwave is a cloud service that processes your email through their servers. Their AI features require server-side computation. Your email data and AI interactions pass through Shortwave's infrastructure.
+
+Maho Mail stores everything locally. If you use Ollama, even your AI inference stays on your machine. There is no cloud component, no telemetry, and no server-side processing. For users in regulated industries or anyone who prefers verifiable privacy, the architecture matters.
+
+### UX & polish
+
+Shortwave has a modern, well-designed interface with smooth animations, thoughtful grouping of related messages, and AI features that surface naturally in the workflow. Their design team has clearly invested in making AI feel like a natural part of email rather than a bolted-on feature. Maho Mail's GUI is more utilitarian, it focuses on reading and composing email efficiently, with the expectation that power users will reach for the CLI and MCP server for advanced workflows.
+
+## Choose Maho Mail if you...
+
+- Use non-Gmail email accounts
+- Want CLI and MCP access to your inbox
+- Want to choose your own AI provider
+- Care about local privacy
+- Want to build custom AI email workflows
+
+## Choose Shortwave if you...
+
+- Use Gmail or Google Workspace
+- Want AI deeply integrated into the email experience
+- Prefer auto-labeling and AI chat out of the box
+- Value polished UX with AI woven into every interaction
+- Do not need CLI, terminal access, or agent protocols
+
+## Frequently asked questions
+
+### Does Shortwave work with non-Gmail accounts?
+
+No. Shortwave is built specifically for Gmail and Google Workspace accounts. It does not support IMAP or other email providers. Maho Mail works with any IMAP account, Gmail, Outlook, Fastmail, ProtonMail Bridge, self-hosted, and more.
+
+### How does AI differ between Maho Mail and Shortwave?
+
+Shortwave integrates AI deeply into its Gmail-specific workflow, AI chat, auto-labeling, thread summaries, and an AI assistant that understands your email history. Maho Mail lets you choose your AI provider (OpenAI, Anthropic, Ollama) and exposes your inbox to any AI agent via MCP. Shortwave's AI is more polished for Gmail. Maho's AI is more flexible and programmable.
+
+### Can Shortwave connect to AI agents like Claude or Cursor?
+
+No. Shortwave has its own built-in AI but does not expose your inbox to external AI agents via MCP or any other protocol. Maho Mail's MCP server lets any MCP-compatible tool interact with your email programmatically.
+
+### Is Shortwave free?
+
+Shortwave has a free tier with limited AI features and a paid plan for full AI capabilities and team features. Maho Mail is completely free, with no paywalls or feature gates.
+
+### Does Maho Mail have auto-labeling like Shortwave?
+
+Maho Mail does not have auto-labeling in the GUI, but you can build equivalent functionality using the CLI and AI. For example, you could pipe unread messages through an LLM to classify and tag them, or have an AI agent handle categorization through the MCP server. The approach is different, manual setup with more control vs. automatic with less.
+
+## Ready to try Maho Mail?
+
+GUI for humans. CLI for developers. MCP for agents. [Learn more about Maho Mail](/mail).
+
+## See also
+
+- [Maho Mail vs aerc, mutt, neomutt](/blog/maho-mail-vs-aerc-mutt-neomutt/)
+- [Maho Mail vs Apple Mail](/blog/maho-mail-vs-apple-mail/)
+- [Maho Mail vs himalaya](/blog/maho-mail-vs-himalaya/)
+- [Maho Mail vs Spark](/blog/maho-mail-vs-spark/)
+- [Maho Mail vs Superhuman](/blog/maho-mail-vs-superhuman/)
+- [Maho Mail vs Thunderbird](/blog/maho-mail-vs-thunderbird/)
+- [Maho Mail GUI Guide](/mail/gui/)
+- [Maho Mail MCP Server](/mail/mcp/)
+- [Maho Mail API Overview](/api/)

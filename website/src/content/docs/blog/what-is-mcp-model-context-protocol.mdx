@@ -21,6 +21,8 @@ The rest of this post explains why those few sentences add up to a useful primit
 
 ## Why MCP is not just an API
 
+You can find the official specifications and documentation on the [Model Context Protocol Specification](https://modelcontextprotocol.io/) page.
+
 An API is an endpoint with a contract. An MCP server is the same idea with two extra rules baked in.
 
 The first rule is discovery. An MCP host can ask a server, "what can you do?", and get back a structured list of tools, each with a name, a description, and a typed input and output schema. The model uses that list to decide which tool to call. Plain APIs do not advertise themselves to language models on demand.
@@ -30,6 +32,8 @@ The second rule is intent. MCP tools are described in language a model can reaso
 Take both rules away and you have an API. Keep them and you have something a model can use without a human writing glue code in between.
 
 ## What an MCP server looks like in a browser
+
+The protocol is built as an open standard. Check the [Model Context Protocol GitHub Repository](https://github.com/modelcontextprotocol) for code and issues.
 
 A browser that supports MCP is doing two jobs at once.
 
@@ -42,6 +46,8 @@ It is also a **client to MCP servers**. Some of those servers ship with the brow
 Maho's side panel uses this split. Built-in tools cover the browser surface. External MCP servers cover everything else. The model does not know the difference, which is the point.
 
 ## Three concrete example tools
+
+Extending browser capabilities safely maps to existing standards, such as those described in [Chromium Extensions Documentation](https://developer.chrome.com/docs/extensions).
 
 Concrete is more useful than abstract. Three tools you can think about.
 

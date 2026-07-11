@@ -230,44 +230,49 @@ void MahoWelcomePageHandler::OnOpenMigrationDialogBrowsersDetected(
 
 void MahoWelcomePageHandler::GetLocalizedStrings(
     GetLocalizedStringsCallback callback) {
-  std::string locale = g_browser_process->GetApplicationLocale();
-  bool is_ko = base::StartsWith(locale, "ko", base::CompareCase::INSENSITIVE_ASCII);
-
   base::flat_map<std::string, std::string> strings;
 
-  auto add = [&](const std::string& key, const std::string& en, const std::string& ko) {
-    strings[key] = is_ko ? ko : en;
+  auto add = [&](const std::string& key, const std::string& en) {
+    strings[key] = en;
   };
 
-  add("IDS_MAHO_WELCOME_SPLASH_TITLE1", "Welcome to", "환영합니다");
-  add("IDS_MAHO_WELCOME_SPLASH_TITLE2", "a calmer internet", "더 조용한 인터넷");
-  add("IDS_MAHO_WELCOME_IMPORT_TITLE", "A Fresh Start, Same Bookmarks", "새로운 시작, 같은 북마크");
-  add("IDS_MAHO_WELCOME_IMPORT_BODY1", "Your bookmarks, history, and passwords are like a trail of breadcrumbs through the internet—don't leave them behind!", "북마크, 방문 기록, 비밀번호는 인터넷에서의 흔적입니다. 두고 가지 마세요!");
-  add("IDS_MAHO_WELCOME_IMPORT_BODY2", "Easily bring them over from another browser and pick up right where you left off.", "다른 브라우저에서 간편하게 데이터를 가져와 중단했던 지점부터 다시 시작해 보세요.");
-  add("IDS_MAHO_WELCOME_DEFAULT_BROWSER_TITLE", "Set as default browser", "기본 브라우저 설정");
+  add("IDS_MAHO_WELCOME_SPLASH_TITLE1", "Built for people who");
+  add("IDS_MAHO_WELCOME_SPLASH_TITLE2", "took browsers seriously.");
+  add("IDS_MAHO_WELCOME_APPEARANCE_TITLE", "Choose your appearance");
+  add("IDS_MAHO_WELCOME_APPEARANCE_BODY",
+      "Pick a look for Maho. You can change it anytime in Settings.");
+  add("IDS_MAHO_WELCOME_APPEARANCE_SYSTEM", "System");
+  add("IDS_MAHO_WELCOME_APPEARANCE_SYSTEM_DESC", "Match your operating system.");
+  add("IDS_MAHO_WELCOME_APPEARANCE_LIGHT", "Light");
+  add("IDS_MAHO_WELCOME_APPEARANCE_DARK", "Dark");
+  add("IDS_MAHO_WELCOME_APPEARANCE_HELPER",
+      "You can change this later in Settings.");
+  add("IDS_MAHO_WELCOME_APPEARANCE_CONTINUE", "Continue");
+  add("IDS_MAHO_WELCOME_IMPORT_TITLE", "A Fresh Start, Same Bookmarks");
+  add("IDS_MAHO_WELCOME_IMPORT_BODY1", "Your bookmarks, history, and passwords are like a trail of breadcrumbs through the internet—don't leave them behind!");
+  add("IDS_MAHO_WELCOME_IMPORT_BODY2", "Easily bring them over from another browser and pick up right where you left off.");
+  add("IDS_MAHO_WELCOME_DEFAULT_BROWSER_TITLE", "Set as default browser");
   add("IDS_MAHO_WELCOME_DEFAULT_BROWSER_BODY",
-      "Make Maho your go-to browser so every link opens right where you want it.",
-      "모든 링크가 원하는 곳에서 바로 열리도록 Maho를 기본 브라우저로 설정하세요.");
-  add("IDS_MAHO_WELCOME_DEFAULT_BROWSER_YES", "Set as default", "기본 브라우저로 설정");
-  add("IDS_MAHO_WELCOME_DEFAULT_BROWSER_NO", "Maybe later", "나중에");
-  add("IDS_MAHO_WELCOME_SEARCH_TITLE", "Your Default Search Engine", "기본 검색 엔진");
-  add("IDS_MAHO_WELCOME_SEARCH_BODY", "Choose your default search engine. You can always change it later!", "기본 검색 엔진을 선택하세요. 나중에 언제든지 변경할 수 있습니다!");
-  add("IDS_MAHO_WELCOME_ESSENTIALS_TITLE", "Your Key Tabs, Always Within Reach", "항상 손이 닿는 곳에 있는 주요 탭");
-  add("IDS_MAHO_WELCOME_ESSENTIALS_BODY1", "Keep your most important tabs easily accessible and always at hand, no matter how many you open.", "얼마나 많은 탭을 열든 상관없이 가장 중요한 탭을 언제나 간편하게 이용할 수 있도록 유지하세요.");
-  add("IDS_MAHO_WELCOME_ESSENTIALS_BODY2", "Essential tabs are always visible, no matter what workspace you are in.", "어떤 워크스페이스에 있든 에센셜 탭은 항상 표시됩니다.");
-  add("IDS_MAHO_WELCOME_THEME_TITLE", "Choose your theme", "테마 선택");
+      "Make Maho your go-to browser so every link opens right where you want it.");
+  add("IDS_MAHO_WELCOME_DEFAULT_BROWSER_YES", "Set as default");
+  add("IDS_MAHO_WELCOME_DEFAULT_BROWSER_NO", "Maybe later");
+  add("IDS_MAHO_WELCOME_SEARCH_TITLE", "Your Default Search Engine");
+  add("IDS_MAHO_WELCOME_SEARCH_BODY", "Choose your default search engine. You can always change it later!");
+  add("IDS_MAHO_WELCOME_ESSENTIALS_TITLE", "Your Key Tabs, Always Within Reach");
+  add("IDS_MAHO_WELCOME_ESSENTIALS_BODY1", "Keep your most important tabs easily accessible and always at hand, no matter how many you open.");
+  add("IDS_MAHO_WELCOME_ESSENTIALS_BODY2", "Essential tabs are always visible, no matter what workspace you are in.");
+  add("IDS_MAHO_WELCOME_THEME_TITLE", "Choose your theme");
   add("IDS_MAHO_WELCOME_THEME_BODY",
-      "Personalize your browser by giving each workspace its own unique color identity.",
-      "각 워크스페이스에 고유한 색상 아이덴티티를 부여해 브라우저를 나만의 스타일로 꾸며보세요.");
-  add("IDS_MAHO_WELCOME_THEME_PICK", "Pick a Theme", "테마 선택");
-  add("IDS_MAHO_WELCOME_THEME_CHANGE", "Change Theme", "테마 변경");
-  add("IDS_MAHO_WELCOME_COMPLETION_TITLE", "You're all set", "모든 준비가 완료되었습니다");
-  add("IDS_MAHO_WELCOME_COMPLETION_BODY", "Your internet is calmer now.", "이제 더 편안한 인터넷을 즐겨보세요.");
-  add("IDS_MAHO_WELCOME_CTA_IMPORT", "Import now", "지금 가져오기");
-  add("IDS_MAHO_WELCOME_CTA_SKIP", "Skip", "건너뛰기");
-  add("IDS_MAHO_WELCOME_CTA_NEXT", "Next", "다음");
-  add("IDS_MAHO_WELCOME_CTA_BACK", "Back", "이전");
-  add("IDS_MAHO_WELCOME_CTA_DONE", "Dive in!", "시작하기!");
+      "Personalize your browser by giving each workspace its own unique color identity.");
+  add("IDS_MAHO_WELCOME_THEME_PICK", "Pick a Theme");
+  add("IDS_MAHO_WELCOME_THEME_CHANGE", "Change Theme");
+  add("IDS_MAHO_WELCOME_COMPLETION_TITLE", "You're all set");
+  add("IDS_MAHO_WELCOME_COMPLETION_BODY", "The browser tools you liked, on a stack that isn't going anywhere.");
+  add("IDS_MAHO_WELCOME_CTA_IMPORT", "Import now");
+  add("IDS_MAHO_WELCOME_CTA_SKIP", "Skip");
+  add("IDS_MAHO_WELCOME_CTA_NEXT", "Next");
+  add("IDS_MAHO_WELCOME_CTA_BACK", "Back");
+  add("IDS_MAHO_WELCOME_CTA_DONE", "Dive in!");
 
   std::move(callback).Run(std::move(strings));
 }

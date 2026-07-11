@@ -17,11 +17,12 @@ import {
   createInitialState,
   WelcomePage,
 } from './types.js';
-import type {ImportState, ImportStage, WelcomeState} from './types.js';
+import type {AppearanceMode, ImportState, ImportStage, WelcomeState} from './types.js';
 
 interface MutableWelcomeState {
   currentPage: WelcomePage;
   direction: 'forward' | 'backward';
+  appearance: AppearanceMode;
   availableBrowsers: BrowserProfile[];
   importState: ImportState;
   importItemSelections: Map<number, number>;
@@ -200,6 +201,13 @@ export class MahoWelcomeStore {
     });
   }
 
+  setAppearance(mode: AppearanceMode): void {
+    this.patch(draft => {
+      draft.appearance = mode;
+    });
+    applyAppearanceMode(mode);
+  }
+
   markImportStarted(): void {
     this.patch(draft => {
       draft.importStarted = true;
@@ -285,6 +293,7 @@ function makeMutableState(state: WelcomeState): MutableWelcomeState {
   return {
     currentPage: state.currentPage,
     direction: state.direction,
+    appearance: state.appearance,
     availableBrowsers: [...state.availableBrowsers],
     importState: state.importState,
     importItemSelections: new Map(state.importItemSelections),
@@ -304,6 +313,7 @@ function freezeMutableState(state: MutableWelcomeState): WelcomeState {
   return {
     currentPage: state.currentPage,
     direction: state.direction,
+    appearance: state.appearance,
     availableBrowsers: [...state.availableBrowsers],
     importState: state.importState,
     importItemSelections: new Map(state.importItemSelections),
@@ -317,4 +327,13 @@ function freezeMutableState(state: MutableWelcomeState): WelcomeState {
     selectedTheme: state.selectedTheme,
     localizedStrings: new Map(state.localizedStrings),
   };
+}
+
+function applyAppearanceMode(mode: AppearanceMode): void {
+  if (mode === 'system') {
+    document.documentElement.style.removeProperty('color-scheme');
+    return;
+  }
+
+  document.documentElement.style.colorScheme = mode;
 }

@@ -1,11 +1,16 @@
 /* Welcome screen wizard layout */
 
 :root {
+  /* Follow the system light/dark preference so every light-dark() token
+     below resolves correctly. Without this, color-scheme defaults to
+     `normal` and light-dark() is permanently stuck on the light value. */
+  color-scheme: light dark;
+
   /* Branding (Zen-equivalent — derived from zen-onboarding-reference dossier) */
-  --maho-branding-dark: #101010;
+  --maho-branding-dark: #16161a;
   --maho-branding-paper: #e2e2e2;
-  --maho-branding-bg: light-dark(#e2e2e2, #101010);
-  --maho-branding-bg-reverse: light-dark(#101010, #e2e2e2);
+  --maho-branding-bg: light-dark(#e2e2e2, #16161a);
+  --maho-branding-bg-reverse: light-dark(#16161a, #f4f4f7);
   --maho-branding-serif: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --maho-welcome-splash-title-size: clamp(3.5rem, 5vw + 1rem, 8rem);
   --maho-welcome-splash-title-max-width: 50%;
@@ -19,32 +24,32 @@
   /* Color derivations via color-mix (Zen formula) */
   --maho-colors-primary: light-dark(
     color-mix(in srgb, var(--maho-primary-color) 50%, black),
-    color-mix(in srgb, var(--maho-primary-color) 20%, #101010)
+    color-mix(in srgb, var(--maho-primary-color) 20%, #1e1e24)
   );
   --maho-colors-secondary: light-dark(
     color-mix(in srgb, var(--maho-colors-primary) 20%, white),
-    color-mix(in srgb, var(--maho-primary-color) 30%, #101010)
+    color-mix(in srgb, var(--maho-primary-color) 30%, #26262e)
   );
   --maho-colors-tertiary: light-dark(
     color-mix(in srgb, var(--maho-primary-color) 2%, white),
-    color-mix(in srgb, var(--maho-primary-color) 1%, #101010)
+    color-mix(in srgb, var(--maho-primary-color) 3%, #1e1e24)
   );
   --maho-colors-border: light-dark(
     color-mix(in srgb, var(--maho-colors-secondary) 50%, transparent),
-    color-mix(in srgb, var(--maho-colors-secondary) 20%, rgb(79,79,79))
+    color-mix(in srgb, var(--maho-colors-secondary) 22%, rgb(96,96,112))
   );
 
   /* Backgrounds */
-  --maho-dialog-background: light-dark(#fafbff, #1c1c1c);
+  --maho-dialog-background: light-dark(#fafbff, #1f1f27);
   --maho-urlbar-background: light-dark(
     color-mix(in srgb, var(--maho-primary-color) 3%, #f4f4f4),
-    color-mix(in srgb, var(--maho-primary-color) 4%, rgb(24,24,24))
+    color-mix(in srgb, var(--maho-primary-color) 6%, #202028)
   );
-  --maho-main-browser-background: light-dark(rgb(235,235,235), #1b1b1b);
-  --maho-toolbar-element-bg: light-dark(rgba(255,255,255,0.7), rgba(0,0,0,0.4));
+  --maho-main-browser-background: light-dark(rgb(235,235,235), #1b1b21);
+  --maho-toolbar-element-bg: light-dark(rgba(255,255,255,0.62), rgba(38,38,48,0.48));
   --maho-essential-tab-icon: light-dark(#5b4fcf, #a89bff);
-  --maho-essentials-browser-background: light-dark(rgba(255,255,255,0.5), rgba(0,0,0,0.2));
-  --maho-essentials-sidebar-background: light-dark(rgba(255,255,255,0.7), rgba(0,0,0,0.4));
+  --maho-essentials-browser-background: light-dark(rgba(255,255,255,0.46), rgba(34,34,42,0.40));
+  --maho-essentials-sidebar-background: light-dark(rgba(255,255,255,0.62), rgba(42,42,52,0.50));
 
   /* Shadows (Zen's exact value) */
   --maho-big-shadow: rgba(0, 0, 0, 0.24) 0px 3px 8px;
@@ -52,7 +57,31 @@
   --maho-shell-radius: 1em;
   --maho-shell-sidebar-padding: clamp(3.8rem, 4vw, 7rem);
   --maho-shell-content-gap: 1.6rem;
-  --maho-shell-content-bg: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1));
+  --maho-shell-content-bg: light-dark(rgba(255, 255, 255, 0.38), rgba(30, 30, 38, 0.38));
+
+  --maho-glass-shell-bg: light-dark(rgba(238, 239, 243, 0.38), rgba(22, 22, 28, 0.48));
+  --maho-glass-panel-bg: light-dark(rgba(238, 239, 243, 0.50), rgba(30, 30, 38, 0.46));
+  --maho-glass-card-bg: light-dark(rgba(238, 239, 243, 0.44), rgba(38, 38, 48, 0.42));
+  --maho-glass-card-hover-bg: light-dark(rgba(238, 239, 243, 0.60), rgba(46, 46, 58, 0.56));
+  --maho-glass-strong-bg: light-dark(rgba(238, 239, 243, 0.68), rgba(42, 42, 52, 0.64));
+  --maho-glass-border: light-dark(rgba(255, 255, 255, 0.64), rgba(255, 255, 255, 0.10));
+  --maho-glass-border-strong: light-dark(rgba(255, 255, 255, 0.76), rgba(255, 255, 255, 0.16));
+  --maho-glass-highlight: light-dark(rgba(255, 255, 255, 0.74), rgba(255, 255, 255, 0.07));
+  --maho-glass-shadow: 0 24px 80px light-dark(rgba(30, 28, 62, 0.15), rgba(0, 0, 0, 0.42)),
+    0 8px 32px light-dark(rgba(0, 0, 0, 0.10), rgba(0, 0, 0, 0.34)),
+    inset 0 1px 0 var(--maho-glass-highlight);
+  --maho-glass-shadow-soft: 0 12px 36px light-dark(rgba(30, 28, 62, 0.12), rgba(0, 0, 0, 0.30)),
+    inset 0 1px 0 var(--maho-glass-highlight);
+  --maho-glass-shadow-tight: 0 8px 24px light-dark(rgba(30, 28, 62, 0.10), rgba(0, 0, 0, 0.26)),
+    inset 0 1px 0 var(--maho-glass-highlight);
+  --maho-glass-blur-panel: blur(26px) saturate(1.35);
+  --maho-glass-blur-card: blur(18px) saturate(1.32);
+  --maho-glass-blur-control: blur(14px) saturate(1.28);
+  --maho-solid-shell-bg: light-dark(#f2f2f7, #19191f);
+  --maho-solid-panel-bg: light-dark(#f8f8fb, #202028);
+  --maho-solid-card-bg: light-dark(#fff, #282832);
+  --maho-solid-control-bg: light-dark(#f7f7fb, #2b2b34);
+  --maho-solid-border: light-dark(rgba(24, 24, 30, 0.12), rgba(255, 255, 255, 0.14));
 
   /* Border-radius scale */
   --maho-border-radius: 7px;
@@ -72,16 +101,36 @@ body {
   height: 100%;
   overflow: hidden;
   background: var(--maho-branding-bg);
+  color: var(--maho-branding-bg-reverse);
   font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   font-feature-settings: 'kern', 'liga';
+  position: relative;
+  isolation: isolate;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: -18%;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 17% 20%, light-dark(rgba(91, 79, 207, 0.20), rgba(124, 111, 239, 0.28)) 0, transparent 34%),
+    radial-gradient(circle at 82% 18%, light-dark(rgba(83, 184, 255, 0.14), rgba(56, 189, 248, 0.18)) 0, transparent 32%),
+    radial-gradient(circle at 48% 84%, light-dark(rgba(255, 185, 126, 0.14), rgba(233, 69, 96, 0.14)) 0, transparent 38%),
+    linear-gradient(135deg, light-dark(rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.035)), light-dark(rgba(226, 226, 238, 0.26), rgba(255, 255, 255, 0)));
+  filter: blur(22px) saturate(1.08);
+  transform: translate3d(0, 0, 0);
 }
 
 #app {
   width: 100%;
   height: 100%;
   position: relative;
+  z-index: 1;
+  isolation: isolate;
 }
 
 .welcome-shell,
@@ -95,8 +144,31 @@ body {
   transform: translate(-50%, -50%);
   border-radius: var(--maho-shell-radius);
   overflow: hidden;
-  box-shadow: var(--maho-big-shadow);
-  background: var(--maho-branding-bg);
+  box-shadow: var(--maho-glass-shadow);
+  background: var(--maho-glass-shell-bg);
+  border: 1px solid var(--maho-glass-border);
+  backdrop-filter: var(--maho-glass-blur-panel);
+  -webkit-backdrop-filter: var(--maho-glass-blur-panel);
+  isolation: isolate;
+}
+
+.welcome-shell::before,
+.welcome-wizard::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 24% 18%, light-dark(rgba(91, 79, 207, 0.16), rgba(124, 111, 239, 0.18)) 0, transparent 32%),
+    radial-gradient(circle at 80% 78%, light-dark(rgba(83, 184, 255, 0.12), rgba(56, 189, 248, 0.10)) 0, transparent 34%),
+    linear-gradient(135deg, light-dark(rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.04)), light-dark(rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.01)));
+}
+
+.welcome-shell > *,
+.welcome-wizard > * {
+  position: relative;
+  z-index: 1;
 }
 
 .welcome-shell__sidebar,
@@ -106,6 +178,10 @@ body {
   flex-direction: column;
   padding: var(--maho-shell-sidebar-padding);
   box-sizing: border-box;
+  background: light-dark(rgba(255, 255, 255, 0.30), rgba(20, 20, 26, 0.34));
+  backdrop-filter: var(--maho-glass-blur-panel);
+  -webkit-backdrop-filter: var(--maho-glass-blur-panel);
+  border-right: 1px solid var(--maho-glass-border);
 }
 
 .welcome-shell__sidebar-content,
@@ -141,8 +217,8 @@ body {
   align-items: flex-start;
 }
 
-.welcome-shell__sidebar-nav .welcome-steps,
-.welcome-sidebar__nav .welcome-steps {
+.welcome-shell__sidebar-nav :where(.welcome-steps),
+.welcome-sidebar__nav :where(.welcome-steps) {
   margin-bottom: 1rem;
   align-self: flex-start;
 }
@@ -156,6 +232,9 @@ body {
   position: relative;
   overflow: hidden;
   box-sizing: border-box;
+  backdrop-filter: var(--maho-glass-blur-panel);
+  -webkit-backdrop-filter: var(--maho-glass-blur-panel);
+  border-left: 1px solid var(--maho-glass-border);
 }
 
 .welcome-shell__content-body {
@@ -182,33 +261,37 @@ body {
   box-sizing: border-box;
 }
 
-.welcome-shell__content-actions .welcome-button--primary,
-.welcome-content__actions .welcome-button--primary {
+.welcome-shell__content-actions :where(.welcome-button--primary),
+.welcome-content__actions :where(.welcome-button--primary) {
   min-width: 140px;
   padding: 0.6rem 1.5rem;
 }
 
 .welcome-select {
   appearance: none;
-  border: 1px solid var(--maho-colors-border);
+  border: 1px solid var(--maho-glass-border);
   border-radius: var(--maho-button-border-radius, 8px);
   padding: 0.6rem 2.5rem 0.6rem 1rem;
   font-size: 0.875rem;
   font-weight: 500;
-  background-color: var(--maho-toolbar-element-bg);
+  background-color: var(--maho-glass-card-bg);
   color: inherit;
   cursor: pointer;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'></polyline></svg>");
   background-repeat: no-repeat;
   background-position: right 0.75rem center;
   background-size: 1rem;
-  transition: border-color 150ms, background-color 150ms, box-shadow 150ms;
+  backdrop-filter: var(--maho-glass-blur-control);
+  -webkit-backdrop-filter: var(--maho-glass-blur-control);
+  box-shadow: var(--maho-glass-shadow-tight);
+  transition: border-color 150ms, background-color 150ms, box-shadow 150ms, transform 150ms;
   outline: none;
 }
 
 .welcome-select:hover {
   border-color: color-mix(in srgb, var(--maho-colors-border) 50%, var(--maho-colors-primary, #5b4fcf));
-  background-color: color-mix(in srgb, var(--maho-toolbar-element-bg) 92%, var(--maho-colors-primary, #5b4fcf));
+  background-color: color-mix(in srgb, var(--maho-glass-card-hover-bg) 90%, var(--maho-colors-primary, #5b4fcf));
+  transform: translateY(-1px);
 }
 
 .welcome-select:focus-visible {
@@ -321,28 +404,35 @@ body {
 /* Button styles */
 .welcome-button {
   appearance: none;
-  border: 1px solid var(--color-sys-outline, rgba(0, 0, 0, 0.15));
-  border-radius: 8px;
+  border: 1px solid var(--maho-glass-border);
+  border-radius: var(--maho-button-border-radius, 8px);
   padding: 10px 20px;
   font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
-  background: transparent;
+  background: var(--maho-glass-card-bg);
   color: inherit;
-  transition: background 150ms, border-color 150ms;
+  backdrop-filter: var(--maho-glass-blur-control);
+  -webkit-backdrop-filter: var(--maho-glass-blur-control);
+  box-shadow: var(--maho-glass-shadow-tight);
+  transition: background 150ms, border-color 150ms, box-shadow 150ms, transform 150ms;
 }
 
 .welcome-button:hover {
-  background: var(--color-sys-state-hover, rgba(0, 0, 0, 0.04));
+  background: var(--maho-glass-card-hover-bg);
+  border-color: var(--maho-glass-border-strong);
+  transform: translateY(-1px);
 }
 
-.welcome-button--primary {
-  background: var(--maho-primary-color);
-  color: #fff;
-  border-color: transparent;
+.welcome-button.welcome-button--primary {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--maho-primary-color) 86%, white), var(--maho-primary-color));
+  color: light-dark(#fff, #fff);
+  border-color: light-dark(rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0.14));
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--maho-primary-color) 34%, transparent),
+    inset 0 1px 0 light-dark(rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0.16));
 }
 
-.welcome-button--primary:hover {
+.welcome-button.welcome-button--primary:hover {
   background: color-mix(in srgb, var(--maho-primary-color) 85%, #000);
   box-shadow: 0 4px 12px color-mix(in srgb, var(--maho-primary-color) 40%, transparent);
 }
@@ -369,19 +459,217 @@ body {
   width: var(--maho-welcome-splash-cta-min-width);
   height: var(--maho-welcome-splash-cta-min-width);
   border-radius: 50%;
-  border: 2px solid var(--color-sys-on-surface, currentColor);
-  background: transparent;
+  border: 1px solid var(--maho-glass-border-strong);
+  background: var(--maho-glass-card-bg);
   color: inherit;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   opacity: 0;
-  transition: background 150ms;
+  backdrop-filter: var(--maho-glass-blur-panel);
+  -webkit-backdrop-filter: var(--maho-glass-blur-panel);
+  box-shadow: var(--maho-glass-shadow-soft);
+  transition: background 150ms, border-color 150ms, box-shadow 150ms;
 }
 
 .welcome-splash__cta:hover {
-  background: var(--color-sys-state-hover, rgba(0, 0, 0, 0.04));
+  background: var(--maho-glass-card-hover-bg);
+  border-color: var(--maho-glass-border-strong);
+}
+
+.welcome-appearance-content {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: clamp(0.9rem, 1.6vw, 1.25rem);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.welcome-appearance__options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: clamp(0.75rem, 1.2vw, 1rem);
+  width: 100%;
+}
+
+.welcome-appearance-card {
+  appearance: none;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(0.7rem, 1vw, 0.9rem);
+  min-height: clamp(176px, 28vh, 206px);
+  padding: clamp(0.75rem, 1.2vw, 1rem);
+  border: 1px solid var(--maho-glass-border);
+  border-radius: var(--maho-border-radius-large, 1.2em);
+  background: var(--maho-glass-card-bg);
+  color: inherit;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  backdrop-filter: var(--maho-glass-blur-card);
+  -webkit-backdrop-filter: var(--maho-glass-blur-card);
+  box-shadow: var(--maho-glass-shadow-tight);
+  transition: transform 150ms, box-shadow 150ms, border-color 150ms, background 150ms;
+}
+
+.welcome-appearance-card:not(.is-selected):hover {
+  transform: translateY(-3px);
+  border-color: color-mix(in srgb, var(--maho-colors-border) 44%, var(--maho-colors-primary));
+  background: var(--maho-glass-card-hover-bg);
+  box-shadow: var(--maho-glass-shadow-soft);
+}
+
+.welcome-appearance-card:focus-visible {
+  outline: none;
+  border-color: var(--maho-colors-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--maho-colors-primary) 22%, transparent), var(--maho-glass-shadow-soft);
+}
+
+.welcome-appearance-card.is-selected {
+  transform: translateY(-2px) scale(1.015);
+  border-color: var(--maho-colors-primary);
+  background: color-mix(in srgb, var(--maho-glass-card-hover-bg) 84%, var(--maho-colors-primary));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--maho-colors-primary) 24%, transparent), var(--maho-glass-shadow-soft);
+}
+
+.welcome-appearance-card.is-selected::after {
+  content: '';
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background-color: var(--maho-colors-primary);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'/></svg>");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 14px 14px;
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--maho-colors-primary) 34%, transparent);
+}
+
+.welcome-appearance-card__preview {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: clamp(96px, 15vh, 118px);
+  overflow: hidden;
+  border: 1px solid var(--maho-glass-border);
+  border-radius: var(--maho-border-radius-medium, 1rem);
+  box-shadow: inset 0 1px 0 var(--maho-glass-highlight);
+}
+
+.welcome-appearance-card__preview::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 28% 18%, light-dark(rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0.10)) 0, transparent 34%),
+    linear-gradient(135deg, light-dark(rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.06)), transparent);
+}
+
+.welcome-appearance-card--system .welcome-appearance-card__preview {
+  background: linear-gradient(135deg, light-dark(#f7f7fb, #f7f7fb) 0 49%, light-dark(#24242e, #24242e) 51% 100%);
+  color: light-dark(#4d45b5, #d8d4ff);
+}
+
+.welcome-appearance-card--light .welcome-appearance-card__preview {
+  background:
+    radial-gradient(circle at 72% 26%, light-dark(rgba(255, 214, 145, 0.46), rgba(255, 214, 145, 0.46)) 0, transparent 34%),
+    linear-gradient(135deg, light-dark(#fff, #fff), light-dark(#ececf5, #ececf5));
+  color: light-dark(#5b4fcf, #5b4fcf);
+}
+
+.welcome-appearance-card--dark .welcome-appearance-card__preview {
+  background:
+    radial-gradient(circle at 70% 24%, light-dark(rgba(124, 111, 239, 0.28), rgba(124, 111, 239, 0.28)) 0, transparent 36%),
+    linear-gradient(135deg, light-dark(#2d2d37, #2d2d37), light-dark(#14141a, #14141a));
+  color: light-dark(#c5bcff, #c5bcff);
+}
+
+.welcome-appearance-card__chrome {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  gap: 0.35rem;
+  z-index: 1;
+}
+
+.welcome-appearance-card__chrome > span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px light-dark(rgba(255, 255, 255, 0.34), rgba(0, 0, 0, 0.16));
+}
+
+.welcome-appearance-card__chrome > span:nth-child(1) {
+  background: light-dark(#ff5f57, #ff5f57);
+}
+
+.welcome-appearance-card__chrome > span:nth-child(2) {
+  background: light-dark(#ffbd2e, #ffbd2e);
+}
+
+.welcome-appearance-card__chrome > span:nth-child(3) {
+  background: light-dark(#27c93f, #27c93f);
+}
+
+.welcome-appearance-card__icon {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: clamp(52px, 5vw, 62px);
+  height: clamp(52px, 5vw, 62px);
+  border: 1px solid var(--maho-glass-border-strong);
+  border-radius: 50%;
+  background: light-dark(rgba(255, 255, 255, 0.44), rgba(255, 255, 255, 0.08));
+  backdrop-filter: var(--maho-glass-blur-control);
+  -webkit-backdrop-filter: var(--maho-glass-blur-control);
+  box-shadow: var(--maho-glass-shadow-tight);
+}
+
+.welcome-appearance-card__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.welcome-appearance-card__title {
+  font-size: 1rem;
+  font-weight: 650;
+}
+
+.welcome-appearance-card__description {
+  font-size: 0.84rem;
+  line-height: 1.45;
+  opacity: 0.58;
+}
+
+.welcome-appearance__helper {
+  align-self: center;
+  max-width: 34rem;
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  text-align: center;
+  opacity: 0.52;
+}
+
+@media (max-width: 900px) {
+  .welcome-appearance__options {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+
+  .welcome-appearance-card {
+    min-height: 0;
+  }
 }
 
 .welcome-shell__content > *,
@@ -452,17 +740,19 @@ body {
   width: clamp(80px, 10vw, 160px);
   height: clamp(80px, 10vw, 160px);
   border-radius: 50%;
-  background: var(--maho-toolbar-element-bg);
-  border: 2px solid var(--maho-colors-border);
-  box-shadow: var(--maho-big-shadow);
+  background: var(--maho-glass-card-bg);
+  border: 1px solid var(--maho-glass-border-strong);
+  box-shadow: var(--maho-glass-shadow-soft);
+  backdrop-filter: var(--maho-glass-blur-card);
+  -webkit-backdrop-filter: var(--maho-glass-blur-card);
 }
 
 .welcome-import-graphic__circle--source {
-  background: light-dark(rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0.1));
+  background: light-dark(rgba(255, 255, 255, 0.62), rgba(42, 42, 52, 0.46));
 }
 
 .welcome-import-graphic__circle--maho {
-  background: var(--maho-primary-color);
+  background: light-dark(rgba(91, 79, 207, 0.72), rgba(124, 111, 239, 0.62));
   opacity: 0.85;
 }
 
@@ -481,6 +771,13 @@ body {
   width: 100%;
   height: 100%;
   padding: 0;
+  border: 1px solid var(--maho-glass-border);
+  border-radius: var(--maho-border-radius-large, 1.2em);
+  background: var(--maho-glass-card-bg);
+  backdrop-filter: var(--maho-glass-blur-card);
+  -webkit-backdrop-filter: var(--maho-glass-blur-card);
+  box-shadow: var(--maho-glass-shadow-soft);
+  box-sizing: border-box;
 }
 
 .welcome-default-browser__icon {
@@ -500,8 +797,8 @@ body {
 }
 
 .welcome-button--ghost {
-  background: transparent;
-  border: none;
+  background: var(--maho-glass-card-bg);
+  border: 1px solid var(--maho-glass-border);
   opacity: 0.7;
   padding: 10px 16px;
   font-size: 0.875rem;
@@ -509,13 +806,18 @@ body {
   cursor: pointer;
   color: inherit;
   font-family: inherit;
-  border-radius: 8px;
-  transition: opacity 150ms, background 150ms;
+  border-radius: var(--maho-button-border-radius, 8px);
+  backdrop-filter: var(--maho-glass-blur-control);
+  -webkit-backdrop-filter: var(--maho-glass-blur-control);
+  box-shadow: var(--maho-glass-shadow-tight);
+  transition: opacity 150ms, background 150ms, border-color 150ms, box-shadow 150ms, transform 150ms;
 }
 
 .welcome-button--ghost:hover {
   opacity: 1;
-  background: var(--color-sys-state-hover, rgba(0, 0, 0, 0.04));
+  background: var(--maho-glass-card-hover-bg);
+  border-color: var(--maho-glass-border-strong);
+  transform: translateY(-1px);
 }
 
 /* Search engine grid */
@@ -545,9 +847,12 @@ body {
   width: 100%;
   padding: 1.25rem;
   border-radius: var(--maho-border-radius-medium, 1rem);
-  border: 2px solid var(--maho-colors-border);
-  background: var(--maho-toolbar-element-bg);
+  border: 1px solid var(--maho-glass-border);
+  background: var(--maho-glass-card-bg);
   cursor: pointer;
+  backdrop-filter: var(--maho-glass-blur-card);
+  -webkit-backdrop-filter: var(--maho-glass-blur-card);
+  box-shadow: var(--maho-glass-shadow-tight);
   transition: transform 150ms, box-shadow 150ms, border-color 150ms, background 150ms;
   color: inherit;
   font-family: inherit;
@@ -557,7 +862,8 @@ body {
 
 .welcome-engine-card:not(.is-selected):hover {
   transform: translateY(-2px);
-  box-shadow: var(--maho-big-shadow);
+  background: var(--maho-glass-card-hover-bg);
+  box-shadow: var(--maho-glass-shadow-soft);
   border-color: color-mix(in srgb, var(--maho-colors-border) 40%, var(--maho-colors-primary, #5b4fcf));
 }
 
@@ -570,7 +876,7 @@ body {
     var(--maho-toolbar-element-bg, rgba(255, 255, 255, 0.7)) 78%,
     var(--maho-colors-primary, #5b4fcf)
   );
-  box-shadow: var(--maho-big-shadow);
+  box-shadow: var(--maho-glass-shadow-soft);
 }
 
 .welcome-engine-card.is-selected::after {
@@ -640,10 +946,13 @@ body {
   gap: 8px;
   padding: 0;
   border-radius: 12px;
-  border: 2px solid var(--color-sys-outline, rgba(0, 0, 0, 0.1));
-  background: transparent;
+  border: 1px solid var(--maho-glass-border);
+  background: var(--maho-glass-card-bg);
   cursor: pointer;
-  transition: border-color 150ms, box-shadow 150ms, transform 100ms;
+  backdrop-filter: var(--maho-glass-blur-card);
+  -webkit-backdrop-filter: var(--maho-glass-blur-card);
+  box-shadow: var(--maho-glass-shadow-tight);
+  transition: border-color 150ms, box-shadow 150ms, transform 100ms, background 150ms;
   overflow: hidden;
   color: inherit;
   font-family: inherit;
@@ -651,7 +960,8 @@ body {
 
 .welcome-theme-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  background: var(--maho-glass-card-hover-bg);
+  box-shadow: var(--maho-glass-shadow-soft);
 }
 
 .welcome-theme-card.is-selected {
@@ -682,6 +992,13 @@ body {
   gap: 1rem;
   width: 100%;
   height: 100%;
+  border: 1px solid var(--maho-glass-border);
+  border-radius: var(--maho-border-radius-large, 1.2em);
+  background: var(--maho-glass-panel-bg);
+  backdrop-filter: var(--maho-glass-blur-panel);
+  -webkit-backdrop-filter: var(--maho-glass-blur-panel);
+  box-shadow: var(--maho-glass-shadow-soft);
+  box-sizing: border-box;
 }
 
 .welcome-completion__check {
@@ -778,10 +1095,13 @@ body {
   gap: 8px;
   padding: 1.25rem 1rem;
   border-radius: 12px;
-  border: 2px solid var(--color-sys-outline, rgba(0, 0, 0, 0.1));
-  background: var(--color-sys-base-container, rgba(255, 255, 255, 0.7));
+  border: 1px solid var(--maho-glass-border);
+  background: var(--maho-glass-card-bg);
   cursor: pointer;
-  transition: border-color 150ms, box-shadow 150ms, transform 100ms;
+  backdrop-filter: var(--maho-glass-blur-card);
+  -webkit-backdrop-filter: var(--maho-glass-blur-card);
+  box-shadow: var(--maho-glass-shadow-tight);
+  transition: border-color 150ms, box-shadow 150ms, transform 100ms, background 150ms;
   color: inherit;
   font-family: inherit;
   position: relative;
@@ -789,7 +1109,8 @@ body {
 
 .welcome-essential-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  background: var(--maho-glass-card-hover-bg);
+  box-shadow: var(--maho-glass-shadow-soft);
 }
 
 .welcome-essential-card.is-selected {
@@ -802,7 +1123,8 @@ body {
   width: 40px;
   height: 40px;
   border-radius: 10px;
-  background: var(--color-sys-surface, rgba(0, 0, 0, 0.06));
+  background: light-dark(rgba(255, 255, 255, 0.46), rgba(255, 255, 255, 0.08));
+  border: 1px solid var(--maho-glass-border);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -876,6 +1198,13 @@ body {
   text-align: center;
   padding: 2rem;
   z-index: 1;
+  border: 1px solid var(--maho-glass-border);
+  border-radius: var(--maho-border-radius-large, 1.2em);
+  background: var(--maho-glass-panel-bg);
+  backdrop-filter: var(--maho-glass-blur-panel);
+  -webkit-backdrop-filter: var(--maho-glass-blur-panel);
+  box-shadow: var(--maho-glass-shadow-soft);
+  box-sizing: border-box;
 }
 
 
@@ -950,9 +1279,12 @@ body {
   flex-direction: column;
   gap: 12px;
   padding: 1.25rem;
-  border-radius: 12px;
-  border: 1px solid var(--color-sys-outline, rgba(0, 0, 0, 0.12));
-  background: var(--color-sys-base-container, rgba(255, 255, 255, 0.85));
+  border-radius: var(--maho-border-radius-medium, 1rem);
+  border: 1px solid var(--maho-glass-border);
+  background: var(--maho-glass-card-bg);
+  backdrop-filter: var(--maho-glass-blur-card);
+  -webkit-backdrop-filter: var(--maho-glass-blur-card);
+  box-shadow: var(--maho-glass-shadow-tight);
 }
 
 .welcome-import-card__name {
@@ -1033,11 +1365,13 @@ body {
   padding-right: 20%;
   box-sizing: border-box;
   background: var(--maho-essentials-browser-background);
-  border: 1px solid var(--maho-colors-border, rgba(0, 0, 0, 0.12));
+  border: 1px solid var(--maho-glass-border);
   border-top-left-radius: var(--maho-border-radius-large, 1.2em);
   border-bottom-width: 0;
   border-right-width: 0;
-  box-shadow: var(--maho-big-shadow);
+  box-shadow: var(--maho-glass-shadow-soft);
+  backdrop-filter: var(--maho-glass-blur-panel);
+  -webkit-backdrop-filter: var(--maho-glass-blur-panel);
   display: flex;
   overflow: hidden;
 }
@@ -1048,6 +1382,8 @@ body {
   padding: 1.4rem;
   box-sizing: border-box;
   background: var(--maho-essentials-sidebar-background);
+  backdrop-filter: var(--maho-glass-blur-card);
+  -webkit-backdrop-filter: var(--maho-glass-blur-card);
   display: flex;
   flex-direction: column;
   gap: 1.2rem;
@@ -1086,17 +1422,20 @@ body {
 
 .welcome-essentials-tile {
   appearance: none;
-  border: 2px solid transparent;
+  border: 1px solid var(--maho-glass-border);
   min-height: var(--maho-tab-min-height, 6rem);
   min-width: var(--maho-tab-min-width, 5rem);
   border-radius: var(--maho-border-radius-medium, 1rem);
-  background: var(--maho-toolbar-element-bg, rgba(0, 0, 0, 0.06));
+  background: var(--maho-glass-card-bg);
   padding: 0.75rem;
   display: flex;
   align-items: center;
   justify-content: center;
   color: inherit;
   cursor: pointer;
+  backdrop-filter: var(--maho-glass-blur-control);
+  -webkit-backdrop-filter: var(--maho-glass-blur-control);
+  box-shadow: var(--maho-glass-shadow-tight);
   transition: transform 0.1s, box-shadow 150ms, background 150ms, border-color 150ms;
   position: relative;
 }
@@ -1117,7 +1456,8 @@ body {
 
 .welcome-essentials-tile:not(.is-selected):hover {
   transform: translateY(-2px);
-  box-shadow: var(--maho-big-shadow);
+  background: var(--maho-glass-card-hover-bg);
+  box-shadow: var(--maho-glass-shadow-soft);
   border-color: color-mix(in srgb, var(--maho-colors-border, rgba(0,0,0,0.15)) 40%, var(--maho-colors-primary, #5b4fcf));
 }
 
@@ -1129,7 +1469,7 @@ body {
     var(--maho-toolbar-element-bg, rgba(255, 255, 255, 0.7)) 72%,
     var(--maho-colors-primary, #5b4fcf)
   );
-  box-shadow: var(--maho-big-shadow);
+  box-shadow: var(--maho-glass-shadow-soft);
 }
 
 .welcome-essentials-tile.is-selected::before {
@@ -1202,28 +1542,164 @@ body {
   width: 200px;
   height: 200px;
   border-radius: 16px;
-  box-shadow: var(--maho-big-shadow);
+  border: 1px solid var(--maho-glass-border);
+  box-shadow: var(--maho-glass-shadow-soft);
+  backdrop-filter: var(--maho-glass-blur-card);
+  -webkit-backdrop-filter: var(--maho-glass-blur-card);
 }
 
 .welcome-theme-preview--empty {
-  background: var(--maho-toolbar-element-bg);
-  border: 2px dashed var(--maho-colors-border);
+  background: var(--maho-glass-card-bg);
+  border: 1px dashed var(--maho-glass-border-strong);
 }
 
 .welcome-theme-picker-button {
   padding: 0.75rem 1.5rem;
-  background: transparent;
+  background: var(--maho-glass-card-bg);
   color: var(--maho-primary-color);
-  border: 2px solid var(--maho-primary-color);
+  border: 1px solid color-mix(in srgb, var(--maho-primary-color) 58%, var(--maho-glass-border-strong));
   border-radius: var(--maho-button-border-radius);
   font-weight: 500;
   cursor: pointer;
   font-family: inherit;
   font-size: 1rem;
-  transition: background 150ms, color 150ms;
+  backdrop-filter: var(--maho-glass-blur-control);
+  -webkit-backdrop-filter: var(--maho-glass-blur-control);
+  box-shadow: var(--maho-glass-shadow-tight);
+  transition: background 150ms, color 150ms, box-shadow 150ms, transform 150ms;
 }
 
 .welcome-theme-picker-button:hover {
   background: var(--maho-primary-color);
-  color: white;
+  color: light-dark(#fff, #fff);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--maho-primary-color) 34%, transparent);
+  transform: translateY(-1px);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  body::before,
+  .welcome-shell::before,
+  .welcome-wizard::before,
+  .welcome-appearance-card__preview::before {
+    display: none;
+  }
+
+  .welcome-shell,
+  .welcome-wizard {
+    background: var(--maho-solid-shell-bg);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .welcome-shell__sidebar,
+  .welcome-sidebar,
+  .welcome-shell__content,
+  .welcome-content,
+  .welcome-completion,
+  .welcome-completion-pane,
+  .welcome-default-browser,
+  .welcome-essentials-mock__container,
+  .welcome-essentials-mock__sidebar {
+    background: var(--maho-solid-panel-bg);
+    border-color: var(--maho-solid-border);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .welcome-engine-card,
+  .welcome-appearance-card,
+  .welcome-appearance-card__preview,
+  .welcome-appearance-card__icon,
+  .welcome-essential-card,
+  .welcome-import-card,
+  .welcome-essentials-tile,
+  .welcome-theme-card,
+  .welcome-import-graphic__circle,
+  .welcome-theme-preview,
+  .welcome-select,
+  .welcome-button,
+  .welcome-button--ghost,
+  .welcome-splash__cta,
+  .welcome-theme-picker-button {
+    background: var(--maho-solid-card-bg);
+    border-color: var(--maho-solid-border);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .welcome-button.welcome-button--primary,
+  .welcome-theme-picker-button:hover,
+  .welcome-import-graphic__circle--maho {
+    background: var(--maho-primary-color);
+  }
+
+  .welcome-engine-card.is-selected,
+  .welcome-appearance-card.is-selected,
+  .welcome-essentials-tile.is-selected {
+    background: color-mix(in srgb, var(--maho-solid-card-bg) 74%, var(--maho-colors-primary, #5b4fcf));
+  }
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  body::before,
+  .welcome-shell::before,
+  .welcome-wizard::before,
+  .welcome-appearance-card__preview::before {
+    display: none;
+  }
+
+  .welcome-shell,
+  .welcome-wizard {
+    background: var(--maho-solid-shell-bg);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .welcome-shell__sidebar,
+  .welcome-sidebar,
+  .welcome-shell__content,
+  .welcome-content,
+  .welcome-completion,
+  .welcome-completion-pane,
+  .welcome-default-browser,
+  .welcome-essentials-mock__container,
+  .welcome-essentials-mock__sidebar {
+    background: var(--maho-solid-panel-bg);
+    border-color: var(--maho-solid-border);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .welcome-engine-card,
+  .welcome-appearance-card,
+  .welcome-appearance-card__preview,
+  .welcome-appearance-card__icon,
+  .welcome-essential-card,
+  .welcome-import-card,
+  .welcome-essentials-tile,
+  .welcome-theme-card,
+  .welcome-import-graphic__circle,
+  .welcome-theme-preview,
+  .welcome-select,
+  .welcome-button,
+  .welcome-button--ghost,
+  .welcome-splash__cta,
+  .welcome-theme-picker-button {
+    background: var(--maho-solid-card-bg);
+    border-color: var(--maho-solid-border);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .welcome-button.welcome-button--primary,
+  .welcome-theme-picker-button:hover,
+  .welcome-import-graphic__circle--maho {
+    background: var(--maho-primary-color);
+  }
+
+  .welcome-engine-card.is-selected,
+  .welcome-appearance-card.is-selected,
+  .welcome-essentials-tile.is-selected {
+    background: color-mix(in srgb, var(--maho-solid-card-bg) 74%, var(--maho-colors-primary, #5b4fcf));
+  }
 }

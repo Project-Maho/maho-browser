@@ -1,0 +1,113 @@
+---
+title: "Maho Mail vs aerc, mutt, neomutt: TUI email in 2026"
+description: "Comparing Maho Mail to aerc, mutt, and neomutt. Terminal email clients that forgot the GUI vs one client with three interfaces."
+date: 2026-04-12
+tags:
+  - mail
+  - comparison
+  - cli
+excerpt: "Terminal email clients that forgot the GUI. Comparing three decades of terminal email to a new approach."
+authors:
+  - name: Maho Team
+---
+
+![Three cream terminal slabs for aerc, mutt and neomutt next to a triple-stack with persimmon for Maho Mail's GUI + CLI + MCP.](/assets/blog/maho-mail-vs-aerc-mutt-neomutt/hero.png)
+
+Terminal email clients that forgot the GUI. Comparing three decades of terminal email to a new approach.
+
+## Quick verdict
+
+**Choose aerc, mutt, or neomutt** if your workflow is entirely terminal-based and you need deep customization with decades of community scripts and patches. **Choose Maho Mail** if you want CLI power alongside a desktop GUI and AI agent integration, without giving up terminal workflows.
+
+## Side-by-side comparison
+
+| Feature | Maho Mail | aerc / mutt / neomutt |
+| --- | --- | --- |
+| Desktop GUI | Yes, native desktop app | No, terminal UI only |
+| CLI | Yes, JSON output, Unix pipes | Yes, decades of scripting support |
+| MCP Server | Yes, AI agents connect via stdio | No |
+| AI Built In | Yes, summarize, draft, classify | No, possible via external scripts |
+| Local & Private | Yes | Yes |
+| Open Source | No, proprietary | Yes |
+| Maturity | Newer project, active development | mutt: since 1995, aerc: since 2019 |
+| Plugin Ecosystem | Growing | Massive, patches, macros, scripts |
+
+## Category comparison
+
+### Interface & accessibility
+
+aerc, mutt, and neomutt are terminal-native email clients. They render everything in your terminal emulator, which means they are fast, resource-light, and endlessly configurable via dotfiles. But they require a terminal to function, there is no graphical fallback, no rich HTML email rendering, and no point-and-click option for less technical tasks.
+
+Maho Mail provides a native desktop GUI for everyday email alongside a CLI for automation. You can triage your inbox in the GUI, then switch to `maho search --from boss --json` in the terminal without switching tools. For users who split time between visual and terminal workflows, this is the core advantage.
+
+### Scripting & automation
+
+mutt has decades of macro support, shell hooks, and community scripts. neomutt extends this further. aerc takes a more modern approach with a built-in terminal and simpler configuration. All three let you pipe messages to external tools, filter mail programmatically, and integrate deeply with your shell environment.
+
+Maho Mail's CLI produces structured JSON output by default, which makes it easier to integrate with modern tooling, jq, scripting languages, and AI pipelines. The MCP server adds another layer: AI agents can search, read, and draft email through a standardized protocol. This kind of structured automation is harder to achieve with mutt's text-based scripting.
+
+### AI integration
+
+None of the traditional terminal clients have built-in AI features. You could pipe mutt output to an LLM via shell commands, but there is no native summarization, classification, or drafting. The integration would be manual and fragile.
+
+Maho Mail has AI built into all three interfaces. Summarize a thread in the GUI, pipe a message to an LLM from the CLI (`maho get 42 --json | llm 'summarize'`), or let an AI agent handle triage through the MCP server. You can use OpenAI, Anthropic, or Ollama, whatever you prefer.
+
+### Stability & ecosystem
+
+This is where the traditional clients clearly win. mutt has been hardened over 30 years. Its codebase has been audited, patched, and debugged by thousands of contributors. neomutt adds modern features on top of that foundation. aerc, while newer, has also built a solid reputation in the developer community.
+
+Maho Mail is a younger project. It has not been through the same volume of real-world testing. If absolute stability and a proven track record are your priority, the traditional tools have an earned advantage here.
+
+## Choose Maho Mail if you...
+
+- Want a desktop GUI and terminal CLI in one client
+- Need AI agents to interact with your inbox via MCP
+- Prefer structured JSON output over plain text
+- Want built-in AI for summarization, drafting, and classification
+- Are starting fresh and want a modern approach to email
+
+## Choose aerc / mutt / neomutt if you...
+
+- Live entirely in the terminal and don't need a GUI
+- Need Maildir, Notmuch, or mbox support
+- Rely on decades of community scripts and patches
+- Prioritize battle-tested stability above all else
+- Want maximum configurability of your terminal email experience
+
+## Frequently asked questions
+
+### Can Maho Mail replace mutt for terminal email workflows?
+
+Maho Mail's CLI covers the most common terminal email operations, reading, searching, composing, and piping to other tools with JSON output. However, mutt and neomutt offer deeper terminal customization with decades of scripting extensions. If your entire workflow lives in a terminal multiplexer with heavily customized macstrstrings, mutt may still be more flexible. If you also want a GUI and AI integration alongside your CLI, Maho is the better fit.
+
+### Does Maho Mail support Maildir or Notmuch?
+
+Maho Mail currently works with IMAP accounts and stores data in a local SQLite database. It does not read from Maildir or integrate with Notmuch. If Maildir or Notmuch integration is a hard requirement, tools like mutt or aerc are better suited.
+
+### Is Maho Mail as stable as mutt?
+
+mutt has been in active development since 1995 and is considered one of the most battle-tested email clients available. Maho Mail is a newer project and has not had the same years of hardening. That said, Maho is under active development and its SQLite-backed architecture avoids many of the concurrency issues older tools face. Maho is proprietary and free.
+
+### Can AI agents use mutt or aerc?
+
+Not natively. You could script around mutt or aerc using shell commands, but neither exposes a structured API for AI agents. Maho Mail's MCP server provides a standardized interface that any MCP-compatible AI tool can connect to directly.
+
+### Is Maho Mail open source like mutt?
+
+No. mutt is open source with a long history of community development; Maho is proprietary and free. Both share a commitment to local-first email, but they differ on source distribution.
+
+## Ready to try Maho Mail?
+
+GUI for humans. CLI for developers. MCP for agents. [Learn more about Maho Mail](/mail).
+
+## See also
+
+- [Maho Mail vs Apple Mail](/blog/maho-mail-vs-apple-mail/)
+- [Maho Mail vs himalaya](/blog/maho-mail-vs-himalaya/)
+- [Maho Mail vs Shortwave](/blog/maho-mail-vs-shortwave/)
+- [Maho Mail vs Spark](/blog/maho-mail-vs-spark/)
+- [Maho Mail vs Superhuman](/blog/maho-mail-vs-superhuman/)
+- [Maho Mail vs Thunderbird](/blog/maho-mail-vs-thunderbird/)
+- [Maho Mail GUI Guide](/mail/gui/)
+- [Maho Mail MCP Server](/mail/mcp/)
+- [Maho Mail API Overview](/api/)

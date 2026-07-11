@@ -21,6 +21,8 @@ This post is the architecture behind that sentence. The endpoints we accept, whe
 
 ## Why BYOK is the default, not a checkbox
 
+Local-first databases benefit from hardware-backed security. For database security, see the [SQLite Encryption Extension](https://www.sqlite.org/see/doc/trunk/www/index.wiki).
+
 A lot of AI features get bolted on top of a vendor-hosted model. The vendor handles billing, key rotation, abuse detection, and rate limits. From a product team's perspective, that is the cheap path. The user types, the SaaS pays the inference bill, the SaaS sees every prompt.
 
 We did not want that shape. The reasons stack:
@@ -33,6 +35,12 @@ We did not want that shape. The reasons stack:
 So BYOK is not the AI tier above the bundled tier. It is the only tier. The AI panel is built around the assumption that the model lives somewhere you control, and the browser is a thin client.
 
 ## Endpoint shapes we accept
+
+### OpenAI-compatible schema
+We support standard OpenAI chat completion schemas for local and hosted endpoints.
+
+### Custom LLM adapters
+Custom adapters allow routing prompts through arbitrary API formats.
 
 The provider field in Settings takes one of five shapes. Each one expects a real public URL or a localhost endpoint and a key, if the endpoint needs one.
 
@@ -49,6 +57,12 @@ The provider field in Settings takes one of five shapes. Each one expects a real
 The provider list is not exclusive. You can register more than one and pick which one a given task uses, which is what the routing section is about.
 
 ## Where keys live
+
+### Keychain access controls
+On macOS, credentials are protected by the OS keychain. Read about the [Apple Keychain Services API](https://developer.apple.com/documentation/security/keychain_services) for details.
+
+### SQLite credential storage
+Only encrypted references are stored in the local SQLite file. We utilize the [Chromium OSCrypt Source](https://source.chromium.org/chromium/chromium/src/+/main:components/os_crypt/) implementation for secure platform-dependent encryption.
 
 Every key you paste lives in the macOS Keychain. Not in a config file, not in `localStorage`, not in a cloud sync bucket, not in a vendor backend. Keychain.
 

@@ -20,6 +20,12 @@ This post is the working version of how the two modes behave inside Maho, why mi
 
 ## The two scopes, defined
 
+### Document-level scope
+Document scope covers metadata and structure of the single active tab.
+
+### Thread-level history
+Thread scope stores user chat records and cumulative context.
+
 Page context is the set of inputs the panel takes from the document in front of you. The visible text, the title, the URL, the structure of the headings, and a small structural envelope (the language, the canonical link, occasionally the publication date when the page exposes it). Page context updates when you navigate. The model sees the page you are on, not the page you were on a minute ago.
 
 Conversation context is the running record of what you and the model have said so far in this panel session. It is a transcript, plus any previous tool results, plus a system prompt that frames the assistant. Conversation context grows as you talk. The model sees what you have built up; it does not see what you stopped seeing.
@@ -29,6 +35,12 @@ Both modes use the same model and the same provider. The only difference is what
 A short, concrete contrast. You open the React documentation and ask, "What does useEffect do?" That is page context: the answer comes from the page in front of you, the answer should cite that page, and the answer should not invent things the page does not say. You then open a different page about state management and ask, "How does the previous answer compare?" That is conversation context: the previous answer is in the transcript, the new page is not the subject, and the model should reason across messages.
 
 ## Why the distinction matters
+
+### Preventing prompt contamination
+Keeping page content isolated prevents passive prompt injection vectors from reading thread history.
+
+### Minimizing token cost
+Separating the scopes avoids resending full document bodies with every chat turn.
 
 The two scopes serve different work, and they fail in different ways.
 

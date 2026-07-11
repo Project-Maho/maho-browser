@@ -1,0 +1,48 @@
+---
+/**
+ * StarlightSiteTitle — Adds "Docs" + "Blog" nav links next to the site logo.
+ *
+ * Renders in order:
+ *   1. Starlight's default SiteTitle (logo + site name)
+ *   2. "Docs" link (points to /browser/ — primary docs entry)
+ *   3. "Blog" link (points to /blog/)
+ *
+ * starlight-blog is configured with `navigation: 'none'` so it does NOT
+ * auto-inject a Blog link via SiteTitle or ThemeSelect overrides. Both nav
+ * links live here to keep them visually grouped next to the logo.
+ */
+import Default from '@astrojs/starlight/components/SiteTitle.astro';
+---
+
+<Default><slot /></Default>
+<nav class="maho-header-nav" aria-label="Primary">
+  <a href="/browser/">Docs</a>
+  <a href="/blog/">Blog</a>
+</nav>
+
+<style>
+  .maho-header-nav {
+    border-inline-start: 1px solid var(--sl-color-gray-5);
+    display: none;
+    align-items: center;
+    gap: 1.25rem;
+    margin-inline-start: 1rem;
+    padding-inline-start: 1rem;
+  }
+
+  @media (min-width: 50rem) {
+    .maho-header-nav {
+      display: flex;
+    }
+  }
+
+  .maho-header-nav a {
+    color: var(--sl-color-text-accent);
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .maho-header-nav a:hover {
+    color: var(--sl-color-white);
+  }
+</style>

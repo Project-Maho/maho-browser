@@ -1,6 +1,7 @@
 import React, {useEffect, useRef, useState, useSyncExternalStore, useCallback} from 'react';
 import {createRoot} from 'react-dom/client';
 
+import {AppearanceContent, AppearanceSidebar} from './pages/appearance.js';
 import {CompletionContent, CompletionSidebar} from './pages/completion.js';
 import {EssentialsContent, EssentialsSidebar} from './pages/essentials.js';
 import {ImportDataContent, ImportDataSidebar} from './pages/import-data.js';
@@ -20,6 +21,9 @@ import {TOTAL_PAGES, WelcomePage} from './types.js';
 import type {WelcomeState} from './types.js';
 
 const WIZARD_STEPS = TOTAL_PAGES - 1;
+
+const isStandalonePage = (page: WelcomePage) =>
+  page === WelcomePage.Splash;
 
 type AnimationPlaybackControls = {
   cancel: () => void;
@@ -101,8 +105,7 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
   useEffect(() => { void store.bootstrap(); }, [store]);
 
   const pageForRender =
-      renderedPage === WelcomePage.Splash &&
-          snapshot.currentPage !== WelcomePage.Splash
+      isStandalonePage(renderedPage) && snapshot.currentPage !== renderedPage
       ? snapshot.currentPage
       : renderedPage;
 
@@ -111,14 +114,14 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
       if (event.defaultPrevented || event.repeat) return;
       if (event.key === 'Enter') {
         const state = store.getSnapshot();
-        if (state.currentPage === WelcomePage.Splash) store.nextPage();
+        if (isStandalonePage(state.currentPage)) store.nextPage();
         else if (state.currentPage === WelcomePage.Completion) store.complete();
         else if (state.currentPage === WelcomePage.SourceSelect && state.importStage === 'A') store.openMigrationDialog();
         else store.nextPage();
       } else if (event.key === 'Escape') {
         const state = store.getSnapshot();
         if (state.currentPage !== WelcomePage.Completion &&
-            state.currentPage !== WelcomePage.Splash) {
+            !isStandalonePage(state.currentPage)) {
           if (state.currentPage === WelcomePage.SourceSelect) {
             store.skipImport();
           } else {
@@ -132,8 +135,8 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
   }, [store]);
 
   useEffect(() => {
-    if (snapshot.currentPage === WelcomePage.Splash ||
-        renderedPage === WelcomePage.Splash ||
+    if (isStandalonePage(snapshot.currentPage) ||
+        isStandalonePage(renderedPage) ||
         snapshot.currentPage === renderedPage) {
       return;
     }
@@ -158,7 +161,7 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
   }, [renderedPage, snapshot.currentPage]);
 
   useEffect(() => {
-    if (pageForRender === WelcomePage.Splash) {
+    if (isStandalonePage(pageForRender)) {
       return;
     }
 
@@ -200,9 +203,9 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
 
   const isCompletionPage = pageForRender === WelcomePage.Completion;
   const isSourceSelectPage = pageForRender === WelcomePage.SourceSelect;
-  const canGoBack = pageForRender > WelcomePage.SourceSelect ||
+  const canGoBack = pageForRender > WelcomePage.Appearance ||
       (isSourceSelectPage && snapshot.importStage === 'B');
-  const currentStep = pageForRender - WelcomePage.SourceSelect;
+  const currentStep = pageForRender - WelcomePage.Appearance;
 
   function onPrimaryClick() {
     if (isSourceSelectPage && snapshot.importStage === 'A') {
@@ -346,6 +349,7 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
 
 function renderSidebar(currentPage: WelcomePage, store: MahoWelcomeStore, snapshot: WelcomeState): React.ReactNode {
   switch (currentPage) {
+    case WelcomePage.Appearance:    return <AppearanceSidebar store={store} />;
     case WelcomePage.SourceSelect:   return <ImportDataSidebar store={store} importStage={snapshot.importStage} />;
     case WelcomePage.ImportProgress:
       return (
@@ -365,6 +369,8 @@ function renderContent(
     currentPage: WelcomePage, snapshot: WelcomeState,
     store: MahoWelcomeStore): React.ReactNode {
   switch (currentPage) {
+    case WelcomePage.Appearance:
+      return <AppearanceContent store={store} appearance={snapshot.appearance} />;
     case WelcomePage.SourceSelect:
       return (
         <ImportDataContent
@@ -387,7 +393,6 @@ function renderContent(
           engines={snapshot.searchEngines}
           selectedEngine={snapshot.selectedEngine}
           onSelect={keyword => store.setSearchEngine(keyword)}
-          store={store}
         />
       );
     case WelcomePage.Essentials:

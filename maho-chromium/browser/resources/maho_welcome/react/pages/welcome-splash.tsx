@@ -6,7 +6,6 @@ import {
   SPLASH_CTA_DELAY,
   SPLASH_EXIT_EASE,
   SPLASH_SPAN_STAGGER,
-  SPLASH_SPRING,
 } from '../motion-constants.js';
 
 export function WelcomeSplash({onStart}: {onStart: () => void}) {
@@ -60,8 +59,8 @@ export function WelcomeSplash({onStart}: {onStart: () => void}) {
   return (
     <div className="welcome-splash" ref={splashRef}>
       <h1 className="welcome-splash__title" ref={titleRef}>
-        <span>Welcome to</span>
-        <span>a calmer internet</span>
+        <span>Built for people who</span>
+        <span>took browsers seriously.</span>
       </h1>
       <button
         ref={ctaRef}
@@ -87,7 +86,7 @@ export function WelcomeSplash({onStart}: {onStart: () => void}) {
           await exit.finished.catch(() => undefined);
           onStart();
         }}>
-        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <line x1="5" y1="12" x2="19" y2="12"></line>
           <polyline points="12 5 19 12 12 19"></polyline>
         </svg>

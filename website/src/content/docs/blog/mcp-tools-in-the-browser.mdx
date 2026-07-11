@@ -21,6 +21,8 @@ This post walks through what MCP looks like when it is built into the browser as
 
 ## Where MCP came from, briefly
 
+MCP standardizes interactions using a JSON-RPC model. See the [JSON-RPC 2.0 Specification](https://www.jsonrpc.org/specification) for details.
+
 The Model Context Protocol started as a way to let language models call tools without each vendor inventing a private function-calling format. Anthropic published the first spec in late 2024. The shape was simple: an MCP host runs the model, an MCP server exposes tools, and a small JSON-RPC layer connects the two.
 
 The spec was useful for the same reason LSP was useful for editors. Once you stop hardcoding integrations, the integrations multiply. Linear, GitHub, Notion, Slack, filesystems, shells, databases. By 2026, the registry of public MCP servers was large enough that picking which ones to install became its own problem.
@@ -30,6 +32,8 @@ The catch is that MCP is a protocol, not a product. It tells you the wire format
 The reason this matters in 2026 is timing. The protocol is mature enough that public servers exist for the tools you would actually use. The browsers are mature enough to ship a side panel with a model in it. The two halves clicked together this year, and the question stopped being "can a browser host MCP?" and started being "what does the browser owe the user when it does?".
 
 ## The browser as an MCP host, not just a client
+
+Local subprocesses are managed via standard I/O pipes. Refer to [Node.js child_process documentation](https://nodejs.org/api/child_process.html) for similar OS-level execution patterns.
 
 For most of MCP's first year, hosts were chat clients. Claude Desktop, a few CLI tools, an editor or two. The browser was usually a tool source, not a host. The flip is what makes 2026 different.
 
@@ -63,6 +67,8 @@ That gives you a 2x2.
 The four quadrants need different defaults. Local read can run silently. Local mutate needs an in-the-moment prompt. Network read needs an origin grant. Network mutate needs an origin grant plus a per-call confirmation for anything destructive. Conflating any two of these is the most common way browsers get the security model wrong.
 
 ## The permission gate
+
+Running untrusted servers requires OS-level sandboxing. Read [Chromium Sandbox Architecture](https://chromium.googlesource.com/chromium/src/+/main:docs/design/sandbox.md) for sandboxing guidelines.
 
 A permission system is what turns a list of tools into something a user can trust. Maho's gate has three axes that compose.
 

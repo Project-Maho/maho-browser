@@ -3,6 +3,7 @@ import starlight from '@astrojs/starlight';
 import starlightBlog from 'starlight-blog';
 import react from '@astrojs/react';
 import sitemap from '@astrojs/sitemap';
+import remarkGfm from 'remark-gfm';
 
 // Canonical site URL. Override at build time with SITE_URL env var.
 // Used by Astro for canonical URLs, sitemap, OG tags, and JSON-LD via Astro.site.
@@ -10,12 +11,26 @@ const SITE_URL = process.env.SITE_URL || 'https://mahobrowser.com';
 
 export default defineConfig({
   site: SITE_URL,
+  // Starlight overwrites `markdown.remarkPlugins` with its own list, dropping
+  // Astro's default GFM. Re-inject remark-gfm here so tables, strikethrough,
+  // task lists, and autolinks work in both .md and .mdx docs.
+  markdown: {
+    remarkPlugins: [remarkGfm],
+  },
   integrations: [
     starlight({
       title: 'Maho',
-      logo: { src: './src/assets/logo.svg' },
+      description: 'Maho is a browser and email client for people who took browsers seriously — sidebar Spaces, split view, a command bar, and optional BYOK AI on maintained Chromium.',
+      logo: { src: './src/assets/logo.png' },
+      favicon: '/favicon-32.png',
+      head: [
+        { tag: 'link', attrs: { rel: 'icon', type: 'image/png', sizes: '16x16', href: '/favicon-16.png' } },
+        { tag: 'link', attrs: { rel: 'icon', type: 'image/png', sizes: '192x192', href: '/icon-192.png' } },
+        { tag: 'link', attrs: { rel: 'apple-touch-icon', sizes: '180x180', href: '/apple-touch-icon.png' } },
+      ],
       components: {
         Head: './src/components/StarlightHead.astro',
+        SiteTitle: './src/components/StarlightSiteTitle.astro',
       },
       sidebar: [
         { label: 'Maho Browser', autogenerate: { directory: 'browser' } },
@@ -54,11 +69,12 @@ export default defineConfig({
           title: 'Blog',
           prefix: 'blog',
           rss: true,
+          navigation: 'none',
         }),
       ],
       // ⚠️ marketing.css is intentionally NOT here — it loads via BaseLayout.astro only.
       // Adding it here would leak marketing styles into Starlight docs pages.
-      customCss: ['./src/styles/global.css'],
+      customCss: ['./src/styles/global.css', './src/styles/starlight-theme.css'],
     }),
     react(),
     sitemap({

@@ -2,84 +2,155 @@
 // biome-ignore-all assist/source/organizeImports: Astro component imports stay grouped for readability.
 // biome-ignore-all lint/correctness/noUnusedImports: Astro frontmatter imports are referenced in the template.
 // biome-ignore-all lint/correctness/noUnusedVariables: Astro frontmatter data is referenced in the template.
-import ProductSwitcher from './ProductSwitcher';
 import ThemeToggle from './ThemeToggle';
 
 const { activeProduct = "browser" } = Astro.props;
 const currentPath = Astro.url.pathname;
+const mobileMenuId = 'site-mobile-drawer';
+const docsHref = activeProduct === 'browser' ? '/browser/' : '/mail/';
+const secondaryProductLink = activeProduct === 'browser'
+  ? { href: '/mail', label: 'Mail →' }
+  : { href: '/', label: 'Browser →' };
+
 function isActive(path: string): boolean {
-  if (path === "/") return currentPath === "/";
+  if (path === '/') return currentPath === '/';
   return currentPath.startsWith(path);
 }
+
+const linkClass = 'text-sm text-muted-foreground transition-colors hover:text-foreground';
 ---
 
-<nav class="fixed top-0 left-0 right-0 z-50 bg-background/80 backdrop-blur-sm" aria-label="Main navigation">
-  <div class="max-w-6xl mx-auto px-6 flex h-16 items-center justify-between gap-3 sm:gap-4">
-    <div class="flex items-center gap-3 sm:gap-4 min-w-0">
-      <a href="/" class="flex items-center gap-2 text-sm font-medium text-foreground shrink-0" aria-label="Maho home">
-        <img src="/logo.svg" alt="" width="24" height="24" class="w-6 h-6" aria-hidden="true" />
-        <span>Maho</span>
-      </a>
-      <ProductSwitcher client:load activeProduct={activeProduct} />
-    </div>
+<nav data-site-nav class="fixed inset-x-0 top-0 z-50 border-b border-border/60 bg-background/85 backdrop-blur-md" aria-label="Main navigation">
+  <div class="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-6">
+    <a href="/" class="flex items-center gap-2 text-sm font-medium text-foreground shrink-0" aria-label="Maho home">
+      <img src="/nav-logo.png" alt="" width="24" height="24" class="h-6 w-6 rounded-md" aria-hidden="true" />
+      <span>Maho</span>
+    </a>
+
     <div class="hidden md:flex items-center gap-6">
-      <a href={activeProduct === "browser" ? "/browser/" : "/cli/"} data-product-docs-link aria-current={isActive("/browser") || isActive("/cli") || isActive("/mail/") || isActive("/api") ? "page" : undefined} class="text-sm text-muted-foreground hover:text-foreground transition-colors">Docs</a>
-      <a href="/blog" aria-current={isActive("/blog") ? "page" : undefined} class="text-sm text-muted-foreground hover:text-foreground transition-colors">Blog</a>
-      <a href="/pricing" aria-current={isActive("/pricing") ? "page" : undefined} class="text-sm text-muted-foreground hover:text-foreground transition-colors">Pricing</a>
+      <a href={docsHref} data-product-docs-link aria-current={isActive('/browser') || isActive('/mail') || isActive('/cli') || isActive('/api') ? 'page' : undefined} class={linkClass}>Docs</a>
+      <a href="/blog" aria-current={isActive('/blog') ? 'page' : undefined} class={linkClass}>Blog</a>
+      <a href="/pricing" aria-current={isActive('/pricing') ? 'page' : undefined} class={linkClass}>Pricing</a>
     </div>
-    <div class="flex items-center gap-2 sm:gap-4">
-      <div class="hidden sm:block">
-        <ThemeToggle client:load />
-      </div>
-      <a href="/download" class="inline-flex items-center gap-2 px-3 sm:px-4 py-1.5 rounded-full bg-foreground text-background text-sm font-medium hover:opacity-90 transition-opacity whitespace-nowrap motion-safe-scale">
-        Download
-      </a>
-      <details class="md:hidden relative" data-mobile-menu>
-        <summary class="cursor-pointer list-none p-2 -mr-2 text-muted-foreground hover:text-foreground transition-colors" aria-label="Toggle menu" style="touch-action: manipulation">
-          <svg data-menu-icon-closed xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <line x1="3" y1="6" x2="21" y2="6"></line>
-            <line x1="3" y1="12" x2="21" y2="12"></line>
-            <line x1="3" y1="18" x2="21" y2="18"></line>
-          </svg>
-          <svg data-menu-icon-open xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="hidden">
-            <line x1="6" y1="6" x2="18" y2="18"></line>
-            <line x1="6" y1="18" x2="18" y2="6"></line>
-          </svg>
-        </summary>
-        <div class="absolute right-0 top-full mt-2 min-w-[200px] rounded-lg border border-border bg-card p-2 shadow-lg">
-          <a href={activeProduct === "browser" ? "/browser/" : "/cli/"} data-product-docs-link aria-current={isActive("/browser") || isActive("/cli") ? "page" : undefined} class="block px-3 py-3 text-sm text-foreground hover:bg-muted rounded-md transition-colors aria-[current=page]:bg-muted">Docs</a>
-          <a href="/blog" aria-current={isActive("/blog") ? "page" : undefined} class="block px-3 py-3 text-sm text-foreground hover:bg-muted rounded-md transition-colors aria-[current=page]:bg-muted">Blog</a>
-          <a href="/pricing" aria-current={isActive("/pricing") ? "page" : undefined} class="block px-3 py-3 text-sm text-foreground hover:bg-muted rounded-md transition-colors aria-[current=page]:bg-muted">Pricing</a>
-          <a href="/why" aria-current={isActive("/why") ? "page" : undefined} class="block px-3 py-3 text-sm text-foreground hover:bg-muted rounded-md transition-colors aria-[current=page]:bg-muted">Why Maho</a>
-          <a href="/about" aria-current={isActive("/about") ? "page" : undefined} class="block px-3 py-3 text-sm text-foreground hover:bg-muted rounded-md transition-colors aria-[current=page]:bg-muted">About</a>
-          <a href="/roadmap" aria-current={isActive("/roadmap") ? "page" : undefined} class="block px-3 py-3 text-sm text-foreground hover:bg-muted rounded-md transition-colors aria-[current=page]:bg-muted">Roadmap</a>
-          <a href="/compare/aside" aria-current={isActive("/compare") ? "page" : undefined} class="block px-3 py-3 text-sm text-foreground hover:bg-muted rounded-md transition-colors aria-[current=page]:bg-muted">vs Aside</a>
-          <div class="sm:hidden border-t border-border my-2"></div>
-          <div class="sm:hidden px-3 py-2 flex items-center justify-between">
-            <span class="text-sm text-muted-foreground">Theme</span>
-            <ThemeToggle client:load />
-          </div>
-        </div>
-      </details>
+
+    <div class="hidden md:flex items-center gap-3 lg:gap-4">
+      <ThemeToggle client:load />
+      <a href={secondaryProductLink.href} class={linkClass}>{secondaryProductLink.label}</a>
+      <a href="/download" class="cta-btn cta-btn-primary whitespace-nowrap">Download</a>
     </div>
+
+    <div class="flex items-center gap-2 md:hidden">
+      <a href="/download" class="cta-btn cta-btn-primary px-3 py-2 text-xs whitespace-nowrap">Download</a>
+      <button
+        type="button"
+        data-nav-toggle
+        class="inline-flex h-10 w-10 items-center justify-center rounded-full border border-border bg-card text-foreground"
+        aria-expanded="false"
+        aria-controls={mobileMenuId}
+        aria-label="Open menu"
+      >
+        <svg data-nav-icon-closed xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <line x1="3" y1="6" x2="21" y2="6"></line>
+          <line x1="3" y1="12" x2="21" y2="12"></line>
+          <line x1="3" y1="18" x2="21" y2="18"></line>
+        </svg>
+        <svg data-nav-icon-open xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="hidden">
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+          <line x1="6" y1="18" x2="18" y2="6"></line>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <div data-nav-overlay hidden class="fixed inset-0 top-16 bg-background/80 backdrop-blur-sm md:hidden"></div>
+  <div id={mobileMenuId} data-nav-drawer hidden class="fixed inset-x-0 top-16 border-b border-border bg-background px-6 py-6 shadow-2xl md:hidden">
+    <div class="flex flex-col gap-2">
+      <a href={docsHref} data-product-docs-link aria-current={isActive('/browser') || isActive('/mail') || isActive('/cli') || isActive('/api') ? 'page' : undefined} class="rounded-squircle-md px-4 py-3 text-sm text-foreground transition-colors hover:bg-muted aria-[current=page]:bg-muted">Docs</a>
+      <a href="/blog" aria-current={isActive('/blog') ? 'page' : undefined} class="rounded-squircle-md px-4 py-3 text-sm text-foreground transition-colors hover:bg-muted aria-[current=page]:bg-muted">Blog</a>
+      <a href="/pricing" aria-current={isActive('/pricing') ? 'page' : undefined} class="rounded-squircle-md px-4 py-3 text-sm text-foreground transition-colors hover:bg-muted aria-[current=page]:bg-muted">Pricing</a>
+      <a href={secondaryProductLink.href} class="rounded-squircle-md px-4 py-3 text-sm text-foreground transition-colors hover:bg-muted">{secondaryProductLink.label}</a>
+    </div>
+
+    <div class="mt-5 flex items-center justify-between rounded-squircle-md border border-border px-4 py-3">
+      <span class="text-sm text-muted-foreground">Theme</span>
+      <ThemeToggle client:load />
+    </div>
+
+    <a href="/download" class="cta-btn cta-btn-primary mt-5 w-full justify-center">Download</a>
   </div>
 </nav>
 
-<style>
-  details[data-mobile-menu][open] [data-menu-icon-closed] { display: none; }
-  details[data-mobile-menu][open] [data-menu-icon-open] { display: block; }
-</style>
-
 <script is:inline>
-  document.addEventListener('click', function(e) {
-    var menu = document.querySelector('[data-mobile-menu]');
-    if (!menu) return;
-    if (e.target.closest('[data-mobile-menu] a')) {
-      menu.removeAttribute('open');
+  (() => {
+    const nav = document.querySelector('[data-site-nav]');
+    if (!nav) return;
+
+    const toggle = nav.querySelector('[data-nav-toggle]');
+    const drawer = nav.querySelector('[data-nav-drawer]');
+    const overlay = nav.querySelector('[data-nav-overlay]');
+    const closedIcon = nav.querySelector('[data-nav-icon-closed]');
+    const openIcon = nav.querySelector('[data-nav-icon-open]');
+    let lastFocused = null;
+
+    if (!(toggle instanceof HTMLButtonElement) || !(drawer instanceof HTMLElement) || !(overlay instanceof HTMLElement)) {
       return;
     }
-    if (!menu.contains(e.target)) {
-      menu.removeAttribute('open');
-    }
-  });
+
+    const syncIcons = (isOpen) => {
+      if (closedIcon instanceof SVGElement) {
+        closedIcon.classList.toggle('hidden', isOpen);
+      }
+
+      if (openIcon instanceof SVGElement) {
+        openIcon.classList.toggle('hidden', !isOpen);
+      }
+    };
+
+    const setOpen = (isOpen) => {
+      toggle.setAttribute('aria-expanded', String(isOpen));
+      toggle.setAttribute('aria-label', isOpen ? 'Close menu' : 'Open menu');
+      drawer.hidden = !isOpen;
+      overlay.hidden = !isOpen;
+      document.body.style.overflow = isOpen ? 'hidden' : '';
+      syncIcons(isOpen);
+
+      if (isOpen) {
+        lastFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        const firstLink = drawer.querySelector('a');
+        if (firstLink instanceof HTMLElement) {
+          firstLink.focus();
+        }
+      } else if (lastFocused instanceof HTMLElement) {
+        lastFocused.focus();
+      }
+    };
+
+    toggle.addEventListener('click', () => {
+      const isOpen = toggle.getAttribute('aria-expanded') === 'true';
+      setOpen(!isOpen);
+    });
+
+    overlay.addEventListener('click', () => setOpen(false));
+
+    drawer.addEventListener('click', (event) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest('a')) {
+        setOpen(false);
+      }
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && toggle.getAttribute('aria-expanded') === 'true') {
+        setOpen(false);
+      }
+    });
+
+    window.addEventListener('resize', () => {
+      if (window.innerWidth >= 768 && toggle.getAttribute('aria-expanded') === 'true') {
+        setOpen(false);
+      }
+    });
+
+    syncIcons(false);
+  })();
 </script>

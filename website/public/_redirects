@@ -3,3 +3,15 @@
 # D0.4: /waitlist route deleted, preserve inbound URLs via 301 to home.
 /waitlist  /  301
 /waitlist/ /  301
+
+# Compare pages migrated to blog posts (2026-07-10).
+/compare/aside                            /blog/maho-vs-aside-browser           301
+/compare/maho-mail-vs-apple-mail          /blog/maho-mail-vs-apple-mail         301
+/compare/maho-mail-vs-superhuman          /blog/maho-mail-vs-superhuman         301
+/compare/maho-mail-vs-thunderbird         /blog/maho-mail-vs-thunderbird        301
+/compare/maho-mail-vs-spark               /blog/maho-mail-vs-spark              301
+/compare/maho-mail-vs-shortwave           /blog/maho-mail-vs-shortwave          301
+/compare/maho-mail-vs-himalaya            /blog/maho-mail-vs-himalaya           301
+/compare/maho-mail-vs-aerc-mutt-neomutt   /blog/maho-mail-vs-aerc-mutt-neomutt  301
+/compare                                  /blog                                 301
+/compare/                                 /blog                                 301

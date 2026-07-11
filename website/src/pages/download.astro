@@ -1,105 +1,434 @@
 ---
 // biome-ignore-all assist/source/organizeImports: Astro component imports stay grouped for readability.
 // biome-ignore-all lint/correctness/noUnusedImports: Astro frontmatter imports are referenced in the template.
-// biome-ignore-all lint/correctness/noUnusedVariables: Astro frontmatter variables are referenced in the template.
+// biome-ignore-all lint/correctness/noUnusedVariables: Astro frontmatter data is referenced in the template.
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
-import CtaButton from '../components/marketing/CtaButton';
-import SquircleBox from '../components/marketing/SquircleBox.astro';
 import ScrollReveal from '../components/motion/ScrollReveal';
 import JSONLD from '../components/JSONLD.astro';
+import { getSiteUrl } from '../lib/site';
 
 const RELEASE_REPO = import.meta.env.PUBLIC_RELEASE_REPO_URL || 'https://github.com/Project-Maho/release';
-const RELEASE_LIVE = import.meta.env.PUBLIC_RELEASE_LIVE === 'true';
-const productParam = Astro.url.searchParams.get('product');
-const productLabel = productParam === 'mail' ? 'Maho Mail' : 'Maho';
-const target = `${RELEASE_REPO}/releases`;
-const discordInvite = 'https://discord.gg/Ty4J6pMdqg';
+const RELEASE_URL_MACOS = import.meta.env.PUBLIC_RELEASE_URL_MACOS || `${RELEASE_REPO}/releases`;
+const RELEASE_URL_WINDOWS = import.meta.env.PUBLIC_RELEASE_URL_WINDOWS || `${RELEASE_REPO}/releases`;
+const RELEASE_URL_LINUX = import.meta.env.PUBLIC_RELEASE_URL_LINUX || `${RELEASE_REPO}/releases`;
 
-const installSteps = [
+const productParam = Astro.url.searchParams.get('product');
+const isMailProduct = productParam === 'mail';
+const productLabel = isMailProduct ? 'Maho Mail' : 'Maho';
+const discordInvite = 'https://discord.gg/Ty4J6pMdqg';
+const { absoluteUrl } = getSiteUrl(Astro);
+
+const pageTitle = `Download ${productLabel} — Maho`;
+const pageDescription = `Free, cross-platform. ${productLabel} has desktop clients for macOS, Windows, and Linux. Mobile in development.`;
+
+const platformIcons = {
+  macos: `
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="3.5" y="4.5" width="17" height="11" rx="2.5"></rect>
+      <path d="M8 19.5h8"></path>
+      <path d="M10 15.5v4"></path>
+      <path d="M14 15.5v4"></path>
+    </svg>
+  `,
+  windows: `
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M4.5 5.5 11 4v7H4.5z"></path>
+      <path d="M13 4l6.5-1.5v8H13z"></path>
+      <path d="M4.5 12H11v8l-6.5-1.5z"></path>
+      <path d="M13 12h6.5v9.5L13 20z"></path>
+    </svg>
+  `,
+  linux: `
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="3.5" y="5" width="17" height="14" rx="2.5"></rect>
+      <path d="m8 10 2.5 2.5L8 15"></path>
+      <path d="M13 15h3.5"></path>
+    </svg>
+  `,
+} as const;
+
+const platforms = [
   {
-    label: 'Step 1',
-    title: 'Open the DMG',
-    detail: 'Double-click the downloaded file in your Downloads folder.'
+    id: 'macos',
+    name: 'macOS',
+    requirements: 'macOS 12+',
+    downloadLabel: 'Download DMG',
+    downloadUrl: RELEASE_URL_MACOS,
+    icon: platformIcons.macos,
+    installSteps: [
+      {
+        title: 'Open the DMG',
+        detail: 'Double-click the downloaded .dmg file in your Downloads folder.',
+      },
+      {
+        title: 'Drag to Applications',
+        detail: 'Drag the Maho icon into your Applications folder.',
+      },
+      {
+        title: 'Launch',
+        detail: 'Open Maho from Applications or Spotlight. First launch sets up sync.',
+      },
+    ],
   },
   {
-    label: 'Step 2',
-    title: 'Drag to Applications',
-    detail: `Drag the ${productLabel} icon into your Applications folder.`
+    id: 'windows',
+    name: 'Windows',
+    requirements: 'Windows 10+',
+    downloadLabel: 'Download EXE / MSI',
+    downloadUrl: RELEASE_URL_WINDOWS,
+    icon: platformIcons.windows,
+    installSteps: [
+      {
+        title: 'Run the installer',
+        detail: 'Double-click the downloaded .exe file. If Windows SmartScreen prompts, click More info → Run anyway.',
+      },
+      {
+        title: 'Install',
+        detail: 'Follow the installer. Maho installs to %LOCALAPPDATA%\\Maho by default.',
+      },
+      {
+        title: 'Launch',
+        detail: 'Open Maho from Start menu or Desktop shortcut.',
+      },
+    ],
   },
   {
-    label: 'Step 3',
-    title: 'Launch',
-    detail: `Open ${productLabel} from Applications or Spotlight. First launch sets up sync.`
-  }
-];
+    id: 'linux',
+    name: 'Linux',
+    requirements: 'Ubuntu 22.04+/glibc 2.35+',
+    downloadLabel: 'Download AppImage',
+    downloadUrl: RELEASE_URL_LINUX,
+    icon: platformIcons.linux,
+    installSteps: [
+      {
+        title: 'Make it executable',
+        detail: 'In your Downloads folder or wherever you saved the AppImage:',
+        command: 'chmod +x Maho-*.AppImage',
+      },
+      {
+        title: 'Run',
+        detail: 'Double-click the AppImage, or execute it:',
+        command: './Maho-*.AppImage',
+      },
+      {
+        title: 'Optional: integrate',
+        detail: 'Use AppImageLauncher or your desktop\'s AppImage helper to add a shortcut and mimetypes.',
+      },
+    ],
+  },
+] as const;
 
 const ld = {
   '@context': 'https://schema.org',
   '@type': 'SoftwareApplication',
-  name: 'Maho',
-  applicationCategory: 'BrowserApplication',
-  operatingSystem: 'macOS 12 or later',
-  downloadUrl: target,
+  name: productLabel,
+  applicationCategory: isMailProduct ? 'CommunicationApplication' : 'BrowserApplication',
+  operatingSystem: 'macOS 12+, Windows 10+, Linux (Ubuntu 22.04+)',
+  downloadUrl: [RELEASE_URL_MACOS, RELEASE_URL_WINDOWS, RELEASE_URL_LINUX],
+  url: absoluteUrl('/download'),
   offers: {
     '@type': 'Offer',
     price: '0',
-    priceCurrency: 'USD'
-  }
+    priceCurrency: 'USD',
+  },
 };
 ---
 
-<BaseLayout title={RELEASE_LIVE ? `Download ${productLabel} for macOS — Maho` : 'Maho — Coming Soon'} description={RELEASE_LIVE ? `Download ${productLabel} for macOS 12+. Free forever. iPhone and Android in development.` : 'Maho launches soon. Join our Discord to hear when.'} ogImage="/og/download.png">
-  {RELEASE_LIVE && (
-    <>
-      <JSONLD data={ld} />
-      <meta http-equiv="refresh" content={`0; url=${target}`} slot="head" />
-      <script is:inline define:vars={{ target }}>
-        // Belt-and-suspenders: client-side redirect in case meta-refresh fails.
-        setTimeout(function() { window.location.replace(target); }, 100);
-      </script>
-    </>
-  )}
+<BaseLayout title={pageTitle} description={pageDescription} ogImage="/og/download.png">
+  <JSONLD data={ld} />
+
+  <script is:inline slot="head">
+    (function() {
+      var ua = navigator.userAgent;
+      var platform = navigator.platform || '';
+      var os = null;
+      if (/Mac|iPhone|iPad|iPod/i.test(platform) || /Mac OS X/i.test(ua)) os = 'macos';
+      else if (/Win/i.test(platform) || /Windows/i.test(ua)) os = 'windows';
+      else if (/Linux|X11/i.test(platform) || /Linux/i.test(ua)) os = 'linux';
+      if (os) document.documentElement.setAttribute('data-detected-os', os);
+    })();
+  </script>
+
   <div class="min-h-screen bg-background text-foreground">
-    <Nav />
-    <main id="main" class="max-w-2xl mx-auto px-6 pt-32 pb-24 text-center">
-      {!RELEASE_LIVE ? (
-        <div class="py-12">
-          <h1 class="heading-serif text-4xl sm:text-5xl mb-6">Maho launches soon.</h1>
-          <p class="text-muted-foreground leading-relaxed text-lg mb-8">The macOS build ships when it ships. No waitlist. Join our Discord to hear when.</p>
-          <a href={discordInvite} class="inline-flex items-center justify-center rounded-full bg-foreground text-background px-6 py-3 text-sm font-medium hover:opacity-90 transition">Join Discord</a>
-        </div>
-      ) : (
-        <>
-          <h1 class="heading-serif text-4xl sm:text-5xl mb-6">
-            Your download is starting.
-          </h1>
-          <p class="text-muted-foreground leading-relaxed text-lg mb-8">
-            Redirecting you to the latest {productLabel} release. If nothing happens within a few seconds:
-          </p>
-          <CtaButton client:load href={target} variant="primary" className="mb-12">
-            Download now
-          </CtaButton>
+    <Nav activeProduct={isMailProduct ? 'mail' : 'browser'} />
 
-          <div class="mt-16 grid grid-cols-1 gap-6 text-left sm:grid-cols-3">
-            {installSteps.map((step, index) => (
-              <ScrollReveal client:visible variant="slide" delayMs={index * 100} className="h-full">
-                <SquircleBox radius="lg" class="h-full border border-border bg-card p-6">
-                  <p class="mb-3 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">{step.label}</p>
-                  <p class="mb-2 text-sm font-medium text-foreground">{step.title}</p>
-                  <p class="text-xs leading-relaxed text-muted-foreground">{step.detail}</p>
-                </SquircleBox>
-              </ScrollReveal>
-            ))}
+    <main id="main" class="pt-24 sm:pt-28 md:pt-32">
+      <section class="container-marketing pad-x-ladder section-rhythm-tall">
+        <ScrollReveal
+          client:visible
+          variant="fade"
+          className="download-shell relative overflow-hidden rounded-squircle-xl border border-border p-8 squircle-enhanced sm:p-10 lg:p-14"
+        >
+          <div class="download-orb download-orb-left" aria-hidden="true"></div>
+          <div class="download-orb download-orb-right" aria-hidden="true"></div>
+
+          <div class="relative z-10">
+            <header class="mx-auto max-w-3xl text-center">
+              <p class="landing-eyebrow mb-4 text-muted-foreground">
+                Download
+              </p>
+
+              {isMailProduct && (
+                <p class="mb-4 text-sm font-medium tracking-tight text-foreground/90">
+                  {productLabel}
+                </p>
+              )}
+
+              <h1 class="heading-serif text-4xl leading-[0.98] sm:text-5xl lg:text-6xl">
+                Choose your platform.
+              </h1>
+
+              <p class="mx-auto mt-6 max-w-3xl text-balance text-lg leading-relaxed text-muted-foreground">
+                Free, cross-platform. {productLabel} has desktop clients for macOS, Windows, and Linux. Mobile in development.
+              </p>
+
+              <p class="mt-5 text-sm leading-relaxed text-muted-foreground">
+                We’ll highlight the best match for your device automatically.
+              </p>
+            </header>
+
+            <div class="mt-12 grid gap-4 md:grid-cols-3 lg:gap-6">
+              {platforms.map((platform, index) => (
+                <ScrollReveal client:visible variant="slide" delayMs={index * 100} className="h-full">
+                  <article data-platform={platform.id} class="download-platform-card h-full">
+                    <div class="download-platform-shell flex h-full flex-col rounded-squircle-lg border border-border p-6 squircle-enhanced sm:p-7">
+                      <div class="flex items-start justify-between gap-4">
+                        <span class="download-platform-icon" set:html={platform.icon} />
+                        <span class="download-platform-chip rounded-full border border-border px-3 py-1 text-[0.68rem] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                          Ready
+                        </span>
+                      </div>
+
+                      <div class="mt-8">
+                        <h2 class="text-2xl font-medium tracking-tight text-foreground">
+                          {platform.name}
+                        </h2>
+                        <p class="mt-2 text-sm leading-relaxed text-muted-foreground">
+                          {platform.requirements}
+                        </p>
+                        <p class="download-platform-match mt-4 text-[0.68rem] font-medium uppercase tracking-[0.18em] text-foreground">
+                          Recommended for this device
+                        </p>
+                      </div>
+
+                      <div class="mt-auto pt-8">
+                        <a
+                          href={platform.downloadUrl}
+                          class="download-platform-cta cta-btn cta-btn-ghost w-full justify-center"
+                          aria-label={`Download ${productLabel} for ${platform.name}`}
+                        >
+                          {platform.downloadLabel}
+                        </a>
+                      </div>
+                    </div>
+                  </article>
+                </ScrollReveal>
+              ))}
+            </div>
           </div>
+        </ScrollReveal>
+      </section>
 
-          <p class="text-xs text-muted-foreground mt-16 leading-relaxed">
-            macOS 12 or later. iPhone and Android are in development — <a href={discordInvite} class="underline hover:text-foreground transition-colors">join our Discord</a> for updates.
+      <section class="container-marketing pad-x-ladder pb-8">
+        <div class="mx-auto max-w-3xl text-center">
+          <p class="landing-eyebrow mb-4 text-muted-foreground">Install</p>
+          <h2 class="heading-serif text-3xl leading-tight sm:text-4xl lg:text-5xl">
+            Install in three moves.
+          </h2>
+          <p class="mx-auto mt-4 max-w-2xl text-base leading-relaxed text-muted-foreground sm:text-lg">
+            Pick your platform, grab the build, and follow the matching setup flow below.
           </p>
-        </>
-      )}
+        </div>
+      </section>
+
+      <section class="container-marketing pad-x-ladder pb-10">
+        <div class="grid gap-6 lg:grid-cols-3">
+          {platforms.map((platform, index) => (
+            <ScrollReveal client:visible variant="slide" delayMs={index * 120} className="h-full">
+              <article class="h-full rounded-squircle-lg border border-border bg-card p-6 squircle-enhanced sm:p-7">
+                <div class="mb-6 flex items-center gap-4">
+                  <span class="download-platform-icon" set:html={platform.icon} />
+                  <div>
+                    <h3 class="text-xl font-medium tracking-tight text-foreground">
+                      {platform.name}
+                    </h3>
+                    <p class="mt-1 text-sm text-muted-foreground">
+                      {platform.downloadLabel}
+                    </p>
+                  </div>
+                </div>
+
+                <ol class="space-y-5">
+                  {platform.installSteps.map((step: any, stepIndex) => (
+                    <li class="border-t border-border/70 pt-5 first:border-t-0 first:pt-0">
+                      <div class="flex items-start gap-4">
+                        <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-background text-xs font-medium text-foreground">
+                          {stepIndex + 1}
+                        </span>
+                        <div class="min-w-0">
+                          <p class="text-sm font-medium text-foreground">
+                            {step.title}
+                          </p>
+                          <p class="mt-2 text-sm leading-relaxed text-muted-foreground">
+                            {step.detail}
+                          </p>
+                          {step.command && (
+                            <code class="mt-3 block overflow-x-auto rounded-squircle-md border border-border bg-background px-3 py-2 text-xs text-foreground squircle-enhanced">
+                              {step.command}
+                            </code>
+                          )}
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              </article>
+            </ScrollReveal>
+          ))}
+        </div>
+      </section>
+
+      <section class="container-marketing pad-x-ladder pb-24">
+        <div class="rounded-squircle-lg border border-border bg-card px-6 py-5 text-center squircle-enhanced">
+          <p class="text-sm leading-relaxed text-muted-foreground sm:text-base">
+            iPhone and Android in development.{' '}
+            <a href={discordInvite} class="text-foreground underline transition-opacity hover:opacity-75">
+              DM me on Discord for updates.
+            </a>
+          </p>
+        </div>
+      </section>
     </main>
+
     <Footer />
   </div>
 </BaseLayout>
+
+<style is:global>
+  .download-shell {
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--card) 94%, transparent), color-mix(in srgb, var(--background) 86%, transparent)),
+      color-mix(in srgb, var(--card) 92%, transparent);
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--foreground) 4%, transparent) inset,
+      0 2rem 5rem color-mix(in srgb, var(--background) 58%, transparent);
+  }
+
+  .download-orb {
+    position: absolute;
+    inset-block-start: auto;
+    block-size: 18rem;
+    inline-size: 18rem;
+    border-radius: 9999px;
+    filter: blur(2rem);
+    opacity: 0.2;
+    pointer-events: none;
+  }
+
+  .download-orb-left {
+    inset-inline-start: -4rem;
+    inset-block-start: -5rem;
+    background: radial-gradient(circle, color-mix(in srgb, var(--foreground) 28%, transparent) 0%, transparent 68%);
+  }
+
+  .download-orb-right {
+    inset-inline-end: -5rem;
+    inset-block-end: -7rem;
+    background: radial-gradient(circle, color-mix(in srgb, var(--muted-foreground) 42%, transparent) 0%, transparent 72%);
+  }
+
+  .download-platform-shell {
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--card) 94%, transparent), color-mix(in srgb, var(--card) 88%, var(--background) 12%));
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--foreground) 3%, transparent) inset,
+      0 1.25rem 2.5rem color-mix(in srgb, var(--background) 42%, transparent);
+    transition:
+      border-color var(--duration-medium, 200ms) var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+      box-shadow var(--duration-medium, 200ms) var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+      transform var(--duration-medium, 200ms) var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+      background var(--duration-medium, 200ms) var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1));
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .download-platform-card:hover .download-platform-shell {
+      transform: translateY(-0.125rem);
+      border-color: color-mix(in srgb, var(--foreground) 16%, var(--border));
+    }
+  }
+
+  .download-platform-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    inline-size: 3rem;
+    block-size: 3rem;
+    border-radius: calc(0.75rem * var(--squircle-factor, 1.4));
+    border: 1px solid color-mix(in srgb, var(--foreground) 8%, var(--border));
+    background: color-mix(in srgb, var(--muted) 72%, transparent);
+    color: var(--foreground);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 4%, transparent) inset;
+  }
+
+  .download-platform-icon svg {
+    inline-size: 1.25rem;
+    block-size: 1.25rem;
+  }
+
+  .download-platform-chip,
+  .download-platform-cta {
+    transition:
+      border-color var(--duration-medium, 200ms) var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+      background-color var(--duration-medium, 200ms) var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+      color var(--duration-medium, 200ms) var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+      box-shadow var(--duration-medium, 200ms) var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1));
+  }
+
+  .download-platform-match {
+    display: none;
+  }
+
+  html[data-detected-os="macos"] .download-platform-card[data-platform="macos"] .download-platform-shell,
+  html[data-detected-os="windows"] .download-platform-card[data-platform="windows"] .download-platform-shell,
+  html[data-detected-os="linux"] .download-platform-card[data-platform="linux"] .download-platform-shell {
+    border-color: color-mix(in srgb, var(--foreground) 26%, var(--border));
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--card) 76%, var(--foreground) 24%), color-mix(in srgb, var(--card) 92%, var(--background) 8%));
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--foreground) 18%, transparent),
+      0 1.75rem 3.5rem color-mix(in srgb, var(--background) 52%, transparent);
+  }
+
+  html[data-detected-os="macos"] .download-platform-card[data-platform="macos"] .download-platform-chip,
+  html[data-detected-os="windows"] .download-platform-card[data-platform="windows"] .download-platform-chip,
+  html[data-detected-os="linux"] .download-platform-card[data-platform="linux"] .download-platform-chip {
+    border-color: color-mix(in srgb, var(--foreground) 18%, transparent);
+    background: color-mix(in srgb, var(--foreground) 12%, transparent);
+    color: var(--foreground);
+  }
+
+  html[data-detected-os="macos"] .download-platform-card[data-platform="macos"] .download-platform-match,
+  html[data-detected-os="windows"] .download-platform-card[data-platform="windows"] .download-platform-match,
+  html[data-detected-os="linux"] .download-platform-card[data-platform="linux"] .download-platform-match {
+    display: block;
+  }
+
+  html[data-detected-os="macos"] .download-platform-card[data-platform="macos"] .download-platform-cta,
+  html[data-detected-os="windows"] .download-platform-card[data-platform="windows"] .download-platform-cta,
+  html[data-detected-os="linux"] .download-platform-card[data-platform="linux"] .download-platform-cta {
+    background: var(--foreground);
+    color: var(--background);
+    border-color: transparent;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 12%, transparent);
+  }
+
+  @media (max-width: 47.999rem) {
+    .download-orb {
+      block-size: 12rem;
+      inline-size: 12rem;
+      opacity: 0.16;
+    }
+  }
+</style>

@@ -1,0 +1,109 @@
+---
+title: "Maho Mail vs himalaya: Which Email Client Is Better in 2026?"
+description: "Maho Mail vs himalaya. Both give you a CLI. Only one adds a desktop GUI, an MCP server for AI agents, and built-in AI features in a single package."
+date: 2026-04-12
+tags:
+  - mail
+  - comparison
+  - cli
+excerpt: "Both have a CLI. Only one has everything else."
+authors:
+  - name: Maho Team
+---
+
+![A cream terminal slab for the himalaya CLI, next to a joined terminal-and-envelope with persimmon accent for Maho Mail's CLI + GUI + MCP.](/assets/blog/maho-mail-vs-himalaya/hero.png)
+
+Both have a CLI. Only one has everything else.
+
+## Quick verdict
+
+**Choose himalaya** if you want a mature, focused CLI email client with broad backend support including Maildir and Notmuch. **Choose Maho Mail** if you want the CLI plus a desktop GUI, MCP server for AI agents, and built-in AI features in one package.
+
+## Side-by-side comparison
+
+| Feature | Maho Mail | himalaya |
+| --- | --- | --- |
+| Desktop GUI | Yes, native desktop app | No |
+| CLI | Yes, JSON output, Unix pipes | Yes, mature, well-documented |
+| MCP Server | Yes, AI agents connect via stdio | No |
+| AI Built In | Yes, summarize, draft, classify | No |
+| Backend Support | IMAP, SMTP | IMAP, Maildir, Notmuch, SMTP, Sendmail |
+| Local & Private | Yes | Yes |
+| Open Source | No, proprietary | Yes |
+| Written In | Rust + TypeScript | Rust |
+
+## Category comparison
+
+### CLI experience
+
+himalaya has been refining its CLI for longer. It supports multiple backends, IMAP, Maildir, Notmuch for reading, SMTP and Sendmail for sending, which makes it more flexible if you work with local mail storage or complex mail server setups.
+
+Maho Mail's CLI is focused on IMAP/SMTP with JSON-first output designed for piping into modern tools. Commands like `maho search --from alice --json` return structured data that works cleanly with jq, scripting languages, and AI pipelines. If backend breadth matters most, himalaya wins. If structured output and AI integration matter more, Maho has the edge.
+
+### Beyond the CLI
+
+This is the fundamental difference. himalaya is a CLI tool. Maho Mail is a CLI tool, a desktop application, and an MCP server that share one local database.
+
+With Maho, you can triage email in the desktop app, automate workflows from the terminal, and let AI agents handle routine tasks through the MCP server, all working against the same data. himalaya does one thing well. Maho tries to do three things in one.
+
+### AI & agent support
+
+himalaya has no built-in AI features and no agent protocol. You could pipe its output to an LLM, but there is no structured integration point.
+
+Maho Mail includes an MCP server that lets AI tools like Claude, Cursor, or any MCP-compatible agent read, search, and draft email. It also has built-in AI features, summarization, drafting, classification, translation, using OpenAI, Anthropic, or Ollama.
+
+### Maturity & reliability
+
+himalaya has been available longer, has more contributors, and has been tested by more users in production. Its Rust codebase is well-structured and actively maintained. Maho Mail is newer. Both projects are under active development, but himalaya has the track record advantage.
+
+## Choose Maho Mail if you...
+
+- Want a desktop GUI alongside your CLI
+- Need AI agents to interact with your inbox via MCP
+- Want built-in AI for summarization and drafting
+- Prefer one tool for visual, terminal, and agent workflows
+
+## Choose himalaya if you...
+
+- Need Maildir, Notmuch, or Sendmail backend support
+- Want a pure CLI tool with no GUI overhead
+- Prefer a more mature, battle-tested project
+- Value broader mail protocol coverage over additional interfaces
+
+## Frequently asked questions
+
+### Did Maho Mail take inspiration from himalaya?
+
+Yes. himalaya pioneered the idea of a standalone CLI email client that works with structured output and multiple backends. Maho Mail builds on that philosophy by adding a desktop GUI, MCP server for AI agents, and built-in AI features alongside the CLI.
+
+### Does himalaya have a GUI?
+
+No. himalaya is a CLI-only tool. There have been community discussions about GUI frontends, but the project itself is terminal-only. Maho Mail includes a native desktop application alongside its CLI.
+
+### Which has better IMAP support?
+
+himalaya supports IMAP, Maildir, Notmuch, and SMTP/Sendmail backends, giving it broader protocol coverage. Maho Mail currently supports IMAP and SMTP. If you need Maildir or Notmuch integration, himalaya is the better choice today.
+
+### Can I use himalaya with AI tools?
+
+himalaya outputs structured data that could be piped to AI tools via shell commands, but it has no built-in AI features or MCP server. Maho Mail provides a native MCP server that AI agents can connect to directly, plus built-in AI for summarization, drafting, and classification.
+
+### Is Maho open source like himalaya?
+
+No. himalaya is open source under MIT; Maho is proprietary but free forever. Both projects share a commitment to local-first email, but they differ on source distribution. himalaya is more mature and has been available longer.
+
+## Ready to try Maho Mail?
+
+GUI for humans. CLI for developers. MCP for agents. [Learn more about Maho Mail](/mail).
+
+## See also
+
+- [Maho Mail vs aerc, mutt, neomutt](/blog/maho-mail-vs-aerc-mutt-neomutt/)
+- [Maho Mail vs Apple Mail](/blog/maho-mail-vs-apple-mail/)
+- [Maho Mail vs Shortwave](/blog/maho-mail-vs-shortwave/)
+- [Maho Mail vs Spark](/blog/maho-mail-vs-spark/)
+- [Maho Mail vs Superhuman](/blog/maho-mail-vs-superhuman/)
+- [Maho Mail vs Thunderbird](/blog/maho-mail-vs-thunderbird/)
+- [Maho Mail GUI Guide](/mail/gui/)
+- [Maho Mail MCP Server](/mail/mcp/)
+- [Maho Mail API Overview](/api/)

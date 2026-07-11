@@ -21,6 +21,8 @@ That is the short version. The interesting part is what changes when a product m
 
 ## The short definition
 
+BYOK allows direct utilization of model provider endpoints. For cost calculations, refer to the [OpenAI API Pricing](https://openai.com/api/pricing/) page.
+
 A BYOK tool exposes a place to paste a model provider's API key. When the tool needs to call a model, it builds the request, attaches your key, and sends it directly to the provider. Common providers are Anthropic, OpenAI, OpenRouter, Together, Groq, and a long tail of others. Some BYOK tools also accept local endpoints like Ollama, LM Studio, or a self-hosted vLLM, in which case there is no key, just a URL.
 
 The phrase is most often used in contrast to a managed AI tier, where the vendor pays for inference and rolls the cost into a subscription.
@@ -32,6 +34,8 @@ BYOK is older than the LLM wave. Early SaaS apps used the phrase to mean "bring 
 The current usage came out of 2023, when AI features in productivity apps hit two walls. Token cost made flat-fee subscriptions unprofitable for power users. Data residency made enterprise buyers refuse to send sensitive content through a vendor's contract with OpenAI when their company already had its own. BYOK answered both. By 2026, it is the default in tools that target developers, and a growing pattern in tools that target everyone else.
 
 ## What BYOK guarantees, and what it does not
+
+Securing API endpoints locally is critical. See the [OWASP API Security Top 10](https://owasp.org/www-project-api-security/) guidelines for API key safety standards.
 
 The marketing around BYOK is loose. Here is what the architecture actually buys you, and what it does not.
 
@@ -50,6 +54,8 @@ The first two are the wins. The last three are where the work still has to happe
 ![BYOK request path vs managed AI request path](/assets/blog/what-is-byok-bring-your-own-key/body-1.png)
 
 ## Common implementation traps
+
+To obtain your own developer keys, visit the [Anthropic API Console](https://console.anthropic.com/).
 
 A handful of patterns turn a BYOK feature into theatre.
 

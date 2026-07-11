@@ -11,6 +11,7 @@ action("bundle_react") {
     "maho_welcome.mojom-webui.js.d.ts",
     "react/app.tsx",
     "react/pages/welcome-splash.tsx",
+    "react/pages/appearance.tsx",
     "react/pages/import-data.tsx",
     "react/pages/search-engine.tsx",
     "react/pages/essentials.tsx",

@@ -31,6 +31,12 @@ An agentic browser is supposed to close that seam. The rest of this post is what
 
 ## Stage 1: search and gather
 
+### Formulating search queries
+Using the LLM to refine keywords for the tool calls.
+
+### Filtering redundant results
+Removing duplicates and low-relevance URLs before context ingestion.
+
 The user types "postgres connection pool tuning" into the address bar. The browser does what every browser does: runs the search, returns results.
 
 This stage is not where the agent earns its money. The user picks the four results that look promising. The agent could rank them, and a future version probably will, but ranking is a different feature. For this workflow, four tabs are open by the user, in their order, with their titles intact.
@@ -42,6 +48,12 @@ A user who has not opened the side panel yet at this point has zero agent activi
 By the end of stage 1, the user has four tabs open and zero permission prompts. The agent has not done anything that needs permission yet, because the agent has not been asked to do anything.
 
 ## Stage 2: summarize with page context
+
+### Extractive summarization
+Capturing core paragraphs rather than abstract generation.
+
+### Headings structure indexing
+Building an outline from H2/H3 elements on the target page.
 
 The user clicks into the PgBouncer guide tab and opens the side panel. They type: "What are the trade-offs between transaction pooling and session pooling?"
 

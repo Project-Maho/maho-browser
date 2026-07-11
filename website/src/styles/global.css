@@ -52,6 +52,46 @@
     font-style: italic;
   }
 
+  .marketing-scope .landing-display {
+    font-family: var(--font-serif);
+    font-style: italic;
+    font-size: clamp(3rem, 6vw + 1rem, 6rem);
+    line-height: 0.96;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+  }
+
+  .marketing-scope .landing-section-title {
+    font-family: var(--font-serif);
+    font-style: normal;
+    font-size: clamp(2rem, 1.35rem + 2vw, 3rem);
+    line-height: 1.02;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+  }
+
+  .marketing-scope .landing-subsection-title {
+    font-family: var(--font-sans, sans-serif);
+    font-size: clamp(1.125rem, 1rem + 0.5vw, 1.5rem);
+    font-weight: 500;
+    line-height: 1.15;
+    letter-spacing: -0.015em;
+  }
+
+  .marketing-scope .landing-body {
+    font-family: var(--font-sans, sans-serif);
+    font-size: 1rem;
+    line-height: 1.7;
+  }
+
+  .marketing-scope .landing-eyebrow {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.75rem;
+    line-height: 1;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+  }
+
   /* Blog comparison tables: scroll horizontally instead of clipping cell text. */
   :is(article, .sl-markdown-content) > table,
   .sl-markdown-content table {
@@ -92,4 +132,3 @@
   }
 
 }
-

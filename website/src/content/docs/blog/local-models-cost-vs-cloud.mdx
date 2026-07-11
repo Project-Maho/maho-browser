@@ -34,6 +34,12 @@ We are also going to ignore one-time costs on both sides. Hardware depreciation 
 
 ## Local: hardware assumptions, kWh per 1M tokens
 
+### Mac Studio M2 Ultra power profile
+Power draws range from 20W idle to 150W under maximum GPU model execution.
+
+### Energy efficiency vs GPU load
+Evaluating how quantization changes power usage over prolonged runs.
+
 Assume an M3 Pro MacBook with sufficient unified memory to run an 8 to 13 billion parameter model in 4-bit quantization. Numbers:
 
 - **Idle draw**: roughly 5 watts.
@@ -56,6 +62,12 @@ Two caveats:
 For the setup walkthrough, see [Ollama with Maho, step by step](/blog/ollama-with-maho-step-by-step/).
 
 ## Cloud: API price per 1M tokens, latency floor
+
+### Pay-as-you-go hosted models
+Hosted APIs charge exclusively for tokens used, bypassing local hardware amortization.
+
+### Cold-start latency overhead
+Remote API requests add network overhead and scheduling queues.
 
 Public list prices for frontier models as of 2026-Q2 (approximate, US dollars, per 1M tokens):
 

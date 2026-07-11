@@ -16,7 +16,7 @@ export function SearchEngineSidebar({store}: {store: MahoWelcomeStore}) {
   );
 }
 
-export function SearchEngineContent({engines, selectedEngine, onSelect, store}: Props & {store: MahoWelcomeStore}) {
+export function SearchEngineContent({engines, selectedEngine, onSelect}: Props) {
   const filteredEngines = engines.filter(engine => {
     const name = engine.name?.toLowerCase() ?? '';
     return !name.includes('wikipedia') &&
@@ -44,21 +44,11 @@ export function SearchEngineContent({engines, selectedEngine, onSelect, store}: 
       {filteredEngines.map(engine => {
         let engineName = engine.name ?? '';
         const keyword = engine.keyword?.toLowerCase() ?? '';
-        const trimmedName = engineName.trim();
-        const isKo = store.getString('IDS_MAHO_WELCOME_CTA_NEXT') === '다음';
 
-        if (isKo) {
-          if (keyword.includes('naver') || trimmedName === 'Naver') {
-            engineName = '네이버';
-          } else if (keyword.includes('daum') || trimmedName === 'Daum') {
-            engineName = '다음';
-          }
-        } else {
-          if (keyword.includes('naver') || trimmedName === '네이버' || trimmedName.includes('네이버')) {
-            engineName = 'Naver';
-          } else if (keyword.includes('daum') || trimmedName === '다음' || trimmedName.includes('다음')) {
-            engineName = 'Daum';
-          }
+        if (keyword.includes('naver')) {
+          engineName = 'Naver';
+        } else if (keyword.includes('daum')) {
+          engineName = 'Daum';
         }
 
         return (

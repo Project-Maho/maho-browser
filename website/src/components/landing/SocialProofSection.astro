@@ -13,17 +13,17 @@ interface Props {
 }
 
 const defaultTickerItems = [
-  'SHIPPING SOON',
   'PRIVACY-FIRST',
-  'MACOS 12+',
-  'YOUR AI · YOUR DATA · YOUR BROWSER',
   'FREE FOREVER',
+  'NO TELEMETRY',
+  'BYOK OR MANAGED AI',
+  'WEEKLY RELEASES',
 ];
 
 const {
   tickerItems = defaultTickerItems,
   testimonialBadges = [],
-  eyebrow = 'In the works',
+  eyebrow = 'By design',
 } = Astro.props;
 
 const normalizedTickerItems = tickerItems.filter((item): item is string => item.trim().length > 0);
@@ -33,9 +33,9 @@ const shouldRender = normalizedTickerItems.length > 0 || normalizedTestimonialBa
 
 {shouldRender && (
   <ScrollReveal client:visible variant="fade">
-    <section class="section-rhythm border-t border-border">
+    <section class="border-t border-border py-5 sm:py-6">
       <div class="max-w-6xl mx-auto pad-x-ladder">
-        <p class="font-mono uppercase tracking-mono-loose text-xs text-muted-foreground mb-6 text-center">{eyebrow}</p>
+        <p class="landing-eyebrow mb-4 text-center text-muted-foreground">{eyebrow}</p>
         {normalizedTickerItems.length > 0 && <MarqueeTicker items={normalizedTickerItems} speed="slow" />}
         {normalizedTestimonialBadges.length > 0 && (
           <div class="flex flex-wrap gap-3 justify-center mt-8">

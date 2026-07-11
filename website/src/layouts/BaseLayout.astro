@@ -20,7 +20,9 @@ const ogImageUrl = new URL(ogImage ?? '/og-image.png', Astro.site).href;
 <html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/logo.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{title}</title>
     <meta name="description" content={description} />
@@ -42,7 +44,7 @@ const ogImageUrl = new URL(ogImage ?? '/og-image.png', Astro.site).href;
     <meta property="og:locale" content="en_US" />
     <meta name="theme-color" content="#0a0a0a" />
     <link rel="canonical" href={canonicalUrl.href} />
-    <link rel="apple-touch-icon" href="/logo.svg" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="alternate" type="application/rss+xml" title="Maho Blog RSS" href="/blog/rss.xml" />
     <script is:inline>
       var t=localStorage.getItem("maho-theme")||localStorage.getItem("starlight-theme");if(t==="light"){document.documentElement.classList.replace("dark","light")}if(t){localStorage.setItem("maho-theme",t);localStorage.setItem("starlight-theme",t)}

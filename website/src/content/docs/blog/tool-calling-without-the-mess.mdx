@@ -23,6 +23,8 @@ This post is the long version of how we honor that contract inside Maho's side p
 
 ## Tool calling is not a feature, it is a contract
 
+To build native UI interfaces around tools, we use [Chromium Views Layout Guide](https://ui.chromium.org/docs/views) patterns.
+
 When a model calls a tool, four parties are on the line. The model produces a structured request. The host validates it, runs the permission check, executes the call, and returns the result. The user is the one who granted permission, and is the one who will live with the consequences. The destination, if any, is the third-party service the call lands on.
 
 The contract has three clauses.
@@ -36,6 +38,12 @@ Third, the permission gate is honest. A tool that asks once and then runs foreve
 A tool that breaks any of those three clauses is a liability. The host owes the user a tool surface that does not break them. The model is not responsible for keeping the contract. The host is.
 
 ## The narrow-tool principle
+
+### Input schema validation
+Every tool call validates its arguments against a JSON schema.
+
+### Single-responsibility tools
+Tools should do exactly one thing to keep authorization simple and auditable.
 
 The default temptation is to ship wide tools. A `do_browser_thing` tool that takes a freeform string and figures out what to do. A `query_database` tool that takes any SQL. A `run_command` tool that takes a shell line. Wide tools are easy to ship and easy to break.
 
@@ -57,6 +65,12 @@ The cost of narrow tools is more tools. Nine where you could have shipped two. W
 
 ## Composing across tools, without an orchestrator
 
+### Output piping in shell
+Users can pipe output from one CLI tool to another using standard Unix patterns.
+
+### Manual tool chaining
+The user remains in the driver's seat, approving subsequent steps.
+
 Once tools are narrow, you compose. The model writes a plan, calls tool A, reads the result, calls tool B. The composition is the model's job. There is no orchestrator on top.
 
 This decision is contested. Some agentic products ship a planner-orchestrator layer that decomposes a goal into a tool chain. We do not. The reason is that the orchestrator becomes the bug surface. When the chain runs wrong, you cannot tell whether the model picked the wrong step or the orchestrator picked the wrong tool. The audit log gets two layers and no clear attribution.
@@ -72,6 +86,8 @@ The audit log is one stream. Every call, with timestamp, input, output, and perm
 The cost is that the model has to be smart enough to plan. The 2026 frontier models are. Smaller models compose less reliably, which is one of the failure modes we cover later.
 
 ## The tools we shipped, and the ones we cut
+
+Restricting writes to browser origins prevents unauthorized operations. Read [W3C Web Application Security](https://www.w3.org/2011/webappsec/) on web origin sandboxing.
 
 Maho ships nine built-in tools. We started with twenty-three.
 
@@ -92,6 +108,8 @@ We cut one tool because it was dangerous. `eval_javascript`. A tool that runs ar
 The pattern is that built-in tools should act on the browser surface and stop. Anything else is an MCP server.
 
 ## Tool authorship for power users
+
+Custom tools can register via the [MDN Web Permissions API](https://developer.mozilla.org/en-US/docs/Web/API/Permissions_API) interface.
 
 If you want a tool we did not ship, you write an MCP server. The browser is the host. Your server is the source.
 

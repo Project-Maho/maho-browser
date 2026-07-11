@@ -1,3 +1,6 @@
+import { CtaButton } from "../marketing/CtaButton";
+import { ScrollReveal } from "../motion/ScrollReveal";
+
 export type PricingTier = {
   name: string;
   badge?: string;
@@ -9,7 +12,7 @@ export type PricingTier = {
 };
 
 export type PricingConfig = {
-  badge: string;
+  eyebrow: string;
   headline: string;
   body: string;
   tiers: PricingTier[];
@@ -22,52 +25,73 @@ type PricingSectionProps = {
 
 export function PricingSection({ config }: PricingSectionProps) {
   return (
-    <section className="py-24 px-6 border-t border-border">
-      <div className="max-w-6xl mx-auto">
-        <span className="inline-block border border-border text-muted-foreground text-xs px-3 py-1 rounded-full mb-6">
-          {config.badge}
-        </span>
-        <h2 className="heading-serif text-4xl sm:text-5xl mb-6">{config.headline}</h2>
-        <p className="text-muted-foreground leading-relaxed text-lg max-w-3xl mb-16">{config.body}</p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-px bg-border max-w-5xl">
-          {config.tiers.map((tier) => {
-            const isFeatured = tier.badge === "Popular";
+    <section className="section-rhythm pad-x-ladder border-t border-border bg-background text-foreground">
+      <div className="container-marketing space-y-10 sm:space-y-14">
+        <ScrollReveal variant="slide">
+          <div className="max-w-3xl space-y-4">
+            <p className="landing-eyebrow text-muted-foreground">{config.eyebrow}</p>
+            <h2 className="landing-section-title">{config.headline}</h2>
+            <p className="landing-body max-w-3xl text-muted-foreground sm:text-lg">{config.body}</p>
+          </div>
+        </ScrollReveal>
+
+        <div className="grid gap-6 lg:grid-cols-3">
+          {config.tiers.map((tier, index) => {
+            const isFeatured = tier.badge?.toLowerCase() === "popular";
+
             return (
-              <div key={tier.name} className={`bg-background p-10 ${isFeatured ? "ring-2 ring-foreground ring-inset" : ""}`}>
-                <div className="flex items-center gap-2 mb-2">
-                  <h3 className="text-foreground font-medium text-lg">{tier.name}</h3>
-                  {tier.badge && (
-                    <span className="inline-block rounded-full bg-foreground px-3 py-1 text-xs font-medium uppercase tracking-[0.18em] text-background">
-                      {tier.badge}
-                    </span>
+              <ScrollReveal key={tier.name} variant="fade" delayMs={index * 70} className="h-full">
+                <article
+                  className={`rounded-squircle-xl squircle-enhanced flex h-full min-h-[29rem] flex-col border p-6 sm:p-7 ${
+                    isFeatured
+                      ? "border-foreground/40 bg-card ring-1 ring-foreground/40"
+                      : "border-border bg-card/70"
+                  }`}
+                >
+                  <div className="space-y-4">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <h3 className="landing-subsection-title text-foreground">{tier.name}</h3>
+                      {tier.badge && (
+                        <span className="landing-eyebrow rounded-full border border-foreground/20 bg-foreground px-3 py-1 text-[0.65rem] text-background">
+                          {tier.badge}
+                        </span>
+                      )}
+                    </div>
+
+                    <p className="flex items-end gap-1 text-foreground">
+                      <span className="landing-section-title text-[2.5rem] sm:text-[2.75rem]">{tier.price}</span>
+                      {tier.suffix && <span className="landing-body pb-2 text-muted-foreground">{tier.suffix}</span>}
+                    </p>
+
+                    <p className="landing-body text-muted-foreground">{tier.description}</p>
+                  </div>
+
+                  <ul className="mt-8 flex flex-1 flex-col gap-3">
+                    {tier.features.map((feature) => (
+                      <li key={feature} className="landing-body flex items-start gap-3 text-muted-foreground">
+                        <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-foreground" aria-hidden="true" />
+                        <span>{feature}</span>
+                      </li>
+                    ))}
+                  </ul>
+
+                  {tier.cta && (
+                    <div className="mt-8">
+                      <CtaButton variant={isFeatured ? "primary" : "ghost"} href={tier.cta.href} className="w-full justify-center">
+                        {tier.cta.label}
+                      </CtaButton>
+                    </div>
                   )}
-                </div>
-                <p className="heading-serif text-4xl text-foreground mb-4">
-                  {tier.price}
-                  {tier.suffix && <span className="text-lg text-muted-foreground">{tier.suffix}</span>}
-                </p>
-                <p className="text-muted-foreground text-sm leading-relaxed mb-6">{tier.description}</p>
-                <ul className="space-y-2 text-sm text-muted-foreground mb-6">
-                  {tier.features.map((feature) => (
-                    <li key={feature}>✓ {feature}</li>
-                  ))}
-                </ul>
-                {tier.cta && (
-                  <a
-                    href={tier.cta.href}
-                    className={`inline-flex items-center gap-2 px-6 py-3 rounded-md text-sm font-medium transition-colors ${isFeatured ? "bg-foreground text-background hover:opacity-90" : "border border-border text-foreground hover:border-foreground"}`}
-                  >
-                    {tier.cta.label}
-                  </a>
-                )}
-              </div>
+                </article>
+              </ScrollReveal>
             );
           })}
         </div>
+
         {config.footerNote && (
-          <p className="text-muted-foreground text-sm leading-relaxed mt-6 max-w-3xl">
-            {config.footerNote} <a href="/about" className="underline hover:text-foreground transition-colors">How Maho stays funded</a>.
-          </p>
+          <ScrollReveal variant="fade">
+            <p className="landing-body max-w-3xl text-sm text-muted-foreground sm:text-base">{config.footerNote}</p>
+          </ScrollReveal>
         )}
       </div>
     </section>

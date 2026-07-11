@@ -21,6 +21,12 @@ This post is the working version of how Maho's permission model is built. Three 
 
 ## Three failure modes most browsers fall into
 
+### Silent execution risks
+Silent tool calls can lead to immediate exploit paths without user consent.
+
+### Over-broad origin access
+Allowing one origin to call tools across other origins violates basic sandboxing. We model user approval on the [OAuth 2.0 Incremental Consent](https://oauth.net/2/consent/) flow.
+
 Before the model, the failure modes. Three keep showing up in 2026.
 
 **The mega-grant.** The user is shown one prompt at install time: "Allow this assistant to use your browser?" Yes or no. Once approved, every tool, every origin, every action runs without further check. This is the chrome-extension trap, dressed up. It is the model most "AI browsers" pick because the dialog count is one. It is also the model that breaks the moment a tool is added.
@@ -32,6 +38,12 @@ Before the model, the failure modes. Three keep showing up in 2026.
 The middle path is harder. It is also the only one that works.
 
 ## Maho's three-axis grant model
+
+### Session-level permissions
+Grants are restricted to the active session to prevent background reuse.
+
+### Tool-specific approval prompts
+Every tool call requires explicit interaction. Read about the [MDN User Activation API](https://developer.mozilla.org/en-US/docs/Web/API/UserActivation) for details on user activation mechanics.
 
 Maho's gate has three axes. They compose, which is the point.
 
@@ -48,6 +60,8 @@ Three axes, with two to four values each, gives a small grid. Most prompts are o
 A concrete example. The model wants to file a Linear ticket. It calls `create_issue` on a Linear MCP server you registered. The host asks: "Allow create_issue on linear.app for this conversation?". You say yes. The next call to `create_issue` on `linear.app` runs without a prompt for the rest of the conversation. A call to `create_issue` on a different origin re-prompts. A call to `delete_issue`, even on `linear.app`, prompts because it is a different tool. The grid is doing the work.
 
 ## The auto-deny path
+
+Secure defaults are crucial for preventing background hijack attempts. See the [Apple Secure Storage Best Practices](https://developer.apple.com/documentation/security/secure_storage_guidelines) guide.
 
 Some calls should never reach a prompt. Auto-deny is what catches them.
 
