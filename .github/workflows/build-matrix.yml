@@ -1,0 +1,47 @@
+name: Cross-platform build
+
+# Required PR check. Builds Maho on all four target platforms via self-hosted
+# runners. Configure the four `build (<os>)` jobs as required status checks on
+# the `main` branch (Settings → Branches → main protection).
+
+on:
+  pull_request:
+    paths:
+      - 'maho/**'
+      - 'maho-chromium/**'
+      - '!**.md'
+  push:
+    branches: [main]
+    paths:
+      - 'maho/**'
+      - 'maho-chromium/**'
+      - '!**.md'
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    concurrency:
+      group: chromium-build-${{ matrix.os }}-${{ github.ref }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-arm64
+            labels: [self-hosted, chromium-builder, macos, arm64]
+          - os: linux-x64
+            labels: [self-hosted, chromium-builder, linux, x64]
+          - os: linux-arm64
+            labels: [self-hosted, chromium-builder, linux, arm64]
+          - os: windows-x64
+            labels: [self-hosted, chromium-builder, windows, x64]
+    runs-on: ${{ matrix.labels }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync Chromium
+        run: gclient sync
+
+      - name: Build
+        run: python3 maho-chromium/build/scripts/build_maho.py

@@ -20,7 +20,7 @@ needed.  The infrastructure described here is live as of 2026-06-17:
 | Crash-loop sentinel (≥3 crashes → rollback) | `browser/updates/crash_loop_sentinel.cc` | ✅ Live |
 | Kill-switch pref (`maho.update.enabled`) | `maho_update_manager.cc` §Initialize | ✅ Live |
 | `--maho-simulate-update-state` debug flag | `maho_update_manager.cc` | ✅ Live |
-| macOS Sparkle 2 delegate | `browser/updates/maho_update_delegate_mac.mm` | ✅ Live |
+| macOS Sparkle 2 delegate | `browser/updates/maho_update_delegate_mac.mm` | 🟡 Wired + framework embedded (A.4, 2026-07-11); pending signed-release live-update test |
 | **SUPublicEDKey (ed25519 public key)** | Info.plist branding patch | ⛔ Blocker — see §1.1 |
 
 **The single remaining blocker** for end-to-end signed rollouts is the

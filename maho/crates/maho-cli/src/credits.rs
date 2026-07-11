@@ -93,9 +93,91 @@ fn try_open_in_maho_browser(url: &str) -> bool {
             .unwrap_or(false)
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
     {
-        // TODO: Linux/Windows Maho detection — fall through to OS default for now.
+        fn maho_exe() -> Option<std::path::PathBuf> {
+            if let Ok(out) = std::process::Command::new("reg")
+                .args(["query", r"HKCU\Software\Maho", "/v", "InstallPath"])
+                .output()
+            {
+                if out.status.success() {
+                    if let Ok(text) = String::from_utf8(out.stdout) {
+                        // Line format: "    InstallPath    REG_SZ    C:\...\Maho"
+                        if let Some(dir) = text
+                            .lines()
+                            .find(|l| l.contains("InstallPath"))
+                            .and_then(|l| l.split("REG_SZ").nth(1))
+                            .map(str::trim)
+                            .filter(|d| !d.is_empty())
+                        {
+                            let exe = std::path::Path::new(dir).join("maho.exe");
+                            if exe.exists() {
+                                return Some(exe);
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+                let exe = std::path::PathBuf::from(local)
+                    .join("Programs")
+                    .join("Maho")
+                    .join("maho.exe");
+                if exe.exists() {
+                    return Some(exe);
+                }
+            }
+            None
+        }
+
+        match maho_exe() {
+            Some(exe) => std::process::Command::new(exe)
+                .arg(url)
+                .spawn()
+                .map(|_| true)
+                .unwrap_or(false),
+            None => false,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        fn maho_exe() -> Option<std::path::PathBuf> {
+            let packaged = std::path::PathBuf::from("/opt/maho/maho");
+            if packaged.exists() {
+                return Some(packaged);
+            }
+            if let Some(home) = std::env::var_os("HOME") {
+                let desktop = std::path::PathBuf::from(&home)
+                    .join(".local/share/applications/maho.desktop");
+                if let Ok(text) = std::fs::read_to_string(&desktop) {
+                    // Exec=/opt/maho/maho %U → take the first token.
+                    if let Some(exe) = text
+                        .lines()
+                        .find_map(|l| l.strip_prefix("Exec="))
+                        .and_then(|e| e.split_whitespace().next())
+                        .map(std::path::PathBuf::from)
+                        .filter(|p| p.exists())
+                    {
+                        return Some(exe);
+                    }
+                }
+            }
+            None
+        }
+
+        match maho_exe() {
+            Some(exe) => std::process::Command::new(exe)
+                .arg(url)
+                .spawn()
+                .map(|_| true)
+                .unwrap_or(false),
+            None => false,
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
         let _ = url;
         false
     }

@@ -1,5 +1,32 @@
 # Build Verification — 2026-06-28
 
+## 2026-07-11 — Cross-platform completion (Phase A/B/C/D partial)
+
+**Verdict: macOS GREEN.** Incremental `chrome` build via `build_maho.py`
+relinked `libchrome_dll.dylib`, rebuilt the maho-core prebuilt
+(`libmaho_ffi.a`, 99.8 MB), and produced `Maho.app`.
+
+Verified this pass:
+- **A.4 Sparkle embedding** — `embed_sparkle_framework()` stages the vendored
+  `Sparkle.framework` (3.0 MB, XPCServices intact) into
+  `Maho.app/Contents/Frameworks/`. Info.plist carries the injected keys:
+  `SUFeedURL`, `SUPublicEDKey` (`iwdrdct4loEJl8WbHsfhhHMNcUygZ54N6uIveroNTbw=`),
+  `SUScheduledCheckInterval=86400`, `LSMinimumSystemVersion=14.0`.
+- **A.0.1** — `generate_update_pubkey.py --check` exits 0; committed
+  `browser/keys/manifest_pubkey.bin` (32 bytes) matches the private-key
+  derivation and produces a non-placeholder header.
+- **D.5** — `generate_update_manifests.py` produces an ED-signed `appcast.xml`
+  (signature validated against `SUPublicEDKey`) and `update-win.json`.
+- **Rust** — `maho-cli` host `cargo check` clean with the new Windows/Linux
+  `credits.rs` launcher branches.
+
+Deferred to the Windows box (native compile required): `maho-ffi` Windows build
+is blocked by `swiftide-core` 0.32.1's unconditional `std::os::unix` import;
+B.6 Windows ACL and `credits.rs` Windows/Linux compile verification follow once
+that blocker is patched. Linux packaging verification needs a Linux VM.
+
+---
+
 ## Summary
 
 **Verdict: GREEN (full chrome target links cleanly after maho-core rebuild)**

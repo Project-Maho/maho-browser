@@ -1,0 +1,82 @@
+name: Release
+
+# Builds release-mode binaries + packages on a semver tag, generates the update
+# manifests, and uploads everything as workflow artifacts. A human then publishes
+# to Project-Maho/release with the locally-authenticated gh CLI:
+#
+#   gh release create v0.1.0 --repo Project-Maho/release --draft \
+#     MahoSetup-0.1.0.exe maho_0.1.0_amd64.deb maho-0.1.0.x86_64.rpm \
+#     Maho-0.1.0.dmg appcast.xml update-win.json
+#
+# v1 uses no cross-repo PAT (see plan D.5). Stable channel only — no
+# -alpha/-beta/-rc tags.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  release:
+    name: release (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-arm64
+            labels: [self-hosted, chromium-builder, macos, arm64]
+          - os: linux-x64
+            labels: [self-hosted, chromium-builder, linux, x64]
+          - os: linux-arm64
+            labels: [self-hosted, chromium-builder, linux, arm64]
+          - os: windows-x64
+            labels: [self-hosted, chromium-builder, windows, x64]
+    runs-on: ${{ matrix.labels }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version from tag
+        id: ver
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Sync Chromium
+        run: gclient sync
+
+      - name: Build (release)
+        run: python3 maho-chromium/build/scripts/build_maho.py --release
+
+      - name: Package (Linux)
+        if: startsWith(matrix.os, 'linux')
+        run: python3 maho-chromium/build/scripts/build_maho_linux_packages.py
+
+      - name: Generate macOS appcast
+        if: matrix.os == 'macos-arm64'
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          python3 maho-chromium/build/scripts/generate_update_manifests.py \
+            --version "${{ steps.ver.outputs.version }}" \
+            --dmg "chromium/src/out/Default/Maho-${{ steps.ver.outputs.version }}.dmg"
+
+      - name: Generate Windows manifest
+        if: matrix.os == 'windows-x64'
+        shell: bash
+        run: |
+          python3 maho-chromium/build/scripts/generate_update_manifests.py \
+            --version "${{ steps.ver.outputs.version }}" \
+            --win-exe "chromium/src/out/Default/MahoSetup-${{ steps.ver.outputs.version }}.exe"
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: maho-release-${{ matrix.os }}
+          if-no-files-found: ignore
+          path: |
+            chromium/src/out/Default/MahoSetup-*.exe
+            chromium/src/out/Default/*.deb
+            chromium/src/out/Default/*.rpm
+            chromium/src/out/Default/Maho-*.dmg
+            chromium/src/out/Default/appcast.xml
+            chromium/src/out/Default/update-win.json

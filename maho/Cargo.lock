@@ -5870,8 +5870,6 @@ dependencies = [
 [[package]]
 name = "swiftide-core"
 version = "0.32.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d7c8055d195da40129ed38b07f5cd56df1b3c4d67971addbde23cde7611bcee"
 dependencies = [
  "anyhow",
  "async-trait",

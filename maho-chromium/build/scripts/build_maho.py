@@ -107,6 +107,32 @@ def ensure_overlay_mount(chromium_src, skip):
         os.symlink(rel_target, mount_path)
 
 
+def embed_sparkle_framework(app_path: str) -> bool:
+    """Copy the vendored Sparkle.framework into the app's Frameworks dir.
+
+    The GN build links against Sparkle.framework but does not stage it into the
+    bundle; the Sparkle-backed updater delegate resolves it from
+    Contents/Frameworks/ at runtime. Copies with symlinks preserved so the
+    framework's Versions/Current structure and code signatures stay valid.
+    """
+    src = os.path.join(_MAHO_CHROMIUM_DIR, 'third_party', 'sparkle',
+                       'Sparkle.framework')
+    if not os.path.isdir(src):
+        print(f"warning: vendored Sparkle framework not found: {src}; "
+              "skipping embed", file=sys.stderr)
+        return False
+    frameworks_dir = os.path.join(app_path, 'Contents', 'Frameworks')
+    os.makedirs(frameworks_dir, exist_ok=True)
+    dest = os.path.join(frameworks_dir, 'Sparkle.framework')
+    if os.path.islink(dest) or os.path.isfile(dest):
+        os.remove(dest)
+    elif os.path.isdir(dest):
+        shutil.rmtree(dest)
+    print(f"Embedding Sparkle framework into {frameworks_dir}")
+    shutil.copytree(src, dest, symlinks=True)
+    return True
+
+
 def find_codesign_identity() -> str | None:
     try:
         res = subprocess.run(
@@ -401,6 +427,8 @@ def main():
             build_chromium_app(out_dir, extra_args)
 
             app_path = os.path.join(_CHROMIUM_SRC_ROOT, out_dir, 'Maho.app')
+            if platform == 'mac':
+                embed_sparkle_framework(app_path)
             if platform == 'mac' and not args.skip_codesign:
                 identity = args.codesign_identity
                 if not identity:
