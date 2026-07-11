@@ -256,7 +256,10 @@ MahoSidebarLibraryRailView::MahoSidebarLibraryRailView() {
       views::BoxLayout::CrossAxisAlignment::kCenter);
 
   SetPreferredSize(gfx::Size(sidebar_layout::kLibraryRailWidthDp, 0));
-  SetBackground(views::CreateSolidBackground(kMahoColorSidebarBackground));
+  // Transparent: the parent sidebar already paints kMahoColorSidebarBackground.
+  // Painting it again here double-composites the translucent (glass-frame)
+  // color, darkening the rail relative to the content pane.
+  SetBackground(nullptr);
 
   utility_host_ = AddChildView(std::make_unique<views::View>());
   utility_host_->SetProperty(views::kViewIgnoredByLayoutKey, true);
@@ -391,7 +394,7 @@ void MahoSidebarLibraryRailView::SetBackCallback(
 
 void MahoSidebarLibraryRailView::OnThemeChanged() {
   views::View::OnThemeChanged();
-  SetBackground(views::CreateSolidBackground(kMahoColorSidebarBackground));
+  SetBackground(nullptr);
   UpdateSelection();
   UpdateBackButtonAppearance();
 }

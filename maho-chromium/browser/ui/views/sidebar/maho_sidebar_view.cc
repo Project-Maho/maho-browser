@@ -107,16 +107,6 @@ MahoSidebarView::MahoSidebarView(Browser* browser)
     : browser_(browser),
       last_focused_body_view_tracker_(std::make_unique<views::ViewTracker>()) {
   BuildUi();
-  // kGlassFrame path: give the sidebar its own non-opaque compositor layer so
-  // the translucent kMahoColorSidebarBackground fill composites over the
-  // window's NSVisualEffectView (desktop blur) instead of an opaque backdrop.
-  // NOTE: do NOT call layer()->SetOpacity() here - that would multiply text
-  // alpha too and make tab labels translucent. Translucency comes solely from
-  // the background color's alpha; opaque text stays opaque.
-  if (features::IsGlassFrameEnabled()) {
-    SetPaintToLayer();
-    layer()->SetFillsBoundsOpaquely(false);
-  }
   if (auto* bridge = MahoSpaceProfileBridge::GetInstance(); bridge) {
     bridge->AddObserver(this);
   }
@@ -455,6 +445,12 @@ void MahoSidebarView::SetBodyMode(MahoSidebarBodyMode mode) {
   if (mode == MahoSidebarBodyMode::kLibrary) {
     ShowLibraryPane(active_library_category_);
   } else {
+    if (auto* container =
+            views::AsViewClass<MahoSidebarContainerView>(parent())) {
+      if (container->IsSpacesOverlayVisible()) {
+        container->DismissSpacesOverlay();
+      }
+    }
     // Hide whichever library pane was active.
     views::View* active_pane = ActiveLibraryPane();
     if (active_pane) {
