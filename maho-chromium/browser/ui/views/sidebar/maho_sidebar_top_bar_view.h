@@ -36,6 +36,7 @@ class MahoSidebarTopBarView : public views::View {
   ~MahoSidebarTopBarView() override;
 
   void Update(const MahoSidebarTopBarModel& model);
+  void SetNavClusterVisible(bool visible);
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
   void AddedToWidget() override;
 

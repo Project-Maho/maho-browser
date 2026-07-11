@@ -22,6 +22,7 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/color/color_provider.h"
+#include "ui/compositor/layer.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
@@ -85,6 +86,11 @@ void MahoSpacesOverlayView::Init(SpaceBoardModel model,
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
   surface_ = AddChildView(std::make_unique<views::View>());
+  surface_->SetPaintToLayer();
+  surface_->layer()->SetFillsBoundsOpaquely(false);
+  surface_->layer()->SetOpacity(0.0f);
+  surface_->layer()->SetTransform(
+      gfx::Transform::MakeTranslation(0, 12));
   auto* surface_layout = surface_->SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical,
       gfx::Insets::VH(kSurfaceInsetDp, kSurfaceInsetDp), kSurfaceSpacingDp));
@@ -134,7 +140,11 @@ void MahoSpacesOverlayView::OnThemeChanged() {
     return;
   }
 
-  const SkColor scrim = color_provider->GetColor(kMahoColorSidebarBackground);
+  // Force full opacity: the sidebar background token can be translucent (it
+  // blends with the window vibrancy layer), but the overlay must be an opaque
+  // occluder so accelerated web contents cannot bleed through underneath it.
+  const SkColor scrim =
+      SkColorSetA(color_provider->GetColor(kMahoColorSidebarBackground), 0xFF);
 
   SetBackground(views::CreateSolidBackground(scrim));
 }

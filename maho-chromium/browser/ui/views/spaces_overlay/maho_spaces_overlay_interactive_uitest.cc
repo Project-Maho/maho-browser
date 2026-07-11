@@ -10,8 +10,10 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+#include "maho/browser/ui/views/spaces_overlay/maho_browser_frame_overlay_host.h"
 #include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_view.h"
 #include "ui/base/test/ui_controls.h"
+#include "ui/compositor/layer.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/accessibility/view_accessibility.h"
@@ -86,11 +88,11 @@ class MahoSpacesOverlayInteractiveUiTest : public InProcessBrowserTest {
   views::View* WaitForBackButton(MahoSpacesOverlayController* controller) {
     views::View* result = nullptr;
     EXPECT_TRUE(base::test::RunUntil([&]() {
-      views::Widget* overlay = controller->GetOverlayWidgetForTesting();
-      if (!overlay) {
+      views::Widget* parent = GetBrowserWidget();
+      if (!parent) {
         return false;
       }
-      result = FindViewByAccessibleName(overlay->GetRootView(),
+      result = FindViewByAccessibleName(parent->GetRootView(),
                                        u"Back");
       return result != nullptr;
     }));
@@ -112,6 +114,13 @@ IN_PROC_BROWSER_TEST_F(MahoSpacesOverlayInteractiveUiTest,
   ASSERT_TRUE(base::test::RunUntil(
       [&]() { return controller->IsVisible(); }));
   EXPECT_TRUE(controller->IsVisible());
+
+  views::Widget* overlay_widget = controller->GetOverlayWidgetForTesting();
+  ASSERT_TRUE(overlay_widget);
+  views::View* root_view = overlay_widget->GetRootView();
+  ASSERT_TRUE(root_view);
+  ASSERT_TRUE(root_view->layer());
+  EXPECT_TRUE(root_view->layer()->fills_bounds_opaquely());
 
   controller->Dismiss(MahoSpacesOverlayController::DismissReason::kExplicitCancel);
 }
@@ -189,20 +198,29 @@ IN_PROC_BROWSER_TEST_F(MahoSpacesOverlayInteractiveUiTest,
   views::Widget* parent_widget = GetBrowserWidget();
   ASSERT_TRUE(parent_widget);
 
-  auto controller =
-      std::make_unique<MahoSpacesOverlayController>(browser());
-  controller->Show(parent_widget);
-  ASSERT_TRUE(base::test::RunUntil(
-      [&]() { return controller->IsVisible(); }));
+  BrowserView* bv = BrowserView::GetBrowserViewForBrowser(browser());
+  ASSERT_TRUE(bv);
+  auto* sidebar_container = static_cast<MahoSidebarContainerView*>(
+      bv->maho_sidebar_container());
+  ASSERT_TRUE(sidebar_container);
 
-  views::View* back_button = WaitForBackButton(controller.get());
+  sidebar_container->ToggleSpacesOverlay();
+
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return sidebar_container->IsSpacesOverlayVisible(); }));
+
+  MahoSpacesOverlayController* controller =
+      sidebar_container->overlay_host()->spaces_overlay_controller();
+  ASSERT_TRUE(controller);
+
+  views::View* back_button = WaitForBackButton(controller);
   ASSERT_TRUE(back_button);
 
   ClickScreenPoint(back_button->GetBoundsInScreen().CenterPoint());
 
   ASSERT_TRUE(base::test::RunUntil(
-      [&]() { return !controller->IsVisible(); }));
-  EXPECT_FALSE(controller->IsVisible())
+      [&]() { return !sidebar_container->IsSpacesOverlayVisible(); }));
+  EXPECT_FALSE(sidebar_container->IsSpacesOverlayVisible())
       << "Clicking the back button must dismiss the spaces overlay";
 }
 
@@ -211,36 +229,35 @@ IN_PROC_BROWSER_TEST_F(MahoSpacesOverlayInteractiveUiTest,
   views::Widget* parent_widget = GetBrowserWidget();
   ASSERT_TRUE(parent_widget);
 
-  auto controller =
-      std::make_unique<MahoSpacesOverlayController>(browser());
-  controller->Show(parent_widget);
-  ASSERT_TRUE(base::test::RunUntil(
-      [&]() { return controller->IsVisible(); }));
-
-  views::View* back_button = WaitForBackButton(controller.get());
-  ASSERT_TRUE(back_button) << "Back button not found in overlay";
-
-  views::Widget* overlay_widget = back_button->GetWidget();
-  ASSERT_TRUE(overlay_widget);
-
   BrowserView* bv = BrowserView::GetBrowserViewForBrowser(browser());
   ASSERT_TRUE(bv);
-  int rail_width = 0;
   auto* sidebar_container = static_cast<MahoSidebarContainerView*>(
       bv->maho_sidebar_container());
-  if (sidebar_container) {
-    rail_width = sidebar_container->GetLibraryRailWidth();
-  }
+  ASSERT_TRUE(sidebar_container);
+
+  sidebar_container->ToggleSpacesOverlay();
+
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return sidebar_container->IsSpacesOverlayVisible(); }));
+
+  MahoSpacesOverlayController* controller =
+      sidebar_container->overlay_host()->spaces_overlay_controller();
+  ASSERT_TRUE(controller);
+
+  views::Widget* overlay_widget = controller->GetOverlayWidgetForTesting();
+  ASSERT_TRUE(overlay_widget);
+
+  int inset_left = sidebar_container->GetSidebarSlotInsets().left();
 
   const gfx::Rect parent_client = parent_widget->GetClientAreaBoundsInScreen();
   const gfx::Rect overlay_bounds = overlay_widget->GetWindowBoundsInScreen();
 
-  EXPECT_EQ(parent_client.x() + rail_width, overlay_bounds.x());
-  EXPECT_EQ(parent_client.width() - rail_width, overlay_bounds.width());
+  EXPECT_EQ(parent_client.x() + inset_left, overlay_bounds.x());
+  EXPECT_EQ(parent_client.width() - inset_left, overlay_bounds.width());
   EXPECT_EQ(parent_client.y(), overlay_bounds.y());
   EXPECT_EQ(parent_client.height(), overlay_bounds.height());
 
-  controller->Dismiss(MahoSpacesOverlayController::DismissReason::kExplicitCancel);
+  sidebar_container->DismissSpacesOverlay();
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSpacesOverlayInteractiveUiTest,
@@ -276,12 +293,15 @@ IN_PROC_BROWSER_TEST_F(MahoSpacesOverlayInteractiveUiTest,
   ASSERT_TRUE(base::test::RunUntil(
       [&]() { return controller->IsVisible(); }));
 
-  views::View* back_button = WaitForBackButton(controller.get());
-  EXPECT_TRUE(back_button)
-      << "Back button must be reachable from the overlay widget root view";
-  if (back_button) {
-    EXPECT_TRUE(back_button->GetVisible());
-    EXPECT_FALSE(back_button->GetBoundsInScreen().IsEmpty());
+  views::Widget* overlay_widget = controller->GetOverlayWidgetForTesting();
+  ASSERT_TRUE(overlay_widget);
+
+  views::View* board_view = FindViewByAccessibleName(overlay_widget->GetRootView(), u"Spaces board");
+  EXPECT_TRUE(board_view)
+      << "Spaces board view must be reachable from the overlay widget root view";
+  if (board_view) {
+    EXPECT_TRUE(board_view->GetVisible());
+    EXPECT_FALSE(board_view->GetBoundsInScreen().IsEmpty());
   }
 
   controller->Dismiss(MahoSpacesOverlayController::DismissReason::kExplicitCancel);

@@ -54,6 +54,7 @@ class MahoSpacesOverlayView : public views::View {
 
   // Testing accessors.
   MahoSpacesOverlayBoardView* GetBoardViewForTesting() { return board_view_; }
+  views::View* GetAnimatedView() { return surface_; }
 
   void RequestFocus() override;
   void OnThemeChanged() override;

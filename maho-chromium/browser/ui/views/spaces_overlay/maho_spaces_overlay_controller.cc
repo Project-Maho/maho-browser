@@ -98,7 +98,7 @@ void MahoSpacesOverlayController::Show(views::Widget* parent_widget) {
       views::Widget::InitParams::CLIENT_OWNS_WIDGET,
       views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
   params.parent = parent_widget_->GetNativeView();
-  params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
+  params.opacity = views::Widget::InitParams::WindowOpacity::kOpaque;
   params.activatable = views::Widget::InitParams::Activatable::kYes;
   params.shadow_type = views::Widget::InitParams::ShadowType::kNone;
   widget_->Init(std::move(params));
@@ -108,10 +108,7 @@ void MahoSpacesOverlayController::Show(views::Widget* parent_widget) {
 
   if (auto* root_view = widget_->GetRootView()) {
     root_view->SetPaintToLayer();
-    root_view->layer()->SetFillsBoundsOpaquely(false);
-    root_view->layer()->SetOpacity(0.0f);
-    root_view->layer()->SetTransform(
-        gfx::Transform::MakeTranslation(0, kShowSlideOffsetDp));
+    root_view->layer()->SetFillsBoundsOpaquely(true);
   }
 
   UpdateBounds();
@@ -129,13 +126,15 @@ void MahoSpacesOverlayController::Show(views::Widget* parent_widget) {
           },
           weak_factory_.GetWeakPtr()));
 
-  if (auto* root_view = widget_->GetRootView(); root_view && root_view->layer()) {
-    views::AnimationBuilder()
-        .Once()
-        .SetDuration(kFadeInDuration)
-        .SetOpacity(root_view->layer(), 1.0f, gfx::Tween::FAST_OUT_SLOW_IN)
-        .SetTransform(root_view->layer(), gfx::Transform(),
-                      gfx::Tween::FAST_OUT_SLOW_IN);
+  if (overlay_view_ && overlay_view_->GetAnimatedView()) {
+    if (auto* anim_layer = overlay_view_->GetAnimatedView()->layer()) {
+      views::AnimationBuilder()
+          .Once()
+          .SetDuration(kFadeInDuration)
+          .SetOpacity(anim_layer, 1.0f, gfx::Tween::FAST_OUT_SLOW_IN)
+          .SetTransform(anim_layer, gfx::Transform(),
+                        gfx::Tween::FAST_OUT_SLOW_IN);
+    }
   }
 
   if (overlay_view_) {
@@ -224,8 +223,8 @@ void MahoSpacesOverlayController::Hide() {
     return;
   }
 
-  auto* root_view = widget_->GetRootView();
-  if (!root_view || !root_view->layer()) {
+  views::View* animated_view = overlay_view_ ? overlay_view_->GetAnimatedView() : nullptr;
+  if (!animated_view || !animated_view->layer()) {
     CloseWidget(restore_focus_on_hide_);
     return;
   }
@@ -237,8 +236,8 @@ void MahoSpacesOverlayController::Hide() {
                                 weak_factory_.GetWeakPtr()))
       .Once()
       .SetDuration(kFadeOutDuration)
-      .SetOpacity(root_view->layer(), 0.0f, gfx::Tween::EASE_IN)
-      .SetTransform(root_view->layer(),
+      .SetOpacity(animated_view->layer(), 0.0f, gfx::Tween::EASE_IN)
+      .SetTransform(animated_view->layer(),
                     gfx::Transform::MakeTranslation(0, kShowSlideOffsetDp / 2),
                     gfx::Tween::EASE_IN);
 }
@@ -310,8 +309,22 @@ void MahoSpacesOverlayController::OnSpaceProfileBridgeChanged() {
     views::Widget* parent = parent_widget_;
     if (parent) {
       // Internal rebuild: skip dismiss callback so rail selection stays.
-      CloseWidget(/*restore_focus=*/false, /*suppress_dismiss_callback=*/true);
+      // Move current widget to a temp variable so we can keep it alive
+      // while the new widget is initialized and shown.
+      std::unique_ptr<views::Widget> old_widget = std::move(widget_);
+      if (old_widget) {
+        old_widget->RemoveObserver(this);
+      }
+      overlay_view_ = nullptr;
+      is_hiding_ = false;
+      is_showing_ = false;
+      restore_focus_on_hide_ = false;
+
       Show(parent);
+
+      if (old_widget) {
+        old_widget.reset();
+      }
     }
   }
 }

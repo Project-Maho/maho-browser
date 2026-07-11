@@ -5,6 +5,9 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_now_playing_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/compositor/layer.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/view_utils.h"
 
 #include <memory>
@@ -104,6 +107,16 @@ MahoSidebarView::MahoSidebarView(Browser* browser)
     : browser_(browser),
       last_focused_body_view_tracker_(std::make_unique<views::ViewTracker>()) {
   BuildUi();
+  // kGlassFrame path: give the sidebar its own non-opaque compositor layer so
+  // the translucent kMahoColorSidebarBackground fill composites over the
+  // window's NSVisualEffectView (desktop blur) instead of an opaque backdrop.
+  // NOTE: do NOT call layer()->SetOpacity() here - that would multiply text
+  // alpha too and make tab labels translucent. Translucency comes solely from
+  // the background color's alpha; opaque text stays opaque.
+  if (features::IsGlassFrameEnabled()) {
+    SetPaintToLayer();
+    layer()->SetFillsBoundsOpaquely(false);
+  }
   if (auto* bridge = MahoSpaceProfileBridge::GetInstance(); bridge) {
     bridge->AddObserver(this);
   }
@@ -185,6 +198,29 @@ void MahoSidebarView::OnThemeChanged() {
   UpdateSearch(model.search);
   UpdateFavorites(model.favorites);
   UpdateFooter(model.footer);
+}
+
+void MahoSidebarView::ViewHierarchyChanged(
+    const views::ViewHierarchyChangedDetails& details) {
+  views::View::ViewHierarchyChanged(details);
+  if (!details.is_add || !details.child) {
+    return;
+  }
+  // Sidebar sits under a translucent BrowserFrameView when kGlassFrame is
+  // enabled. Any Label descendant that would otherwise paint subpixel-AA
+  // text against a non-opaque ancestor trips a DCHECK in Label::PaintText.
+  // details.child is the root of the added subtree; walk it recursively.
+  std::vector<views::View*> stack{details.child};
+  while (!stack.empty()) {
+    views::View* view = stack.back();
+    stack.pop_back();
+    if (auto* label = views::AsViewClass<views::Label>(view)) {
+      label->SetSubpixelRenderingEnabled(false);
+    }
+    for (views::View* child : view->children()) {
+      stack.push_back(child);
+    }
+  }
 }
 
 void MahoSidebarView::OnTabListScrolled() {
@@ -367,7 +403,7 @@ void MahoSidebarView::BuildUi() {
       std::make_unique<MahoSidebarFooterView>(browser_));
 
   normal_body_layout->SetFlexForView(tab_scroll_view_, 1, true);
-  body_layout->SetFlexForView(content_host_, 1, true);
+  body_layout->SetFlexForView(content_host_, 1, false);
   root_layout->SetFlexForView(body_host_, 1, true);
 
   create_space_view_ =
@@ -401,6 +437,7 @@ void MahoSidebarView::SetBodyMode(MahoSidebarBodyMode mode) {
   }
   if (top_bar_view_) {
     top_bar_view_->SetVisible(true);
+    top_bar_view_->SetNavClusterVisible(mode != MahoSidebarBodyMode::kLibrary);
   }
   if (library_container_) {
     library_container_->SetVisible(mode == MahoSidebarBodyMode::kLibrary);

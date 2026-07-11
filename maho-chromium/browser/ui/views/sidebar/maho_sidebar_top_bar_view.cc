@@ -224,6 +224,12 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
 
 MahoSidebarTopBarView::~MahoSidebarTopBarView() = default;
 
+void MahoSidebarTopBarView::SetNavClusterVisible(bool visible) {
+  if (nav_cluster_ && nav_cluster_->GetVisible() != visible) {
+    nav_cluster_->SetVisible(visible);
+  }
+}
+
 void MahoSidebarTopBarView::Update(const MahoSidebarTopBarModel& model) {
   model_ = model;
   ApplyChromeSpacing();
