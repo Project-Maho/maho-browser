@@ -141,12 +141,18 @@ pub enum ColorHarmony {
     Floating,
 }
 
+fn default_opacity() -> f64 {
+    1.0
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum SpaceTheme {
     #[serde(rename = "solid")]
     Solid {
         color: SpaceColor,
+        #[serde(default = "default_opacity")]
+        opacity: f64,
         #[serde(rename = "schemaVersion", default, skip_serializing_if = "is_zero_u32")]
         schema_version: u32,
     },
@@ -157,7 +163,9 @@ pub enum SpaceTheme {
         harmony: ColorHarmony,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scheme: Option<ThemeScheme>,
+        #[serde(default = "default_opacity")]
         opacity: f64,
+        #[serde(default)]
         texture: f64,
         #[serde(rename = "schemaVersion", default, skip_serializing_if = "is_zero_u32")]
         schema_version: u32,
@@ -170,7 +178,9 @@ pub enum SpaceTheme {
         harmony: Option<ColorHarmony>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scheme: Option<ThemeScheme>,
+        #[serde(default = "default_opacity")]
         opacity: f64,
+        #[serde(default)]
         texture: f64,
         #[serde(rename = "schemaVersion", default, skip_serializing_if = "is_zero_u32")]
         schema_version: u32,
@@ -234,6 +244,7 @@ impl SpaceTheme {
     pub fn from_legacy_color(color: &SpaceColor) -> Self {
         SpaceTheme::Solid {
             color: color.clone(),
+            opacity: default_opacity(),
             schema_version: 0,
         }
     }
@@ -370,6 +381,7 @@ mod tests {
                 brightness: 0.9,
                 grain: 0.2,
             },
+            opacity: 1.0,
             schema_version: 0,
         };
         let json = serde_json::to_string(&theme).unwrap();
@@ -418,6 +430,7 @@ mod tests {
     fn space_theme_base_color_solid() {
         let theme = SpaceTheme::Solid {
             color: SpaceColor { hue: 0.3, saturation: 0.5, brightness: 0.7, grain: 0.1 },
+            opacity: 1.0,
             schema_version: 0,
         };
         let base = theme.base_color();
@@ -604,6 +617,7 @@ mod tests {
                 assert_eq!(schema_version, 2);
                 let re = serde_json::to_string(&SpaceTheme::Solid {
                     color: SpaceColor { hue: 0.5, saturation: 0.8, brightness: 0.9, grain: 0.1 },
+                    opacity: 1.0,
                     schema_version: 2,
                 }).unwrap();
                 assert!(re.contains("\"schemaVersion\":2"), "re-serialized: {re}");
@@ -616,6 +630,7 @@ mod tests {
     fn space_theme_schema_version_zero_not_serialized() {
         let theme = SpaceTheme::Solid {
             color: SpaceColor { hue: 0.5, saturation: 0.8, brightness: 0.9, grain: 0.1 },
+            opacity: 1.0,
             schema_version: 0,
         };
         let re = serde_json::to_string(&theme).unwrap();

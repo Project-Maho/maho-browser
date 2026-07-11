@@ -7,6 +7,7 @@
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/values.h"
+#include "chrome/browser/ui/color/chrome_color_id.h"
 #include "content/public/browser/browser_thread.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/ui/downloads/maho_download_theme.h"
@@ -31,9 +32,9 @@ constexpr SkColor kSidebarBackgroundDark = SkColorSetARGB(255, 39, 35, 54);
 constexpr SkColor kSidebarBackgroundLight = SkColorSetARGB(255, 228, 229, 238);
 
 // Minimum alpha for kMahoColorSidebarBackground when the theme opacity slider
-// is at 0.0. Below this the vibrancy backdrop drowns the tab labels.
-// Matches Chromium's kBrowserFrameAlphaLight (95) used by kGlassFrame.
-constexpr SkAlpha kSidebarMinAlpha = 95;
+// is at 0.0. Low enough for a glassy Zen look (the NSVisualEffectView blur
+// shows through), but nonzero so opaque tab labels stay legible over it.
+constexpr SkAlpha kSidebarMinAlpha = 24;
 constexpr SkColor kContentBackgroundDark = SkColorSetARGB(255, 28, 27, 45);
 constexpr SkColor kContentBackgroundLight = SkColorSetARGB(255, 246, 247, 251);
 constexpr SkColor kContentGradientTopDark = SkColorSetARGB(255, 35, 33, 55);
@@ -45,12 +46,18 @@ void AddWindowAndSurfaceColors(ui::ColorMixer& mixer, bool dark_mode) {
   mixer[kMahoColorWindowBackground] = {dark_mode
       ? SkColorSetARGB(255, 16, 15, 21)
       : SkColorSetARGB(255, 240, 240, 245)};
+  // Translucent by default (no active Space theme) so the kGlassFrame vibrancy
+  // shows through. The tint mixer below raises alpha per the opacity slider
+  // when a theme is active.
   mixer[kMahoColorSidebarBackground] = {dark_mode
-      ? kSidebarBackgroundDark
-      : kSidebarBackgroundLight};
+      ? SkColorSetA(kSidebarBackgroundDark, kSidebarMinAlpha)
+      : SkColorSetA(kSidebarBackgroundLight, kSidebarMinAlpha)};
   mixer[kMahoColorContentBackground] = {dark_mode
       ? kContentBackgroundDark
       : kContentBackgroundLight};
+  // Fill the empty content area (blank / new-tab) with the themed content color
+  // so it matches the sidebar, instead of Chromium's default opaque gray.
+  mixer[kColorWebContentsBackground] = {kMahoColorContentBackground};
   mixer[kMahoColorContentGradientTop] = {dark_mode
       ? kContentGradientTopDark
       : kContentGradientTopLight};
@@ -142,6 +149,12 @@ void AddTabRowColors(ui::ColorMixer& mixer, bool dark_mode) {
   mixer[kMahoColorTabRowActiveHoveredBackground] = {dark_mode
       ? SkColorSetARGB(51, 255, 255, 255)
       : SkColorSetARGB(38, 0, 0, 0)};
+  mixer[kMahoColorTabRowSelectedBackground] = {dark_mode
+      ? SkColorSetARGB(38, 255, 255, 255)
+      : SkColorSetARGB(25, 0, 0, 0)};
+  mixer[kMahoColorTabRowSelectedHoveredBackground] = {dark_mode
+      ? SkColorSetARGB(38, 255, 255, 255)
+      : SkColorSetARGB(25, 0, 0, 0)};
   mixer[kMahoColorInteractiveChipIdleBackground] = {dark_mode
       ? SkColorSetARGB(16, 255, 255, 255)
       : SkColorSetARGB(13, 0, 0, 0)};
@@ -574,6 +587,13 @@ void AddMahoColorMixers(ui::ColorProvider* provider,
         maho_theme::BlendColors(base_tab_active, primary_tint, 0.05f);
     tint_mixer[kMahoColorTabRowActiveBackground] = {tinted_tab_active};
     tint_mixer[kMahoColorTabRowActiveHoveredBackground] = {tinted_tab_active};
+    const SkColor base_tab_selected = dark_mode
+        ? SkColorSetARGB(38, 255, 255, 255)
+        : SkColorSetARGB(25, 0, 0, 0);
+    const SkColor tinted_tab_selected =
+        maho_theme::BlendColors(base_tab_selected, primary_tint, 0.05f);
+    tint_mixer[kMahoColorTabRowSelectedBackground] = {tinted_tab_selected};
+    tint_mixer[kMahoColorTabRowSelectedHoveredBackground] = {tinted_tab_selected};
   }
 
   DVLOG(1) << "MahoColorMixers: registered " << (kMahoColorsEnd - kMahoColorsStart)

@@ -348,6 +348,31 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         ),
         Replacement(
             old=(
+                "    case IDC_CLOSE_TAB:\n"
+                '      base::RecordAction(base::UserMetricsAction("CloseTabByKey"));\n'
+                "      CloseTab(browser_);\n"
+                "      break;\n"
+            ),
+            new=(
+                "    case IDC_CLOSE_TAB:\n"
+                '      base::RecordAction(base::UserMetricsAction("CloseTabByKey"));\n'
+                "      if (auto* maho_browser_view =\n"
+                "              BrowserView::GetBrowserViewForBrowser(browser_);\n"
+                "          maho_browser_view &&\n"
+                "          maho_browser_view->MaybeHandleMultiTabClose()) {\n"
+                "        break;\n"
+                "      }\n"
+                "      CloseTab(browser_);\n"
+                "      break;\n"
+            ),
+            description=(
+                "Route Cmd+W through BrowserView so sidebar multi-selected tabs "
+                "close together instead of only the active tab"
+            ),
+            guard="maho_browser_view->MaybeHandleMultiTabClose()",
+        ),
+        Replacement(
+            old=(
                 '    case IDC_SELECT_TAB_0:\n'
                 '    case IDC_SELECT_TAB_1:\n'
                 '    case IDC_SELECT_TAB_2:\n'
@@ -1080,6 +1105,22 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard="bool MaybeHandleMruTabSwitch(bool forward);",
         ),
         Replacement(
+            old="  bool MaybeHandleMruTabSwitch(bool forward);\n",
+            new=(
+                "  bool MaybeHandleMruTabSwitch(bool forward);\n"
+                "\n"
+                "  // Closes all sidebar multi-selected tabs when two or more are\n"
+                "  // selected. Returns true when it handled the close so the\n"
+                "  // caller skips the upstream single-tab CloseTab.\n"
+                "  bool MaybeHandleMultiTabClose();\n"
+            ),
+            description=(
+                "Declare BrowserView::MaybeHandleMultiTabClose for Cmd+W "
+                "sidebar multi-select close"
+            ),
+            guard="bool MaybeHandleMultiTabClose();",
+        ),
+        Replacement(
             old=(
                 "  std::unique_ptr<maho::MahoCommandOverlayController>\n"
                 "      maho_command_overlay_controller_;\n"
@@ -1156,6 +1197,20 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "Include MahoMruTabTracker and MahoCore FFI headers in browser_view.cc"
             ),
             guard='#include "maho/third_party/maho/maho_ffi.h"',
+        ),
+        Replacement(
+            old='#include "maho/browser/ui/views/command/maho_command_overlay_controller.h"\n',
+            new=(
+                '#include "maho/browser/ui/views/command/maho_command_overlay_controller.h"\n'
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"\n'
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"\n'
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"\n'
+            ),
+            description=(
+                "Include Maho sidebar view + tab list view in browser_view.cc "
+                "for MaybeHandleMultiTabClose"
+            ),
+            guard='#include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"',
         ),
         Replacement(
             old='#include "maho/browser/ui/tabs/maho_mru_tab_tracker.h"\n',
@@ -1245,6 +1300,37 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "cursor advance, Ctrl-release commit)"
             ),
             guard="bool BrowserView::MaybeHandleMruTabSwitch",
+        ),
+        Replacement(
+            old=(
+                "maho::MahoCommandOverlayController*\n"
+                "BrowserView::GetOrCreateMahoCommandOverlayController() {\n"
+            ),
+            new=(
+                "bool BrowserView::MaybeHandleMultiTabClose() {\n"
+                "  auto* container = views::AsViewClass<maho::MahoSidebarContainerView>(\n"
+                "      maho_sidebar_container());\n"
+                "  if (!container) {\n"
+                "    return false;\n"
+                "  }\n"
+                "  auto* sidebar = views::AsViewClass<maho::MahoSidebarView>(\n"
+                "      container->sidebar_view());\n"
+                "  if (!sidebar || !sidebar->tab_list_view() ||\n"
+                "      !sidebar->tab_list_view()->HasMultiSelection()) {\n"
+                "    return false;\n"
+                "  }\n"
+                "  sidebar->tab_list_view()->CloseSelected();\n"
+                "  return true;\n"
+                "}\n"
+                "\n"
+                "maho::MahoCommandOverlayController*\n"
+                "BrowserView::GetOrCreateMahoCommandOverlayController() {\n"
+            ),
+            description=(
+                "Implement BrowserView::MaybeHandleMultiTabClose so Cmd+W closes "
+                "all sidebar multi-selected tabs together"
+            ),
+            guard="bool BrowserView::MaybeHandleMultiTabClose()",
         ),
         Replacement(
             old=(
@@ -2511,44 +2597,34 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             description="Suppress upstream MediaToolbarButtonView addition",
         ),
     ],
-    "chrome/browser/ui/views/frame/contents_web_view.cc": [
+    "ui/compositor/layer.cc": [
         Replacement(
             old=(
-                '#include "ui/base/metadata/metadata_impl_macros.h"\n'
+                "void Layer::SetFillsBoundsOpaquely(bool fills_bounds_opaquely) {\n"
+                "  CHECK_NE(type_, LayerType::LAYER_SOLID_COLOR);\n"
+                "  SetFillsBoundsOpaquelyWithReason(fills_bounds_opaquely,\n"
+                "                                   PropertyChangeReason::NOT_FROM_ANIMATION);\n"
+                "}\n"
             ),
             new=(
-                '#include "ui/base/metadata/metadata_impl_macros.h"\n'
-                '#include "ui/base/ui_base_features.h"\n'
-            ),
-            description=(
-                "Maho: include ui_base_features for the kGlassFrame blank-content "
-                "transparency guard"
-            ),
-            guard='#include "ui/base/ui_base_features.h"',
-        ),
-        Replacement(
-            old=(
-                "void ContentsWebView::UpdateBackgroundColor() {\n"
-                "  const SkColor color = GetColorProvider()->GetColor(\n"
-            ),
-            new=(
-                "void ContentsWebView::UpdateBackgroundColor() {\n"
-                "  // Maho kGlassFrame: in the blank/zero-tab state (no active\n"
-                "  // WebContents) make the content layer transparent so the window\n"
-                "  // NSVisualEffectView vibrancy shows through instead of the opaque\n"
-                "  // kColorWebContentsBackground gray.\n"
-                "  if (features::IsGlassFrameEnabled() && !web_contents()) {\n"
-                "    layer()->SetColor(SK_ColorTRANSPARENT);\n"
-                "    layer()->SetFillsBoundsOpaquely(false);\n"
+                "void Layer::SetFillsBoundsOpaquely(bool fills_bounds_opaquely) {\n"
+                "  // Maho: solid-color layers derive opacity from their color's alpha,\n"
+                "  // so this setter is a no-op for them; upstream CHECK_NEs and aborts.\n"
+                "  // kGlassFrame makes LayerBasedSolidBackground force LAYER_SOLID_COLOR\n"
+                "  // on views that also call SetFillsBoundsOpaquely, so no-op instead.\n"
+                "  if (type_ == LayerType::LAYER_SOLID_COLOR) {\n"
                 "    return;\n"
                 "  }\n"
-                "  const SkColor color = GetColorProvider()->GetColor(\n"
+                "  SetFillsBoundsOpaquelyWithReason(fills_bounds_opaquely,\n"
+                "                                   PropertyChangeReason::NOT_FROM_ANIMATION);\n"
+                "}\n"
             ),
             description=(
-                "Maho: make ContentsWebView transparent in the blank/zero-tab "
-                "state under kGlassFrame so the window vibrancy shows through"
+                "Maho: make Layer::SetFillsBoundsOpaquely a no-op for "
+                "LAYER_SOLID_COLOR instead of CHECK-crashing (kGlassFrame exposes "
+                "solid-color-backed views that call it)"
             ),
-            guard="Maho kGlassFrame: in the blank/zero-tab state",
+            guard="solid-color layers derive opacity from their color's alpha",
         ),
     ],
     "chrome/browser/ui/views/frame/browser_native_widget_mac.mm": [

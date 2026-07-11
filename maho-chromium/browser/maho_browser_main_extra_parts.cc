@@ -1,6 +1,7 @@
 #include "maho/browser/maho_browser_main_extra_parts.h"
 
 #include <string>
+#include <unordered_map>
 
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -61,10 +62,12 @@
 #include "ui/accessibility/ax_tree_update.h"
 #include "maho/browser/mcp/maho_mcp_accessibility_handler.h"
 #include "maho/browser/mcp/maho_mcp_console_capture.h"
+#include "maho/browser/mcp/maho_mcp_firewall.h"
 #include "maho/browser/mcp/maho_mcp_input_synthesizer.h"
 #include "maho/browser/mcp/maho_mcp_navigation_tracker.h"
 #include "maho/browser/mcp/maho_mcp_screenshot_handler.h"
 #include "maho/browser/mcp/maho_mcp_session.h"
+#include "maho/browser/mcp/maho_mcp_network_observer.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/accessibility/ax_action_data.h"
 #include "ui/accessibility/ax_enums.mojom-shared.h"
@@ -150,11 +153,18 @@ void PopulateBridgeFromCore(MahoCore* core) {
   bridge->SetActiveSpaceId(
       DecodeActiveSpaceId(maho_core_get_active_space_id(core)));
 
-  if (content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
+  auto apply_initial_theme = []() {
     MahoSpaceThemeState::UpdateFromCore();
+    // Reset the color cache so the first window's ColorProvider picks up the
+    // restored Space theme; otherwise the initial paint uses the un-themed base
+    // colors until an unrelated theme event resets it.
+    ui::ColorProviderManager::Get().ResetColorProviderCache();
+  };
+  if (content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
+    apply_initial_theme();
   } else {
     content::GetUIThreadTaskRunner({})->PostTask(
-        FROM_HERE, base::BindOnce(&MahoSpaceThemeState::UpdateFromCore));
+        FROM_HERE, base::BindOnce(apply_initial_theme));
   }
 
   LOG(INFO) << "Maho bridge populated: "
@@ -240,6 +250,9 @@ namespace {
 
 class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
  public:
+  MahoMcpBrowserDelegateImpl() {
+    ui_weak_ptr_ = weak_factory_.GetWeakPtr();
+  }
   ~MahoMcpBrowserDelegateImpl() override = default;
 
   std::vector<maho::MahoMcpSession::TabInfo> GetTabList() override {
@@ -715,7 +728,106 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
     return true;
   }
 
+  void StartNetworkCapture(
+      const std::string& capture_id,
+      int tab_id,
+      StartNetworkCaptureCallback callback) override {
+    if (!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
+      content::GetUIThreadTaskRunner({})->PostTask(
+          FROM_HERE,
+          base::BindOnce(
+              &MahoMcpBrowserDelegateImpl::StartNetworkCaptureOnUi,
+              ui_weak_ptr_, capture_id, tab_id, std::move(callback)));
+      return;
+    }
+    StartNetworkCaptureOnUi(capture_id, tab_id, std::move(callback));
+  }
+
+  void StopNetworkCapture(
+      const std::string& capture_id,
+      StopNetworkCaptureCallback callback) override {
+    if (!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
+      content::GetUIThreadTaskRunner({})->PostTask(
+          FROM_HERE,
+          base::BindOnce(&MahoMcpBrowserDelegateImpl::StopNetworkCaptureOnUi,
+                         ui_weak_ptr_, capture_id, std::move(callback)));
+      return;
+    }
+    StopNetworkCaptureOnUi(capture_id, std::move(callback));
+  }
+
+  void CancelNetworkCapture(const std::string& capture_id) override {
+    if (!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
+      content::GetUIThreadTaskRunner({})->PostTask(
+          FROM_HERE,
+          base::BindOnce(&MahoMcpBrowserDelegateImpl::CancelNetworkCaptureOnUi,
+                         ui_weak_ptr_, capture_id));
+      return;
+    }
+    CancelNetworkCaptureOnUi(capture_id);
+  }
+
  private:
+  void StartNetworkCaptureOnUi(
+      const std::string& capture_id,
+      int tab_id,
+      StartNetworkCaptureCallback callback) {
+    content::WebContents* wc = (tab_id == 0)
+                                   ? GetActiveWebContents()
+                                   : GetWebContentsForTabId(tab_id);
+    if (!wc || capture_id.empty() ||
+        network_observers_.find(capture_id) != network_observers_.end()) {
+      std::move(callback).Run(StartNetworkCaptureResult{});
+      return;
+    }
+    // Resolve the concrete tab id we bound to so an omitted request stays
+    // fixed to this tab even if the active tab later changes.
+    int resolved_tab_id = tab_id;
+    if (resolved_tab_id == 0) {
+      if (sessions::SessionTabHelper* helper =
+              sessions::SessionTabHelper::FromWebContents(wc)) {
+        resolved_tab_id = helper->session_id().id();
+      }
+    }
+    auto observer = std::make_unique<maho::MahoMcpNetworkObserver>();
+    observer->StartCapture(wc);
+    network_observers_.emplace(capture_id, std::move(observer));
+    StartNetworkCaptureResult result;
+    result.success = true;
+    result.tab_id = resolved_tab_id;
+    std::move(callback).Run(std::move(result));
+  }
+
+  void StopNetworkCaptureOnUi(const std::string& capture_id,
+                              StopNetworkCaptureCallback callback) {
+    auto it = network_observers_.find(capture_id);
+    if (it == network_observers_.end()) {
+      std::move(callback).Run(std::nullopt);
+      return;
+    }
+    std::unique_ptr<maho::MahoMcpNetworkObserver> observer =
+        std::move(it->second);
+    network_observers_.erase(it);
+    observer->StopCapture();
+    auto har = observer->GetHar();
+    std::move(callback).Run(std::move(har));
+  }
+
+  void CancelNetworkCaptureOnUi(const std::string& capture_id) {
+    auto it = network_observers_.find(capture_id);
+    if (it == network_observers_.end()) {
+      return;
+    }
+    std::unique_ptr<maho::MahoMcpNetworkObserver> observer =
+        std::move(it->second);
+    network_observers_.erase(it);
+    observer->StopCapture();
+  }
+
+  std::unordered_map<std::string,
+                     std::unique_ptr<maho::MahoMcpNetworkObserver>>
+      network_observers_;
+  base::WeakPtr<MahoMcpBrowserDelegateImpl> ui_weak_ptr_;
   base::WeakPtrFactory<MahoMcpBrowserDelegateImpl> weak_factory_{this};
 };
 

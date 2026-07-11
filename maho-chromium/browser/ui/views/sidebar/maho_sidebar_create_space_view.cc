@@ -239,7 +239,7 @@ std::string BuildThemeJsonForSelection(
   theme_dict.Set("type", "zen");
   theme_dict.Set("gradientColors", std::move(gradient_colors));
   theme_dict.Set("harmony", "analogous");
-  theme_dict.Set("opacity", 1.0);
+  theme_dict.Set("opacity", selection.opacity);
   theme_dict.Set("texture", grain);
   theme_dict.Set("scheme", selection.zen_scheme);
 
@@ -268,6 +268,9 @@ MahoSidebarCreateSpaceThemeSelection BuildSelectionFromThemeJson(
   }
   if (const std::string* scheme = root.FindString("scheme")) {
     selection.zen_scheme = *scheme;
+  }
+  if (auto opacity = root.FindDouble("opacity")) {
+    selection.opacity = *opacity;
   }
 
   if (const auto* color = root.FindDict("color")) {

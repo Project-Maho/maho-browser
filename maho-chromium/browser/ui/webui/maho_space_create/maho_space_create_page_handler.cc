@@ -82,9 +82,10 @@ void MahoSpaceCreatePageHandler::PreviewTheme(
 void MahoSpaceCreatePageHandler::CommitTheme(
     maho_space_create::mojom::ThemeSelectionPtr selection) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  MahoSpaceThemeState::ClearPreviewOverride();
-  MahoSpaceThemeState::UpdateFromCore();
-  RepaintBrowserAfterThemeStateChange(browser_);
+  // Persistence + UpdateFromCore + repaint happen in the dialog's result
+  // callback (the single source of truth). Reading core here would repaint
+  // with the pre-persist (stale) theme; leaving the preview override in place
+  // keeps the chosen theme visible until the commit lands.
   if (commit_callback_) {
     std::move(commit_callback_).Run(selection->theme_json);
   }

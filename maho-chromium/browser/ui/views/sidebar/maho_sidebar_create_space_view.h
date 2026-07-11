@@ -40,6 +40,7 @@ struct MahoSidebarCreateSpaceThemeSelection {
   MahoSidebarCreateSpaceThemeMode mode =
       MahoSidebarCreateSpaceThemeMode::kZen;
   std::string zen_scheme = "auto";
+  double opacity = 0.0;
 };
 
 // Reusable native create-space form content, hosted inline inside the sidebar

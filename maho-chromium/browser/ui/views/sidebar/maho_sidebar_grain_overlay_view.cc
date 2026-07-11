@@ -71,7 +71,7 @@ void MahoSidebarGrainOverlayView::OnPaint(gfx::Canvas* canvas) {
   const gfx::Rect bounds = GetLocalBounds();
 
   cc::PaintFlags flags;
-  flags.setAlphaf(texture_ * 0.18f);
+  flags.setAlphaf(texture_ * 0.10f);
   flags.setBlendMode(SkBlendMode::kSoftLight);
 
   for (int y = bounds.y(); y < bounds.bottom(); y += kNoiseSize) {

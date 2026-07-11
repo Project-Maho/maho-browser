@@ -98,7 +98,7 @@ export function positionForHueAndDistance(
 // Opacity helpers
 // ---------------------------------------------------------------------------
 
-export const OPACITY_MIN = 0.25;
+export const OPACITY_MIN = 0.0;
 export const OPACITY_MAX = 0.9;
 
 export function clampOpacity(v: number): number {
@@ -227,6 +227,7 @@ export interface SerializedThemeColor {
 export interface SerializedSolidTheme {
   type: 'solid';
   color: SerializedSpaceColor;
+  opacity?: number;
 }
 
 export interface SerializedZenTheme {
@@ -615,7 +616,9 @@ export function wireThemeToSelection(
           mode: 'sparkle',
           preset_index: presetIndex,
           grain,
-          opacity: 0.5,
+          opacity: typeof solid.opacity === 'number'
+              ? clampOpacity(solid.opacity)
+              : fallback.opacity,
           harmony: 'analogous',
           stops: buildAutoZenStops(huePart, saturation),
         },

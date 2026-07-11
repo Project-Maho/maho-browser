@@ -175,6 +175,9 @@ class EmptyFavoritesPlaceholderView : public views::View {
     title_label_->SetEnabledColor(ui::kColorSysOnSurface);
     title_label_->SetTextStyle(views::style::STYLE_BODY_3_MEDIUM);
     title_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+    // Required for kGlassFrame: BrowserFrameView is non-opaque, so
+    // Label::PaintText's opacity DCHECK trips without this suppression.
+    title_label_->SetSubpixelRenderingEnabled(false);
 
     description_label_ = AddChildView(std::make_unique<views::Label>(
         std::u16string(u"Favorites keep your most used sites\nand apps close")));
@@ -183,6 +186,7 @@ class EmptyFavoritesPlaceholderView : public views::View {
     description_label_->SetTextStyle(views::style::STYLE_BODY_5_MEDIUM);
     description_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
     description_label_->SetMultiLine(true);
+    description_label_->SetSubpixelRenderingEnabled(false);
 
     UpdateAppearance();
   }
@@ -382,43 +386,6 @@ class FavoriteTileButton : public views::Button,
       drag_done_callback_.Run(dragging_tab_id_);
     }
     dragging_tab_id_.clear();
-  }
-
-  bool GetDropFormats(int* formats,
-                      std::set<ui::ClipboardFormatType>* format_types) override {
-    return drop_target_ && drop_target_->GetDropFormats(formats, format_types);
-  }
-
-  bool CanDrop(const ui::OSExchangeData& data) override {
-    return drop_target_ && drop_target_->CanDrop(data);
-  }
-
-  int OnDragUpdated(const ui::DropTargetEvent& event) override {
-    if (!drop_target_) {
-      return static_cast<int>(ui::mojom::DragOperation::kNone);
-    }
-    return drop_target_->OnDragUpdated(
-        drop_target_->ForwardDropEventToGrid(event, this));
-  }
-
-  DropCallback GetDropCallback(const ui::DropTargetEvent& event) override {
-    if (!drop_target_) {
-      return base::BindOnce(
-          [](const ui::DropTargetEvent&,
-             ui::mojom::DragOperation& output_drag_op,
-             std::unique_ptr<ui::LayerTreeOwner>) {
-            output_drag_op = ui::mojom::DragOperation::kNone;
-          });
-    }
-    return drop_target_->GetDropCallback(
-        drop_target_->ForwardDropEventToGrid(event, this));
-  }
-
-  void OnDragExited() override {
-    views::Button::OnDragExited();
-    if (drop_target_) {
-      drop_target_->OnDragExited();
-    }
   }
 
   struct TileVisualState {
@@ -652,6 +619,8 @@ MahoSidebarFavoritesGridView::MahoSidebarFavoritesGridView(Browser* browser)
         gfx::Size(1, sidebar_layout::kFavoriteTileHeightDp));
     tile->SetPaintToLayer();
     tile->layer()->SetFillsBoundsOpaquely(false);
+    tile->layer()->GetAnimator()->set_preemption_strategy(
+        ui::LayerAnimator::IMMEDIATELY_ANIMATE_TO_NEW_TARGET);
     tile->SetBorder(nullptr);
     tile->SetRequestFocusOnPress(false);
 
@@ -1160,13 +1129,6 @@ int MahoSidebarFavoritesGridView::OnDragUpdated(
   }
 
   active_drag_tab_id_ = payload.node_id;
-  for (size_t i = 0; i < kTileCount; ++i) {
-    if (tile_tab_ids_[i] == payload.node_id) {
-      if (tile_views_[i] && tile_views_[i]->layer()) {
-        tile_views_[i]->layer()->SetOpacity(0.f);
-      }
-    }
-  }
 
   const size_t favorite_count = favorite_count_;
   if (payload.origin != SidebarDragOrigin::kFavorites &&
@@ -1243,22 +1205,12 @@ views::View::DropCallback MahoSidebarFavoritesGridView::GetDropCallback(
           return;
         }
         output_drag_op = ui::mojom::DragOperation::kMove;
-        LOG(WARNING) << "[MahoDropDbg] drop: origin=" << static_cast<int>(payload.origin)
-                     << " tab_id=" << payload.node_id
-                     << " target_index=" << target_index
-                     << " favorite_count=" << favorite_count;
         if (weak_grid) {
           weak_grid->HideOverlayAndPhantom();
           weak_grid->MarkDropAccepted(payload.node_id);
         }
 
         const SidebarDropPlan plan = PlanFavoritesGridDrop(payload);
-        LOG(WARNING) << "[MahoDropDbg] plan.is_valid=" << plan.is_valid
-                     << " plan.steps.size=" << plan.steps.size();
-        for (const auto& step : plan.steps) {
-          LOG(WARNING) << "[MahoDropDbg]   step.kind=" << step.kind
-                       << " step.tab_id=" << step.node_id;
-        }
         ExecuteDropPlan(plan);
 
         const bool from_favorites =
@@ -1411,23 +1363,25 @@ int MahoSidebarFavoritesGridView::ResolveDropIndex(
     const std::string& source_tab_id,
     bool source_is_favorite) const {  // L3-EXEMPT: local parameter
   const int favorite_count = static_cast<int>(GetVisibleFavoriteCount());
-  // Always resolve against the full N-item grid so the index matches
-  // AnimateDragPreview's GetTileBoundsForCount(N) layout.  Using N-1
-  // produced a different grid geometry, mapping the cursor to the wrong slot.
-  const int item_count = favorite_count;
+
+  const bool source_exists =
+      source_is_favorite &&
+      std::find(tile_tab_ids_.begin(), tile_tab_ids_.end(), source_tab_id) !=
+          tile_tab_ids_.end();
+
+  // External drag inserts a new tile (N+1 geometry). Favorite reorder keeps
+  // N geometry. Match the geometry that AnimateDragPreview/ShowInsertionPreview
+  // will render.
+  const int item_count =
+      source_exists ? favorite_count : (favorite_count + 1);
   const int target_index = TileIndexForPoint(point, item_count);
 
   if (!source_is_favorite) {  // L3-EXEMPT: local parameter
-    return std::clamp(target_index, 0, item_count);
+    return std::clamp(target_index, 0, favorite_count);
   }
-
-  const bool source_exists =
-      std::find(tile_tab_ids_.begin(), tile_tab_ids_.end(), source_tab_id) !=
-      tile_tab_ids_.end();
   if (!source_exists) {
-    return std::clamp(target_index, 0, item_count);
+    return std::clamp(target_index, 0, favorite_count);
   }
-
   return std::clamp(target_index, 0, std::max(0, favorite_count - 1));
 }
 
@@ -1484,7 +1438,11 @@ MahoSidebarFavoritesGridView::GetTileBoundsForCount(int item_count) const {
 
   const gfx::Point content_origin =
       views::View::ConvertPointToTarget(content_view_, this, gfx::Point());
-  const int content_width = std::max(0, content_view_->width());
+  int content_width = std::max(0, content_view_->width());
+  if (content_width <= 0) {
+    // Empty grid: content_view_ hidden (width 0). Use grid's contents width.
+    content_width = std::max(0, GetContentsBounds().width());
+  }
   if (content_width <= 0) {
     return bounds;
   }
@@ -1798,15 +1756,17 @@ void MahoSidebarFavoritesGridView::AnimateDragPreview(
       gfx::Transform offset;
       offset.Translate(dx, dy);
 
-      tile_views_[i]->layer()->GetAnimator()->StopAnimating();
       views::AnimationBuilder()
           .Once()
           .SetDuration(base::Milliseconds(180))
           .SetTransform(tile_views_[i]->layer(), offset,
                         gfx::Tween::EASE_IN_OUT);
     } else {
-      tile_views_[i]->layer()->GetAnimator()->StopAnimating();
-      tile_views_[i]->layer()->SetTransform(gfx::Transform());
+      views::AnimationBuilder()
+          .Once()
+          .SetDuration(base::Milliseconds(180))
+          .SetTransform(tile_views_[i]->layer(), gfx::Transform(),
+                        gfx::Tween::EASE_IN_OUT);
     }
     slot++;
   }
@@ -1838,11 +1798,9 @@ void MahoSidebarFavoritesGridView::ShowInsertionPreview(
     tile->SetVisible(false);
     tile->SetCanProcessEventsWithinSubtree(false);
     tile->SetBackground(views::CreateRoundedRectBackground(
-        SkColorSetARGB(255, 255, 220, 0),
+        kMahoColorInteractiveChipIdleBackground,
         sidebar_layout::kFavoriteTileCornerRadiusDp));
-    tile->SetBorder(views::CreateRoundedRectBorder(
-        3, sidebar_layout::kFavoriteTileCornerRadiusDp,
-        SkColorSetARGB(255, 255, 0, 0)));
+    tile->SetBorder(views::CreateEmptyBorder(gfx::Insets(1)));
 
     auto* tile_layout = tile->SetLayoutManager(std::make_unique<views::BoxLayout>(
         views::BoxLayout::Orientation::kVertical,
@@ -1876,21 +1834,13 @@ void MahoSidebarFavoritesGridView::ShowInsertionPreview(
     drag_preview_tile_->SetPreferredSize(
         gfx::Size(sidebar_layout::kFavoriteTileHeightDp,
                   sidebar_layout::kFavoriteTileHeightDp));
-    LOG(INFO) << "[MahoPhantom] Created drag_preview_tile_ has_layer="
-              << (drag_preview_tile_->layer() != nullptr);
   }
 
-  // Compute target slot bounds in grid-view coordinates.
   const int slot_count = std::min(static_cast<int>(favorite_count_) + 1,
                                   static_cast<int>(kTileCount));
   const int clamped_index = std::clamp(preview_index, 0, slot_count - 1);
   const auto slot_bounds = GetTileBoundsForCount(slot_count);
   const gfx::Rect target_bounds = slot_bounds[clamped_index];
-  LOG(INFO) << "[MahoPhantom] ShowInsertionPreview preview_index="
-            << preview_index << " clamped=" << clamped_index
-            << " slot_count=" << slot_count
-            << " target_bounds=" << target_bounds.ToString()
-            << " grid_bounds=" << bounds().ToString();
   if (target_bounds.IsEmpty()) {
     HideInsertionPreview();
     return;
@@ -1901,14 +1851,6 @@ void MahoSidebarFavoritesGridView::ShowInsertionPreview(
   drag_preview_tile_->SetVisible(true);
   drag_preview_tile_->layer()->SetOpacity(1.f);
   drag_preview_tile_->parent()->ReorderChildView(drag_preview_tile_.get(), -1);
-  LOG(INFO) << "[MahoPhantom] Set visible bounds="
-            << drag_preview_tile_->bounds().ToString()
-            << " visible=" << drag_preview_tile_->GetVisible()
-            << " parent=" << drag_preview_tile_->parent()
-            << " parent_bounds="
-            << (drag_preview_tile_->parent()
-                    ? drag_preview_tile_->parent()->bounds().ToString()
-                    : std::string("null"));
 
   if (drag_preview_tab_id_ == tab_id && drag_preview_url_.is_valid()) {
     return;

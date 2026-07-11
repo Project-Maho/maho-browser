@@ -236,6 +236,9 @@ bool ApplyThemeJsonToSpace(MahoCore* core,
   if (result) {
     maho_string_free(result);
   }
+  // Persist to disk so the theme (incl. opacity) survives restart; otherwise
+  // update_space_config only mutates in-memory core state and is lost on relaunch.
+  maho_core_save_state(core);
   return true;
 }
 

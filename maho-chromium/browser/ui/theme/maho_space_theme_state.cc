@@ -191,7 +191,8 @@ std::optional<MahoSpaceThemeState::ThemeData> ExtractThemeDataFromThemeDict(
         .kind = kind,
         .primary_hsv = *primary_hsv,
         .secondary_hsv = std::nullopt,
-        .opacity = 1.0f,
+        .opacity = static_cast<float>(std::clamp(
+            theme_dict->FindDouble("opacity").value_or(1.0), 0.0, 1.0)),
         .texture = 0.0f,
         .grain = static_cast<float>(std::clamp(
             color_dict ? color_dict->FindDouble("grain").value_or(0.0) : 0.0,

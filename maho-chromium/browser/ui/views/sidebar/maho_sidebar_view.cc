@@ -1148,6 +1148,14 @@ void MahoSidebarView::OnSpaceProfileBridgeChanged() {
   // stale title/URL patches on top of a freshly-rebuilt tab list.
   cosmetic_refresh_timer_.Stop();
   UpdateSpacesPaneActions();
+  // Grain is a cached overlay value (not a live ColorProvider token like the
+  // sidebar color/opacity), so it must be refreshed per-space here; otherwise
+  // it stays at the previously active space's noise level.
+  if (grain_overlay_) {
+    std::optional<MahoSpaceThemeState::ThemeData> theme_data =
+        MahoSpaceThemeState::GetThemeData();
+    grain_overlay_->SetTexture(theme_data ? theme_data->texture : 0.0f);
+  }
   ScheduleRefreshAll();
 }
 
@@ -1212,6 +1220,10 @@ int MahoSidebarView::OnDragUpdated(const ui::DropTargetEvent& event) {
     favorites_view_->OnFavoritesZoneExited();
   }
   last_over_favorites_ = now_over;
+
+  if (!now_over) {
+    return static_cast<int>(ui::mojom::DragOperation::kNone);
+  }
 
   ui::DropTargetEvent fav_event(event.data(), gfx::PointF(fav_location),
                                 event.root_location_f(),
