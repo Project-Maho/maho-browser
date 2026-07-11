@@ -82,6 +82,7 @@ class MahoNowPlayingCard : public media_message_center::MediaNotificationView,
  private:
   void BuildLayout();
   void UpdateExpandedState();
+  void UpdateFaviconFromWebContents();
   std::u16string FormatPosition(base::TimeDelta time) const;
   void UpdateMuteButton();
 

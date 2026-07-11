@@ -803,10 +803,6 @@ class SidebarInsertionLaneView : public views::View {
       UpdateAppearance();
       return static_cast<int>(ui::mojom::DragOperation::kNone);
     }
-    drag_count_ = payload.selected_tab_ids.size();
-    if (drag_count_ == 0) {
-      drag_count_ = 1;
-    }
     if (section_ == MahoSidebarTabSection::kNormal &&
         reveal_empty_pinned_drop_lane_callback_ &&
         (payload.origin == SidebarDragOrigin::kPinnedSection ||
@@ -947,7 +943,6 @@ class SidebarInsertionLaneView : public views::View {
   void OnDragExited() override {
     ForwardDragEnded(this);
     drag_over_drop_target_ = false;
-    drag_count_ = 1;
     UpdateAppearance();
   }
 
@@ -956,11 +951,11 @@ class SidebarInsertionLaneView : public views::View {
     SetBackground(drag_over_drop_target_
                       ? views::CreateSolidBackground(ui::kColorSysPrimary)
                       : nullptr);
-    int target_height = kDropIndicatorThicknessDp;
-    if (drag_over_drop_target_) {
-      target_height = kRowHeightDp * drag_count_;
-    }
-    SetPreferredSize(gfx::Size(0, target_height));
+    // The lane stays a thin marker fixed at the insertion gap. It must never
+    // grow into the adjacent tab row on hover: doing so shifts layout under the
+    // cursor, traps the drag on the enlarged lane, and hides the tab row's
+    // split drop zone (its lower two-thirds).
+    SetPreferredSize(gfx::Size(0, kDropIndicatorThicknessDp));
     if (parent()) {
       parent()->InvalidateLayout();
     }
@@ -975,7 +970,6 @@ class SidebarInsertionLaneView : public views::View {
   const int target_folder_child_index_;
   const MahoSidebarTabSection section_;
   bool drag_over_drop_target_ = false;
-  int drag_count_ = 1;
   base::RepeatingCallback<void(const std::string&)> on_favorites_drop_accepted_;
   base::RepeatingClosure reveal_empty_pinned_drop_lane_callback_;
 };
@@ -1803,8 +1797,15 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
         }
         output_drag_op = ui::mojom::DragOperation::kNone;
 
+        LOG(WARNING) << "[MAHO_DROP_DBG] drop tab=" << tab_id
+                     << " zone=" << static_cast<int>(drop_zone)
+                     << " multi=" << is_multi_drag
+                     << " kind=" << static_cast<int>(payload.node_kind)
+                     << " node_id=" << payload.node_id;
+
         if (payload.node_kind == SidebarNodeKind::kTab &&
             !tab_id.empty()) {
+
           std::vector<std::string> ids_to_move;
           if (!payload.selected_tab_ids.empty()) {
             ids_to_move = payload.selected_tab_ids;
@@ -1827,6 +1828,10 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
 
             const SidebarDropPlan plan =
                 ResolveDropPlan(SectionKindFromTabSection(section), single_payload);
+            LOG(WARNING) << "[MAHO_DROP_DBG] loop move_id=" << move_id
+                         << " zone=" << static_cast<int>(drop_zone)
+                         << " plan_valid=" << plan.is_valid
+                         << " plan_steps=" << plan.steps.size();
             if (!plan.is_valid) {
               continue;
             }
@@ -1839,6 +1844,18 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
                   resolve_tab_index ? resolve_tab_index.Run(tab_id) : -1;
               const int source_tab_strip_index =
                   resolve_tab_index ? resolve_tab_index.Run(single_payload.node_id) : -1;
+              TabStripModel* dbg_model =
+                  browser ? browser->tab_strip_model() : nullptr;
+              LOG(WARNING) << "[MAHO_DROP_DBG] kSplit tgt=" << target_tab_strip_index
+                           << " src=" << source_tab_strip_index
+                           << " src_in_split="
+                           << (dbg_model && dbg_model->ContainsIndex(source_tab_strip_index)
+                                   ? dbg_model->GetSplitForTab(source_tab_strip_index).has_value()
+                                   : -1)
+                           << " tgt_in_split="
+                           << (dbg_model && dbg_model->ContainsIndex(target_tab_strip_index)
+                                   ? dbg_model->GetSplitForTab(target_tab_strip_index).has_value()
+                                   : -1);
               if (target_tab_strip_index >= 0 &&
                   source_tab_strip_index >= 0 &&
                   target_tab_strip_index != source_tab_strip_index) {
@@ -1967,6 +1984,10 @@ void SidebarTabRowView::OnDragExited() {
 
 void SidebarTabRowView::OnDragDone() {
   views::View::OnDragDone();
+  if (layer()) {
+    layer()->SetOpacity(1.f);
+    DestroyLayer();
+  }
   NotifySidebarDragEnded(this);
 }
 
@@ -2169,6 +2190,10 @@ void SidebarTabRowView::WriteDragDataForView(views::View* sender,
   }
 
   data->provider().SetDragImage(drag_image, gfx::Vector2d());
+
+  SetPaintToLayer();
+  layer()->SetFillsBoundsOpaquely(false);
+  layer()->SetOpacity(0.35f);
 }
 
 int SidebarTabRowView::GetDragOperationsForView(views::View* sender,
@@ -2321,18 +2346,19 @@ SidebarTabRowView::SidebarTabDropZone SidebarTabRowView::ResolveDropZone(
     }
   }
 
-  const int row_height = std::max(height(), 1);
-  const int y = event.location().y();
-  const int third = row_height / 3;
-
-  if (y < third) {
-    return SidebarTabDropZone::kBefore;
-  }
-
+  // Dropping a tab onto another tab always creates a split view — that is the
+  // whole point of a tab-on-tab drop. Reordering to a specific position is done
+  // by dropping on the thin insertion lanes between rows, not on a row body.
   if (payload.node_kind == SidebarNodeKind::kTab) {
     return SidebarTabDropZone::kSplit;
   }
 
+  // Non-tab (folder) payloads keep the top-third reorder-before behavior.
+  const int row_height = std::max(height(), 1);
+  const int y = event.location().y();
+  if (y < row_height / 3) {
+    return SidebarTabDropZone::kBefore;
+  }
   return SidebarTabDropZone::kNone;
 }
 
@@ -3450,15 +3476,21 @@ void MahoSidebarTabListView::UpdateActiveTabHighlightOnly(
     }
     auto it = tab_id_to_row_view_.find(tab_id);
     if (it == tab_id_to_row_view_.end() || !it->second) {
+      LOG(WARNING) << "[MAHO_SPLIT_DBG] toggle_active id=" << tab_id
+                   << " active=" << active << " ROW_NOT_FOUND";
       return;
     }
     SidebarTabRowView* row = it->second;
-    // In a split, the unified container owns the shared highlight; otherwise
-    // the row highlights itself.
     if (auto* container =
             views::AsViewClass<SplitGroupContainerView>(row->parent())) {
+      LOG(WARNING) << "[MAHO_SPLIT_DBG] toggle_active id=" << tab_id
+                   << " active=" << active << " -> CONTAINER";
       container->SetActiveState(active);
     } else {
+      LOG(WARNING) << "[MAHO_SPLIT_DBG] toggle_active id=" << tab_id
+                   << " active=" << active << " -> ROW (parent="
+                   << (row->parent() ? row->parent()->GetClassName() : "null")
+                   << ")";
       row->SetActive(active);
     }
   };
@@ -3624,6 +3656,14 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
 
   tab_rows_->SetLayoutManager(nullptr);
 
+  // Reset split tracking before destroying rows: split_id_to_container_ holds
+  // raw_ptrs to the containers RemoveAllChildViews is about to delete, and
+  // RebuildSplitGroupContainer repopulates both while building, so clearing
+  // after the tree walk would wipe the freshly-collected ids. splits_awaiting_
+  // anim_ is intentionally NOT cleared here: it survives the rebuild burst.
+  current_rebuild_split_ids_.clear();
+  split_id_to_container_.clear();
+
   base::ElapsedTimer rr_remove_t;
   tab_rows_->RemoveAllChildViews();
   LOG(INFO) << "[MAHO_PERF]     RR.RemoveAllChildViews="
@@ -3678,7 +3718,6 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
 
   // Rebuild O(1) tab_id -> row_view map used by UpdateActiveTabHighlightOnly.
   tab_id_to_row_view_.clear();
-  current_rebuild_split_ids_.clear();
   if (tab_rows_) {
     std::function<void(views::View*)> collect_rows;
     collect_rows = [&](views::View* parent) {
@@ -3724,6 +3763,15 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
 
   if (GetWidget() && GetWidget()->IsVisible()) {
     GetWidget()->LayoutRootViewIfNecessary();
+    // Creating one split triggers a burst of rebuilds; (re)start a short timer
+    // so the reveal animation plays once, on the settled container, instead of
+    // being torn down mid-flight by the next rebuild.
+    if (!splits_awaiting_anim_.empty()) {
+      split_anim_debounce_timer_.Start(
+          FROM_HERE, base::Milliseconds(180),
+          base::BindOnce(&MahoSidebarTabListView::AnimateAwaitingSplits,
+                         weak_factory_.GetWeakPtr()));
+    }
     if (GetWidget()->HasCapture()) {
       LOG(INFO) << "[MAHO_PERF]     RR TOTAL(has_capture)="
                 << maho_rr_t.Elapsed().InMillisecondsF() << "ms";
@@ -4020,7 +4068,10 @@ void MahoSidebarTabListView::RebuildSplitGroupContainer(
       is_side_by_side ? views::LayoutOrientation::kHorizontal
                       : views::LayoutOrientation::kVertical);
 
-  split_container->SetInsideBorderInsets(gfx::Insets::VH(0, 2));
+  // No horizontal inset: each pane row already carries its own 9px leading
+  // inset, so any container padding would push the first pane's favicon out of
+  // alignment with the ordinary (non-split) rows above and below it.
+  split_container->SetInsideBorderInsets(gfx::Insets());
 
   split_container->GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
   split_container->GetViewAccessibility().SetName(u"Split view");
@@ -4036,8 +4087,15 @@ void MahoSidebarTabListView::RebuildSplitGroupContainer(
   if (!group_node.split_id.empty()) {
     current_rebuild_split_ids_.insert(group_node.split_id);
   }
+  if (is_new_split) {
+    splits_awaiting_anim_.insert(group_node.split_id);
+  }
 
   auto* container_ptr = parent->AddChildView(std::move(split_container));
+
+  if (!group_node.split_id.empty()) {
+    split_id_to_container_[group_node.split_id] = container_ptr;
+  }
 
   for (size_t i = 0; i < group_node.children.size(); ++i) {
     const size_t child_start = container_ptr->children().size();
@@ -4067,20 +4125,48 @@ void MahoSidebarTabListView::RebuildSplitGroupContainer(
     }
   }
 
-  if (is_new_split && is_side_by_side) {
-    container_ptr->SetPaintToLayer();
+  // A split still awaiting its reveal needs a TEXTURED layer ready on this
+  // (possibly just-rebuilt) container so AnimateAwaitingSplits can transform it
+  // once the rebuild burst settles. TEXTURED avoids the LAYER_SOLID_COLOR path,
+  // on which SetFillsBoundsOpaquely() CHECK-fails (ui/compositor/layer.cc:955).
+  if (is_side_by_side && !group_node.split_id.empty() &&
+      splits_awaiting_anim_.count(group_node.split_id)) {
+    container_ptr->SetPaintToLayer(ui::LAYER_TEXTURED);
     container_ptr->layer()->SetFillsBoundsOpaquely(false);
-    ui::Layer* layer = container_ptr->layer();
+  }
+}
+
+void MahoSidebarTabListView::AnimateAwaitingSplits() {
+  for (const auto& split_id : splits_awaiting_anim_) {
+    auto it = split_id_to_container_.find(split_id);
+    if (it == split_id_to_container_.end() || !it->second) {
+      continue;
+    }
+    views::View* container = it->second;
+    if (!container->layer()) {
+      continue;
+    }
+    const int w = container->width();
+    const int h = container->height();
+    if (w <= 0 || h <= 0) {
+      continue;
+    }
+    ui::Layer* layer = container->layer();
+    // Reveal by unfolding horizontally about the row's center so the two panes
+    // appear to split apart to the left and right.
     gfx::Transform start;
-    start.Scale(0.6, 1.0);
+    start.Translate(w / 2.0, h / 2.0);
+    start.Scale(0.35, 1.0);
+    start.Translate(-w / 2.0, -h / 2.0);
     layer->SetTransform(start);
-    layer->SetOpacity(0.4f);
+    layer->SetOpacity(0.0f);
     ui::ScopedLayerAnimationSettings settings(layer->GetAnimator());
-    settings.SetTransitionDuration(base::Milliseconds(180));
+    settings.SetTransitionDuration(base::Milliseconds(200));
     settings.SetTweenType(gfx::Tween::EASE_OUT);
     layer->SetTransform(gfx::Transform());
     layer->SetOpacity(1.0f);
   }
+  splits_awaiting_anim_.clear();
 }
 
 std::u16string MahoSidebarTabListView::GetNodeDisplayText(

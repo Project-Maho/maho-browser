@@ -13,6 +13,9 @@
 #include "components/global_media_controls/public/media_session_notification_item.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/media_session.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/favicon_status.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
@@ -29,6 +32,7 @@
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/color/color_id.h"
+#include "maho/browser/ui/theme/maho_color_id.h"
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 
 namespace maho {
@@ -98,6 +102,26 @@ class NotePulseOverlay : public views::View, public gfx::AnimationDelegate {
   bool active_ = false;
 };
 
+class GlassHoverImageButton : public views::ImageButton {
+  METADATA_HEADER(GlassHoverImageButton, views::ImageButton)
+
+ public:
+  explicit GlassHoverImageButton(PressedCallback callback)
+      : views::ImageButton(std::move(callback)) {}
+  ~GlassHoverImageButton() override = default;
+
+  void StateChanged(ButtonState old_state) override {
+    views::ImageButton::StateChanged(old_state);
+    const ButtonState state = GetState();
+    if (state == STATE_HOVERED || state == STATE_PRESSED) {
+      SetBackground(views::CreateRoundedRectBackground(
+          kMahoColorTabRowHoverBackground, 6));
+    } else {
+      SetBackground(nullptr);
+    }
+  }
+};
+
 MahoNowPlayingCard::MahoNowPlayingCard(
     const std::string& item_id,
     base::WeakPtr<media_message_center::MediaNotificationItem> item,
@@ -155,6 +179,7 @@ void MahoNowPlayingCard::UpdateWithMediaMetadata(
   if (artist_label_) {
     artist_label_->SetText(metadata.artist.empty() ? metadata.source_title : metadata.artist);
   }
+  UpdateFaviconFromWebContents();
   for (auto& observer : observers_) {
     observer.OnMediaItemUIMetadataChanged();
   }
@@ -187,9 +212,33 @@ void MahoNowPlayingCard::UpdateWithMediaArtwork(const gfx::ImageSkia& image) {}
 void MahoNowPlayingCard::UpdateWithChapterArtwork(int index, const gfx::ImageSkia& image) {}
 
 void MahoNowPlayingCard::UpdateWithFavicon(const gfx::ImageSkia& icon) {
-  if (favicon_view_) {
+  if (favicon_view_ && !icon.isNull()) {
     favicon_view_->SetImageModel(views::Button::STATE_NORMAL,
                                  ui::ImageModel::FromImageSkia(icon));
+    return;
+  }
+  UpdateFaviconFromWebContents();
+}
+
+void MahoNowPlayingCard::UpdateFaviconFromWebContents() {
+  if (!favicon_view_) {
+    return;
+  }
+  content::WebContents* contents =
+      content::MediaSession::GetWebContentsFromRequestId(item_id_);
+  if (!contents) {
+    return;
+  }
+  content::NavigationEntry* entry =
+      contents->GetController().GetLastCommittedEntry();
+  if (!entry) {
+    return;
+  }
+  const content::FaviconStatus& favicon = entry->GetFavicon();
+  if (favicon.valid && !favicon.image.IsEmpty()) {
+    favicon_view_->SetImageModel(
+        views::Button::STATE_NORMAL,
+        ui::ImageModel::FromImageSkia(favicon.image.AsImageSkia()));
   }
 }
 
@@ -318,13 +367,15 @@ void MahoNowPlayingCard::BuildLayout() {
 
   auto* favicon_stack = row4->AddChildView(std::make_unique<views::View>());
   favicon_stack->SetLayoutManager(std::make_unique<views::FillLayout>());
-  favicon_stack->SetPreferredSize(gfx::Size(20, 20));
+  favicon_stack->SetPreferredSize(gfx::Size(26, 26));
 
-  favicon_view_ = favicon_stack->AddChildView(std::make_unique<views::ImageButton>(
+  favicon_view_ = favicon_stack->AddChildView(std::make_unique<GlassHoverImageButton>(
       base::BindRepeating(&MahoNowPlayingCard::OnFaviconPressed,
                           base::Unretained(this))));
   favicon_view_->SetBorder(nullptr);
-  favicon_view_->SetPreferredSize(gfx::Size(16, 16));
+  favicon_view_->SetPreferredSize(gfx::Size(26, 26));
+  favicon_view_->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
+  favicon_view_->SetImageVerticalAlignment(views::ImageButton::ALIGN_MIDDLE);
   favicon_view_->SetAccessibleName(u"Jump to source tab");
   favicon_view_->SetTooltipText(u"Jump to source tab");
   views::InstallCircleHighlightPathGenerator(favicon_view_);
@@ -467,6 +518,9 @@ void MahoNowPlayingCard::OnPlayPausePressed() {
 }
 
 BEGIN_METADATA(NotePulseOverlay)
+END_METADATA
+
+BEGIN_METADATA(GlassHoverImageButton)
 END_METADATA
 
 BEGIN_METADATA(MahoNowPlayingCard)

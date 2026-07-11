@@ -191,6 +191,7 @@ class MahoSidebarTabListView : public views::View,
   const std::unordered_set<std::string>& selected_tab_ids() const {
     return selected_tab_ids_;
   }
+  bool HasMultiSelection() const { return selected_tab_ids_.size() > 1; }
 
   void CloseSelected();
   void PinSelected(bool pin);
@@ -221,6 +222,7 @@ class MahoSidebarTabListView : public views::View,
                                   MahoSidebarTabSection section,
                                   Browser* browser,
                                   const std::string& parent_folder_id);
+  void AnimateAwaitingSplits();
   std::u16string GetNodeDisplayText(const SidebarTreeNode& node) const;
   std::u16string GetNodeTooltipText(const SidebarTreeNode& node) const;
   void ActivateTab(int tab_index);
@@ -308,6 +310,18 @@ class MahoSidebarTabListView : public views::View,
   // splits so their creation animates once instead of on every rebuild.
   std::set<std::string> last_rendered_split_ids_;
   std::set<std::string> current_rebuild_split_ids_;
+
+  // Live split_id -> container view, rebuilt every RebuildRows. Lets the
+  // debounced creation animation find the current container after the burst of
+  // rebuilds that a single split creation triggers has settled.
+  std::unordered_map<std::string, raw_ptr<views::View>> split_id_to_container_;
+  // Split IDs created this session that still need their one-time reveal
+  // animation. Persists across rebuilds (unlike the maps above) until the
+  // debounce timer actually plays the animation, then is cleared.
+  std::set<std::string> splits_awaiting_anim_;
+  // Coalesces the rebuild burst: (re)started on each rebuild that still has a
+  // split awaiting animation, so the reveal fires once on the settled view.
+  base::OneShotTimer split_anim_debounce_timer_;
 
   // Selection states
   std::unordered_set<std::string> selected_tab_ids_;

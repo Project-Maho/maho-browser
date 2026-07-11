@@ -34,7 +34,11 @@ MahoSidebarNowPlayingView::MahoSidebarNowPlayingView(Browser* browser)
   }
 }
 
-void MahoSidebarNowPlayingView::AddedToWidget() {}
+void MahoSidebarNowPlayingView::AddedToWidget() {
+  if (service_) {
+    service_->media_item_manager()->SetDialogDelegate(this);
+  }
+}
 
 void MahoSidebarNowPlayingView::SetupDelegate() {}
 
