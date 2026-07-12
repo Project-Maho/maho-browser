@@ -436,12 +436,6 @@ impl SettingsManager {
                     item_type: SettingsItemType::Toggle,
                     value: serde_json::json!(self.settings.appearance.show_tab_bar),
                 },
-                SettingsItem {
-                    key: "window_transparency".to_string(),
-                    label: "Window Transparency".to_string(),
-                    item_type: SettingsItemType::Toggle,
-                    value: serde_json::json!(self.settings.appearance.window_transparency),
-                },
             ],
         };
 

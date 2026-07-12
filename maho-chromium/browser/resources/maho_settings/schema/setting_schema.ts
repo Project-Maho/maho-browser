@@ -95,14 +95,6 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
     },
   },
   {
-    key: 'appearance.window_transparency',
-    metadata: {
-      label: 'Window transparency',
-      description: 'Allow subtle transparency effects on the browser window background.',
-      control: 'toggle',
-    },
-  },
-  {
     key: 'privacy.do_not_track',
     metadata: {
       label: 'Send “Do Not Track”',

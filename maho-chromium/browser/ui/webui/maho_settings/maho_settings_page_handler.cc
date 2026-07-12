@@ -1527,9 +1527,6 @@ bool MahoSettingsPageHandler::HandleFfiSetting(const std::string& key,
   } else if (key == "appearance.density") {
     maho_core_set_density(core, value.c_str());
     handled = true;
-  } else if (key == "appearance.window_transparency") {
-    maho_core_set_window_transparency(core, value == "true");
-    handled = true;
   } else if (key == "appearance.sidebar_width") {
     int width = 0;
     if (!base::StringToInt(value, &width)) return true;
@@ -1634,9 +1631,6 @@ void MahoSettingsPageHandler::AppendFfiSettings(
       add("appearance.sidebar_width",
           base::NumberToString(static_cast<int>(*width)));
     }
-  }
-  if (auto transparency = appearance->FindBool("windowTransparency")) {
-    add("appearance.window_transparency", *transparency ? "true" : "false");
   }
   if (const base::DictValue* color = appearance->FindDict("accentColor")) {
     std::string color_json;

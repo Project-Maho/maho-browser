@@ -19,7 +19,6 @@ export const LIVE_PANE_SECTION_MANIFEST: Record<string, LivePaneSectionDefinitio
       settingKeys: [
         'appearance.theme',
         'appearance.sidebar_width',
-        'appearance.window_transparency',
       ],
       wide: true,
     }},
