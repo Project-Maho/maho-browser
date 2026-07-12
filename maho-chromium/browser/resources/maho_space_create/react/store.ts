@@ -39,7 +39,7 @@ import type {
 
 type Listener = () => void;
 
-const PREVIEW_DEBOUNCE_MS = 0;
+const PREVIEW_DEBOUNCE_MS = 33;
 
 function notifyListeners(listeners: Set<Listener>): void {
   for (const listener of listeners) {
@@ -225,7 +225,7 @@ export class ThemePickerStore {
         saturation: color.saturation,
         lightness: color.lightness,
         position: pos,
-        isPrimary: false,
+        isPrimary: sel.stops.length === 0,
       });
     });
   }
@@ -233,8 +233,8 @@ export class ThemePickerStore {
   removeStop(index: number): void {
     this.patch(draft => {
       const stops = draft.selection.stops;
-      if (stops.length <= 1) return;
-      if (stops[index]?.isPrimary) return;
+      if (stops.length === 0) return;
+      if (stops.length > 1 && stops[index]?.isPrimary) return;
       stops.splice(index, 1);
     });
   }
@@ -315,8 +315,8 @@ export class ThemePickerStore {
 
   private schedulePreview(): void {
     this.clearPreviewTimer();
-    const payload = this.serializeSelection();
     this.previewTimer = this.scheduleTimeout(() => {
+      const payload = this.serializeSelection();
       void this.handler.previewTheme({themeJson: payload});
       this.previewTimer = null;
     }, PREVIEW_DEBOUNCE_MS);

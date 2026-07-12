@@ -1,15 +1,18 @@
-import React, {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore} from 'react';
+import React, {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore} from 'react';
 import {createRoot} from 'react-dom/client';
 
 import {ThemePickerStore} from './store.js';
 import type {ThemeSelection, ThemeMode, ZenStop, CanvasGeometry} from './types.js';
-import {HARMONIES, HARMONY_MAX_DOTS, OPACITY_MIN, OPACITY_MAX} from './types.js';
+import {clampUnit, DEFAULT_DISTANCE, HARMONIES, HARMONY_MAX_DOTS, OPACITY_MIN, OPACITY_MAX, positionForHueAndDistance} from './types.js';
 import type {ColorHarmony} from './types.js';
+import {Button} from '@ui/button';
+import {ToggleGroup, ToggleGroupItem} from '@ui/toggle-group';
+import {Tooltip, TooltipContent, TooltipProvider, TooltipTrigger} from '@ui/tooltip';
 
 const MODE_OPTIONS: Array<{mode: ThemeMode; icon: string; label: string; title: string}> = [
   {mode: 'sparkle', icon: '✦', label: 'Auto', title: 'Auto — gradient theme that adapts to system'},
-  {mode: 'sun', icon: '☀', label: 'Light', title: 'Light — bright solid theme'},
-  {mode: 'moon', icon: '🌙', label: 'Dark', title: 'Dark — dark solid theme'},
+  {mode: 'sun', icon: '☀', label: 'Light', title: 'Light — bright theme'},
+  {mode: 'moon', icon: '🌙', label: 'Dark', title: 'Dark — dark theme'},
 ];
 
 const SWATCHS = Array.from({length: 9}, (_, index) => index);
@@ -27,6 +30,12 @@ const HARMONY_LABELS: Record<ColorHarmony, string> = {
   triadic: 'Triadic',
   floating: 'Floating',
 };
+
+const MODE_CHIP_CLASS =
+    'size-9 rounded-full border-border/70 bg-secondary/60 p-0 text-muted-foreground shadow-none hover:bg-muted hover:text-foreground focus-visible:ring-ring aria-checked:border-border aria-checked:bg-secondary aria-checked:text-foreground';
+const CANVAS_ACTION_BUTTON_CLASS =
+    'size-[30px] rounded-full border-border/70 bg-secondary/70 p-0 text-base leading-none text-foreground shadow-none backdrop-blur-md hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40';
+const FOOTER_BUTTON_CLASS = 'min-w-[88px]';
 
 function harmonyTooltip(harmony: ColorHarmony, applicableCount: number): string {
   const label = HARMONY_LABELS[harmony];
@@ -83,23 +92,35 @@ function ThemePicker({store, loading}: {store: ThemePickerStore; loading: boolea
 function ModeChips(
     {selectedMode, onSelect}: {selectedMode: ThemeMode; onSelect: (mode: ThemeMode) => void}) {
   return (
-    <div className="tp-mode-chips" data-maho-el="D2">
+    <ToggleGroup
+      className="tp-mode-chips"
+      data-maho-el="D2"
+      variant="outline"
+      type="single"
+      value={selectedMode}
+      onValueChange={(value: string) => {
+        if (value) {
+          onSelect(value as ThemeMode);
+        }
+      }}>
       {MODE_OPTIONS.map(option => (
-        <button
-          key={option.mode}
-          type="button"
-          className={option.mode === selectedMode ? 'tp-chip is-selected' : 'tp-chip'}
-          data-maho-el={
-            option.mode === 'sparkle' ? 'KP-5' : option.mode === 'sun' ? 'KP-6' : 'KP-7'}
-          aria-label={option.title}
-          aria-pressed={option.mode === selectedMode}
-          title={option.title}
-          onClick={e => { e.stopPropagation(); onSelect(option.mode); }}>
-          <span className="tp-chip__icon" aria-hidden="true">{option.icon}</span>
-          <span className="tp-chip__label" aria-hidden="true">{option.label}</span>
-        </button>
+        <Tooltip key={option.mode}>
+          <TooltipTrigger asChild>
+            <ToggleGroupItem
+              className={MODE_CHIP_CLASS}
+              data-maho-el={
+                option.mode === 'sparkle' ? 'KP-5' : option.mode === 'sun' ? 'KP-6' : 'KP-7'}
+              value={option.mode}
+              aria-label={option.title}
+              onClick={e => { e.stopPropagation(); }}>
+              <span className="text-base leading-none" aria-hidden="true">{option.icon}</span>
+              <span className="sr-only">{option.label}</span>
+            </ToggleGroupItem>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{option.title}</TooltipContent>
+        </Tooltip>
       ))}
-    </div>
+    </ToggleGroup>
   );
 }
 
@@ -115,40 +136,51 @@ function CanvasActions(
   const algoDisabled = applicableHarmonies.length <= 1;
   const max = HARMONY_MAX_DOTS[selection.harmony];
   const atMax = selection.stops.length >= max;
-  const atMin = selection.stops.length <= 1;
+  const atMin = selection.stops.length === 0;
   const lastIdx = selection.stops.length - 1;
+  const tooltipText = harmonyTooltip(selection.harmony, applicableHarmonies.length);
   return (
     <div className="tp-canvas-actions">
-      <button
+      <Button
+        variant="ghost"
+        size="icon"
         type="button"
-        className="tp-dot-btn"
-        disabled={atMax}
+        className={CANVAS_ACTION_BUTTON_CLASS}
+        disabled={atMax || selection.stops.length === 0}
         aria-label="Add color stop"
         onClick={e => { e.stopPropagation(); store.addStop(); }}>
         +
-      </button>
-      <button
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
         type="button"
-        className="tp-dot-btn"
+        className={CANVAS_ACTION_BUTTON_CLASS}
         disabled={atMin}
         aria-label="Remove color stop"
         onClick={e => { e.stopPropagation(); store.removeStop(lastIdx); }}>
         −
-      </button>
-      <button
-        type="button"
-        className="tp-algo-toggle"
-        disabled={algoDisabled}
-        aria-label={harmonyTooltip(selection.harmony, applicableHarmonies.length)}
-        title={harmonyTooltip(selection.harmony, applicableHarmonies.length)}
-        onClick={e => { e.stopPropagation(); if (nextHarmony) store.setHarmony(nextHarmony); }}>
-        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <path d="M8 2.5 L2.5 12.5 L13.5 12.5 Z" stroke="currentColor" strokeWidth="1.2" fill="none"/>
-          <circle cx="8" cy="2.5" r="1.7" fill="currentColor"/>
-          <circle cx="2.5" cy="12.5" r="1.7" fill="currentColor"/>
-          <circle cx="13.5" cy="12.5" r="1.7" fill="currentColor"/>
-        </svg>
-      </button>
+      </Button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            type="button"
+            className={CANVAS_ACTION_BUTTON_CLASS}
+            disabled={algoDisabled}
+            aria-label={tooltipText}
+            onClick={e => { e.stopPropagation(); if (nextHarmony) store.setHarmony(nextHarmony); }}>
+            <svg className="size-4" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M8 2.5 L2.5 12.5 L13.5 12.5 Z" stroke="currentColor" strokeWidth="1.2" fill="none"/>
+              <circle cx="8" cy="2.5" r="1.7" fill="currentColor"/>
+              <circle cx="2.5" cy="12.5" r="1.7" fill="currentColor"/>
+              <circle cx="13.5" cy="12.5" r="1.7" fill="currentColor"/>
+            </svg>
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="top">{tooltipText}</TooltipContent>
+      </Tooltip>
     </div>
   );
 }
@@ -159,14 +191,27 @@ function ZenDots(
       canvasRef: React.RefObject<HTMLElement | null>;
       store: ThemePickerStore;
     }) {
-  const geomRef = useRef<CanvasGeometry>({width: 380, height: 380, padding: 20});
+  const [geom, setGeom] = useState<CanvasGeometry>({width: 380, height: 380, padding: 20});
 
   useLayoutEffect(() => {
     const node = canvasRef.current;
     if (!node) return;
-    const rect = node.getBoundingClientRect();
-    geomRef.current = {width: rect.width, height: rect.height, padding: 20};
-  });
+
+    const measure = () => {
+      const rect = node.getBoundingClientRect();
+      setGeom(prev => {
+        if (prev.width === rect.width && prev.height === rect.height) {
+          return prev;
+        }
+        return {width: rect.width, height: rect.height, padding: 20};
+      });
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [canvasRef]);
 
   return (
     <div className="tp-zen-dots" data-maho-el="D9">
@@ -176,7 +221,7 @@ function ZenDots(
           index={index}
           stop={stop}
           canvasRef={canvasRef}
-          geomRef={geomRef}
+          geom={geom}
           store={store}
         />
       ))}
@@ -185,11 +230,11 @@ function ZenDots(
 }
 
 function ZenDot(
-    {index, stop, canvasRef, geomRef, store}: {
+    {index, stop, canvasRef, geom, store}: {
       index: number;
       stop: ZenStop;
       canvasRef: React.RefObject<HTMLElement | null>;
-      geomRef: React.RefObject<CanvasGeometry>;
+      geom: CanvasGeometry;
       store: ThemePickerStore;
     }) {
   const draggingRef = useRef(false);
@@ -235,14 +280,16 @@ function ZenDot(
     updateFromEvent(event.nativeEvent);
   }, [updateFromEvent, isDraggable]);
 
-  const geom = geomRef.current;
-  const canvasWidth = geom.width;
-  const canvasHeight = geom.height;
-  const xPercent = (stop.position.x / canvasWidth) * 100;
-  const yPercent = (stop.position.y / canvasHeight) * 100;
+  const corrupt = !(typeof stop.lightness === 'number' &&
+      Number.isFinite(stop.lightness) && stop.lightness > 0 &&
+      stop.lightness <= 100);
+  const distance = corrupt ? DEFAULT_DISTANCE : clampUnit(1 - stop.lightness / 100);
+  const derived = positionForHueAndDistance(stop.hue, distance, geom);
+  const xPercent = (derived.x / geom.width) * 100;
+  const yPercent = (derived.y / geom.height) * 100;
   const hueDegrees = stop.hue * 360;
-  const saturationPercent = Math.max(10, stop.saturation * 100);
-  const lightnessPercent = stop.lightness;
+  const displayLightness = corrupt ? (1 - DEFAULT_DISTANCE) * 100 : stop.lightness;
+  const displaySaturation = corrupt ? 97 : Math.max(10, stop.saturation * 100);
   // Zen exact dot sizing — see zen-gradient-generator.css:257-291. (2x scale for Maho.)
   const size = stop.isPrimary ? 76 : 40;
   const borderWidth = stop.isPrimary ? 12 : 6;
@@ -257,7 +304,7 @@ function ZenDot(
         width: `${size}px`,
         height: `${size}px`,
         borderWidth: `${borderWidth}px`,
-        background: `hsl(${hueDegrees.toFixed(1)}, ${saturationPercent.toFixed(1)}%, ${lightnessPercent.toFixed(1)}%)`,
+        background: `hsl(${hueDegrees.toFixed(1)}, ${displaySaturation.toFixed(1)}%, ${displayLightness.toFixed(1)}%)`,
         pointerEvents: isDraggable ? 'auto' : 'none',
         cursor: isDraggable ? undefined : 'default',
       }}
@@ -327,8 +374,8 @@ function PreviewCanvas(
     }) {
   const canvasRef = useRef<HTMLElement | null>(null);
 
-  const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLElement>) => {
-    const target = e.target as HTMLElement;
+  const handleCanvasClick = useCallback((event: MouseEvent) => {
+    const target = event.target as HTMLElement;
     if (target.closest('.tp-canvas-actions') ||
         target.closest('.tp-mode-chips') ||
         target.closest('.tp-zen-dot')) {
@@ -337,19 +384,30 @@ function PreviewCanvas(
     const node = canvasRef.current;
     if (!node) return;
     const rect = node.getBoundingClientRect();
-    const pixelX = e.clientX - rect.left;
-    const pixelY = e.clientY - rect.top;
+    const pixelX = event.clientX - rect.left;
+    const pixelY = event.clientY - rect.top;
     store.addStop({x: pixelX, y: pixelY});
   }, [store]);
+
+  useEffect(() => {
+    const node = canvasRef.current;
+    if (!node) return;
+    node.addEventListener('click', handleCanvasClick);
+    return () => node.removeEventListener('click', handleCanvasClick);
+  }, [handleCanvasClick]);
 
   return (
     <section
       ref={canvasRef}
       className="tp-canvas tp-canvas--zen"
-      data-maho-el="D1 KP-3"
-      onClick={handleCanvasClick}>
+      data-maho-el="D1 KP-3">
       <ModeChips selectedMode={selection.mode} onSelect={onSelectMode} />
       <CanvasActions selection={selection} store={store} />
+      {selection.stops.length === 0 ? (
+        <p className="pointer-events-none z-[1] m-0 text-sm font-medium text-muted-foreground/80">
+          Tap to pick a color
+        </p>
+      ) : null}
       <ZenDots selection={selection} canvasRef={canvasRef} store={store} />
     </section>
   );
@@ -367,19 +425,20 @@ function SwatchRow(
     }) {
   return (
     <section className="tp-swatches-row" data-maho-el="D4 KP-11">
-      <button
+      <Button
+        variant="ghost"
+        size="icon"
         type="button"
         className="tp-chevron tp-chevron--left"
         aria-label="Previous swatch"
         onClick={() => onStepPreset(-1)}>
         <span className="tp-chevron__icon" aria-hidden="true">‹</span>
-      </button>
-      <div className="tp-swatches" role="list" aria-label="Theme swatches">
+      </Button>
+      <div className="tp-swatches">
         {SWATCHS.map(index => (
           <button
             key={index}
             type="button"
-            role="listitem"
             aria-label={`Theme preset ${index + 1}`}
             aria-pressed={selectedPreset === index}
             className={selectedPreset === index ? `tp-swatch tp-swatch--${index} is-selected` : `tp-swatch tp-swatch--${index}`}
@@ -387,14 +446,16 @@ function SwatchRow(
           </button>
         ))}
       </div>
-      <button
+      <Button
+        variant="ghost"
+        size="icon"
         type="button"
         className="tp-chevron tp-chevron--right"
         aria-label="Next swatch"
         data-maho-el="D5"
         onClick={() => onStepPreset(1)}>
         <span className="tp-chevron__icon" aria-hidden="true">›</span>
-      </button>
+      </Button>
     </section>
   );
 }
@@ -544,12 +605,12 @@ function Footer(
     }) {
   return (
     <footer className="tp-footer" data-maho-el="D8">
-      <button type="button" className="tp-cancel-btn" disabled={disabled} onClick={onCancel}>
+      <Button type="button" variant="outline" className={FOOTER_BUTTON_CLASS} disabled={disabled} onClick={onCancel}>
         Cancel
-      </button>
-      <button type="button" className="tp-done-btn" disabled={disabled} onClick={onDone}>
+      </Button>
+      <Button type="button" variant="default" className={FOOTER_BUTTON_CLASS} disabled={disabled} onClick={onDone}>
         Done
-      </button>
+      </Button>
     </footer>
   );
 }
@@ -561,4 +622,7 @@ if (!rootElement) {
 }
 
 const store = new ThemePickerStore();
-createRoot(rootElement).render(<App store={store} />);
+createRoot(rootElement).render(
+    <TooltipProvider delayDuration={180}>
+      <App store={store} />
+    </TooltipProvider>);

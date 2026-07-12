@@ -2137,12 +2137,6 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "    if (disposition == WindowOpenDisposition::CURRENT_TAB) {"
             ),
             new=(
-                "    {\n"
-                "      auto it = tab.extra_data.find(MahoTabIdHelper::kExtraDataKey);\n"
-                "      if (it != tab.extra_data.end() && !it->second.empty()) {\n"
-                "        MahoTabIdHelper::SetPendingRestoredTabId(it->second);\n"
-                "      }\n"
-                "    }\n"
                 "    // Maho zero-tab: skip chrome://newtab and about:blank restored tabs so\n"
                 "    // legacy sessions do not resurrect these synthetic URLs. Real user tabs\n"
                 "    // (youtube.com, etc.) restore normally.\n"
@@ -2156,6 +2150,15 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "            (url.SchemeIs(\"chrome\") && url.host() == \"newtab\")) {\n"
                 "          return nullptr;\n"
                 "        }\n"
+                "      }\n"
+                "    }\n"
+                "    // Push the stable id ONLY after the zero-tab filter's early return, so a\n"
+                "    // filtered tab never leaks an unconsumed id into the global FIFO queue\n"
+                "    // that the next restored WebContents would mis-pop.\n"
+                "    {\n"
+                "      auto it = tab.extra_data.find(MahoTabIdHelper::kExtraDataKey);\n"
+                "      if (it != tab.extra_data.end() && !it->second.empty()) {\n"
+                "        MahoTabIdHelper::SetPendingRestoredTabId(it->second);\n"
                 "      }\n"
                 "    }\n"
                 "    RecordAppLaunchForTab(browser, tab, selected_index);\n"
@@ -2177,12 +2180,6 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "    // Associate sessionStorage (if any) to the restored tab."
             ),
             new=(
-                "    {\n"
-                "      auto it = tab.extra_data.find(MahoTabIdHelper::kExtraDataKey);\n"
-                "      if (it != tab.extra_data.end() && !it->second.empty()) {\n"
-                "        MahoTabIdHelper::SetPendingRestoredTabId(it->second);\n"
-                "      }\n"
-                "    }\n"
                 "    // Maho zero-tab: skip chrome://newtab and about:blank restored tabs so\n"
                 "    // legacy sessions do not resurrect these synthetic URLs. Real user tabs\n"
                 "    // (youtube.com, etc.) restore normally. If the filtered tab was the\n"
@@ -2205,6 +2202,15 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "          }\n"
                 "          return;\n"
                 "        }\n"
+                "      }\n"
+                "    }\n"
+                "    // Push the stable id ONLY after the zero-tab filter's early return, so a\n"
+                "    // filtered tab never leaks an unconsumed id into the global FIFO queue\n"
+                "    // that the next restored WebContents would mis-pop.\n"
+                "    {\n"
+                "      auto it = tab.extra_data.find(MahoTabIdHelper::kExtraDataKey);\n"
+                "      if (it != tab.extra_data.end() && !it->second.empty()) {\n"
+                "        MahoTabIdHelper::SetPendingRestoredTabId(it->second);\n"
                 "      }\n"
                 "    }\n"
                 "    RecordAppLaunchForTab(browser, tab, selected_index);\n"
@@ -2707,6 +2713,51 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "transparency + NSVisualEffectView sidebar vibrancy"
             ),
             guard="Maho: enable kGlassFrame by default on macOS",
+        ),
+    ],
+    "chrome/browser/ui/views/frame/browser_widget.cc": [
+        Replacement(
+            old=(
+                '#include "chrome/browser/ui/views/frame/browser_view.h"\n'
+            ),
+            new=(
+                '#include "chrome/browser/ui/views/frame/browser_view.h"\n'
+                '#include "maho/browser/ui/theme/maho_space_theme_state.h"\n'
+            ),
+            description=(
+                "Maho: include space theme state so GetColorProviderKey can "
+                "force the active space light/dark scheme"
+            ),
+            guard="maho/browser/ui/theme/maho_space_theme_state.h",
+        ),
+        Replacement(
+            old=(
+                "  }();\n"
+                "\n"
+                "  // user_color.\n"
+            ),
+            new=(
+                "  }();\n"
+                "\n"
+                "  // Maho: force the active space light/dark scheme onto the\n"
+                "  // ColorProviderKey. Auto (or no active theme) leaves the\n"
+                "  // upstream value untouched. Incognito stays forced-dark.\n"
+                "  if (!IsIncognitoBrowser()) {\n"
+                "    if (std::optional<bool> maho_dark =\n"
+                "            MahoSpaceThemeState::GetForcedDarkMode()) {\n"
+                "      key.color_mode = *maho_dark\n"
+                "                           ? ui::ColorProviderKey::ColorMode::kDark\n"
+                "                           : ui::ColorProviderKey::ColorMode::kLight;\n"
+                "    }\n"
+                "  }\n"
+                "\n"
+                "  // user_color.\n"
+            ),
+            description=(
+                "Maho: force per-space light/dark color scheme in "
+                "BrowserWidget::GetColorProviderKey"
+            ),
+            guard="MahoSpaceThemeState::GetForcedDarkMode",
         ),
     ],
 }

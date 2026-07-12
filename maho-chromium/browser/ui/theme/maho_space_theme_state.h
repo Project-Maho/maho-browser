@@ -20,6 +20,13 @@ class MahoSpaceThemeState {
     kZen,
   };
 
+  // Per-space forced appearance. kAuto follows the browser/OS setting.
+  enum class ColorScheme {
+    kAuto,
+    kLight,
+    kDark,
+  };
+
   struct SpaceHSV {
     SkScalar hue;        // 0-360
     SkScalar saturation; // 0.0-1.0
@@ -33,6 +40,8 @@ class MahoSpaceThemeState {
     float opacity;
     float texture;
     float grain;
+    ColorScheme color_scheme = ColorScheme::kAuto;
+    bool achromatic = false;
   };
 
   // Updates cached state by reading the active space's theme from Rust core FFI.
@@ -40,6 +49,11 @@ class MahoSpaceThemeState {
 
   // Returns cached theme data for the active space, or std::nullopt if none.
   static std::optional<ThemeData> GetThemeData();
+
+  // Returns the active space's forced dark-mode preference for the color
+  // pipeline: true = force dark, false = force light, std::nullopt = follow the
+  // browser/OS setting (kAuto or no active theme). Honors preview overrides.
+  static std::optional<bool> GetForcedDarkMode();
 
   // Returns a chrome tint color for space theme blending, or SK_ColorTRANSPARENT
   // if no space has an active color. Preserved as a compatibility helper for

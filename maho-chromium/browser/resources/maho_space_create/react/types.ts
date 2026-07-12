@@ -38,6 +38,16 @@ export const DEFAULT_CANVAS_GEOMETRY: CanvasGeometry = {
   padding: 20,
 };
 
+export const DEFAULT_DISTANCE = 0.3;
+
+export function distanceFromLightness(lightness: number | undefined): number {
+  if (typeof lightness === 'number' && Number.isFinite(lightness) &&
+      lightness > 0 && lightness <= 100) {
+    return clampUnit(1 - lightness / 100);
+  }
+  return DEFAULT_DISTANCE;
+}
+
 // ---------------------------------------------------------------------------
 // Polar color mapping (Zen parity)
 // ---------------------------------------------------------------------------
@@ -220,7 +230,7 @@ export interface SerializedThemeColor {
   isPrimary: boolean;
   c?: [number, number, number];
   position?: {x: number; y: number};
-  algorithm?: ColorHarmony;
+  algorithm?: string;
   lightness?: number;
 }
 
@@ -233,7 +243,7 @@ export interface SerializedSolidTheme {
 export interface SerializedZenTheme {
   type: 'gradient';
   gradientColors: SerializedThemeColor[];
-  harmony: ColorHarmony;
+  harmony: string;
   opacity: number;
   texture: number;
   scheme?: 'auto' | 'light' | 'dark';
@@ -281,8 +291,8 @@ const PRESET_IDS = [
 
 function buildZenPresets(): ZenPreset[] {
   const geom = DEFAULT_CANVAS_GEOMETRY;
-  const distance = 0.7;
-  const lightness = 85;
+  const lightness = (1 - DEFAULT_DISTANCE) * 100;
+  const distance = distanceFromLightness(lightness);
   return PRESETS.map((p, i) => {
     const pos = positionForHueAndDistance(p.hue, distance, geom);
     const [r, g, b] = hsbToRgb(p.hue, p.saturation, p.brightness);
@@ -325,15 +335,11 @@ export function normalizeHue(hue: number): number {
   return wrapped < 0 ? wrapped + 1 : wrapped;
 }
 
-function defaultPosition(hue: number): {x: number; y: number} {
-  return positionForHueAndDistance(hue, 0.7, DEFAULT_CANVAS_GEOMETRY);
-}
-
 export function stopsForPreset(presetIndex: number): ZenStop[] {
   const preset = PRESETS[normalizePresetIndex(presetIndex)];
   const geom = DEFAULT_CANVAS_GEOMETRY;
-  const distance = 0.7;
-  const lightness = 85;
+  const lightness = (1 - DEFAULT_DISTANCE) * 100;
+  const distance = distanceFromLightness(lightness);
   const primaryPos = positionForHueAndDistance(preset.hue, distance, geom);
   const offsets = HARMONIES['analogous'];
   const secondaries = offsets.map(offset => {
@@ -408,25 +414,30 @@ export function normalizeSelection(
       : fallback.harmony;
 
   let stops: ZenStop[];
-  if (selection.stops && selection.stops.length >= 1 &&
+  if (Array.isArray(selection.stops) &&
       selection.stops.length <= HARMONY_MAX_DOTS[harmony]) {
-    stops = selection.stops.map(stop => ({
-      hue: typeof stop.hue === 'number' ? normalizeHue(stop.hue) : 0,
-      saturation: typeof stop.saturation === 'number'
-          ? clampUnit(stop.saturation) : 0,
-      isPrimary: Boolean(stop.isPrimary),
-      position: stop.position && typeof stop.position.x === 'number' &&
-                    typeof stop.position.y === 'number'
-          ? {x: stop.position.x, y: stop.position.y}
-          : defaultPosition(typeof stop.hue === 'number' ? stop.hue : 0),
-      lightness: typeof stop.lightness === 'number'
-          ? Math.max(0, Math.min(100, stop.lightness)) : 85,
-    }));
+    stops = selection.stops.map(stop => {
+      const hue = typeof stop.hue === 'number' ? normalizeHue(stop.hue) : 0;
+      const lightness = typeof stop.lightness === 'number' &&
+              Number.isFinite(stop.lightness) && stop.lightness > 0 &&
+              stop.lightness <= 100
+          ? stop.lightness
+          : (1 - DEFAULT_DISTANCE) * 100;
+      return {
+        hue,
+        saturation: typeof stop.saturation === 'number'
+            ? clampUnit(stop.saturation) : 0,
+        isPrimary: Boolean(stop.isPrimary),
+        position: positionForHueAndDistance(
+            hue, distanceFromLightness(lightness), DEFAULT_CANVAS_GEOMETRY),
+        lightness,
+      };
+    });
   } else {
     stops = stopsForPreset(presetIndex);
   }
 
-  if (!stops.some(s => s.isPrimary)) {
+  if (stops.length > 0 && !stops.some(s => s.isPrimary)) {
     stops[0]!.isPrimary = true;
   }
 
@@ -491,8 +502,8 @@ const ANALOGOUS_OFFSETS = [-50 / 360, 50 / 360];
 function buildAutoZenStops(
     primaryHue: number, primarySaturation: number): ZenStop[] {
   const geom = DEFAULT_CANVAS_GEOMETRY;
-  const distance = 0.7;
-  const lightness = 85;
+  const lightness = (1 - DEFAULT_DISTANCE) * 100;
+  const distance = distanceFromLightness(lightness);
   const primaryPos = positionForHueAndDistance(primaryHue, distance, geom);
   return [
     {
@@ -530,6 +541,19 @@ function schemeToMode(scheme: unknown): ThemeMode {
   return 'sparkle';
 }
 
+function mapHarmonyToWire(harmony: ColorHarmony): string {
+  if (harmony === 'singleAnalogous') return 'single_analogous';
+  if (harmony === 'splitComplementary') return 'split_complementary';
+  return harmony;
+}
+
+function mapWireToHarmony(wire: unknown): ColorHarmony {
+  if (wire === 'single_analogous') return 'singleAnalogous';
+  if (wire === 'split_complementary') return 'splitComplementary';
+  if (isValidHarmony(wire)) return wire;
+  return 'analogous';
+}
+
 export function selectionToWireTheme(
     selection: ThemeSelection): SerializedTheme {
   const normalized = normalizeSelection(selection);
@@ -549,12 +573,12 @@ export function selectionToWireTheme(
         position: {x: stop.position.x, y: stop.position.y},
       };
       if (stop.isPrimary) {
-        color.algorithm = normalized.harmony;
+        color.algorithm = mapHarmonyToWire(normalized.harmony);
         color.lightness = stop.lightness;
       }
       return color;
     }),
-    harmony: normalized.harmony,
+    harmony: mapHarmonyToWire(normalized.harmony),
     opacity: normalized.opacity,
     texture: grainUnit,
     scheme: modeToScheme(normalized.mode),
@@ -618,7 +642,7 @@ export function wireThemeToSelection(
           grain,
           opacity: typeof solid.opacity === 'number'
               ? clampOpacity(solid.opacity)
-              : fallback.opacity,
+              : OPACITY_MAX,
           harmony: 'analogous',
           stops: buildAutoZenStops(huePart, saturation),
         },
@@ -629,24 +653,21 @@ export function wireThemeToSelection(
     if (parsed.type === 'zen' || parsed.type === 'gradient') {
       const zen = parsed as unknown as SerializedZenTheme;
       const stops = zen.gradientColors;
-      if (!Array.isArray(stops) || stops.length === 0) {
+      if (!Array.isArray(stops)) {
         return fallback;
       }
 
-      const geom = DEFAULT_CANVAS_GEOMETRY;
-
       // Parse harmony
       const rawHarmony = (parsed as Record<string, unknown>).harmony;
-      const harmony: ColorHarmony = isValidHarmony(rawHarmony)
-          ? rawHarmony : 'analogous';
+      const harmony: ColorHarmony = mapWireToHarmony(rawHarmony);
+      const maxStops = HARMONY_MAX_DOTS[harmony];
 
       // Parse opacity
-      const rawOpacity = typeof zen.opacity === 'number' ? zen.opacity : 0.5;
+      const rawOpacity = typeof zen.opacity === 'number' ? zen.opacity : OPACITY_MAX;
       const opacity = clampOpacity(rawOpacity);
 
       // Parse stops
-      const maxStops = HARMONY_MAX_DOTS[harmony];
-      const validStops: ZenStop[] = stops.slice(0, maxStops).map(stop => {
+      const validStops: ZenStop[] = stops.map(stop => {
         let hue: number;
         let saturation: number;
         let lightness: number;
@@ -663,7 +684,7 @@ export function wireThemeToSelection(
           const rawLightness =
               (stop as Record<string, unknown>).lightness;
           lightness = typeof rawLightness === 'number'
-              ? Math.max(0, Math.min(100, rawLightness))
+              ? rawLightness
               : hsb.b * 100;
         } else {
           hue = typeof stop.hue === 'number'
@@ -675,23 +696,19 @@ export function wireThemeToSelection(
           const rawLightness =
               (stop as Record<string, unknown>).lightness;
           lightness = typeof rawLightness === 'number'
-              ? Math.max(0, Math.min(100, rawLightness))
+              ? rawLightness
               : rawBrightness * 100;
         }
 
-        // Parse position
-        const rawPos = (stop as Record<string, unknown>).position;
-        let position: {x: number; y: number};
-        if (rawPos && typeof rawPos === 'object' &&
-            typeof (rawPos as {x: number}).x === 'number' &&
-            typeof (rawPos as {y: number}).y === 'number') {
-          position = {
-            x: (rawPos as {x: number}).x,
-            y: (rawPos as {y: number}).y,
-          };
-        } else {
-          position = positionForHueAndDistance(hue, 0.7, geom);
+        if (!(typeof lightness === 'number' && Number.isFinite(lightness) &&
+              lightness > 0 && lightness <= 100)) {
+          const distance = DEFAULT_DISTANCE;
+          lightness = (1 - distance) * 100;
+          saturation = (90 + (1 - distance) * 10) / 100;
         }
+
+        const position = positionForHueAndDistance(
+            hue, distanceFromLightness(lightness), DEFAULT_CANVAS_GEOMETRY);
 
         return {
           hue,
@@ -703,20 +720,22 @@ export function wireThemeToSelection(
       });
 
       // Pad to at least 3 stops for analogous/splitComplementary/triadic
-      while (validStops.length < Math.min(3, maxStops)) {
-        const last = validStops[validStops.length - 1]!;
-        validStops.push({
-          ...last,
-          position: {...last.position},
-          isPrimary: false,
-        });
+      if (validStops.length > 0) {
+        while (validStops.length < Math.min(3, maxStops)) {
+          const last = validStops[validStops.length - 1]!;
+          validStops.push({
+            ...last,
+            position: {...last.position},
+            isPrimary: false,
+          });
+        }
       }
 
-      if (!validStops.some(s => s.isPrimary)) {
+      if (validStops.length > 0 && !validStops.some(s => s.isPrimary)) {
         validStops[0]!.isPrimary = true;
       }
 
-      const primary = validStops.find(s => s.isPrimary) ?? validStops[0]!;
+      const primary = validStops.find(s => s.isPrimary);
       const texture = zen.texture;
       const grain = typeof texture === 'number'
           ? clampBrightness(Math.round(texture * 100))
@@ -725,7 +744,7 @@ export function wireThemeToSelection(
       return {
         selection: {
           mode: schemeToMode(zen.scheme),
-          preset_index: nearestPresetIndex(primary.hue),
+          preset_index: primary ? nearestPresetIndex(primary.hue) : 0,
           grain,
           opacity,
           harmony,

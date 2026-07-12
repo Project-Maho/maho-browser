@@ -168,6 +168,17 @@ const base::DictValue* FindSecondaryStop(const base::ListValue& colors,
   return nullptr;
 }
 
+MahoSpaceThemeState::ColorScheme ColorSchemeFromString(
+    const std::string* scheme) {
+  if (scheme && *scheme == "light") {
+    return MahoSpaceThemeState::ColorScheme::kLight;
+  }
+  if (scheme && *scheme == "dark") {
+    return MahoSpaceThemeState::ColorScheme::kDark;
+  }
+  return MahoSpaceThemeState::ColorScheme::kAuto;
+}
+
 std::optional<MahoSpaceThemeState::ThemeData> ExtractThemeDataFromThemeDict(
     const base::DictValue* theme_dict) {
   if (!theme_dict) {
@@ -187,23 +198,39 @@ std::optional<MahoSpaceThemeState::ThemeData> ExtractThemeDataFromThemeDict(
     if (!primary_hsv) {
       return std::nullopt;
     }
+    float grain_val = static_cast<float>(std::clamp(
+        color_dict ? color_dict->FindDouble("grain").value_or(0.0) : 0.0,
+        0.0, 1.0));
     return MahoSpaceThemeState::ThemeData{
         .kind = kind,
         .primary_hsv = *primary_hsv,
         .secondary_hsv = std::nullopt,
         .opacity = static_cast<float>(std::clamp(
             theme_dict->FindDouble("opacity").value_or(1.0), 0.0, 1.0)),
-        .texture = 0.0f,
-        .grain = static_cast<float>(std::clamp(
-            color_dict ? color_dict->FindDouble("grain").value_or(0.0) : 0.0,
-            0.0, 1.0)),
+        .texture = grain_val,
+        .grain = grain_val,
     };
   }
 
   if (*type == "gradient" || *type == "zen") {
     const auto* colors = theme_dict->FindList("gradientColors");
-    if (!colors || colors->empty()) {
+    if (!colors) {
       return std::nullopt;
+    }
+
+    if (colors->empty()) {
+      return MahoSpaceThemeState::ThemeData{
+          .kind = kind,
+          .primary_hsv = {0.0f, 0.0f, 0.5f},
+          .secondary_hsv = std::nullopt,
+          .opacity = static_cast<float>(std::clamp(
+              theme_dict->FindDouble("opacity").value_or(1.0), 0.0, 1.0)),
+          .texture = static_cast<float>(std::clamp(
+              theme_dict->FindDouble("texture").value_or(0.0), 0.0, 1.0)),
+          .grain = 0.0f,
+          .color_scheme = ColorSchemeFromString(theme_dict->FindString("scheme")),
+          .achromatic = true,
+      };
     }
 
     const base::DictValue* dominant = FindDominantStop(*colors);
@@ -234,6 +261,7 @@ std::optional<MahoSpaceThemeState::ThemeData> ExtractThemeDataFromThemeDict(
         .grain = static_cast<float>(std::clamp(
             dominant ? dominant->FindDouble("grain").value_or(0.0) : 0.0,
             0.0, 1.0)),
+        .color_scheme = ColorSchemeFromString(theme_dict->FindString("scheme")),
     };
   }
 
@@ -356,7 +384,7 @@ SkColor MahoSpaceThemeState::GetChromeTint(bool is_dark, uint8_t alpha) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   const std::optional<ThemeData>& effective =
       preview_override_.has_value() ? preview_override_ : active_theme_;
-  if (!effective) {
+  if (!effective || effective->achromatic) {
     return SK_ColorTRANSPARENT;
   }
 
@@ -416,4 +444,21 @@ void MahoSpaceThemeState::ClearPreviewOverride() {
 bool MahoSpaceThemeState::HasPreviewOverride() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   return preview_override_.has_value();
+}
+
+std::optional<bool> MahoSpaceThemeState::GetForcedDarkMode() {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  const std::optional<ThemeData> data = GetThemeData();
+  if (!data) {
+    return std::nullopt;
+  }
+  switch (data->color_scheme) {
+    case ColorScheme::kLight:
+      return false;
+    case ColorScheme::kDark:
+      return true;
+    case ColorScheme::kAuto:
+      return std::nullopt;
+  }
+  return std::nullopt;
 }

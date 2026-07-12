@@ -413,7 +413,7 @@ SkColor AdjustThemeTint(const MahoSpaceThemeState::SpaceHSV& hsv,
   return SkHSVToColor(alpha, adjusted);
 }
 
-[[maybe_unused]] float GetSidebarBlendForKind(MahoSpaceThemeState::ThemeKind kind) {
+float GetSidebarBlendForKind(MahoSpaceThemeState::ThemeKind kind) {
   switch (kind) {
     case MahoSpaceThemeState::ThemeKind::kSolid:
       return 0.08f;
@@ -529,7 +529,7 @@ void AddMahoColorMixers(ui::ColorProvider* provider,
   // signal, so we cannot distinguish incognito from normal dark-mode windows here.
   std::optional<MahoSpaceThemeState::ThemeData> theme_data =
       MahoSpaceThemeState::GetThemeData();
-  if (theme_data) {
+  if (theme_data && !theme_data->achromatic) {
     const SkColor base_titlebar = dark_mode ? kTitlebarGlassDark
                                             : kTitlebarGlassLight;
     const SkColor base_sidebar = dark_mode ? kSidebarBackgroundDark
@@ -573,6 +573,7 @@ void AddMahoColorMixers(ui::ColorProvider* provider,
     tint_mixer[kMahoColorContentBackground] = {maho_theme::BlendColors(
         base_content, primary_tint,
         GetContentBlendForKind(theme_data->kind) * opacity_bias)};
+    tint_mixer[kColorWebContentsBackground] = {kMahoColorContentBackground};
     tint_mixer[kMahoColorContentGradientTop] = {maho_theme::BlendColors(
         base_gradient_top, primary_tint,
         GetGradientBlendForKind(theme_data->kind) * opacity_bias + texture_bias)};

@@ -5,6 +5,12 @@ use crate::common::DateTime;
 use crate::folder::Folder;
 use crate::identifiers::{FolderId, ProfileId, SpaceId, TabId};
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ThemeColorPosition {
+    pub x: f64,
+    pub y: f64,
+}
+
 /// Color stop for gradient/Zen themes. Accepts flat HSB or Zen `c`-format on
 /// the wire; see custom `Deserialize` impl for both representations.
 #[derive(Clone, Debug, Serialize)]
@@ -21,6 +27,12 @@ pub struct ThemeColor {
     /// Re-emitted on serialization so round-trips are lossless.
     #[serde(rename = "c", default, skip_serializing_if = "Option::is_none")]
     pub c_raw: Option<CValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<ThemeColorPosition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lightness: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub algorithm: Option<ColorHarmony>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -54,6 +66,9 @@ impl<'de> Deserialize<'de> for ThemeColor {
                 let mut is_custom = false;
                 let mut is_primary = false;
                 let mut c_raw: Option<CValue> = None;
+                let mut position: Option<ThemeColorPosition> = None;
+                let mut lightness: Option<f64> = None;
+                let mut algorithm: Option<ColorHarmony> = None;
 
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
@@ -91,6 +106,9 @@ impl<'de> Deserialize<'de> for ThemeColor {
                                 ));
                             }
                         }
+                        "position" => position = map.next_value()?,
+                        "lightness" => lightness = map.next_value()?,
+                        "algorithm" => algorithm = map.next_value()?,
                         _ => {
                             let _ = map.next_value::<serde_json::Value>()?;
                         }
@@ -113,6 +131,9 @@ impl<'de> Deserialize<'de> for ThemeColor {
                     is_custom,
                     is_primary,
                     c_raw,
+                    position,
+                    lightness,
+                    algorithm,
                 })
             }
         }
@@ -191,19 +212,13 @@ impl SpaceTheme {
     pub fn validate(&self) -> bool {
         match self {
             SpaceTheme::Solid { .. } => true,
-            SpaceTheme::Gradient { colors, harmony, scheme, .. } => {
-                if colors.is_empty() {
-                    return false;
-                }
+            SpaceTheme::Gradient { harmony, scheme, .. } => {
                 if matches!(harmony, ColorHarmony::Floating) && scheme.is_none() {
                     return false;
                 }
                 true
             }
-            SpaceTheme::Zen { colors, harmony, scheme, .. } => {
-                if colors.is_empty() {
-                    return false;
-                }
+            SpaceTheme::Zen { harmony, scheme, .. } => {
                 if let Some(ColorHarmony::Floating) = harmony {
                     if scheme.is_none() {
                         return false;
@@ -400,8 +415,8 @@ mod tests {
     fn space_theme_gradient_roundtrip() {
         let theme = SpaceTheme::Gradient {
             colors: vec![
-                ThemeColor { hue: 0.5, saturation: 0.8, brightness: 0.9, is_custom: false, is_primary: true, c_raw: None },
-                ThemeColor { hue: 0.0, saturation: 0.8, brightness: 0.9, is_custom: false, is_primary: false, c_raw: None },
+                ThemeColor { hue: 0.5, saturation: 0.8, brightness: 0.9, is_custom: false, is_primary: true, c_raw: None, position: None, lightness: None, algorithm: None },
+                ThemeColor { hue: 0.0, saturation: 0.8, brightness: 0.9, is_custom: false, is_primary: false, c_raw: None, position: None, lightness: None, algorithm: None },
             ],
             harmony: ColorHarmony::Complementary,
             scheme: None,
@@ -442,8 +457,8 @@ mod tests {
     fn space_theme_base_color_gradient_uses_primary() {
         let theme = SpaceTheme::Gradient {
             colors: vec![
-                ThemeColor { hue: 0.1, saturation: 0.5, brightness: 0.9, is_custom: false, is_primary: false, c_raw: None },
-                ThemeColor { hue: 0.6, saturation: 0.8, brightness: 0.7, is_custom: false, is_primary: true, c_raw: None },
+                ThemeColor { hue: 0.1, saturation: 0.5, brightness: 0.9, is_custom: false, is_primary: false, c_raw: None, position: None, lightness: None, algorithm: None },
+                ThemeColor { hue: 0.6, saturation: 0.8, brightness: 0.7, is_custom: false, is_primary: true, c_raw: None, position: None, lightness: None, algorithm: None },
             ],
             harmony: ColorHarmony::Analogous,
             scheme: None,
@@ -479,6 +494,9 @@ mod tests {
                     hue: 0.0, saturation: 0.0, brightness: 0.0,
                     is_custom: false, is_primary: true,
                     c_raw: Some(CValue::Rgb([74, 144, 217])),
+                    position: None,
+                    lightness: None,
+                    algorithm: None,
                 },
             ],
             harmony: None,
@@ -511,6 +529,9 @@ mod tests {
                 hue: 0.0, saturation: 0.0, brightness: 0.0,
                 is_custom: true, is_primary: true,
                 c_raw: Some(CValue::Hex("#ff6b35".to_string())),
+                position: None,
+                lightness: None,
+                algorithm: None,
             }],
             harmony: Some(ColorHarmony::Analogous),
             scheme: None,
@@ -534,8 +555,8 @@ mod tests {
     fn space_theme_zen_base_color_uses_hsb_when_available() {
         let theme = SpaceTheme::Zen {
             colors: vec![
-                ThemeColor { hue: 0.2, saturation: 0.6, brightness: 0.8, is_custom: false, is_primary: false, c_raw: None },
-                ThemeColor { hue: 0.7, saturation: 0.9, brightness: 0.5, is_custom: false, is_primary: true, c_raw: None },
+                ThemeColor { hue: 0.2, saturation: 0.6, brightness: 0.8, is_custom: false, is_primary: false, c_raw: None, position: None, lightness: None, algorithm: None },
+                ThemeColor { hue: 0.7, saturation: 0.9, brightness: 0.5, is_custom: false, is_primary: true, c_raw: None, position: None, lightness: None, algorithm: None },
             ],
             harmony: None,
             scheme: None,
