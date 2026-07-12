@@ -429,4 +429,9 @@ struct ConnectedDevice: Codable, Identifiable {
     let name: String
     let deviceType: String
     let lastSeen: String?
+    let isOnline: Bool?
+
+    var appearsOffline: Bool {
+        isOnline == false
+    }
 }

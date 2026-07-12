@@ -198,6 +198,8 @@ extension MahoIcon {
         case "bell": return Lucide.bell
         case "envelope": return Lucide.mail
         case "globe": return Lucide.globe
+        case "cpu": return Lucide.cpu
+        case "robot", "bot": return Lucide.bot
         case "safari": return Lucide.compass
         case "magnifyingglass": return Lucide.search
         case "plus.magnifyingglass": return Lucide.zoomIn

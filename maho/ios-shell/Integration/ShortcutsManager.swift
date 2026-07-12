@@ -13,7 +13,7 @@ struct OpenInMahoIntent: AppIntent {
         guard let url = URL(string: urlString), let spaceId = MahoBridge.shared.getActiveSpaceId() else {
             return .result()
         }
-        MahoBridge.shared.sendEvent(.createTab(spaceId: spaceId, url: Url(url.absoluteString), parentId: nil))
+        MahoBridge.shared.sendEvent(.createTab(spaceId: spaceId, url: Url(url.absoluteString), parentId: nil, isPrivate: false))
         return .result()
     }
 }
@@ -22,12 +22,15 @@ struct OpenInMahoIntent: AppIntent {
 struct NewTabIntent: AppIntent {
     static var title: LocalizedStringResource = "New Tab"
     static var description = IntentDescription("Open a new tab in Maho.")
+    static var openAppWhenRun: Bool = true
 
+    @MainActor
     func perform() async throws -> some IntentResult {
-        guard let spaceId = MahoBridge.shared.getActiveSpaceId() else {
-            return .result()
+        if let onNewTab = DeepLinkHandler.shared.onNewTab {
+            onNewTab()
+        } else {
+            DeepLinkHandler.shared.pendingNewTabSearch = true
         }
-        MahoBridge.shared.sendEvent(.createTab(spaceId: spaceId, url: nil, parentId: nil))
         return .result()
     }
 }
@@ -45,7 +48,7 @@ struct SearchInMahoIntent: AppIntent {
             return .result()
         }
         let searchURL = "https://www.google.com/search?q=\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query)"
-        MahoBridge.shared.sendEvent(.createTab(spaceId: spaceId, url: Url(searchURL), parentId: nil))
+        MahoBridge.shared.sendEvent(.createTab(spaceId: spaceId, url: Url(searchURL), parentId: nil, isPrivate: false))
         return .result()
     }
 }

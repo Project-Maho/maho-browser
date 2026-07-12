@@ -15,8 +15,8 @@ extension MahoBridge {
         return spaceTabs.sorted(by: { $0.lastActiveAt > $1.lastActiveAt }).first?.id
     }
 
-    func createTab(url: Url?, inSpace spaceId: SpaceId, parentId: TabId? = nil) {
-        sendEvent(.createTab(spaceId: spaceId, url: url, parentId: parentId))
+    func createTab(url: Url?, inSpace spaceId: SpaceId, parentId: TabId? = nil, isPrivate: Bool = false) {
+        sendEvent(.createTab(spaceId: spaceId, url: url, parentId: parentId, isPrivate: isPrivate))
     }
 
     func closeTab(id tabId: TabId) {
@@ -72,5 +72,16 @@ extension MahoBridge {
                 FFIString.consume(maho_core_get_archived_tabs(ptr, cStr))
             }
         } ?? nil
+    }
+
+    func getFavoriteTabs(spaceId: SpaceId) -> [TabViewModel] {
+        guard let jsonString = try? spaceId.mahoJSONString() else {
+            return []
+        }
+        return (withCore { ptr in
+            jsonString.withCString { cStr in
+                FFIString.consumeJSON(maho_core_get_favorite_tabs(ptr, cStr))
+            }
+        } ?? nil) ?? []
     }
 }

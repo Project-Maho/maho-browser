@@ -38,13 +38,6 @@ private struct ChatCompletionData: Decodable {
     }
 }
 
-private struct ChatProviderConfig {
-    let providerLabel: String
-    let apiKey: String
-    let endpoint: String
-    let model: String
-}
-
 struct ChatImageAttachment: Equatable {
     enum Source: Equatable {
         case camera
@@ -335,8 +328,8 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func initializeSession() {
-        guard let config = preferredProviderConfig() else {
-            errorMessage = "Add an OpenAI or Anthropic API key in Settings → Max AI → LLM API Keys."
+        guard let config = AiProviderResolver.resolve() else {
+            errorMessage = "Sign in to your Maho account for free AI credits, or add an OpenAI / Anthropic API key in Settings → Max AI → LLM API Keys."
             return
         }
 
@@ -355,30 +348,6 @@ final class ChatViewModel: ObservableObject {
         }
 
         startPolling(sessionPtr: sessionPtr)
-    }
-
-    private func preferredProviderConfig() -> ChatProviderConfig? {
-        let openAIKey = bridge.byokGetKey(provider: "openai")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !openAIKey.isEmpty {
-            return ChatProviderConfig(
-                providerLabel: "OpenAI",
-                apiKey: openAIKey,
-                endpoint: "https://api.openai.com/v1",
-                model: "gpt-4o"
-            )
-        }
-
-        let anthropicKey = bridge.byokGetKey(provider: "anthropic")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !anthropicKey.isEmpty {
-            return ChatProviderConfig(
-                providerLabel: "Anthropic",
-                apiKey: anthropicKey,
-                endpoint: "https://api.anthropic.com/v1",
-                model: "claude-sonnet-4-20250514"
-            )
-        }
-
-        return nil
     }
 
     private func buildSystemInstruction() -> String {

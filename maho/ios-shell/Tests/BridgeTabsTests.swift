@@ -9,7 +9,7 @@ final class BridgeTabsTests: XCTestCase {
     // MARK: - createTab sends correct ShellEvent
 
     func testCreateTabEventEncoding() throws {
-        let event = ShellEvent.createTab(spaceId: "space-1", url: Url("https://example.com"), parentId: "tab-parent")
+        let event = ShellEvent.createTab(spaceId: "space-1", url: Url("https://example.com"), parentId: "tab-parent", isPrivate: false)
         let data = try encoder.encode(event)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
@@ -20,7 +20,7 @@ final class BridgeTabsTests: XCTestCase {
     }
 
     func testCreateTabEventWithoutOptionalFields() throws {
-        let event = ShellEvent.createTab(spaceId: "space-2", url: nil, parentId: nil)
+        let event = ShellEvent.createTab(spaceId: "space-2", url: nil, parentId: nil, isPrivate: false)
         let data = try encoder.encode(event)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
@@ -59,7 +59,8 @@ final class BridgeTabsTests: XCTestCase {
             "children": [],
             "createdAt": "2024-01-01T00:00:00Z",
             "lastActiveAt": "2024-01-01T00:00:00Z",
-            "role": {"type": "pinned"}
+            "role": {"type": "pinned"},
+            "isPrivate": false
         }
         """
         let data = try XCTUnwrap(json.data(using: .utf8))
@@ -89,7 +90,8 @@ final class BridgeTabsTests: XCTestCase {
             children: ["tab-child"],
             createdAt: "2024-06-01T12:00:00Z",
             lastActiveAt: "2024-06-01T12:30:00Z",
-            role: .favorite(order: 1)
+            role: .favorite(order: 1),
+            isPrivate: false
         )
 
         let data = try encoder.encode(original)

@@ -42,22 +42,6 @@ struct AutofillSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-
-            Section("Saved Addresses") {
-                NavigationLink("Manage Addresses") {
-                    Text("Address management is available in the browser.")
-                        .foregroundStyle(.secondary)
-                        .padding()
-                }
-            }
-
-            Section("Payment Methods") {
-                NavigationLink("Manage Payment Methods") {
-                    Text("Payment method management is available in the browser.")
-                        .foregroundStyle(.secondary)
-                        .padding()
-                }
-            }
         }
         .navigationTitle("Autofill & Passwords")
         .onAppear(perform: loadSettings)

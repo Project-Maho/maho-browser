@@ -22,17 +22,25 @@ struct TabCardView: View {
         return trimmed.isEmpty ? host : trimmed
     }
 
-    private var statusLabel: String {
-        if tab.isLoading {
-            return "Loading"
+    private var sendableDevices: [ConnectedDevice] {
+        let currentDeviceId = RelayAuthStore.shared.loadSession()?.device?.id
+        return MahoBridge.shared.getConnectedDevices().filter { device in
+            guard let currentDeviceId, !currentDeviceId.isEmpty else { return true }
+            return device.id != currentDeviceId
         }
-        if tab.isPlayingAudio {
-            return "Playing"
+    }
+
+    private func sendMenuTitle(for device: ConnectedDevice) -> String {
+        device.appearsOffline ? "\(device.name) (offline)" : device.name
+    }
+
+    private func deviceIcon(for type: String) -> UIImage {
+        switch type.lowercased() {
+        case "desktop", "mac", "pc": return Lucide.monitor
+        case "phone", "iphone", "android": return Lucide.smartphone
+        case "tablet", "ipad": return Lucide.tablet
+        default: return Lucide.laptop
         }
-        if tab.isMuted {
-            return "Muted"
-        }
-        return "Open"
     }
 
     var body: some View {
@@ -57,6 +65,31 @@ struct TabCardView: View {
                 }
             } label: {
                 Label { Text(tab.isPinned ? "Unpin" : "Pin") } icon: { Image(lucide: MahoIcon.imageForSFSymbol(tab.isPinned ? "pin.slash" : "pin")) }
+            }
+
+            Button {
+                MahoBridge.shared.sendEvent(.favoriteTab(tabId: tab.id))
+            } label: {
+                Label { Text(tab.isFavorite ? "Remove from Favorites" : "Add to Favorites") } icon: { Image(lucide: MahoIcon.imageForSFSymbol(tab.isFavorite ? "star.slash" : "star")) }
+            }
+
+            Menu {
+                if sendableDevices.isEmpty {
+                    Button {} label: {
+                        Label { Text("No devices") } icon: { Image(lucide: Lucide.smartphone) }
+                    }
+                    .disabled(true)
+                } else {
+                    ForEach(sendableDevices) { device in
+                        Button {
+                            MahoBridge.shared.sendTabToDevice(url: tab.url, title: title, deviceId: device.id)
+                        } label: {
+                            Label { Text(sendMenuTitle(for: device)) } icon: { Image(lucide: deviceIcon(for: device.deviceType)) }
+                        }
+                    }
+                }
+            } label: {
+                Label { Text("Send to Device") } icon: { Image(lucide: Lucide.send) }
             }
 
             Button {
@@ -173,33 +206,18 @@ struct TabCardView: View {
                 }
 
                 Spacer(minLength: 0)
-
-                if isActive {
-                    Image(lucide: Lucide.circle)
-                        .font(.caption)
-                        .foregroundStyle(ShellTheme.Palette.accent)
-                }
             }
 
-            HStack(spacing: ShellTheme.Spacing.small) {
-                Label { Text(statusLabel) } icon: { Image(lucide: MahoIcon.imageForSFSymbol(tab.isLoading ? "hourglass" : "circle.fill")) }
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
-                Spacer(minLength: 0)
-
-                HStack(spacing: ShellTheme.Spacing.small) {
-                    if tab.isPinned {
-                        metaIcon(Lucide.pin)
-                    }
-
-                    if tab.isMuted {
-                        metaIcon(Lucide.volumeOff)
-                    }
-
-                    if tab.isPlayingAudio {
-                        metaIcon(Lucide.volume2)
-                    }
+            let isFavorite = tab.isFavorite
+            if tab.isPinned || isFavorite || tab.isMuted || tab.isPlayingAudio {
+                HStack(spacing: ShellTheme.Spacing.xSmall) {
+                    if isFavorite { chip(text: "Saved", color: ShellTheme.Palette.accent) }
+                    else if tab.isPinned { chip(text: "Pinned", color: ShellTheme.Palette.accent) }
+                    
+                    if tab.isPlayingAudio { chip(text: "Audio", color: .green) }
+                    if tab.isMuted { chip(text: "Muted", color: .orange) }
+                    
+                    Spacer(minLength: 0)
                 }
             }
         }
@@ -207,6 +225,15 @@ struct TabCardView: View {
         .padding(.top, ShellTheme.Spacing.medium)
         .padding(.bottom, ShellTheme.Spacing.medium)
         .background(panelBackground)
+    }
+
+    private func chip(text: String, color: Color) -> some View {
+        Text(text)
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(color.opacity(0.12), in: Capsule())
     }
 
     private var placeholderPreview: some View {

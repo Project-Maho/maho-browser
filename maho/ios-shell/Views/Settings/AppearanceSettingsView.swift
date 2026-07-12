@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct AppearanceSettingsView: View {
-    @State private var theme: Theme = .system
+    @EnvironmentObject private var themeStore: AppThemeStore
     @State private var density: Density = .comfortable
     @State private var showTabBar: Bool = true
     @State private var windowTransparency: Bool = false
@@ -9,18 +9,26 @@ struct AppearanceSettingsView: View {
 
     private let bridge = MahoBridge.shared
 
+    /// Bind picker directly to the store so the segmented control always
+    /// reflects the actual live theme (source of truth). Writing through the
+    /// binding routes updates through `themeStore.set`, which also persists
+    /// to the Rust bridge.
+    private var themeBinding: Binding<Theme> {
+        Binding(
+            get: { themeStore.theme },
+            set: { themeStore.set($0) }
+        )
+    }
+
     var body: some View {
         Form {
             Section("Theme") {
-                Picker("Appearance", selection: $theme) {
+                Picker("Appearance", selection: themeBinding) {
                     Text("System").tag(Theme.system)
                     Text("Light").tag(Theme.light)
                     Text("Dark").tag(Theme.dark)
                 }
                 .pickerStyle(.segmented)
-                .onChange(of: theme) { _, newValue in
-                    bridge.setTheme(newValue)
-                }
             }
 
             Section("Layout") {
@@ -78,16 +86,13 @@ struct AppearanceSettingsView: View {
         for section in vm.sections {
             for item in section.items {
                 switch item.key {
-                case "appearance.theme":
-                    if let raw = item.value.value as? String, let t = Theme(rawValue: raw) {
-                        theme = t
-                    }
                 case "appearance.density":
                     if let raw = item.value.value as? String, let d = Density(rawValue: raw) {
                         density = d
                     }
                 case "appearance.showTabBar": showTabBar = (item.value.value as? Bool) ?? true
                 case "appearance.windowTransparency": windowTransparency = (item.value.value as? Bool) ?? false
+                case "appearance.customChromeCss": customCss = (item.value.value as? String) ?? ""
                 default: break
                 }
             }

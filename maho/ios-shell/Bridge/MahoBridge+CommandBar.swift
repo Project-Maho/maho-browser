@@ -6,8 +6,8 @@ extension MahoBridge {
 
     /// Sends a command bar query to the core for ranked results.
     @discardableResult
-    func commandBarQuery(query: String, mode: String? = nil) -> [CoreUpdate] {
-        handleEvent(.commandBarQuery(text: query, mode: mode))
+    func commandBarQuery(query: String, mode: String? = nil, isIncognito: Bool = false) -> [CoreUpdate] {
+        handleEvent(.commandBarQuery(text: query, mode: mode, isIncognito: isIncognito))
     }
 
     /// Selects a command bar item by index.

@@ -9,6 +9,7 @@ final class DeepLinkHandler {
     var onOpenURL: ((String) -> Void)?
     var onSearch: ((String) -> Void)?
     var onNewTab: (() -> Void)?
+    var pendingNewTabSearch = false
 
     private init() {}
 

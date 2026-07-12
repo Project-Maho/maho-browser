@@ -120,6 +120,7 @@ struct BrowserView: View {
     let viewModel: BrowserViewModel
 
     let tabId: TabId
+    let isIncognito: Bool
     @Binding var isBarVisible: Bool
     @Binding var tintColor: Color
     @Binding var chromeVisibilityProgress: CGFloat
@@ -140,7 +141,8 @@ struct BrowserView: View {
     }
 
     private var webContent: some View {
-        WebViewContainer(viewModel: viewModel, onPinchSummarize: onPinchSummarize)
+        WebViewContainer(viewModel: viewModel, isPrivate: isIncognito, onPinchSummarize: onPinchSummarize)
+            .id("\(tabId)-\(isIncognito)")
             .background(ShellTheme.Palette.browsingBackground)
             .background(
                 BrowserChromeObserver(

@@ -52,11 +52,17 @@ struct SettingsRootView: View {
                 }
 
                 Section(header: Text("AI")) {
+                    NavigationLink(destination: AiProviderSettingsView()) {
+                        Label { Text("AI Provider") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("cpu")) }
+                    }
                     NavigationLink(destination: MaxSettingsView()) {
                         Label { Text("Maho AI") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("sparkles")) }
                     }
                     NavigationLink(destination: AgentView()) {
                         Label { Text("Web Agent") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("bot")) }
+                    }
+                    NavigationLink(destination: BYOKSettingsView()) {
+                        Label { Text("API Keys") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("key")) }
                     }
                     NavigationLink(destination: AdvancedSettingsView()) {
                         Label { Text("Advanced") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("gearshape.2")) }

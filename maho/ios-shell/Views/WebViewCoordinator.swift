@@ -150,6 +150,13 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, UI
             viewModel.loadingProgress = 1.0
             guard !viewModel.tabId.isEmpty else { return }
             bridge.sendEvent(.tabLoadingChanged(tabId: viewModel.tabId, isLoading: false))
+            let tabId = viewModel.tabId
+            Task { @MainActor in
+                if let snapshot = await captureWebViewScreenshot(webView) {
+                    bridge.updateTabPreview(tabId: tabId, imageData: snapshot)
+                }
+            }
+            captureFavicon(webView: webView, tabId: tabId)
         }
     }
 
@@ -269,6 +276,33 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, UI
             presenter = presented
         }
         presenter.present(alert, animated: true)
+    }
+
+    private func captureFavicon(webView: WKWebView, tabId: TabId) {
+        guard let pageURL = webView.url,
+              let scheme = pageURL.scheme,
+              scheme == "http" || scheme == "https" else { return }
+        let js = "(function(){var l=document.querySelector('link[rel~=\"icon\"],link[rel=\"shortcut icon\"],link[rel=\"apple-touch-icon\"]');return l&&l.href?l.href:(location.origin+'/favicon.ico');})()"
+        webView.evaluateJavaScript(js) { [weak self] result, _ in
+            guard let self,
+                  let href = result as? String,
+                  let iconURL = Foundation.URL(string: href) else { return }
+            Task {
+                guard let (data, _) = try? await URLSession.shared.data(from: iconURL),
+                      let image = UIImage(data: data),
+                      let pngData = image.pngData() else { return }
+                let imageData = ImageData(
+                    data: [UInt8](pngData),
+                    width: UInt32(max(image.size.width * image.scale, 1)),
+                    height: UInt32(max(image.size.height * image.scale, 1)),
+                    format: .png
+                )
+                await MainActor.run {
+                    guard !tabId.isEmpty else { return }
+                    self.bridge.sendEvent(.tabFaviconUpdated(tabId: tabId, favicon: imageData))
+                }
+            }
+        }
     }
 }
 

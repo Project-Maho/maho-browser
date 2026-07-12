@@ -71,18 +71,18 @@ struct SuggestionRow: View {
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .frame(width: 16, height: 16)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(suggestion.kind == .aiAnswer ? .purple : .secondary)
                 }
             }
             .frame(width: 32, height: 32)
-            .background(Color(uiColor: .secondarySystemBackground))
+            .background(suggestion.kind == .aiAnswer ? Color.purple.opacity(0.15) : Color(uiColor: .secondarySystemBackground))
             .cornerRadius(6)
 
             // Text
             VStack(alignment: .leading, spacing: 2) {
                 Text(highlightedText(suggestion.title, ranges: suggestion.matchRanges))
-                    .font(.system(size: 16, weight: .regular))
-                    .foregroundColor(.primary)
+                    .font(.system(size: 16, weight: suggestion.kind == .aiAnswer ? .semibold : .regular))
+                    .foregroundColor(suggestion.kind == .aiAnswer ? .purple : .primary)
                     .lineLimit(1)
                 
                 if let subtitle = suggestion.subtitle, !subtitle.isEmpty {
@@ -111,6 +111,7 @@ struct SuggestionRow: View {
         case .unitConversion: return "arrow.left.and.right"
         case .archivedTab: return "archivebox"
         case .closedTab: return "xmark.circle"
+        case .aiAnswer: return "sparkles"
         }
     }
 

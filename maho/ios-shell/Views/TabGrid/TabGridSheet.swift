@@ -3,7 +3,7 @@ import LucideIcons
 
 struct TabGridSheet: View {
     @Binding var isIncognito: Bool
-    let onNewTab: () -> Bool
+    let onRequestNewTab: () -> Void
 
     @Environment(\.dismiss) private var dismiss
 
@@ -19,15 +19,6 @@ struct TabGridSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             sheetHeader
-
-            // Personal / Private Segmented Control (Incognito Toggle)
-            Picker("Mode", selection: $isIncognito) {
-                Text("Personal").tag(false)
-                Text("Private").tag(true)
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, ShellTheme.Spacing.large)
-            .padding(.bottom, ShellTheme.Spacing.small)
 
             if !spaces.isEmpty {
                 SpaceChipRow(
@@ -45,6 +36,8 @@ struct TabGridSheet: View {
             TabGridView(
                 tabs: filteredTabs,
                 activeTabId: activeTabId,
+                activeSpaceId: activeSpaceId,
+                isIncognito: isIncognito,
                 onSelectTab: { tabId in
                     bridge.activateTab(id: tabId)
                     dismiss()
@@ -55,12 +48,13 @@ struct TabGridSheet: View {
                 }
             )
 
+            let activeSpaceName = spaces.first { $0.id == activeSpaceId }?.name ?? "Current space"
             TabGridToolbar(
                 tabCount: filteredTabs.count,
+                activeSpaceName: activeSpaceName,
                 onNewTab: {
-                    if onNewTab() {
-                        dismiss()
-                    }
+                    onRequestNewTab()
+                    dismiss()
                 },
                 onCloseAll: {
                     for tab in filteredTabs {
@@ -68,7 +62,9 @@ struct TabGridSheet: View {
                     }
                     reloadState()
                 },
-                onDismiss: { dismiss() }
+                onDone: {
+                    dismiss()
+                }
             )
         }
         .background(tabGridBackground)
@@ -143,8 +139,9 @@ struct TabGridSheet: View {
     }
 
     private var filteredTabs: [TabViewModel] {
-        guard let activeSpaceId else { return tabs }
-        return tabs.filter { $0.spaceId == activeSpaceId }
+        tabs.filter { tab in
+            (activeSpaceId == nil || tab.spaceId == activeSpaceId) && tab.isPrivate == isIncognito
+        }
     }
 
     private func reloadState() {

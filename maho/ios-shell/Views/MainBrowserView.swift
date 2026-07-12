@@ -55,9 +55,11 @@ struct MainBrowserView: View {
     @State private var pendingHomeSearchFocusAfterTabGridDismiss = false
     @StateObject private var pinchSummarizer = PageSummarizer()
     @State private var browseForMeSeed = UUID()
-    @State private var showPageMenu = false
     @State private var isSearchFocused = false
+    @State private var isAddressBarEditing = false
     @StateObject private var commandBarVM = CommandBarViewModel()
+    @State private var showAiSearch = false
+    @State private var aiSearchQuery = ""
 
     private let bridge = MahoBridge.shared
     private let tickTimer = Timer.publish(every: 0.35, on: .main, in: .common).autoconnect()
@@ -72,7 +74,7 @@ struct MainBrowserView: View {
                 BrowserView(
                     viewModel: browserVM,
                     tabId: activeTabId,
-                    isIncognito: isIncognito,
+                    isIncognito: effectiveIsPrivate,
                     isBarVisible: $isBottomBarVisible,
                     tintColor: $tintColor,
                     chromeVisibilityProgress: $chromeVisibilityProgress,
@@ -82,13 +84,23 @@ struct MainBrowserView: View {
 
             if !isBrowsing {
                 HomeSearchView(
-                    activeSpaceName: activeSpaceName,
-                    activeSpaceTabCount: currentSpaceTabs.count,
-                    recentTabs: recentTabs,
-                    topSites: topSites,
-                    showsUnderlyingPage: activeTabId != nil,
-                    onSelectSite: createTabAndNavigate,
-                    onResumeTab: resumeTabFromHome
+                    onOpenTabs: {
+                        refreshState()
+                        showTabGrid = true
+                    },
+                    onOpenSettings: {
+                        showSettings = true
+                    },
+                    onResumeTab: { tabId in
+                        bridge.activateTab(id: tabId)
+                        refreshState()
+                    },
+                    onSelectSite: { url in
+                        if let activeSpace = bridge.getActiveSpaceId() {
+                            bridge.createTab(url: Url(url), inSpace: activeSpace)
+                            refreshState()
+                        }
+                    }
                 )
                 .transition(.opacity)
                 .zIndex(0)
@@ -101,17 +113,14 @@ struct MainBrowserView: View {
 
             if isBrowsing {
                 VStack(spacing: 0) {
-                    if isIncognito {
-                        PrivateBanner(onDismiss: {
-                            toggleIncognito()
-                        })
-                        .padding(.top, ShellTheme.Spacing.small)
+                    if effectiveIsPrivate {
+                        PrivateBanner()
                         .transition(.move(edge: .top).combined(with: .opacity))
                     }
 
                     Spacer()
                 }
-                .animation(.spring(response: 0.32, dampingFraction: 0.86), value: isIncognito)
+                .animation(.spring(response: 0.32, dampingFraction: 0.86), value: effectiveIsPrivate)
             }
 
             VStack(spacing: 0) {
@@ -142,12 +151,14 @@ struct MainBrowserView: View {
                     homeQuery: $homeQuery,
                     homeSearchFocusRequest: $focusHomeSearchRequest,
                     isSearchFocused: $isSearchFocused,
+                    isAddressBarEditing: $isAddressBarEditing,
                     onTabsTapped: {
                         refreshState()
                         showTabGrid = true
                     },
                     onAddressTapped: {
-                        transitionToHome()
+                        isAddressBarEditing = true
+                        isSearchFocused = true
                     },
                     onHomeSubmit: submitHomeQuery,
                     onGoBack: goBack,
@@ -159,10 +170,9 @@ struct MainBrowserView: View {
                         switchTab(direction: .previous)
                     },
                     onSelectSpace: selectSpace,
-                    onMenuTapped: {
-                        showPageMenu = true
+                    onTogglePrivate: {
+                        setPrivate(!effectiveIsPrivate)
                     },
-                    onToggleIncognito: toggleIncognito,
                     onFindInPage: {
                         guard browsingTabId != nil else { return }
                         showFindInPage = true
@@ -172,6 +182,7 @@ struct MainBrowserView: View {
                     },
                     onShare: shareCurrentPage,
                     onReload: reloadCurrentPage,
+                    onArchive: archiveCurrentTab,
                     onToggleReader: toggleReaderMode,
                     onZoomIn: {
                         adjustZoom(by: 0.1)
@@ -179,6 +190,7 @@ struct MainBrowserView: View {
                     onZoomOut: {
                         adjustZoom(by: -0.1)
                     },
+                    onResetZoom: resetZoom,
                     onToggleDesktop: toggleDesktopMode,
                     onPiP: {
                         if let webView = browserVM.webView {
@@ -263,11 +275,18 @@ struct MainBrowserView: View {
                     viewModel: commandBarVM,
                     onSelect: { suggestion in
                         isSearchFocused = false
-                        let targetUrl = suggestion.executionPayload ?? suggestion.key
-                        createTabAndNavigate(targetUrl)
+                        isAddressBarEditing = false
+                        if suggestion.kind == .aiAnswer {
+                            let queryText = suggestion.key.hasPrefix("ai_search:") ? String(suggestion.key.dropFirst(10)) : suggestion.title
+                            presentAiSearch(query: queryText)
+                        } else {
+                            let targetUrl = suggestion.executionPayload ?? suggestion.key
+                            createTabAndNavigate(targetUrl)
+                        }
                     },
                     onCancel: {
                         isSearchFocused = false
+                        isAddressBarEditing = false
                     }
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -277,9 +296,11 @@ struct MainBrowserView: View {
         .sheet(isPresented: $showTabGrid, onDismiss: handleTabGridDismiss) {
             TabGridSheet(
                 isIncognito: $isIncognito,
-                onNewTab: createNewTabFromGrid
+                onRequestNewTab: {
+                    _ = createNewTabFromGrid()
+                }
             )
-            .presentationDragIndicator(.hidden)
+            .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showSettings) {
             SettingsRootView()
@@ -315,14 +336,21 @@ struct MainBrowserView: View {
                 ReaderView(article: article, isPresented: $isReaderMode)
             }
         }
-        .sheet(isPresented: $showPageMenu) {
-            MahoMenuSheet(onAction: handleMenuAction)
-        }
         .sheet(isPresented: $showDownloads) {
             DownloadsView()
         }
         .sheet(isPresented: $showNotes) {
             NotesView()
+        }
+        .sheet(isPresented: $showAiSearch) {
+            AiSearchOverlayView(query: aiSearchQuery, isIncognito: isIncognito)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .onChange(of: isSearchFocused) { _, newValue in
+            if !newValue {
+                isAddressBarEditing = false
+            }
         }
         .onAppear {
             loadBrowserState()
@@ -366,47 +394,6 @@ struct MainBrowserView: View {
         }
     }
 
-    private func handleMenuAction(_ action: MenuAction) {
-        showPageMenu = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            switch action {
-            case .newTab:
-                _ = createNewTabFromGrid()
-            case .newPrivateTab:
-                if !isIncognito {
-                    toggleIncognito()
-                }
-                _ = createNewTabFromGrid()
-            case .bookmarks:
-                showBookmarks = true
-            case .history:
-                showHistory = true
-            case .downloads:
-                showDownloads = true
-            case .readingList:
-                showReadingList = true
-            case .notes:
-                showNotes = true
-            case .sharePage:
-                shareCurrentPage()
-            case .findInPage:
-                showFindInPage = true
-            case .reload:
-                reloadCurrentPage()
-            case .desktopSite:
-                toggleDesktopMode()
-            case .readerMode:
-                toggleReaderMode()
-            case .settings:
-                showSettings = true
-            case .signIn:
-                showSettings = true
-            case .profileSwitcher:
-                showSettings = true
-            }
-        }
-    }
-
     private func setupDeepLinkHandler() {
         DeepLinkHandler.shared.onOpenURL = { [self] urlString in
             createTabAndNavigate(urlString)
@@ -419,9 +406,17 @@ struct MainBrowserView: View {
         DeepLinkHandler.shared.onNewTab = { [self] in
             activeTabId = nil
             transitionToHome()
+            isSearchFocused = true
         }
         HandoffManager.shared.onReceiveURL = { [self] url in
             createTabAndNavigate(url.absoluteString)
+        }
+
+        if DeepLinkHandler.shared.pendingNewTabSearch {
+            DeepLinkHandler.shared.pendingNewTabSearch = false
+            activeTabId = nil
+            transitionToHome()
+            isSearchFocused = true
         }
     }
 
@@ -459,8 +454,16 @@ struct MainBrowserView: View {
             .map { $0 }
     }
 
+    /// On-screen privacy: active tab's privacy when browsing, else the "new tab
+    /// mode" (`isIncognito`). Drives webview storage + private chrome. Conflating
+    /// this with `isIncognito` (which only picks the mode for NEW tabs) reintroduces
+    /// the privacy leak this feature fixes.
+    private var effectiveIsPrivate: Bool {
+        currentActiveTab?.isPrivate ?? isIncognito
+    }
+
     private var effectiveTintColor: Color {
-        isIncognito ? ShellTheme.Palette.incognitoTint : tintColor
+        effectiveIsPrivate ? ShellTheme.Palette.incognitoTint : tintColor
     }
 
     private var browsingTabId: TabId? {
@@ -477,7 +480,7 @@ struct MainBrowserView: View {
     }
 
     private var backgroundColor: Color {
-        if isIncognito {
+        if effectiveIsPrivate {
             return ShellTheme.Palette.incognitoBackground
         }
 
@@ -500,7 +503,7 @@ struct MainBrowserView: View {
 
     @ViewBuilder
     private var shellBackgroundLayer: some View {
-        if isIncognito {
+        if effectiveIsPrivate {
             LinearGradient(
                 colors: [
                     ShellTheme.Palette.incognitoBackground,
@@ -712,7 +715,7 @@ struct MainBrowserView: View {
         shellRoute = .home
         homeQuery = ""
         pendingHomeSearchFocusAfterTabGridDismiss = true
-        bridge.createTab(url: nil, inSpace: targetSpaceId)
+        bridge.createTab(url: nil, inSpace: targetSpaceId, isPrivate: isIncognito)
         refreshState()
 #if canImport(UIKit)
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -739,7 +742,7 @@ struct MainBrowserView: View {
         pendingNavigationUrl = destination
         browserVM.currentUrl = destination
         browserVM.currentTitle = ""
-        bridge.createTab(url: Url(destination), inSpace: targetSpaceId)
+        bridge.createTab(url: Url(destination), inSpace: targetSpaceId, isPrivate: isIncognito)
         refreshState()
 
         let fallbackTabId = currentSpaceTabs.sorted(by: { $0.lastActiveAt > $1.lastActiveAt }).first?.id
@@ -758,6 +761,12 @@ struct MainBrowserView: View {
         browserVM.reload()
     }
 
+    private func archiveCurrentTab() {
+        guard browsingTabId != nil else { return }
+        processUpdates(bridge.commandBarAction(action: .archiveTab))
+        refreshState()
+    }
+
     private func activateTab(_ id: TabId) {
         bridge.activateTab(id: id)
         refreshState()
@@ -768,6 +777,13 @@ struct MainBrowserView: View {
 
     private func resumeTabFromHome(_ id: TabId) {
         activateTab(id)
+    }
+
+    private func handleSuggestionSelection(_ suggestion: SuggestionViewModel) {
+        let payload = suggestion.executionPayload ?? suggestion.title
+        let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        createTabAndNavigate(trimmed)
     }
 
     private func transitionToHome() {
@@ -781,6 +797,11 @@ struct MainBrowserView: View {
 
     private func submitHomeQuery() {
         createTabAndNavigate(homeQuery)
+    }
+
+    private func presentAiSearch(query: String) {
+        aiSearchQuery = query
+        showAiSearch = true
     }
 
     private func goBack() {
@@ -915,6 +936,13 @@ struct MainBrowserView: View {
         browserVM.webView?.evaluateJavaScript("document.body.style.zoom = '\(percentage)%';")
     }
 
+    private func resetZoom() {
+        guard browsingTabId != nil else { return }
+        zoomLevel = 1.0
+        browserVM.setZoom(zoomLevel)
+        browserVM.webView?.evaluateJavaScript("document.body.style.zoom = '100%';")
+    }
+
     private func toggleDesktopMode() {
         guard browsingTabId != nil else { return }
         isDesktopMode.toggle()
@@ -978,16 +1006,33 @@ struct MainBrowserView: View {
             .replacingOccurrences(of: #"\s+CriOS/[^ ]+"#, with: " Version/17.0", options: .regularExpression)
     }
 
-    private func toggleIncognito() {
-        isIncognito.toggle()
-        if isIncognito {
+    private func setPrivate(_ on: Bool) {
+        let targetSpaceId = activeSpaceId ?? spaces.first?.id ?? ""
+        guard !targetSpaceId.isEmpty else { return }
+        if on {
+            isIncognito = true
             tintColor = ShellTheme.Palette.incognitoTint
             showSummaryOverlay = false
             pageSummarizer.reset()
-        } else if let tab = currentActiveTab {
-            tintColor = tintColorForTab(tab)
+            bridge.createTab(url: nil, inSpace: targetSpaceId, isPrivate: true)
+            refreshState()
         } else {
-            tintColor = ShellTheme.Palette.accent
+            let privateTabs = bridge.getTabViewModels().filter { $0.spaceId == targetSpaceId && $0.isPrivate }
+            for tab in privateTabs {
+                bridge.closeTab(id: tab.id)
+            }
+            isIncognito = false
+            refreshState()
+
+            let remainingTabs = bridge.getTabViewModels().filter { $0.spaceId == targetSpaceId && !$0.isPrivate }
+            if let firstNormal = remainingTabs.sorted(by: { $0.lastActiveAt > $1.lastActiveAt }).first {
+                bridge.activateTab(id: firstNormal.id)
+                tintColor = tintColorForTab(firstNormal)
+            } else {
+                transitionToHome()
+                tintColor = ShellTheme.Palette.accent
+            }
+            refreshState()
         }
     }
 

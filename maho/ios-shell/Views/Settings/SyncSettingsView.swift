@@ -30,7 +30,6 @@ struct SyncSettingsView: View {
     @State private var syncEnabled = false
     @State private var devices: [ConnectedDevice] = []
     @State private var authMode: AuthMode = .login
-    @State private var serverURLInput = ""
     @State private var emailInput = ""
     @State private var passwordInput = ""
     @State private var displayNameInput = ""
@@ -83,24 +82,6 @@ struct SyncSettingsView: View {
     @ViewBuilder
     private var accountSection: some View {
         Section {
-            TextField("Relay Server URL", text: $serverURLInput)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .keyboardType(.URL)
-                .onSubmit(saveServerURL)
-                .onChange(of: serverURLInput) { _, newValue in
-                    let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !trimmed.isEmpty else { return }
-                    let normalized = RelayAPIClient.normalizedBaseURLString(from: trimmed)
-                    if normalized != newValue {
-                        serverURLInput = normalized
-                    }
-                }
-
-            Text("Uses the relay HTTP API for sign-in and periodic polling. Old ws/wss URLs are normalized automatically.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
             if let relaySession {
                 VStack(alignment: .leading, spacing: ShellTheme.Spacing.small) {
                     Text(relaySession.account.email)
@@ -201,28 +182,30 @@ struct SyncSettingsView: View {
 
     @ViewBuilder
     private var syncStatusSection: some View {
-        Section {
-            HStack(spacing: ShellTheme.Spacing.medium) {
-                statusIcon
-                VStack(alignment: .leading, spacing: ShellTheme.Spacing.xxSmall) {
-                    Text(statusLabel)
-                        .font(.body)
-                    if let detail = statusDetail {
-                        Text(detail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+        if relaySession != nil {
+            Section {
+                HStack(spacing: ShellTheme.Spacing.medium) {
+                    statusIcon
+                    VStack(alignment: .leading, spacing: ShellTheme.Spacing.xxSmall) {
+                        Text(statusLabel)
+                            .font(.body)
+                        if let detail = statusDetail {
+                            Text(detail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
-            }
 
-            if relaySession != nil {
-                Button("Poll Now") {
-                    SyncManager.shared.syncNow()
+                if relaySession != nil {
+                    Button("Poll Now") {
+                        SyncManager.shared.syncNow()
+                    }
+                    .disabled(!syncEnabled)
                 }
-                .disabled(!syncEnabled)
+            } header: {
+                Text("Status")
             }
-        } header: {
-            Text("Status")
         }
     }
 
@@ -295,11 +278,12 @@ struct SyncSettingsView: View {
                         }
                         Spacer()
                         Button {
-                            bridge.sendTabToDevice(url: "", title: "", deviceId: device.id)
+                            sendActiveTab(to: device)
                         } label: {
                             Image(lucide: Lucide.send)
                         }
                         .buttonStyle(.borderless)
+                        .disabled(activeTabForSend == nil)
                     }
                 }
                 .onDelete { offsets in
@@ -323,27 +307,39 @@ struct SyncSettingsView: View {
         }
     }
 
+    private var activeTabForSend: TabViewModel? {
+        guard let activeTabId = bridge.getActiveTabId() else { return nil }
+        return bridge.getTabViewModels().first(where: { $0.id == activeTabId })
+    }
+
+    private func sendActiveTab(to device: ConnectedDevice) {
+        guard let activeTab = activeTabForSend else { return }
+        bridge.sendTabToDevice(url: activeTab.url, title: activeTab.title, deviceId: device.id)
+    }
+
     @ViewBuilder
     private var syncKeySection: some View {
-        Section {
-            Button("Generate Sync Key") {
-                generatedSyncKey = bridge.generateSyncKey()
-                showSyncKeyAlert = generatedSyncKey != nil
-            }
-            TextField("Recovery Phrase", text: $recoveryPhraseInput)
-                .textInputAutocapitalization(.never)
-            Button("Join with Recovery Phrase") {
-                guard !recoveryPhraseInput.isEmpty else { return }
-                joinResult = bridge.joinSync(recoveryPhrase: recoveryPhraseInput)
-                showJoinResult = true
-                if joinResult != nil {
-                    recoveryPhraseInput = ""
-                    refresh()
+        if relaySession != nil {
+            Section {
+                Button("Generate Sync Key") {
+                    generatedSyncKey = bridge.generateSyncKey()
+                    showSyncKeyAlert = generatedSyncKey != nil
                 }
+                TextField("Recovery Phrase", text: $recoveryPhraseInput)
+                    .textInputAutocapitalization(.never)
+                Button("Join with Recovery Phrase") {
+                    guard !recoveryPhraseInput.isEmpty else { return }
+                    joinResult = bridge.joinSync(recoveryPhrase: recoveryPhraseInput)
+                    showJoinResult = true
+                    if joinResult != nil {
+                        recoveryPhraseInput = ""
+                        refresh()
+                    }
+                }
+                .disabled(recoveryPhraseInput.isEmpty)
+            } header: {
+                Text("Sync Key")
             }
-            .disabled(recoveryPhraseInput.isEmpty)
-        } header: {
-            Text("Sync Key")
         }
     }
 
@@ -352,9 +348,6 @@ struct SyncSettingsView: View {
     }
 
     private func configureView() {
-        serverURLInput = RelayAPIClient.normalizedBaseURLString(
-            from: UserDefaults.standard.string(forKey: RelayAPIClient.serverURLDefaultsKey) ?? RelayAPIClient.defaultBaseURLString
-        )
         refresh()
         SyncManager.shared.configureForCurrentSession()
     }
@@ -384,18 +377,10 @@ struct SyncSettingsView: View {
         }
     }
 
-    private func saveServerURL() {
-        let normalized = RelayAPIClient.normalizedBaseURLString(from: serverURLInput)
-        serverURLInput = normalized
-        UserDefaults.standard.set(normalized, forKey: RelayAPIClient.serverURLDefaultsKey)
-    }
-
     private func submitAuth(mode: RelayAuthMode) async {
         isSubmittingAuth = true
         authMessage = nil
         defer { isSubmittingAuth = false }
-
-        saveServerURL()
 
         let email = emailInput.trimmingCharacters(in: .whitespacesAndNewlines)
         let password = passwordInput

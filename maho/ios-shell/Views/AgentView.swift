@@ -11,7 +11,6 @@ final class AgentViewModel: ObservableObject {
     }
 
     @Published var goal = ""
-    @Published var startURL = ""
     @Published var taskState: TaskState = .idle
     @Published var resultMessage: String?
     @Published var eventLog: [String] = []
@@ -145,11 +144,6 @@ struct AgentView: View {
             Section {
                 TextField("Describe the task", text: $viewModel.goal, axis: .vertical)
                     .lineLimit(2...5)
-                    .disabled(viewModel.taskState == .working)
-
-                TextField("Start URL (optional)", text: $viewModel.startURL)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
                     .disabled(viewModel.taskState == .working)
             } header: {
                 Text("Task")

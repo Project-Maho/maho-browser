@@ -8,29 +8,86 @@ import UIKit
 struct TabGridView: View {
     let tabs: [TabViewModel]
     let activeTabId: TabId?
+    let activeSpaceId: SpaceId?
+    let isIncognito: Bool
     let onSelectTab: (TabId) -> Void
     let onCloseTab: (TabId) -> Void
 
     private let bridge = MahoBridge.shared
 
+    private var gridColumns: [GridItem] {
+        [GridItem(.flexible(), spacing: ShellTheme.Spacing.medium),
+         GridItem(.flexible(), spacing: ShellTheme.Spacing.medium)]
+    }
+
     var body: some View {
-        Group {
-            if tabs.isEmpty {
+        let favorites = favoriteTabs
+
+        return Group {
+            if tabs.isEmpty && favorites.isEmpty {
                 emptyState
             } else {
-                deckLayout
+                gridLayout(favorites: favorites)
             }
         }
     }
 
-    private var deckLayout: some View {
+    private func gridLayout(favorites: [TabViewModel]) -> some View {
         ScrollView {
-            LazyVStack(spacing: ShellTheme.Spacing.mediumLarge) {
-                ForEach(Array(tabs.indices), id: \.self) { index in
-                    deckCard(for: tabs[index], index: index)
+            LazyVStack(alignment: .leading, spacing: ShellTheme.Spacing.large) {
+                let pinned = tabs.filter { $0.isPinned && !$0.isFavorite }
+                let today = tabs.filter { !$0.isPinned && !$0.isFavorite }
+
+                if !favorites.isEmpty {
+                    VStack(alignment: .leading, spacing: ShellTheme.Spacing.small) {
+                        Text("Favorites")
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, ShellTheme.Spacing.large)
+                        
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: ShellTheme.Spacing.medium) {
+                                ForEach(favorites) { tab in
+                                    favoriteTile(for: tab)
+                                }
+                            }
+                            .padding(.horizontal, ShellTheme.Spacing.large)
+                        }
+                    }
+                }
+
+                if !pinned.isEmpty {
+                    VStack(alignment: .leading, spacing: ShellTheme.Spacing.small) {
+                        Text("Pinned")
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, ShellTheme.Spacing.large)
+                        
+                        LazyVGrid(columns: gridColumns, spacing: ShellTheme.Spacing.medium) {
+                            ForEach(pinned) { tab in
+                                gridCard(for: tab)
+                            }
+                        }
+                        .padding(.horizontal, ShellTheme.Spacing.large)
+                    }
+                }
+
+                if !today.isEmpty {
+                    VStack(alignment: .leading, spacing: ShellTheme.Spacing.small) {
+                        Text("Today")
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, ShellTheme.Spacing.large)
+
+                        LazyVGrid(columns: gridColumns, spacing: ShellTheme.Spacing.medium) {
+                            ForEach(today) { tab in
+                                gridCard(for: tab)
+                            }
+                        }
+                        .padding(.horizontal, ShellTheme.Spacing.large)
+                    }
                 }
             }
-            .padding(.horizontal, ShellTheme.Spacing.large)
             .padding(.top, ShellTheme.Spacing.large)
             .padding(.bottom, ShellTheme.Size.homeBottomSpacer)
         }
@@ -84,20 +141,63 @@ struct TabGridView: View {
         .ignoresSafeArea()
     }
 
-    private func deckCard(for tab: TabViewModel, index: Int) -> some View {
+    private func gridCard(for tab: TabViewModel) -> some View {
         TabCardView(
             tab: tab,
             isActive: tab.id == activeTabId,
             previewImage: bridge.getTabPreview(tabId: tab.id),
-            deckIndex: index,
+            deckIndex: 0,
             onTap: { onSelectTab(tab.id) },
             onClose: { onCloseTab(tab.id) }
         )
-        .padding(.horizontal, ShellTheme.Spacing.xSmall)
-        .offset(x: index.isMultiple(of: 2) ? -ShellTheme.Spacing.small : ShellTheme.Spacing.small)
+    }
+
+    private var favoriteTabs: [TabViewModel] {
+        guard let activeSpaceId else { return [] }
+        return bridge.getFavoriteTabs(spaceId: activeSpaceId)
+            .filter { $0.isPrivate == isIncognito }
+    }
+
+    private func favoriteTile(for tab: TabViewModel) -> some View {
+        Button {
+            onSelectTab(tab.id)
+        } label: {
+            let host = displayHost(for: tab.url)
+            ZStack {
+                if let favicon = tab.favicon, let uiImage = favicon.uiImage {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 24, height: 24)
+                        .cornerRadius(4)
+                } else {
+                    let monogramLetter = DomainMonogram.letter(for: host)
+                    let monogramColor = DomainMonogram.color(for: host)
+
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(monogramColor)
+                        .frame(width: 36, height: 36)
+
+                    Text(String(monogramLetter))
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(.white)
+                }
+            }
+            .frame(width: 36, height: 36)
+            .background(ShellTheme.Palette.tabCardSurface.opacity(0.85), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(tab.id == activeTabId ? ShellTheme.Palette.accent : ShellTheme.Palette.overlayBorder, lineWidth: tab.id == activeTabId ? 2 : ShellTheme.Stroke.hairline)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("favoriteDock_\(tab.id)")
+        .accessibilityLabel(tab.title.isEmpty ? displayHost(for: tab.url) : tab.title)
+        .accessibilityHint("Opens this favorite tab.")
     }
 
     private func displayHost(for url: String) -> String {
-        URLComponents(string: url)?.host?.replacingOccurrences(of: "www.", with: "") ?? "New tab"
+        guard let urlObj = URL(string: url), let host = urlObj.host else { return "" }
+        return host
     }
 }

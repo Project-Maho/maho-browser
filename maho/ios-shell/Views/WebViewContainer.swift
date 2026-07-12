@@ -13,6 +13,9 @@ struct WebViewContainer: UIViewRepresentable {
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
+        if isPrivate {
+            configuration.websiteDataStore = PrivateBrowsingDataStorePool.shared.store
+        }
         let preferences = WKWebpagePreferences()
         preferences.allowsContentJavaScript = true
         configuration.defaultWebpagePreferences = preferences

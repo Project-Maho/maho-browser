@@ -16,7 +16,7 @@ final class CodableRoundTripTests: XCTestCase {
     }
 
     func testShellEventCreateTabRoundTrip() throws {
-        let original = ShellEvent.createTab(spaceId: "space-1", url: Url("https://maho.dev"), parentId: "tab-parent")
+        let original = ShellEvent.createTab(spaceId: "space-1", url: Url("https://maho.dev"), parentId: "tab-parent", isPrivate: false)
         let data = try MahoJSON.encoder.encode(original)
         let decoded = try JSONDecoder().decode(ShellEvent.self, from: data)
         let originalJson = try jsonDict(from: original)
@@ -83,7 +83,8 @@ final class CodableRoundTripTests: XCTestCase {
                 "children": [],
                 "createdAt": "2024-01-01T00:00:00Z",
                 "lastActiveAt": "2024-01-01T00:00:00Z",
-                "role": {"type": "normal"}
+                "role": {"type": "normal"},
+                "isPrivate": false
             }
         }
         """.data(using: .utf8)!

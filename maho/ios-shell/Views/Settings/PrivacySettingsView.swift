@@ -104,6 +104,12 @@ struct PrivacySettingsView: View {
                     Button("Cancel", role: .cancel) {}
                 }
             }
+
+            Section("AI Settings") {
+                NavigationLink("AI Privacy Dashboard") {
+                    PrivacyDashboardView()
+                }
+            }
         }
         .navigationTitle("Privacy & Security")
         .onAppear(perform: loadSettings)

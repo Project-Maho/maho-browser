@@ -5,6 +5,7 @@ struct MahoApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("onboardingCompleted") private var onboardingCompleted: Bool = false
     @StateObject private var updateChecker = AppStoreUpdateChecker()
+    @StateObject private var themeStore = AppThemeStore()
 
     private var shouldShowOnboarding: Bool {
         !isRunningUITests && !onboardingCompleted
@@ -41,6 +42,7 @@ struct MahoApp: App {
                 }
                 UpdateBannerView(checker: updateChecker)
             }
+            .environmentObject(themeStore)
             .task {
                 await updateChecker.check()
             }
@@ -58,6 +60,7 @@ struct MahoApp: App {
                 MahoBridge.shared.saveState()
             case .active:
                 SyncManager.shared.configureForCurrentSession()
+                themeStore.refresh()
             case .inactive:
                 break
             @unknown default:

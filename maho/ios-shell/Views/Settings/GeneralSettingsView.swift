@@ -42,6 +42,11 @@ struct GeneralSettingsView: View {
                 }
                 .onChange(of: selectedSearchEngine) { _, newValue in
                     defaults.set(newValue, forKey: Self.searchEngineDefaultsKey)
+                    if let searchEngine = searchEngine(named: newValue) {
+                        bridge.updateGeneralSettings(
+                            GeneralSettingsUpdate(defaultSearchEngine: searchEngine)
+                        )
+                    }
                 }
             } header: {
                 Text("Search")
@@ -126,6 +131,18 @@ struct GeneralSettingsView: View {
         } message: {
             Text("This clears website data and local browser preferences on this device.")
         }
+    }
+
+    private func searchEngine(named name: String) -> SettingsSearchEngine? {
+        guard let option = Self.searchEngineOptions.first(where: { $0.name == name }) else {
+            return nil
+        }
+
+        return SettingsSearchEngine(
+            name: option.name,
+            urlTemplate: option.urlTemplate,
+            isDefault: true
+        )
     }
 
     private func loadSettings() {

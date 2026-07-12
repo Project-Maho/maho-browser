@@ -168,7 +168,7 @@ final class RelayAPIClient: RelayAPIClientProtocol {
     init(
         session: URLSession = .shared,
         baseURLProvider: @escaping () -> String = {
-            UserDefaults.standard.string(forKey: RelayAPIClient.serverURLDefaultsKey) ?? RelayAPIClient.defaultBaseURLString
+            RelayAPIClient.currentBaseURLString()
         },
         deviceNameProvider: @escaping () -> String? = {
             #if canImport(UIKit)
@@ -346,6 +346,14 @@ final class RelayAPIClient: RelayAPIClientProtocol {
         }
 
         return url
+    }
+
+    static func currentBaseURLString() -> String {
+        if let env = ProcessInfo.processInfo.environment["MAHO_RELAY_URL"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !env.isEmpty {
+            return normalizedBaseURLString(from: env)
+        }
+        return defaultBaseURLString
     }
 
     static func normalizedBaseURLString(from rawValue: String) -> String {

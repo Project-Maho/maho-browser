@@ -22,14 +22,26 @@ final class VisualQAScreenshots: XCTestCase {
     func testCaptureAllScreens() throws {
         snap("02-home-empty")
 
+        let tabsButton = app.buttons["tabsButton"]
+        if tabsButton.waitForExistence(timeout: 3) {
+            tabsButton.tap()
+            sleep(2)
+            snap("04-tab-grid")
+            let closeGrid = app.buttons["Close"].firstMatch
+            if closeGrid.exists { closeGrid.tap() } else { app.swipeDown() }
+            sleep(1)
+        }
+
         let homeSearch = app.textFields["homeSearchField"]
         if homeSearch.waitForExistence(timeout: 3) {
             homeSearch.tap()
             sleep(2)
             snap("05-url-bar-focused")
-            homeSearch.typeText("apple")
-            sleep(1)
-            snap("06-url-bar-typed")
+            if app.keyboards.firstMatch.waitForExistence(timeout: 2) {
+                homeSearch.typeText("apple")
+                sleep(1)
+                snap("06-url-bar-typed")
+            }
             if app.buttons["Cancel"].firstMatch.exists { app.buttons["Cancel"].firstMatch.tap() }
             sleep(1)
         }
@@ -39,6 +51,9 @@ final class VisualQAScreenshots: XCTestCase {
             menuButton.tap()
             sleep(1)
             snap("03-menu-open")
+            app.swipeUp()
+            sleep(1)
+            snap("03b-menu-scrolled")
             let settingsBtn = app.buttons["Settings"].firstMatch
             if settingsBtn.waitForExistence(timeout: 2) {
                 settingsBtn.tap()
@@ -59,24 +74,11 @@ final class VisualQAScreenshots: XCTestCase {
         if menuButton.waitForExistence(timeout: 3) {
             menuButton.tap()
             sleep(1)
-            let privateBtn = app.buttons["Private"].firstMatch
+            let privateBtn = app.buttons["New Private Tab"].firstMatch
             if privateBtn.waitForExistence(timeout: 2) {
                 privateBtn.tap()
                 sleep(2)
                 snap("09-private-mode")
-            }
-        }
-
-        let tabsButton = app.buttons["tabsButton"]
-        if tabsButton.waitForExistence(timeout: 3) {
-            tabsButton.tap()
-            sleep(2)
-            snap("04-tab-grid")
-            let plusBtn = app.buttons["+"].firstMatch
-            if plusBtn.waitForExistence(timeout: 2) {
-                plusBtn.tap()
-                sleep(1)
-                snap("10-tab-grid-after-new")
             }
         }
     }

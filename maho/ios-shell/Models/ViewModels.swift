@@ -59,6 +59,7 @@ struct TabViewModel: Codable, Identifiable {
     let createdAt: String
     let lastActiveAt: String
     let role: TabRole
+    let isPrivate: Bool
 
     var isPinned: Bool {
         switch role {
@@ -82,7 +83,7 @@ struct TabViewModel: Codable, Identifiable {
     private enum CodingKeys: String, CodingKey {
         case id, spaceId, title, customTitle, url, favicon, isLoading
         case isMuted, isPlayingAudio, lifecycleState
-        case children, createdAt, lastActiveAt, role
+        case children, createdAt, lastActiveAt, role, isPrivate
     }
 }
 
@@ -138,6 +139,7 @@ enum SuggestionType: String, Codable {
     case unitConversion
     case archivedTab
     case closedTab
+    case aiAnswer
 }
 
 struct SuggestionViewModel: Codable, Identifiable {

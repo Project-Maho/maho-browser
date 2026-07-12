@@ -27,6 +27,7 @@ struct ArcBottomBar: View {
     @Binding var homeQuery: String
     @Binding var homeSearchFocusRequest: Bool
     @Binding var isSearchFocused: Bool
+    @Binding var isAddressBarEditing: Bool
     let onTabsTapped: () -> Void
     let onAddressTapped: () -> Void
     let onHomeSubmit: () -> Void
@@ -35,15 +36,16 @@ struct ArcBottomBar: View {
     let onTabSwipeLeft: () -> Void
     let onTabSwipeRight: () -> Void
     let onSelectSpace: (String) -> Void
-    let onMenuTapped: () -> Void
-    let onToggleIncognito: () -> Void
+    let onTogglePrivate: () -> Void
     let onFindInPage: () -> Void
     let onSettings: () -> Void
     let onShare: () -> Void
     let onReload: () -> Void
+    let onArchive: () -> Void
     let onToggleReader: () -> Void
     let onZoomIn: () -> Void
     let onZoomOut: () -> Void
+    let onResetZoom: () -> Void
     let onToggleDesktop: () -> Void
     let onPiP: () -> Void
     let onBrowseForMe: () -> Void
@@ -138,13 +140,15 @@ struct ArcBottomBar: View {
                     .frame(width: ShellTheme.Size.touchTarget, height: ShellTheme.Size.touchTarget)
                     .foregroundStyle(foregroundColor)
 
-                Text("\(max(tabCount, 0))")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(ShellTheme.Palette.bottomBarBadgeText(isIncognito: isIncognito))
-                    .padding(.horizontal, ShellTheme.Spacing.badgeHorizontal)
-                    .padding(.vertical, ShellTheme.Spacing.badgeVertical)
-                    .background(foregroundColor, in: Capsule())
-                    .offset(x: 5, y: -1)
+                if tabCount > 0 {
+                    Text("\(tabCount)")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(ShellTheme.Palette.bottomBarBadgeText(isIncognito: isIncognito))
+                        .padding(.horizontal, ShellTheme.Spacing.badgeHorizontal)
+                        .padding(.vertical, ShellTheme.Spacing.badgeVertical)
+                        .background(foregroundColor, in: Capsule())
+                        .offset(x: 5, y: -1)
+                }
             }
             .padding(.horizontal, 2)
             .background(
@@ -163,13 +167,13 @@ struct ArcBottomBar: View {
         })
         .accessibilityIdentifier("tabsButton")
         .accessibilityLabel("Tabs")
-        .accessibilityValue("\(max(tabCount, 0)) open")
+        .accessibilityValue(tabCount > 0 ? "\(tabCount) open" : "")
         .accessibilityHint("Double tap to open the tab switcher. Touch and hold to switch spaces.")
     }
 
     private var centerCapsule: some View {
         Group {
-            if isHomeMode {
+            if isHomeMode || isAddressBarEditing {
                 homeCenterCapsule
             } else {
                 browsingCenterCapsule
@@ -196,6 +200,16 @@ struct ArcBottomBar: View {
             .accessibilityIdentifier("arcAddressPill")
             .accessibilityLabel("Address and search")
             .accessibilityHint("Double tap to search or enter an address. Swipe left or right to move between tabs.")
+
+            Button(action: onTogglePrivate) {
+                Image(lucide: isIncognito ? Lucide.eyeOff : Lucide.eye)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(isIncognito ? ShellTheme.Palette.incognitoTint : mutedForegroundColor)
+                    .frame(width: ShellTheme.Size.touchTarget - ShellTheme.Spacing.medium, height: ShellTheme.Size.touchTarget - ShellTheme.Spacing.medium)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("togglePrivateButtonBrowsing")
+            .accessibilityLabel(isIncognito ? "Exit Private" : "Enter Private")
 
             chromeNavButton(
                 icon: Lucide.chevronRight,
@@ -228,7 +242,7 @@ struct ArcBottomBar: View {
 
     private var homeCenterCapsule: some View {
         HStack(spacing: ShellTheme.Spacing.xSmall) {
-            Image(lucide: isIncognito ? Lucide.eyeOff : Lucide.search)
+            Image(lucide: Lucide.search)
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(mutedForegroundColor)
 
@@ -242,6 +256,9 @@ struct ArcBottomBar: View {
                     .keyboardType(.webSearch)
                     .submitLabel(.search)
                     .focused($isHomeSearchFocused)
+                    .onTapGesture {
+                        isHomeSearchFocused = true
+                    }
                     .onSubmit(onHomeSubmit)
                     .accessibilityIdentifier("homeSearchField")
 
@@ -273,6 +290,16 @@ struct ArcBottomBar: View {
                 .accessibilityIdentifier("homeSearchSubmitButton")
                 .accessibilityLabel("Submit search")
                 .accessibilityHint("Submits the current search or address.")
+
+                Button(action: onTogglePrivate) {
+                    Image(lucide: isIncognito ? Lucide.eyeOff : Lucide.eye)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(isIncognito ? ShellTheme.Palette.incognitoTint : mutedForegroundColor)
+                        .frame(width: ShellTheme.Size.touchTarget - ShellTheme.Spacing.medium, height: ShellTheme.Size.touchTarget - ShellTheme.Spacing.medium)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("togglePrivateButtonHome")
+                .accessibilityLabel(isIncognito ? "Exit Private" : "Enter Private")
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("homeSearchBar")
@@ -281,12 +308,14 @@ struct ArcBottomBar: View {
         .padding(.trailing, ShellTheme.Spacing.xSmall)
         .padding(.vertical, 3)
         .frame(minHeight: ShellTheme.Size.bottomBarCapsuleHeight)
-        .background(capsuleBackground)
+        .background(
+            capsuleBackground
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    isHomeSearchFocused = true
+                }
+        )
         .overlay(capsuleStroke)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            isHomeSearchFocused = true
-        }
         .accessibilityIdentifier("arcAddressPill")
         .accessibilityLabel("Address and search")
         .accessibilityHint("Double tap to search or enter an address.")
@@ -336,7 +365,76 @@ struct ArcBottomBar: View {
     }
 
     private var menuButton: some View {
-        Button(action: onMenuTapped) {
+        Menu {
+            Section {
+                Button(action: onFindInPage) {
+                    Label { Text("Find in Page") } icon: { Image(lucide: Lucide.search) }
+                }
+                .disabled(!canReload)
+
+                Button(action: onShare) {
+                    Label { Text("Share") } icon: { Image(lucide: Lucide.share) }
+                }
+                .disabled(!canShare)
+
+                Button(action: onReload) {
+                    Label { Text("Reload") } icon: { Image(lucide: Lucide.rotateCw) }
+                }
+                .disabled(!canReload)
+
+                Button(action: onArchive) {
+                    Label { Text("Add to Archive") } icon: { Image(lucide: Lucide.archive) }
+                }
+                .disabled(!canReload)
+            }
+
+            Section {
+                Button(action: onToggleReader) {
+                    Label { Text(isReaderMode ? "Exit Reader Mode" : "Reader Mode") } icon: { Image(lucide: Lucide.bookOpen) }
+                }
+                .disabled(!canReload)
+
+                Button(action: onToggleDesktop) {
+                    Label { Text(isDesktopMode ? "Mobile Site" : "Desktop Site") } icon: { Image(lucide: Lucide.monitor) }
+                }
+                .disabled(!canReload)
+
+                Menu {
+                    Button(action: onZoomIn) {
+                        Label { Text("Zoom In") } icon: { Image(lucide: Lucide.zoomIn) }
+                    }
+                    .disabled(!canReload)
+
+                    Button(action: onZoomOut) {
+                        Label { Text("Zoom Out") } icon: { Image(lucide: Lucide.zoomOut) }
+                    }
+                    .disabled(!canReload)
+
+                    Button(action: onResetZoom) {
+                        Label { Text("Reset Zoom") } icon: { Image(lucide: Lucide.rotateCcw) }
+                    }
+                    .disabled(!canReload)
+                } label: {
+                    Label { Text("Zoom \(Int((zoomLevel * 100).rounded()))%") } icon: { Image(lucide: Lucide.zoomIn) }
+                }
+
+                Button(action: onPiP) {
+                    Label { Text("Picture in Picture") } icon: { Image(lucide: Lucide.appWindow) }
+                }
+                .disabled(!canReload)
+
+                Button(action: onBrowseForMe) {
+                    Label { Text("Browse for Me") } icon: { Image(lucide: Lucide.sparkles) }
+                }
+                .disabled(!canReload)
+            }
+
+            Section {
+                Button(action: onSettings) {
+                    Label { Text("Settings") } icon: { Image(lucide: Lucide.settings) }
+                }
+            }
+        } label: {
             Image(lucide: Lucide.menu)
                 .font(.body.weight(.semibold))
                 .frame(width: ShellTheme.Size.touchTarget, height: ShellTheme.Size.touchTarget)
@@ -346,7 +444,6 @@ struct ArcBottomBar: View {
                     chromeControlBackground(isProminent: false)
                 )
         }
-        .buttonStyle(.plain)
         .accessibilityIdentifier("menuButton")
         .accessibilityLabel("Page menu")
         .accessibilityHint("Opens page actions and view options.")

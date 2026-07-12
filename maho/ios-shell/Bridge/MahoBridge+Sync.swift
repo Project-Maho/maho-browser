@@ -32,18 +32,6 @@ extension MahoBridge {
         sendEvent(.toggleSync)
     }
 
-    func sendTab(tabId: TabId, deviceId: String) {
-        withCore { ptr in
-            tabId.withCString { cUrl in
-                "".withCString { cTitle in
-                    deviceId.withCString { cDeviceId in
-                        maho_core_send_tab(ptr, cUrl, cTitle, cDeviceId)
-                    }
-                }
-            }
-        }
-    }
-
     func sendTabToDevice(url: String, title: String, deviceId: String) {
         withCore { ptr in
             url.withCString { cUrl in

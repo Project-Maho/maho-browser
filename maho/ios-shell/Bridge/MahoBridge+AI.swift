@@ -52,6 +52,12 @@ private func ffiClusterTabs(
     _ threshold: Double
 ) -> UnsafeMutablePointer<CChar>?
 
+@_silgen_name("maho_core_managed_proxy_url")
+private func ffiManagedProxyUrl() -> UnsafeMutablePointer<CChar>?
+
+@_silgen_name("maho_core_free_string")
+private func ffiFreeString(_ s: UnsafeMutablePointer<CChar>?)
+
 
 
 
@@ -120,6 +126,15 @@ extension MahoBridge {
         (withCore { ptr in
             FFIString.consumeJSON(ffiClusterTabs(ptr, threshold), as: [TabClusterResult].self)
         } ?? nil) ?? []
+    }
+
+    // MARK: Managed AI (free credits via relay session)
+
+    func managedProxyURL() -> String? {
+        guard let raw = ffiManagedProxyUrl() else { return nil }
+        defer { ffiFreeString(raw) }
+        let url = String(cString: raw)
+        return url.isEmpty ? nil : url
     }
 
     // MARK: Offline Model (stubs)

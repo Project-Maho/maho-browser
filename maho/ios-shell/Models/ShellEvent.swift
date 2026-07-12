@@ -10,7 +10,7 @@ enum ShellEvent: Codable {
     case stop(tabId: TabId)
 
     // Tab management
-    case createTab(spaceId: SpaceId, url: Url?, parentId: TabId?)
+    case createTab(spaceId: SpaceId, url: Url?, parentId: TabId?, isPrivate: Bool)
     case closeTab(tabId: TabId)
     case activateTab(tabId: TabId)
     case duplicateTab(tabId: TabId)
@@ -56,7 +56,7 @@ enum ShellEvent: Codable {
     // Command bar
     case commandBarOpened
     case commandBarClosed
-    case commandBarQuery(text: String, mode: String?)
+    case commandBarQuery(text: String, mode: String?, isIncognito: Bool)
     case commandBarSelect(index: Int, key: String)
     case commandBarAction(action: QuickAction)
     case saveSearch(query: String)
@@ -104,9 +104,10 @@ enum ShellEvent: Codable {
     case tabUrlUpdated(tabId: TabId, url: Url)
     case tabLoadingChanged(tabId: TabId, isLoading: Bool)
     case tabNavigationStateChanged(tabId: TabId, canGoBack: Bool, canGoForward: Bool)
+    case tabFaviconUpdated(tabId: TabId, favicon: ImageData?)
 
     // History
-    case searchHistory(query: String, limit: Int)
+    case searchHistory(query: String, limit: Int, isIncognito: Bool)
     case clearHistory
     case deleteHistoryEntry(entryId: String)
 
@@ -271,6 +272,7 @@ enum ShellEvent: Codable {
         case .tabUrlUpdated: return "tab_url_updated"
         case .tabLoadingChanged: return "tab_loading_changed"
         case .tabNavigationStateChanged: return "tab_navigation_state_changed"
+        case .tabFaviconUpdated: return "tab_favicon_updated"
         case .searchHistory: return "search_history"
         case .clearHistory: return "clear_history"
         case .deleteHistoryEntry: return "delete_history_entry"
@@ -340,10 +342,11 @@ enum ShellEvent: Codable {
             try container.encode(tabId, forKey: DynamicCodingKey(stringValue: "tab_id")!)
         case .stop(let tabId):
             try container.encode(tabId, forKey: DynamicCodingKey(stringValue: "tab_id")!)
-        case .createTab(let spaceId, let url, let parentId):
+        case .createTab(let spaceId, let url, let parentId, let isPrivate):
             try container.encode(spaceId, forKey: DynamicCodingKey(stringValue: "space_id")!)
             try container.encodeIfPresent(url, forKey: DynamicCodingKey(stringValue: "url")!)
             try container.encodeIfPresent(parentId, forKey: DynamicCodingKey(stringValue: "parent_id")!)
+            try container.encode(isPrivate, forKey: DynamicCodingKey(stringValue: "is_private")!)
         case .closeTab(let tabId):
             try container.encode(tabId, forKey: DynamicCodingKey(stringValue: "tab_id")!)
         case .activateTab(let tabId):
@@ -452,9 +455,10 @@ enum ShellEvent: Codable {
             try container.encode(folderId, forKey: DynamicCodingKey(stringValue: "folder_id")!)
         case .commandBarOpened: break
         case .commandBarClosed: break
-        case .commandBarQuery(let text, let mode):
+        case .commandBarQuery(let text, let mode, let isIncognito):
             try container.encode(text, forKey: DynamicCodingKey(stringValue: "text")!)
             try container.encodeIfPresent(mode, forKey: DynamicCodingKey(stringValue: "mode")!)
+            try container.encode(isIncognito, forKey: DynamicCodingKey(stringValue: "is_incognito")!)
         case .commandBarSelect(let index, let key):
             try container.encode(index, forKey: DynamicCodingKey(stringValue: "index")!)
             try container.encode(key, forKey: DynamicCodingKey(stringValue: "key")!)
@@ -532,9 +536,13 @@ enum ShellEvent: Codable {
             try container.encode(tabId, forKey: DynamicCodingKey(stringValue: "tab_id")!)
             try container.encode(canGoBack, forKey: DynamicCodingKey(stringValue: "can_go_back")!)
             try container.encode(canGoForward, forKey: DynamicCodingKey(stringValue: "can_go_forward")!)
-        case .searchHistory(let query, let limit):
+        case .tabFaviconUpdated(let tabId, let favicon):
+            try container.encode(tabId, forKey: DynamicCodingKey(stringValue: "tab_id")!)
+            try container.encodeIfPresent(favicon, forKey: DynamicCodingKey(stringValue: "favicon")!)
+        case .searchHistory(let query, let limit, let isIncognito):
             try container.encode(query, forKey: DynamicCodingKey(stringValue: "query")!)
             try container.encode(limit, forKey: DynamicCodingKey(stringValue: "limit")!)
+            try container.encode(isIncognito, forKey: DynamicCodingKey(stringValue: "is_incognito")!)
         case .clearHistory: break
         case .deleteHistoryEntry(let entryId):
             try container.encode(entryId, forKey: DynamicCodingKey(stringValue: "entry_id")!)
@@ -673,7 +681,8 @@ enum ShellEvent: Codable {
             self = .createTab(
                 spaceId: try container.decode(SpaceId.self, forKey: DynamicCodingKey(stringValue: "space_id")!),
                 url: try container.decodeIfPresent(Url.self, forKey: DynamicCodingKey(stringValue: "url")!),
-                parentId: try container.decodeIfPresent(TabId.self, forKey: DynamicCodingKey(stringValue: "parent_id")!))
+                parentId: try container.decodeIfPresent(TabId.self, forKey: DynamicCodingKey(stringValue: "parent_id")!),
+                isPrivate: (try? container.decode(Bool.self, forKey: DynamicCodingKey(stringValue: "is_private")!)) ?? false)
         case "close_tab":
             self = .closeTab(tabId: try container.decode(TabId.self, forKey: DynamicCodingKey(stringValue: "tab_id")!))
         case "activate_tab":
@@ -817,7 +826,8 @@ enum ShellEvent: Codable {
         case "command_bar_query":
             self = .commandBarQuery(
                 text: try container.decode(String.self, forKey: DynamicCodingKey(stringValue: "text")!),
-                mode: try container.decodeIfPresent(String.self, forKey: DynamicCodingKey(stringValue: "mode")!))
+                mode: try container.decodeIfPresent(String.self, forKey: DynamicCodingKey(stringValue: "mode")!),
+                isIncognito: (try? container.decode(Bool.self, forKey: DynamicCodingKey(stringValue: "is_incognito")!)) ?? false)
         case "command_bar_select":
             self = .commandBarSelect(
                 index: try container.decode(Int.self, forKey: DynamicCodingKey(stringValue: "index")!),
@@ -924,12 +934,17 @@ enum ShellEvent: Codable {
                 tabId: try container.decode(TabId.self, forKey: DynamicCodingKey(stringValue: "tab_id")!),
                 canGoBack: try container.decode(Bool.self, forKey: DynamicCodingKey(stringValue: "can_go_back")!),
                 canGoForward: try container.decode(Bool.self, forKey: DynamicCodingKey(stringValue: "can_go_forward")!))
+        case "tab_favicon_updated":
+            self = .tabFaviconUpdated(
+                tabId: try container.decode(TabId.self, forKey: DynamicCodingKey(stringValue: "tab_id")!),
+                favicon: try container.decodeIfPresent(ImageData.self, forKey: DynamicCodingKey(stringValue: "favicon")!))
 
         // History
         case "search_history":
             self = .searchHistory(
                 query: try container.decode(String.self, forKey: DynamicCodingKey(stringValue: "query")!),
-                limit: try container.decode(Int.self, forKey: DynamicCodingKey(stringValue: "limit")!))
+                limit: try container.decode(Int.self, forKey: DynamicCodingKey(stringValue: "limit")!),
+                isIncognito: (try? container.decode(Bool.self, forKey: DynamicCodingKey(stringValue: "is_incognito")!)) ?? false)
         case "clear_history":
             self = .clearHistory
         case "delete_history_entry":

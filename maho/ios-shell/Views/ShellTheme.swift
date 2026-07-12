@@ -21,6 +21,42 @@ enum ShellTheme {
 #endif
         }
 
+        static var homeBackgroundElevated: Color {
+#if canImport(UIKit)
+            Color(uiColor: .secondarySystemBackground)
+#else
+            Color.white
+#endif
+        }
+
+        static var logoStarOutline: Color {
+#if canImport(UIKit)
+            Color(uiColor: UIColor { traits in
+                traits.userInterfaceStyle == .dark
+                    ? UIColor.clear
+                    : UIColor(red: 30.0 / 255.0, green: 27.0 / 255.0, blue: 75.0 / 255.0, alpha: 1.0)
+            })
+#else
+            Color(red: 30.0 / 255.0, green: 27.0 / 255.0, blue: 75.0 / 255.0)
+#endif
+        }
+
+        static var sheetSurface: Color {
+#if canImport(UIKit)
+            Color(uiColor: .systemBackground)
+#else
+            Color.white
+#endif
+        }
+
+        static var sheetFieldFill: Color {
+#if canImport(UIKit)
+            Color(uiColor: .secondarySystemBackground)
+#else
+            Color(white: 0.92)
+#endif
+        }
+
         static var browsingBackground: Color {
 #if canImport(UIKit)
             Color(uiColor: .systemBackground)
@@ -29,13 +65,16 @@ enum ShellTheme {
 #endif
         }
 
-        static let incognitoBackground = Color.black
-        static let incognitoTint = Color.black.opacity(0.82)
+        static let incognitoBackground = Color(red: 26.0 / 255.0, green: 35.0 / 255.0, blue: 82.0 / 255.0)
+        static let incognitoTint = Color(red: 26.0 / 255.0, green: 35.0 / 255.0, blue: 82.0 / 255.0).opacity(0.82)
         static let incognitoForeground = Color.white
         static let incognitoSurface = Color.white.opacity(0.08)
         static let incognitoSurfaceStrong = Color.white.opacity(0.12)
         static let incognitoBorder = Color.white.opacity(0.14)
         static let incognitoMutedForeground = Color.white.opacity(0.7)
+        static let incognitoSearchCanvas = Color(red: 20.0 / 255.0, green: 20.0 / 255.0, blue: 22.0 / 255.0)
+        static let incognitoSearchContainer = Color(red: 42.0 / 255.0, green: 42.0 / 255.0, blue: 44.0 / 255.0)
+        static let incognitoSearchField = Color(red: 58.0 / 255.0, green: 58.0 / 255.0, blue: 60.0 / 255.0)
 
         static let searchFieldFill = Color.black.opacity(0.03)
         static let searchFieldBorder = Color.black.opacity(0.035)
@@ -95,9 +134,9 @@ enum ShellTheme {
 
         static func bottomBarFill(tint: Color, isIncognito: Bool) -> Color {
 #if canImport(UIKit)
-            let base = Color(uiColor: isIncognito ? .black : .secondarySystemBackground)
+            let base = isIncognito ? incognitoBackground : Color(uiColor: .secondarySystemBackground)
 #else
-            let base = isIncognito ? Color.black : Color.white
+            let base = isIncognito ? incognitoBackground : Color.white
 #endif
             return isIncognito ? base.opacity(0.92) : base.opacity(0.84)
         }

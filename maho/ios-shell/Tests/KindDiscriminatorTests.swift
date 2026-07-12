@@ -12,7 +12,7 @@ final class KindDiscriminatorTests: XCTestCase {
     }
 
     func testShellEventCreateTabContainsKind() throws {
-        let event = ShellEvent.createTab(spaceId: "space-1", url: nil, parentId: nil)
+        let event = ShellEvent.createTab(spaceId: "space-1", url: nil, parentId: nil, isPrivate: false)
         let json = try encodeToJson(event)
         XCTAssertEqual(json["kind"] as? String, "create_tab")
     }
@@ -21,7 +21,7 @@ final class KindDiscriminatorTests: XCTestCase {
 
     func testCoreUpdateTabCreatedDecodesWithKind() throws {
         let json = """
-        {"kind": "tab_created", "tab": {"id": "t1", "spaceId": "s1", "title": "", "url": "", "favicon": null, "isLoading": false, "isPinned": false, "isFavorite": false, "isMuted": false, "isPlayingAudio": false, "lifecycleState": "active", "children": [], "createdAt": "2024-01-01T00:00:00Z", "lastActiveAt": "2024-01-01T00:00:00Z", "role": {"type": "normal"}}}
+        {"kind": "tab_created", "tab": {"id": "t1", "spaceId": "s1", "title": "", "url": "", "favicon": null, "isLoading": false, "isPinned": false, "isFavorite": false, "isMuted": false, "isPlayingAudio": false, "lifecycleState": "active", "children": [], "createdAt": "2024-01-01T00:00:00Z", "lastActiveAt": "2024-01-01T00:00:00Z", "role": {"type": "normal"}, "isPrivate": false}}
         """.data(using: .utf8)!
         let decoded = try JSONDecoder().decode(CoreUpdate.self, from: json)
         if case .tabCreated = decoded {} else { XCTFail("Expected tabCreated") }
