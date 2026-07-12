@@ -22,6 +22,8 @@
 #include "ui/base/dragdrop/drop_target_event.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/models/image_model.h"
+#include "ui/gfx/animation/animation_delegate.h"
+#include "ui/gfx/animation/slide_animation.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/menus/simple_menu_model.h"
 #include "ui/views/context_menu_controller.h"
@@ -341,10 +343,11 @@ class MahoSidebarTabListView : public views::View,
 };
 
 class SidebarTabRowView : public views::View,
-                           public views::DragController,
-                           public views::ContextMenuController,
-                           public views::TextfieldController,
-                           public MahoTabContextMenu::Delegate {
+                            public views::DragController,
+                            public views::ContextMenuController,
+                            public views::TextfieldController,
+                            public gfx::AnimationDelegate,
+                            public MahoTabContextMenu::Delegate {
   METADATA_HEADER(SidebarTabRowView, views::View)
 
  public:
@@ -370,6 +373,7 @@ class SidebarTabRowView : public views::View,
 
   void OnThemeChanged() override;
   void OnFocus() override;
+  void Layout(PassKey) override;
   gfx::Size CalculatePreferredSize(
       const views::SizeBounds& available_size) const override;
 
@@ -403,6 +407,8 @@ class SidebarTabRowView : public views::View,
   DropCallback GetDropCallback(const ui::DropTargetEvent& event) override;
   void OnDragExited() override;
   void OnDragDone() override;
+  void AnimationProgressed(const gfx::Animation* animation) override;
+  void AnimationEnded(const gfx::Animation* animation) override;
 
   void WriteDragDataForView(views::View* sender,
                             const gfx::Point& press_pt,
@@ -477,6 +483,11 @@ class SidebarTabRowView : public views::View,
                                      const SidebarDragPayload& payload) const;
   void BeginTitleEditing();
   void EndTitleEditing(bool commit);
+  double GetSplitPreviewProgress() const;
+  bool IsSplitPreviewLeft() const;
+  void ApplySplitPreviewContentLayout(double progress);
+  void RefreshSplitPreviewLayout();
+  void UpdateSplitPreviewAnimation(bool visible);
   void UpdateAppearance();
 
   bool active_;
@@ -508,6 +519,11 @@ class SidebarTabRowView : public views::View,
   base::RepeatingClosure reveal_empty_pinned_drop_lane_callback_;
   bool drag_over_drop_target_ = false;
   SidebarTabDropZone active_drop_zone_ = SidebarTabDropZone::kNone;
+  gfx::SlideAnimation split_preview_animation_{this};
+  bool split_preview_target_visible_ = false;
+  bool split_preview_paint_installed_ = false;
+  bool split_preview_left_ = false;
+  bool split_preview_visual_left_ = false;
   bool activate_pending_ = false;
   bool activation_handled_for_current_press_ = false;
   bool is_suspended_ = false;

@@ -71,6 +71,7 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_dnd_events.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
@@ -89,6 +90,7 @@
 #include "ui/display/screen.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/base/dragdrop/drop_target_event.h"
+#include "ui/gfx/animation/tween.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
@@ -120,7 +122,10 @@
 #include "ui/views/vector_icons.h"
 #include "url/gurl.h"
 #include "base/timer/timer.h"
+#include "cc/paint/paint_flags.h"
 #include "ui/views/controls/scroll_view.h"
+
+#include "third_party/skia/include/core/SkColor.h"
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_drag_util.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_drop_planner.h"
@@ -156,8 +161,10 @@ constexpr int kFolderRowLeadingInsetDp = 8;
 constexpr int kDragStartThresholdDp = 5;
 constexpr int kDropIndicatorThicknessDp = 2;
 constexpr int kDropIndicatorOutlineThicknessDp = 1;
+constexpr int kSplitPreviewAnimationMs = 170;
 constexpr int kSplitPreviewDividerInsetDp = 4;
 constexpr int kSplitPreviewDividerWidthDp = 2;
+constexpr double kSplitPreviewIncomingPaneOpacity = 0.16;
 constexpr int kInlineActionIconSizeDp = 17;
 constexpr int kInlineActionsSpacingDp = 6;
 [[maybe_unused]] constexpr int kAudioIndicatorSizeDp = 14;
@@ -171,7 +178,11 @@ const gfx::Insets kSectionSeparatorInsets = gfx::Insets::TLBR(2, 8, 2, 8);
 
 class SidebarSplitDropTargetBackground : public views::Background {
  public:
-  SidebarSplitDropTargetBackground() = default;
+  explicit SidebarSplitDropTargetBackground(
+      base::RepeatingCallback<double()> progress_callback,
+      base::RepeatingCallback<bool()> preview_left_callback)
+      : progress_callback_(std::move(progress_callback)),
+        preview_left_callback_(std::move(preview_left_callback)) {}
 
   void Paint(gfx::Canvas* canvas, views::View* view) const override {
     const ui::ColorProvider* color_provider = view->GetColorProvider();
@@ -184,31 +195,84 @@ class SidebarSplitDropTargetBackground : public views::Background {
       return;
     }
 
-    cc::PaintFlags fill_flags;
-    fill_flags.setAntiAlias(true);
-    fill_flags.setStyle(cc::PaintFlags::kFill_Style);
-    fill_flags.setColor(color_provider->GetColor(ui::kColorSysSurface4));
-    canvas->DrawRoundRect(gfx::RectF(bounds), kRowCornerRadiusDp, fill_flags);
-
-    const float divider_height =
-        bounds.height() - (kSplitPreviewDividerInsetDp * 2.0f);
-    if (divider_height <= 0.0f) {
+    const double progress =
+        std::clamp(progress_callback_.Run(), 0.0, 1.0);
+    if (progress <= 0.0) {
       return;
     }
 
-    cc::PaintFlags divider_flags;
-    divider_flags.setAntiAlias(false);
-    divider_flags.setStyle(cc::PaintFlags::kFill_Style);
-    divider_flags.setColor(color_provider->GetColor(ui::kColorSysPrimary));
-    const float divider_x =
-        bounds.x() + ((bounds.width() - kSplitPreviewDividerWidthDp) / 2.0f);
-    canvas->DrawRect(
-        gfx::RectF(divider_x, bounds.y() + kSplitPreviewDividerInsetDp,
-                   kSplitPreviewDividerWidthDp, divider_height),
-        divider_flags);
+    const bool preview_left = preview_left_callback_.Run();
+    const float half_width =
+        (bounds.width() - kSplitPreviewDividerWidthDp) / 2.0f;
+    const float split_x = bounds.x() + half_width;
+    const gfx::RectF incoming_bounds(
+        preview_left ? static_cast<float>(bounds.x()) : split_x,
+        static_cast<float>(bounds.y()),
+        half_width,
+        static_cast<float>(bounds.height()));
+    const gfx::RectF target_bounds(
+        preview_left ? split_x + kSplitPreviewDividerWidthDp
+                     : static_cast<float>(bounds.x()),
+        static_cast<float>(bounds.y()),
+        half_width,
+        static_cast<float>(bounds.height()));
+    cc::PaintFlags target_flags;
+    target_flags.setAntiAlias(true);
+    target_flags.setStyle(cc::PaintFlags::kFill_Style);
+    target_flags.setColor(ApplyOpacity(
+        color_provider->GetColor(ui::kColorSysSurface4), progress));
+    canvas->DrawRoundRect(target_bounds, kRowCornerRadiusDp, target_flags);
+
+    cc::PaintFlags incoming_flags;
+    incoming_flags.setAntiAlias(true);
+    incoming_flags.setStyle(cc::PaintFlags::kFill_Style);
+    incoming_flags.setColor(ApplyOpacity(
+        color_provider->GetColor(ui::kColorSysPrimary),
+        progress * kSplitPreviewIncomingPaneOpacity));
+    canvas->DrawRoundRect(incoming_bounds, kRowCornerRadiusDp, incoming_flags);
+
+    const float full_divider_height =
+        bounds.height() - (kSplitPreviewDividerInsetDp * 2.0f);
+    if (full_divider_height > 0.0f) {
+      const float divider_height =
+          full_divider_height * static_cast<float>(progress);
+      cc::PaintFlags divider_flags;
+      divider_flags.setAntiAlias(true);
+      divider_flags.setStyle(cc::PaintFlags::kFill_Style);
+      divider_flags.setColor(ApplyOpacity(
+          color_provider->GetColor(ui::kColorSysDivider), progress));
+      const float divider_x =
+          bounds.x() + ((bounds.width() - kSplitPreviewDividerWidthDp) / 2.0f);
+      const float divider_y =
+          bounds.y() + (bounds.height() - divider_height) / 2.0f;
+      canvas->DrawRoundRect(
+          gfx::RectF(divider_x, divider_y, kSplitPreviewDividerWidthDp,
+                     divider_height),
+          kSplitPreviewDividerWidthDp / 2.0f, divider_flags);
+    }
+
+    cc::PaintFlags border_flags;
+    border_flags.setAntiAlias(true);
+    border_flags.setStyle(cc::PaintFlags::kStroke_Style);
+    border_flags.setStrokeWidth(kDropIndicatorOutlineThicknessDp);
+    border_flags.setColor(ApplyOpacity(
+        color_provider->GetColor(ui::kColorSysPrimary), progress));
+    gfx::RectF border_bounds(bounds);
+    border_bounds.Inset(kDropIndicatorOutlineThicknessDp / 2.0f);
+    canvas->DrawRoundRect(border_bounds, kRowCornerRadiusDp, border_flags);
   }
 
   void OnViewThemeChanged(views::View* view) override { view->SchedulePaint(); }
+
+ private:
+  static SkColor ApplyOpacity(SkColor color, double opacity) {
+    const int alpha = std::clamp(
+        static_cast<int>(SkColorGetA(color) * opacity + 0.5), 0, 255);
+    return SkColorSetA(color, alpha);
+  }
+
+  base::RepeatingCallback<double()> progress_callback_;
+  base::RepeatingCallback<bool()> preview_left_callback_;
 };
 
 ui::DropTargetEvent ForwardDropTargetEventToView(const ui::DropTargetEvent& event,
@@ -1480,6 +1544,9 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
       preview_hide_callback_(std::move(preview_hide_callback)),
       activate_callback_(std::move(activate_callback)),
       mute_callback_(std::move(mute_callback)) {
+  split_preview_animation_.SetSlideDuration(
+      base::Milliseconds(kSplitPreviewAnimationMs));
+  split_preview_animation_.SetTweenType(gfx::Tween::EASE_OUT);
   SetNotifyEnterExitOnChild(true);
   const int indent = node.depth * kFolderIndentDp;
   auto row_insets = gfx::Insets::TLBR(0, 9 + indent, 0, 7);
@@ -1576,6 +1643,45 @@ SidebarTabRowView::SidebarTabRowView(const SidebarTreeNode& node,
 
 SidebarTabRowView::~SidebarTabRowView() = default;
 
+double SidebarTabRowView::GetSplitPreviewProgress() const {
+  return split_preview_animation_.GetCurrentValue();
+}
+
+bool SidebarTabRowView::IsSplitPreviewLeft() const {
+  return split_preview_visual_left_;
+}
+
+void SidebarTabRowView::UpdateSplitPreviewAnimation(bool visible) {
+  if (split_preview_target_visible_ == visible) {
+    return;
+  }
+  split_preview_target_visible_ = visible;
+  if (visible) {
+    split_preview_animation_.Show();
+  } else {
+    split_preview_animation_.Hide();
+  }
+  RefreshSplitPreviewLayout();
+}
+
+void SidebarTabRowView::AnimationProgressed(const gfx::Animation* animation) {
+  if (animation == &split_preview_animation_) {
+    RefreshSplitPreviewLayout();
+  }
+}
+
+void SidebarTabRowView::AnimationEnded(const gfx::Animation* animation) {
+  if (animation != &split_preview_animation_) {
+    return;
+  }
+  RefreshSplitPreviewLayout();
+  if (!split_preview_target_visible_ &&
+      split_preview_animation_.GetCurrentValue() == 0.0) {
+    split_preview_visual_left_ = false;
+    UpdateAppearance();
+  }
+}
+
 void SidebarTabRowView::SetSplitCompactMode(bool compact) {
   split_compact_ = compact;
   if (audio_button_) {
@@ -1628,6 +1734,96 @@ void SidebarTabRowView::OnAudioButtonPressed(const ui::Event& event) {
 gfx::Size SidebarTabRowView::CalculatePreferredSize(
     const views::SizeBounds& available_size) const {
   return gfx::Size(0, kRowHeightDp);
+}
+
+void SidebarTabRowView::Layout(PassKey) {
+  LayoutSuperclass<views::View>(this);
+  if (!split_compact_) {
+    ApplySplitPreviewContentLayout(GetSplitPreviewProgress());
+  }
+}
+
+void SidebarTabRowView::ApplySplitPreviewContentLayout(double progress) {
+  progress = std::clamp(progress, 0.0, 1.0);
+  if (progress <= 0.0 || !favicon_view_ || !title_button_ || !close_button_) {
+    return;
+  }
+
+  const gfx::Rect full_bounds = GetContentsBounds();
+  if (full_bounds.IsEmpty() ||
+      full_bounds.width() <= kSplitPreviewDividerWidthDp) {
+    return;
+  }
+
+  const int pane_width =
+      std::max(0, (full_bounds.width() - kSplitPreviewDividerWidthDp) / 2);
+  const int pane_x = split_preview_left_
+                         ? full_bounds.x() + pane_width +
+                               kSplitPreviewDividerWidthDp
+                         : full_bounds.x();
+  const gfx::Rect pane_bounds(pane_x, full_bounds.y(), pane_width,
+                              full_bounds.height());
+  const gfx::Rect favicon_bounds = favicon_view_->bounds();
+  const gfx::Rect title_bounds = title_button_->bounds();
+  const gfx::Rect title_field_bounds = title_field_ ? title_field_->bounds()
+                                                    : title_bounds;
+  const gfx::Rect audio_bounds = audio_button_ ? audio_button_->bounds()
+                                               : gfx::Rect();
+  const gfx::Rect close_bounds = close_button_->bounds();
+  const int leading_inset =
+      std::max(0, favicon_bounds.x() - full_bounds.x());
+  const int trailing_inset =
+      std::max(0, full_bounds.right() - close_bounds.right());
+
+  gfx::Rect close_target = close_bounds;
+  close_target.set_x(std::max(
+      pane_bounds.x(), pane_bounds.right() - trailing_inset -
+                           close_bounds.width()));
+  int trailing_x = close_target.x();
+
+  gfx::Rect audio_target = audio_bounds;
+  if (audio_button_ && audio_button_->GetVisible()) {
+    audio_target.set_x(std::max(
+        pane_bounds.x(), trailing_x - kRowIconTextSpacingDp -
+                             audio_bounds.width()));
+    trailing_x = audio_target.x();
+  }
+
+  gfx::Rect favicon_target = favicon_bounds;
+  favicon_target.set_x(std::min(
+      pane_bounds.right() - favicon_bounds.width(),
+      pane_bounds.x() + std::min(leading_inset, pane_width)));
+  favicon_target.set_x(std::max(pane_bounds.x(), favicon_target.x()));
+
+  const int title_x = favicon_target.right() + kRowIconTextSpacingDp;
+  const int title_right = std::max(title_x, trailing_x - kRowIconTextSpacingDp);
+  gfx::Rect title_target(title_x, title_bounds.y(),
+                         std::max(0, title_right - title_x),
+                         title_bounds.height());
+  gfx::Rect title_field_target(title_x, title_field_bounds.y(),
+                               title_target.width(),
+                               title_field_bounds.height());
+
+  favicon_view_->SetBoundsRect(
+      gfx::Tween::RectValueBetween(progress, favicon_bounds, favicon_target));
+  title_button_->SetBoundsRect(
+      gfx::Tween::RectValueBetween(progress, title_bounds, title_target));
+  if (title_field_) {
+    title_field_->SetBoundsRect(gfx::Tween::RectValueBetween(
+        progress, title_field_bounds, title_field_target));
+  }
+  if (audio_button_ && audio_button_->GetVisible()) {
+    audio_button_->SetBoundsRect(
+        gfx::Tween::RectValueBetween(progress, audio_bounds, audio_target));
+  }
+  close_button_->SetBoundsRect(
+      gfx::Tween::RectValueBetween(progress, close_bounds, close_target));
+}
+
+void SidebarTabRowView::RefreshSplitPreviewLayout() {
+  InvalidateLayout();
+  DeprecatedLayoutImmediately();
+  SchedulePaint();
 }
 
 void SidebarTabRowView::SetFavicon(ui::ImageModel image) {
@@ -1807,14 +2003,29 @@ int SidebarTabRowView::OnDragUpdated(const ui::DropTargetEvent& event) {
   if (!ReadMahoDragData(event.data(), payload)) {
     active_drop_zone_ = SidebarTabDropZone::kNone;
     drag_over_drop_target_ = false;
+    split_preview_left_ = false;
     UpdateAppearance();
     return static_cast<int>(ui::mojom::DragOperation::kNone);
   }
   active_drop_zone_ = ResolveDropZone(event, payload);
   if (active_drop_zone_ == SidebarTabDropZone::kNone) {
     drag_over_drop_target_ = false;
+    split_preview_left_ = false;
     UpdateAppearance();
     return static_cast<int>(ui::mojom::DragOperation::kNone);
+  }
+  if (active_drop_zone_ == SidebarTabDropZone::kSplit) {
+    const bool drop_on_left = event.location().x() < width() / 2;
+    const bool split_side_changed =
+        split_preview_left_ != drop_on_left ||
+        split_preview_visual_left_ != drop_on_left;
+    split_preview_left_ = drop_on_left;
+    split_preview_visual_left_ = drop_on_left;
+    if (split_side_changed) {
+      RefreshSplitPreviewLayout();
+    }
+  } else {
+    split_preview_left_ = false;
   }
   if (section_ == MahoSidebarTabSection::kNormal &&
       reveal_empty_pinned_drop_lane_callback_ &&
@@ -1838,6 +2049,13 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
   const SidebarTabDropZone drop_zone =
       has_drag_payload ? ResolveDropZone(event, drag_payload)
                        : SidebarTabDropZone::kNone;
+  const bool split_drop_on_left =
+      drop_zone == SidebarTabDropZone::kSplit &&
+      event.location().x() < width() / 2;
+  active_drop_zone_ = SidebarTabDropZone::kNone;
+  drag_over_drop_target_ = false;
+  split_preview_left_ = false;
+  UpdateAppearance();
   MahoSidebarTabListView* list_view = GetTabListView();
   const bool is_multi_drag = list_view && list_view->IsTabSelected(tab_id_) &&
                              list_view->selected_tab_ids().size() > 1;
@@ -1850,6 +2068,7 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
           base::RepeatingCallback<void(const std::string&)>
               favorites_drop_accepted,
           SidebarTabDropZone drop_zone,
+          bool split_drop_on_left,
           bool is_multi_drag,
           MahoSidebarTabListView* list_view,
           const ui::DropTargetEvent& event,
@@ -1942,18 +2161,40 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
               if (!tgt_wc && list_view) {
                 tgt_wc = list_view->WakeSuspendedTab(tab_id);
               }
-              const int source_tab_strip_index =
+              int source_tab_strip_index =
                   src_wc ? model->GetIndexOfWebContents(src_wc) : -1;
-              const int target_tab_strip_index =
+              int target_tab_strip_index =
                   tgt_wc ? model->GetIndexOfWebContents(tgt_wc) : -1;
               LOG(WARNING) << "[MAHO_DROP_DBG] kSplit(woken) tgt="
-                           << target_tab_strip_index
-                           << " src=" << source_tab_strip_index;
+                            << target_tab_strip_index
+                            << " src=" << source_tab_strip_index
+                            << " left=" << split_drop_on_left;
               if (src_wc && tgt_wc && src_wc != tgt_wc &&
                   source_tab_strip_index >= 0 &&
                   target_tab_strip_index >= 0) {
                 if (!model->GetSplitForTab(source_tab_strip_index).has_value() &&
                     !model->GetSplitForTab(target_tab_strip_index).has_value()) {
+                  const int move_destination = split_drop_on_left
+                      ? (source_tab_strip_index < target_tab_strip_index
+                             ? target_tab_strip_index - 1
+                             : target_tab_strip_index)
+                      : (source_tab_strip_index < target_tab_strip_index
+                             ? target_tab_strip_index
+                             : target_tab_strip_index + 1);
+                  if (source_tab_strip_index != move_destination) {
+                    model->MoveWebContentsAt(source_tab_strip_index,
+                                             move_destination,
+                                             false);
+                    source_tab_strip_index =
+                        model->GetIndexOfWebContents(src_wc);
+                    target_tab_strip_index =
+                        model->GetIndexOfWebContents(tgt_wc);
+                  }
+                  if (source_tab_strip_index < 0 || target_tab_strip_index < 0 ||
+                      model->GetSplitForTab(source_tab_strip_index).has_value() ||
+                      model->GetSplitForTab(target_tab_strip_index).has_value()) {
+                    continue;
+                  }
                   output_drag_op = ui::mojom::DragOperation::kMove;
                   split_tabs::SplitTabVisualData visual_data(
                       split_tabs::SplitTabLayout::kVertical, 0.5);
@@ -1966,22 +2207,23 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
                       split_tabs::SplitTabCreatedSource::kDragAndDropTab);
 
                   // Mirror to Rust for persistence (matches MahoSplitViewController path).
-                  auto get_stable_id = [&](int index) -> std::string {
-                    content::WebContents* contents =
-                        model->GetWebContentsAt(index);
+                  auto get_stable_id = [](content::WebContents* contents)
+                      -> std::string {
                     if (!contents) return "";
                     auto* helper = MahoTabIdHelper::FromWebContents(contents);
                     return helper ? helper->stable_tab_id() : "";
                   };
-                  std::string target_id = get_stable_id(target_tab_strip_index);
-                  std::string source_id = get_stable_id(source_tab_strip_index);
-                  if (!target_id.empty() && !source_id.empty()) {
+                  std::string left_id =
+                      get_stable_id(split_drop_on_left ? src_wc : tgt_wc);
+                  std::string right_id =
+                      get_stable_id(split_drop_on_left ? tgt_wc : src_wc);
+                  if (!left_id.empty() && !right_id.empty()) {
                     std::string event_json = base::StringPrintf(
                         "{\"kind\":\"create_split\",\"window_id\":\"%s\","
                         "\"tab_ids\":[\"%s\",\"%s\"],"
                         "\"orientation\":\"horizontal\"}",
                         std::to_string(browser->session_id().id()).c_str(),
-                        target_id.c_str(), source_id.c_str());
+                        left_id.c_str(), right_id.c_str());
                     if (auto* core = maho::GetCore()) {
                       char* result =
                           maho_core_handle_event(core, event_json.c_str());
@@ -2061,13 +2303,15 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
       },
       browser_, tab_id_, section_, space_id_,
       source_parent_folder_id_, resolve_tab_index_,
-      favorites_drop_accepted_callback_, drop_zone, is_multi_drag, list_view);
+      favorites_drop_accepted_callback_, drop_zone, split_drop_on_left,
+      is_multi_drag, list_view);
 }
 
 void SidebarTabRowView::OnDragExited() {
   ForwardDragEnded(this);
   active_drop_zone_ = SidebarTabDropZone::kNone;
   drag_over_drop_target_ = false;
+  split_preview_left_ = false;
   UpdateAppearance();
 }
 
@@ -2077,6 +2321,10 @@ void SidebarTabRowView::OnDragDone() {
     layer()->SetOpacity(1.f);
     DestroyLayer();
   }
+  active_drop_zone_ = SidebarTabDropZone::kNone;
+  drag_over_drop_target_ = false;
+  split_preview_left_ = false;
+  UpdateAppearance();
   NotifySidebarDragEnded(this);
 }
 
@@ -2237,7 +2485,7 @@ void SidebarTabRowView::WriteDragDataForView(views::View* sender,
 
   const ui::ColorProvider* color_provider = GetColorProvider();
   const SkColor bg_color =
-      color_provider ? color_provider->GetColor(kMahoColorTabRowHoverBackground)
+      color_provider ? color_provider->GetColor(kMahoColorTabRowActiveBackground)
                      : SkColorSetARGB(0x33, 0x88, 0x88, 0x88);
   auto drag_image = CreateSidebarDragImageWithBackground(
       this, bg_color, static_cast<float>(kRowCornerRadiusDp));
@@ -2325,26 +2573,52 @@ void SidebarTabRowView::UpdateAppearance() {
     current_state = AppearanceVisualState::kIdle;
   }
 
-  if (current_state != last_visual_state_) {
+  const bool wants_split_preview =
+      !split_compact_ && drag_over_drop_target_ &&
+      active_drop_zone_ == SidebarTabDropZone::kSplit;
+  UpdateSplitPreviewAnimation(wants_split_preview);
+  const bool keep_split_preview_paint =
+      !split_compact_ &&
+      (wants_split_preview || split_preview_animation_.is_animating() ||
+       split_preview_animation_.GetCurrentValue() > 0.0);
+  const bool split_preview_paint_changed =
+      keep_split_preview_paint != split_preview_paint_installed_;
+
+  if (current_state != last_visual_state_ || split_preview_paint_changed) {
     last_visual_state_ = current_state;
+    split_preview_paint_installed_ = keep_split_preview_paint;
     if (split_compact_) {
       // Split panes render transparent; the unified split container paints the
       // shared active/hover background so both halves highlight together.
       SetBackground(nullptr);
       SetBorder(nullptr);
+    } else if (keep_split_preview_paint) {
+      SetBackground(std::make_unique<SidebarSplitDropTargetBackground>(
+          base::BindRepeating(&SidebarTabRowView::GetSplitPreviewProgress,
+                              base::Unretained(this)),
+          base::BindRepeating(&SidebarTabRowView::IsSplitPreviewLeft,
+                              base::Unretained(this))));
+      SetBorder(views::CreateEmptyBorder(
+          gfx::Insets(kDropIndicatorOutlineThicknessDp)));
     } else {
       switch (current_state) {
         case AppearanceVisualState::kDropTarget:
           if (active_drop_zone_ == SidebarTabDropZone::kSplit) {
-            SetBackground(
-                std::make_unique<SidebarSplitDropTargetBackground>());
+            SetBackground(std::make_unique<SidebarSplitDropTargetBackground>(
+                base::BindRepeating(
+                    &SidebarTabRowView::GetSplitPreviewProgress,
+                    base::Unretained(this)),
+                base::BindRepeating(&SidebarTabRowView::IsSplitPreviewLeft,
+                                    base::Unretained(this))));
+            SetBorder(views::CreateEmptyBorder(
+                gfx::Insets(kDropIndicatorOutlineThicknessDp)));
           } else {
             SetBackground(views::CreateRoundedRectBackground(
                 ui::kColorSysSurface4, kRowCornerRadiusDp));
+            SetBorder(views::CreateRoundedRectBorder(
+                kDropIndicatorOutlineThicknessDp, kRowCornerRadiusDp,
+                ui::kColorSysPrimary));
           }
-          SetBorder(views::CreateRoundedRectBorder(
-              kDropIndicatorOutlineThicknessDp, kRowCornerRadiusDp,
-              ui::kColorSysPrimary));
           break;
         case AppearanceVisualState::kActive:
           SetBackground(views::CreateRoundedRectBackground(
@@ -2445,6 +2719,14 @@ SidebarTabRowView::SidebarTabDropZone SidebarTabRowView::ResolveDropZone(
   // whole point of a tab-on-tab drop. Reordering to a specific position is done
   // by dropping on the thin insertion lanes between rows, not on a row body.
   if (payload.node_kind == SidebarNodeKind::kTab) {
+    if (browser_) {
+      return SidebarTabDropZone::kSplit;
+    }
+    const int row_height = std::max(height(), 1);
+    const int y = event.location().y();
+    if (y < row_height / 3) {
+      return SidebarTabDropZone::kBefore;
+    }
     return SidebarTabDropZone::kSplit;
   }
 
@@ -4163,9 +4445,13 @@ void MahoSidebarTabListView::RebuildSplitGroupContainer(
   auto split_container = std::make_unique<SplitGroupContainerView>();
 
   const bool is_side_by_side = (group_node.split_orientation == "vertical");
+  bool force_vertical = false;
+  if (browser && browser->profile()) {
+    force_vertical = !maho::sidebar_prefs::IsSidebarPanelExpanded(browser->profile()->GetPrefs());
+  }
   split_container->SetOrientation(
-      is_side_by_side ? views::LayoutOrientation::kHorizontal
-                      : views::LayoutOrientation::kVertical);
+      (is_side_by_side && !force_vertical) ? views::LayoutOrientation::kHorizontal
+                                           : views::LayoutOrientation::kVertical);
 
   // No horizontal inset: each pane row already carries its own 9px leading
   // inset, so any container padding would push the first pane's favicon out of
@@ -4381,12 +4667,6 @@ content::WebContents* MahoSidebarTabListView::WakeSuspendedTab(
     return nullptr;
   }
 
-  if (persisted->role_type == "favorite") {
-    LOG(ERROR) << "BUG: favorite should never be suspended";
-    return nullptr;
-  }
-
-  MahoTabIdHelper::SetPendingRestoredTabId(tab_id);
 
   TRACE_EVENT_INSTANT0("browser", "WakeSuspendedTab.NavigateStart",
                        TRACE_EVENT_SCOPE_THREAD);
@@ -4401,11 +4681,22 @@ content::WebContents* MahoSidebarTabListView::WakeSuspendedTab(
   LOG(INFO) << "[MAHO_PERF]   Navigate()=" << navigate_ms << "ms";
 
   if (params.navigated_or_inserted_contents) {
+    // Bind the stable id directly on the freshly-created WebContents instead of
+    // relying on the global SetPendingRestoredTabId FIFO queue. The queue's
+    // blind front-pop can hand a stale, unconsumed id (e.g. a favorite whose
+    // WebContents was never materialized under Model B) to this new tab,
+    // branding it as the wrong tab. Direct binding is immune to that pollution.
+    if (auto* id_helper =
+            MahoTabIdHelper::FromWebContents(params.navigated_or_inserted_contents);
+        id_helper && id_helper->stable_tab_id() != tab_id) {
+      id_helper->SetRestoredTabId(tab_id);
+    }
+
     MahoTabWakeHelper::CreateForWebContents(
         params.navigated_or_inserted_contents, tab_id,
         persisted->scroll_x, persisted->scroll_y);
 
-    if (persisted->is_pinned) {
+    if (persisted->is_pinned && persisted->role_type == "pinned") {
       TabStripModel* model = browser_->tab_strip_model();
       int new_idx = model->GetIndexOfWebContents(params.navigated_or_inserted_contents);
       if (new_idx != TabStripModel::kNoTab && !model->IsTabPinned(new_idx)) {
@@ -5465,8 +5756,9 @@ void MahoSidebarTabListView::MoveSelectedToSpace(const std::string& space_id) {
 
   for (const auto& tab_id : snapshot_ids) {
     maho::DispatchShellEvent("move_tab_to_space",
-                             {{"space_id", space_id},
-                              {"tab_id", tab_id}});
+                             {{"target_space_id", space_id},
+                              {"tab_id", tab_id},
+                              {"section", "normal"}});
   }
 
   selected_tab_ids_.clear();
