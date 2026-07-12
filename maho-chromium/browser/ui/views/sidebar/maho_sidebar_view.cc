@@ -2,6 +2,7 @@
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_drag_util.h"
+#include "ui/views/widget/widget.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_now_playing_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
@@ -1213,10 +1214,11 @@ int MahoSidebarView::OnDragUpdated(const ui::DropTargetEvent& event) {
   gfx::Point fav_location = event.location();
   views::View::ConvertPointToTarget(this, favorites_view_, &fav_location);
 
+  const bool was_over = last_over_favorites_;
   const bool now_over =
       gfx::Rect(favorites_view_->size()).Contains(fav_location);
 
-  if (last_over_favorites_ && !now_over) {
+  if (was_over && !now_over) {
     favorites_view_->OnFavoritesZoneExited();
   }
   last_over_favorites_ = now_over;
@@ -1269,6 +1271,13 @@ void MahoSidebarView::OnDragStarted(const std::string& tab_id) {
     favorites_view_->OnExternalDragStarted(tab_id);
   }
   last_over_favorites_ = false;
+}
+
+void MahoSidebarView::SetActiveDragGhostImage(const gfx::ImageSkia& image,
+                                              const gfx::Vector2d& offset) {
+  if (favorites_view_) {
+    favorites_view_->SetActiveDragGhostImage(image, offset);
+  }
 }
 
 void MahoSidebarView::OnTranslateEnabledChanged(content::WebContents* source) {

@@ -24,6 +24,7 @@
 #include "ui/base/dragdrop/drop_target_event.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/gfx/image/image_skia.h"
+#include "ui/gfx/geometry/vector2d.h"
 #include "ui/views/view.h"
 #include "ui/views/view_observer.h"
 #include "ui/views/controls/scroll_view.h"
@@ -99,6 +100,8 @@ class MahoSidebarView
   void OnDragExited() override;
   void OnDragEnded();
   void OnDragStarted(const std::string& tab_id);
+  void SetActiveDragGhostImage(const gfx::ImageSkia& image,
+                               const gfx::Vector2d& offset);
 
   void OpenLibrary();
   void OpenLibrary(MahoSidebarLibraryRailView::Category category);
