@@ -13,13 +13,19 @@
 #include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
 #include "base/json/json_reader.h"
+#include "base/command_line.h"
 #include "base/logging.h"
 #include "base/path_service.h"
+#include "base/process/launch.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/synchronization/waitable_event.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/thread.h"
+#include "base/values.h"
+#include "base/version.h"
 #include "chrome/browser/browser_process.h"
 #include "components/prefs/pref_service.h"
+#include "components/version_info/version_info.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "maho/browser/updates/maho_update_pref_names.h"
@@ -28,6 +34,7 @@
 #include "maho/browser/updates/rollout_bucket.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 
@@ -111,7 +118,19 @@ class PlatformUpdaterDelegateWin : public PlatformUpdaterDelegate {
     base::ThreadPool::PostTask(
         FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
         base::BindOnce(
-            [](const base::FilePath& installer_path) {
+            [](const base::FilePath& installer_path, const std::string& hash,
+               const std::string& cn) {
+              // Re-verify immediately before execution to close the TOCTOU
+              // window between OnVerificationComplete and this deferred launch:
+              // another process running as this user could otherwise swap the
+              // fixed-path installer for a malicious binary after verification.
+              if (!updates::VerifySha256(installer_path, hash) ||
+                  !updates::VerifyAuthenticode(installer_path, cn)) {
+                LOG(ERROR) << "Maho: installer failed re-verification before "
+                              "launch; aborting update.";
+                base::DeleteFile(installer_path);
+                return;
+              }
               base::LaunchOptions options;
               options.start_hidden = true;
               base::CommandLine cmd(installer_path);
@@ -123,20 +142,41 @@ class PlatformUpdaterDelegateWin : public PlatformUpdaterDelegate {
               cmd.AppendArg("/S");
               base::LaunchProcess(cmd, options);
             },
-            verified_installer_path_));
+            verified_installer_path_, installer_sha256_,
+            installer_signer_cn_));
   }
 
  private:
   void CheckMsixUpdate() {
-    try {
-      Package package = Package::Current();
-      auto op = package.CheckUpdateAvailabilityAsync();
-      auto result = op.get();
+    // Chromium builds with C++ exceptions disabled, so the throwing C++/WinRT
+    // projections (op.get() / try-catch on winrt::hresult_error) cannot be
+    // used. Drive the async operation via a completion handler + WaitableEvent
+    // and branch on AsyncStatus; GetResults() is only called on
+    // AsyncStatus::Completed, where it does not throw.
+    Package package = Package::Current();
+    auto op = package.CheckUpdateAvailabilityAsync();
 
-      UpdateState next_state = UpdateState::kUpToDate;
-      UpdateError err = UpdateError::kNone;
+    base::WaitableEvent done;
+    PackageUpdateAvailability availability = PackageUpdateAvailability::Unknown;
+    AsyncStatus final_status = AsyncStatus::Error;
+    op.Completed(
+        [&](IAsyncOperation<PackageUpdateAvailabilityResult> const& async,
+            AsyncStatus status) {
+          final_status = status;
+          if (status == AsyncStatus::Completed) {
+            availability = async.GetResults().Availability();
+          }
+          done.Signal();
+        });
+    done.Wait();
 
-      switch (result.Availability()) {
+    UpdateState next_state = UpdateState::kUpToDate;
+    UpdateError err = UpdateError::kNone;
+    if (final_status != AsyncStatus::Completed) {
+      next_state = UpdateState::kError;
+      err = UpdateError::kConnectionFailed;
+    } else {
+      switch (availability) {
         case PackageUpdateAvailability::Available:
         case PackageUpdateAvailability::Required:
           next_state = UpdateState::kUpdateAvailable;
@@ -151,26 +191,19 @@ class PlatformUpdaterDelegateWin : public PlatformUpdaterDelegate {
           err = UpdateError::kConnectionFailed;
           break;
       }
-
-      content::GetUIThreadTaskRunner({})->PostTask(
-          FROM_HERE,
-          base::BindOnce(
-              [](UpdateState state, UpdateError error) {
-                if (state == UpdateState::kError) {
-                  MahoUpdateManager::GetInstance()->TransitionToError(error);
-                } else {
-                  MahoUpdateManager::GetInstance()->TransitionToState(state);
-                }
-              },
-              next_state, err));
-    } catch (const winrt::hresult_error&) {
-      content::GetUIThreadTaskRunner({})->PostTask(
-          FROM_HERE,
-          base::BindOnce([]() {
-            MahoUpdateManager::GetInstance()->TransitionToError(
-                UpdateError::kConnectionFailed);
-          }));
     }
+
+    content::GetUIThreadTaskRunner({})->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            [](UpdateState state, UpdateError error) {
+              if (state == UpdateState::kError) {
+                MahoUpdateManager::GetInstance()->TransitionToError(error);
+              } else {
+                MahoUpdateManager::GetInstance()->TransitionToState(state);
+              }
+            },
+            next_state, err));
   }
 
   void CheckCustomDownloaderUpdate(bool manual_check) {
@@ -271,6 +304,18 @@ class PlatformUpdaterDelegateWin : public PlatformUpdaterDelegate {
         !rollout_bucket) {
       MahoUpdateManager::GetInstance()->TransitionToError(
           UpdateError::kUnknown);
+      return;
+    }
+
+    // Downgrade protection: reject manifests that are not strictly newer than
+    // the running build. The manifest is ed25519-signed, but an old (still
+    // validly signed) manifest+installer could otherwise be replayed to force
+    // a downgrade to a known-vulnerable version. Mirrors the Linux delegate.
+    base::Version latest(*version);
+    base::Version current(version_info::GetVersionNumber());
+    if (!latest.IsValid() || !current.IsValid() || latest <= current) {
+      MahoUpdateManager::GetInstance()->TransitionToState(
+          UpdateState::kUpToDate);
       return;
     }
 

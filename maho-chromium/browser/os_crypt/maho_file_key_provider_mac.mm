@@ -74,8 +74,14 @@ GetKeyTask(const base::FilePath& user_data_dir) {
   }
 
   uint32_t secure_status = 0;
-  DCHECK(maho_core_oscrypt_key_path_is_secure(password_file.value().c_str(),
-                                              &secure_status));
+  if (!maho_core_oscrypt_key_path_is_secure(password_file.value().c_str(),
+                                            &secure_status)) {
+    LOG(ERROR) << "OSCrypt key file failed path/permission security check, "
+                  "status: "
+               << secure_status;
+    return base::unexpected(
+        os_crypt_async::KeyProvider::KeyError::kPermanentlyUnavailable);
+  }
 
   return os_crypt_async::Encryptor::Key(
       derived_key, os_crypt_async::mojom::Algorithm::kAES128CBC);

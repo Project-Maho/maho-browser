@@ -16,8 +16,21 @@ bool IsAcceptableUpdateServerUrl(const std::string& url) {
   if (url.empty()) {
     return false;
   }
-  return base::StartsWith(url, "http://", base::CompareCase::INSENSITIVE_ASCII) ||
-         base::StartsWith(url, "https://", base::CompareCase::INSENSITIVE_ASCII);
+  if (base::StartsWith(url, "https://", base::CompareCase::INSENSITIVE_ASCII)) {
+    return true;
+  }
+  // Plain http:// is only permitted for loopback (local development/testing).
+  // Production/remote update servers must use https:// to prevent MITM
+  // replay/downgrade of the (signed) update manifest.
+  if (base::StartsWith(url, "http://localhost",
+                       base::CompareCase::INSENSITIVE_ASCII) ||
+      base::StartsWith(url, "http://127.0.0.1",
+                       base::CompareCase::INSENSITIVE_ASCII) ||
+      base::StartsWith(url, "http://[::1]",
+                       base::CompareCase::INSENSITIVE_ASCII)) {
+    return true;
+  }
+  return false;
 }
 
 std::string StripTrailingSlash(std::string url) {
