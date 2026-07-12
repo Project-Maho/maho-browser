@@ -15,6 +15,7 @@ fn make_tab(id: &str, title: &str, url: &str) -> TabViewModel {
         is_favorite: false,
         favorite_order: None,
         role: maho_types::tab::TabRole::Normal,
+        is_private: false,
         is_muted: false,
         is_playing_audio: false,
         lifecycle_state: "active".to_string(),
@@ -566,3 +567,32 @@ fn search_suggestion_still_emitted_for_url_query() {
     assert!(search_pos.is_some(), "Search suggestion should be present for URL query");
 }
 
+#[test]
+fn empty_query_yields_no_action_suggestions() {
+    let mut engine = CommandBarEngine::new();
+    engine.add_action("mute_tab".to_string(), "Mute Tab".to_string(), "Tab Actions".to_string());
+
+    let ctx = empty_ctx();
+    let results = engine.search("", None, &ctx);
+
+    assert!(
+        pos_by_kind(&results, SuggestionType::Action).is_none(),
+        "empty query must not surface any Action suggestions; got keys: {:?}",
+        results.iter().map(|r| r.key.as_str()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn text_match_surfaces_action_inline() {
+    let mut engine = CommandBarEngine::new();
+    engine.add_action("mute_tab".to_string(), "Mute Tab".to_string(), "Tab Actions".to_string());
+
+    let ctx = empty_ctx();
+    let results = engine.search("mute", None, &ctx);
+
+    assert!(
+        pos_by_key(&results, "action:mute_tab").is_some(),
+        "text match 'mute' must surface the mute_tab action inline (score > 0.3 threshold); got keys: {:?}",
+        results.iter().map(|r| r.key.as_str()).collect::<Vec<_>>()
+    );
+}

@@ -1,3 +1,4 @@
+pub mod ai_search_intent;
 pub mod account_manager;
 pub mod atc_manager;
 pub mod autofill_manager;

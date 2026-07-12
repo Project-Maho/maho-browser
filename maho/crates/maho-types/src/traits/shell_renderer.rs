@@ -32,6 +32,8 @@ pub struct TabViewModel {
     pub created_at: DateTime,
     pub last_active_at: DateTime,
     pub role: TabRole,
+    #[serde(default)]
+    pub is_private: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -152,6 +154,8 @@ pub enum SuggestionType {
     ArchivedTab,
     ClosedTab,
     Folder,
+    #[serde(rename = "aiAnswer")]
+    AiAnswer,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

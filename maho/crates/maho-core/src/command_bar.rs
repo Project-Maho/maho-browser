@@ -389,6 +389,27 @@ impl CommandBarEngine {
                 },
                 score: 1.5,
             });
+
+            if !ctx.is_incognito {
+                let intent = crate::ai_search_intent::classify_query(query);
+                if intent == crate::ai_search_intent::QueryIntent::AiPreferred || intent == crate::ai_search_intent::QueryIntent::Ambiguous {
+                    let score = if intent == crate::ai_search_intent::QueryIntent::AiPreferred { 1.8 } else { 1.6 };
+                    results.push(SearchResult {
+                        suggestion: SuggestionViewModel {
+                            kind: SuggestionType::AiAnswer,
+                            key: format!("ai_search:{}", query),
+                            title: format!("Ask Maho AI \"{}\"", query),
+                            subtitle: None,
+                            execution_payload: None,
+                            icon: None,
+                            relevance_score: score,
+                            match_ranges: None,
+                            shortcut: None,
+                        },
+                        score,
+                    });
+                }
+            }
         }
 
         // Search tabs
@@ -581,27 +602,29 @@ impl CommandBarEngine {
         }
 
         // Search actions
-        for action in &self.actions {
-            let target = format!("{} {}", action.label, action.category).to_lowercase();
-            let match_result = Self::fuzzy_match(&lower_query, &target);
-            if match_result.is_match {
-                results.push(SearchResult {
-                    suggestion: SuggestionViewModel {
-                        kind: SuggestionType::Action,
-                        key: format!("action:{}", action.id),
-                        title: action.label.clone(),
-                        subtitle: Some(action.category.clone()),
-                        execution_payload: None,
-                        icon: None,
-                        relevance_score: match_result.score,
-                        match_ranges: Some(indices_to_ranges(
-                            &match_result.matched_indices,
-                            action.label.len(),
-                        )),
-                        shortcut: None,
-                    },
-                    score: match_result.score,
-                });
+        if !lower_query.is_empty() {
+            for action in &self.actions {
+                let target = format!("{} {}", action.label, action.category).to_lowercase();
+                let match_result = Self::fuzzy_match(&lower_query, &target);
+                if match_result.is_match && match_result.score > 0.3 {
+                    results.push(SearchResult {
+                        suggestion: SuggestionViewModel {
+                            kind: SuggestionType::Action,
+                            key: format!("action:{}", action.id),
+                            title: action.label.clone(),
+                            subtitle: Some(action.category.clone()),
+                            execution_payload: None,
+                            icon: None,
+                            relevance_score: match_result.score,
+                            match_ranges: Some(indices_to_ranges(
+                                &match_result.matched_indices,
+                                action.label.len(),
+                            )),
+                            shortcut: None,
+                        },
+                        score: match_result.score,
+                    });
+                }
             }
         }
 
@@ -808,12 +831,13 @@ impl CommandBarEngine {
             SuggestionType::ArchivedTab => 3,
             SuggestionType::History => 4,
             SuggestionType::Navigation => 5,
-            SuggestionType::Search => 6,        // ← NEW
-            SuggestionType::Action => 7,        // shifted
-            SuggestionType::Folder => 8,        // shifted
-            SuggestionType::Calculator => 9,    // shifted
-            SuggestionType::UnitConversion => 10, // shifted
-            _ => 11,
+            SuggestionType::AiAnswer => 6,
+            SuggestionType::Search => 7,
+            SuggestionType::Action => 8,
+            SuggestionType::Folder => 9,
+            SuggestionType::Calculator => 10,
+            SuggestionType::UnitConversion => 11,
+            _ => 12,
         }
     }
 
