@@ -22,6 +22,8 @@
 #include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/vector2d.h"
+#include "ui/gfx/image/image_skia.h"
 
 #include "ui/views/context_menu_controller.h"
 #include "ui/views/view.h"
@@ -87,6 +89,9 @@ class MahoSidebarFavoritesGridView : public views::View {
   void OnExternalDragStarted(const std::string& tab_id);
   void CleanupAfterDrop();
   void HideOverlayAndPhantom();
+  void SetActiveDragGhostImage(const gfx::ImageSkia& image,
+                               const gfx::Vector2d& offset);
+  void RestoreOsDragGhostImage();
 
   // Fix 3: Called by MahoSidebarView when cursor exits favorites subarea.
   void OnFavoritesZoneExited();
@@ -162,8 +167,8 @@ class MahoSidebarFavoritesGridView : public views::View {
   // tab is being dragged FROM the tab list INTO the favorites grid. Gives the
   // "favicon+box morph" feedback the user expects when the drag ghost (a tab
   // row snapshot) reaches the favorites zone.
-  void ShowInsertionPreview(int preview_index,
-                              const std::string& tab_id);
+  void ShowInsertionPreview(const gfx::Point& cursor,
+                            const std::string& tab_id);
   void HideInsertionPreview();
   void OnInsertionPreviewFaviconLoaded(
       const std::string& tab_id,
@@ -213,6 +218,10 @@ class MahoSidebarFavoritesGridView : public views::View {
   std::string drag_preview_tab_id_;
   GURL drag_preview_url_;
   int drag_preview_slot_ = -1;
+
+  gfx::ImageSkia active_drag_ghost_image_;
+  gfx::Vector2d active_drag_ghost_offset_;
+  bool os_ghost_hidden_ = false;
   base::CancelableTaskTracker drag_preview_task_tracker_;
 
   // Animation helpers
