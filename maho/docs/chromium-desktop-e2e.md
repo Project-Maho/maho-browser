@@ -170,9 +170,17 @@ the app. Two properties make testing robust against that churn:
    `/json`. There is therefore no supported way to freeze a component build off
    `out/Default`; do not attempt to snapshot/clone the runtime set.
 
-For a binary that is also immune to `out/Default` rebuilds **at rest** (not just
-while running), build into a dedicated output directory once and point
-`MAHO_APP_PATH` at it:
+The `--serve` / `--attach` model on `out/Default` is the primary mechanism and
+needs no extra build. Note that the AI panel is a WebUI: with `load_webui_from_disk`
+enabled in the dev `args.gn`, changing the panel's TypeScript/React does **not**
+require a Chromium rebuild — rebuild the WebUI bundle and reload the served
+instance. Only C++/Rust/Mojo changes need a Chromium rebuild (which rebuilds the
+shared `out/Default`).
+
+#### Optional: a binary immune to churn even at rest (`out/E2E`)
+
+For a binary that is immune to `out/Default` rebuilds **at rest** (not just while
+running), build into a dedicated output directory and point `MAHO_APP_PATH` at it:
 
 ```bash
 python3 maho-chromium/build/scripts/build_maho.py --out-dir out/E2E --no-launch
@@ -180,8 +188,22 @@ MAHO_APP_PATH=$PWD/chromium/src/out/E2E/Maho.app \
   node maho-chromium/build/scripts/e2e_chromium_ai.js --serve
 ```
 
-**Caveat:** a broad `pkill Maho` from another session still kills any instance
-(shared process name) — this is unavoidable. Restart `--serve` to recover.
+**This is a one-time FULL build (hours).** There is no compiler cache configured
+(no ccache/sccache/reclient in `args.gn`), so a fresh out directory shares no
+object files with `out/Default` and recompiles everything. This path is therefore
+only worthwhile to **pin one binary for a sustained QA campaign** — build once,
+then test for days while other sessions churn `out/Default` — and is **not**
+suitable for fast iterate-and-test loops.
+
+Unverified cheaper alternative: an APFS CoW clone of the entire `out/Default` tree
+(`cp -Rc`) followed by `gn gen out/E2E` + `ninja` might let ninja "adopt" the
+existing objects and produce an isolated binary near-instantly. This has **not**
+been validated — it may hit the same component-build init hang that defeats a
+partial relocation (see point 2 above), and `gn gen`/`ninja` could trigger a large
+rebuild. Do not rely on it until measured.
+
+**Caveat (both paths):** a broad `pkill Maho` from another session still kills any
+instance (shared process name) — this is unavoidable. Restart `--serve` to recover.
 
 ### Self-test
 
