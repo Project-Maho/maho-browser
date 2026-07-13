@@ -2760,6 +2760,102 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard="MahoSpaceThemeState::GetForcedDarkMode",
         ),
     ],
+    "chrome/browser/ui/views/frame/multi_contents_view.h": [
+        Replacement(
+            old="  static constexpr int kSplitViewContentInset = 8;\n",
+            new="  static constexpr int kSplitViewContentInset = 0;\n",
+            description=(
+                "Maho: zero split-view content inset so split panes sit flush to "
+                "the window edges like a single pane (no gray content frame)"
+            ),
+            guard="static constexpr int kSplitViewContentInset = 0;",
+        ),
+    ],
+    "chrome/browser/ui/views/frame/multi_contents_view.cc": [
+        Replacement(
+            old=(
+                "  const bool show_background =\n"
+                "      drop_target_view_->GetVisible() || IsInSplitView();\n"
+            ),
+            new=(
+                "  const bool show_background =\n"
+                "      drop_target_view_->GetVisible();\n"
+            ),
+            description=(
+                "Maho: do not paint the gray kColorToolbar MultiContentsBackgroundView "
+                "behind split panes (only during drag-drop); it was the visible gray "
+                "rounded frame around split content"
+            ),
+            guard="  const bool show_background =\n      drop_target_view_->GetVisible();\n",
+        ),
+    ],
+    "chrome/browser/ui/views/frame/multi_contents_resize_area.cc": [
+        Replacement(
+            old="constexpr int kHandlePadding = 6;\n",
+            new="constexpr int kHandlePadding = 0;\n",
+            description=(
+                "Maho: zero split resize-area padding so the two panes touch flush "
+                "(no gray gap/seam between them)"
+            ),
+            guard="constexpr int kHandlePadding = 0;",
+        ),
+        Replacement(
+            old="constexpr int kHandleWidth = 4;\n",
+            new="constexpr int kHandleWidth = 0;\n",
+            description=(
+                "Maho: zero split resize-handle width so no divider/handle/notch is "
+                "drawn between panes (drag-resize disabled for a fully flush split)"
+            ),
+            guard="constexpr int kHandleWidth = 0;",
+        ),
+    ],
+    "chrome/browser/ui/views/frame/contents_container_view.cc": [
+        Replacement(
+            old="    container_outline_->UpdateState(is_active, is_highlighted);\n",
+            new="    container_outline_->SetVisible(false);\n",
+            description=(
+                "Maho: hide ContentsContainerOutline in split. Its OnPaint draws a "
+                "rounded-rect stroke (kCornerRadius=8); with kThickness=0 Skia still "
+                "renders a 1px hairline whose rounded bottom corners showed as faint "
+                "notches. Hiding the view removes them entirely."
+            ),
+        ),
+        Replacement(
+            old="constexpr float kContentCornerRadius = 6;\n",
+            new="constexpr float kContentCornerRadius = 0;\n",
+            description=(
+                "Maho: square split-view content corners to match the flush "
+                "single-pane look"
+            ),
+            guard="constexpr float kContentCornerRadius = 0;",
+        ),
+        Replacement(
+            old="constexpr int kSplitViewContentPadding = 4;\n",
+            new="constexpr int kSplitViewContentPadding = 0;\n",
+            description="Maho: remove split-view content padding for flush panes",
+            guard="constexpr int kSplitViewContentPadding = 0;",
+        ),
+        Replacement(
+            old="    mini_toolbar_->UpdateState(is_active, is_highlighted);\n",
+            new="    mini_toolbar_->SetVisible(false);\n",
+            description=(
+                "Maho: hide the split-view mini toolbar (inactive-pane favicon/"
+                "domain/close pill) for a clean borderless split"
+            ),
+        ),
+    ],
+    "chrome/browser/ui/views/frame/contents_container_outline.h": [
+        Replacement(
+            old="  static constexpr int kThickness = 1;\n",
+            new="  static constexpr int kThickness = 0;\n",
+            description=(
+                "Maho: zero content outline thickness so the per-pane empty "
+                "border collapses and split content is fully flush (outline is "
+                "already transparent via the color mixer)"
+            ),
+            guard="static constexpr int kThickness = 0;",
+        ),
+    ],
 }
 
 

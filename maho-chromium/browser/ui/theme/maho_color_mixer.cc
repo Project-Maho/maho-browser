@@ -67,6 +67,18 @@ void AddWindowAndSurfaceColors(ui::ColorMixer& mixer, bool dark_mode) {
   mixer[kMahoColorContentBorder] = {dark_mode
       ? SkColorSetARGB(46, 55, 51, 81)
       : SkColorSetARGB(133, 189, 195, 219)};
+  // Split view draws a 1dp stroke around each content pane (upstream
+  // ContentsContainerOutline, kColorSysOutline/kColorSysNeutralOutline). Make
+  // the always-on active/inactive outlines transparent so panes sit flush; the
+  // drag-to-split highlight outline is left visible as the drop indicator.
+  mixer[kColorMultiContentsViewActiveContentOutline] = {SK_ColorTRANSPARENT};
+  mixer[kColorMultiContentsViewInactiveContentOutline] = {SK_ColorTRANSPARENT};
+  // MultiContentsView frames the split content region with ContentsSeparator
+  // views painted in kColorToolbarContentAreaSeparator (material
+  // kColorSysSurfaceVariant). Transparent drops that gray framing. The same id
+  // is the single-pane toolbar/content underline, so it is borderless there too,
+  // matching Maho's minimal glass surface.
+  mixer[kColorToolbarContentAreaSeparator] = {SK_ColorTRANSPARENT};
   mixer[kMahoColorCardBackground] = {dark_mode
       ? SkColorSetARGB(255, 42, 39, 61)
       : SkColorSetARGB(255, 248, 249, 252)};
