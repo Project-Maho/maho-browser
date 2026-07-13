@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use maho_browser_mcp::client::BrowserClient;
 use maho_browser_mcp::paths::default_socket_path;
 use serde_json::Value;
@@ -51,11 +51,7 @@ pub async fn connect(override_path: Option<&str>) -> Result<BrowserClient> {
 /// Call an MCP tool on the connected browser and return the result payload.
 ///
 /// This wraps the `tools/call` JSON-RPC method, extracting the result content.
-pub async fn send_tool_call(
-    client: &BrowserClient,
-    tool: &str,
-    args: Value,
-) -> Result<Value> {
+pub async fn send_tool_call(client: &BrowserClient, tool: &str, args: Value) -> Result<Value> {
     let params = serde_json::json!({
         "name": tool,
         "arguments": args,

@@ -20,17 +20,10 @@ struct ChatMessage {
 }
 
 /// Send a chat message directly to an OpenAI-compatible provider (BYOK mode).
-pub async fn send_byok(
-    provider: &str,
-    api_key: &str,
-    message: &str,
-) -> Result<()> {
+pub async fn send_byok(provider: &str, api_key: &str, message: &str) -> Result<()> {
     let base_url = match provider {
         "openai" => "https://api.openai.com/v1",
-        other => bail!(
-            "unsupported BYOK provider: '{}'. Supported: openai",
-            other
-        ),
+        other => bail!("unsupported BYOK provider: '{}'. Supported: openai", other),
     };
 
     let client = Client::new();

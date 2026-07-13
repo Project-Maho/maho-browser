@@ -292,6 +292,15 @@ pub struct BrowserReleaseLeaseParams {
     pub tab_id: i64,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrowserRoutinesListParams {}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BrowserRoutinesRunParams {
+    #[schemars(description = "Routine id (or name) to run — resolves built-ins first, then custom routines")]
+    pub id: String,
+}
+
 /// The MCP server that bridges stdio (rmcp) to the browser's UDS socket.
 #[derive(Debug, Clone)]
 pub struct MahoBrowserMcpServer {
@@ -850,6 +859,19 @@ impl MahoBrowserMcpServer {
         Ok(serde_json::to_string(&result).unwrap_or_default())
     }
 
+    #[tool(description = "Get the session-scoped allowed_domains list.")]
+    async fn browser_get_allowed_domains(
+        &self,
+        _params: Parameters<serde_json::Value>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("browser_get_allowed_domains", serde_json::json!({}))
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
     #[tool(description = "Acquire an exclusive lease on the given tab (blocks other sessions from mutating it)")]
     async fn browser_acquire_lease(
         &self,
@@ -892,6 +914,32 @@ impl MahoBrowserMcpServer {
         let result = self
             .client
             .call_tool("browser_release_lease", json!({"tab_id": params.tab_id}))
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "List the routines the running browser exposes (built-in recipes + user-defined custom routines) from the maho_core routines engine")]
+    async fn browser_routines_list(
+        &self,
+        #[allow(unused_variables)] Parameters(_params): Parameters<BrowserRoutinesListParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("browser_routines_list", json!({}))
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "Run a routine by id via the running browser's maho_core routines engine. Tier-locked routines return a structured error (Max tier required).")]
+    async fn browser_routines_run(
+        &self,
+        Parameters(params): Parameters<BrowserRoutinesRunParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("browser_routines_run", json!({"id": params.id}))
             .await
             .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
         Ok(serde_json::to_string(&result).unwrap_or_default())
@@ -1267,6 +1315,57 @@ mod tests {
 
         drop(server);
         handle.await.unwrap();
+    }
+
+    // FIX-4-browser: browser_routines_list + browser_routines_run are exposed
+    // and delegate over the bridge to the browser's (SAME) maho_core routines
+    // engine — list returns the built-ins, run resolves the routine by id.
+    #[tokio::test]
+    async fn routines_list_run_exposed() {
+        // browser_routines_list: the running browser's engine returns the merged
+        // built-in + custom routine set. The bridge must forward verbatim.
+        let list_result = json!({
+            "routines": [
+                {"id": "morning_briefing", "name": "Morning Briefing", "source": "builtin"},
+                {"id": "close_old_tabs", "name": "Close Old Tabs", "source": "builtin"},
+                {"id": "summarize_reading_list", "name": "Summarize Reading List", "source": "builtin"},
+                {"id": "weekly_tab_tidy", "name": "Weekly Tab Tidy", "source": "builtin"},
+            ]
+        });
+        let (mock, handle) =
+            MockBrowser::start_with_result("browser_routines_list", list_result).await;
+        let client = BrowserClient::connect(&mock.sock_path).await.unwrap();
+        let server = MahoBrowserMcpServer::new_with_client(Arc::new(client));
+
+        let listed = server
+            .browser_routines_list(Parameters(BrowserRoutinesListParams {}))
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&listed).unwrap();
+        let routines = parsed["routines"].as_array().unwrap();
+        assert_eq!(routines.len(), 4);
+        assert!(routines.iter().any(|r| r["id"] == "morning_briefing"));
+        handle.await.unwrap();
+
+        // browser_routines_run: the bridge forwards the routine id to the engine
+        // (which resolves built-ins first, then custom). Echo mock confirms the
+        // exact wire method + the id argument reach the engine unchanged.
+        let (mock2, handle2) = MockBrowser::start().await;
+        let client2 = BrowserClient::connect(&mock2.sock_path).await.unwrap();
+        let server2 = MahoBrowserMcpServer::new_with_client(Arc::new(client2));
+
+        let ran = server2
+            .browser_routines_run(Parameters(BrowserRoutinesRunParams {
+                id: "morning_briefing".into(),
+            }))
+            .await
+            .unwrap();
+        let parsed2: serde_json::Value = serde_json::from_str(&ran).unwrap();
+        assert_eq!(parsed2["_method"], "browser_routines_run");
+        assert_eq!(parsed2["_params"]["id"], "morning_briefing");
+
+        drop(server2);
+        handle2.await.unwrap();
     }
 
     // T7: browser_bookmarks_search — query flows through

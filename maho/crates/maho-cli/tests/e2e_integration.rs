@@ -110,7 +110,9 @@ async fn handle_login(
     let password = body["password"].as_str().unwrap_or_default().to_string();
 
     let users = state.users.lock().unwrap();
-    let user = users.iter().find(|u| u.email == email && u.password == password);
+    let user = users
+        .iter()
+        .find(|u| u.email == email && u.password == password);
 
     match user {
         Some(u) => (
@@ -130,10 +132,7 @@ async fn handle_login(
     }
 }
 
-async fn handle_me(
-    State(state): State<RelayState>,
-    req: Request<Body>,
-) -> impl IntoResponse {
+async fn handle_me(State(state): State<RelayState>, req: Request<Body>) -> impl IntoResponse {
     let auth_header = req
         .headers()
         .get("authorization")
@@ -169,10 +168,7 @@ fn mock_proxy(state: ProxyState) -> Router {
         .with_state(state)
 }
 
-async fn handle_chat(
-    State(state): State<ProxyState>,
-    req: Request<Body>,
-) -> impl IntoResponse {
+async fn handle_chat(State(state): State<ProxyState>, req: Request<Body>) -> impl IntoResponse {
     // Capture the Authorization header
     let auth_header = req
         .headers()
@@ -422,10 +418,7 @@ async fn test_invalid_credentials() {
         .output()
         .expect("failed to run maho");
 
-    assert!(
-        !output.status.success(),
-        "login with bad creds should fail"
-    );
+    assert!(!output.status.success(), "login with bad creds should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.to_lowercase().contains("invalid"),
@@ -479,10 +472,7 @@ async fn test_chat_without_login() {
         .output()
         .expect("failed to run maho chat");
 
-    assert!(
-        !output.status.success(),
-        "chat without login should fail"
-    );
+    assert!(!output.status.success(), "chat without login should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stderr_lower = stderr.to_lowercase();
     assert!(
@@ -507,10 +497,7 @@ async fn test_whoami_without_login() {
         .output()
         .expect("failed to run maho whoami");
 
-    assert!(
-        !output.status.success(),
-        "whoami without login should fail"
-    );
+    assert!(!output.status.success(), "whoami without login should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stderr_lower = stderr.to_lowercase();
     assert!(

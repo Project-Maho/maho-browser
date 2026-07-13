@@ -18,8 +18,17 @@ fn help_contains_all_command_groups() {
 
     // All visible top-level groups must appear in --help
     let expected_groups = [
-        "auth", "chat", "billing", "tab", "history", "bookmarks", "page", "headless", "browser",
-        "mcp", "version",
+        "auth",
+        "chat",
+        "billing",
+        "tab",
+        "history",
+        "bookmarks",
+        "page",
+        "headless",
+        "browser",
+        "mcp",
+        "version",
     ];
     for group in &expected_groups {
         assert!(
@@ -134,7 +143,12 @@ fn deprecated_balance_prints_warning_to_stderr() {
 #[test]
 fn tab_info_exits_with_error_when_no_browser() {
     let output = maho_cmd()
-        .args(["--socket-path", "/tmp/nonexistent-maho-cli-test.sock", "tab", "info"])
+        .args([
+            "--socket-path",
+            "/tmp/nonexistent-maho-cli-test.sock",
+            "tab",
+            "info",
+        ])
         .output()
         .expect("failed to run maho tab info");
 
@@ -154,7 +168,15 @@ fn tab_info_exits_with_error_when_no_browser() {
 #[test]
 fn headless_exits_with_error_when_no_browser() {
     let output = maho_cmd()
-        .args(["headless", "--url", "https://example.com", "--extract", "title"])
+        .args([
+            "--socket-path",
+            "/tmp/nonexistent-maho-cli-test.sock",
+            "headless",
+            "--url",
+            "https://example.com",
+            "--extract",
+            "title",
+        ])
         .output()
         .expect("failed to run maho headless");
 
@@ -171,17 +193,36 @@ fn headless_exits_with_error_when_no_browser() {
     );
 }
 
+#[cfg(unix)]
 #[test]
-fn mcp_stub_exits_with_code_2() {
-    let output = maho_cmd()
-        .args(["mcp"])
+fn mcp_errors_when_sibling_binary_missing() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // `maho mcp` exec-replaces the process with the sibling `maho-browser-mcp`
+    // binary resolved via current_exe(). Copying the CLI into an isolated dir
+    // with no sibling makes the missing-binary error path deterministic
+    // (independent of whatever sits next to the test binary in target/debug).
+    let dir = tempfile::tempdir().unwrap();
+    let maho_copy = dir.path().join("maho");
+    std::fs::copy(env!("CARGO_BIN_EXE_maho"), &maho_copy).unwrap();
+    let mut perms = std::fs::metadata(&maho_copy).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&maho_copy, perms).unwrap();
+
+    let output = Command::new(&maho_copy)
+        .arg("mcp")
+        .stdin(std::process::Stdio::null())
         .output()
         .expect("failed to run maho mcp");
 
-    assert_eq!(
-        output.status.code(),
-        Some(2),
-        "mcp stub should exit with code 2"
+    assert!(
+        !output.status.success(),
+        "mcp should fail when the sibling maho-browser-mcp binary is missing"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("maho-browser-mcp"),
+        "mcp should report the missing sibling binary, got:\n{stderr}"
     );
 }
 

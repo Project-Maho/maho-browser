@@ -40,6 +40,7 @@ pub struct AiMcpServer {
     pub trusted_tools: Option<Vec<String>>,
     pub timeout_ms: u64,
     pub output_cap_bytes: usize,
+    pub socket_path: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -49,6 +50,7 @@ pub struct AiMcpServer {
 pub enum McpTransport {
     Stdio,
     Http,
+    Uds,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

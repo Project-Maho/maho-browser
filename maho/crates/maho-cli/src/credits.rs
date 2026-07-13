@@ -148,8 +148,8 @@ fn try_open_in_maho_browser(url: &str) -> bool {
                 return Some(packaged);
             }
             if let Some(home) = std::env::var_os("HOME") {
-                let desktop = std::path::PathBuf::from(&home)
-                    .join(".local/share/applications/maho.desktop");
+                let desktop =
+                    std::path::PathBuf::from(&home).join(".local/share/applications/maho.desktop");
                 if let Ok(text) = std::fs::read_to_string(&desktop) {
                     // Exec=/opt/maho/maho %U → take the first token.
                     if let Some(exe) = text

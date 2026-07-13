@@ -3288,6 +3288,7 @@ dependencies = [
  "futures",
  "hyper 1.10.1",
  "libc",
+ "maho-browser-mcp",
  "maho-core",
  "maho-storage",
  "maho-types",
@@ -3352,12 +3353,19 @@ name = "maho-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "base64 0.22.1",
+ "chrono",
  "clap",
  "directories",
  "futures-util",
+ "hmac",
+ "maho-agent",
  "maho-browser-mcp",
+ "maho-core",
+ "maho-storage",
+ "maho-types",
  "nix 0.29.0",
  "open",
  "reqwest 0.12.28",
@@ -3365,11 +3373,14 @@ dependencies = [
  "rustyline",
  "serde",
  "serde_json",
+ "sha2",
+ "swiftide-core",
  "tempfile",
  "tokio",
  "toml",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -3407,6 +3418,7 @@ dependencies = [
 name = "maho-ffi"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "criterion",
  "maho-agent",
  "maho-core",
@@ -3432,6 +3444,7 @@ dependencies = [
  "dirs 5.0.1",
  "hmac",
  "lz4_flex 0.11.6",
+ "md-5",
  "pbkdf2",
  "plist",
  "rusqlite",

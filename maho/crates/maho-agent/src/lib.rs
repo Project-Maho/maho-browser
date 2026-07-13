@@ -113,6 +113,12 @@ pub trait AgentStorage: Send + Sync {
     ) -> Result<(), AgentError> {
         Ok(())
     }
+    async fn get_system_prompt_snapshot(
+        &self,
+        _conversation_id: &str,
+    ) -> Result<Option<String>, AgentError> {
+        Ok(None)
+    }
 }
 
 pub struct MutexAgentStorage(pub std::sync::Arc<std::sync::Mutex<maho_storage::sqlite::SqliteStorage>>);
@@ -272,6 +278,21 @@ impl AgentStorage for MutexAgentStorage {
         tokio::task::spawn_blocking(move || {
             let lock = storage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             lock.set_system_prompt_snapshot_if_absent(&conv_id, &prompt)
+                .map_err(|e| AgentError::ExecutionError(e.to_string()))
+        })
+        .await
+        .map_err(|e| AgentError::ExecutionError(e.to_string()))?
+    }
+
+    async fn get_system_prompt_snapshot(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<String>, AgentError> {
+        let storage = std::sync::Arc::clone(&self.0);
+        let conv_id = conversation_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            let lock = storage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            lock.get_system_prompt_snapshot(&conv_id)
                 .map_err(|e| AgentError::ExecutionError(e.to_string()))
         })
         .await

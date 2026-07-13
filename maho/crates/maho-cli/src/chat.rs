@@ -23,10 +23,7 @@ struct ChatMessage {
 
 /// Send a chat message through the billing proxy and stream the response to stdout.
 pub async fn send_chat(proxy_url: &str, config: &CliConfig, message: &str) -> Result<()> {
-    let token = config
-        .access_token
-        .as_deref()
-        .unwrap_or_default();
+    let token = config.access_token.as_deref().unwrap_or_default();
 
     if token.is_empty() {
         bail!("not logged in — run `maho login` first");

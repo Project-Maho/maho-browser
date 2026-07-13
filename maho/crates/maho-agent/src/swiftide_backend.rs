@@ -33,6 +33,39 @@ impl<T> MutexExt<T> for Mutex<T> {
     }
 }
 
+fn should_attempt_mcp_connect(server: &maho_types::ai::AiMcpServer) -> bool {
+    server.trusted
+        || crate::mcp_client::resolve_uds_permission(
+            server.transport,
+            server.socket_path.as_deref(),
+        ) == ToolPermission::AutoApprove
+}
+
+/// Decide whether a registered MCP tool must be gated by the permission callback.
+///
+/// FIX-9a (#3): a dogfood (`AutoApprove`) tool auto-runs (`sensitive == false`)
+/// ONLY when it is READ-ONLY; genuinely sensitive browser *actions* keep
+/// `sensitive == true` so the CLI's `deny-sensitive` default still gates them.
+/// Explicit server trust (`server.trusted` + `trusted_tools`) is an independent,
+/// user-opted-in path and is preserved for any tool. `raw_name` is the tool name
+/// with any `mcp:<server>/` prefix stripped.
+fn mcp_tool_is_sensitive(
+    tool_permission: ToolPermission,
+    raw_name: &str,
+    tool_name: &str,
+    server_trusted: bool,
+    trusted_tools: Option<&Vec<String>>,
+) -> bool {
+    let dogfood_readonly = tool_permission == ToolPermission::AutoApprove
+        && crate::mcp_client::is_readonly_dogfood_tool(raw_name);
+    let explicitly_trusted = server_trusted
+        && match trusted_tools {
+            None => true,
+            Some(list) => list.iter().any(|n| n == raw_name || n == tool_name),
+        };
+    !(dogfood_readonly || explicitly_trusted)
+}
+
 #[derive(Clone)]
 struct MahoOpenAIConfig {
     // SAFETY: contains BYOK plaintext, exclude from crash dumps
@@ -108,6 +141,7 @@ struct PermissionGatedTool {
     permission_callback: Arc<Mutex<Option<PermissionCallback>>>,
     denied_flag: Arc<Mutex<bool>>,
     session_id: String,
+    approval_policy: Arc<Mutex<String>>,
 }
 
 #[async_trait]
@@ -120,6 +154,12 @@ impl Tool for PermissionGatedTool {
         if *self.denied_flag.lock_unpoison() {
             return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
                 anyhow::anyhow!("Permission Denied"),
+            ));
+        }
+
+        if self.approval_policy.lock_unpoison().as_str() == "deny" {
+            return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
+                anyhow::anyhow!("Permission Denied: global approval policy is 'deny'"),
             ));
         }
 
@@ -375,7 +415,7 @@ impl Tool for ShellExecTool {
 
         // 5. Cap output to 10k characters to prevent self-exfiltration of huge logs/files
         if result.len() > 10000 {
-            result.truncate(10000);
+            truncate_at_char_boundary(&mut result, 10000);
             result.push_str("\n... [Output truncated to 10,000 characters]");
         }
 
@@ -546,6 +586,17 @@ impl Tool for BrowserToolShim {
     }
 }
 
+fn truncate_at_char_boundary(s: &mut String, max_bytes: usize) {
+    if s.len() <= max_bytes {
+        return;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.truncate(end);
+}
+
 fn browser_tool_shims(bridge: Arc<dyn BrowserToolBridge>) -> Vec<BrowserToolShim> {
     let no_args = serde_json::json!({
         "type": "object",
@@ -563,6 +614,12 @@ fn browser_tool_shims(bridge: Arc<dyn BrowserToolBridge>) -> Vec<BrowserToolShim
         "required": ["query"]
     });
     vec![
+        BrowserToolShim {
+            name: "list_browser_tabs",
+            description: "List every open browser tab and return each tab's id, title, url, and whether it is active, as structured JSON. Use this to enumerate all tabs.",
+            parameters_schema: no_args.clone(),
+            bridge: Arc::clone(&bridge),
+        },
         BrowserToolShim {
             name: "read_current_page",
             description: "Read the currently active browser tab and return its main content (title, url, text) as structured JSON.",
@@ -596,6 +653,119 @@ fn browser_tool_shims(bridge: Arc<dyn BrowserToolBridge>) -> Vec<BrowserToolShim
     ]
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LlmProviderKind {
+    OpenAi,
+    Anthropic,
+}
+
+fn normalize_provider(p: &str) -> &str {
+    match p {
+        "claude" => "anthropic",
+        other => other,
+    }
+}
+
+/// Probe the secure-storage callback for a usable BYOK key and build the
+/// matching LLM client.
+///
+/// `preferred` (from `maho run --provider`) is probed FIRST so an Anthropic
+/// selection is never mislabeled as OpenAI. The previous behavior hard-coded
+/// the probe order to `openai` first and used the *probe argument* (not the key
+/// the callback actually returned) as the provider label, so `--provider
+/// anthropic` built an OpenAI client pointed at the OpenAI base URL while
+/// carrying an Anthropic key.
+pub fn resolve_byok_client<F>(
+    preferred: Option<&str>,
+    secure_cb: &F,
+    resolved_model: &str,
+) -> Result<(Box<dyn swiftide_core::chat_completion::ChatCompletion>, LlmProviderKind), AgentError>
+where
+    F: Fn(&str) -> Result<SecureKeyBundle, AgentError> + ?Sized,
+{
+    let order: [&str; 2] = match preferred.map(normalize_provider) {
+        Some("anthropic") => ["anthropic", "openai"],
+        _ => ["openai", "anthropic"],
+    };
+
+    let mut found: Option<(&'static str, SecureKeyBundle)> = None;
+    let mut last_err: Option<AgentError> = None;
+    for provider in order {
+        match secure_cb(provider) {
+            Ok(bundle) => {
+                found = Some((provider, bundle));
+                break;
+            }
+            Err(e) => last_err = Some(e),
+        }
+    }
+    let (provider, bundle) = match found {
+        Some(pair) => pair,
+        None => {
+            return Err(last_err.unwrap_or_else(|| {
+                AgentError::ExecutionError(
+                    "Secure storage callback is missing or returned no keys for the requested provider"
+                        .to_string(),
+                )
+            }));
+        }
+    };
+
+    build_byok_client(provider, bundle, resolved_model)
+}
+
+fn build_byok_client(
+    provider: &str,
+    bundle: SecureKeyBundle,
+    resolved_model: &str,
+) -> Result<(Box<dyn swiftide_core::chat_completion::ChatCompletion>, LlmProviderKind), AgentError> {
+    let api_key = bundle.key;
+    let base_url_override = bundle.base_url;
+    let model_override = bundle.model;
+
+    if normalize_provider(provider) == "anthropic" {
+        let default_model = model_override
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                if resolved_model.is_empty() {
+                    "claude-3-5-sonnet".to_string()
+                } else {
+                    resolved_model.to_string()
+                }
+            });
+        let client = async_anthropic::Client::from_api_key(api_key.secret().clone());
+        let swiftide_anthropic = swiftide_integrations::anthropic::Anthropic::builder()
+            .default_prompt_model(default_model)
+            .client(client)
+            .build()
+            .map_err(|e| AgentError::ExecutionError(format!("Failed to build Anthropic client: {e}")))?;
+        Ok((Box::new(swiftide_anthropic), LlmProviderKind::Anthropic))
+    } else {
+        let api_base = base_url_override
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| OPENAI_DEFAULT_API_BASE.to_string());
+        let default_model = model_override
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                if resolved_model.is_empty() {
+                    "gpt-4o".to_string()
+                } else {
+                    resolved_model.to_string()
+                }
+            });
+        let config = MahoOpenAIConfig {
+            api_key: Arc::new(api_key.secret().clone()),
+            api_base,
+        };
+        let client = swiftide_integrations::openai::GenericOpenAIBuilder::<MahoOpenAIConfig>::default()
+            .default_prompt_model(default_model)
+            .client(async_openai::Client::with_config(config))
+            .build()
+            .map_err(|e| AgentError::ExecutionError(format!("Failed to build OpenAI client: {e}")))?;
+        Ok((Box::new(client), LlmProviderKind::OpenAi))
+    }
+}
+
 pub struct SwiftideBackend {
     storage: Arc<dyn AgentStorage>,
     permission_callback: Arc<Mutex<Option<PermissionCallback>>>,
@@ -607,6 +777,9 @@ pub struct SwiftideBackend {
     allow_insecure_key_storage: bool,
     system_prompt: Arc<Mutex<String>>,
     mcp_client_cache: Arc<Mutex<std::collections::HashMap<String, Arc<crate::mcp_client::McpClient>>>>,
+    active_space_id: Arc<Mutex<Option<String>>>,
+    approval_policy: Arc<Mutex<String>>,
+    preferred_provider: Arc<Mutex<Option<String>>>,
 }
 
 impl Clone for SwiftideBackend {
@@ -622,6 +795,9 @@ impl Clone for SwiftideBackend {
             allow_insecure_key_storage: self.allow_insecure_key_storage,
             system_prompt: Arc::clone(&self.system_prompt),
             mcp_client_cache: Arc::clone(&self.mcp_client_cache),
+            active_space_id: Arc::clone(&self.active_space_id),
+            approval_policy: Arc::clone(&self.approval_policy),
+            preferred_provider: Arc::clone(&self.preferred_provider),
         }
     }
 }
@@ -645,7 +821,49 @@ impl SwiftideBackend {
             mcp_client_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
             allow_insecure_key_storage,
             system_prompt: Arc::new(Mutex::new(String::new())),
+            active_space_id: Arc::new(Mutex::new(None)),
+            approval_policy: Arc::new(Mutex::new(String::from("prompt"))),
+            preferred_provider: Arc::new(Mutex::new(None)),
         }
+    }
+
+    pub fn set_active_space_id(&self, space_id: Option<String>) {
+        *self.active_space_id.lock_unpoison() = space_id;
+    }
+
+    pub fn set_approval_policy(&self, policy: String) {
+        *self.approval_policy.lock_unpoison() = policy;
+    }
+
+    pub fn set_preferred_provider(&self, provider: Option<String>) {
+        *self.preferred_provider.lock_unpoison() = provider;
+    }
+
+    pub async fn run_prompt(&self, prompt: &str) -> Result<String, AgentError> {
+        let session_id = format!("run-{}", uuid::Uuid::new_v4());
+        let denied_flag = Arc::new(Mutex::new(false));
+        let message = MahoChatMessage::user(ChatContent::text(prompt.to_string()));
+        let result = self
+            .run_turn_internal(&session_id, message, denied_flag, None)
+            .await?;
+        match result.content {
+            ChatContent::Text(text) => Ok(text),
+            _ => Err(AgentError::ExecutionError(
+                "No assistant response generated".to_string(),
+            )),
+        }
+    }
+
+    async fn find_active_workspace(&self) -> Option<maho_types::ai::AiWorkspace> {
+        let space_id = self.active_space_id.lock_unpoison().clone();
+        let root_str = self.workspace_root.to_string_lossy().to_string();
+        let workspaces = self.storage.list_workspaces().await.ok()?;
+        if let Some(ref sid) = space_id {
+            if let Some(ws) = workspaces.iter().find(|w| w.space_id.as_ref() == Some(sid)) {
+                return Some(ws.clone());
+            }
+        }
+        workspaces.into_iter().find(|w| w.workspace_root.as_ref() == Some(&root_str))
     }
 
     pub fn set_llm_override(&self, llm: Box<dyn swiftide_core::chat_completion::ChatCompletion>) {
@@ -659,6 +877,7 @@ impl SwiftideBackend {
             permission_callback: Arc::clone(&self.permission_callback),
             denied_flag,
             session_id: session_id.to_string(),
+            approval_policy: Arc::clone(&self.approval_policy),
         }) as Box<dyn Tool>
     }
 
@@ -683,16 +902,8 @@ impl SwiftideBackend {
         self.storage.save_message(session_id, &message.role, &content_str).await?;
 
         // Fetch active workspace and profile to resolve configuration
-        let mut active_workspace = None;
+        let active_workspace = self.find_active_workspace().await;
         let root_str = self.workspace_root.to_string_lossy().to_string();
-        if let Ok(workspaces) = self.storage.list_workspaces().await {
-            for ws in workspaces {
-                if ws.workspace_root.as_ref() == Some(&root_str) {
-                    active_workspace = Some(ws);
-                    break;
-                }
-            }
-        }
 
         let workspace_is_real = active_workspace.is_some();
 
@@ -755,21 +966,6 @@ impl SwiftideBackend {
             lock.as_ref().map(|llm| dyn_clone::clone_box(&**llm))
         };
 
-        let secure_cb_opt = {
-            let secure_cb = self.secure_storage_callback.lock_unpoison();
-            if let Some(ref cb) = *secure_cb {
-                if let Ok(bundle) = cb("openai") {
-                    Some(("openai", bundle))
-                } else if let Ok(bundle) = cb("anthropic") {
-                    Some(("anthropic", bundle))
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        };
-
         let llm: Box<dyn swiftide_core::chat_completion::ChatCompletion> = if let Some(llm) = llm_override_opt {
             llm
         } else if let Some(access_token) = self.storage.get_setting("auth:access_token").await? {
@@ -790,65 +986,28 @@ impl SwiftideBackend {
                 .map_err(|e| AgentError::ExecutionError(format!("Failed to build MahoManaged OpenAI client: {e}")))?;
             Box::new(client)
         } else {
-            let (provider, bundle) = if let Some(res) = secure_cb_opt {
-                res
+            let preferred = self.preferred_provider.lock_unpoison().clone();
+            let secure_client = {
+                let guard = self.secure_storage_callback.lock_unpoison();
+                guard.as_ref().and_then(|cb| {
+                    resolve_byok_client(preferred.as_deref(), cb.as_ref(), &resolved.model).ok()
+                })
+            };
+            if let Some((client, _kind)) = secure_client {
+                client
             } else {
                 if !self.allow_insecure_key_storage {
                     return Err(AgentError::ExecutionError("Secure storage callback is missing or returned no keys, and insecure key storage is not allowed".to_string()));
                 }
-                if let Some(key) = self.storage.get_byok_key("openai").await? {
+                let (provider, bundle) = if let Some(key) = self.storage.get_byok_key("openai").await? {
                     ("openai", SecureKeyBundle::from_key(key))
                 } else if let Some(key) = self.storage.get_byok_key("anthropic").await? {
                     ("anthropic", SecureKeyBundle::from_key(key))
                 } else {
                     return Err(AgentError::ExecutionError("No BYOK API key configured".to_string()));
-                }
-            };
-
-            let api_key = bundle.key;
-            let base_url_override = bundle.base_url;
-            let model_override = bundle.model;
-
-            if provider == "openai" {
-                let api_base = base_url_override
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| OPENAI_DEFAULT_API_BASE.to_string());
-                let default_model = model_override
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| {
-                        if resolved.model.is_empty() {
-                            "gpt-4o".to_string()
-                        } else {
-                            resolved.model.clone()
-                        }
-                    });
-                let config = MahoOpenAIConfig {
-                    api_key: Arc::new(api_key.secret().clone()),
-                    api_base,
                 };
-                let client = swiftide_integrations::openai::GenericOpenAIBuilder::<MahoOpenAIConfig>::default()
-                    .default_prompt_model(default_model)
-                    .client(async_openai::Client::with_config(config))
-                    .build()
-                    .map_err(|e| AgentError::ExecutionError(format!("Failed to build OpenAI client: {e}")))?;
-                Box::new(client)
-            } else {
-                let default_model = model_override
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| {
-                        if resolved.model.is_empty() {
-                            "claude-3-5-sonnet".to_string()
-                        } else {
-                            resolved.model.clone()
-                        }
-                    });
-                let client = async_anthropic::Client::from_api_key(api_key.secret().clone());
-                let swiftide_anthropic = swiftide_integrations::anthropic::Anthropic::builder()
-                    .default_prompt_model(default_model)
-                    .client(client)
-                    .build()
-                    .map_err(|e| AgentError::ExecutionError(format!("Failed to build Anthropic client: {e}")))?;
-                Box::new(swiftide_anthropic)
+                let (client, _kind) = build_byok_client(provider, bundle, &resolved.model)?;
+                client
             }
         };
 
@@ -856,13 +1015,19 @@ impl SwiftideBackend {
         let history = self.storage.get_history(session_id).await?;
         let mut swiftide_history = Vec::new();
 
-        // Retrieve system prompt and prepend it
+        // Retrieve system prompt and prepend it.
+        // Priority: explicit programmatic override (empty in production) >
+        // per-conversation snapshot (frozen at first turn so mid-conversation
+        // profile switches do NOT rewrite an ongoing chat, #13) > current profile.
         let system_prompt_val = {
             let sp = self.system_prompt.lock_unpoison().clone();
             if !sp.is_empty() {
                 sp
             } else {
-                resolved.system_prompt.clone()
+                match self.storage.get_system_prompt_snapshot(session_id).await {
+                    Ok(Some(snap)) => snap,
+                    _ => resolved.system_prompt.clone(),
+                }
             }
         };
         if !system_prompt_val.is_empty() {
@@ -906,22 +1071,19 @@ impl SwiftideBackend {
             // connecting to, and executing MCP servers and CLI tools during an agent session.
             // It resolves active workspaces matching the current root, executes tool specs,
             // and manages connection states dynamically.
-            let mut active_workspace = None;
-            let root_str = self.workspace_root.to_string_lossy().to_string();
-            if let Ok(workspaces) = self.storage.list_workspaces().await {
-                for ws in workspaces {
-                    if ws.workspace_root.as_ref() == Some(&root_str) {
-                        active_workspace = Some(ws);
-                        break;
-                    }
-                }
-            }
+            let active_workspace = self.find_active_workspace().await;
 
             let workspace_id = active_workspace.as_ref().map(|ws| ws.id.clone());
             let mut mcp_servers = Vec::new();
             let mut cli_tools = Vec::new();
             if let Some(ws_id) = &workspace_id {
                 if let Ok(servers) = self.storage.list_mcp_servers(ws_id).await {
+                    tracing::debug!(
+                        target: "maho_agent::swiftide_backend",
+                        workspace_id = %ws_id,
+                        server_count = servers.len(),
+                        "list_mcp_servers loaded"
+                    );
                     mcp_servers = servers;
                 }
                 if let Ok(tools) = self.storage.list_cli_tools(ws_id).await {
@@ -943,11 +1105,27 @@ impl SwiftideBackend {
             };
 
             for server in mcp_servers {
+                if !should_attempt_mcp_connect(&server) {
+                    continue;
+                }
+                if !profile.mcp_servers.is_empty()
+                    && !profile.mcp_servers.contains(&server.id) {
+                    continue;
+                }
                 let auth_token = keychain_lookup(&server.auth_keychain_id);
                 let cache_key = format!("{}::{}", server.id, server.updated_at);
-                let client_arc = {
+                let cached = {
                     let cache = self.mcp_client_cache.lock_unpoison();
                     cache.get(&cache_key).cloned()
+                };
+                let client_arc = match cached {
+                    Some(c) if c.is_alive() => Some(c),
+                    Some(dead) => {
+                        dead.emit_unavailable();
+                        self.mcp_client_cache.lock_unpoison().remove(&cache_key);
+                        None
+                    }
+                    None => None,
                 };
 
                 let client_arc = if let Some(cached) = client_arc {
@@ -962,18 +1140,26 @@ impl SwiftideBackend {
                             arc
                         }
                         Err(e) => {
-                            let dbg_msg = format!(
-                                "[swiftide_backend] MCP server '{}' offline: {}",
-                                server.name, e
+                            tracing::warn!(
+                                target: "maho_agent::swiftide_backend",
+                                server = %server.name,
+                                error = %e,
+                                "McpClient::connect failed"
                             );
-                            let _ = std::fs::OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open("/tmp/maho-agent-live.log")
-                                .and_then(|mut f| {
-                                    use std::io::Write;
-                                    writeln!(f, "{}", dbg_msg)
-                                });
+                            if cfg!(debug_assertions) {
+                                let dbg_msg = format!(
+                                    "[swiftide_backend] MCP server '{}' offline: {}",
+                                    server.name, e
+                                );
+                                let _ = std::fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open("/tmp/maho-agent-live.log")
+                                    .and_then(|mut f| {
+                                        use std::io::Write;
+                                        writeln!(f, "{}", dbg_msg)
+                                    });
+                            }
                             
                             if let Some(ref list) = server.trusted_tools {
                                 for tool_name in list {
@@ -989,28 +1175,41 @@ impl SwiftideBackend {
                     }
                 };
 
-                if let Ok(tools) = client_arc.list_tools().await {
-                    for tool in tools {
-                        // Per-tool sensitivity: tool is sensitive UNLESS the server
-                        // is trusted AND the tool is explicitly in trusted_tools (or
-                        // trusted_tools is None which means "all tools trusted").
-                        // Strip the "mcp:<server>/" prefix to match user-facing tool names.
+                match client_arc.list_tools().await {
+                    Ok(tools) => {
+                        for tool in tools {
+                        // Per-tool sensitivity: a dogfood (AutoApprove) tool
+                        // auto-runs only if READ-ONLY; sensitive browser actions
+                        // stay gated. Explicit server trust is preserved. See
+                        // mcp_tool_is_sensitive (FIX-9a #3).
                         let raw_name = tool.name
                             .split_once('/')
                             .map(|(_, name)| name)
                             .unwrap_or(&tool.name);
-                        let per_tool_trusted = server.trusted && match &server.trusted_tools {
-                            None => true,
-                            Some(list) => list.iter().any(|n| n == raw_name || n == &tool.name),
-                        };
-                        let sensitive = !per_tool_trusted;
+                        let sensitive = mcp_tool_is_sensitive(
+                            tool.permission,
+                            raw_name,
+                            &tool.name,
+                            server.trusted,
+                            server.trusted_tools.as_ref(),
+                        );
                         let shim = McpToolShim {
-                            name: tool.name.clone(),
+                            name: llm_safe_tool_name(&tool.name),
+                            dispatch_name: tool.name.clone(),
                             description: tool.description.clone(),
                             parameters_schema: tool.parameters_schema.clone(),
                             client: Arc::clone(&client_arc),
                         };
-                        platform_tools.push(self.build_gated_tool(Arc::new(shim), sensitive, denied_flag.clone(), session_id));
+                            platform_tools.push(self.build_gated_tool(Arc::new(shim), sensitive, denied_flag.clone(), session_id));
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            target: "maho_agent::swiftide_backend",
+                            server = %server.name,
+                            error = %e,
+                            "McpClient::list_tools failed"
+                        );
                     }
                 }
             }
@@ -1027,6 +1226,11 @@ impl SwiftideBackend {
 
         let browser_bridge_opt = self.browser_tool_bridge.lock_unpoison().clone();
         let dbg_log = |msg: &str| {
+            // #8: debug-only diagnostic log. Never write tool args (may contain
+            // page content) to a world-readable fixed path in release builds.
+            if !cfg!(debug_assertions) {
+                return;
+            }
             let _ = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -1046,6 +1250,15 @@ impl SwiftideBackend {
         } else {
             dbg_log("[swiftide_backend] No browser_tool_bridge set");
         }
+
+        // profile.tools is a per-profile allowlist keyed by tool name (empty =
+        // all tools allowed), mirroring maho_core get_effective_tools. Enforce
+        // it at exec time so a profile's restrictions actually gate the tools
+        // the agent can call, not just the settings UI listing.
+        if !profile.tools.is_empty() {
+            platform_tools.retain(|t| profile.tools.contains(&t.name().to_string()));
+        }
+
         let final_names: Vec<_> = platform_tools.iter().map(|t| t.name().to_string()).collect();
         dbg_log(&format!("[swiftide_backend] Final platform_tools count: {} names: {:?}",
             platform_tools.len(), final_names));
@@ -1077,16 +1290,19 @@ impl SwiftideBackend {
         let mut agent = builder.build()
             .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
-        // Run turn with 30s timeout
-        tokio::time::timeout(std::time::Duration::from_secs(30), agent.query(content_str.clone()))
+        // Turn safety-net timeout (600s). Per-tool timeouts (MCP 60s, browser
+        // 30s, CLI/shell configurable) and the permission dialog's own 30s bound
+        // govern real waits; this outer cap only catches a genuinely runaway
+        // agent loop and does NOT count human permission-response time against
+        // the turn.
+        tokio::time::timeout(std::time::Duration::from_secs(600), agent.query(content_str.clone()))
             .await
             .map_err(|_| AgentError::ExecutionError("Agent query timed out".to_string()))?
             .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
-        // Check denied flag
-        if *denied_flag.lock_unpoison() {
-            return Err(AgentError::PermissionDenied);
-        }
+        // A denied tool returns a ToolError to the model (see PermissionGatedTool),
+        // which lets the model produce a normal response instead of aborting the
+        // whole turn. We no longer discard the turn on denial.
 
         // Retrieve the last message from the context
         let result_history = agent.context().history().await
@@ -1104,26 +1320,34 @@ impl SwiftideBackend {
             self.storage.save_message(session_id, "assistant", &res_text).await?;
             Ok(MahoChatMessage::assistant(ChatContent::text(res_text)))
         } else {
-            let history_summary: Vec<&str> = result_history.iter().map(|m| match m {
+            let last_role = result_history.last().map(|m| match m {
                 SwiftideChatMessage::System(_) => "System",
                 SwiftideChatMessage::User(_) => "User",
                 SwiftideChatMessage::Assistant(_, _) => "Assistant",
                 SwiftideChatMessage::ToolOutput(_, _) => "ToolOutput",
                 SwiftideChatMessage::Summary(_) => "Summary",
-            }).collect();
-            let _ = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/tmp/maho-agent-live.log")
-                .and_then(|mut f| {
-                    use std::io::Write;
-                    writeln!(f,
-                        "[swiftide_backend] No assistant text found. History roles: {history_summary:?}. Session={session_id}."
-                    )
-                });
+            }).unwrap_or("<empty>");
+            if cfg!(debug_assertions) {
+                let history_summary: Vec<&str> = result_history.iter().map(|m| match m {
+                    SwiftideChatMessage::System(_) => "System",
+                    SwiftideChatMessage::User(_) => "User",
+                    SwiftideChatMessage::Assistant(_, _) => "Assistant",
+                    SwiftideChatMessage::ToolOutput(_, _) => "ToolOutput",
+                    SwiftideChatMessage::Summary(_) => "Summary",
+                }).collect();
+                let _ = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/tmp/maho-agent-live.log")
+                    .and_then(|mut f| {
+                        use std::io::Write;
+                        writeln!(f,
+                            "[swiftide_backend] No assistant text found. History roles: {history_summary:?}. Session={session_id}."
+                        )
+                    });
+            }
             Err(AgentError::ExecutionError(format!(
-                "No assistant response generated (history ended with: {:?})",
-                history_summary.last().copied().unwrap_or("<empty>")
+                "No assistant response generated (history ended with: {last_role:?})"
             )))
         }
     }
@@ -1131,16 +1355,7 @@ impl SwiftideBackend {
     pub async fn discover_tools(&self) -> Vec<ToolDefinition> {
         let mut platform_tools = crate::tool_registry::get_platform_tools();
 
-        let mut active_workspace = None;
-        let root_str = self.workspace_root.to_string_lossy().to_string();
-        if let Ok(workspaces) = self.storage.list_workspaces().await {
-            for ws in workspaces {
-                if ws.workspace_root.as_ref() == Some(&root_str) {
-                    active_workspace = Some(ws);
-                    break;
-                }
-            }
-        }
+        let active_workspace = self.find_active_workspace().await;
 
         let workspace_id = active_workspace.as_ref().map(|ws| ws.id.clone());
         let mut mcp_servers = Vec::new();
@@ -1168,11 +1383,23 @@ impl SwiftideBackend {
         };
 
         for server in mcp_servers {
+            if !server.trusted {
+                continue;
+            }
             let auth_token = keychain_lookup(&server.auth_keychain_id);
             let cache_key = format!("{}::{}", server.id, server.updated_at);
-            let client_arc = {
+            let cached = {
                 let cache = self.mcp_client_cache.lock_unpoison();
                 cache.get(&cache_key).cloned()
+            };
+            let client_arc = match cached {
+                Some(c) if c.is_alive() => Some(c),
+                Some(dead) => {
+                    dead.emit_unavailable();
+                    self.mcp_client_cache.lock_unpoison().remove(&cache_key);
+                    None
+                }
+                None => None,
             };
 
             let client_arc = if let Some(cached) = client_arc {
@@ -1264,16 +1491,8 @@ impl SwiftideBackend {
         self.storage.save_message(session_id, &message.role, &content_str).await?;
 
         // Fetch active workspace and profile to resolve configuration
-        let mut active_workspace = None;
+        let active_workspace = self.find_active_workspace().await;
         let root_str = self.workspace_root.to_string_lossy().to_string();
-        if let Ok(workspaces) = self.storage.list_workspaces().await {
-            for ws in workspaces {
-                if ws.workspace_root.as_ref() == Some(&root_str) {
-                    active_workspace = Some(ws);
-                    break;
-                }
-            }
-        }
 
         let ws = active_workspace.unwrap_or_else(|| {
             maho_types::ai::AiWorkspace {
@@ -1427,13 +1646,19 @@ impl SwiftideBackend {
         let history = self.storage.get_history(session_id).await?;
         let mut swiftide_history = Vec::new();
 
-        // Retrieve system prompt and prepend it
+        // Retrieve system prompt and prepend it.
+        // Priority: explicit programmatic override (empty in production) >
+        // per-conversation snapshot (frozen at first turn so mid-conversation
+        // profile switches do NOT rewrite an ongoing chat, #13) > current profile.
         let system_prompt_val = {
             let sp = self.system_prompt.lock_unpoison().clone();
             if !sp.is_empty() {
                 sp
             } else {
-                resolved.system_prompt.clone()
+                match self.storage.get_system_prompt_snapshot(session_id).await {
+                    Ok(Some(snap)) => snap,
+                    _ => resolved.system_prompt.clone(),
+                }
             }
         };
         if !system_prompt_val.is_empty() {
@@ -1485,8 +1710,8 @@ impl SwiftideBackend {
         let mut agent = builder.build()
             .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
-        // Run turn with 30s timeout
-        tokio::time::timeout(std::time::Duration::from_secs(30), agent.query(content_str.clone()))
+        // Simple path has no tools; 600s safety-net only (see run_turn_internal).
+        tokio::time::timeout(std::time::Duration::from_secs(600), agent.query(content_str.clone()))
             .await
             .map_err(|_| AgentError::ExecutionError("Agent query timed out".to_string()))?
             .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
@@ -1676,9 +1901,16 @@ use crate::cli_tool_executor::CliToolExecutor;
 #[derive(Clone)]
 struct McpToolShim {
     name: String,
+    dispatch_name: String,
     description: String,
     parameters_schema: serde_json::Value,
     client: Arc<McpClient>,
+}
+
+fn llm_safe_tool_name(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .collect()
 }
 
 #[async_trait]
@@ -1692,7 +1924,7 @@ impl swiftide_core::Tool for McpToolShim {
         let args_json: serde_json::Value = serde_json::from_str(args_str)
             .map_err(|e| swiftide_core::chat_completion::errors::ToolError::unknown(e))?;
         
-        let result = self.client.call_tool(&self.name, args_json).await
+        let result = self.client.call_tool(&self.dispatch_name, args_json).await
             .map_err(|e| swiftide_core::chat_completion::errors::ToolError::unknown(e))?;
             
         Ok(swiftide_core::chat_completion::ToolOutput::Text(result.to_string()))
@@ -1788,6 +2020,138 @@ impl swiftide_core::Tool for CliToolShim {
 mod tests {
     use super::*;
 
+    fn test_mcp_server(
+        transport: maho_types::ai::McpTransport,
+        trusted: bool,
+        socket_path: Option<String>,
+    ) -> maho_types::ai::AiMcpServer {
+        maho_types::ai::AiMcpServer {
+            id: "srv".to_string(),
+            workspace_id: "ws".to_string(),
+            name: "browser-dogfood".to_string(),
+            transport,
+            command: None,
+            url: None,
+            auth_keychain_id: None,
+            trusted,
+            trusted_tools: None,
+            timeout_ms: 1000,
+            output_cap_bytes: 10240,
+            socket_path,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn default_browser_uds_is_connectable_without_trusted_flag() {
+        let socket_path = maho_browser_mcp::paths::default_socket_path()
+            .to_string_lossy()
+            .to_string();
+        let server = test_mcp_server(maho_types::ai::McpTransport::Uds, false, Some(socket_path));
+
+        assert!(
+            should_attempt_mcp_connect(&server),
+            "the browser dogfood UDS socket must bypass the external-server trust gate"
+        );
+    }
+
+    #[test]
+    fn arbitrary_untrusted_uds_remains_blocked_before_connect() {
+        let server = test_mcp_server(
+            maho_types::ai::McpTransport::Uds,
+            false,
+            Some("/tmp/not-the-maho-browser.sock".to_string()),
+        );
+
+        assert!(!should_attempt_mcp_connect(&server));
+    }
+
+    #[test]
+    fn untrusted_stdio_remains_blocked_before_connect() {
+        let server = test_mcp_server(maho_types::ai::McpTransport::Stdio, false, None);
+
+        assert!(!should_attempt_mcp_connect(&server));
+    }
+
+    #[test]
+    fn dogfood_readonly_tool_auto_runs() {
+        assert!(
+            !mcp_tool_is_sensitive(
+                ToolPermission::AutoApprove,
+                "browser_tab_list",
+                "mcp:browser/browser_tab_list",
+                false,
+                None,
+            ),
+            "a read-only dogfood tool must be non-sensitive (auto-run)"
+        );
+    }
+
+    #[test]
+    fn dogfood_sensitive_action_stays_gated() {
+        for name in ["browser_click", "browser_type", "browser_navigate", "browser_tab_new"] {
+            assert!(
+                mcp_tool_is_sensitive(
+                    ToolPermission::AutoApprove,
+                    name,
+                    &format!("mcp:browser/{name}"),
+                    false,
+                    None,
+                ),
+                "{name}: a sensitive dogfood action must stay sensitive so the callback gates it"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_server_trust_still_trusts_any_tool() {
+        assert!(
+            !mcp_tool_is_sensitive(
+                ToolPermission::AlwaysAsk,
+                "browser_click",
+                "mcp:browser/browser_click",
+                true,
+                None,
+            ),
+            "an explicitly trusted server (trusted_tools=None) trusts all its tools"
+        );
+        assert!(
+            !mcp_tool_is_sensitive(
+                ToolPermission::AlwaysAsk,
+                "custom_tool",
+                "mcp:ext/custom_tool",
+                true,
+                Some(&vec!["custom_tool".to_string()]),
+            ),
+            "a tool explicitly listed in trusted_tools is trusted"
+        );
+        assert!(
+            mcp_tool_is_sensitive(
+                ToolPermission::AlwaysAsk,
+                "other_tool",
+                "mcp:ext/other_tool",
+                true,
+                Some(&vec!["custom_tool".to_string()]),
+            ),
+            "a tool NOT in trusted_tools remains sensitive"
+        );
+    }
+
+    #[test]
+    fn non_dogfood_sensitive_tool_is_gated() {
+        assert!(
+            mcp_tool_is_sensitive(
+                ToolPermission::AlwaysAsk,
+                "browser_tab_list",
+                "mcp:ext/browser_tab_list",
+                false,
+                None,
+            ),
+            "an untrusted (non-dogfood) server's tools stay sensitive even if read-only-named"
+        );
+    }
+
     #[tokio::test]
     async fn test_fsread_size_cap_rejection() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -1843,5 +2207,30 @@ mod tests {
             other => panic!("Expected text output; got {other:?}"),
         };
         assert_eq!(text, "hello world");
+    }
+
+    #[test]
+    fn test_truncate_at_char_boundary() {
+        // Under the limit: unchanged.
+        let mut s = "hi".to_string();
+        truncate_at_char_boundary(&mut s, 100);
+        assert_eq!(s, "hi");
+
+        // "日本語" = 3 chars x 3 bytes = 9 bytes. A 4-byte cut lands mid-"本";
+        // must back off to the 3-byte boundary after "日" (never panic).
+        let mut s = "日本語".to_string();
+        truncate_at_char_boundary(&mut s, 4);
+        assert_eq!(s, "日");
+        assert!(s.len() <= 4);
+
+        // Exact boundary is preserved.
+        let mut s = "日本語".to_string();
+        truncate_at_char_boundary(&mut s, 3);
+        assert_eq!(s, "日");
+
+        // 4-byte emoji: "a😀b" = 1 + 4 + 1 bytes; a 3-byte cut lands mid-emoji.
+        let mut s = "a😀b".to_string();
+        truncate_at_char_boundary(&mut s, 3);
+        assert_eq!(s, "a");
     }
 }

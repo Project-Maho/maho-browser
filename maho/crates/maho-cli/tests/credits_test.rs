@@ -28,11 +28,7 @@ async fn spawn_mock_relay_with_balance(balance_usd: f64) -> SocketAddr {
 
 fn maho_cmd_with_token(config_dir: &std::path::Path, token: &str) -> Command {
     let config_path = config_dir.join("cli.toml");
-    std::fs::write(
-        &config_path,
-        format!("access_token = \"{token}\"\n"),
-    )
-    .unwrap();
+    std::fs::write(&config_path, format!("access_token = \"{token}\"\n")).unwrap();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_maho"));
     cmd.env("MAHO_CONFIG_DIR", config_dir);
     cmd.env("MAHO_CLI_TEST", "1");

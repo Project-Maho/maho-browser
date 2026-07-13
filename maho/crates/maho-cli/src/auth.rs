@@ -83,10 +83,7 @@ pub async fn signup(relay_url: &str, email: &str, password: &str) -> Result<Auth
 }
 
 pub async fn whoami(relay_url: &str, config: &CliConfig) -> Result<MeResponse> {
-    let token = config
-        .access_token
-        .as_deref()
-        .unwrap_or_default();
+    let token = config.access_token.as_deref().unwrap_or_default();
 
     if token.is_empty() {
         bail!("not logged in — run `maho login` first");
@@ -94,11 +91,7 @@ pub async fn whoami(relay_url: &str, config: &CliConfig) -> Result<MeResponse> {
 
     let client = Client::new();
     let url = format!("{}/auth/me", relay_url);
-    let resp = client
-        .get(&url)
-        .bearer_auth(token)
-        .send()
-        .await?;
+    let resp = client.get(&url).bearer_auth(token).send().await?;
 
     if !resp.status().is_success() {
         let status = resp.status();
