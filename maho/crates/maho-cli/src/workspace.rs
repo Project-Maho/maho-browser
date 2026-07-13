@@ -1,3 +1,4 @@
+use maho_browser_mcp::paths::user_data_dir;
 use maho_storage::sqlite::SqliteStorage;
 use std::path::PathBuf;
 
@@ -5,53 +6,16 @@ use std::path::PathBuf;
 /// add/list/remove` silently operate on a phantom DB the WebUI never reads.
 /// Source of truth: `maho_browser_main_extra_parts.cc` opens
 /// `DIR_USER_DATA/MahoCore`, and `maho-ffi/src/lib.rs` appends the fixed
-/// `maho.db` filename, giving `<user_data_dir>/MahoCore/maho.db`.
+/// `maho.db` filename, giving `<user_data_dir>/MahoCore/maho.db`. The
+/// `user_data_dir` base is shared with the MCP socket path (see
+/// `maho_browser_mcp::paths`) so the two can never diverge.
 ///
-/// `MAHO_DB_PATH` overrides for tests / non-standard deployments. This is NOT
-/// derived from the socket's parent: on Linux the socket lives in a runtime
-/// dir, not the user_data_dir, so that heuristic diverged from the browser.
+/// `MAHO_DB_PATH` overrides for tests / non-standard deployments.
 pub fn default_db_path() -> PathBuf {
     if let Ok(p) = std::env::var("MAHO_DB_PATH") {
         return PathBuf::from(p);
     }
-    default_user_data_dir().join("MahoCore").join("maho.db")
-}
-
-/// Mirrors Chromium's `DIR_USER_DATA` for the Maho product per platform so the
-/// CLI and browser agree on where the registry DB lives. macOS is verified live
-/// (`CrProductDirName=Maho` → `~/Library/Application Support/Maho`); Linux and
-/// Windows follow Chromium's per-platform convention with the Maho product dir.
-#[cfg(target_os = "macos")]
-fn default_user_data_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join("Library/Application Support/Maho")
-}
-
-#[cfg(target_os = "linux")]
-fn default_user_data_dir() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-        if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("maho");
-        }
-    }
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join(".config/maho")
-}
-
-#[cfg(target_os = "windows")]
-fn default_user_data_dir() -> PathBuf {
-    if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        if !local.is_empty() {
-            return PathBuf::from(local).join("Maho").join("User Data");
-        }
-    }
-    PathBuf::from(r"C:\Temp").join("Maho").join("User Data")
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-fn default_user_data_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join(".config/maho")
+    user_data_dir().join("MahoCore").join("maho.db")
 }
 
 pub async fn resolve_workspace_id(
