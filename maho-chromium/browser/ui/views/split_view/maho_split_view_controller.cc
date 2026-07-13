@@ -13,8 +13,6 @@
 #include "content/public/browser/web_contents.h"
 #include "url/gurl.h"
 
-#include "base/json/json_reader.h"
-#include "base/values.h"
 #include "base/strings/stringprintf.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_tab_id_helper.h"
@@ -193,82 +191,18 @@ bool MahoSplitViewController::IsSplitActive() const {
 }
 
 // static
-void MahoSplitViewController::RestoreForWindow(Browser* browser) {
-  MahoCore* core = maho::GetCore();
-  if (!core) {
-    return;
-  }
-
-  std::string window_id = std::to_string(browser->session_id().id());
-  char* config_json =
-      maho_core_get_split_view_config(core, window_id.c_str());
-  if (!config_json) {
-    return;
-  }
-
-  std::optional<base::Value> value = base::JSONReader::Read(config_json, base::JSON_PARSE_RFC);
-  maho_core_free_string(config_json);
-
-  if (!value || !value->is_dict()) {
-    return;
-  }
-
-  const base::DictValue& dict = value->GetDict();
-  const base::ListValue* panes = dict.FindList("panes");
-  if (!panes || panes->size() < 2) {
-    return;
-  }
-
-  const std::string* orientation_str = dict.FindString("orientation");
-  split_tabs::SplitTabLayout layout = split_tabs::SplitTabLayout::kVertical;
-  if (orientation_str && *orientation_str == "horizontal") {
-    layout = split_tabs::SplitTabLayout::kHorizontal;
-  }
-
-  const base::ListValue* ratios = dict.FindList("ratios");
-  double split_ratio = 0.5;
-  if (ratios && ratios->size() > 0) {
-    if (ratios->front().is_double()) {
-      split_ratio = ratios->front().GetDouble();
-    }
-  }
-
-  TabStripModel* model = browser->tab_strip_model();
-  if (!model) {
-    return;
-  }
-
-  std::vector<int> indices;
-  for (const base::Value& pane : *panes) {
-    if (!pane.is_dict()) {
-      continue;
-    }
-    const std::string* tab_id = pane.GetDict().FindString("tabId");
-    if (!tab_id) {
-      continue;
-    }
-
-    int index = TabStripModel::kNoTab;
-    for (int i = 0; i < model->count(); ++i) {
-      content::WebContents* contents = model->GetWebContentsAt(i);
-      auto* helper = MahoTabIdHelper::FromWebContents(contents);
-      if (helper && helper->stable_tab_id() == *tab_id) {
-        index = i;
-        break;
-      }
-    }
-
-    if (index != TabStripModel::kNoTab) {
-      indices.push_back(index);
-    }
-  }
-
-  if (indices.size() == 2) {
-    if (!model->GetSplitForTab(indices[0]).has_value() &&
-        !model->GetSplitForTab(indices[1]).has_value()) {
-      split_tabs::SplitTabVisualData visual_data(layout, split_ratio);
-      model->AddToNewSplit(indices, visual_data,
-                           split_tabs::SplitTabCreatedSource::kToolbarButton);
-    }
-  }
+void MahoSplitViewController::RestoreForWindow(Browser* /*browser*/) {
+  // Intentionally a no-op. Chromium's session service persists and restores
+  // split membership AND visual layout (kCommandSetSplitTab in
+  // session_service_commands.cc; RestoreSplitTabVisualData in
+  // session_restore.cc, round-tripping layout via SplitTabLayoutToString), so
+  // side-by-side splits come back side-by-side without our help.
+  // Maho's former re-apply here was guarded by !GetSplitForTab(...): when the
+  // session service had already restored the split it did nothing, and the
+  // only case it acted on was session data being absent — where it mapped the
+  // always-"horizontal" persisted orientation to kHorizontal and flipped the
+  // split to stacked. Dead on the normal path, wrong on the exception path, so
+  // it is removed and restore is left entirely to the session service.
 }
+
+

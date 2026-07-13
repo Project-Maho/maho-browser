@@ -59,6 +59,7 @@
 #include "maho/browser/ui/tab_preview/maho_tab_preview_controller.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_folder_hover_controller.h"
 #include "components/split_tabs/split_tab_visual_data.h"
+#include "components/tabs/public/split_tab_data.h"
 #include "maho/browser/ui/context_menu/maho_folder_context_menu.h"
 #include "maho/browser/ui/context_menu/maho_space_context_menu.h"
 #include "maho/browser/ui/context_menu/maho_tab_context_menu.h"
@@ -164,7 +165,6 @@ constexpr int kDropIndicatorOutlineThicknessDp = 1;
 constexpr int kSplitPreviewAnimationMs = 170;
 constexpr int kSplitPreviewDividerInsetDp = 4;
 constexpr int kSplitPreviewDividerWidthDp = 2;
-constexpr double kSplitPreviewIncomingPaneOpacity = 0.16;
 constexpr int kInlineActionIconSizeDp = 17;
 constexpr int kInlineActionsSpacingDp = 6;
 [[maybe_unused]] constexpr int kAudioIndicatorSizeDp = 14;
@@ -220,15 +220,14 @@ class SidebarSplitDropTargetBackground : public views::Background {
     target_flags.setAntiAlias(true);
     target_flags.setStyle(cc::PaintFlags::kFill_Style);
     target_flags.setColor(ApplyOpacity(
-        color_provider->GetColor(ui::kColorSysSurface4), progress));
+        color_provider->GetColor(kMahoColorTabRowActiveBackground), progress));
     canvas->DrawRoundRect(target_bounds, kRowCornerRadiusDp, target_flags);
 
     cc::PaintFlags incoming_flags;
     incoming_flags.setAntiAlias(true);
     incoming_flags.setStyle(cc::PaintFlags::kFill_Style);
     incoming_flags.setColor(ApplyOpacity(
-        color_provider->GetColor(ui::kColorSysPrimary),
-        progress * kSplitPreviewIncomingPaneOpacity));
+        color_provider->GetColor(kMahoColorTabRowActiveBackground), progress));
     canvas->DrawRoundRect(incoming_bounds, kRowCornerRadiusDp, incoming_flags);
 
     const float full_divider_height =
@@ -286,40 +285,32 @@ ui::DropTargetEvent ForwardDropTargetEventToView(const ui::DropTargetEvent& even
 }
 
 void NotifySidebarDragEnded(views::View* start_view) {
-  views::View* v = start_view;
-  while (v) {
-    if (v->GetClassName() == std::string("MahoSidebarView")) {
-      MahoSidebarView* sidebar_view = static_cast<MahoSidebarView*>(v);
+  for (views::View* v = start_view; v; v = v->parent()) {
+    if (auto* sidebar_view = views::AsViewClass<MahoSidebarView>(v)) {
       sidebar_view->OnDragEnded();
       break;
     }
-    v = v->parent();
   }
 }
 
 void NotifySidebarDragStarted(views::View* start_view,
                                const std::string& tab_id) {
-  views::View* v = start_view;
-  while (v) {
-    if (v->GetClassName() == std::string("MahoSidebarView")) {
-      MahoSidebarView* sidebar_view = static_cast<MahoSidebarView*>(v);
+  for (views::View* v = start_view; v; v = v->parent()) {
+    if (auto* sidebar_view = views::AsViewClass<MahoSidebarView>(v)) {
       sidebar_view->OnDragStarted(tab_id);
       break;
     }
-    v = v->parent();
   }
 }
 
 void NotifySidebarDragGhostImage(views::View* start_view,
                                  const gfx::ImageSkia& image,
                                  const gfx::Vector2d& offset) {
-  views::View* v = start_view;
-  while (v) {
-    if (v->GetClassName() == std::string("MahoSidebarView")) {
-      static_cast<MahoSidebarView*>(v)->SetActiveDragGhostImage(image, offset);
+  for (views::View* v = start_view; v; v = v->parent()) {
+    if (auto* sidebar_view = views::AsViewClass<MahoSidebarView>(v)) {
+      sidebar_view->SetActiveDragGhostImage(image, offset);
       break;
     }
-    v = v->parent();
   }
 }
 
@@ -485,7 +476,6 @@ class SidebarDropForwardingLabelButton : public views::LabelButton {
     if (!drop_target_) {
       return static_cast<int>(ui::mojom::DragOperation::kNone);
     }
-    LOG(WARNING) << "[MAHO_HOVER_DBG] FWD_LABELBTN OnDragUpdated";
     return drop_target_->OnDragUpdated(
         ForwardDropTargetEventToView(event, this, drop_target_));
   }
@@ -536,7 +526,6 @@ class SidebarDropForwardingView : public views::View {
     if (!drop_target_) {
       return static_cast<int>(ui::mojom::DragOperation::kNone);
     }
-    LOG(WARNING) << "[MAHO_HOVER_DBG] FWD_VIEW OnDragUpdated";
     return drop_target_->OnDragUpdated(
         ForwardDropTargetEventToView(event, this, drop_target_));
   }
@@ -2036,8 +2025,6 @@ int SidebarTabRowView::OnDragUpdated(const ui::DropTargetEvent& event) {
   }
   drag_over_drop_target_ = true;
   UpdateAppearance();
-  LOG(WARNING) << "[MAHO_HOVER_DBG] row OnDragUpdated zone="
-               << static_cast<int>(active_drop_zone_) << " tab=" << tab_id_;
   return static_cast<int>(ui::mojom::DragOperation::kMove);
 }
 
@@ -2081,12 +2068,6 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
         }
         output_drag_op = ui::mojom::DragOperation::kNone;
 
-        LOG(WARNING) << "[MAHO_DROP_DBG] drop tab=" << tab_id
-                     << " zone=" << static_cast<int>(drop_zone)
-                     << " multi=" << is_multi_drag
-                     << " kind=" << static_cast<int>(payload.node_kind)
-                     << " node_id=" << payload.node_id;
-
         if (payload.node_kind == SidebarNodeKind::kTab &&
             !tab_id.empty()) {
 
@@ -2118,17 +2099,18 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
 
             const SidebarDropPlan plan =
                 ResolveDropPlan(SectionKindFromTabSection(section), single_payload);
-            LOG(WARNING) << "[MAHO_DROP_DBG] loop move_id=" << move_id
-                         << " zone=" << static_cast<int>(drop_zone)
-                         << " plan_valid=" << plan.is_valid
-                         << " plan_steps=" << plan.steps.size();
             if (!plan.is_valid) {
               continue;
             }
 
-            if (drop_zone == SidebarTabDropZone::kSplit && plan.steps.empty()) {
+            if (drop_zone == SidebarTabDropZone::kSplit) {
               if (is_multi_drag) {
                 continue;
+              }
+              // The source tab may live inside a folder; run the drop plan
+              // first so it exits the folder to root, then create the split.
+              if (!plan.steps.empty()) {
+                ExecuteDropPlan(plan);
               }
               TabStripModel* model =
                   browser ? browser->tab_strip_model() : nullptr;
@@ -2161,14 +2143,27 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
               if (!tgt_wc && list_view) {
                 tgt_wc = list_view->WakeSuspendedTab(tab_id);
               }
+              // Waking two suspended tabs back-to-back races the scoped wake-id
+              // adoption, so a woken WebContents can end up with the wrong
+              // stable_tab_id. Stamp each with the core id we already hold so
+              // the sidebar's stable-id->strip-index map resolves them and
+              // GroupSplitTabs can render the split (otherwise index stays -1).
+              auto stamp_stable_id = [](content::WebContents* wc,
+                                        const std::string& want) {
+                if (!wc || want.empty()) {
+                  return;
+                }
+                auto* helper = MahoTabIdHelper::FromWebContents(wc);
+                if (helper && helper->stable_tab_id() != want) {
+                  helper->SetRestoredTabId(want);
+                }
+              };
+              stamp_stable_id(src_wc, drag_source_id);
+              stamp_stable_id(tgt_wc, tab_id);
               int source_tab_strip_index =
                   src_wc ? model->GetIndexOfWebContents(src_wc) : -1;
               int target_tab_strip_index =
                   tgt_wc ? model->GetIndexOfWebContents(tgt_wc) : -1;
-              LOG(WARNING) << "[MAHO_DROP_DBG] kSplit(woken) tgt="
-                            << target_tab_strip_index
-                            << " src=" << source_tab_strip_index
-                            << " left=" << split_drop_on_left;
               if (src_wc && tgt_wc && src_wc != tgt_wc &&
                   source_tab_strip_index >= 0 &&
                   target_tab_strip_index >= 0) {
@@ -2178,9 +2173,9 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
                       ? (source_tab_strip_index < target_tab_strip_index
                              ? target_tab_strip_index - 1
                              : target_tab_strip_index)
-                      : (source_tab_strip_index < target_tab_strip_index
-                             ? target_tab_strip_index
-                             : target_tab_strip_index + 1);
+                              : (source_tab_strip_index < target_tab_strip_index
+                                     ? target_tab_strip_index
+                                     : target_tab_strip_index + 1);
                   if (source_tab_strip_index != move_destination) {
                     model->MoveWebContentsAt(source_tab_strip_index,
                                              move_destination,
@@ -2195,24 +2190,40 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
                       model->GetSplitForTab(target_tab_strip_index).has_value()) {
                     continue;
                   }
-                  output_drag_op = ui::mojom::DragOperation::kMove;
-                  split_tabs::SplitTabVisualData visual_data(
-                      split_tabs::SplitTabLayout::kVertical, 0.5);
-                  model->ActivateTabAt(
-                      target_tab_strip_index,
-                      TabStripUserGestureDetails(
-                          TabStripUserGestureDetails::GestureType::kOther));
-                  model->AddToNewSplit(
-                      {source_tab_strip_index}, visual_data,
-                      split_tabs::SplitTabCreatedSource::kDragAndDropTab);
-
-                  // Mirror to Rust for persistence (matches MahoSplitViewController path).
                   auto get_stable_id = [](content::WebContents* contents)
                       -> std::string {
                     if (!contents) return "";
                     auto* helper = MahoTabIdHelper::FromWebContents(contents);
                     return helper ? helper->stable_tab_id() : "";
                   };
+                  output_drag_op = ui::mojom::DragOperation::kMove;
+                  split_tabs::SplitTabVisualData visual_data(
+                      split_tabs::SplitTabLayout::kVertical, 0.5);
+                  model->ActivateTabAt(
+                      target_tab_strip_index,
+                          TabStripUserGestureDetails(
+                              TabStripUserGestureDetails::GestureType::kOther));
+                  model->AddToNewSplit(
+                      {source_tab_strip_index}, visual_data,
+                      split_tabs::SplitTabCreatedSource::kDragAndDropTab);
+
+                  // The target pane may have lived inside a folder. GroupSplitTabs
+                  // only groups split members that are siblings at the same tree
+                  // depth, so pull the target out to root now that the split
+                  // exists (the source was already rooted by the drop plan).
+                  // Dispatched only here — after the split is created — so a
+                  // bailed drop never yanks the target out of its folder, and the
+                  // already-split guard above stops duplicate dispatch under
+                  // multi-drag. source_parent_folder_id is the drop target row's
+                  // own containing folder.
+                  if (!source_parent_folder_id.empty()) {
+                    DispatchShellEvent("move_tab_to_root",
+                                       {{"space_id", space_id},
+                                        {"folder_id", source_parent_folder_id},
+                                        {"tab_id", tab_id}});
+                  }
+
+                  // Mirror to Rust for persistence (matches MahoSplitViewController path).
                   std::string left_id =
                       get_stable_id(split_drop_on_left ? src_wc : tgt_wc);
                   std::string right_id =
@@ -2484,11 +2495,14 @@ void SidebarTabRowView::WriteDragDataForView(views::View* sender,
   SetBoundsRect(unmirrored_bounds);
 
   const ui::ColorProvider* color_provider = GetColorProvider();
-  const SkColor bg_color =
+  const SkColor base_color =
+      color_provider ? color_provider->GetColor(kMahoColorSidebarBackground)
+                     : SkColorSetARGB(0xFF, 0x27, 0x23, 0x36);
+  const SkColor overlay_color =
       color_provider ? color_provider->GetColor(kMahoColorTabRowActiveBackground)
                      : SkColorSetARGB(0x33, 0x88, 0x88, 0x88);
   auto drag_image = CreateSidebarDragImageWithBackground(
-      this, bg_color, static_cast<float>(kRowCornerRadiusDp));
+      this, base_color, overlay_color, static_cast<float>(kRowCornerRadiusDp));
 
   SetBoundsRect(og_bounds);
   audio_button_->SetVisible(audio_was_visible);
@@ -2814,7 +2828,6 @@ SidebarFolderRowView::SidebarFolderRowView(
   auto name_field = std::make_unique<views::Textfield>();
   name_field->SetVisible(false);
   name_field->SetBorder(nullptr);
-  name_field->SetBackgroundColor(SK_ColorTRANSPARENT);
   name_field->SetTextColor(ui::kColorSysOnSurface);
   name_field->SetController(this);
   name_field->SetAccessibleName(u"Rename folder");
@@ -2877,6 +2890,8 @@ void SidebarFolderRowView::BeginFolderEditing() {
   label_button_->SetVisible(false);
   name_field_->SetVisible(true);
   name_field_->SetText(committed_name_);
+  InvalidateLayout();
+  DeprecatedLayoutImmediately();
   name_field_->RequestFocus();
   name_field_->SelectAll(false);
   UpdateAppearance();
@@ -3669,13 +3684,12 @@ void MahoSidebarTabListView::SetTabPreviewShowDelayForTesting(
 void MahoSidebarTabListView::Update(const MahoSidebarTabListModel& model,
                                     Browser* browser) {
   base::ElapsedTimer maho_perf_t;
-  LOG(INFO) << "[MAHO_PERF] Update START";
+  DVLOG(1) << "[MAHO_PERF] Update START";
   browser_ = browser;
   if (active_space_id_ != model.active_space_id) {
     ClearSelection();
     active_space_id_ = model.active_space_id;
   }
-  HideEmptyPinnedDropLane();
 
   const TabStripModel* strip = browser ? browser->tab_strip_model() : nullptr;
   const bool live_tab_strip_is_empty = !strip || strip->empty();
@@ -3702,7 +3716,7 @@ void MahoSidebarTabListView::Update(const MahoSidebarTabListModel& model,
     has_last_model_ = true;
   }
 
-  if (batch_in_progress_) {
+  if (batch_depth_ > 0) {
     batch_rebuild_needed_ = true;
     return;
   }
@@ -3714,21 +3728,42 @@ void MahoSidebarTabListView::Update(const MahoSidebarTabListModel& model,
     return;
   }
 
-  // Single-source-of-truth for folder toggle: when we are about to do our
-  // own optimistic local rebuild in ToggleFolderExpanded(), we suppress the
-  // first state-push rebuild that fires asynchronously from
+  // Hiding the pinned drop-lane collapses a row's worth of height. Deferred
+  // until here (past the capture early-return) so it never shifts layout
+  // mid-drag; the flush after capture releases performs the hide.
+  HideEmptyPinnedDropLane();
+
+  // Single-source-of-truth for folder toggle: when we do our own optimistic
+  // local rebuild in ToggleFolderExpanded(), we suppress the single matching
+  // state-push rebuild that fires asynchronously from
   // DispatchShellEvent → NotifyChanged → ScheduleRefreshAll → ThreadPool
-  // → RefreshAll → Update(). The flag is consumed (one-shot) here so that
-  // unrelated future updates (e.g. tab created elsewhere) still rebuild.
-  // Otherwise every folder click pays for two full RebuildRows() passes on
-  // the entire sidebar (the user has 870+ tabs — that is the freeze).
-  if (suppress_state_push_rebuild_) {
-    suppress_state_push_rebuild_ = false;
-    last_model_ = model;
-    has_last_model_ = true;
-    last_model_fingerprint_ = ComputeModelFingerprint(model);
-    last_active_tab_id_ = model.active_tab.tab_id;
-    return;
+  // → RefreshAll → Update(). Gating on the fingerprint (rather than a bare
+  // flag) ensures an unrelated update arriving first — e.g. a tab created
+  // elsewhere — is NOT swallowed and still rebuilds. Otherwise every folder
+  // click pays for two full RebuildRows() passes on the entire sidebar (the
+  // user has 870+ tabs — that is the freeze).
+  if (!suppress_push_fingerprint_.empty()) {
+    std::string fingerprint = ComputeModelFingerprint(model);
+    if (fingerprint == suppress_push_fingerprint_) {
+      suppress_push_fingerprint_.clear();
+      last_model_ = model;
+      has_last_model_ = true;
+      last_model_fingerprint_ = std::move(fingerprint);
+      // A suppressed push can still carry an active-tab change. Applying it
+      // via the highlight fast path (which also reconciles last_model_) keeps
+      // the guard in UpdateActiveTabHighlightOnly from blocking a later
+      // correction; a bare last_active_tab_id_ assignment would drop it.
+      if (model.active_tab.tab_id != last_active_tab_id_) {
+        UpdateActiveTabHighlightOnly(model.active_tab.tab_id);
+      }
+      RebuildTabIndexCache();
+      return;
+    }
+    // Fingerprint mismatch: this is not the toggle push we armed for. The arm
+    // is single-shot — disarm now so a stale fingerprint can never swallow a
+    // later legitimate push that happens to match it (e.g. an unrelated change
+    // being undone). Then process this update normally below.
+    suppress_push_fingerprint_.clear();
   }
 
   // Fingerprint-based dedupe of background state pushes. Without this, every
@@ -3742,17 +3777,20 @@ void MahoSidebarTabListView::Update(const MahoSidebarTabListModel& model,
   std::string fingerprint = ComputeModelFingerprint(model);
   if (!last_model_fingerprint_.empty() && fingerprint == last_model_fingerprint_) {
     if (model.active_tab.tab_id != last_active_tab_id_) {
-      LOG(INFO) << "[MAHO_PERF]   fp_match active_only";
+      DVLOG(1) << "[MAHO_PERF]   fp_match active_only";
       UpdateActiveTabHighlightOnly(model.active_tab.tab_id);
       last_active_tab_id_ = model.active_tab.tab_id;
       if (favorites_sync_callback_) {
         favorites_sync_callback_.Run();
       }
     } else {
-      LOG(INFO) << "[MAHO_PERF]   fp_match noop";
+      DVLOG(1) << "[MAHO_PERF]   fp_match noop";
     }
-    LOG(INFO) << "[MAHO_PERF] Update END(fp_match) "
-              << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
+    // Index-only strip mutations don't change the fingerprint, so refresh the
+    // cache even on this fast path to keep it aligned with the live strip.
+    RebuildTabIndexCache();
+    DVLOG(1) << "[MAHO_PERF] Update END(fp_match) "
+             << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
     return;
   }
   last_model_fingerprint_ = std::move(fingerprint);
@@ -3761,25 +3799,12 @@ void MahoSidebarTabListView::Update(const MahoSidebarTabListModel& model,
 
   base::ElapsedTimer rebuild_t;
   RebuildRows(model, browser);
-  LOG(INFO) << "[MAHO_PERF]   RebuildRows="
-            << rebuild_t.Elapsed().InMillisecondsF() << "ms rows=" << (tab_rows_ ? tab_rows_->children().size() : 0);
+  DVLOG(1) << "[MAHO_PERF]   RebuildRows="
+           << rebuild_t.Elapsed().InMillisecondsF() << "ms rows=" << (tab_rows_ ? tab_rows_->children().size() : 0);
 
-  // Rebuild tab_id→strip_index cache after successful update.
-  tab_id_to_index_.clear();
-  TabStripModel* id_strip = browser_ ? browser_->tab_strip_model() : nullptr;
-  if (id_strip) {
-    tab_id_to_index_.reserve(id_strip->count());
-    for (int i = 0; i < id_strip->count(); ++i) {
-      auto* contents = id_strip->GetWebContentsAt(i);
-      if (!contents) continue;
-      auto* helper = MahoTabIdHelper::FromWebContents(contents);
-      if (helper && !helper->stable_tab_id().empty()) {
-        tab_id_to_index_[helper->stable_tab_id()] = i;
-      }
-    }
-  }
-  LOG(INFO) << "[MAHO_PERF] Update END(rebuilt) "
-            << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
+  RebuildTabIndexCache();
+  DVLOG(1) << "[MAHO_PERF] Update END(rebuilt) "
+           << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
 }
 
 std::string MahoSidebarTabListView::ComputeModelFingerprint(
@@ -3802,6 +3827,13 @@ std::string MahoSidebarTabListView::ComputeModelFingerprint(
         out.push_back(n.is_expanded ? 'E' : 'C');
         out.push_back(':');
         out.append(base::UTF16ToUTF8(n.folder_name));
+      } else {
+        // is_audible is intentionally excluded: an audio start/stop is a
+        // cosmetic change routed through ApplyCosmeticRefresh()
+        // (UpdateAudioState), so folding it into the fingerprint here would
+        // force a full RebuildRows on every audio flicker.
+        out.push_back(n.is_suspended ? 'S' : 's');
+        out.push_back(n.is_muted ? 'M' : 'm');
       }
       out.push_back(';');
       if (!n.children.empty()) {
@@ -3842,9 +3874,113 @@ void MahoSidebarTabListView::UpdateActiveTabHighlightOnly(
   if (last_active_tab_id_ == new_active_tab_id) {
     return;
   }
+
+  // An empty incoming id while the strip still has an active tab means the
+  // stable id was not captured yet (transient/startup race). Clearing here
+  // would drop a valid highlight no later push may restore, so skip — mirrors
+  // the MahoSidebarView fast-path guard. A genuine "no active tab" clear still
+  // proceeds because active_index() is then kNoTab.
+  if (new_active_tab_id.empty() && browser_ && browser_->tab_strip_model() &&
+      browser_->tab_strip_model()->active_index() != TabStripModel::kNoTab) {
+    return;
+  }
+
+  // A split renders both panes active when either is active (GroupSplitTabs).
+  // Resolve each active tab to the full set of tab_ids in its split so the
+  // highlight toggles both panes as one unit; a single-pane toggle would
+  // desync last_model_ and, in stacked splits (rows paint their own
+  // background), leave a stale half-highlight on the next re-render.
+  std::map<std::string, std::vector<std::string>> tab_to_split_unit;
+  if (has_last_model_) {
+    std::function<void(const std::vector<SidebarTreeNode>&)> collect_units;
+    collect_units = [&](const std::vector<SidebarTreeNode>& nodes) {
+      for (const auto& node : nodes) {
+        if (node.kind == SidebarNodeKind::kSplitGroup) {
+          std::vector<std::string> members;
+          for (const auto& child : node.children) {
+            if (child.kind == SidebarNodeKind::kTab && !child.tab_id.empty()) {
+              members.push_back(child.tab_id);
+            }
+          }
+          for (const auto& member : members) {
+            tab_to_split_unit[member] = members;
+          }
+        }
+        if (!node.children.empty()) {
+          collect_units(node.children);
+        }
+      }
+    };
+    collect_units(last_model_.pinned_tree);
+    collect_units(last_model_.normal_tree);
+  }
+
+  auto unit_for = [&](const std::string& tab_id) -> std::vector<std::string> {
+    if (tab_id.empty()) {
+      return {};
+    }
+    auto it = tab_to_split_unit.find(tab_id);
+    if (it != tab_to_split_unit.end()) {
+      return it->second;
+    }
+    return {tab_id};
+  };
+
+  const std::vector<std::string> new_unit = unit_for(new_active_tab_id);
+  const std::vector<std::string> old_unit = unit_for(last_active_tab_id_);
+  std::set<std::string> new_set(new_unit.begin(), new_unit.end());
+
+  // The observer fast paths reach here without an Update() pass, so
+  // last_model_ still carries the previous is_active flags. Everything that
+  // re-renders from last_model_ (IncrementalToggleFolder, the
+  // RebuildRows(last_model_) fallbacks) would resurrect the old highlight —
+  // or drop the new one for a tab inside a collapsed folder — and the
+  // last_active_tab_id_ guard above then blocks any later correction.
+  if (has_last_model_) {
+    std::function<void(std::vector<SidebarTreeNode>&)> sync_active;
+    sync_active = [&](std::vector<SidebarTreeNode>& nodes) {
+      for (auto& node : nodes) {
+        if (node.kind == SidebarNodeKind::kTab) {
+          node.is_active = new_set.count(node.tab_id) > 0;
+        }
+        if (!node.children.empty()) {
+          sync_active(node.children);
+        }
+      }
+    };
+    sync_active(last_model_.pinned_tree);
+    sync_active(last_model_.normal_tree);
+    last_model_.active_tab.tab_id = new_active_tab_id;
+  }
+
   if (!tab_rows_) {
     last_active_tab_id_ = new_active_tab_id;
     return;
+  }
+
+  // Sticky-row maintenance: a collapsed folder keeps its active descendant
+  // visible as a sticky row. The outgoing tab's sticky row (if any) is torn
+  // down, and when the incoming tab lives inside a collapsed folder — so it
+  // has no ordinary row — a sticky row is materialized for it.
+  if (!last_active_tab_id_.empty()) {
+    auto old_it = tab_id_to_row_view_.find(last_active_tab_id_);
+    if (old_it != tab_id_to_row_view_.end() && old_it->second &&
+        !old_it->second->collapsed_sticky_folder_id().empty()) {
+      SidebarTabRowView* old_sticky = old_it->second;
+      views::View* sticky_parent = old_sticky->parent();
+      tab_id_to_row_view_.erase(old_it);
+      if (sticky_parent) {
+        std::unique_ptr<views::View> owned_sticky =
+            sticky_parent->RemoveChildViewT(
+                static_cast<views::View*>(old_sticky));
+        sticky_parent->InvalidateLayout();
+      }
+    }
+  }
+  if (!new_active_tab_id.empty() &&
+      tab_id_to_row_view_.find(new_active_tab_id) ==
+          tab_id_to_row_view_.end()) {
+    MaterializeStickyRowForTab(new_active_tab_id);
   }
 
   auto toggle_active = [&](const std::string& tab_id, bool active) {
@@ -3853,27 +3989,32 @@ void MahoSidebarTabListView::UpdateActiveTabHighlightOnly(
     }
     auto it = tab_id_to_row_view_.find(tab_id);
     if (it == tab_id_to_row_view_.end() || !it->second) {
-      LOG(WARNING) << "[MAHO_SPLIT_DBG] toggle_active id=" << tab_id
-                   << " active=" << active << " ROW_NOT_FOUND";
       return;
     }
     SidebarTabRowView* row = it->second;
+    // Split panes paint transparent, so SetActive is state-only there; the
+    // container paints the shared highlight for both halves. Keeping the
+    // row's own flag accurate matters for is_active_for_testing() and any
+    // later reparenting out of the split.
+    row->SetActive(active);
     if (auto* container =
             views::AsViewClass<SplitGroupContainerView>(row->parent())) {
-      LOG(WARNING) << "[MAHO_SPLIT_DBG] toggle_active id=" << tab_id
-                   << " active=" << active << " -> CONTAINER";
       container->SetActiveState(active);
-    } else {
-      LOG(WARNING) << "[MAHO_SPLIT_DBG] toggle_active id=" << tab_id
-                   << " active=" << active << " -> ROW (parent="
-                   << (row->parent() ? row->parent()->GetClassName() : "null")
-                   << ")";
-      row->SetActive(active);
     }
   };
 
-  toggle_active(last_active_tab_id_, false);
-  toggle_active(new_active_tab_id, true);
+  // Toggle whole split units, not single rows: deactivate every outgoing pane
+  // not shared by the incoming unit, then activate every incoming pane. Both
+  // panes of a split share one container and SetActive/SetActiveState early-out
+  // on an unchanged value, so redundant calls here are idempotent.
+  for (const auto& id : old_unit) {
+    if (new_set.count(id) == 0) {
+      toggle_active(id, false);
+    }
+  }
+  for (const auto& id : new_unit) {
+    toggle_active(id, true);
+  }
 
   last_active_tab_id_ = new_active_tab_id;
 }
@@ -3916,8 +4057,6 @@ int MahoSidebarTabListView::OnDragUpdated(const ui::DropTargetEvent& event) {
       RevealEmptyPinnedDropLane();
     }
   }
-  LOG(WARNING) << "[MAHO_HOVER_DBG] CONTAINER OnDragUpdated y="
-               << event.location().y();
   return static_cast<int>(ui::mojom::DragOperation::kCopy);
 }
 
@@ -4045,7 +4184,7 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
 
   base::ElapsedTimer rr_remove_t;
   tab_rows_->RemoveAllChildViews();
-  LOG(INFO) << "[MAHO_PERF]     RR.RemoveAllChildViews="
+  DVLOG(1) << "[MAHO_PERF]     RR.RemoveAllChildViews="
             << rr_remove_t.Elapsed().InMillisecondsF() << "ms";
   pinned_section_target_ = nullptr;
   normal_section_target_ = nullptr;
@@ -4055,7 +4194,7 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
                         !model.normal_tree.empty();
   if (!HasTabStripContext(browser) && !has_tree) {
     AddTabActionsRow();
-    LOG(INFO) << "[MAHO_PERF]     RR.zero_context TOTAL="
+    DVLOG(1) << "[MAHO_PERF]     RR.zero_context TOTAL="
               << maho_rr_t.Elapsed().InMillisecondsF() << "ms";
     return;
   }
@@ -4071,7 +4210,7 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
   base::ElapsedTimer rr_pinned_t;
   RebuildTreeSection(tab_rows_, effective_model->pinned_tree,
                      MahoSidebarTabSection::kPinned, browser);
-  LOG(INFO) << "[MAHO_PERF]     RR.RebuildPinned="
+  DVLOG(1) << "[MAHO_PERF]     RR.RebuildPinned="
             << rr_pinned_t.Elapsed().InMillisecondsF()
             << "ms nodes=" << effective_model->pinned_tree.size();
 
@@ -4091,7 +4230,7 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
   base::ElapsedTimer rr_normal_t;
   RebuildTreeSection(tab_rows_, effective_model->normal_tree,
                      MahoSidebarTabSection::kNormal, browser);
-  LOG(INFO) << "[MAHO_PERF]     RR.RebuildNormal="
+  DVLOG(1) << "[MAHO_PERF]     RR.RebuildNormal="
             << rr_normal_t.Elapsed().InMillisecondsF()
             << "ms nodes=" << effective_model->normal_tree.size();
 
@@ -4134,6 +4273,26 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
 
   last_rendered_split_ids_ = current_rebuild_split_ids_;
 
+  if (!pending_folder_edit_id_.empty()) {
+    std::string edit_id = std::move(pending_folder_edit_id_);
+    pending_folder_edit_id_.clear();
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            [](base::WeakPtr<MahoSidebarTabListView> weak_self,
+               std::string folder_id) {
+              if (!weak_self) {
+                return;
+              }
+              auto it = weak_self->folder_rows_by_id_.find(folder_id);
+              if (it != weak_self->folder_rows_by_id_.end() && it->second) {
+                it->second->ScrollViewToVisible();
+                it->second->BeginFolderEditing();
+              }
+            },
+            weak_factory_.GetWeakPtr(), std::move(edit_id)));
+  }
+
   if (tab_rows_) {
     tab_rows_->SetLayoutManager(std::make_unique<SidebarVirtualLayoutDelegate>(
         visibility_manager_.get(), kRowHeightDp));
@@ -4146,15 +4305,13 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
     // so the reveal animation plays once, on the settled container, instead of
     // being torn down mid-flight by the next rebuild.
     if (!splits_awaiting_anim_.empty()) {
-      LOG(WARNING) << "[MAHO_DROP_DBG] debounce start awaiting="
-                   << splits_awaiting_anim_.size();
       split_anim_debounce_timer_.Start(
           FROM_HERE, base::Milliseconds(60),
           base::BindOnce(&MahoSidebarTabListView::AnimateAwaitingSplits,
                          weak_factory_.GetWeakPtr()));
     }
     if (GetWidget()->HasCapture()) {
-      LOG(INFO) << "[MAHO_PERF]     RR TOTAL(has_capture)="
+      DVLOG(1) << "[MAHO_PERF]     RR TOTAL(has_capture)="
                 << maho_rr_t.Elapsed().InMillisecondsF() << "ms";
       return;
     }
@@ -4165,7 +4322,7 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
     if (!widget_bounds_screen.Contains(cursor_screen)) {
       base::ElapsedTimer rr_syn_t;
       GetWidget()->SynthesizeMouseMoveEvent();
-      LOG(INFO) << "[MAHO_PERF]     RR.SynthesizeMouseMove="
+      DVLOG(1) << "[MAHO_PERF]     RR.SynthesizeMouseMove="
                 << rr_syn_t.Elapsed().InMillisecondsF() << "ms";
     }
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
@@ -4188,7 +4345,7 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
             },
              weak_factory_.GetWeakPtr()));
   }
-  LOG(INFO) << "[MAHO_PERF]     RR TOTAL="
+  DVLOG(1) << "[MAHO_PERF]     RR TOTAL="
             << maho_rr_t.Elapsed().InMillisecondsF() << "ms";
 }
 
@@ -4200,6 +4357,7 @@ void MahoSidebarTabListView::FlushDeferredRebuild() {
   last_model_fingerprint_ = ComputeModelFingerprint(deferred_model_);
   last_active_tab_id_ = deferred_model_.active_tab.tab_id;
   RebuildRows(deferred_model_, deferred_browser_);
+  RebuildTabIndexCache();
   deferred_model_ = {};
   deferred_browser_ = nullptr;
 }
@@ -4313,6 +4471,11 @@ void MahoSidebarTabListView::RebuildTreeNodes(
       if (node.is_expanded && !node.children.empty()) {
         RebuildTreeNodes(parent, node.children, section, browser,
                          node.folder_id);
+      } else if (!node.children.empty()) {
+        // Collapsed folder: keep the active descendant visible as a sticky
+        // row directly under the folder row.
+        AddCollapsedActiveRow(parent, parent->children().size(), node, section,
+                              browser);
       }
 
       if (index + 1 == nodes.size()) {
@@ -4334,50 +4497,6 @@ void MahoSidebarTabListView::RebuildTreeNodes(
       RebuildSplitGroupContainer(parent, node, section, browser,
                                  parent_folder_id);
     } else {
-      const int live_index = node.tab_strip_index >= 0
-                                 ? node.tab_strip_index
-                                 : ResolveTabStripIndexForTabId(node.tab_id);
-      const bool is_suspended = (live_index < 0) || node.is_suspended;
-      content::WebContents* contents = nullptr;
-      tabs::TabInterface* tab_iface = nullptr;
-      if (browser && browser->tab_strip_model() && live_index >= 0) {
-        contents = browser->tab_strip_model()->GetWebContentsAt(live_index);
-        if (contents) {
-          tab_iface = tabs::TabInterface::GetFromContents(contents);
-        }
-      }
-      TabUIHelper* tab_ui =
-          tab_iface ? TabUIHelper::From(tab_iface) : nullptr;
-      ui::ImageModel fav = tab_ui ? tab_ui->GetFavicon() : ui::ImageModel();
-      if (fav.IsEmpty() && !node.favicon_png_data.empty()) {
-        gfx::Image png = gfx::Image::CreateFrom1xPNGBytes(node.favicon_png_data);
-        if (!png.IsEmpty()) {
-          fav = ui::ImageModel::FromImage(png);
-        }
-      }
-      const bool needs_async_favicon = fav.IsEmpty();
-      if (fav.IsEmpty()) {
-        fav = ui::ImageModel::FromVectorIcon(vector_icons::kGlobeIcon,
-                                             ui::kColorSysOnSurfaceSubtle,
-                                             kRowIconSizeDp);
-      }
-      if (needs_async_favicon && browser_ && !node.url.empty()) {
-        GURL page_url(node.url);
-        if (page_url.is_valid()) {
-          favicon::FaviconService* favicon_service =
-              FaviconServiceFactory::GetForProfile(
-                  browser_->profile(), ServiceAccessType::EXPLICIT_ACCESS);
-          if (favicon_service) {
-            favicon_service->GetFaviconImageForPageURL(
-                page_url,
-                base::BindOnce(&MahoSidebarTabListView::OnFaviconLoaded,
-                               weak_factory_.GetWeakPtr(), node.tab_id,
-                               page_url),
-                &favicon_task_tracker_);
-          }
-        }
-      }
-
       auto* before_tab_lane =
           parent->AddChildView(std::make_unique<SidebarInsertionLaneView>(
               active_space_id_, node.tab_id, SidebarNodeKind::kTab, node.tab_id,
@@ -4389,35 +4508,7 @@ void MahoSidebarTabListView::RebuildTreeNodes(
       before_tab_lane->SetRevealEmptyPinnedDropLaneCallback(
           base::BindRepeating(&MahoSidebarTabListView::RevealEmptyPinnedDropLane,
                               base::Unretained(this)));
-      auto* row_view = parent->AddChildView(std::make_unique<SidebarTabRowView>(
-          node, std::move(fav), browser, section, active_space_id_,
-          ResolveTabDisplayText(node),
-          base::BindRepeating(&MahoSidebarTabListView::ActivateTabById,
-                              weak_factory_.GetWeakPtr(),
-                              node.tab_id),
-          base::BindRepeating(&MahoSidebarTabListView::CloseTabById,
-                              weak_factory_.GetWeakPtr(),
-                              node.tab_id),
-          base::BindRepeating(&MahoSidebarTabListView::MuteTabById,
-                              weak_factory_.GetWeakPtr(),
-                              node.tab_id),
-          base::BindRepeating(&MahoSidebarTabListView::CommitTabTitleChange,
-                              weak_factory_.GetWeakPtr()),
-          base::BindRepeating(&MahoSidebarTabListView::ResolveTabStripIndexForTabId,
-                              base::Unretained(this)),
-          base::BindRepeating(&MahoSidebarTabListView::HandleTabRowHoverStart,
-                              base::Unretained(this)),
-          base::BindRepeating(&MahoSidebarTabListView::HandleTabRowHoverEnd,
-                              base::Unretained(this))));
-      row_view->SetSuspended(is_suspended);
-      if (favorites_drop_accepted_callback_) {
-        row_view->SetFavoritesDropAcceptedCallback(
-            favorites_drop_accepted_callback_);
-      }
-      row_view->SetRevealEmptyPinnedDropLaneCallback(
-          base::BindRepeating(&MahoSidebarTabListView::RevealEmptyPinnedDropLane,
-                              base::Unretained(this)));
-      row_view->SetTooltipText(GetNodeTooltipText(node));
+      parent->AddChildView(CreateTabRowView(node, section, browser));
 
       if (index + 1 == nodes.size()) {
         auto* append_tab_lane =
@@ -4433,6 +4524,184 @@ void MahoSidebarTabListView::RebuildTreeNodes(
                                 base::Unretained(this)));
       }
     }
+  }
+}
+
+std::unique_ptr<SidebarTabRowView> MahoSidebarTabListView::CreateTabRowView(
+    const SidebarTreeNode& node,
+    MahoSidebarTabSection section,
+    Browser* browser) {
+  const int live_index = node.tab_strip_index >= 0
+                             ? node.tab_strip_index
+                             : ResolveTabStripIndexForTabId(node.tab_id);
+  const bool is_suspended = (live_index < 0) || node.is_suspended;
+  content::WebContents* contents = nullptr;
+  tabs::TabInterface* tab_iface = nullptr;
+  if (browser && browser->tab_strip_model() && live_index >= 0) {
+    contents = browser->tab_strip_model()->GetWebContentsAt(live_index);
+    if (contents) {
+      tab_iface = tabs::TabInterface::GetFromContents(contents);
+    }
+  }
+  TabUIHelper* tab_ui =
+      tab_iface ? TabUIHelper::From(tab_iface) : nullptr;
+  ui::ImageModel fav = tab_ui ? tab_ui->GetFavicon() : ui::ImageModel();
+  if (fav.IsEmpty() && !node.favicon_png_data.empty()) {
+    gfx::Image png = gfx::Image::CreateFrom1xPNGBytes(node.favicon_png_data);
+    if (!png.IsEmpty()) {
+      fav = ui::ImageModel::FromImage(png);
+    }
+  }
+  const bool needs_async_favicon = fav.IsEmpty();
+  if (fav.IsEmpty()) {
+    fav = ui::ImageModel::FromVectorIcon(vector_icons::kGlobeIcon,
+                                         ui::kColorSysOnSurfaceSubtle,
+                                         kRowIconSizeDp);
+  }
+  if (needs_async_favicon && browser_ && !node.url.empty()) {
+    GURL page_url(node.url);
+    if (page_url.is_valid()) {
+      favicon::FaviconService* favicon_service =
+          FaviconServiceFactory::GetForProfile(
+              browser_->profile(), ServiceAccessType::EXPLICIT_ACCESS);
+      if (favicon_service) {
+        favicon_service->GetFaviconImageForPageURL(
+            page_url,
+            base::BindOnce(&MahoSidebarTabListView::OnFaviconLoaded,
+                           weak_factory_.GetWeakPtr(), node.tab_id,
+                           page_url),
+            &favicon_task_tracker_);
+      }
+    }
+  }
+
+  auto row_view = std::make_unique<SidebarTabRowView>(
+      node, std::move(fav), browser, section, active_space_id_,
+      ResolveTabDisplayText(node),
+      base::BindRepeating(&MahoSidebarTabListView::ActivateTabById,
+                          weak_factory_.GetWeakPtr(),
+                          node.tab_id),
+      base::BindRepeating(&MahoSidebarTabListView::CloseTabById,
+                          weak_factory_.GetWeakPtr(),
+                          node.tab_id),
+      base::BindRepeating(&MahoSidebarTabListView::MuteTabById,
+                          weak_factory_.GetWeakPtr(),
+                          node.tab_id),
+      base::BindRepeating(&MahoSidebarTabListView::CommitTabTitleChange,
+                          weak_factory_.GetWeakPtr()),
+      base::BindRepeating(&MahoSidebarTabListView::ResolveTabStripIndexForTabId,
+                          base::Unretained(this)),
+      base::BindRepeating(&MahoSidebarTabListView::HandleTabRowHoverStart,
+                          base::Unretained(this)),
+      base::BindRepeating(&MahoSidebarTabListView::HandleTabRowHoverEnd,
+                          base::Unretained(this)));
+  row_view->SetSuspended(is_suspended);
+  if (favorites_drop_accepted_callback_) {
+    row_view->SetFavoritesDropAcceptedCallback(
+        favorites_drop_accepted_callback_);
+  }
+  row_view->SetRevealEmptyPinnedDropLaneCallback(
+      base::BindRepeating(&MahoSidebarTabListView::RevealEmptyPinnedDropLane,
+                          base::Unretained(this)));
+  row_view->SetTooltipText(GetNodeTooltipText(node));
+  return row_view;
+}
+
+namespace {
+
+const SidebarTreeNode* FindActiveTabDescendant(
+    const std::vector<SidebarTreeNode>& nodes) {
+  for (const auto& n : nodes) {
+    if (n.kind == SidebarNodeKind::kTab && n.is_active) {
+      return &n;
+    }
+    if (!n.children.empty()) {
+      if (const SidebarTreeNode* found = FindActiveTabDescendant(n.children)) {
+        return found;
+      }
+    }
+  }
+  return nullptr;
+}
+
+}  // namespace
+
+SidebarTabRowView* MahoSidebarTabListView::AddCollapsedActiveRow(
+    views::View* parent,
+    size_t insert_index,
+    const SidebarTreeNode& folder_node,
+    MahoSidebarTabSection section,
+    Browser* browser) {
+  const SidebarTreeNode* active_desc =
+      FindActiveTabDescendant(folder_node.children);
+  if (!active_desc) {
+    return nullptr;
+  }
+  SidebarTreeNode sticky = *active_desc;
+  sticky.children.clear();
+  // Render at one level under the visible folder row even when the tab sits
+  // deeper in a nested collapsed folder; is_in_split is cleared so the row
+  // paints as an ordinary standalone row outside any split container.
+  sticky.depth = folder_node.depth + 1;
+  sticky.is_in_split = false;
+  SidebarTabRowView* row = parent->AddChildViewAt(
+      CreateTabRowView(sticky, section, browser), insert_index);
+  row->SetCollapsedStickyFolderId(folder_node.folder_id);
+  tab_id_to_row_view_[row->tab_id()] = row;
+  return row;
+}
+
+void MahoSidebarTabListView::MaterializeStickyRowForTab(
+    const std::string& tab_id) {
+  if (!has_last_model_ || tab_id.empty()) {
+    return;
+  }
+  // Anchor on the OUTERMOST collapsed folder on the path to |tab_id|: that is
+  // the only folder row that is actually materialized (rows inside collapsed
+  // folders are not built), so the sticky row must hang directly under it.
+  const SidebarTreeNode* anchor_folder = nullptr;
+  const SidebarTreeNode* first_collapsed = nullptr;
+  std::function<bool(const std::vector<SidebarTreeNode>&)> find_path;
+  find_path = [&](const std::vector<SidebarTreeNode>& nodes) -> bool {
+    for (const auto& n : nodes) {
+      if (n.kind == SidebarNodeKind::kTab && n.tab_id == tab_id) {
+        return first_collapsed != nullptr;
+      }
+      if (!n.children.empty()) {
+        const SidebarTreeNode* saved = first_collapsed;
+        if (n.kind == SidebarNodeKind::kFolder && !n.is_expanded &&
+            !first_collapsed) {
+          first_collapsed = &n;
+        }
+        if (find_path(n.children)) {
+          return true;
+        }
+        first_collapsed = saved;
+      }
+    }
+    return false;
+  };
+  if (!find_path(last_model_.pinned_tree) &&
+      !find_path(last_model_.normal_tree)) {
+    return;
+  }
+  anchor_folder = first_collapsed;
+  auto it = folder_rows_by_id_.find(anchor_folder->folder_id);
+  if (it == folder_rows_by_id_.end() || !it->second) {
+    return;
+  }
+  SidebarFolderRowView* folder_row = it->second;
+  views::View* parent_view = folder_row->parent();
+  if (!parent_view) {
+    return;
+  }
+  auto folder_index = parent_view->GetIndexOf(folder_row);
+  if (!folder_index.has_value()) {
+    return;
+  }
+  if (AddCollapsedActiveRow(parent_view, *folder_index + 1, *anchor_folder,
+                            folder_row->section(), browser_)) {
+    parent_view->InvalidateLayout();
   }
 }
 
@@ -4502,7 +4771,11 @@ void MahoSidebarTabListView::RebuildSplitGroupContainer(
 
     if (i + 1 < group_node.children.size()) {
       auto divider = std::make_unique<views::View>();
-      divider->SetBackground(views::CreateSolidBackground(ui::kColorSysDivider));
+      // The active split background lightens the row, washing out the subtle
+      // divider; use a stronger outline color when active so it stays visible.
+      divider->SetBackground(views::CreateSolidBackground(
+          has_active_child ? ui::kColorSysOnSurfaceSubtle
+                           : ui::kColorSysDivider));
       divider->SetPreferredSize(
           is_side_by_side ? gfx::Size(1, kRowHeightDp - 8)
                           : gfx::Size(kRowHeightDp - 8, 1));
@@ -4525,23 +4798,17 @@ void MahoSidebarTabListView::RebuildSplitGroupContainer(
 }
 
 void MahoSidebarTabListView::AnimateAwaitingSplits() {
-  LOG(WARNING) << "[MAHO_DROP_DBG] AnimateAwaitingSplits fired count="
-               << splits_awaiting_anim_.size();
   for (const auto& split_id : splits_awaiting_anim_) {
     auto it = split_id_to_container_.find(split_id);
     if (it == split_id_to_container_.end() || !it->second) {
-      LOG(WARNING) << "[MAHO_DROP_DBG] anim skip: no container for " << split_id;
       continue;
     }
     views::View* container = it->second;
     if (!container->layer()) {
-      LOG(WARNING) << "[MAHO_DROP_DBG] anim skip: no layer";
       continue;
     }
     const int w = container->width();
     const int h = container->height();
-    LOG(WARNING) << "[MAHO_DROP_DBG] anim split=" << split_id
-                 << " w=" << w << " h=" << h;
     if (w <= 0 || h <= 0) {
       continue;
     }
@@ -4651,7 +4918,7 @@ content::WebContents* MahoSidebarTabListView::WakeSuspendedTab(
     const std::string& tab_id) {
   TRACE_EVENT1("browser", "WakeSuspendedTab", "tab_id", tab_id);
   base::ElapsedTimer maho_perf_t;
-  LOG(INFO) << "[MAHO_PERF] WakeSuspendedTab START tab_id=" << tab_id;
+  DVLOG(1) << "[MAHO_PERF] WakeSuspendedTab START tab_id=" << tab_id;
 
   TRACE_EVENT_INSTANT0("browser", "WakeSuspendedTab.QueryStart",
                        TRACE_EVENT_SCOPE_THREAD);
@@ -4660,9 +4927,9 @@ content::WebContents* MahoSidebarTabListView::WakeSuspendedTab(
   const double query_ms = query_t.Elapsed().InMillisecondsF();
   TRACE_EVENT_INSTANT1("browser", "WakeSuspendedTab.QueryEnd",
                        TRACE_EVENT_SCOPE_THREAD, "ms", query_ms);
-  LOG(INFO) << "[MAHO_PERF]   QueryTabFromCore=" << query_ms << "ms";
+  DVLOG(1) << "[MAHO_PERF]   QueryTabFromCore=" << query_ms << "ms";
   if (!persisted) {
-    LOG(INFO) << "[MAHO_PERF] WakeSuspendedTab END(no_persisted) "
+    DVLOG(1) << "[MAHO_PERF] WakeSuspendedTab END(no_persisted) "
               << maho_perf_t.Elapsed().InMillisecondsF() << "ms";
     return nullptr;
   }
@@ -4674,11 +4941,21 @@ content::WebContents* MahoSidebarTabListView::WakeSuspendedTab(
   NavigateParams params(browser_, GURL(persisted->url),
                         ui::PAGE_TRANSITION_AUTO_BOOKMARK);
   params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
-  Navigate(&params);
+  {
+    // The strip-insert observer announces create_tab synchronously INSIDE
+    // Navigate(), while the fresh WebContents still carries the throwaway
+    // UUID minted by TabHelpers. This scope makes that announcement adopt
+    // |tab_id| first, so maho-core restores the existing suspended tab
+    // instead of creating a new Normal tab. The direct SetRestoredTabId
+    // below stays as a fallback for paths where no announcement happened
+    // (e.g. space bridge not yet initialized).
+    maho::ScopedMahoTabWakeId wake_scope(tab_id);
+    Navigate(&params);
+  }
   const double navigate_ms = nav_t.Elapsed().InMillisecondsF();
   TRACE_EVENT_INSTANT1("browser", "WakeSuspendedTab.NavigateEnd",
                        TRACE_EVENT_SCOPE_THREAD, "ms", navigate_ms);
-  LOG(INFO) << "[MAHO_PERF]   Navigate()=" << navigate_ms << "ms";
+  DVLOG(1) << "[MAHO_PERF]   Navigate()=" << navigate_ms << "ms";
 
   if (params.navigated_or_inserted_contents) {
     // Bind the stable id directly on the freshly-created WebContents instead of
@@ -4705,7 +4982,7 @@ content::WebContents* MahoSidebarTabListView::WakeSuspendedTab(
     }
   }
   const double total_ms = maho_perf_t.Elapsed().InMillisecondsF();
-  LOG(INFO) << "[MAHO_PERF] WakeSuspendedTab BREAKDOWN"
+  DVLOG(1) << "[MAHO_PERF] WakeSuspendedTab BREAKDOWN"
             << " query=" << query_ms << "ms"
             << " navigate=" << navigate_ms << "ms"
             << " total=" << total_ms << "ms";
@@ -4745,12 +5022,13 @@ void MahoSidebarTabListView::CloseTab(int tab_index) {
 void MahoSidebarTabListView::CloseTabById(const std::string& tab_id) {
   const int index = ResolveTabStripIndexForTabId(tab_id);
   if (index >= 0) {
-    if (maho::IsCorePinnedTab(tab_id)) {
-      // Stage 1 of the pinned two-stage close: suspend in core and drop the
-      // live WebContents. The row then resolves to index -1 on rebuild,
-      // flipping "−" to "X" and routing the next press to real-delete below.
-      // StripObserver's IsCorePinnedTab guard suppresses the kRemoved close_tab
-      // dispatch, so the core record survives as Suspended (not deleted here).
+    if (maho::IsCoreCloseProtectedTab(tab_id)) {
+      // Stage 1 of the close-protected (pinned or favorite) two-stage close:
+      // suspend in core and drop the live WebContents. The row then resolves to
+      // index -1 on rebuild, flipping "−" to "X" and routing the next press to
+      // real-delete below. StripObserver's IsCorePinnedTab guard suppresses the
+      // kRemoved close_tab dispatch, so the core record survives as Suspended
+      // (not deleted here).
       maho::DispatchShellEvent("suspend_tab", {{"tab_id", tab_id}});
       if (TabStripModel* model =
               browser_ ? browser_->tab_strip_model() : nullptr;
@@ -4799,15 +5077,29 @@ int MahoSidebarTabListView::ResolveTabStripIndexForTabId(
   if (tab_id.empty()) {
     return -1;
   }
+  TabStripModel* strip = browser_ ? browser_->tab_strip_model() : nullptr;
   // P3: O(1) cached lookup eliminates O(N) strip scan per hover event;
   // N=870+ tabs, called multiple times per mouse enter/exit cycle.
   auto it = tab_id_to_index_.find(tab_id);
   if (it != tab_id_to_index_.end()) {
-    return it->second;
+    // Defensive validation: index-only strip mutations (split-drop
+    // MoveWebContentsAt, AddToNewSplit, a tab closed before the next rebuild)
+    // shift indices without a fingerprint change, so the cache can point at a
+    // neighbor. A blind hit here would activate — or worse, CloseTabById the
+    // wrong tab and delete its core record. Trust the entry only if the live
+    // WebContents at that index still carries this tab_id.
+    if (strip && it->second >= 0 && it->second < strip->count()) {
+      auto* contents = strip->GetWebContentsAt(it->second);
+      auto* helper =
+          contents ? MahoTabIdHelper::FromWebContents(contents) : nullptr;
+      if (helper && helper->stable_tab_id() == tab_id) {
+        return it->second;
+      }
+    }
+    // Stale: fall through to the scan and refresh the entry below.
   }
-  // Fallback: linear scan for stale-cache cases (tab inserted after last
-  // Update but before next rebuild).
-  TabStripModel* strip = browser_ ? browser_->tab_strip_model() : nullptr;
+  // Linear-scan fallback for a cache miss or a stale entry the validation
+  // above rejected. On success the corrected index is written back.
   if (!strip) {
     return -1;
   }
@@ -4818,10 +5110,34 @@ int MahoSidebarTabListView::ResolveTabStripIndexForTabId(
     }
     auto* helper = MahoTabIdHelper::FromWebContents(contents);
     if (helper && helper->stable_tab_id() == tab_id) {
+      tab_id_to_index_[tab_id] = i;
       return i;
     }
   }
   return -1;
+}
+
+void MahoSidebarTabListView::RebuildTabIndexCache() {
+  tab_id_to_index_.clear();
+  TabStripModel* id_strip = browser_ ? browser_->tab_strip_model() : nullptr;
+  if (!id_strip) {
+    return;
+  }
+  tab_id_to_index_.reserve(id_strip->count());
+  for (int i = 0; i < id_strip->count(); ++i) {
+    auto* contents = id_strip->GetWebContentsAt(i);
+    if (!contents) {
+      continue;
+    }
+    auto* helper = MahoTabIdHelper::FromWebContents(contents);
+    if (helper && !helper->stable_tab_id().empty()) {
+      tab_id_to_index_[helper->stable_tab_id()] = i;
+    }
+  }
+}
+
+void MahoSidebarTabListView::InvalidateTabIndexCache() {
+  tab_id_to_index_.clear();
 }
 
 void MahoSidebarTabListView::OpenNewTab(const ui::Event& event) {
@@ -5149,10 +5465,10 @@ void MahoSidebarTabListView::ToggleFolderExpanded(
   // which schedules an asynchronous ThreadPool round-trip ending in our
   // own Update() → RebuildRows(). For 870+ tabs that second pass takes
   // ~1s and is wasted work because we are about to do an optimistic
-  // local rebuild below with the same effective state. Suppress that
-  // single upcoming state-push pass.
+  // local rebuild below with the same effective state. We arm suppression
+  // of that single matching state-push below, once the optimistic flip has
+  // produced the fingerprint the push will carry.
   if (!active_space_id_.empty() && !folder_id.empty()) {
-    suppress_state_push_rebuild_ = true;
     DispatchShellEvent("toggle_folder_expanded", {
         {"space_id", active_space_id_},
         {"folder_id", folder_id}});
@@ -5185,12 +5501,52 @@ void MahoSidebarTabListView::ToggleFolderExpanded(
       rebuild_deferred_ = false;
       deferred_model_ = {};
       deferred_browser_ = nullptr;
+      // last_model_ now carries the toggled expansion state; the async push
+      // reflecting this toggle will fingerprint identically, so arm exactly
+      // that fingerprint for one-shot suppression in Update().
+      suppress_push_fingerprint_ = ComputeModelFingerprint(last_model_);
       IncrementalToggleFolder(folder_id, new_expanded_state);
       return;
     }
   }
 
   FlushDeferredRebuild();
+}
+
+void MahoSidebarTabListView::UnregisterRowsRecursive(views::View* view) {
+  if (!view) {
+    return;
+  }
+  if (auto* row = views::AsViewClass<SidebarTabRowView>(view)) {
+    if (!row->tab_id().empty()) {
+      auto it = tab_id_to_row_view_.find(row->tab_id());
+      if (it != tab_id_to_row_view_.end() && it->second == row) {
+        tab_id_to_row_view_.erase(it);
+      }
+    }
+  } else if (auto* folder = views::AsViewClass<SidebarFolderRowView>(view)) {
+    auto it = folder_rows_by_id_.find(folder->folder_id());
+    if (it != folder_rows_by_id_.end() && it->second == folder) {
+      folder_rows_by_id_.erase(it);
+    }
+  }
+  // split_id_to_container_ and splits_awaiting_anim_ hold raw_ptr/id trackers
+  // for a split container that AnimateAwaitingSplits() later dereferences; they
+  // must be dropped before RemoveChildViewT frees this view, or the debounced
+  // timer derefs a dangling raw_ptr (its non-null check won't catch a freed
+  // pointer).
+  for (auto it = split_id_to_container_.begin();
+       it != split_id_to_container_.end();) {
+    if (it->second == view) {
+      splits_awaiting_anim_.erase(it->first);
+      it = split_id_to_container_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  for (views::View* child : view->children()) {
+    UnregisterRowsRecursive(child);
+  }
 }
 
 void MahoSidebarTabListView::IncrementalToggleFolder(
@@ -5217,6 +5573,28 @@ void MahoSidebarTabListView::IncrementalToggleFolder(
 
   folder_row->SetExpanded(expand);
 
+  const SidebarTreeNode* folder_node = nullptr;
+  auto find_node = [&folder_id](const auto& self,
+                                const std::vector<SidebarTreeNode>& nodes)
+      -> const SidebarTreeNode* {
+    for (const auto& n : nodes) {
+      if (n.kind == SidebarNodeKind::kFolder && n.folder_id == folder_id) {
+        return &n;
+      }
+      if (!n.children.empty()) {
+        const auto* found = self(self, n.children);
+        if (found) {
+          return found;
+        }
+      }
+    }
+    return nullptr;
+  };
+  folder_node = find_node(find_node, last_model_.pinned_tree);
+  if (!folder_node) {
+    folder_node = find_node(find_node, last_model_.normal_tree);
+  }
+
   if (!expand) {
     std::set<std::string> descendant_ids;
     descendant_ids.insert(folder_id);
@@ -5228,7 +5606,12 @@ void MahoSidebarTabListView::IncrementalToggleFolder(
       bool is_descendant = false;
 
       if (auto* tab_row = views::AsViewClass<SidebarTabRowView>(child)) {
-        is_descendant = descendant_ids.count(tab_row->containing_folder_id());
+        // The sticky-folder check catches the active row a nested collapsed
+        // folder keeps visible: its containing_folder_id may point at a
+        // deeper, never-materialized folder that descendant_ids can't learn.
+        is_descendant =
+            descendant_ids.count(tab_row->containing_folder_id()) ||
+            descendant_ids.count(tab_row->collapsed_sticky_folder_id());
       } else if (auto* sub_folder =
                      views::AsViewClass<SidebarFolderRowView>(child)) {
         if (descendant_ids.count(sub_folder->parent_folder_id())) {
@@ -5238,8 +5621,24 @@ void MahoSidebarTabListView::IncrementalToggleFolder(
       } else if (auto* lane =
                      views::AsViewClass<SidebarInsertionLaneView>(child)) {
         is_descendant = descendant_ids.count(lane->target_parent_folder_id());
+      } else if (auto* split =
+                     views::AsViewClass<SplitGroupContainerView>(child)) {
+        // A split-group container carries no folder id of its own; classify it
+        // by the containing_folder_id of its first tab row. Root-level split
+        // groups (empty containing_folder_id) are NOT descendants and must
+        // survive a sibling folder's collapse.
+        for (views::View* c : split->children()) {
+          if (auto* r = views::AsViewClass<SidebarTabRowView>(c)) {
+            is_descendant = descendant_ids.count(r->containing_folder_id());
+            break;
+          }
+        }
       } else {
-        is_descendant = true;
+        // Unknown view type: do NOT assume it belongs to the collapsing
+        // folder. Treating unknowns as descendants would delete sibling blocks
+        // that render right after the folder (e.g. a root split group). Stop
+        // the sweep at the first unrecognized boundary.
+        break;
       }
 
       if (!is_descendant) {
@@ -5249,71 +5648,66 @@ void MahoSidebarTabListView::IncrementalToggleFolder(
     }
 
     for (auto* child : to_remove) {
-      if (auto* sub_folder = views::AsViewClass<SidebarFolderRowView>(child)) {
-        folder_rows_by_id_.erase(sub_folder->folder_id());
-      } else if (auto* tab_row = views::AsViewClass<SidebarTabRowView>(child)) {
-        // Row is about to be freed by RemoveChildViewT; a stale raw_ptr left in
-        // tab_id_to_row_view_ is a UAF hazard (ClearSelection/ToggleTabSelected
-        // dereference it). selected_tab_ids_ is intentionally untouched so the
-        // selection survives collapse.
-        tab_id_to_row_view_.erase(tab_row->tab_id());
-      }
+      // Recursively drop every descendant row/folder from the lookup maps
+      // before RemoveChildViewT frees the views. A stale raw_ptr in
+      // tab_id_to_row_view_ is a UAF hazard (ClearSelection/ToggleTabSelected
+      // dereference it) and split containers nest rows the top-level erase
+      // used to miss. selected_tab_ids_ is intentionally untouched so the
+      // selection survives collapse.
+      UnregisterRowsRecursive(child);
       std::unique_ptr<views::View> owned =
           parent_view->RemoveChildViewT(child);
     }
+
+    // Keep the active descendant visible under the now-collapsed folder.
+    if (folder_node) {
+      AddCollapsedActiveRow(parent_view, folder_index + 1, *folder_node,
+                            folder_row->section(), browser_);
+    }
   } else {
-    const SidebarTreeNode* folder_node = nullptr;
-    auto find_node = [&folder_id](const auto& self,
-                                  const std::vector<SidebarTreeNode>& nodes)
-        -> const SidebarTreeNode* {
-      for (const auto& n : nodes) {
-        if (n.kind == SidebarNodeKind::kFolder && n.folder_id == folder_id) {
-          return &n;
-        }
-        if (!n.children.empty()) {
-          const auto* found = self(self, n.children);
-          if (found) {
-            return found;
-          }
-        }
+    // A collapsed folder may have kept its active descendant visible as a
+    // sticky row right under the folder row; the expanded children re-render
+    // that tab as an ordinary row, so drop the sticky first.
+    if (folder_index + 1 < parent_view->children().size()) {
+      auto* maybe_sticky = views::AsViewClass<SidebarTabRowView>(
+          parent_view->children()[folder_index + 1]);
+      if (maybe_sticky &&
+          maybe_sticky->collapsed_sticky_folder_id() == folder_id) {
+        tab_id_to_row_view_.erase(maybe_sticky->tab_id());
+        std::unique_ptr<views::View> owned_sticky =
+            parent_view->RemoveChildViewT(
+                static_cast<views::View*>(maybe_sticky));
       }
-      return nullptr;
-    };
-    folder_node = find_node(find_node, last_model_.pinned_tree);
-    if (!folder_node) {
-      folder_node = find_node(find_node, last_model_.normal_tree);
     }
 
-    if (!folder_node || folder_node->children.empty()) {
-      return;
-    }
+    if (folder_node && !folder_node->children.empty()) {
+      auto temp = std::make_unique<views::View>();
+      temp->SetLayoutManager(std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kVertical));
+      RebuildTreeNodes(temp.get(), folder_node->children, folder_row->section(),
+                       browser_, folder_id);
 
-    auto temp = std::make_unique<views::View>();
-    temp->SetLayoutManager(std::make_unique<views::BoxLayout>(
-        views::BoxLayout::Orientation::kVertical));
-    RebuildTreeNodes(temp.get(), folder_node->children, folder_row->section(),
-                     browser_, folder_id);
+      std::function<void(views::View*)> register_tab_rows;
+      register_tab_rows = [&](views::View* v) {
+        if (auto* row = views::AsViewClass<SidebarTabRowView>(v);
+            row && !row->tab_id().empty()) {
+          tab_id_to_row_view_[row->tab_id()] = row;
+          row->SetSelected(selected_tab_ids_.count(row->tab_id()) > 0);
+        }
+        for (views::View* c : v->children()) {
+          register_tab_rows(c);
+        }
+      };
 
-    std::function<void(views::View*)> register_tab_rows;
-    register_tab_rows = [&](views::View* v) {
-      if (auto* row = views::AsViewClass<SidebarTabRowView>(v);
-          row && !row->tab_id().empty()) {
-        tab_id_to_row_view_[row->tab_id()] = row;
-        row->SetSelected(selected_tab_ids_.count(row->tab_id()) > 0);
+      size_t insert_pos = folder_index + 1;
+      while (!temp->children().empty()) {
+        views::View* first = temp->children().front();
+        std::unique_ptr<views::View> owned = temp->RemoveChildViewT(first);
+        views::View* added =
+            parent_view->AddChildViewAt(std::move(owned), insert_pos);
+        register_tab_rows(added);
+        ++insert_pos;
       }
-      for (views::View* c : v->children()) {
-        register_tab_rows(c);
-      }
-    };
-
-    size_t insert_pos = folder_index + 1;
-    while (!temp->children().empty()) {
-      views::View* first = temp->children().front();
-      std::unique_ptr<views::View> owned = temp->RemoveChildViewT(first);
-      views::View* added =
-          parent_view->AddChildViewAt(std::move(owned), insert_pos);
-      register_tab_rows(added);
-      ++insert_pos;
     }
   }
 
@@ -5345,6 +5739,11 @@ void MahoSidebarTabListView::CommitFolderNameChange(
                      {{"space_id", active_space_id_},
                       {"folder_id", folder_id},
                       {"name", base::UTF16ToUTF8(new_name)}});
+}
+
+void MahoSidebarTabListView::SetPendingFolderEdit(
+    const std::string& folder_id) {
+  pending_folder_edit_id_ = folder_id;
 }
 
 std::u16string MahoSidebarTabListView::ResolveTabDisplayText(
@@ -5675,55 +6074,15 @@ void MahoSidebarTabListView::CloseSelected() {
 
   RebuildRowsBatchScoper scoper(this);
 
-  TabStripModel* model = browser_ ? browser_->tab_strip_model() : nullptr;
-  if (model) {
-    std::vector<content::WebContents*> live_contents;
-    for (const auto& tab_id : live_ids) {
-      int idx = ResolveTabStripIndexForTabId(tab_id);
-      if (idx >= 0) {
-        if (content::WebContents* wc = model->GetWebContentsAt(idx)) {
-          live_contents.push_back(wc);
-        }
-      }
-    }
-
-    for (content::WebContents* wc : live_contents) {
-      int idx = model->GetIndexOfWebContents(wc);
-      if (idx != TabStripModel::kNoTab) {
-        if (auto* helper = MahoTabIdHelper::FromWebContents(wc);
-            helper && !helper->stable_tab_id().empty()) {
-          auto* bridge = MahoSpaceProfileBridge::GetInstance();
-          std::string active_space_id = bridge ? bridge->GetActiveSpaceId(browser_) : std::string();
-          if (!active_space_id.empty()) {
-            maho::DispatchShellEvent("close_tab", {
-                {"tab_id", helper->stable_tab_id()},
-                {"expected_space_id", active_space_id}
-            });
-          } else {
-            maho::DispatchShellEvent("close_tab", {{"tab_id", helper->stable_tab_id()}});
-          }
-        }
-        model->CloseWebContentsAt(idx, TabCloseTypes::CLOSE_USER_GESTURE |
-                                      TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
-      }
-    }
+  for (const auto& tab_id : live_ids) {
+    CloseTabById(tab_id);
   }
 
   for (const auto& tab_id : suspended_ids) {
-    auto* bridge = MahoSpaceProfileBridge::GetInstance();
-    std::string active_space_id = bridge ? bridge->GetActiveSpaceId(browser_) : std::string();
-    if (!active_space_id.empty()) {
-      maho::DispatchShellEvent("close_tab", {
-          {"tab_id", tab_id},
-          {"expected_space_id", active_space_id}
-      });
-    } else {
-      maho::DispatchShellEvent("close_tab", {{"tab_id", tab_id}});
-    }
+    CloseTabById(tab_id);
   }
 
-  selected_tab_ids_.clear();
-  selection_anchor_tab_id_.clear();
+  ClearSelection();
 }
 
 void MahoSidebarTabListView::PinSelected(bool pin) {
@@ -5761,8 +6120,7 @@ void MahoSidebarTabListView::MoveSelectedToSpace(const std::string& space_id) {
                               {"section", "normal"}});
   }
 
-  selected_tab_ids_.clear();
-  selection_anchor_tab_id_.clear();
+  ClearSelection();
 }
 
 void MahoSidebarTabListView::MuteSelected(bool mute) {
@@ -5801,8 +6159,7 @@ void MahoSidebarTabListView::ArchiveSelected() {
   for (const auto& tab_id : snapshot_ids) {
     maho::DispatchShellEvent("archive_tab_by_id", {{"tab_id", tab_id}});
   }
-  selected_tab_ids_.clear();
-  selection_anchor_tab_id_.clear();
+  ClearSelection();
 }
 
 void MahoSidebarTabListView::OpenSelectedInSplit() {
@@ -5871,8 +6228,7 @@ void MahoSidebarTabListView::NewFolderWithSelected() {
   dict.Set("tab_ids", std::move(ids));
   DispatchShellEventDict("create_folder_with_tabs", std::move(dict));
 
-  selected_tab_ids_.clear();
-  selection_anchor_tab_id_.clear();
+  ClearSelection();
 }
 
 void SidebarTabRowView::SetSelected(bool selected) {
@@ -5901,6 +6257,12 @@ void SidebarTabRowView::CloseSelectedTabs() {
   }
 }
 
+void SidebarTabRowView::CloseTabById(const std::string& tab_id) {
+  if (MahoSidebarTabListView* list_view = GetTabListView()) {
+    list_view->CloseTabById(tab_id);
+  }
+}
+
 void SidebarTabRowView::PinSelectedTabs(bool pin) {
   if (MahoSidebarTabListView* list_view = GetTabListView()) {
     list_view->PinSelected(pin);
@@ -5914,11 +6276,13 @@ void SidebarTabRowView::MoveSelectedTabsToSpace(const std::string& space_id) {
 }
 
 RebuildRowsBatchScoper::RebuildRowsBatchScoper(MahoSidebarTabListView* view) : view_(view) {
-  view_->batch_in_progress_ = true;
+  ++view_->batch_depth_;
 }
 
 RebuildRowsBatchScoper::~RebuildRowsBatchScoper() {
-  view_->batch_in_progress_ = false;
+  if (--view_->batch_depth_ > 0) {
+    return;
+  }
   if (view_->batch_rebuild_needed_) {
     view_->batch_rebuild_needed_ = false;
     view_->Update(view_->last_model_, view_->browser_);

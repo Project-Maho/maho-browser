@@ -920,6 +920,9 @@ MahoSidebarTabListModel MahoSidebarStateAdapter::BuildTabListModel(
         model.active_tab.host = GetTabHost(active_contents);
         if (auto* helper = MahoTabIdHelper::FromWebContents(active_contents)) {
           active_stable_id = helper->stable_tab_id();
+          // Without this the fp_match fast path sees active_tab.tab_id=="" and
+          // clears the highlight a row click just applied (RC-H1).
+          model.active_tab.tab_id = active_stable_id;
         }
       }
     }
