@@ -10,6 +10,9 @@
 #include "base/task/sequenced_task_runner.h"
 #include "components/prefs/pref_service.h"
 #include "base/time/time.h"
+#include "base/feature_list.h"
+#include "build/build_config.h"
+#include "maho/browser/maho_features.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
@@ -24,10 +27,43 @@
 #include "ui/views/controls/resize_area.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/view_class_properties.h"
+#include "ui/views/widget/widget.h"
+
+#if BUILDFLAG(IS_WIN)
+#include <dwmapi.h>
+
+#include "base/win/windows_version.h"
+#include "ui/views/win/hwnd_util.h"
+#endif
 
 namespace maho {
 
 namespace {
+
+// Applies a translucent DWM Acrylic backdrop to the browser window on Windows
+// 11 22H2+ so the alpha-encoded sidebar background reveals it (macOS gets
+// passive NSWindow vibrancy). No-op elsewhere and when the flag is disabled.
+void ApplySidebarWindowVibrancy(views::Widget* widget) {
+#if BUILDFLAG(IS_WIN)
+  if (!base::FeatureList::IsEnabled(features::kMahoSidebarVibrancy)) {
+    return;
+  }
+  if (base::win::GetVersion() < base::win::Version::WIN11_22H2) {
+    return;
+  }
+  if (!widget) {
+    return;
+  }
+  HWND hwnd = views::HWNDForNativeWindow(widget->GetNativeWindow());
+  if (!hwnd) {
+    return;
+  }
+  static constexpr DWORD kBackdropTransientAcrylic = 3;
+  DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE,
+                        &kBackdropTransientAcrylic,
+                        sizeof(kBackdropTransientAcrylic));
+#endif
+}
 
 constexpr int kResizeHandleWidthDp = 6;
 
@@ -117,6 +153,7 @@ void MahoSidebarContainerView::ShowCommandOverlayForSearch(
 
 void MahoSidebarContainerView::OnThemeChanged() {
   views::View::OnThemeChanged();
+  ApplySidebarWindowVibrancy(GetWidget());
 }
 
 void MahoSidebarContainerView::Layout(PassKey) {
@@ -476,6 +513,7 @@ bool MahoSidebarContainerView::IsOverlayVisible() const {
 
 void MahoSidebarContainerView::AddedToWidget() {
   views::View::AddedToWidget();
+  ApplySidebarWindowVibrancy(GetWidget());
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(&MahoSidebarContainerView::AttachOverlayHost,

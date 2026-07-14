@@ -48,6 +48,11 @@ BASE_DECLARE_FEATURE(kMahoUnifiedClickPath);
 BASE_DECLARE_FEATURE(kMahoArcToolbarButtonProvider);
 BASE_DECLARE_FEATURE(kMahoCommandPaletteVibrancy);
 
+// When enabled, the vertical sidebar applies a translucent DWM Acrylic backdrop
+// on Windows 11 22H2+ so it mirrors the macOS vibrancy. Kill-switch; no-op below
+// Win11 22H2 and on non-Windows platforms.
+BASE_DECLARE_FEATURE(kMahoSidebarVibrancy);
+
 }  // namespace maho::features
 
 #endif  // MAHO_BROWSER_MAHO_FEATURES_H_
