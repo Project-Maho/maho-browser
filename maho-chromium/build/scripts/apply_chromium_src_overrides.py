@@ -2789,26 +2789,6 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard="  const bool show_background =\n      drop_target_view_->GetVisible();\n",
         ),
     ],
-    "chrome/browser/ui/views/frame/multi_contents_resize_area.cc": [
-        Replacement(
-            old="constexpr int kHandlePadding = 6;\n",
-            new="constexpr int kHandlePadding = 0;\n",
-            description=(
-                "Maho: zero split resize-area padding so the two panes touch flush "
-                "(no gray gap/seam between them)"
-            ),
-            guard="constexpr int kHandlePadding = 0;",
-        ),
-        Replacement(
-            old="constexpr int kHandleWidth = 4;\n",
-            new="constexpr int kHandleWidth = 0;\n",
-            description=(
-                "Maho: zero split resize-handle width so no divider/handle/notch is "
-                "drawn between panes (drag-resize disabled for a fully flush split)"
-            ),
-            guard="constexpr int kHandleWidth = 0;",
-        ),
-    ],
     "chrome/browser/ui/views/frame/contents_container_view.cc": [
         Replacement(
             old="    container_outline_->UpdateState(is_active, is_highlighted);\n",
