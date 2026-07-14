@@ -9,7 +9,9 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "build/build_config.h"
 #include "build/buildflag.h"
+#include "cc/paint/paint_flags.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
@@ -30,8 +32,11 @@
 #include "ui/base/ui_base_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/color/color_id.h"
+#include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/insets.h"
+#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/size.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/button.h"
@@ -132,6 +137,45 @@ views::ImageButton* AddControlButton(views::View* parent,
   return parent->AddChildView(std::move(button));
 }
 
+#if BUILDFLAG(IS_WIN)
+constexpr SkColor kWinCloseRed = SkColorSetRGB(0xFF, 0x5F, 0x57);
+constexpr SkColor kWinMinYellow = SkColorSetRGB(0xFE, 0xBC, 0x2E);
+constexpr SkColor kWinMaxGreen = SkColorSetRGB(0x28, 0xC8, 0x40);
+
+class MahoWinCaptionDot : public views::Button {
+  METADATA_HEADER(MahoWinCaptionDot, views::Button)
+
+ public:
+  MahoWinCaptionDot(PressedCallback callback,
+                    SkColor color,
+                    const std::u16string& accessible_name)
+      : views::Button(std::move(callback)), color_(color) {
+    SetPreferredSize(gfx::Size(sidebar_layout::kWinCaptionDotDiameterDp,
+                               sidebar_layout::kWinCaptionDotDiameterDp));
+    SetAccessibleName(accessible_name);
+    SetTooltipText(accessible_name);
+    SetInstallFocusRingOnFocus(false);
+    SetRequestFocusOnPress(false);
+  }
+
+  void PaintButtonContents(gfx::Canvas* canvas) override {
+    cc::PaintFlags flags;
+    flags.setAntiAlias(true);
+    flags.setStyle(cc::PaintFlags::kFill_Style);
+    flags.setColor(color_);
+    const gfx::Rect bounds = GetContentsBounds();
+    canvas->DrawCircle(gfx::PointF(bounds.CenterPoint()), bounds.width() / 2.f,
+                       flags);
+  }
+
+ private:
+  SkColor color_;
+};
+
+BEGIN_METADATA(MahoWinCaptionDot)
+END_METADATA
+#endif  // BUILDFLAG(IS_WIN)
+
 }  // namespace
 
 BEGIN_METADATA(MahoSidebarTopBarView)
@@ -158,6 +202,29 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
   traffic_light_spacer_->SetPreferredSize(gfx::Size(
       sidebar_layout::kTrafficLightAlignmentWidthDp,
       sidebar_layout::kTopBarTrafficLightAlignmentHeightDp));
+#if BUILDFLAG(IS_WIN)
+  auto* dot_layout = traffic_light_spacer_->SetLayoutManager(
+      std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kHorizontal, gfx::Insets(),
+          sidebar_layout::kWinCaptionDotSpacingDp));
+  dot_layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kCenter);
+  win_close_dot_ = traffic_light_spacer_->AddChildView(
+      std::make_unique<MahoWinCaptionDot>(
+          base::BindRepeating(&MahoSidebarTopBarView::OnWinClosePressed,
+                              weak_factory_.GetWeakPtr()),
+          kWinCloseRed, u"Close"));
+  win_min_dot_ = traffic_light_spacer_->AddChildView(
+      std::make_unique<MahoWinCaptionDot>(
+          base::BindRepeating(&MahoSidebarTopBarView::OnWinMinimizePressed,
+                              weak_factory_.GetWeakPtr()),
+          kWinMinYellow, u"Minimize"));
+  win_max_dot_ = traffic_light_spacer_->AddChildView(
+      std::make_unique<MahoWinCaptionDot>(
+          base::BindRepeating(&MahoSidebarTopBarView::OnWinMaximizePressed,
+                              weak_factory_.GetWeakPtr()),
+          kWinMaxGreen, u"Maximize"));
+#endif  // BUILDFLAG(IS_WIN)
 
   // Leading cluster: sidebar-toggle (and any future leading actions).
   leading_cluster_ = AddChildView(std::make_unique<views::View>());
@@ -253,6 +320,16 @@ void MahoSidebarTopBarView::MaybeUpdateDynamicTopInset() {
   if (!layout) {
     return;
   }
+#if BUILDFLAG(IS_WIN)
+  if (layout->inside_border_insets().top() !=
+      sidebar_layout::kWinTopBarTopInsetDp) {
+    const gfx::Insets cur = layout->inside_border_insets();
+    layout->set_inside_border_insets(gfx::Insets::TLBR(
+        sidebar_layout::kWinTopBarTopInsetDp, cur.left(), cur.bottom(),
+        cur.right()));
+    InvalidateLayout();
+  }
+#else
   std::optional<int> measured_center_y = GetTrafficLightCenterYInView(this);
   if (!measured_center_y.has_value()) {
     return;
@@ -267,10 +344,23 @@ void MahoSidebarTopBarView::MaybeUpdateDynamicTopInset() {
   layout->set_inside_border_insets(gfx::Insets::TLBR(
       desired_top_inset, current.left(), current.bottom(), current.right()));
   InvalidateLayout();
+#endif  // BUILDFLAG(IS_WIN)
 }
 
 bool MahoSidebarTopBarView::IsPositionInWindowCaption(
     const gfx::Point& point) const {
+#if BUILDFLAG(IS_WIN)
+  for (const views::Button* dot :
+       {win_close_dot_.get(), win_min_dot_.get(), win_max_dot_.get()}) {
+    if (dot && dot->GetVisible()) {
+      gfx::Point point_in_dot = point;
+      views::View::ConvertPointToTarget(this, dot, &point_in_dot);
+      if (dot->GetLocalBounds().Contains(point_in_dot)) {
+        return false;
+      }
+    }
+  }
+#endif  // BUILDFLAG(IS_WIN)
   for (const views::ImageButton* button :
        {sidebar_toggle_button_.get(), back_button_.get(),
         forward_button_.get(), reload_button_.get(), ai_button_.get()}) {
@@ -394,5 +484,29 @@ void MahoSidebarTopBarView::OnToggleSidebarPressed(const ui::Event& event) {
     sidebar_prefs::ToggleSidebarPanelExpanded(browser_->profile()->GetPrefs());
   }
 }
+
+#if BUILDFLAG(IS_WIN)
+void MahoSidebarTopBarView::OnWinClosePressed(const ui::Event& event) {
+  if (auto* widget = GetWidget()) {
+    widget->CloseWithReason(views::Widget::ClosedReason::kCloseButtonClicked);
+  }
+}
+
+void MahoSidebarTopBarView::OnWinMinimizePressed(const ui::Event& event) {
+  if (auto* widget = GetWidget()) {
+    widget->Minimize();
+  }
+}
+
+void MahoSidebarTopBarView::OnWinMaximizePressed(const ui::Event& event) {
+  if (auto* widget = GetWidget()) {
+    if (widget->IsMaximized()) {
+      widget->Restore();
+    } else {
+      widget->Maximize();
+    }
+  }
+}
+#endif  // BUILDFLAG(IS_WIN)
 
 }  // namespace maho

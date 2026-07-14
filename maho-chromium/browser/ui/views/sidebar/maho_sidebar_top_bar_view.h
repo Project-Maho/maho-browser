@@ -8,6 +8,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "build/build_config.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/vector_icon_types.h"
@@ -20,6 +21,7 @@ class Event;
 }  // namespace ui
 
 namespace views {
+class Button;
 class ImageButton;
 class View;
 }  // namespace views
@@ -75,6 +77,12 @@ class MahoSidebarTopBarView : public views::View {
   void OnAiPressed(const ui::Event& event);
   void OnToggleSidebarPressed(const ui::Event& event);
 
+#if BUILDFLAG(IS_WIN)
+  void OnWinClosePressed(const ui::Event& event);
+  void OnWinMinimizePressed(const ui::Event& event);
+  void OnWinMaximizePressed(const ui::Event& event);
+#endif
+
   raw_ptr<Browser> browser_;
   raw_ptr<views::View> traffic_light_spacer_ = nullptr;
   raw_ptr<views::View> leading_cluster_ = nullptr;
@@ -85,6 +93,11 @@ class MahoSidebarTopBarView : public views::View {
   raw_ptr<views::ImageButton> forward_button_ = nullptr;
   raw_ptr<views::ImageButton> reload_button_ = nullptr;
   raw_ptr<views::ImageButton> ai_button_ = nullptr;
+#if BUILDFLAG(IS_WIN)
+  raw_ptr<views::Button> win_close_dot_ = nullptr;
+  raw_ptr<views::Button> win_min_dot_ = nullptr;
+  raw_ptr<views::Button> win_max_dot_ = nullptr;
+#endif
   MahoSidebarTopBarModel model_;
   base::WeakPtrFactory<MahoSidebarTopBarView> weak_factory_{this};
 };

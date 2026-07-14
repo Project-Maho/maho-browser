@@ -49,6 +49,8 @@ FILE_PLATFORMS: dict[str, frozenset[str]] = {
     "chrome/browser/app_controller_mac.mm": frozenset({"mac"}),
     "chrome/browser/global_keyboard_shortcuts_mac.mm": frozenset({"mac"}),
     "chrome/browser/global_keyboard_shortcuts_mac_unittest.mm": frozenset({"mac"}),
+    "chrome/browser/ui/views/frame/browser_frame_view_win.cc": frozenset({"win"}),
+    "chrome/browser/ui/views/frame/browser_frame_view_win.h": frozenset({"win"}),
 }
 
 
@@ -2673,6 +2675,110 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "window reveals the NSVisualEffectView desktop blur"
             ),
             guard="paint no frame wash under kGlassFrame",
+        ),
+    ],
+    "chrome/browser/ui/views/frame/browser_frame_view_win.cc": [
+        Replacement(
+            old=(
+                "  caption_button_container_ =\n"
+                "      AddChildView(std::make_unique<BrowserCaptionButtonContainer>(this));\n"
+                "}\n"
+            ),
+            new=(
+                "  caption_button_container_ =\n"
+                "      AddChildView(std::make_unique<BrowserCaptionButtonContainer>(this));\n"
+                "  caption_button_container_->SetVisible(false);\n"
+                "}\n"
+            ),
+            description=(
+                "Maho(win): hide native caption buttons at construction; under Arc "
+                "layout the sidebar draws Mac-style traffic lights instead"
+            ),
+            guard=(
+                "AddChildView(std::make_unique<BrowserCaptionButtonContainer>(this));\n"
+                "  caption_button_container_->SetVisible(false);"
+            ),
+        ),
+        Replacement(
+            old=(
+                "int BrowserFrameViewWin::GetTopInset(bool restored) const {\n"
+                "  if (GetBrowserView()->GetTabStripVisible()) {\n"
+                "    return TopAreaHeight(restored);\n"
+                "  }\n"
+                "  return ShouldBrowserCustomDrawTitlebar(GetBrowserView())\n"
+                "             ? TitlebarHeight(restored)\n"
+                "             : 0;\n"
+                "}\n"
+            ),
+            new=(
+                "bool BrowserFrameViewWin::IsMahoArcLayoutActive() const {\n"
+                "  const views::View* container = GetBrowserView()->maho_sidebar_container();\n"
+                "  return container && container->GetVisible();\n"
+                "}\n"
+                "\n"
+                "int BrowserFrameViewWin::GetTopInset(bool restored) const {\n"
+                "  if (GetBrowserView()->GetTabStripVisible()) {\n"
+                "    return TopAreaHeight(restored);\n"
+                "  }\n"
+                "  // Maho Arc layout: sidebar owns the client area edge to edge; no titlebar.\n"
+                "  if (IsMahoArcLayoutActive()) {\n"
+                "    return 0;\n"
+                "  }\n"
+                "  return ShouldBrowserCustomDrawTitlebar(GetBrowserView())\n"
+                "             ? TitlebarHeight(restored)\n"
+                "             : 0;\n"
+                "}\n"
+            ),
+            description=(
+                "Maho(win): zero the frame top inset under Arc layout so the vertical "
+                "sidebar goes edge-to-edge with no native titlebar strip"
+            ),
+            guard="bool BrowserFrameViewWin::IsMahoArcLayoutActive() const {",
+        ),
+        Replacement(
+            old=(
+                "void BrowserFrameViewWin::LayoutCaptionButtons() {\n"
+                "  TRACE_EVENT0(\"views.frame\", \"BrowserFrameViewWin::LayoutCaptionButtons\");\n"
+                "\n"
+                "  caption_button_container_->SetVisible(!browser_widget()->IsFullscreen());\n"
+            ),
+            new=(
+                "void BrowserFrameViewWin::LayoutCaptionButtons() {\n"
+                "  TRACE_EVENT0(\"views.frame\", \"BrowserFrameViewWin::LayoutCaptionButtons\");\n"
+                "\n"
+                "  if (IsMahoArcLayoutActive()) {\n"
+                "    caption_button_container_->SetVisible(false);\n"
+                "    caption_button_container_->SetBounds(0, 0, 0, 0);\n"
+                "    return;\n"
+                "  }\n"
+                "\n"
+                "  caption_button_container_->SetVisible(!browser_widget()->IsFullscreen());\n"
+            ),
+            description=(
+                "Maho(win): under Arc layout give the caption-button container empty "
+                "bounds so its NonClientHitTest never steals clicks from web content"
+            ),
+            guard="    caption_button_container_->SetBounds(0, 0, 0, 0);",
+        ),
+    ],
+    "chrome/browser/ui/views/frame/browser_frame_view_win.h": [
+        Replacement(
+            old=(
+                "  void LayoutCaptionButtons();\n"
+                "  void LayoutClientView();\n"
+                "  void LayoutWebAppWindowTitle(const gfx::Rect& available_space,\n"
+            ),
+            new=(
+                "  void LayoutCaptionButtons();\n"
+                "  void LayoutClientView();\n"
+                "\n"
+                "  // True when Maho's Arc sidebar layout owns the client area, so the\n"
+                "  // frame reserves no titlebar strip and shows no native caption buttons.\n"
+                "  bool IsMahoArcLayoutActive() const;\n"
+                "  void LayoutWebAppWindowTitle(const gfx::Rect& available_space,\n"
+            ),
+            description="Maho(win): declare BrowserFrameViewWin::IsMahoArcLayoutActive()",
+            guard="  bool IsMahoArcLayoutActive() const;",
         ),
     ],
     "chrome/app/chrome_main_delegate.cc": [
