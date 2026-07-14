@@ -13,6 +13,11 @@ struct ChromiumBrowserInfo {
     #[cfg_attr(any(target_os = "windows", target_os = "linux"), allow(dead_code))]
     app_data_subdir: &'static str,
     has_profiles: bool,
+    /// Arc's spaces live in one global `StorableSidebar.json` shared across all
+    /// Chromium profiles, so per-profile entries import duplicate spaces behind
+    /// an opaque profile picker. When true, collapse to a single representative
+    /// profile and expose one plain-named entry.
+    collapse_profiles: bool,
 }
 
 const CHROMIUM_BROWSERS: &[ChromiumBrowserInfo] = &[
@@ -21,36 +26,42 @@ const CHROMIUM_BROWSERS: &[ChromiumBrowserInfo] = &[
         display_name: "Google Chrome",
         app_data_subdir: "Google/Chrome",
         has_profiles: true,
+        collapse_profiles: false,
     },
     ChromiumBrowserInfo {
         browser_type: BrowserType::Arc,
         display_name: "Arc",
         app_data_subdir: "Arc/User Data",
         has_profiles: true,
+        collapse_profiles: true,
     },
     ChromiumBrowserInfo {
         browser_type: BrowserType::Brave,
         display_name: "Brave",
         app_data_subdir: "BraveSoftware/Brave-Browser",
         has_profiles: true,
+        collapse_profiles: false,
     },
     ChromiumBrowserInfo {
         browser_type: BrowserType::Edge,
         display_name: "Microsoft Edge",
         app_data_subdir: "Microsoft Edge",
         has_profiles: true,
+        collapse_profiles: false,
     },
     ChromiumBrowserInfo {
         browser_type: BrowserType::Vivaldi,
         display_name: "Vivaldi",
         app_data_subdir: "Vivaldi",
         has_profiles: true,
+        collapse_profiles: false,
     },
     ChromiumBrowserInfo {
         browser_type: BrowserType::Opera,
         display_name: "Opera",
         app_data_subdir: "com.operasoftware.Opera",
         has_profiles: false,
+        collapse_profiles: false,
     },
 ];
 
@@ -194,15 +205,26 @@ fn detect_chromium_browsers(app_support: &Path, results: &mut Vec<DetectedBrowse
             vec![browser_dir.clone()]
         };
 
-        for profile_dir in profile_dirs {
-            let bookmarks_file = profile_dir.join("Bookmarks");
-            let has_bookmarks = bookmarks_file.exists();
-            let has_passwords = profile_dir.join("Login Data").exists();
-            let browser_installed = has_bookmarks || has_passwords || profile_dir.is_dir();
+        let installed_dirs: Vec<PathBuf> = profile_dirs
+            .into_iter()
+            .filter(|dir| {
+                dir.join("Bookmarks").exists()
+                    || dir.join("Login Data").exists()
+                    || dir.is_dir()
+            })
+            .collect();
 
-            if !browser_installed {
-                continue;
-            }
+        let selected_dirs: Vec<PathBuf> = if info.collapse_profiles {
+            pick_representative_profile(&installed_dirs)
+                .into_iter()
+                .collect()
+        } else {
+            installed_dirs
+        };
+
+        for profile_dir in selected_dirs {
+            let has_bookmarks = profile_dir.join("Bookmarks").exists();
+            let has_passwords = profile_dir.join("Login Data").exists();
 
             let mut services =
                 ImportServices::HISTORY | ImportServices::COOKIES | ImportServices::FAVICONS;
@@ -219,8 +241,10 @@ fn detect_chromium_browsers(app_support: &Path, results: &mut Vec<DetectedBrowse
                 services |= ImportServices::WORKSPACES;
             }
 
-            let profile_name = read_chromium_profile_name(&profile_dir)
-                .or_else(|| {
+            let display_name = if info.collapse_profiles {
+                info.display_name.to_string()
+            } else {
+                let profile_name = read_chromium_profile_name(&profile_dir).or_else(|| {
                     let dir_name = profile_dir
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
@@ -231,10 +255,10 @@ fn detect_chromium_browsers(app_support: &Path, results: &mut Vec<DetectedBrowse
                         None
                     }
                 });
-
-            let display_name = match profile_name {
-                Some(ref name) => format!("{} - {}", info.display_name, name),
-                None => info.display_name.to_string(),
+                match profile_name {
+                    Some(ref name) => format!("{} - {}", info.display_name, name),
+                    None => info.display_name.to_string(),
+                }
             };
 
             results.push(DetectedBrowser {
@@ -246,6 +270,24 @@ fn detect_chromium_browsers(app_support: &Path, results: &mut Vec<DetectedBrowse
             });
         }
     }
+}
+
+/// Representative profile for `collapse_profiles` browsers: prefer `Default`,
+/// then any profile with importable data, then the first available.
+fn pick_representative_profile(dirs: &[PathBuf]) -> Option<PathBuf> {
+    if let Some(default_dir) = dirs
+        .iter()
+        .find(|dir| dir.file_name().map(|n| n.to_string_lossy() == "Default").unwrap_or(false))
+    {
+        return Some(default_dir.clone());
+    }
+    if let Some(with_data) = dirs
+        .iter()
+        .find(|dir| dir.join("Bookmarks").exists() || dir.join("Login Data").exists())
+    {
+        return Some(with_data.clone());
+    }
+    dirs.first().cloned()
 }
 
 fn read_chromium_profile_name(profile_dir: &Path) -> Option<String> {
@@ -428,7 +470,11 @@ fn detect_safari(results: &mut Vec<DetectedBrowser>) {
                 browser_type: BrowserType::Safari,
                 display_name: "Safari".to_string(),
                 profile_path: safari_bookmarks,
-                services_supported: ImportServices::BOOKMARKS,
+                services_supported: ImportServices::BOOKMARKS
+                    | ImportServices::HISTORY
+                    | ImportServices::COOKIES
+                    | ImportServices::PASSWORDS
+                    | ImportServices::FAVICONS,
                 requires_full_disk_access: true,
             });
         }
@@ -490,6 +536,86 @@ mod tests {
         let results = detect_chromium_browsers_in(tmp.path());
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].display_name, "Google Chrome - Personal");
+    }
+
+    #[test]
+    fn arc_collapses_multiple_profiles_to_single_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("Arc/User Data");
+        for (dir, name) in [
+            ("Default", "ts"),
+            ("Profile 1", "Your Chromium"),
+            ("Profile 2", "asd"),
+        ] {
+            let p = base.join(dir);
+            std::fs::create_dir_all(&p).unwrap();
+            std::fs::write(p.join("Bookmarks"), "{}").unwrap();
+            let prefs = serde_json::json!({"profile": {"name": name}});
+            std::fs::write(p.join("Preferences"), serde_json::to_string(&prefs).unwrap()).unwrap();
+        }
+
+        let results = detect_chromium_browsers_in(tmp.path());
+        let arc: Vec<_> = results
+            .iter()
+            .filter(|b| b.browser_type == BrowserType::Arc)
+            .collect();
+        assert_eq!(arc.len(), 1, "Arc must collapse to a single entry");
+        assert_eq!(arc[0].display_name, "Arc", "no profile-name suffix");
+        assert!(arc[0].services_supported & ImportServices::WORKSPACES != 0);
+        assert!(
+            arc[0].profile_path.ends_with("Default"),
+            "Default is the preferred representative profile"
+        );
+    }
+
+    #[test]
+    fn arc_single_default_profile_has_plain_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("Arc/User Data/Default");
+        std::fs::create_dir_all(&p).unwrap();
+        std::fs::write(p.join("Bookmarks"), "{}").unwrap();
+
+        let results = detect_chromium_browsers_in(tmp.path());
+        let arc: Vec<_> = results
+            .iter()
+            .filter(|b| b.browser_type == BrowserType::Arc)
+            .collect();
+        assert_eq!(arc.len(), 1);
+        assert_eq!(arc[0].display_name, "Arc");
+    }
+
+    #[test]
+    fn arc_without_default_picks_profile_with_data() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p1 = tmp.path().join("Arc/User Data/Profile 1");
+        std::fs::create_dir_all(&p1).unwrap();
+        std::fs::write(p1.join("Bookmarks"), "{}").unwrap();
+
+        let results = detect_chromium_browsers_in(tmp.path());
+        let arc: Vec<_> = results
+            .iter()
+            .filter(|b| b.browser_type == BrowserType::Arc)
+            .collect();
+        assert_eq!(arc.len(), 1);
+        assert_eq!(arc[0].display_name, "Arc");
+        assert!(arc[0].profile_path.ends_with("Profile 1"));
+    }
+
+    #[test]
+    fn arc_without_default_or_data_picks_first_profile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("Arc/User Data");
+        std::fs::create_dir_all(base.join("Profile 1")).unwrap();
+        std::fs::create_dir_all(base.join("Profile 2")).unwrap();
+
+        let results = detect_chromium_browsers_in(tmp.path());
+        let arc: Vec<_> = results
+            .iter()
+            .filter(|b| b.browser_type == BrowserType::Arc)
+            .collect();
+        assert_eq!(arc.len(), 1, "empty Arc profiles still collapse to one entry");
+        assert_eq!(arc[0].display_name, "Arc");
+        assert!(arc[0].services_supported & ImportServices::WORKSPACES != 0);
     }
 
     #[test]
