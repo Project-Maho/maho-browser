@@ -267,7 +267,7 @@ export class PageHandlerRemote {
   getSyncStatus(): Promise<{status: SyncStatus}>;
   getSyncDevices(): Promise<{devices: SyncDeviceInfo[]}>;
   generateSyncKey(): Promise<{keyInfo: SyncKeyInfo}>;
-  startSync(syncKey: string): Promise<{status: SyncStatus}>;
+  configureSyncEncryption(recoveryPhrase: string): Promise<{status: SyncStatus}>;
   joinSync(recoveryPhrase: string): Promise<{status: SyncStatus}>;
   stopSync(): Promise<void>;
   disconnectSyncDevice(deviceId: string): Promise<{success: boolean}>;

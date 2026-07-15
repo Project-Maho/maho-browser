@@ -70,7 +70,7 @@ namespace {
 namespace ai = maho::ai_prefs;
 namespace acct = maho::account_prefs;
 
-constexpr char kSettingsSyncRelayUrl[] = "https://sync.mahobrowser.com";
+
 
 // ── Auth traffic annotations ──
 
@@ -686,11 +686,18 @@ GenerateSyncKeyResult GenerateSyncKeyOnCoreSequence() {
   return result;
 }
 
-void StartSyncOnCoreSequence(const std::string& sync_key) {
+maho_settings::mojom::SyncStatusPtr ConfigureSyncEncryptionOnCoreSequence(
+    const std::string& recovery_phrase) {
   MahoCore* core = maho::GetCore();
-  if (!core) return;
-  maho_core_start_sync(core, kSettingsSyncRelayUrl,
-                       sync_key.c_str());
+  if (!core) {
+    auto s = maho_settings::mojom::SyncStatus::New();
+    s->status_label = "error";
+    s->error_message = "Core not available";
+    return s;
+  }
+  char* result = maho_core_configure_sync_encryption(core, maho::auth::kSyncRelayUrl, recovery_phrase.c_str());
+  if (result) maho_string_free(result);
+  return BuildSyncStatusOnCoreSequence();
 }
 
 maho_settings::mojom::SyncStatusPtr JoinSyncOnCoreSequence(
@@ -702,7 +709,7 @@ maho_settings::mojom::SyncStatusPtr JoinSyncOnCoreSequence(
     s->error_message = "Core not available";
     return s;
   }
-  char* result = maho_core_join_sync(core, recovery_phrase.c_str());
+  char* result = maho_core_join_sync(core, maho::auth::kSyncRelayUrl, recovery_phrase.c_str());
   if (result) maho_string_free(result);
   return BuildSyncStatusOnCoreSequence();
 }
@@ -1925,24 +1932,18 @@ void MahoSettingsPageHandler::GenerateSyncKey(
           std::move(callback)));
 }
 
-void MahoSettingsPageHandler::StartSync(const std::string& sync_key,
-                                          StartSyncCallback callback) {
+void MahoSettingsPageHandler::ConfigureSyncEncryption(const std::string& recovery_phrase,
+                                                      ConfigureSyncEncryptionCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  maho::PostCoreTaskAndReply(
+  maho::PostCoreTask(
       FROM_HERE,
-      base::BindOnce(&StartSyncOnCoreSequence, sync_key),
+      base::BindOnce(&ConfigureSyncEncryptionOnCoreSequence, recovery_phrase),
       base::BindOnce(
-          [](base::WeakPtr<MahoSettingsPageHandler> self,
-             StartSyncCallback cb) {
-            if (!self) {
-              auto s = maho_settings::mojom::SyncStatus::New();
-              s->status_label = "error";
-              std::move(cb).Run(std::move(s));
-              return;
-            }
-            self->GetSyncStatus(std::move(cb));
+          [](ConfigureSyncEncryptionCallback cb,
+             maho_settings::mojom::SyncStatusPtr status) {
+            std::move(cb).Run(std::move(status));
           },
-          weak_factory_.GetWeakPtr(), std::move(callback)));
+          std::move(callback)));
 }
 
 void MahoSettingsPageHandler::JoinSync(const std::string& recovery_phrase,

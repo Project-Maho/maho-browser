@@ -102,8 +102,8 @@ class MahoSettingsPageHandler
   void GetSyncStatus(GetSyncStatusCallback callback) override;
   void GetSyncDevices(GetSyncDevicesCallback callback) override;
   void GenerateSyncKey(GenerateSyncKeyCallback callback) override;
-  void StartSync(const std::string& sync_key,
-                 StartSyncCallback callback) override;
+  void ConfigureSyncEncryption(const std::string& recovery_phrase,
+                               ConfigureSyncEncryptionCallback callback) override;
   void JoinSync(const std::string& recovery_phrase,
                 JoinSyncCallback callback) override;
   void StopSync() override;

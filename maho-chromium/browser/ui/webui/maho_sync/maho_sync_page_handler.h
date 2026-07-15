@@ -27,8 +27,8 @@ class MahoSyncPageHandler : public maho_sync::mojom::PageHandler {
   ~MahoSyncPageHandler() override;
 
   // maho_sync::mojom::PageHandler:
-  void StartSync(const std::string& relay_url,
-                 StartSyncCallback callback) override;
+  void ConfigureSyncEncryption(const std::string& recovery_phrase,
+                               ConfigureSyncEncryptionCallback callback) override;
   void JoinSync(const std::string& room_id,
                 const std::string& passphrase,
                 JoinSyncCallback callback) override;
@@ -41,8 +41,9 @@ class MahoSyncPageHandler : public maho_sync::mojom::PageHandler {
   static maho_sync::mojom::SyncStatusPtr BuildSyncStatusOnPool();
   static std::vector<maho_sync::mojom::DeviceInfoPtr>
   BuildDeviceListOnPool();
-  static void StartSyncOnPool(const std::string& relay_url,
-                               const std::string& sync_key);
+  static maho_sync::mojom::SyncStatusPtr ConfigureSyncEncryptionOnPool(
+      const std::string& relay_url,
+      const std::string& recovery_phrase);
   static maho_sync::mojom::SyncStatusPtr JoinSyncOnPool(
       const std::string& room_id,
       const std::string& recovery_phrase);
@@ -55,7 +56,6 @@ class MahoSyncPageHandler : public maho_sync::mojom::PageHandler {
   };
   static GenerateSyncKeyResult GenerateSyncKeyOnPool();
 
-  void OnStartSyncComplete(StartSyncCallback callback);
   void OnJoinSyncComplete(JoinSyncCallback callback,
                           maho_sync::mojom::SyncStatusPtr status);
   void OnSyncStatusResult(GetSyncStatusCallback callback,

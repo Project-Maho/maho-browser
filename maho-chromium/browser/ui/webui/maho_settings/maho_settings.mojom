@@ -252,7 +252,7 @@ interface PageHandler {
   GetSyncStatus() => (SyncStatus status);
   GetSyncDevices() => (array<SyncDeviceInfo> devices);
   GenerateSyncKey() => (SyncKeyInfo key_info);
-  StartSync(string sync_key) => (SyncStatus status);
+  ConfigureSyncEncryption(string recovery_phrase) => (SyncStatus status);
   JoinSync(string recovery_phrase) => (SyncStatus status);
   StopSync();
   DisconnectSyncDevice(string device_id) => (bool success);

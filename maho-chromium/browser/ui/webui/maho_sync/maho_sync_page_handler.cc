@@ -168,14 +168,22 @@ MahoSyncPageHandler::BuildDeviceListOnPool() {
 }
 
 // static
-void MahoSyncPageHandler::StartSyncOnPool(const std::string& relay_url,
-                                            const std::string& sync_key) {
+maho_sync::mojom::SyncStatusPtr MahoSyncPageHandler::ConfigureSyncEncryptionOnPool(
+    const std::string& relay_url,
+    const std::string& recovery_phrase) {
   MahoCore* core = maho::GetCore();
   if (!core) {
-    return;
+    auto status = maho_sync::mojom::SyncStatus::New();
+    status->is_syncing = false;
+    status->status_label = "idle";
+    return status;
   }
-  maho_core_start_sync(core, relay_url.c_str(),
-                        sync_key.empty() ? nullptr : sync_key.c_str());
+  char* result = maho_core_configure_sync_encryption(
+      core, relay_url.c_str(), recovery_phrase.c_str());
+  if (result) {
+    maho_string_free(result);
+  }
+  return BuildSyncStatusOnPool();
 }
 
 // static
@@ -190,7 +198,7 @@ maho_sync::mojom::SyncStatusPtr MahoSyncPageHandler::JoinSyncOnPool(
     status->room_id = room_id;
     return status;
   }
-  char* result = maho_core_join_sync(core, recovery_phrase.c_str());
+  char* result = maho_core_join_sync(core, maho::auth::kSyncRelayUrl, recovery_phrase.c_str());
   if (result) {
     maho_string_free(result);
   }
@@ -240,18 +248,18 @@ MahoSyncPageHandler::GenerateSyncKeyOnPool() {
   return result;
 }
 
-void MahoSyncPageHandler::StartSync(const std::string& relay_url,
-                                     StartSyncCallback callback) {
+void MahoSyncPageHandler::ConfigureSyncEncryption(const std::string& recovery_phrase,
+                                                   ConfigureSyncEncryptionCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!maho::auth::HasValidRelaySession(profile_->GetPrefs())) {
     std::move(callback).Run(BuildAccountLoginRequiredStatus());
     return;
   }
-  maho::PostCoreTaskAndReply(
+  maho::PostCoreTask<maho_sync::mojom::SyncStatusPtr>(
       FROM_HERE,
-      base::BindOnce(&MahoSyncPageHandler::StartSyncOnPool, relay_url,
-                     std::string()),
-      base::BindOnce(&MahoSyncPageHandler::OnStartSyncComplete,
+      base::BindOnce(&MahoSyncPageHandler::ConfigureSyncEncryptionOnPool,
+                     maho::auth::kSyncRelayUrl, recovery_phrase),
+      base::BindOnce(&MahoSyncPageHandler::OnJoinSyncComplete,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
@@ -305,12 +313,6 @@ void MahoSyncPageHandler::GenerateSyncKey(
       base::BindOnce(&MahoSyncPageHandler::GenerateSyncKeyOnPool),
       base::BindOnce(&MahoSyncPageHandler::OnGenerateSyncKeyResult,
                       weak_factory_.GetWeakPtr(), std::move(callback)));
-}
-
-void MahoSyncPageHandler::OnStartSyncComplete(
-    StartSyncCallback callback) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  GetSyncStatus(std::move(callback));
 }
 
 void MahoSyncPageHandler::OnJoinSyncComplete(

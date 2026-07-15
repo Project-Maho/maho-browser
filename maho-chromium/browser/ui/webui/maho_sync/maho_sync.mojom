@@ -24,7 +24,7 @@ interface PageHandlerFactory {
 };
 
 interface PageHandler {
-  StartSync(string relay_url) => (SyncStatus status);
+  ConfigureSyncEncryption(string recovery_phrase) => (SyncStatus status);
 
   JoinSync(string room_id, string passphrase) => (SyncStatus status);
 
