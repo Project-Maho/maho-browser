@@ -1,6 +1,6 @@
 use crate::common::{
-    Cookie, DataTypes, FindOptions, FindResult, ImageData, JsValue, Rect, ScriptWorld,
-    TabSnapshot, Url,
+    Cookie, DataTypes, FindOptions, FindResult, ImageData, JsValue, Rect, ScriptWorld, TabSnapshot,
+    Url,
 };
 use crate::events::core_update::MahoError;
 

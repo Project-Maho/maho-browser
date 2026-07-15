@@ -2,7 +2,7 @@
 
 ## Current Resolution Path
 
-All WebUI React surfaces (`maho_notes`, `maho_boost`, `maho_easel`, etc.) resolve
+All WebUI React surfaces (`maho_ai`, `maho_boost`, `maho_routines`, etc.) resolve
 npm packages from the **workspace-level** `website/node_modules/` directory. This is
 a deliberate coupling during early migration: the Astro website workspace already
 has React, ReactDOM, and Radix UI installed, so WebUI bundles reuse those

@@ -29,6 +29,11 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/device_reauth/chrome_device_authenticator_factory.h"
+#include "components/device_reauth/device_authenticator.h"
+#include "maho/third_party/maho/maho_bridge.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "maho/browser/maho_private_context_policy.h"
 #include "base/metrics/histogram_functions.h"
@@ -2018,26 +2023,31 @@ void MahoSettingsPageHandler::GetPasswordProviderStatus(
   auto status = maho_settings::mojom::PasswordProviderStatus::New();
   status->provider = maho_settings_password_helpers::ToPasswordProviderKind(mode);
   status->is_enabled = passwords_enabled;
-  status->is_available =
-      maho::passwords::IsPasswordProviderAvailable(mode);
-  switch (status->provider) {
-    case maho_settings::mojom::PasswordProviderKind::kMahoNative:
-      status->display_name = "Maho Native";
-      status->description = "Use Maho's native password manager.";
-      break;
-    case maho_settings::mojom::PasswordProviderKind::kBitwarden:
-      status->display_name = "Bitwarden";
-      status->description = status->is_available
-                                 ? "Use Bitwarden as the password provider."
-                                 : "Bitwarden is selected, but the Bitwarden extension is not installed or enabled.";
-      break;
-    case maho_settings::mojom::PasswordProviderKind::kOnePassword:
-      status->display_name = "1Password";
-      status->description = status->is_available
-                                 ? "Use 1Password as the password provider."
-                                 : "1Password is selected, but the 1Password extension is not installed or enabled.";
-      break;
+  status->is_available = maho::passwords::IsPasswordProviderAvailable(mode);
+
+  std::string registry_json = maho::core::GetPasswordProviderRegistry();
+  std::optional<base::Value> parsed = base::JSONReader::Read(registry_json, base::JSON_PARSE_RFC);
+  if (parsed && parsed->is_list()) {
+    for (const auto& item : parsed->GetList()) {
+      if (!item.is_dict()) continue;
+      const auto& dict = item.GetDict();
+      const std::string* provider_id = dict.FindString("providerId");
+      if (provider_id && *provider_id == mode) {
+        const std::string* display_name = dict.FindString("displayName");
+        const std::string* description = dict.FindString("description");
+        if (display_name) status->display_name = *display_name;
+        if (description) {
+          if (status->is_available) {
+            status->description = *description;
+          } else {
+            status->description = *display_name + " is selected, but the " + *display_name + " extension is not installed or enabled.";
+          }
+        }
+        break;
+      }
+    }
   }
+
   status->capabilities = maho_settings_password_helpers::MakePasswordProviderCapabilities(status->provider);
   std::move(callback).Run(std::move(status));
 }
@@ -2046,31 +2056,35 @@ void MahoSettingsPageHandler::GetPasswordProviderOptions(
     GetPasswordProviderOptionsCallback callback) {
   std::vector<maho_settings::mojom::PasswordProviderOptionPtr> options;
 
-  {
-    auto opt = maho_settings::mojom::PasswordProviderOption::New();
-    opt->provider = maho_settings::mojom::PasswordProviderKind::kMahoNative;
-    opt->display_name = "Maho Native";
-    opt->description = "Use Maho's native password manager.";
-    opt->is_available = true;
-    options.push_back(std::move(opt));
-  }
+  std::string registry_json = maho::core::GetPasswordProviderRegistry();
+  std::optional<base::Value> parsed = base::JSONReader::Read(registry_json, base::JSON_PARSE_RFC);
+  if (parsed && parsed->is_list()) {
+    for (const auto& item : parsed->GetList()) {
+      if (!item.is_dict()) continue;
+      const auto& dict = item.GetDict();
+      const std::string* provider_id = dict.FindString("providerId");
+      if (!provider_id) continue;
 
-  {
-    auto opt = maho_settings::mojom::PasswordProviderOption::New();
-    opt->provider = maho_settings::mojom::PasswordProviderKind::kBitwarden;
-    opt->display_name = "Bitwarden";
-    opt->description = "Use Bitwarden as the password provider.";
-    opt->is_available = maho::passwords::IsBitwardenExtensionAvailable();
-    options.push_back(std::move(opt));
-  }
+      auto opt = maho_settings::mojom::PasswordProviderOption::New();
+      opt->provider = maho_settings_password_helpers::ToPasswordProviderKind(*provider_id);
+      
+      const std::string* display_name = dict.FindString("displayName");
+      if (display_name) opt->display_name = *display_name;
+      
+      const std::string* description = dict.FindString("description");
+      if (description) opt->description = *description;
 
-  {
-    auto opt = maho_settings::mojom::PasswordProviderOption::New();
-    opt->provider = maho_settings::mojom::PasswordProviderKind::kOnePassword;
-    opt->display_name = "1Password";
-    opt->description = "Use 1Password as the password provider.";
-    opt->is_available = maho::passwords::IsOnePasswordExtensionAvailable();
-    options.push_back(std::move(opt));
+      if (*provider_id == "maho_native") {
+        opt->is_available = true;
+      } else if (*provider_id == "bitwarden") {
+        opt->is_available = maho::passwords::IsBitwardenExtensionAvailable();
+      } else if (*provider_id == "onepassword") {
+        opt->is_available = maho::passwords::IsOnePasswordExtensionAvailable();
+      } else {
+        opt->is_available = false;
+      }
+      options.push_back(std::move(opt));
+    }
   }
 
   std::move(callback).Run(std::move(options));
@@ -2106,52 +2120,145 @@ void MahoSettingsPageHandler::AddPassword(const std::string& domain,
                                           const std::string& username,
                                           const std::string& password,
                                           AddPasswordCallback callback) {
+  Browser* browser = chrome::FindBrowserWithProfile(profile_);
+  gfx::NativeWindow window = browser ? browser->window()->GetNativeWindow() : gfx::NativeWindow();
+
+  device_reauth::DeviceAuthParams params(
+      base::Seconds(60), device_reauth::DeviceAuthSource::kPasswordManager,
+      "PasswordManager.ReauthToAccessPasswordInSettings");
+
+  auto authenticator = ChromeDeviceAuthenticatorFactory::GetForProfile(profile_, window, params);
+  if (!authenticator) {
+    std::move(callback).Run(false);
+    return;
+  }
+
+  auto* authenticator_ptr = authenticator.get();
+  authenticator_ptr->AuthenticateWithMessage(
+      u"비밀번호 추가",
+      base::BindOnce(&MahoSettingsPageHandler::OnReauthAddComplete,
+                     weak_factory_.GetWeakPtr(), domain, username, password, std::move(authenticator), std::move(callback)));
+}
+
+void MahoSettingsPageHandler::OnReauthAddComplete(
+    const std::string& domain,
+    const std::string& username,
+    const std::string& password,
+    std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator,
+    AddPasswordCallback callback,
+    bool success) {
+  if (!success) {
+    std::move(callback).Run(false);
+    return;
+  }
+
   MahoCore* core = maho::GetCore();
   if (!core) {
     std::move(callback).Run(false);
     return;
   }
 
-  const bool success = maho_core_add_password(
+  const bool ok = maho_core_add_password(
       core, domain.c_str(), username.c_str(), password.empty() ? nullptr : password.c_str());
-  if (success) {
+  if (ok) {
     ScheduleNotify();
   }
-  std::move(callback).Run(success);
+  std::move(callback).Run(ok);
 }
 
 void MahoSettingsPageHandler::UpdatePasswordUsername(
     const std::string& password_id,
     const std::string& username,
     UpdatePasswordUsernameCallback callback) {
+  Browser* browser = chrome::FindBrowserWithProfile(profile_);
+  gfx::NativeWindow window = browser ? browser->window()->GetNativeWindow() : gfx::NativeWindow();
+
+  device_reauth::DeviceAuthParams params(
+      base::Seconds(60), device_reauth::DeviceAuthSource::kPasswordManager,
+      "PasswordManager.ReauthToAccessPasswordInSettings");
+
+  auto authenticator = ChromeDeviceAuthenticatorFactory::GetForProfile(profile_, window, params);
+  if (!authenticator) {
+    std::move(callback).Run(false);
+    return;
+  }
+
+  auto* authenticator_ptr = authenticator.get();
+  authenticator_ptr->AuthenticateWithMessage(
+      u"비밀번호 수정",
+      base::BindOnce(&MahoSettingsPageHandler::OnReauthUpdateComplete,
+                     weak_factory_.GetWeakPtr(), password_id, username, std::move(authenticator), std::move(callback)));
+}
+
+void MahoSettingsPageHandler::OnReauthUpdateComplete(
+    const std::string& password_id,
+    const std::string& username,
+    std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator,
+    UpdatePasswordUsernameCallback callback,
+    bool success) {
+  if (!success) {
+    std::move(callback).Run(false);
+    return;
+  }
+
   MahoCore* core = maho::GetCore();
   if (!core) {
     std::move(callback).Run(false);
     return;
   }
 
-  const bool success = maho_core_update_password_username(
+  const bool ok = maho_core_update_password_username(
       core, password_id.c_str(), username.c_str());
-  if (success) {
+  if (ok) {
     ScheduleNotify();
   }
-  std::move(callback).Run(success);
+  std::move(callback).Run(ok);
 }
 
 void MahoSettingsPageHandler::DeletePassword(
     const std::string& password_id,
     DeletePasswordCallback callback) {
+  Browser* browser = chrome::FindBrowserWithProfile(profile_);
+  gfx::NativeWindow window = browser ? browser->window()->GetNativeWindow() : gfx::NativeWindow();
+
+  device_reauth::DeviceAuthParams params(
+      base::Seconds(60), device_reauth::DeviceAuthSource::kPasswordManager,
+      "PasswordManager.ReauthToAccessPasswordInSettings");
+
+  auto authenticator = ChromeDeviceAuthenticatorFactory::GetForProfile(profile_, window, params);
+  if (!authenticator) {
+    std::move(callback).Run(false);
+    return;
+  }
+
+  auto* authenticator_ptr = authenticator.get();
+  authenticator_ptr->AuthenticateWithMessage(
+      u"비밀번호 삭제",
+      base::BindOnce(&MahoSettingsPageHandler::OnReauthDeleteComplete,
+                     weak_factory_.GetWeakPtr(), password_id, std::move(authenticator), std::move(callback)));
+}
+
+void MahoSettingsPageHandler::OnReauthDeleteComplete(
+    const std::string& password_id,
+    std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator,
+    DeletePasswordCallback callback,
+    bool success) {
+  if (!success) {
+    std::move(callback).Run(false);
+    return;
+  }
+
   MahoCore* core = maho::GetCore();
   if (!core) {
     std::move(callback).Run(false);
     return;
   }
 
-  const bool success = maho_core_delete_password(core, password_id.c_str());
-  if (success) {
+  const bool ok = maho_core_delete_password(core, password_id.c_str());
+  if (ok) {
     ScheduleNotify();
   }
-  std::move(callback).Run(success);
+  std::move(callback).Run(ok);
 }
 
 void MahoSettingsPageHandler::RevealPassword(
@@ -2166,6 +2273,43 @@ void MahoSettingsPageHandler::RevealPassword(
   }
 
   if (!passwords_enabled) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+
+  Browser* browser = chrome::FindBrowserWithProfile(profile_);
+  gfx::NativeWindow window = browser ? browser->window()->GetNativeWindow() : gfx::NativeWindow();
+
+  device_reauth::DeviceAuthParams params(
+      base::Seconds(60), device_reauth::DeviceAuthSource::kPasswordManager,
+      "PasswordManager.ReauthToAccessPasswordInSettings");
+
+  auto authenticator = ChromeDeviceAuthenticatorFactory::GetForProfile(profile_, window, params);
+  if (!authenticator) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+
+  // Keep the authenticator unique_ptr alive by moving it into the BindOnce callback.
+  auto* authenticator_ptr = authenticator.get();
+  authenticator_ptr->AuthenticateWithMessage(
+      u"저장된 비밀번호 보기",
+      base::BindOnce(&MahoSettingsPageHandler::OnReauthRevealComplete,
+                     weak_factory_.GetWeakPtr(), password_id, std::move(authenticator), std::move(callback)));
+}
+
+void MahoSettingsPageHandler::OnReauthRevealComplete(
+    const std::string& password_id,
+    std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator,
+    RevealPasswordCallback callback,
+    bool success) {
+  if (!success) {
     std::move(callback).Run(std::nullopt);
     return;
   }

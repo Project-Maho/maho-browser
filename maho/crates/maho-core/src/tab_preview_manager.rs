@@ -35,7 +35,8 @@ impl TabPreviewManager {
     }
 
     pub fn total_size_bytes(&self) -> usize {
-        self.previews.values()
+        self.previews
+            .values()
             .filter_map(|p| p.thumbnail.as_ref())
             .map(|thumb| thumb.data.len())
             .sum()
@@ -47,12 +48,16 @@ impl TabPreviewManager {
             return;
         }
 
-        let mut list: Vec<(TabId, String, usize)> = self.previews.iter()
-            .map(|(id, p)| (
-                id.clone(),
-                p.captured_at.0.clone(),
-                p.thumbnail.as_ref().map(|t| t.data.len()).unwrap_or(0)
-            ))
+        let mut list: Vec<(TabId, String, usize)> = self
+            .previews
+            .iter()
+            .map(|(id, p)| {
+                (
+                    id.clone(),
+                    p.captured_at.0.clone(),
+                    p.thumbnail.as_ref().map(|t| t.data.len()).unwrap_or(0),
+                )
+            })
             .collect();
 
         list.sort_by(|a, b| a.1.cmp(&b.1));
@@ -100,7 +105,11 @@ impl TabPreviewManager {
         }
     }
 
-    pub fn load_from_storage(&mut self, storage: &maho_storage::lmdb::LmdbStorage, tab_ids: &[TabId]) {
+    pub fn load_from_storage(
+        &mut self,
+        storage: &maho_storage::lmdb::LmdbStorage,
+        tab_ids: &[TabId],
+    ) {
         for tab_id in tab_ids {
             if let Ok(Some(bytes)) = storage.load_preview(tab_id.as_ref()) {
                 if let Ok(preview) = serde_json::from_slice::<TabPreview>(&bytes) {

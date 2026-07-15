@@ -1,15 +1,15 @@
+use maho_core::command_bar::CommandBarEngine;
+use maho_types::common::DateTime;
+use maho_types::identifiers::{FolderId, SpaceId, TabId};
+use maho_types::space::SpaceColor;
+use maho_types::tab::TabRole;
+use maho_types::traits::shell_renderer::{
+    FolderViewModel, SearchContext, SpaceViewModel, SuggestionType, TabViewModel,
+};
+use serde::Serialize;
 use std::env;
 use std::fs::File;
 use std::io::Write;
-use serde::Serialize;
-use maho_types::identifiers::{TabId, SpaceId, FolderId};
-use maho_types::traits::shell_renderer::{
-    SearchContext, TabViewModel, SpaceViewModel, FolderViewModel, SuggestionType
-};
-use maho_types::space::SpaceColor;
-use maho_types::tab::TabRole;
-use maho_types::common::DateTime;
-use maho_core::command_bar::CommandBarEngine;
 
 #[derive(Serialize)]
 struct GoldenOutput {
@@ -64,9 +64,21 @@ fn main() {
     }
 
     let mut engine = CommandBarEngine::new();
-    engine.add_history_entry("https://history.test/".to_string(), "Maho History".to_string(), None);
-    engine.add_action("close_tab".to_string(), "Close Tab".to_string(), "Tabs".to_string());
-    engine.add_action("toggle_sidebar".to_string(), "Toggle Sidebar".to_string(), "View".to_string());
+    engine.add_history_entry(
+        "https://history.test/".to_string(),
+        "Maho History".to_string(),
+        None,
+    );
+    engine.add_action(
+        "close_tab".to_string(),
+        "Close Tab".to_string(),
+        "Tabs".to_string(),
+    );
+    engine.add_action(
+        "toggle_sidebar".to_string(),
+        "Toggle Sidebar".to_string(),
+        "View".to_string(),
+    );
 
     let space_normal = SpaceId::new("space-normal-v1");
     let t_now = DateTime::from_iso("2024-01-01T00:00:00Z");
@@ -160,7 +172,11 @@ fn main() {
         spaces: vec![space_vm],
         folders: vec![folder_vm],
         archived_tabs: vec![tab_archived],
-        bookmarks: vec![("bookmark-v1".to_string(), "Maho Bookmark".to_string(), "https://bookmark.test/".to_string())],
+        bookmarks: vec![(
+            "bookmark-v1".to_string(),
+            "Maho Bookmark".to_string(),
+            "https://bookmark.test/".to_string(),
+        )],
         bookmark_favicons: vec![],
         closed_tabs: vec![tab_closed],
         extensions: vec![("extension-v1".to_string(), "Maho Extension".to_string())],

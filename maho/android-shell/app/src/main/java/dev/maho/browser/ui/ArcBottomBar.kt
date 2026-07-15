@@ -5,6 +5,7 @@ package dev.maho.browser.ui
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -101,6 +103,7 @@ fun ArcBottomBar(
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
     onToggleDesktopMode: () -> Unit,
+    onOpenAiChat: () -> Unit = {},
     onPiP: () -> Unit = {},
     onBrowseForMe: () -> Unit = {},
     canSwipeToPreviousTab: Boolean = false,
@@ -167,6 +170,32 @@ fun ArcBottomBar(
         }
     }
     val canSubmitHomeQuery = homeQuery.trim().isNotEmpty()
+
+    if (isHomeMode) {
+        val isDarkMode = isSystemInDarkTheme()
+        val homeContentColor = if (isDarkMode) Color.White else Color.Black
+        val homeBackgroundColor = if (isDarkMode) shellColors.homeBackgroundEnd else Color.White
+
+        HomeModeBottomBar(
+            tabCount = tabCount,
+            contentColor = homeContentColor,
+            badgeTextColor = if (isDarkMode) Color.Black else Color.White,
+            backgroundColor = homeBackgroundColor,
+            buttonColor = homeContentColor.copy(alpha = 0.035f),
+            primaryButtonColor = if (isDarkMode) {
+                shellColors.accent.copy(alpha = 0.14f)
+            } else {
+                Color(0xFFE5EEFB)
+            },
+            borderColor = homeContentColor.copy(alpha = 0.08f),
+            onTabsClick = onTabsClick,
+            onOpenAiChat = onOpenAiChat,
+            onSearchClick = onSearchClick,
+            onOpenSettings = onOpenSettings,
+            modifier = modifier,
+        )
+        return
+    }
 
     Surface(
         modifier = modifier
@@ -741,6 +770,220 @@ fun ArcBottomBar(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun HomeModeBottomBar(
+    tabCount: Int,
+    contentColor: Color,
+    badgeTextColor: Color,
+    backgroundColor: Color,
+    buttonColor: Color,
+    primaryButtonColor: Color,
+    borderColor: Color,
+    onTabsClick: () -> Unit,
+    onOpenAiChat: () -> Unit,
+    onSearchClick: () -> Unit,
+    onOpenSettings: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .background(backgroundColor)
+            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 6.dp)
+            .testTag("arcBottomBarContainer"),
+    ) {
+        val rightGroupWidth = 44.dp + 12.dp + 44.dp
+        val centerButtonWidth = minOf(112.dp, maxOf(80.dp, maxWidth - rightGroupWidth - rightGroupWidth))
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(44.dp),
+        ) {
+            Box(modifier = Modifier.align(Alignment.CenterStart)) {
+                HomeTabsFooterButton(
+                    tabCount = tabCount,
+                    contentColor = contentColor,
+                    badgeTextColor = badgeTextColor,
+                    containerColor = buttonColor,
+                    borderColor = borderColor,
+                    onClick = onTabsClick,
+                )
+            }
+
+            Box(modifier = Modifier.align(Alignment.Center)) {
+                HomeNewTabFooterButton(
+                    width = centerButtonWidth,
+                    contentColor = contentColor,
+                    containerColor = primaryButtonColor,
+                    borderColor = borderColor,
+                    onClick = onSearchClick,
+                )
+            }
+
+            Row(
+                modifier = Modifier.align(Alignment.CenterEnd),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                HomeFooterIconButton(
+                    icon = MahoIcon.Bot,
+                    contentDescription = "Agent",
+                    testTag = "arcBottomBarAiButton",
+                    shape = CircleShape,
+                    contentColor = contentColor,
+                    containerColor = buttonColor,
+                    borderColor = borderColor,
+                    onClick = onOpenAiChat,
+                )
+
+                HomeFooterIconButton(
+                    icon = MahoIcon.Settings,
+                    contentDescription = "Settings",
+                    testTag = "arcBottomBarMoreButton",
+                    shape = CircleShape,
+                    contentColor = contentColor,
+                    containerColor = buttonColor,
+                    borderColor = borderColor,
+                    onClick = onOpenSettings,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeTabsFooterButton(
+    tabCount: Int,
+    contentColor: Color,
+    badgeTextColor: Color,
+    containerColor: Color,
+    borderColor: Color,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .size(44.dp)
+            .semantics {
+                contentDescription = "Tabs"
+                stateDescription = "$tabCount tab${if (tabCount == 1) "" else "s"}"
+            }
+            .clickable(onClick = onClick)
+            .testTag("arcBottomBarTabsButton"),
+        shape = RoundedCornerShape(16.dp),
+        color = containerColor,
+        border = BorderStroke(1.dp, borderColor),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Box(
+            modifier = Modifier.size(44.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                painter = painterResource(id = MahoIcon.Copy.drawableRes),
+                contentDescription = null,
+                modifier = Modifier.size(19.dp),
+                tint = contentColor,
+            )
+            if (tabCount > 0) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .offset(x = 4.dp, y = (-4).dp),
+                    shape = CircleShape,
+                    color = contentColor,
+                    tonalElevation = 0.dp,
+                    shadowElevation = 0.dp,
+                ) {
+                    Text(
+                        text = if (tabCount > 99) "99+" else tabCount.toString(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = badgeTextColor,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeFooterIconButton(
+    icon: MahoIcon,
+    contentDescription: String,
+    testTag: String,
+    shape: Shape,
+    contentColor: Color,
+    containerColor: Color,
+    borderColor: Color,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .size(44.dp)
+            .semantics { this.contentDescription = contentDescription }
+            .clickable(onClick = onClick)
+            .testTag(testTag),
+        shape = shape,
+        color = containerColor,
+        border = BorderStroke(1.dp, borderColor),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Box(
+            modifier = Modifier.size(44.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                painter = painterResource(id = icon.drawableRes),
+                contentDescription = null,
+                modifier = Modifier.size(19.dp),
+                tint = contentColor,
+            )
+        }
+    }
+}
+
+@Composable
+private fun HomeNewTabFooterButton(
+    width: androidx.compose.ui.unit.Dp = 112.dp,
+    contentColor: Color,
+    containerColor: Color,
+    borderColor: Color,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .width(width)
+            .height(44.dp)
+            .semantics { contentDescription = "New Tab" }
+            .clickable(onClick = onClick)
+            .testTag("arcBottomBarPageButton"),
+        shape = RoundedCornerShape(18.dp),
+        color = containerColor,
+        border = BorderStroke(1.dp, borderColor),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+    ) {
+        Box(
+            modifier = Modifier
+                .width(width)
+                .height(44.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                painter = painterResource(id = MahoIcon.Add.drawableRes),
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = contentColor,
+            )
         }
     }
 }

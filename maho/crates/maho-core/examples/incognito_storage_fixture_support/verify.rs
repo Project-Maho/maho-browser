@@ -50,7 +50,9 @@ pub fn run(args: &Args) -> Result<(), String> {
         return Err("baseline and final snapshots differ".to_string());
     }
     if !leaked.is_empty() {
-        return Err(format!("OTR canaries present in final snapshot: {leaked:?}"));
+        return Err(format!(
+            "OTR canaries present in final snapshot: {leaked:?}"
+        ));
     }
     Ok(())
 }

@@ -170,23 +170,24 @@ void MahoAIUI::CreatePageHandler(
   // agrees with the host, build a kAI token, and deny every non-regular
   // context with no handler/data source/pref consumption and a dropped pipe.
   if (!browser || !profile || browser_window->GetProfile() != profile) {
-    LOG(ERROR) << "[MAHO-AI-PANEL-DBG] CreatePageHandler R-9 reject: "
-               << "browser=" << (browser != nullptr)
-               << " profile=" << (profile != nullptr) << " -> pipe dropped";
     receiver.reset();
     page.reset();
     return;
   }
 
-  auto token = std::make_unique<MahoPrivateContextToken>(browser_window, host);
+  // The AI panel is hosted in the side panel, whose WebContents is not a tab.
+  // Build the R-9 token against the browser window only (no web_contents), so
+  // Revalidate classifies by profile and does not require tab-strip membership
+  // (which a side-panel WebContents never has). This mirrors how
+  // RegisterMahoAiSidePanel builds its token and still denies every non-regular
+  // (OTR/Guest/system/DevTools) context.
+  auto token = std::make_unique<MahoPrivateContextToken>(
+      browser_window, /*web_contents=*/nullptr);
   if (!token->Revalidate(MahoPrivateCapability::kAI)) {
-    LOG(ERROR) << "[MAHO-AI-PANEL-DBG] CreatePageHandler R-9 reject: "
-               << "Revalidate(kAI)=false for side-panel host -> pipe dropped";
     receiver.reset();
     page.reset();
     return;
   }
-  LOG(ERROR) << "[MAHO-AI-PANEL-DBG] CreatePageHandler R-9 PASS -> creating page handler";
 
   auto url_loader_factory =
       profile->GetDefaultStoragePartition()->GetURLLoaderFactoryForBrowserProcess();

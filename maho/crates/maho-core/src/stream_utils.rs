@@ -90,12 +90,19 @@ mod tests {
     #[tokio::test]
     async fn bounded_channel_applies_backpressure() {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<u32>(4);
-        for i in 0..4 { tx.try_send(i).unwrap(); }
+        for i in 0..4 {
+            tx.try_send(i).unwrap();
+        }
         let err = tx.try_send(99).unwrap_err();
-        assert!(matches!(err, tokio::sync::mpsc::error::TrySendError::Full(_)));
+        assert!(matches!(
+            err,
+            tokio::sync::mpsc::error::TrySendError::Full(_)
+        ));
         drop(tx);
         let mut count = 0u32;
-        while rx.recv().await.is_some() { count += 1; }
+        while rx.recv().await.is_some() {
+            count += 1;
+        }
         assert_eq!(count, 4);
     }
 }

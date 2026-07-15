@@ -2,32 +2,40 @@
 
 #include "maho/browser/updates/maho_config_manager.h"
 
+#include <cstddef>
+#include <string>
+#include <vector>
+
 #include "base/base64.h"
 #include "base/files/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/path_service.h"
-#include "base/values.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/uuid.h"
+#include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/prefs/pref_service.h"
+#include "maho/browser/maho_core_holder.h"
 #include "maho/browser/updates/maho_update_pref_names.h"
 #include "maho/browser/updates/maho_update_signature.h"
 #include "maho/browser/updates/manifest_pubkey.h"
 #include "maho/browser/updates/rollout_bucket.h"
+#include "maho/third_party/maho/maho_ffi.h"
 #include "net/base/load_flags.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "url/gurl.h"
 
 namespace maho {
 namespace updates {
 
 namespace {
 constexpr int kCompiledBrainCapabilityVersion = 1;
+constexpr size_t kMaxManifestBodyBytes = 64 * 1024;
 }
 
 // static
@@ -46,6 +54,7 @@ void MahoConfigManager::Initialize(::Profile* profile) {
   initialized_ = true;
   profile_ = profile;
 
+  LoadLastKnownGoodConfig();
   HandleRollbackIfNeeded();
 
   // Schedule periodic checks every 4 hours.
@@ -62,21 +71,68 @@ void MahoConfigManager::Initialize(::Profile* profile) {
       base::Seconds(5));
 }
 
-void MahoConfigManager::HandleRollbackIfNeeded() {
+void MahoConfigManager::LoadLastKnownGoodConfig() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   PrefService* local_state = g_browser_process ? g_browser_process->local_state() : nullptr;
-  if (!local_state) return;
+  if (!local_state || !profile_) return;
+
+  const std::string lkg_version =
+      local_state->GetString(prefs::kMahoUpdateLastKnownGoodVersion);
+  if (lkg_version.empty()) return;
+
+  int parsed_version = 0;
+  if (!base::StringToInt(lkg_version, &parsed_version)) {
+    LOG(WARNING) << "MahoConfigManager: Ignoring non-numeric LKG version: "
+                 << lkg_version;
+    return;
+  }
+
+  base::FilePath lkg_path = profile_->GetPath()
+                                .AppendASCII("maho_config")
+                                .AppendASCII("config_v" + lkg_version + ".json");
+  if (!base::PathExists(lkg_path)) return;
+
+  LOG(INFO) << "MahoConfigManager: Loading last-known-good configuration: "
+            << lkg_version;
+  if (ApplyConfigToCore(lkg_path)) {
+    SignalReload(lkg_path, parsed_version);
+  } else {
+    LOG(ERROR) << "MahoConfigManager: Failed to apply last-known-good "
+                  "configuration: "
+               << lkg_path.value();
+  }
+}
+
+void MahoConfigManager::HandleRollbackIfNeeded() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  PrefService* local_state = g_browser_process ? g_browser_process->local_state() : nullptr;
+  if (!local_state || !profile_) return;
 
   if (local_state->GetBoolean(prefs::kMahoUpdateRollbackRequested)) {
+    bool clear_flag = true;
     std::string lkg_version = local_state->GetString(prefs::kMahoUpdateLastKnownGoodVersion);
-    if (!lkg_version.empty()) {
+    int parsed_version = 0;
+    if (!lkg_version.empty() && base::StringToInt(lkg_version, &parsed_version)) {
       base::FilePath config_dir = profile_->GetPath().AppendASCII("maho_config");
       base::FilePath lkg_path = config_dir.AppendASCII("config_v" + lkg_version + ".json");
       if (base::PathExists(lkg_path)) {
         LOG(WARNING) << "MahoConfigManager: Rollback requested. Reverting to LKG configuration: " << lkg_version;
-        SignalReload(lkg_path, std::stoi(lkg_version));
+        if (ApplyConfigToCore(lkg_path)) {
+          SignalReload(lkg_path, parsed_version);
+        } else {
+          LOG(ERROR) << "MahoConfigManager: Failed to apply rollback "
+                        "configuration; will retry on next start: "
+                     << lkg_path.value();
+          clear_flag = false;
+        }
       }
+    } else if (!lkg_version.empty()) {
+      LOG(WARNING) << "MahoConfigManager: Rollback requested but LKG version is non-numeric: "
+                   << lkg_version;
     }
-    local_state->SetBoolean(prefs::kMahoUpdateRollbackRequested, false);
+    if (clear_flag) {
+      local_state->SetBoolean(prefs::kMahoUpdateRollbackRequested, false);
+    }
   }
 }
 
@@ -136,10 +192,11 @@ void MahoConfigManager::CheckForConfigUpdate() {
 
   manifest_loader_ = network::SimpleURLLoader::Create(std::move(request), traffic_annotation);
   auto* factory = g_browser_process->shared_url_loader_factory().get();
-  manifest_loader_->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
+  manifest_loader_->DownloadToString(
       factory,
       base::BindOnce(&MahoConfigManager::OnManifestFetched,
-                     base::Unretained(this)));
+                     base::Unretained(this)),
+      kMaxManifestBodyBytes);
 }
 
 void MahoConfigManager::OnManifestFetched(std::optional<std::string> body) {
@@ -245,6 +302,22 @@ void MahoConfigManager::OnBlobDownloaded(base::FilePath temp_path) {
     return;
   }
 
+  InstallDownloadedBlob(std::move(temp_path));
+}
+
+void MahoConfigManager::InstallDownloadedBlobForTesting(
+    const base::FilePath& temp_path,
+    const std::string& sha256,
+    int version) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  downloading_sha256_ = sha256;
+  downloading_version_ = version;
+  InstallDownloadedBlob(temp_path);
+}
+
+void MahoConfigManager::InstallDownloadedBlob(base::FilePath temp_path) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
   // Verify hash
   if (!VerifySha256(temp_path, downloading_sha256_)) {
     LOG(ERROR) << "MahoConfigManager: Hash verification failed for config blob!";
@@ -284,13 +357,36 @@ void MahoConfigManager::OnBlobDownloaded(base::FilePath temp_path) {
     return;
   }
 
-  // Update LKG
-  PrefService* local_state = g_browser_process ? g_browser_process->local_state() : nullptr;
-  if (local_state) {
-    local_state->SetString(prefs::kMahoUpdateLastKnownGoodVersion, std::to_string(downloading_version_));
+  if (ApplyConfigToCore(dest_path)) {
+    PrefService* local_state = g_browser_process ? g_browser_process->local_state() : nullptr;
+    if (local_state) {
+      local_state->SetString(prefs::kMahoUpdateLastKnownGoodVersion, std::to_string(downloading_version_));
+    }
+    SignalReload(dest_path, downloading_version_);
+  } else {
+    LOG(ERROR) << "MahoConfigManager: Config apply failed; not promoting v"
+               << downloading_version_ << " to active/LKG.";
+  }
+}
+
+bool MahoConfigManager::ApplyConfigToCore(const base::FilePath& path) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    LOG(WARNING) << "MahoConfigManager: MahoCore unavailable; config apply deferred to active path only.";
+    return false;
   }
 
-  SignalReload(dest_path, downloading_version_);
+  if (!apply_config_callback_for_testing_.is_null()) {
+    return apply_config_callback_for_testing_.Run(core, path);
+  }
+
+  const bool ok = maho_core_apply_config(core, path.AsUTF8Unsafe().c_str());
+  if (!ok) {
+    LOG(ERROR) << "MahoConfigManager: maho_core_apply_config failed for "
+               << path.value();
+  }
+  return ok;
 }
 
 void MahoConfigManager::SignalReload(const base::FilePath& path, int version) {
@@ -301,6 +397,27 @@ void MahoConfigManager::SignalReload(const base::FilePath& path, int version) {
 
 base::FilePath MahoConfigManager::GetActiveConfigPath() const {
   return active_config_path_;
+}
+
+void MahoConfigManager::SetApplyConfigCallbackForTesting(
+    ApplyConfigCallbackForTesting callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  apply_config_callback_for_testing_ = std::move(callback);
+}
+
+void MahoConfigManager::ResetForTesting() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  update_timer_.Stop();
+  manifest_loader_.reset();
+  blob_loader_.reset();
+  initialized_ = false;
+  profile_ = nullptr;
+  active_config_path_.clear();
+  active_version_ = 0;
+  downloading_url_.clear();
+  downloading_sha256_.clear();
+  downloading_version_ = 0;
+  apply_config_callback_for_testing_.Reset();
 }
 
 }  // namespace updates

@@ -418,6 +418,47 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
                 "model": model
             ]
 
+        // ── Agent Session ─────────────────────────────────────────────────────
+        case "agentCreateSession":
+            let sessionId = try stringParam(params, at: 0, name: "sessionId")
+            guard let ptr = bridge.agentCreateSession(sessionId: sessionId) else {
+                throw BridgeError.operationFailed("agentCreateSession returned nil")
+            }
+            return AgentHandleRegistry.shared.register(ptr: ptr)
+
+        case "agentSendMessage":
+            let ptr = try agentSessionParam(params, at: 0, name: "handle")
+            let message = try stringParam(params, at: 1, name: "message")
+            return bridge.agentSendMessage(ptr, message: message)
+
+        case "agentPollEvent":
+            let ptr = try agentSessionParam(params, at: 0, name: "handle")
+            return bridge.agentPollEvent(ptr) ?? NSNull()
+
+        case "agentCancel":
+            let ptr = try agentSessionParam(params, at: 0, name: "handle")
+            return bridge.agentCancel(ptr)
+
+        case "agentFreeSession":
+            let handle = try stringParam(params, at: 0, name: "handle")
+            guard let ptr = AgentHandleRegistry.shared.get(id: handle) else {
+                throw BridgeError.operationFailed("Agent handle not found: \(handle)")
+            }
+            bridge.agentFreeSession(ptr)
+            AgentHandleRegistry.shared.unregister(id: handle)
+            return nil
+
+        case "agentListTools":
+            let ptr = try agentSessionParam(params, at: 0, name: "handle")
+            guard
+                let toolsJson = bridge.agentListTools(ptr),
+                let data = toolsJson.data(using: .utf8),
+                let tools = try? JSONSerialization.jsonObject(with: data) as? [Any]
+            else {
+                return [Any]()
+            }
+            return tools
+
         // ── Native-only actions ───────────────────────────────────────────────
         case "hapticFeedback":
             let style = stringParamOpt(params, at: 0, name: "style") ?? "medium"
@@ -528,6 +569,14 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
         let handle = try stringParam(params, at: index, name: name)
         guard let ptr = ChatSessionRegistry.shared.get(id: handle) else {
             throw BridgeError.operationFailed("Session handle not found: \(handle)")
+        }
+        return ptr
+    }
+
+    private func agentSessionParam(_ params: Any, at index: Int, name: String) throws -> OpaquePointer {
+        let handle = try stringParam(params, at: index, name: name)
+        guard let ptr = AgentHandleRegistry.shared.get(id: handle) else {
+            throw BridgeError.operationFailed("Agent handle not found: \(handle)")
         }
         return ptr
     }
@@ -657,18 +706,17 @@ extension WebViewBridgeController {
             hash += "?\(query)"
         }
 
-        // WKWebView requires a URL with the fragment; we reload with JS after the base loads.
+        // WKWebView requires a file URL; embed the hash as a URL fragment so
+        // app.tsx routes to the correct screen at boot (a post-load JS hash set
+        // races the document and can leave the router on the default screen).
         let accessURL = bundleURL.deletingLastPathComponent()
-        webView.loadFileURL(bundleURL, allowingReadAccessTo: accessURL)
-
-        if !hash.isEmpty, hash != "#" {
-            // After load, push the hash so app.tsx picks up the correct screen.
-            let escapedHash = hash
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "'", with: "\\'")
-            let js = "window.location.hash = '\(escapedHash)'"
-            webView.evaluateJavaScript(js, completionHandler: nil)
+        let targetURL: URL
+        if hash.isEmpty || hash == "#" {
+            targetURL = bundleURL
+        } else {
+            targetURL = URL(string: bundleURL.absoluteString + hash) ?? bundleURL
         }
+        webView.loadFileURL(targetURL, allowingReadAccessTo: accessURL)
     }
 }
 

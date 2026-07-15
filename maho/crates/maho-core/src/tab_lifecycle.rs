@@ -95,7 +95,14 @@ impl TabLifecycleManager {
         window_id: Option<i64>,
         is_private: bool,
     ) -> Tab {
-        self.create_tab_inner(TabId::generate(), space_id, url, parent_id, window_id, is_private)
+        self.create_tab_inner(
+            TabId::generate(),
+            space_id,
+            url,
+            parent_id,
+            window_id,
+            is_private,
+        )
     }
 
     pub fn create_tab_with_id(
@@ -319,7 +326,10 @@ impl TabLifecycleManager {
     pub fn get_tabs_by_space(&self, space_id: &SpaceId) -> Vec<&Tab> {
         self.tabs
             .values()
-            .filter(|t| t.space_id == *space_id && !matches!(t.state, TabLifecycleState::Archived { .. }))            .collect()
+            .filter(|t| {
+                t.space_id == *space_id && !matches!(t.state, TabLifecycleState::Archived { .. })
+            })
+            .collect()
     }
 
     pub fn clear(&mut self) {
@@ -509,22 +519,41 @@ impl TabLifecycleManager {
     }
 
     pub fn favorite_tab(&mut self, tab_id: &TabId) {
-        if self.tabs.get(tab_id).map(|tab| tab.role.is_favorite()).unwrap_or(false) { // L3-EXEMPT: role query
+        if self
+            .tabs
+            .get(tab_id)
+            .map(|tab| tab.role.is_favorite())
+            .unwrap_or(false)
+        {
+            // L3-EXEMPT: role query
             return;
         }
-        let current_count = self.tabs.values().filter(|t| t.role.is_favorite() && !matches!(t.state, TabLifecycleState::Archived { .. })).count(); // L3-EXEMPT: role query
+        let current_count = self
+            .tabs
+            .values()
+            .filter(|t| {
+                t.role.is_favorite() && !matches!(t.state, TabLifecycleState::Archived { .. })
+            })
+            .count(); // L3-EXEMPT: role query
         if current_count >= MAX_FAVORITES {
             return;
         }
         let max_order = self
             .tabs
             .values()
-            .filter(|t| t.role.is_favorite() && !matches!(t.state, TabLifecycleState::Archived { .. })) // L3-EXEMPT: role query
+            .filter(|t| {
+                t.role.is_favorite() && !matches!(t.state, TabLifecycleState::Archived { .. })
+            }) // L3-EXEMPT: role query
             .filter_map(|t| t.role.favorite_order())
             .max()
             .unwrap_or(0);
-        
-        self.transition_tab_role(tab_id, TabRole::Favorite { order: max_order + 1 });
+
+        self.transition_tab_role(
+            tab_id,
+            TabRole::Favorite {
+                order: max_order + 1,
+            },
+        );
     }
 
     pub fn mute_tab(&mut self, tab_id: &TabId) {
@@ -650,11 +679,17 @@ impl TabLifecycleManager {
             let elapsed = now - timestamp;
             let state_kind = tab.state.kind_str();
 
-            if state_kind == "active" && elapsed > FREEZE_TIMEOUT_MS && !is_auto_lifecycle_exempt(tab) {
+            if state_kind == "active"
+                && elapsed > FREEZE_TIMEOUT_MS
+                && !is_auto_lifecycle_exempt(tab)
+            {
                 if let Some(update) = self.freeze_tab_internal(&tab_id) {
                     pending.push(update);
                 }
-            } else if state_kind == "frozen" && elapsed > SUSPEND_TIMEOUT_MS && !is_auto_lifecycle_exempt(tab) {
+            } else if state_kind == "frozen"
+                && elapsed > SUSPEND_TIMEOUT_MS
+                && !is_auto_lifecycle_exempt(tab)
+            {
                 if let Some(update) = self.suspend_tab_internal(&tab_id) {
                     pending.push(update);
                 }
@@ -780,7 +815,11 @@ impl TabLifecycleManager {
     pub fn get_pinned_tabs(&self, space_id: &SpaceId) -> Vec<&Tab> {
         self.tabs
             .values()
-            .filter(|t| t.space_id == *space_id && t.role == TabRole::Pinned && !matches!(t.state, TabLifecycleState::Archived { .. }))
+            .filter(|t| {
+                t.space_id == *space_id
+                    && t.role == TabRole::Pinned
+                    && !matches!(t.state, TabLifecycleState::Archived { .. })
+            })
             .collect()
     }
 
@@ -788,17 +827,30 @@ impl TabLifecycleManager {
         let mut tabs: Vec<&Tab> = self
             .tabs
             .values()
-            .filter(|t| t.space_id == *space_id && t.role.is_favorite() && !matches!(t.state, TabLifecycleState::Archived { .. })) // L3-EXEMPT: role query
+            .filter(|t| {
+                t.space_id == *space_id
+                    && t.role.is_favorite()
+                    && !matches!(t.state, TabLifecycleState::Archived { .. })
+            }) // L3-EXEMPT: role query
             .collect();
         tabs.sort_by_key(|t| t.role.favorite_order().unwrap_or(u32::MAX));
         tabs
     }
 
-    pub fn reorder_favorite(&mut self, tab_id: &TabId, new_index: usize, space_ids: &HashSet<SpaceId>) {
+    pub fn reorder_favorite(
+        &mut self,
+        tab_id: &TabId,
+        new_index: usize,
+        space_ids: &HashSet<SpaceId>,
+    ) {
         let mut favorite_tabs: Vec<Tab> = self
             .tabs
             .values()
-            .filter(|t| t.role.is_favorite() && space_ids.contains(&t.space_id) && !matches!(t.state, TabLifecycleState::Archived { .. })) // L3-EXEMPT: role query
+            .filter(|t| {
+                t.role.is_favorite()
+                    && space_ids.contains(&t.space_id)
+                    && !matches!(t.state, TabLifecycleState::Archived { .. })
+            }) // L3-EXEMPT: role query
             .cloned()
             .collect();
         favorite_tabs.sort_by_key(|t| t.role.favorite_order().unwrap_or(u32::MAX));
@@ -832,13 +884,20 @@ impl TabLifecycleManager {
     }
 
     pub fn get_all_favorite_tabs(&self) -> Vec<&Tab> {
-        self.tabs.values().filter(|t| t.role.is_favorite()).collect() // L3-EXEMPT: role query
+        self.tabs
+            .values()
+            .filter(|t| t.role.is_favorite())
+            .collect() // L3-EXEMPT: role query
     }
 
     pub fn count_favorite_tabs_in_spaces(&self, space_ids: &HashSet<SpaceId>) -> usize {
         self.tabs
             .values()
-            .filter(|t| t.role.is_favorite() && space_ids.contains(&t.space_id) && !matches!(t.state, TabLifecycleState::Archived { .. })) // L3-EXEMPT: role query
+            .filter(|t| {
+                t.role.is_favorite()
+                    && space_ids.contains(&t.space_id)
+                    && !matches!(t.state, TabLifecycleState::Archived { .. })
+            }) // L3-EXEMPT: role query
             .count()
     }
 
@@ -1324,7 +1383,13 @@ mod tests {
         }));
 
         let space_id = SpaceId::new("space-1");
-        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None, false);
+        let tab = manager.create_tab(
+            space_id.clone(),
+            Some(Url::new("https://example.com")),
+            None,
+            None,
+            false,
+        );
         let tab_id = tab.id.clone();
 
         manager.favorite_tab(&tab_id);
@@ -1336,8 +1401,13 @@ mod tests {
 
         let first_call_updates = updates.borrow().clone();
         assert_eq!(first_call_updates.len(), 2);
-        assert!(matches!(first_call_updates[0], CoreUpdate::TabCreated { .. }));
-        assert!(matches!(&first_call_updates[1], CoreUpdate::TabUpdated { tab_id: update_tab_id, changes } if update_tab_id == &tab_id && changes.is_favorite == Some(true) && changes.favorite_order == Some(Some(1)))); // L3-EXEMPT: test assert
+        assert!(matches!(
+            first_call_updates[0],
+            CoreUpdate::TabCreated { .. }
+        ));
+        assert!(
+            matches!(&first_call_updates[1], CoreUpdate::TabUpdated { tab_id: update_tab_id, changes } if update_tab_id == &tab_id && changes.is_favorite == Some(true) && changes.favorite_order == Some(Some(1)))
+        ); // L3-EXEMPT: test assert
 
         manager.favorite_tab(&tab_id);
 
@@ -1347,7 +1417,11 @@ mod tests {
         assert_eq!(manager.get_favorite_tabs(&space_id).len(), 1);
 
         let all_updates = updates.borrow();
-        assert_eq!(all_updates.len(), 2, "the second favorite_tab call should not emit any update");
+        assert_eq!(
+            all_updates.len(),
+            2,
+            "the second favorite_tab call should not emit any update"
+        );
         assert_eq!(
             all_updates
                 .iter()
@@ -1362,7 +1436,13 @@ mod tests {
     fn restored_archived_tab_not_re_archived_by_today_tab_timeout() {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
-        let tab = manager.create_tab(space_id, Some(Url::new("https://example.com")), None, None, false);
+        let tab = manager.create_tab(
+            space_id,
+            Some(Url::new("https://example.com")),
+            None,
+            None,
+            false,
+        );
         let tab_id = tab.id.clone();
 
         let old_ts = now_millis() - 24 * 60 * 60 * 1000;
@@ -1370,21 +1450,36 @@ mod tests {
 
         manager.suspend_tab(&tab_id);
         manager.archive_tab(&tab_id);
-        assert!(matches!(manager.get_tab(&tab_id).unwrap().state, TabLifecycleState::Archived { .. }));
+        assert!(matches!(
+            manager.get_tab(&tab_id).unwrap().state,
+            TabLifecycleState::Archived { .. }
+        ));
 
         manager.restore_archived_tab(&tab_id);
-        assert!(matches!(manager.get_tab(&tab_id).unwrap().state, TabLifecycleState::Active));
+        assert!(matches!(
+            manager.get_tab(&tab_id).unwrap().state,
+            TabLifecycleState::Active
+        ));
 
         manager.tick_with_settings(24.0, 12.0);
 
-        assert!(matches!(manager.get_tab(&tab_id).unwrap().state, TabLifecycleState::Active));
+        assert!(matches!(
+            manager.get_tab(&tab_id).unwrap().state,
+            TabLifecycleState::Active
+        ));
     }
 
     #[test]
     fn favorite_tab_exempt_from_frozen_to_suspended() {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
-        let tab = manager.create_tab(space_id, Some(Url::new("https://example.com")), None, None, false);
+        let tab = manager.create_tab(
+            space_id,
+            Some(Url::new("https://example.com")),
+            None,
+            None,
+            false,
+        );
         let tab_id = tab.id.clone();
 
         manager.favorite_tab(&tab_id);
@@ -1397,7 +1492,10 @@ mod tests {
 
         manager.tick_with_settings(24.0, 12.0);
 
-        assert!(matches!(manager.get_tab(&tab_id).unwrap().state, TabLifecycleState::Frozen));
+        assert!(matches!(
+            manager.get_tab(&tab_id).unwrap().state,
+            TabLifecycleState::Frozen
+        ));
     }
 
     #[test]
@@ -1405,9 +1503,21 @@ mod tests {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
 
-        let tab1 = manager.create_tab(space_id.clone(), Some(Url::new("https://a.com")), None, None, false);
+        let tab1 = manager.create_tab(
+            space_id.clone(),
+            Some(Url::new("https://a.com")),
+            None,
+            None,
+            false,
+        );
         let tab1_id = tab1.id.clone();
-        let tab2 = manager.create_tab(space_id.clone(), Some(Url::new("https://b.com")), None, None, false);
+        let tab2 = manager.create_tab(
+            space_id.clone(),
+            Some(Url::new("https://b.com")),
+            None,
+            None,
+            false,
+        );
         let tab2_id = tab2.id.clone();
 
         manager.favorite_tab(&tab1_id);
@@ -1433,7 +1543,13 @@ mod tests {
     fn reopened_tab_not_re_archived_by_tick() {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
-        let tab = manager.create_tab(space_id, Some(Url::new("https://example.com")), None, None, false);
+        let tab = manager.create_tab(
+            space_id,
+            Some(Url::new("https://example.com")),
+            None,
+            None,
+            false,
+        );
         let tab_id = tab.id.clone();
 
         // Backdate creation timestamp so tab appears old
@@ -1460,22 +1576,46 @@ mod tests {
     fn test_update_tab_url() {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
-        let tab = manager.create_tab(space_id, Some(Url::new("https://example.com")), None, None, false);
+        let tab = manager.create_tab(
+            space_id,
+            Some(Url::new("https://example.com")),
+            None,
+            None,
+            false,
+        );
         let tab_id = tab.id.clone();
 
-        assert_eq!(manager.get_tab(&tab_id).unwrap().url.0.as_str(), "https://example.com");
+        assert_eq!(
+            manager.get_tab(&tab_id).unwrap().url.0.as_str(),
+            "https://example.com"
+        );
 
         manager.update_tab_url(&tab_id, Url::new("https://maho.dev"));
-        assert_eq!(manager.get_tab(&tab_id).unwrap().url.0.as_str(), "https://maho.dev");
+        assert_eq!(
+            manager.get_tab(&tab_id).unwrap().url.0.as_str(),
+            "https://maho.dev"
+        );
     }
 
     #[test]
     fn collect_child_ids_terminates_on_cycle() {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
-        let tab1 = manager.create_tab(space_id.clone(), Some(Url::new("https://a.com")), None, None, false);
+        let tab1 = manager.create_tab(
+            space_id.clone(),
+            Some(Url::new("https://a.com")),
+            None,
+            None,
+            false,
+        );
         let tab1_id = tab1.id.clone();
-        let tab2 = manager.create_tab(space_id.clone(), Some(Url::new("https://b.com")), None, None, false);
+        let tab2 = manager.create_tab(
+            space_id.clone(),
+            Some(Url::new("https://b.com")),
+            None,
+            None,
+            false,
+        );
         let tab2_id = tab2.id.clone();
 
         if let Some(t1) = manager.tabs.get_mut(&tab1_id) {
@@ -1493,7 +1633,13 @@ mod tests {
     fn find_tabs_older_than_skips_pinned() {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
-        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None, false);
+        let tab = manager.create_tab(
+            space_id.clone(),
+            Some(Url::new("https://example.com")),
+            None,
+            None,
+            false,
+        );
         let tab_id = tab.id.clone();
 
         manager.pin_tab(&tab_id);
@@ -1510,13 +1656,25 @@ mod tests {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
 
-        let old_tab = manager.create_tab(space_id.clone(), Some(Url::new("https://old.com")), None, None, false);
+        let old_tab = manager.create_tab(
+            space_id.clone(),
+            Some(Url::new("https://old.com")),
+            None,
+            None,
+            false,
+        );
         let old_id = old_tab.id.clone();
         if let Some(t) = manager.tabs.get_mut(&old_id) {
             t.last_active_at = DateTime::from_iso("2023-01-01T00:00:00.000Z");
         }
 
-        let recent_tab = manager.create_tab(space_id.clone(), Some(Url::new("https://recent.com")), None, None, false);
+        let recent_tab = manager.create_tab(
+            space_id.clone(),
+            Some(Url::new("https://recent.com")),
+            None,
+            None,
+            false,
+        );
         let recent_id = recent_tab.id.clone();
         if let Some(t) = manager.tabs.get_mut(&recent_id) {
             t.last_active_at = DateTime::from_iso("2024-06-01T00:00:00.000Z");
@@ -1533,13 +1691,25 @@ mod tests {
         let space_a = SpaceId::new("space-a");
         let space_b = SpaceId::new("space-b");
 
-        let tab_a = manager.create_tab(space_a.clone(), Some(Url::new("https://a.com")), None, None, false);
+        let tab_a = manager.create_tab(
+            space_a.clone(),
+            Some(Url::new("https://a.com")),
+            None,
+            None,
+            false,
+        );
         let id_a = tab_a.id.clone();
         if let Some(t) = manager.tabs.get_mut(&id_a) {
             t.last_active_at = DateTime::from_iso("2020-01-01T00:00:00.000Z");
         }
 
-        let tab_b = manager.create_tab(space_b.clone(), Some(Url::new("https://b.com")), None, None, false);
+        let tab_b = manager.create_tab(
+            space_b.clone(),
+            Some(Url::new("https://b.com")),
+            None,
+            None,
+            false,
+        );
         let id_b = tab_b.id.clone();
         if let Some(t) = manager.tabs.get_mut(&id_b) {
             t.last_active_at = DateTime::from_iso("2020-01-01T00:00:00.000Z");
@@ -1564,7 +1734,13 @@ mod tests {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
 
-        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None, false);
+        let tab = manager.create_tab(
+            space_id.clone(),
+            Some(Url::new("https://example.com")),
+            None,
+            None,
+            false,
+        );
         let tab_id = tab.id.clone();
 
         // 1. Initial tab activation updates last_active_at to now.
@@ -1581,7 +1757,13 @@ mod tests {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
 
-        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None, false);
+        let tab = manager.create_tab(
+            space_id.clone(),
+            Some(Url::new("https://example.com")),
+            None,
+            None,
+            false,
+        );
         let tab_id = tab.id.clone();
 
         manager.suspend_tab(&tab_id);
@@ -1599,7 +1781,13 @@ mod tests {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
 
-        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None, false);
+        let tab = manager.create_tab(
+            space_id.clone(),
+            Some(Url::new("https://example.com")),
+            None,
+            None,
+            false,
+        );
         let tab_id = tab.id.clone();
 
         manager.freeze_tab(&tab_id);
@@ -1618,7 +1806,13 @@ mod tests {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
 
-        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None, false);
+        let tab = manager.create_tab(
+            space_id.clone(),
+            Some(Url::new("https://example.com")),
+            None,
+            None,
+            false,
+        );
         let tab_id = tab.id.clone();
 
         manager.freeze_tab(&tab_id);
@@ -1639,7 +1833,13 @@ mod tests {
         let mut manager = TabLifecycleManager::new(Box::new(|_| {}));
         let space_id = SpaceId::new("space-1");
 
-        let tab = manager.create_tab(space_id.clone(), Some(Url::new("https://example.com")), None, None, false);
+        let tab = manager.create_tab(
+            space_id.clone(),
+            Some(Url::new("https://example.com")),
+            None,
+            None,
+            false,
+        );
         let tab_id = tab.id.clone();
 
         manager.freeze_tab(&tab_id);

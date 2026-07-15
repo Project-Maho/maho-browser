@@ -73,7 +73,10 @@ fn handle_event_invalid_json_returns_error_payload() {
     let ptr = maho_ffi::maho_core_new();
     let bad = CString::new("not json").unwrap();
     let result = unsafe { maho_ffi::maho_core_handle_event(ptr, bad.as_ptr()) };
-    assert!(!result.is_null(), "malformed JSON must return a non-null error payload");
+    assert!(
+        !result.is_null(),
+        "malformed JSON must return a non-null error payload"
+    );
     let json = unsafe { CStr::from_ptr(result) }.to_str().unwrap();
     let value: Value = serde_json::from_str(json).unwrap();
     assert_eq!(value["error"]["kind"], "parse");
@@ -91,8 +94,12 @@ fn get_tab_view_models_returns_seeded_first_run_tabs() {
     let json = unsafe { CStr::from_ptr(result) }.to_str().unwrap();
     let tabs: Vec<Value> = serde_json::from_str(json).unwrap();
     assert_eq!(tabs.len(), 2);
-    assert!(tabs.iter().any(|tab| tab.get("isPinned") == Some(&Value::Bool(true))));
-    assert!(tabs.iter().any(|tab| tab.get("isFavorite") == Some(&Value::Bool(true))));
+    assert!(tabs
+        .iter()
+        .any(|tab| tab.get("isPinned") == Some(&Value::Bool(true))));
+    assert!(tabs
+        .iter()
+        .any(|tab| tab.get("isFavorite") == Some(&Value::Bool(true))));
     unsafe { maho_ffi::maho_string_free(result) };
     unsafe { maho_ffi::maho_core_free(ptr) };
 }
@@ -177,12 +184,7 @@ fn legacy_preview_abi_matches_preedit() {
     let tab_id = CString::new("tab-1").unwrap();
     let data = vec![1, 2, 3];
     unsafe {
-        maho_ffi::maho_core_update_tab_preview(
-            ptr,
-            tab_id.as_ptr(),
-            data.as_ptr(),
-            data.len(),
-        );
+        maho_ffi::maho_core_update_tab_preview(ptr, tab_id.as_ptr(), data.as_ptr(), data.len());
     }
     unsafe { maho_ffi::maho_core_free(ptr) };
 }
@@ -339,12 +341,7 @@ fn test_password_list_omits_plaintext_and_reveal_succeeds() {
     let secret = CString::new("my-super-secret-password").unwrap();
 
     let added = unsafe {
-        maho_ffi::maho_core_add_password(
-            ptr,
-            domain.as_ptr(),
-            username.as_ptr(),
-            secret.as_ptr(),
-        )
+        maho_ffi::maho_core_add_password(ptr, domain.as_ptr(), username.as_ptr(), secret.as_ptr())
     };
     assert!(added);
 
@@ -360,7 +357,11 @@ fn test_password_list_omits_plaintext_and_reveal_succeeds() {
 
     // Parse the JSON to find the password ID
     let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
-    let id = parsed.as_array().unwrap()[0].get("id").unwrap().as_str().unwrap();
+    let id = parsed.as_array().unwrap()[0]
+        .get("id")
+        .unwrap()
+        .as_str()
+        .unwrap();
     let id_c = CString::new(id).unwrap();
 
     // Reveal password by ID should return the secret
@@ -386,9 +387,8 @@ fn test_sync_device_disconnect_and_rename() {
     let new_name = CString::new("Super Device").unwrap();
 
     // Renaming or disconnecting nonexistent device should return false
-    let disconnected = unsafe {
-        maho_ffi::maho_core_disconnect_sync_device(ptr, device_id.as_ptr())
-    };
+    let disconnected =
+        unsafe { maho_ffi::maho_core_disconnect_sync_device(ptr, device_id.as_ptr()) };
     assert!(!disconnected);
 
     let renamed = unsafe {
@@ -398,5 +398,3 @@ fn test_sync_device_disconnect_and_rename() {
 
     unsafe { maho_ffi::maho_core_free(ptr) };
 }
-
-

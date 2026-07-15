@@ -24,8 +24,17 @@ fn dispatch_create_tab(core: &mut MahoCore, space_id: &SpaceId, url: &str) -> Op
     None
 }
 
-fn dispatch_create_space(core: &mut MahoCore, name: &str, profile_id: &ProfileId) -> Option<SpaceId> {
-    let color = SpaceColor { hue: 0.6, saturation: 0.8, brightness: 0.9, grain: 0.0 };
+fn dispatch_create_space(
+    core: &mut MahoCore,
+    name: &str,
+    profile_id: &ProfileId,
+) -> Option<SpaceId> {
+    let color = SpaceColor {
+        hue: 0.6,
+        saturation: 0.8,
+        brightness: 0.9,
+        grain: 0.0,
+    };
     let updates = core.handle_event(ShellEvent::CreateSpace {
         name: name.to_string(),
         color,
@@ -40,7 +49,10 @@ fn dispatch_create_space(core: &mut MahoCore, name: &str, profile_id: &ProfileId
 }
 
 fn main() {
-    let path: PathBuf = std::env::args().nth(1).expect("usage: seed_initial <lmdb_dir>").into();
+    let path: PathBuf = std::env::args()
+        .nth(1)
+        .expect("usage: seed_initial <lmdb_dir>")
+        .into();
     std::fs::create_dir_all(&path).expect("mkdir lmdb_dir");
     println!("Seeding LMDB at: {}", path.display());
 
@@ -57,7 +69,11 @@ fn main() {
     let active_space_id = core.get_active_space_id();
     println!("Active space: {:?}", active_space_id);
 
-    let fav_urls = ["https://github.com/", "https://gmail.com/", "https://calendar.google.com/"];
+    let fav_urls = [
+        "https://github.com/",
+        "https://gmail.com/",
+        "https://calendar.google.com/",
+    ];
     let mut fav_ids: Vec<TabId> = Vec::new();
     for u in &fav_urls {
         if let Some(id) = dispatch_create_tab(&mut core, &active_space_id, u) {
@@ -65,11 +81,17 @@ fn main() {
         }
     }
     for tid in &fav_ids {
-        core.handle_event(ShellEvent::FavoriteTab { tab_id: tid.clone() });
+        core.handle_event(ShellEvent::FavoriteTab {
+            tab_id: tid.clone(),
+        });
     }
     println!("Favorites added: {}", fav_ids.len());
 
-    let pinned_urls = ["https://www.notion.so/", "https://www.figma.com/", "https://slack.com/"];
+    let pinned_urls = [
+        "https://www.notion.so/",
+        "https://www.figma.com/",
+        "https://slack.com/",
+    ];
     let mut pinned_ids: Vec<TabId> = Vec::new();
     for u in &pinned_urls {
         if let Some(id) = dispatch_create_tab(&mut core, &active_space_id, u) {
@@ -77,11 +99,17 @@ fn main() {
         }
     }
     for tid in &pinned_ids {
-        core.handle_event(ShellEvent::PinTab { tab_id: tid.clone() });
+        core.handle_event(ShellEvent::PinTab {
+            tab_id: tid.clone(),
+        });
     }
     println!("Pinned tabs added: {}", pinned_ids.len());
 
-    let normal_urls = ["https://stackoverflow.com/", "https://dev.to/", "https://reddit.com/"];
+    let normal_urls = [
+        "https://stackoverflow.com/",
+        "https://dev.to/",
+        "https://reddit.com/",
+    ];
     let mut normal_ids: Vec<TabId> = Vec::new();
     for u in &normal_urls {
         if let Some(id) = dispatch_create_tab(&mut core, &active_space_id, u) {
@@ -91,8 +119,14 @@ fn main() {
     println!("Normal tabs added: {}", normal_ids.len());
 
     // Suspend all seeded tabs so they start as suspended/ghost tabs
-    for tid in fav_ids.iter().chain(pinned_ids.iter()).chain(normal_ids.iter()) {
-        core.handle_event(ShellEvent::SuspendTab { tab_id: tid.clone() });
+    for tid in fav_ids
+        .iter()
+        .chain(pinned_ids.iter())
+        .chain(normal_ids.iter())
+    {
+        core.handle_event(ShellEvent::SuspendTab {
+            tab_id: tid.clone(),
+        });
     }
 
     for name in &["Reading", "Tools", "Projects"] {

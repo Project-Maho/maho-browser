@@ -145,7 +145,7 @@ fn base64_decode(input: &str) -> Option<Vec<u8>> {
     let mut bytes = Vec::new();
     let mut buffer = 0u32;
     let mut num_bits = 0;
-    
+
     for c in input.chars() {
         if c == '=' {
             break;

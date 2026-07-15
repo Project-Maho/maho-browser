@@ -32,11 +32,13 @@ class MahoSidebarLibraryRailView : public views::View {
   METADATA_HEADER(MahoSidebarLibraryRailView, views::View)
 
  public:
+  // Stable persisted IDs. Do not reorder or renumber: removed legacy rail
+  // categories previously occupied 4 and 5, so surviving values stay pinned.
   enum class Category {
-    kArchivedTabs,
-    kDownloads,
-    kMedia,
-    kSpaces,
+    kArchivedTabs = 0,
+    kDownloads = 1,
+    kMedia = 2,
+    kSpaces = 3,
   };
 
   using CategorySelectedCallback = base::RepeatingCallback<void(Category)>;

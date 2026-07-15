@@ -50,6 +50,7 @@ export interface PhotoCapture {
 export type HapticStyle = 'light' | 'medium' | 'heavy';
 
 export type SessionHandle = string;
+export type AgentHandle = string;
 export type Provider = string;
 export type Platform = 'ios' | 'android' | 'unknown';
 
@@ -64,6 +65,45 @@ export type ChatEvent =
   | { kind: 'tool_call'; toolCallId: string; name: string; args: Record<string, unknown> }
   | { kind: 'complete'; content: string }
   | { kind: 'error'; message: string };
+
+/**
+ * Normalized event from the native agent kernel.
+ *
+ * The native wire format is `{ "type": "token"|"complete"|"error", "data": <string|object> }`.
+ * This union maps those directly after normalization in use-agent-session.ts.
+ *
+ * - token:    streaming LLM delta; accumulate to build full text
+ * - complete: turn finished; fullText is the entire response
+ * - error:    turn failed; message is the AgentError display string
+ */
+export type AgentEvent =
+  | { kind: 'token'; token: string }
+  | { kind: 'complete'; fullText: string }
+  | { kind: 'error'; message: string };
+
+/**
+ * ToolDescriptor returned by agentListTools().
+ * Mirrors maho-types/src/tool.rs ToolDescriptor (camelCase serde).
+ */
+export interface AgentToolDescriptor {
+  name: string;
+  description: string;
+  /** JSON Schema object for the tool's parameters (key: "inputSchema" on wire) */
+  inputSchema: Record<string, unknown>;
+  provenance: AgentToolProvenance;
+  sensitive: boolean;
+  permission: AgentToolPermission;
+}
+
+export type AgentToolProvenance =
+  | 'builtin_browser'
+  | 'agent_local'
+  | { external: string };
+
+export type AgentToolPermission =
+  | 'auto_approve'
+  | 'session_approve'
+  | 'always_ask';
 
 export type ChatContent =
   | { kind: 'text'; text: string }
@@ -169,6 +209,20 @@ export interface MahoBridge {
 
   // --- Pinch ---
   pinchEstimateCost(pageContent: string, requestedModel?: string): Promise<CostEstimate>;
+
+  // --- Agent Session ---
+  // agentCreateSession allocates a native MahoAgentSession (opaque pointer).
+  // The returned AgentHandle is an opaque string managed by the native bridge registry.
+  // Caller MUST call agentFreeSession when done.
+  agentCreateSession(sessionId: string): Promise<AgentHandle>;
+  agentFreeSession(handle: AgentHandle): Promise<void>;
+  agentSendMessage(handle: AgentHandle, message: string): Promise<boolean>;
+  agentCancel(handle: AgentHandle): Promise<boolean>;
+  // Returns a single queued event JSON string, or null if the queue is empty.
+  // Events are `{ "type": "token"|"complete"|"error", "data": string | object }`.
+  agentPollEvent(handle: AgentHandle): Promise<string | null>;
+  // Returns JSON array of AgentToolDescriptor for the session's registered tools.
+  agentListTools(handle: AgentHandle): Promise<AgentToolDescriptor[]>;
 
   // --- Native-only actions ---
   capturePhoto(): Promise<PhotoCapture | null>;

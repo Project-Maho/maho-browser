@@ -18,6 +18,8 @@ class SharedURLLoaderFactory;
 
 namespace maho::auth {
 
+inline constexpr char kSyncRelayUrl[] = "https://sync.mahobrowser.com";
+
 // Returns decrypted access token, or empty string if not stored or decrypt
 // failed. Synchronous — only safe to call after the Encryptor is ready.
 std::string GetRelayAccessToken(PrefService* prefs,

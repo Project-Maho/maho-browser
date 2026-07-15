@@ -3,7 +3,7 @@
 **Generated:** 2026-07-14
 
 ## OVERVIEW
-TypeScript/React frontends for all WebUI surfaces (11 feature apps). Each subdirectory is a self-contained SPA compiled via GN + esbuild. Uses **shadcn + Tailwind CSS v4** with shared primitives in `maho_common/`.
+TypeScript/React frontends for WebUI surfaces. Each subdirectory is a self-contained SPA compiled via GN + esbuild. Uses **shadcn + Tailwind CSS v4** with shared primitives in `maho_common/`.
 
 ## STRUCTURE
 ```
@@ -18,8 +18,6 @@ browser/resources/
 ├── maho_ai/                  # chrome://maho-ai frontend
 ├── maho_boost/               # chrome://maho-boost frontend
 ├── maho_boost_content_script/ # Boost content script (injected into pages)
-├── maho_easel/               # chrome://maho-easel frontend
-├── maho_notes/               # chrome://maho-notes frontend
 ├── maho_routines/            # chrome://maho-routines frontend
 ├── maho_settings/            # chrome://maho-settings frontend
 ├── maho_space_config/        # chrome://maho-space-config frontend

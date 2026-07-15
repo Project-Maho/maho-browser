@@ -1,7 +1,7 @@
 use maho_core::maho_core::MahoCore;
+use maho_types::common::{ImageData, ImageFormat, Url};
 use maho_types::events::shell_event::ShellEvent;
 use maho_types::identifiers::TabId;
-use maho_types::common::{ImageData, ImageFormat, Url};
 
 #[test]
 fn test_preview_round_trip_lmdb() {
@@ -106,7 +106,10 @@ fn normal_registered_preview_round_trips() {
     core.update_tab_preview(&tab_id, image);
     let preview = core.get_tab_preview(&tab_id);
     assert!(preview.is_some());
-    assert_eq!(preview.unwrap().thumbnail.as_ref().unwrap().data, vec![1, 2, 3]);
+    assert_eq!(
+        preview.unwrap().thumbnail.as_ref().unwrap().data,
+        vec![1, 2, 3]
+    );
 }
 
 #[test]
@@ -130,7 +133,10 @@ fn legacy_private_preview_round_trips_for_mobile_compatibility() {
     core.update_tab_preview(&tab_id, image);
     let preview = core.get_tab_preview(&tab_id);
     assert!(preview.is_some());
-    assert_eq!(preview.unwrap().thumbnail.as_ref().unwrap().data, vec![4, 5, 6]);
+    assert_eq!(
+        preview.unwrap().thumbnail.as_ref().unwrap().data,
+        vec![4, 5, 6]
+    );
 }
 
 #[test]
@@ -146,5 +152,8 @@ fn unknown_legacy_behavior_matches_preedit() {
     core.update_tab_preview(&tab_id, image);
     let preview = core.get_tab_preview(&tab_id);
     assert!(preview.is_some());
-    assert_eq!(preview.unwrap().thumbnail.as_ref().unwrap().data, vec![7, 8, 9]);
+    assert_eq!(
+        preview.unwrap().thumbnail.as_ref().unwrap().data,
+        vec![7, 8, 9]
+    );
 }

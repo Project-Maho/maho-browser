@@ -395,8 +395,14 @@ impl CommandBarEngine {
 
             if !ctx.is_incognito {
                 let intent = crate::ai_search_intent::classify_query(query);
-                if intent == crate::ai_search_intent::QueryIntent::AiPreferred || intent == crate::ai_search_intent::QueryIntent::Ambiguous {
-                    let score = if intent == crate::ai_search_intent::QueryIntent::AiPreferred { 1.8 } else { 1.6 };
+                if intent == crate::ai_search_intent::QueryIntent::AiPreferred
+                    || intent == crate::ai_search_intent::QueryIntent::Ambiguous
+                {
+                    let score = if intent == crate::ai_search_intent::QueryIntent::AiPreferred {
+                        1.8
+                    } else {
+                        1.6
+                    };
                     results.push(SearchResult {
                         suggestion: SuggestionViewModel {
                             kind: SuggestionType::AiAnswer,
@@ -647,7 +653,10 @@ impl CommandBarEngine {
                                     title: entry.title.clone(),
                                     subtitle: Some(entry.url.clone()),
                                     execution_payload: Some(entry.url.clone()),
-                                    icon: entry.icon.clone().or_else(|| Self::icon_for_url(ctx, &entry.url)),
+                                    icon: entry
+                                        .icon
+                                        .clone()
+                                        .or_else(|| Self::icon_for_url(ctx, &entry.url)),
                                     relevance_score: match_result.score,
                                     match_ranges: Some(indices_to_ranges(
                                         &match_result.matched_indices,
@@ -673,7 +682,10 @@ impl CommandBarEngine {
                                 title: entry.title.clone(),
                                 subtitle: Some(entry.url.clone()),
                                 execution_payload: Some(entry.url.clone()),
-                                icon: entry.icon.clone().or_else(|| Self::icon_for_url(ctx, &entry.url)),
+                                icon: entry
+                                    .icon
+                                    .clone()
+                                    .or_else(|| Self::icon_for_url(ctx, &entry.url)),
                                 relevance_score: match_result.score,
                                 match_ranges: Some(indices_to_ranges(
                                     &match_result.matched_indices,
@@ -709,13 +721,13 @@ impl CommandBarEngine {
                     "normal" => match result.suggestion.kind {
                         SuggestionType::Action => 0.5,
                         SuggestionType::Tab => 0.3,
-                        SuggestionType::Search => 0.2,    // ← NEW
+                        SuggestionType::Search => 0.2, // ← NEW
                         SuggestionType::Folder => 0.2,
                         _ => 0.0,
                     },
                     "addressBar" => match result.suggestion.kind {
                         SuggestionType::Navigation => 0.5,
-                        SuggestionType::Search => 0.3,    // ← NEW
+                        SuggestionType::Search => 0.3, // ← NEW
                         SuggestionType::History => 0.3,
                         _ => 0.0,
                     },
@@ -1315,7 +1327,9 @@ impl CommandBarEngine {
                     if let Some(engine) = self.search_engines.iter().find(|e| {
                         if let Some(ref sc) = e.shortcut {
                             sc.eq_ignore_ascii_case(&at_shortcut)
-                                || sc.trim_start_matches('@').eq_ignore_ascii_case(shortcut_part)
+                                || sc
+                                    .trim_start_matches('@')
+                                    .eq_ignore_ascii_case(shortcut_part)
                         } else {
                             false
                         }

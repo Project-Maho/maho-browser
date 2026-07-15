@@ -1,8 +1,10 @@
-use std::collections::HashMap;
-use maho_types::boost::{Boost, BoostUpdate, ColorBoost, TypographyBoost, CaseMode, SizeMode, Point, ZenCompatBoostData};
-use maho_types::identifiers::BoostId;
+use maho_types::boost::{
+    Boost, BoostUpdate, CaseMode, ColorBoost, Point, SizeMode, TypographyBoost, ZenCompatBoostData,
+};
 use maho_types::common::DateTime;
+use maho_types::identifiers::BoostId;
 use rand::Rng;
+use std::collections::HashMap;
 
 pub struct BoostManager {
     boosts: HashMap<BoostId, Boost>,
@@ -88,7 +90,8 @@ impl BoostManager {
 
     pub fn create_temp(&mut self, domain: String) -> Boost {
         if let Some(current_active) = self.active_boosts.get(&domain).cloned() {
-            self.previous_active_boosts.insert(domain.clone(), current_active);
+            self.previous_active_boosts
+                .insert(domain.clone(), current_active);
         }
         let boost = self.create_with_name(domain.clone(), "My Boost".to_string());
         self.active_boosts.insert(domain, boost.id.clone());
@@ -286,8 +289,8 @@ impl BoostManager {
             y: (0.5 + (angle_rad.sin() as f32) * distance * 0.5).clamp(0.0, 1.0),
         };
 
-        let secondary_angle_rad = angle_rad
-            + boost.color.secondary_dot_angle_deg_delta * std::f64::consts::PI / 180.0;
+        let secondary_angle_rad =
+            angle_rad + boost.color.secondary_dot_angle_deg_delta * std::f64::consts::PI / 180.0;
         boost.color.secondary_dot_pos = Point {
             x: (0.5 + (secondary_angle_rad.cos() as f32) * distance * 0.5).clamp(0.0, 1.0),
             y: (0.5 + (secondary_angle_rad.sin() as f32) * distance * 0.5).clamp(0.0, 1.0),
@@ -716,19 +719,33 @@ mod tests {
         let json = mgr.export_boost(&boost.id).unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert!(value.get("boostName").is_some(), "must use Zen 'boostName'");
-        assert!(value.get("enableColorBoost").is_some(), "must use Zen 'enableColorBoost'");
-        assert!(value.get("textCaseOverride").is_some(), "must use Zen 'textCaseOverride'");
-        assert!(value.get("sizeOverride").is_some(), "must use Zen 'sizeOverride'");
+        assert!(
+            value.get("enableColorBoost").is_some(),
+            "must use Zen 'enableColorBoost'"
+        );
+        assert!(
+            value.get("textCaseOverride").is_some(),
+            "must use Zen 'textCaseOverride'"
+        );
+        assert!(
+            value.get("sizeOverride").is_some(),
+            "must use Zen 'sizeOverride'"
+        );
         assert!(value.get("customCSS").is_some(), "must use Zen 'customCSS'");
         assert!(value.get("name").is_none(), "must NOT use Maho 'name'");
-        assert!(value.get("domain").is_none(), "must NOT include Maho-only 'domain'");
+        assert!(
+            value.get("domain").is_none(),
+            "must NOT include Maho-only 'domain'"
+        );
     }
 
     #[test]
     fn test_import_accepts_zen_compat_with_autoTheme() {
         let mut mgr = BoostManager::new();
         let zen_json = r#"{"boostName":"X","dotPos":{"x":0,"y":0},"dotDistance":0,"dotAngleDeg":0,"secondaryDotPos":{"x":0,"y":0},"secondaryDotAngleDegDelta":0,"autoTheme":true,"enableColorBoost":true,"smartInvert":false,"contrast":0.75,"brightness":0.5,"saturation":0.5,"fontFamily":"","textCaseOverride":"none","sizeOverride":1,"zapSelectors":[],"customCSS":"","changeWasMade":true}"#;
-        let boost = mgr.import_boost("example.com".to_string(), zen_json).unwrap();
+        let boost = mgr
+            .import_boost("example.com".to_string(), zen_json)
+            .unwrap();
         assert_eq!(boost.name, "X");
         assert!(boost.color.magic_theme);
         assert!(boost.color.color_boost_enabled);
@@ -739,11 +756,15 @@ mod tests {
         let mut mgr = BoostManager::new();
         let boost = mgr.create_temp("example.com".to_string());
 
-        let result = mgr.append_zap_selector(&boost.id, ".ad-banner".to_string()).unwrap();
+        let result = mgr
+            .append_zap_selector(&boost.id, ".ad-banner".to_string())
+            .unwrap();
         assert_eq!(result.zap_selectors.len(), 1);
         assert!(result.change_was_made);
 
-        let result2 = mgr.append_zap_selector(&boost.id, ".ad-banner".to_string()).unwrap();
+        let result2 = mgr
+            .append_zap_selector(&boost.id, ".ad-banner".to_string())
+            .unwrap();
         assert_eq!(result2.zap_selectors.len(), 1);
 
         let result3 = mgr.remove_zap_selector(&boost.id, ".nonexistent").unwrap();

@@ -47,6 +47,9 @@ targets:
           - "ShareExtension/**"
       - path: Sources
       - path: Assets.xcassets
+      - path: web-ai
+        type: folder
+        buildPhase: resources
     info:
       path: Info.plist
       properties:

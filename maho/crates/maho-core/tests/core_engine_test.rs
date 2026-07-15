@@ -53,10 +53,7 @@ fn shortcut_manager_reset_single() {
     let after_reset = core.get_all_shortcuts_json();
     let original: Vec<serde_json::Value> = serde_json::from_str(&original_json).unwrap();
     let reset: Vec<serde_json::Value> = serde_json::from_str(&after_reset).unwrap();
-    let orig_binding = original
-        .iter()
-        .find(|b| b["action"] == "new_tab")
-        .unwrap();
+    let orig_binding = original.iter().find(|b| b["action"] == "new_tab").unwrap();
     let reset_binding = reset.iter().find(|b| b["action"] == "new_tab").unwrap();
     assert_eq!(orig_binding["keyCombo"], reset_binding["keyCombo"]);
 }
@@ -268,7 +265,11 @@ fn delete_active_space_falls_back_and_persists_order_name_and_profile_linkage() 
             false
         }
     });
-    assert!(space_deleted_event.is_some(), "Expected SpaceDeleted event, but got {:?}", updates);
+    assert!(
+        space_deleted_event.is_some(),
+        "Expected SpaceDeleted event, but got {:?}",
+        updates
+    );
     assert_eq!(restored.get_active_space_id(), restored_active_space_id);
 }
 
@@ -319,10 +320,8 @@ mod persistence_tests {
     fn boost_persistence_round_trip() {
         let temp_dir = temp_dir();
         let mut core = create_persisted_core(&temp_dir);
-        let boost = core.create_boost_persisted(
-            "example.com".to_string(),
-            "My Test Boost".to_string(),
-        );
+        let boost =
+            core.create_boost_persisted("example.com".to_string(), "My Test Boost".to_string());
         let boost_id = boost.id.clone();
         core.set_active_boost_persisted("example.com", Some(boost_id.clone()));
 
@@ -621,7 +620,9 @@ mod persistence_tests {
         assert!(restored.load_persisted_data().is_ok());
 
         let list = restored.list_profiles();
-        assert!(list.iter().any(|p| p.id == profile_id && p.name == "Test Profile"));
+        assert!(list
+            .iter()
+            .any(|p| p.id == profile_id && p.name == "Test Profile"));
     }
 
     #[test]
@@ -677,7 +678,10 @@ mod persistence_tests {
         };
 
         let res = core.set_shortcut_persisted("reload_tab", reserved_combo);
-        assert!(matches!(res, Err(maho_types::keyboard::SetShortcutError::Reserved)));
+        assert!(matches!(
+            res,
+            Err(maho_types::keyboard::SetShortcutError::Reserved)
+        ));
     }
 
     #[test]
@@ -805,8 +809,7 @@ mod persistence_tests {
         assert!(import_result.is_ok());
 
         let after_import = core.get_all_shortcuts_json();
-        let after_bindings: Vec<serde_json::Value> =
-            serde_json::from_str(&after_import).unwrap();
+        let after_bindings: Vec<serde_json::Value> = serde_json::from_str(&after_import).unwrap();
         let new_tab_binding = after_bindings
             .iter()
             .find(|b| b["action"] == "new_tab")
@@ -848,7 +851,9 @@ fn pin_unpin_routed_through_transition_seam() {
     assert_eq!(vm_before.role, TabRole::Normal);
     assert!(!vm_before.is_pinned);
 
-    let pin_updates = core.handle_event(ShellEvent::PinTab { tab_id: tab_id.clone() });
+    let pin_updates = core.handle_event(ShellEvent::PinTab {
+        tab_id: tab_id.clone(),
+    });
 
     assert!(
         pin_updates.iter().any(|u| matches!(
@@ -867,7 +872,9 @@ fn pin_unpin_routed_through_transition_seam() {
     assert_eq!(vm_pinned.role, TabRole::Pinned);
     assert!(vm_pinned.is_pinned);
 
-    let unpin_updates = core.handle_event(ShellEvent::UnpinTab { tab_id: tab_id.clone() });
+    let unpin_updates = core.handle_event(ShellEvent::UnpinTab {
+        tab_id: tab_id.clone(),
+    });
 
     assert!(
         unpin_updates.iter().any(|u| matches!(

@@ -1,10 +1,10 @@
-use std::path::PathBuf;
 use maho_core::maho_core::MahoCore;
 use maho_types::common::Url;
 use maho_types::events::core_update::CoreUpdate;
 use maho_types::events::shell_event::ShellEvent;
 use maho_types::identifiers::{ProfileId, SpaceId, TabId};
 use maho_types::space::SpaceColor;
+use std::path::PathBuf;
 
 fn dispatch_create_tab(core: &mut MahoCore, space_id: &SpaceId, url: &str) -> Option<TabId> {
     let updates = core.handle_event(ShellEvent::CreateTab {
@@ -23,8 +23,17 @@ fn dispatch_create_tab(core: &mut MahoCore, space_id: &SpaceId, url: &str) -> Op
     None
 }
 
-fn dispatch_create_space(core: &mut MahoCore, name: &str, profile_id: &ProfileId) -> Option<SpaceId> {
-    let color = SpaceColor { hue: 0.6, saturation: 0.8, brightness: 0.9, grain: 0.0 };
+fn dispatch_create_space(
+    core: &mut MahoCore,
+    name: &str,
+    profile_id: &ProfileId,
+) -> Option<SpaceId> {
+    let color = SpaceColor {
+        hue: 0.6,
+        saturation: 0.8,
+        brightness: 0.9,
+        grain: 0.0,
+    };
     let updates = core.handle_event(ShellEvent::CreateSpace {
         name: name.to_string(),
         color,
@@ -39,13 +48,19 @@ fn dispatch_create_space(core: &mut MahoCore, name: &str, profile_id: &ProfileId
 }
 
 fn main() {
-    let path: PathBuf = std::env::args().nth(1).expect("usage: seed_look_and_feel <lmdb_dir>").into();
+    let path: PathBuf = std::env::args()
+        .nth(1)
+        .expect("usage: seed_look_and_feel <lmdb_dir>")
+        .into();
     // Clean up directory if it exists to ensure clean seed
     if path.exists() {
         let _ = std::fs::remove_dir_all(&path);
     }
     std::fs::create_dir_all(&path).expect("mkdir lmdb_dir");
-    println!("Seeding LMDB and SQLite for visual QA at: {}", path.display());
+    println!(
+        "Seeding LMDB and SQLite for visual QA at: {}",
+        path.display()
+    );
 
     let lmdb_path = path.join("state");
     let sqlite_path = path.join("maho.db");
@@ -85,12 +100,18 @@ fn main() {
         }
     }
     for tid in &fav_ids {
-        core.handle_event(ShellEvent::FavoriteTab { tab_id: tid.clone() });
+        core.handle_event(ShellEvent::FavoriteTab {
+            tab_id: tid.clone(),
+        });
     }
     println!("Favorites added: {}", fav_ids.len());
 
     // Pinned tabs
-    let pinned_urls = ["https://www.notion.so/", "https://www.figma.com/", "https://slack.com/"];
+    let pinned_urls = [
+        "https://www.notion.so/",
+        "https://www.figma.com/",
+        "https://slack.com/",
+    ];
     let mut pinned_ids: Vec<TabId> = Vec::new();
     for u in &pinned_urls {
         if let Some(id) = dispatch_create_tab(&mut core, &active_space_id, u) {
@@ -98,7 +119,9 @@ fn main() {
         }
     }
     for tid in &pinned_ids {
-        core.handle_event(ShellEvent::PinTab { tab_id: tid.clone() });
+        core.handle_event(ShellEvent::PinTab {
+            tab_id: tid.clone(),
+        });
     }
     println!("Pinned tabs added: {}", pinned_ids.len());
 
@@ -117,8 +140,14 @@ fn main() {
     println!("Normal tabs added: {}", normal_ids.len());
 
     // Suspend all seeded tabs
-    for tid in fav_ids.iter().chain(pinned_ids.iter()).chain(normal_ids.iter()) {
-        core.handle_event(ShellEvent::SuspendTab { tab_id: tid.clone() });
+    for tid in fav_ids
+        .iter()
+        .chain(pinned_ids.iter())
+        .chain(normal_ids.iter())
+    {
+        core.handle_event(ShellEvent::SuspendTab {
+            tab_id: tid.clone(),
+        });
     }
 
     // Create extra spaces for space switcher parity

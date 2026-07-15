@@ -18,15 +18,29 @@ pub fn default_db_path() -> PathBuf {
     user_data_dir().join("MahoCore").join("maho.db")
 }
 
+pub fn open_storage(db_path: &std::path::Path) -> Result<SqliteStorage, maho_storage::StorageError> {
+    if let Some(parent) = db_path.parent() {
+        let key_path = parent.join("maho_storage.key");
+        let mut key_bytes = [0u8; 16];
+        let mut status = 0;
+        if maho_core::oscrypt::derive_key(&key_path.to_string_lossy(), &mut key_bytes, &mut status) {
+            let hex_key: String = key_bytes.iter().map(|b| format!("{:02x}", b)).collect();
+            let _ = maho_storage::sqlite::set_sqlcipher_key(&hex_key);
+        }
+    }
+    SqliteStorage::open(&db_path.to_string_lossy())
+}
+
 pub async fn resolve_workspace_id(
     db_path: &std::path::Path,
     override_workspace: Option<&str>,
 ) -> anyhow::Result<String> {
-    let db_path_str = db_path.to_string_lossy().to_string();
+    let db_path_buf = db_path.to_path_buf();
     let override_workspace = override_workspace.map(|s| s.to_string());
 
     tokio::task::spawn_blocking(move || {
-        let storage = SqliteStorage::open(&db_path_str)
+        let db_path_str = db_path_buf.to_string_lossy().to_string();
+        let storage = open_storage(&db_path_buf)
             .map_err(|e| anyhow::anyhow!("Failed to open database at {}: {}", db_path_str, e))?;
 
         let workspaces = storage.list_workspaces()
@@ -113,7 +127,7 @@ mod tests {
     async fn test_resolve_workspace_by_id_or_name() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("maho.db");
-        let storage = SqliteStorage::open(&db_path.to_string_lossy()).unwrap();
+        let storage = open_storage(&db_path).unwrap();
 
         let ws1 = make_test_workspace("ws-1", "First Workspace", None);
         let ws2 = make_test_workspace("ws-2", "Second Workspace", Some("/tmp/project"));
@@ -140,7 +154,7 @@ mod tests {
     async fn test_resolve_workspace_current_fallback() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("maho.db");
-        let storage = SqliteStorage::open(&db_path.to_string_lossy()).unwrap();
+        let storage = open_storage(&db_path).unwrap();
 
         let ws1 = make_test_workspace("ws-1", "Default Workspace", None);
         storage.create_workspace(&ws1).unwrap();

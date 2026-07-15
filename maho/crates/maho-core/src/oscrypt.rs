@@ -1,11 +1,11 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
+use pbkdf2::pbkdf2_hmac;
+use rand::RngCore;
+use sha1::Sha1;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
-use pbkdf2::pbkdf2_hmac;
-use sha1::Sha1;
-use rand::RngCore;
 
 pub fn derive_key(password_file_path: &str, out_key: &mut [u8; 16], out_status: &mut u32) -> bool {
     let path = Path::new(password_file_path);

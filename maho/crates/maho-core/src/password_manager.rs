@@ -35,7 +35,12 @@ impl PasswordManager {
         self.passwords.len() < len_before
     }
 
-    pub fn add_password(&mut self, domain: String, username: String, password: Option<String>) -> &SavedPassword {
+    pub fn add_password(
+        &mut self,
+        domain: String,
+        username: String,
+        password: Option<String>,
+    ) -> &SavedPassword {
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
         let password = SavedPassword {

@@ -17,10 +17,13 @@ type IconName =
   | 'loader'
   | 'x'
   | 'chevron-left'
+  | 'chevron-down'
   | 'circle-alert'
   | 'download'
   | 'wifi-off'
   | 'settings'
+  | 'arrow-up'
+  | 'square'
   | 'bot';
 
 interface IconProps {
@@ -65,6 +68,7 @@ const paths: Record<IconName, JSX.Element> = {
   ),
   x: <path d="M18 6 6 18M6 6l12 12" />,
   'chevron-left': <path d="m15 18-6-6 6-6" />,
+  'chevron-down': <path d="m6 9 6 6 6-6" />,
   'circle-alert': (
     <>
       <circle cx="12" cy="12" r="10" />
@@ -92,6 +96,8 @@ const paths: Record<IconName, JSX.Element> = {
       <circle cx="12" cy="12" r="3" />
     </>
   ),
+  'arrow-up': <path d="m5 12 7-7 7 7M12 19V5" />,
+  square: <rect width="12" height="12" x="6" y="6" rx="1" fill="currentColor" />,
   bot: (
     <>
       <path d="M12 8V4H8" />
@@ -101,7 +107,15 @@ const paths: Record<IconName, JSX.Element> = {
   ),
 };
 
-export function Icon({ name, size = 20, class: className, ...rest }: IconProps) {
+export function Icon({
+  name,
+  size = 20,
+  class: className,
+  'aria-label': ariaLabel,
+  'aria-hidden': ariaHidden,
+}: IconProps) {
+  const hidden = ariaHidden ?? (ariaLabel ? undefined : true);
+
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -114,8 +128,11 @@ export function Icon({ name, size = 20, class: className, ...rest }: IconProps) 
       stroke-linecap="round"
       stroke-linejoin="round"
       class={clsx('inline-block shrink-0', className)}
-      {...rest}
+      aria-hidden={hidden}
+      aria-label={ariaLabel}
+      role={ariaLabel ? 'img' : undefined}
     >
+      {ariaLabel && <title>{ariaLabel}</title>}
       {paths[name]}
     </svg>
   );

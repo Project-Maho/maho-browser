@@ -8,7 +8,9 @@ fn test_sync_sqlite_integration_flow() {
     core.start_sync("wss://localhost:8080", "room-123");
 
     let payload = serde_json::json!({"action": "test-action", "enabled": true}).to_string();
-    let version = core.next_hlc_ts().expect("next_hlc_ts should succeed on in-memory storage");
+    let version = core
+        .next_hlc_ts()
+        .expect("next_hlc_ts should succeed on in-memory storage");
     let entity = SyncEntity {
         entity_type: SyncEntityType::Shortcut,
         entity_id: "test-action".to_string(),
@@ -28,7 +30,11 @@ fn test_sync_sqlite_integration_flow() {
     let outgoing = core.drain_sync_outgoing();
     assert_eq!(outgoing.len(), 1);
 
-    let pending = core.storage_ref().unwrap().load_pending_sync_entities().unwrap();
+    let pending = core
+        .storage_ref()
+        .unwrap()
+        .load_pending_sync_entities()
+        .unwrap();
     assert!(pending.is_empty());
 
     core.ack_sync_entity("shortcut", "test-action", version);
@@ -179,7 +185,11 @@ fn test_sync_queue_survives_restart_and_flushes() {
             .unwrap()
             .load_pending_sync_entities()
             .unwrap();
-        assert_eq!(pending.len(), 1, "entity should be persisted while sync_manager is None");
+        assert_eq!(
+            pending.len(),
+            1,
+            "entity should be persisted while sync_manager is None"
+        );
     }
 
     {

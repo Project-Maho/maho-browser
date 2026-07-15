@@ -33,7 +33,7 @@ export interface MojoPageHandlerFactory<TRouter, THandler> {
  * @example
  * ```ts
  * import {PageCallbackRouter, PageHandlerFactory, PageHandlerRemote}
- *     from '../maho_notes.mojom-webui.js';
+ *     from '../maho_routines.mojom-webui.js';
  * import {bindMojoPageHandler} from '//resources/maho_common/react/use_mojo.js';
  *
  * const {router, handler} = bindMojoPageHandler(

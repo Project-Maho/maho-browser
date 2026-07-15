@@ -40,7 +40,9 @@ fn test_multi_window_split_view_isolation() {
     assert_eq!(config2.panes[0].tab_id.0, "tab-3");
 
     // Clear window-1 split
-    core.handle_event(ShellEvent::ClearSplitView { window_id: w1.clone() });
+    core.handle_event(ShellEvent::ClearSplitView {
+        window_id: w1.clone(),
+    });
     assert!(core.get_split_view_config(&w1).is_none());
     assert!(core.get_split_view_config(&w2).is_some());
 }
@@ -61,12 +63,17 @@ fn test_split_view_events_emit_changed() {
     });
 
     assert_eq!(updates.len(), 1);
-    if let CoreUpdate::SplitViewChanged { window_id, config, schema_version } = &updates[0] {
+    if let CoreUpdate::SplitViewChanged {
+        window_id,
+        config,
+        schema_version,
+    } = &updates[0]
+    {
         assert_eq!(window_id, &w);
         assert_eq!(*schema_version, 1);
         let cfg = config.as_ref().unwrap();
         assert_eq!(cfg.panes.len(), 3);
-        assert_eq!(cfg.ratios, vec![1.0/3.0, 1.0/3.0, 1.0/3.0]);
+        assert_eq!(cfg.ratios, vec![1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]);
     } else {
         panic!("Expected SplitViewChanged");
     }

@@ -24,23 +24,23 @@ impl TabLifecycleState {
 }
 
 #[non_exhaustive]
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum TabRole {
+    #[default]
     Normal,
     Pinned,
-    Favorite { order: u32 },
-}
-
-impl Default for TabRole {
-    fn default() -> Self { TabRole::Normal }
+    Favorite {
+        order: u32,
+    },
 }
 
 impl TabRole {
     pub fn is_pinned(&self) -> bool {
         matches!(self, TabRole::Pinned | TabRole::Favorite { .. })
     }
-    pub fn is_favorite(&self) -> bool { // L3-EXEMPT: role query helper
+    pub fn is_favorite(&self) -> bool {
+        // L3-EXEMPT: role query helper
         matches!(self, TabRole::Favorite { .. })
     }
     pub fn favorite_order(&self) -> Option<u32> {
@@ -90,10 +90,18 @@ impl Serialize for Tab {
         // 13 always-serialized fields + 3 mixed-version sync compat fields (T7.1). // L3-EXEMPT: field-count doc
         const BASE_FIELDS: usize = 13 + 3;
         let mut count = BASE_FIELDS;
-        if self.custom_title.is_some() { count += 1; }
-        if self.pinned_url.is_some() { count += 1; }
-        if self.window_id.is_some() { count += 1; }
-        if self.is_private { count += 1; }
+        if self.custom_title.is_some() {
+            count += 1;
+        }
+        if self.pinned_url.is_some() {
+            count += 1;
+        }
+        if self.window_id.is_some() {
+            count += 1;
+        }
+        if self.is_private {
+            count += 1;
+        }
 
         let mut state = serializer.serialize_struct("Tab", count)?;
         state.serialize_field("id", &self.id)?;
@@ -171,11 +179,14 @@ impl<'de> Deserialize<'de> for Tab {
         }
 
         let helper = TabHelper::deserialize(deserializer)?;
-        
+
         let role = if let Some(r) = helper.role {
             r
-        } else if helper.is_favorite.unwrap_or(false) { // L3-EXEMPT
-            TabRole::Favorite { order: helper.favorite_order.unwrap_or(0) }
+        } else if helper.is_favorite.unwrap_or(false) {
+            // L3-EXEMPT
+            TabRole::Favorite {
+                order: helper.favorite_order.unwrap_or(0),
+            }
         } else if helper.is_pinned.unwrap_or(false) {
             TabRole::Pinned
         } else {
@@ -210,7 +221,8 @@ mod tests {
 
     #[test]
     fn test_deserialize_old_schema() {
-        let old_json = format!(r#"{{
+        let old_json = format!(
+            r#"{{
             "id": "tab-1",
             "parentId": null,
             "spaceId": "space-1",
@@ -229,12 +241,15 @@ mod tests {
             "isPinned": true,
             "{}": true,
             "favoriteOrder": 3
-        }}"#, concat!("is", "Favorite"));
+        }}"#,
+            concat!("is", "Favorite")
+        );
 
         let tab: Tab = serde_json::from_str(&old_json).unwrap();
         assert_eq!(tab.role, TabRole::Favorite { order: 3 });
 
-        let old_pinned_json = format!(r#"{{
+        let old_pinned_json = format!(
+            r#"{{
             "id": "tab-2",
             "parentId": null,
             "spaceId": "space-1",
@@ -253,7 +268,9 @@ mod tests {
             "isPinned": true,
             "{}": false,
             "favoriteOrder": null
-        }}"#, concat!("is", "Favorite"));
+        }}"#,
+            concat!("is", "Favorite")
+        );
         let tab: Tab = serde_json::from_str(&old_pinned_json).unwrap();
         assert_eq!(tab.role, TabRole::Pinned);
     }

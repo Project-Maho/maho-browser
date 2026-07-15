@@ -14,7 +14,8 @@ fn test_sync_all_entities_round_trip() {
         "action": "navigate_back",
         "enabled": true,
         "keyCombo": {"key": "b", "modifiers": ["cmd"]}
-    }).to_string();
+    })
+    .to_string();
     let e_shortcut = SyncEntity {
         entity_type: SyncEntityType::Shortcut,
         entity_id: "navigate_back".to_string(),
@@ -35,7 +36,8 @@ fn test_sync_all_entities_round_trip() {
     let extension_payload = serde_json::json!({
         "id": "ext-1",
         "enabled": true
-    }).to_string();
+    })
+    .to_string();
     let e_extension = SyncEntity {
         entity_type: SyncEntityType::Extension,
         entity_id: "ext-1".to_string(),
@@ -66,7 +68,8 @@ fn test_sync_all_entities_round_trip() {
         "createdAt": "2026-07-09T00:00:00Z",
         "lastActiveAt": "2026-07-09T00:00:00Z",
         "scrollPosition": {"x": 0.0, "y": 0.0}
-    }).to_string();
+    })
+    .to_string();
     let e_tab = SyncEntity {
         entity_type: SyncEntityType::Tab,
         entity_id: "tab-1".to_string(),
@@ -81,7 +84,10 @@ fn test_sync_all_entities_round_trip() {
     };
     let applied = core.apply_sync_remote_entities(vec![e_tab]);
     assert_eq!(applied.len(), 1);
-    assert!(core.get_tab_view_models().iter().any(|t| t.id.to_string() == "tab-1"));
+    assert!(core
+        .get_tab_view_models()
+        .iter()
+        .any(|t| t.id.to_string() == "tab-1"));
 
     // 4. Space
     let space_payload = serde_json::json!({
@@ -98,7 +104,8 @@ fn test_sync_all_entities_round_trip() {
         "isActive": true,
         "createdAt": "2026-07-09T00:00:00Z",
         "lastActiveTabId": null
-    }).to_string();
+    })
+    .to_string();
     let e_space = SyncEntity {
         entity_type: SyncEntityType::Space,
         entity_id: "space-1".to_string(),
@@ -113,7 +120,10 @@ fn test_sync_all_entities_round_trip() {
     };
     let applied = core.apply_sync_remote_entities(vec![e_space]);
     assert_eq!(applied.len(), 1);
-    assert!(core.get_space_view_models().iter().any(|s| s.id.to_string() == "space-1"));
+    assert!(core
+        .get_space_view_models()
+        .iter()
+        .any(|s| s.id.to_string() == "space-1"));
 
     // 5. Bookmark
     let bookmark_payload = serde_json::json!({
@@ -123,7 +133,8 @@ fn test_sync_all_entities_round_trip() {
         "folder_id": null,
         "favicon": null,
         "created_at": "2026-07-09T00:00:00Z"
-    }).to_string();
+    })
+    .to_string();
     let e_bookmark = SyncEntity {
         entity_type: SyncEntityType::Bookmark,
         entity_id: "bm-1".to_string(),
@@ -138,7 +149,10 @@ fn test_sync_all_entities_round_trip() {
     };
     let applied = core.apply_sync_remote_entities(vec![e_bookmark]);
     assert_eq!(applied.len(), 1);
-    assert!(core.search_bookmarks("Google").iter().any(|b| b.0 == "bm-1"));
+    assert!(core
+        .search_bookmarks("Google")
+        .iter()
+        .any(|b| b.0 == "bm-1"));
 
     // 6. Note
     let note_payload = serde_json::json!({
@@ -148,7 +162,8 @@ fn test_sync_all_entities_round_trip() {
         "content": "Secret note",
         "createdAt": "2026-07-09T00:00:00Z",
         "updatedAt": "2026-07-09T00:00:00Z"
-    }).to_string();
+    })
+    .to_string();
     let e_note = SyncEntity {
         entity_type: SyncEntityType::Note,
         entity_id: "note-1".to_string(),
@@ -163,7 +178,10 @@ fn test_sync_all_entities_round_trip() {
     };
     let applied = core.apply_sync_remote_entities(vec![e_note]);
     assert_eq!(applied.len(), 1);
-    assert!(core.get_note_view_models().iter().any(|n| n.id.to_string() == "note-1"));
+    assert!(core
+        .get_note_view_models()
+        .iter()
+        .any(|n| n.id.to_string() == "note-1"));
 
     // 7. Boost
     let boost_payload = serde_json::json!({
@@ -193,7 +211,8 @@ fn test_sync_all_entities_round_trip() {
         "changeWasMade": false,
         "createdAt": "2026-07-09T00:00:00Z",
         "updatedAt": "2026-07-09T00:00:00Z"
-    }).to_string();
+    })
+    .to_string();
     let e_boost = SyncEntity {
         entity_type: SyncEntityType::Boost,
         entity_id: "boost-1".to_string(),
@@ -208,7 +227,9 @@ fn test_sync_all_entities_round_trip() {
     };
     let applied = core.apply_sync_remote_entities(vec![e_boost]);
     assert_eq!(applied.len(), 1);
-    assert!(core.get_boost_by_id(&maho_types::identifiers::BoostId::new("boost-1")).is_some());
+    assert!(core
+        .get_boost_by_id(&maho_types::identifiers::BoostId::new("boost-1"))
+        .is_some());
 
     // 8. ReadingListItem
     let item_payload = serde_json::json!({
@@ -225,7 +246,8 @@ fn test_sync_all_entities_round_trip() {
         "estimated_read_minutes": null,
         "offline_content": null,
         "tags": []
-    }).to_string();
+    })
+    .to_string();
     let e_item = SyncEntity {
         entity_type: SyncEntityType::ReadingListItem,
         entity_id: "item-1".to_string(),
@@ -250,7 +272,8 @@ fn test_sync_all_entities_round_trip() {
         "shortcut": "@w",
         "iconUrl": null,
         "isDefault": false
-    }).to_string();
+    })
+    .to_string();
     let e_engine = SyncEntity {
         entity_type: SyncEntityType::SearchEngine,
         entity_id: "engine-1".to_string(),
@@ -265,7 +288,10 @@ fn test_sync_all_entities_round_trip() {
     };
     let applied = core.apply_sync_remote_entities(vec![e_engine]);
     assert_eq!(applied.len(), 1);
-    assert!(core.get_search_engines().iter().any(|se| se.id == "engine-1"));
+    assert!(core
+        .get_search_engines()
+        .iter()
+        .any(|se| se.id == "engine-1"));
 
     // 10. Memory
     let memory_payload = serde_json::json!({
@@ -275,7 +301,8 @@ fn test_sync_all_entities_round_trip() {
         "categories": "tech",
         "importance": 0.9,
         "metadata": null
-    }).to_string();
+    })
+    .to_string();
     let e_memory = SyncEntity {
         entity_type: SyncEntityType::Memory,
         entity_id: "memory-1".to_string(),

@@ -258,11 +258,11 @@ fn is_space_management_event() {
     let evt = ShellEvent::CreateSpace {
         name: "Work".to_string(),
         color: SpaceColor {
-                hue: 200.0,
-                saturation: 0.8,
-                brightness: 0.9,
-                grain: 0.0,
-            },
+            hue: 200.0,
+            saturation: 0.8,
+            brightness: 0.9,
+            grain: 0.0,
+        },
         profile_id: maho_types::identifiers::ProfileId::new(""),
     };
     assert!(evt.is_space_management_event());
@@ -522,7 +522,10 @@ fn pinned_close_behavior_defaults_to_switch_when_missing() {
         "siteSearchEntries": []
     }"#;
     let settings: GeneralSettings = serde_json::from_str(json).unwrap();
-    assert!(matches!(settings.pinned_close_behavior, PinnedCloseBehavior::Switch));
+    assert!(matches!(
+        settings.pinned_close_behavior,
+        PinnedCloseBehavior::Switch
+    ));
 }
 
 #[test]
@@ -545,7 +548,10 @@ fn pinned_close_behavior_round_trips_reset_unload_switch() {
     let serialized = serde_json::to_string(&original).unwrap();
     assert!(serialized.contains("reset-unload-switch"));
     let deserialized: GeneralSettings = serde_json::from_str(&serialized).unwrap();
-    assert!(matches!(deserialized.pinned_close_behavior, PinnedCloseBehavior::ResetUnloadSwitch));
+    assert!(matches!(
+        deserialized.pinned_close_behavior,
+        PinnedCloseBehavior::ResetUnloadSwitch
+    ));
 }
 
 // === SuggestionType wire-format contract (Rust <-> Swift) ===

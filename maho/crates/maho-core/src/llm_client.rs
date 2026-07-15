@@ -4,10 +4,10 @@
 //! `response_format: json_object`. Reuses user-configured provider/key/model
 //! (read at MemoryManager::set_auth time from C++ prefs).
 
+use crate::error::CoreError;
+use crate::memory_manager::{AuthSnapshot, RawFact};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use crate::memory_manager::{AuthSnapshot, RawFact};
-use crate::error::CoreError;
 
 const FACT_EXTRACTION_SYSTEM: &str =
     "You extract durable user facts from text. Return ONLY a JSON object with this shape: \
@@ -37,7 +37,10 @@ struct FactsEnvelope {
     facts: Vec<RawFact>,
 }
 
-pub async fn extract_facts_json(auth: &AuthSnapshot, text: &str) -> Result<Vec<RawFact>, CoreError> {
+pub async fn extract_facts_json(
+    auth: &AuthSnapshot,
+    text: &str,
+) -> Result<Vec<RawFact>, CoreError> {
     let body = if auth.provider == "anthropic" {
         json!({
             "model": auth.model,
@@ -70,11 +73,13 @@ pub async fn extract_facts_json(auth: &AuthSnapshot, text: &str) -> Result<Vec<R
             .header("x-api-key", &auth.api_key)
             .header("anthropic-version", "2023-06-01")
             .json(&body)
-            .send().await
+            .send()
+            .await
             .map_err(|e| CoreError::Network(e.to_string()))?
             .error_for_status()
             .map_err(|e| CoreError::Network(e.to_string()))?
-            .text().await
+            .text()
+            .await
             .map_err(|e| CoreError::Network(e.to_string()))?;
 
         // Anthropic response: {"content":[{"type":"text","text":"..."}], ...}
@@ -90,15 +95,20 @@ pub async fn extract_facts_json(auth: &AuthSnapshot, text: &str) -> Result<Vec<R
             .post(&url)
             .bearer_auth(&auth.api_key)
             .json(&body)
-            .send().await
+            .send()
+            .await
             .map_err(|e| CoreError::Network(e.to_string()))?
             .error_for_status()
             .map_err(|e| CoreError::Network(e.to_string()))?
-            .json().await
+            .json()
+            .await
             .map_err(|e| CoreError::Network(e.to_string()))?;
-        resp.choices.into_iter().next()
+        resp.choices
+            .into_iter()
+            .next()
             .ok_or_else(|| CoreError::Parse("no choices".into()))?
-            .message.content
+            .message
+            .content
     };
 
     let cleaned_content = clean_json_codeblock(&content);
@@ -111,9 +121,9 @@ pub async fn extract_facts_json(auth: &AuthSnapshot, text: &str) -> Result<Vec<R
 fn clean_json_codeblock(s: &str) -> String {
     let s = s.trim();
     if s.starts_with("```json") && s.ends_with("```") {
-        s[7..s.len()-3].to_string()
+        s[7..s.len() - 3].to_string()
     } else if s.starts_with("```") && s.ends_with("```") {
-        s[3..s.len()-3].to_string()
+        s[3..s.len() - 3].to_string()
     } else {
         s.to_string()
     }
@@ -138,16 +148,19 @@ pub async fn summarize_browsing(auth: &AuthSnapshot, text: &str) -> Result<Strin
             .header("x-api-key", &auth.api_key)
             .header("anthropic-version", "2023-06-01")
             .json(&body)
-            .send().await
+            .send()
+            .await
             .map_err(|e| CoreError::Network(e.to_string()))?
             .error_for_status()
             .map_err(|e| CoreError::Network(e.to_string()))?
-            .text().await
+            .text()
+            .await
             .map_err(|e| CoreError::Network(e.to_string()))?;
 
         let json: Value = serde_json::from_str(&resp_text)
             .map_err(|e| CoreError::Parse(format!("json parse: {e}")))?;
-        Ok(json.pointer("/content/0/text")
+        Ok(json
+            .pointer("/content/0/text")
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string())
@@ -157,14 +170,20 @@ pub async fn summarize_browsing(auth: &AuthSnapshot, text: &str) -> Result<Strin
             .post(&url)
             .bearer_auth(&auth.api_key)
             .json(&body)
-            .send().await
+            .send()
+            .await
             .map_err(|e| CoreError::Network(e.to_string()))?
             .error_for_status()
             .map_err(|e| CoreError::Network(e.to_string()))?
-            .json().await
+            .json()
+            .await
             .map_err(|e| CoreError::Network(e.to_string()))?;
-        Ok(resp.choices.into_iter().next()
+        Ok(resp
+            .choices
+            .into_iter()
+            .next()
             .ok_or_else(|| CoreError::Parse("no choices".into()))?
-            .message.content)
+            .message
+            .content)
     }
 }

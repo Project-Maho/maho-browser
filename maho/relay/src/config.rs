@@ -17,55 +17,66 @@ pub struct RelayConfig {
 
 impl RelayConfig {
     pub fn from_env(env: &Env) -> Self {
-        let require_auth = env.var("REQUIRE_AUTH")
+        let require_auth = env
+            .var("REQUIRE_AUTH")
             .map(|v| v.to_string() == "true")
             .unwrap_or(true);
-            
-        let open_registration = env.var("OPEN_REGISTRATION")
+
+        let open_registration = env
+            .var("OPEN_REGISTRATION")
             .map(|v| v.to_string() == "true")
             .unwrap_or(false);
-            
-        let signup_rate_limit_per_ip_per_minute = env.var("SIGNUP_RATE_LIMIT_PER_IP_PER_MINUTE")
+
+        let signup_rate_limit_per_ip_per_minute = env
+            .var("SIGNUP_RATE_LIMIT_PER_IP_PER_MINUTE")
             .ok()
             .and_then(|v| v.to_string().parse().ok())
             .unwrap_or(3);
-            
-        let login_rate_limit_per_ip_per_minute = env.var("LOGIN_RATE_LIMIT_PER_IP_PER_MINUTE")
+
+        let login_rate_limit_per_ip_per_minute = env
+            .var("LOGIN_RATE_LIMIT_PER_IP_PER_MINUTE")
             .ok()
             .and_then(|v| v.to_string().parse().ok())
             .unwrap_or(10);
-            
-        let min_password_length = env.var("MIN_PASSWORD_LENGTH")
+
+        let min_password_length = env
+            .var("MIN_PASSWORD_LENGTH")
             .ok()
             .and_then(|v| v.to_string().parse().ok())
             .unwrap_or(12);
-            
-        let max_room_size_mb = env.var("MAX_ROOM_SIZE_MB")
+
+        let max_room_size_mb = env
+            .var("MAX_ROOM_SIZE_MB")
             .ok()
             .and_then(|v| v.to_string().parse().ok())
             .unwrap_or(50);
-            
-        let max_message_size_bytes = env.var("MAX_MESSAGE_SIZE_BYTES")
+
+        let max_message_size_bytes = env
+            .var("MAX_MESSAGE_SIZE_BYTES")
             .ok()
             .and_then(|v| v.to_string().parse().ok())
             .unwrap_or(1_048_576);
-            
-        let max_connections_per_room = env.var("MAX_CONNECTIONS_PER_ROOM")
+
+        let max_connections_per_room = env
+            .var("MAX_CONNECTIONS_PER_ROOM")
             .ok()
             .and_then(|v| v.to_string().parse().ok())
             .unwrap_or(5);
-            
-        let max_connections_per_ip = env.var("MAX_CONNECTIONS_PER_IP")
+
+        let max_connections_per_ip = env
+            .var("MAX_CONNECTIONS_PER_IP")
             .ok()
             .and_then(|v| v.to_string().parse().ok())
             .unwrap_or(20);
-            
-        let max_rooms_per_ip = env.var("MAX_ROOMS_PER_IP")
+
+        let max_rooms_per_ip = env
+            .var("MAX_ROOMS_PER_IP")
             .ok()
             .and_then(|v| v.to_string().parse().ok())
             .unwrap_or(10);
-            
-        let retention_days = env.var("RETENTION_DAYS")
+
+        let retention_days = env
+            .var("RETENTION_DAYS")
             .ok()
             .and_then(|v| v.to_string().parse().ok())
             .unwrap_or(30);

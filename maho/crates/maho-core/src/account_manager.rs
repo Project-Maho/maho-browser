@@ -1,5 +1,5 @@
 use maho_types::account::{AccountInfo, AuthState, SyncState, UserTier};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// FNV-1a hash over raw bytes. Endian-independent, deterministic across
 /// architectures. Used for device_id_hash tiebreaks in LWW sync ordering.
@@ -218,7 +218,12 @@ mod tests {
         let errored = manager
             .mark_auth_error("bad credentials".to_string())
             .expect("account should exist");
-        assert_eq!(errored.auth_state, AuthState::Error { message: "bad credentials".to_string() });
+        assert_eq!(
+            errored.auth_state,
+            AuthState::Error {
+                message: "bad credentials".to_string()
+            }
+        );
 
         let refreshed = manager.refresh_token().expect("account should exist");
         assert_eq!(refreshed.auth_state, AuthState::Authenticated);

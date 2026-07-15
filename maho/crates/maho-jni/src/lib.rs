@@ -1181,7 +1181,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeJoinSync<'local>(
         Some(s) => s,
         None => return std::ptr::null_mut(),
     };
-    let json = core.join_sync(&phrase);
+    let json = core.join_sync("wss://sync.mahobrowser.com", &phrase);
     match env.new_string(&json) {
         Ok(s) => s.into_raw(),
         Err(_) => std::ptr::null_mut(),

@@ -1,9 +1,9 @@
-use std::pin::Pin;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures_util::{Stream, StreamExt};
 use maho_types::chat::{ChatContent, ChatContentPart};
-use maho_types::llm::{ModelInfo, LLMStreamChunk};
+use maho_types::llm::{LLMStreamChunk, ModelInfo};
 use serde_json::Value;
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use std::pin::Pin;
 
 use crate::stream_utils;
 
@@ -30,7 +30,8 @@ pub async fn validate_api_key(provider: &str, api_key: &str) -> bool {
     let client = crate::http::shared_http_client();
 
     let req = if provider == "anthropic" {
-        client.post("https://api.anthropic.com/v1/messages")
+        client
+            .post("https://api.anthropic.com/v1/messages")
             .header("x-api-key", api_key)
             .header("anthropic-version", "2023-06-01")
             .json(&serde_json::json!({
@@ -39,7 +40,8 @@ pub async fn validate_api_key(provider: &str, api_key: &str) -> bool {
                 "messages": [{"role": "user", "content": "Ping"}]
             }))
     } else {
-        client.get("https://api.openai.com/v1/models")
+        client
+            .get("https://api.openai.com/v1/models")
             .header("Authorization", format!("Bearer {}", api_key))
     };
 
@@ -72,14 +74,15 @@ impl LLMProvider for OpenAICompatibleProvider {
     ) -> Pin<Box<dyn Stream<Item = Result<LLMStreamChunk, String>> + Send>> {
         let (tx, rx) = tokio::sync::mpsc::channel(256);
         let client = crate::http::shared_http_client();
-        
+
         let endpoint_url = if self.endpoint.ends_with("/chat/completions") {
             self.endpoint.clone()
         } else {
             format!("{}/chat/completions", self.endpoint.trim_end_matches('/'))
         };
 
-        let mut req = client.post(&endpoint_url)
+        let mut req = client
+            .post(&endpoint_url)
             .header("Content-Type", "application/json");
 
         if !self.api_key.is_empty() {
@@ -93,7 +96,9 @@ impl LLMProvider for OpenAICompatibleProvider {
         });
 
         if !tools.is_empty() {
-            body.as_object_mut().unwrap().insert("tools".to_string(), Value::Array(tools));
+            body.as_object_mut()
+                .unwrap()
+                .insert("tools".to_string(), Value::Array(tools));
         }
 
         tokio::spawn(async move {
@@ -155,19 +160,47 @@ impl LLMProvider for OpenAICompatibleProvider {
                         if let Some(choices) = json.pointer("/choices").and_then(|v| v.as_array()) {
                             if let Some(choice) = choices.first() {
                                 if let Some(delta) = choice.get("delta") {
-                                    if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+                                    if let Some(content) =
+                                        delta.get("content").and_then(|c| c.as_str())
+                                    {
                                         if !content.is_empty() {
-                                            let _ = tx.try_send(Ok(LLMStreamChunk::Token(content.to_string())));
+                                            let _ = tx.try_send(Ok(LLMStreamChunk::Token(
+                                                content.to_string(),
+                                            )));
                                         }
                                     }
 
-                                    if let Some(delta_tool_calls) = delta.get("tool_calls").and_then(|tc| tc.as_array()) {
+                                    if let Some(delta_tool_calls) =
+                                        delta.get("tool_calls").and_then(|tc| tc.as_array())
+                                    {
                                         for tc in delta_tool_calls {
-                                            let index = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
-                                            let id = tc.get("id").and_then(|id| id.as_str()).map(|s| s.to_string());
-                                            let name = tc.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()).map(|s| s.to_string());
-                                            let arguments_delta = tc.get("function").and_then(|f| f.get("arguments")).and_then(|a| a.as_str()).unwrap_or_default().to_string();
-                                            let _ = tx.try_send(Ok(LLMStreamChunk::ToolCallDelta { index, id, name, arguments_delta }));
+                                            let index = tc
+                                                .get("index")
+                                                .and_then(|i| i.as_u64())
+                                                .unwrap_or(0)
+                                                as usize;
+                                            let id = tc
+                                                .get("id")
+                                                .and_then(|id| id.as_str())
+                                                .map(|s| s.to_string());
+                                            let name = tc
+                                                .get("function")
+                                                .and_then(|f| f.get("name"))
+                                                .and_then(|n| n.as_str())
+                                                .map(|s| s.to_string());
+                                            let arguments_delta = tc
+                                                .get("function")
+                                                .and_then(|f| f.get("arguments"))
+                                                .and_then(|a| a.as_str())
+                                                .unwrap_or_default()
+                                                .to_string();
+                                            let _ =
+                                                tx.try_send(Ok(LLMStreamChunk::ToolCallDelta {
+                                                    index,
+                                                    id,
+                                                    name,
+                                                    arguments_delta,
+                                                }));
                                         }
                                     }
                                 }
@@ -227,16 +260,19 @@ pub fn chat_content_to_openai_value(content: &ChatContent) -> Value {
             }])
         }
         ChatContent::Mixed(parts) => {
-            let items: Vec<Value> = parts.iter().map(|p| match p {
-                ChatContentPart::Text(s) => serde_json::json!({ "type": "text", "text": s }),
-                ChatContentPart::Image { mime, data } => {
-                    let b64 = BASE64.encode(data);
-                    serde_json::json!({
-                        "type": "image_url",
-                        "image_url": { "url": format!("data:{};base64,{}", mime, b64) }
-                    })
-                }
-            }).collect();
+            let items: Vec<Value> = parts
+                .iter()
+                .map(|p| match p {
+                    ChatContentPart::Text(s) => serde_json::json!({ "type": "text", "text": s }),
+                    ChatContentPart::Image { mime, data } => {
+                        let b64 = BASE64.encode(data);
+                        serde_json::json!({
+                            "type": "image_url",
+                            "image_url": { "url": format!("data:{};base64,{}", mime, b64) }
+                        })
+                    }
+                })
+                .collect();
             Value::Array(items)
         }
     }
@@ -271,7 +307,10 @@ mod tests {
     fn test_openai_mixed_format() {
         let parts = vec![
             ChatContentPart::Text("describe this".to_string()),
-            ChatContentPart::Image { mime: "image/png".to_string(), data: vec![1u8, 2, 3] },
+            ChatContentPart::Image {
+                mime: "image/png".to_string(),
+                data: vec![1u8, 2, 3],
+            },
         ];
         let content = ChatContent::Mixed(parts);
         let val = chat_content_to_openai_value(&content);

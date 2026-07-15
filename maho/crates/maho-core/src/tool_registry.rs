@@ -4,25 +4,34 @@ use maho_types::events::core_update::{CoreUpdate, LLMRequestContext};
 use maho_types::mcp::{ToolCall, ToolDescriptor, ToolPermission, ToolProvenance, ToolResult};
 pub type ToolDefinition = ToolDescriptor;
 
-
-
 fn is_internal_tool(name: &str) -> bool {
-    matches!(name, "search_bookmarks" | "list_tabs" | "get_page_info" | "search_history")
+    matches!(
+        name,
+        "search_bookmarks" | "list_tabs" | "get_page_info" | "search_history"
+    )
 }
 
 fn validate_namespace(name: &str) -> bool {
     if name.starts_with("mcp:") {
         let rest = &name[4..];
         if let Some((server, tool)) = rest.split_once('/') {
-            !server.is_empty() && !tool.is_empty() && 
-            server.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') &&
-            tool.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+            !server.is_empty()
+                && !tool.is_empty()
+                && server
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+                && tool
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
         } else {
             false
         }
     } else if name.starts_with("sh:") {
         let tool = &name[3..];
-        !tool.is_empty() && tool.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+        !tool.is_empty()
+            && tool
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
     } else {
         // Bare name
         !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_')
@@ -222,25 +231,23 @@ impl ToolRegistry {
         if let Some(t) = self.tool_registry.iter().find(|t| t.name == name) {
             return Some(t);
         }
-        let mut candidates: Vec<&ToolDescriptor> = self.tool_registry.iter()
+        let mut candidates: Vec<&ToolDescriptor> = self
+            .tool_registry
+            .iter()
             .filter(|t| {
-                t.name == name || 
-                t.name.split('/').last().unwrap_or("") == name ||
-                t.name.split(':').last().unwrap_or("") == name
+                t.name == name
+                    || t.name.split('/').last().unwrap_or("") == name
+                    || t.name.split(':').last().unwrap_or("") == name
             })
             .collect();
 
-        candidates.sort_by_key(|t| {
-            match &t.provenance {
-                ToolProvenance::BuiltinBrowser => 0,
-                _ => 1,
-            }
+        candidates.sort_by_key(|t| match &t.provenance {
+            ToolProvenance::BuiltinBrowser => 0,
+            _ => 1,
         });
 
         candidates.into_iter().next()
     }
-
-
 
     pub fn unregister_tool(&mut self, name: &str) {
         self.tool_registry.retain(|t| t.name != name);
@@ -318,9 +325,11 @@ impl ToolRegistry {
             } else {
                 match def.permission {
                     ToolPermission::AutoApprove => false,
-                    ToolPermission::SessionApprove => {
-                        !self.permission_cache.get(&def.name).copied().unwrap_or(false)
-                    }
+                    ToolPermission::SessionApprove => !self
+                        .permission_cache
+                        .get(&def.name)
+                        .copied()
+                        .unwrap_or(false),
                     ToolPermission::AlwaysAsk => true,
                 }
             };
@@ -387,13 +396,13 @@ impl ToolRegistry {
                 request_type: maho_types::events::core_update::LLMRequestType::ChatCompletion,
                 prompt: messages_json,
                 context: LLMRequestContext::Chat {
-                    chat: maho_types::chat::ChatRequestContext {
+                    chat: Box::new(maho_types::chat::ChatRequestContext {
                         request_mode: maho_types::chat::ChatRequestMode::ToolAssistedTask,
                         page_context: None,
                         tools: None,
                         session_id: None,
                         page_url: None,
-                    },
+                    }),
                 },
             });
         }
@@ -423,9 +432,7 @@ impl ToolRegistry {
             content: result_content.to_string(),
         };
         pending.completed_results.push(tool_result);
-        pending
-            .remaining_external
-            .retain(|tc| tc.id != call_id);
+        pending.remaining_external.retain(|tc| tc.id != call_id);
 
         if !pending.remaining_external.is_empty() {
             return vec![];
@@ -436,20 +443,21 @@ impl ToolRegistry {
             return vec![];
         };
 
-        self.active_tool_rounds.insert(pending.original_request_id.clone(), pending.tool_round);
+        self.active_tool_rounds
+            .insert(pending.original_request_id.clone(), pending.tool_round);
         let messages_json = build_tool_results_message(&pending.completed_results);
         vec![CoreUpdate::RequestLlmCompletion {
             request_id: pending.original_request_id,
             request_type: maho_types::events::core_update::LLMRequestType::ChatCompletion,
             prompt: messages_json,
             context: LLMRequestContext::Chat {
-                chat: maho_types::chat::ChatRequestContext {
+                chat: Box::new(maho_types::chat::ChatRequestContext {
                     request_mode: maho_types::chat::ChatRequestMode::ToolAssistedTask,
                     page_context: None,
                     tools: None,
                     session_id: None,
                     page_url: None,
-                },
+                }),
             },
         }]
     }
@@ -465,15 +473,12 @@ impl ToolRegistry {
         };
 
         if granted {
-            let tool_name = self
-                .pending_tool_loops
-                .get(&request_id)
-                .and_then(|p| {
-                    p.remaining_external
-                        .iter()
-                        .find(|tc| tc.id == call_id)
-                        .map(|tc| tc.name.clone())
-                });
+            let tool_name = self.pending_tool_loops.get(&request_id).and_then(|p| {
+                p.remaining_external
+                    .iter()
+                    .find(|tc| tc.id == call_id)
+                    .map(|tc| tc.name.clone())
+            });
             if let Some(name) = tool_name {
                 let def = self.tool_registry.iter().find(|d| d.name == name);
                 if let Some(def) = def {
@@ -529,20 +534,21 @@ impl ToolRegistry {
         if pending.remaining_external.is_empty() {
             let pending = self.pending_tool_loops.remove(&request_id);
             if let Some(pending) = pending {
-                self.active_tool_rounds.insert(pending.original_request_id.clone(), pending.tool_round);
+                self.active_tool_rounds
+                    .insert(pending.original_request_id.clone(), pending.tool_round);
                 let messages_json = build_tool_results_message(&pending.completed_results);
                 return vec![CoreUpdate::RequestLlmCompletion {
                     request_id: pending.original_request_id,
                     request_type: maho_types::events::core_update::LLMRequestType::ChatCompletion,
                     prompt: messages_json,
                     context: LLMRequestContext::Chat {
-                        chat: maho_types::chat::ChatRequestContext {
+                        chat: Box::new(maho_types::chat::ChatRequestContext {
                             request_mode: maho_types::chat::ChatRequestMode::ToolAssistedTask,
                             page_context: None,
                             tools: None,
                             session_id: None,
                             page_url: None,
-                        },
+                        }),
                     },
                 }];
             }
@@ -581,9 +587,7 @@ impl ToolRegistry {
                 serde_json::to_string(&items).unwrap_or_else(|_| "[]".into())
             }
             "get_page_info" => match active_tab_info {
-                Some((title, url)) => {
-                    serde_json::json!({"title": title, "url": url}).to_string()
-                }
+                Some((title, url)) => serde_json::json!({"title": title, "url": url}).to_string(),
                 None => "{\"title\": \"\", \"url\": \"\"}".into(),
             },
             "search_history" => {
@@ -609,11 +613,7 @@ impl ToolRegistry {
 
     fn find_request_for_call(&self, call_id: &str) -> Option<String> {
         for (request_id, pending) in &self.pending_tool_loops {
-            if pending
-                .remaining_external
-                .iter()
-                .any(|tc| tc.id == call_id)
-            {
+            if pending.remaining_external.iter().any(|tc| tc.id == call_id) {
                 return Some(request_id.clone());
             }
         }
@@ -672,16 +672,8 @@ mod tests {
             name: "list_tabs".into(),
             arguments: serde_json::json!({}),
         };
-        let tabs = vec![
-            ("tab1".into(), "Google".into(), "https://google.com".into()),
-        ];
-        let result = mgr.execute_internal_tool(
-            &tc,
-            &tabs,
-            None,
-            &|_, _| vec![],
-            &|_| vec![],
-        );
+        let tabs = vec![("tab1".into(), "Google".into(), "https://google.com".into())];
+        let result = mgr.execute_internal_tool(&tc, &tabs, None, &|_, _| vec![], &|_| vec![]);
         assert!(result.success);
         assert!(result.content.contains("Google"));
     }
@@ -729,9 +721,7 @@ mod tests {
                 "arguments": "{}"
             }
         })];
-        let tabs = vec![
-            ("t1".into(), "Tab 1".into(), "https://example.com".into()),
-        ];
+        let tabs = vec![("t1".into(), "Tab 1".into(), "https://example.com".into())];
         let updates = mgr.handle_llm_response_with_tools(
             "req_1",
             &tc_json,
@@ -742,7 +732,10 @@ mod tests {
             &|_| vec![],
         );
         assert_eq!(updates.len(), 1);
-        assert!(matches!(&updates[0], CoreUpdate::RequestLlmCompletion { .. }));
+        assert!(matches!(
+            &updates[0],
+            CoreUpdate::RequestLlmCompletion { .. }
+        ));
     }
 
     #[test]
@@ -781,10 +774,19 @@ mod tests {
         let tabs = vec![("t1".into(), "Tab".into(), "https://x.com".into())];
 
         let updates = mgr.handle_llm_response_with_tools(
-            "req_1", &tc_json, serde_json::json!([]), &tabs, None, &|_, _| vec![], &|_| vec![],
+            "req_1",
+            &tc_json,
+            serde_json::json!([]),
+            &tabs,
+            None,
+            &|_, _| vec![],
+            &|_| vec![],
         );
         assert_eq!(updates.len(), 1);
-        assert!(matches!(&updates[0], CoreUpdate::RequestLlmCompletion { .. }));
+        assert!(matches!(
+            &updates[0],
+            CoreUpdate::RequestLlmCompletion { .. }
+        ));
     }
 
     #[test]
@@ -796,12 +798,21 @@ mod tests {
         })];
         let tabs = vec![("t1".into(), "Tab".into(), "https://x.com".into())];
 
-        mgr.active_tool_rounds.insert("req_capped".to_string(), MAX_TOOL_ROUNDS);
+        mgr.active_tool_rounds
+            .insert("req_capped".to_string(), MAX_TOOL_ROUNDS);
         let updates = mgr.handle_llm_response_with_tools(
-            "req_capped", &tc_json, serde_json::json!([]), &tabs, None, &|_, _| vec![], &|_| vec![],
+            "req_capped",
+            &tc_json,
+            serde_json::json!([]),
+            &tabs,
+            None,
+            &|_, _| vec![],
+            &|_| vec![],
         );
         assert_eq!(updates.len(), 1);
-        assert!(matches!(&updates[0], CoreUpdate::ChatCompletionReady { response, .. } if response.contains("limit reached")));
+        assert!(
+            matches!(&updates[0], CoreUpdate::ChatCompletionReady { response, .. } if response.contains("limit reached"))
+        );
     }
 
     #[test]
@@ -814,14 +825,23 @@ mod tests {
         })];
 
         let updates = mgr.handle_llm_response_with_tools(
-            "req_ext", &tc_json, serde_json::json!([]), &[], None, &|_, _| vec![], &|_| vec![],
+            "req_ext",
+            &tc_json,
+            serde_json::json!([]),
+            &[],
+            None,
+            &|_, _| vec![],
+            &|_| vec![],
         );
         assert_eq!(updates.len(), 1);
         assert!(matches!(&updates[0], CoreUpdate::ExecuteToolAction { .. }));
 
         let updates = mgr.handle_tool_action_result("call_ext_1", true, "{\"ok\":true}");
         assert_eq!(updates.len(), 1);
-        assert!(matches!(&updates[0], CoreUpdate::RequestLlmCompletion { .. }));
+        assert!(matches!(
+            &updates[0],
+            CoreUpdate::RequestLlmCompletion { .. }
+        ));
 
         assert_eq!(*mgr.active_tool_rounds.get("req_ext").unwrap(), 1);
     }
@@ -837,7 +857,8 @@ mod tests {
             provenance: ToolProvenance::BuiltinBrowser,
             sensitive: false,
             permission: ToolPermission::AutoApprove,
-        }).unwrap();
+        })
+        .unwrap();
         assert_eq!(mgr.tool_registry.len(), initial_len + 1);
         assert!(mgr.list_tool_names().contains(&"custom_tool".to_string()));
     }
@@ -856,7 +877,11 @@ mod tests {
         mgr.register_tool(def.clone()).unwrap();
         // Registering exact same name should fail due to collision checking
         assert!(mgr.register_tool(def.clone()).is_err());
-        let count = mgr.tool_registry.iter().filter(|t| t.name == "dedup_tool").count();
+        let count = mgr
+            .tool_registry
+            .iter()
+            .filter(|t| t.name == "dedup_tool")
+            .count();
         assert_eq!(count, 1);
     }
 
@@ -870,10 +895,15 @@ mod tests {
             provenance: ToolProvenance::BuiltinBrowser,
             sensitive: false,
             permission: ToolPermission::AutoApprove,
-        }).unwrap();
-        assert!(mgr.list_tool_names().contains(&"removable_tool".to_string()));
+        })
+        .unwrap();
+        assert!(mgr
+            .list_tool_names()
+            .contains(&"removable_tool".to_string()));
         mgr.unregister_tool("removable_tool");
-        assert!(!mgr.list_tool_names().contains(&"removable_tool".to_string()));
+        assert!(!mgr
+            .list_tool_names()
+            .contains(&"removable_tool".to_string()));
     }
 
     #[test]
@@ -881,54 +911,64 @@ mod tests {
         let mut mgr = ToolRegistry::new();
 
         // Valid bare name
-        assert!(mgr.register_tool(ToolDescriptor {
-            name: "valid_name".into(),
-            description: "".into(),
-            parameters_schema: serde_json::json!({}),
-            provenance: ToolProvenance::BuiltinBrowser,
-            sensitive: false,
-            permission: ToolPermission::AutoApprove,
-        }).is_ok());
+        assert!(mgr
+            .register_tool(ToolDescriptor {
+                name: "valid_name".into(),
+                description: "".into(),
+                parameters_schema: serde_json::json!({}),
+                provenance: ToolProvenance::BuiltinBrowser,
+                sensitive: false,
+                permission: ToolPermission::AutoApprove,
+            })
+            .is_ok());
 
         // Invalid bare name (contains spaces)
-        assert!(mgr.register_tool(ToolDescriptor {
-            name: "invalid name".into(),
-            description: "".into(),
-            parameters_schema: serde_json::json!({}),
-            provenance: ToolProvenance::BuiltinBrowser,
-            sensitive: false,
-            permission: ToolPermission::AutoApprove,
-        }).is_err());
+        assert!(mgr
+            .register_tool(ToolDescriptor {
+                name: "invalid name".into(),
+                description: "".into(),
+                parameters_schema: serde_json::json!({}),
+                provenance: ToolProvenance::BuiltinBrowser,
+                sensitive: false,
+                permission: ToolPermission::AutoApprove,
+            })
+            .is_err());
 
         // Valid mcp format
-        assert!(mgr.register_tool(ToolDescriptor {
-            name: "mcp:server-1/valid-tool".into(),
-            description: "".into(),
-            parameters_schema: serde_json::json!({}),
-            provenance: ToolProvenance::External("server-1".into()),
-            sensitive: false,
-            permission: ToolPermission::AutoApprove,
-        }).is_ok());
+        assert!(mgr
+            .register_tool(ToolDescriptor {
+                name: "mcp:server-1/valid-tool".into(),
+                description: "".into(),
+                parameters_schema: serde_json::json!({}),
+                provenance: ToolProvenance::External("server-1".into()),
+                sensitive: false,
+                permission: ToolPermission::AutoApprove,
+            })
+            .is_ok());
 
         // Invalid mcp format (missing slash)
-        assert!(mgr.register_tool(ToolDescriptor {
-            name: "mcp:server-1".into(),
-            description: "".into(),
-            parameters_schema: serde_json::json!({}),
-            provenance: ToolProvenance::External("server-1".into()),
-            sensitive: false,
-            permission: ToolPermission::AutoApprove,
-        }).is_err());
+        assert!(mgr
+            .register_tool(ToolDescriptor {
+                name: "mcp:server-1".into(),
+                description: "".into(),
+                parameters_schema: serde_json::json!({}),
+                provenance: ToolProvenance::External("server-1".into()),
+                sensitive: false,
+                permission: ToolPermission::AutoApprove,
+            })
+            .is_err());
 
         // Valid sh format
-        assert!(mgr.register_tool(ToolDescriptor {
-            name: "sh:ripgrep".into(),
-            description: "".into(),
-            parameters_schema: serde_json::json!({}),
-            provenance: ToolProvenance::AgentLocal,
-            sensitive: false,
-            permission: ToolPermission::AutoApprove,
-        }).is_ok());
+        assert!(mgr
+            .register_tool(ToolDescriptor {
+                name: "sh:ripgrep".into(),
+                description: "".into(),
+                parameters_schema: serde_json::json!({}),
+                provenance: ToolProvenance::AgentLocal,
+                sensitive: false,
+                permission: ToolPermission::AutoApprove,
+            })
+            .is_ok());
     }
 
     #[test]
@@ -943,7 +983,8 @@ mod tests {
             provenance: ToolProvenance::External("server1".into()),
             sensitive: false,
             permission: ToolPermission::AutoApprove,
-        }).unwrap();
+        })
+        .unwrap();
 
         mgr.register_tool(ToolDescriptor {
             name: "search".into(),
@@ -952,7 +993,8 @@ mod tests {
             provenance: ToolProvenance::BuiltinBrowser,
             sensitive: false,
             permission: ToolPermission::AutoApprove,
-        }).unwrap();
+        })
+        .unwrap();
 
         // Registering mcp:server2/search (LLM name: mcp_search) should collide with mcp:server1/search
         let res = mgr.register_tool(ToolDescriptor {
@@ -979,7 +1021,8 @@ mod tests {
             provenance: ToolProvenance::External("my-server".into()),
             sensitive: false,
             permission: ToolPermission::AutoApprove,
-        }).unwrap();
+        })
+        .unwrap();
 
         mgr.register_tool(ToolDescriptor {
             name: "lookup".into(),
@@ -988,7 +1031,8 @@ mod tests {
             provenance: ToolProvenance::BuiltinBrowser,
             sensitive: false,
             permission: ToolPermission::AutoApprove,
-        }).unwrap();
+        })
+        .unwrap();
 
         // lookup should resolve to the bare builtin
         let tool = mgr.get_tool("lookup").unwrap();

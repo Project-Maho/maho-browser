@@ -1,6 +1,6 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
-use std::sync::{OnceLock, Mutex};
+use std::sync::{Mutex, OnceLock};
 
 use maho_ffi::*;
 

@@ -55,9 +55,25 @@ SidebarDropPlan ResolveDropPlan(SectionKind target,
       (payload.origin == SidebarDragOrigin::kPinnedSection);
 
   if (!is_tab) {
-    if (target == SectionKind::kFavorites || target == SectionKind::kPinned) {
+    // Folders can never be dropped into the Favorites strip.
+    if (target == SectionKind::kFavorites) {
       plan.is_valid = false;
       return plan;
+    }
+    // Folder drops to Pinned/Normal are valid. A whole-folder move that crosses
+    // the Pinned/Normal boundary flips the folder's pin state; a same-section
+    // folder drop is a pure positional reorder that carries no pin transition.
+    const bool to_pinned_folder = (target == SectionKind::kPinned);
+    if (to_pinned_folder && !source_is_pinned) {
+      plan.pin_transition.kind = SidebarDropPlan::PinTransition::Kind::kPin;
+      plan.pin_transition.is_folder = true;
+      plan.pin_transition.node_id = payload.node_id;
+      plan.pin_transition.space_id = payload.space_id;
+    } else if (!to_pinned_folder && source_is_pinned) {
+      plan.pin_transition.kind = SidebarDropPlan::PinTransition::Kind::kUnpin;
+      plan.pin_transition.is_folder = true;
+      plan.pin_transition.node_id = payload.node_id;
+      plan.pin_transition.space_id = payload.space_id;
     }
     return plan;
   }

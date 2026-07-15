@@ -9,14 +9,21 @@ use serde_json::Value;
 fn assert_json_eq(actual: &str, expected: &str, context: &str) {
     let a: Value = serde_json::from_str(actual).expect("actual not valid JSON");
     let e: Value = serde_json::from_str(expected).expect("expected not valid JSON");
-    assert_eq!(a, e, "JSON mismatch [{context}]:\n  actual:   {actual}\n  expected: {expected}");
+    assert_eq!(
+        a, e,
+        "JSON mismatch [{context}]:\n  actual:   {actual}\n  expected: {expected}"
+    );
 }
 
 #[test]
 fn chat_content_text_wire_format() {
     let v = ChatContent::Text("hello".to_string());
     let json = serde_json::to_string(&v).unwrap();
-    assert_json_eq(&json, r#"{"type":"text","data":"hello"}"#, "ChatContent::Text");
+    assert_json_eq(
+        &json,
+        r#"{"type":"text","data":"hello"}"#,
+        "ChatContent::Text",
+    );
 }
 
 #[test]
@@ -67,7 +74,11 @@ fn chat_message_wire_format() {
 fn llm_stream_chunk_token_wire_format() {
     let v = LLMStreamChunk::Token("Hi".to_string());
     let json = serde_json::to_string(&v).unwrap();
-    assert_json_eq(&json, r#"{"type":"token","data":"Hi"}"#, "LLMStreamChunk::Token");
+    assert_json_eq(
+        &json,
+        r#"{"type":"token","data":"Hi"}"#,
+        "LLMStreamChunk::Token",
+    );
 }
 
 #[test]
@@ -118,9 +129,8 @@ fn space_ai_config_wire_format_minimal() {
 fn space_ai_config_decodes_missing_fields() {
     // SpaceAIConfig must allow #[serde(default)] on optional fields
     let json = r#"{}"#;
-    let decoded: SpaceAIConfig = serde_json::from_str(json).expect(
-        "SpaceAIConfig must decode from empty object — check #[serde(default)]"
-    );
+    let decoded: SpaceAIConfig = serde_json::from_str(json)
+        .expect("SpaceAIConfig must decode from empty object — check #[serde(default)]");
     assert!(decoded.system_prompt.is_none());
     assert!(decoded.tone.is_none());
     assert!(decoded.focus_areas.is_empty());

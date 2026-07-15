@@ -1,5 +1,6 @@
 package dev.maho.browser.ui
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
@@ -10,12 +11,15 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -34,6 +38,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,12 +48,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
 import dev.maho.browser.MahoBridge
+import dev.maho.browser.bridge.BridgeCommandBar
 import dev.maho.browser.bridge.BridgeNavigation
 import dev.maho.browser.bridge.BridgeSpaces
 import dev.maho.browser.bridge.BridgeTabs
@@ -56,6 +65,8 @@ import dev.maho.browser.models.CoreUpdate
 import dev.maho.browser.models.SpaceColor
 import dev.maho.browser.models.SpaceId
 import dev.maho.browser.models.SpaceViewModel
+import dev.maho.browser.models.SuggestionType
+import dev.maho.browser.models.SuggestionViewModel
 import dev.maho.browser.models.TabId
 import dev.maho.browser.models.TabViewModel
 import dev.maho.browser.ui.find.FindInPageSheet
@@ -119,6 +130,8 @@ fun MainBrowserScreen(externalUrl: String? = null) {
     val shellColors = BrowserShellTheme.colors
     val bridge = MahoBridge
     val context = LocalContext.current
+    val view = LocalView.current
+    val isSystemDarkTheme = isSystemInDarkTheme()
     var tabs by remember { mutableStateOf<List<TabViewModel>>(emptyList()) }
     var spaces by remember { mutableStateOf<List<SpaceViewModel>>(emptyList()) }
     var activeSpaceId by remember { mutableStateOf<SpaceId?>(null) }
@@ -138,6 +151,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
     var homeQuery by rememberSaveable { mutableStateOf("") }
     var pendingHomeNavigationUrl by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingBrowsingTabId by rememberSaveable { mutableStateOf<TabId?>(null) }
+    var webAgentInitialGoal by rememberSaveable { mutableStateOf<String?>(null) }
 
     var loadProgress by remember { mutableStateOf(0) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
@@ -406,11 +420,22 @@ fun MainBrowserScreen(externalUrl: String? = null) {
     }
 
     fun popOverlay() {
+        if (overlayStack.lastOrNull() == BrowserOverlay.WebAgent) {
+            webAgentInitialGoal = null
+        }
         overlayStack = overlayStack.dropLast(1)
     }
 
     fun clearOverlays() {
+        webAgentInitialGoal = null
         overlayStack = emptyList()
+    }
+
+    fun presentWebAgent(initialGoal: String? = null) {
+        webAgentInitialGoal = initialGoal
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+        pushOverlay(BrowserOverlay.WebAgent)
     }
 
     fun revealBottomBar(lockMillis: Long = 0L) {
@@ -615,6 +640,21 @@ fun MainBrowserScreen(externalUrl: String? = null) {
         revealBottomBar(lockMillis = 800)
     }
 
+    fun handleSearchSuggestionSelection(suggestion: SuggestionViewModel) {
+        showSearchSheet = false
+        homeQuery = ""
+
+        if (suggestion.kind == SuggestionType.AiAnswer) {
+            presentWebAgent(aiSearchQueryText(suggestion))
+            return
+        }
+
+        val target = suggestionNavigationTarget(suggestion)
+        if (target.isNotBlank()) {
+            submitSearch(target, reuseActiveTab = false)
+        }
+    }
+
     LaunchedEffect(Unit) {
         refreshBrowserState()
         transitionToHome(returnTabId = activeTabId)
@@ -659,6 +699,12 @@ fun MainBrowserScreen(externalUrl: String? = null) {
         ?: pendingHomeNavigationUrl?.takeIf { it.isNotBlank() }
         ?: "about:blank"
     val isBrowsingRoute = shellRoute == ShellRoute.Browsing
+    val isCleanHomeChrome = shellRoute == ShellRoute.Home &&
+        overlayStack.isEmpty() &&
+        !showTabGrid &&
+        !showFindSheet &&
+        !showSearchSheet &&
+        !showSummaryOverlay
     val shellRouteStateDescription = when {
         showTabGrid && isIncognito -> "incognito tab switcher"
         showTabGrid -> "tab switcher"
@@ -680,6 +726,44 @@ fun MainBrowserScreen(externalUrl: String? = null) {
         isIncognito -> MaterialTheme.colorScheme.inverseSurface
         activeSpace != null -> activeSpace.color.toComposeColor()
         else -> Color.Unspecified
+    }
+    val reduceMotion = remember(context) {
+        runCatching {
+            android.provider.Settings.Global.getFloat(
+                context.contentResolver,
+                android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+            ) == 0f
+        }.getOrDefault(false)
+    }
+
+    SideEffect {
+        val activity = context as? Activity
+        val actionBar = activity?.actionBar
+        if (shellRoute == ShellRoute.Home) {
+            actionBar?.hide()
+        } else {
+            actionBar?.show()
+        }
+
+        val window = activity?.window ?: return@SideEffect
+        val statusBarColor = when {
+            showSearchSheet && isIncognito -> Color(0xFF101633)
+            showSearchSheet && isSystemDarkTheme -> shellColors.windowBackground
+            showSearchSheet -> Color(0xFF666668)
+            isCleanHomeChrome && isIncognito -> Color(0xFF1A2352)
+            isCleanHomeChrome && isSystemDarkTheme -> shellColors.homeBackgroundStart
+            isCleanHomeChrome -> Color(0xFFF2F2F7)
+            else -> shellColors.windowBackground
+        }
+        val useDarkStatusIcons = when {
+            showSearchSheet && isIncognito -> false
+            showSearchSheet && isSystemDarkTheme -> false
+            showSearchSheet -> true
+            else -> isCleanHomeChrome && !isIncognito && !isSystemDarkTheme
+        }
+
+        window.statusBarColor = statusBarColor.toArgb()
+        WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = useDarkStatusIcons
     }
 
     LaunchedEffect(activeTabId) {
@@ -749,13 +833,18 @@ fun MainBrowserScreen(externalUrl: String? = null) {
             resolvedHomeReturnTabId != null &&
             !showTabGrid &&
             !showFindSheet &&
+            !showSearchSheet &&
             overlayStack.isEmpty(),
     ) {
         transitionToBrowsing(resolvedHomeReturnTabId)
     }
 
+    BackHandler(enabled = showSearchSheet && overlayStack.isEmpty()) {
+        showSearchSheet = false
+    }
+
     val predictiveBackEnabled =
-        isBrowsingRoute && activeTabId != null && !showTabGrid && !showFindSheet && overlayStack.isEmpty()
+        isBrowsingRoute && activeTabId != null && !showTabGrid && !showFindSheet && !showSearchSheet && overlayStack.isEmpty()
     androidx.activity.compose.PredictiveBackHandler(enabled = predictiveBackEnabled) { progress ->
         try {
             progress.collect { event ->
@@ -793,7 +882,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
             },
         contentWindowInsets = WindowInsets.safeDrawing,
         bottomBar = {
-            if (overlayStack.isEmpty()) {
+            if (overlayStack.isEmpty() && !showSearchSheet) {
                 if (isBrowsingRoute) {
                     AnimatedVisibility(
                         visible = bottomBarVisible,
@@ -990,6 +1079,9 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                             onOpenSettings = {
                                 pushOverlay(BrowserOverlay.Settings)
                             },
+                            onOpenAiChat = {
+                                presentWebAgent()
+                            },
                             onShare = {},
                             onReload = {},
                             onToggleReaderMode = {},
@@ -1127,7 +1219,31 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                 }
             }
 
-            if (showSearchSheet && overlayStack.isEmpty()) {
+            AnimatedVisibility(
+                visible = showSearchSheet && overlayStack.isEmpty(),
+                enter = if (reduceMotion) {
+                    fadeIn(animationSpec = tween(durationMillis = 120))
+                } else {
+                    slideInVertically(
+                        animationSpec = spring(
+                            dampingRatio = 0.88f,
+                            stiffness = Spring.StiffnessMediumLow,
+                        ),
+                        initialOffsetY = { it },
+                    ) + fadeIn(animationSpec = tween(durationMillis = 120))
+                },
+                exit = if (reduceMotion) {
+                    fadeOut(animationSpec = tween(durationMillis = 120))
+                } else {
+                    slideOutVertically(
+                        animationSpec = spring(
+                            dampingRatio = 0.90f,
+                            stiffness = Spring.StiffnessMedium,
+                        ),
+                        targetOffsetY = { it },
+                    ) + fadeOut(animationSpec = tween(durationMillis = 180))
+                },
+            ) {
                 SearchSheet(
                     initialQuery = homeQuery,
                     isIncognito = isIncognito,
@@ -1140,11 +1256,15 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                     onToggleIncognito = {
                         isIncognito = !isIncognito
                     },
-                    onAskAI = { entered ->
+                    onSelectSuggestion = ::handleSearchSuggestionSelection,
+                    onBrowseForMe = { entered ->
                         showSearchSheet = false
-                        homeQuery = entered
-                        submitSearch(entered, reuseActiveTab = false)
-                    }
+                        homeQuery = ""
+                        presentWebAgent(entered)
+                    },
+                    onRecordSuggestionSelection = { index, suggestion ->
+                        BridgeCommandBar.selectItem(index = index, key = suggestion.key)
+                    },
                 )
             }
 
@@ -1265,7 +1385,11 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                         BrowserOverlay.AutofillSettings -> AutofillSettingsScreen(onBack = { popOverlay() })
                         BrowserOverlay.NotificationSettings -> NotificationSettingsScreen(onBack = { popOverlay() })
                         BrowserOverlay.MaxSettings -> MaxSettingsScreen(onBack = { popOverlay() })
-                        BrowserOverlay.WebAgent -> dev.maho.browser.ui.agent.AgentScreen(onBack = { popOverlay() })
+                        BrowserOverlay.WebAgent ->
+                            dev.maho.browser.ui.webview.WebAgentOverlay(
+                                initialGoal = webAgentInitialGoal,
+                                onExit = { popOverlay() },
+                            )
                         BrowserOverlay.AdvancedSettings -> AdvancedSettingsScreen(onBack = { popOverlay() })
                         BrowserOverlay.Profiles -> ProfileSettingsScreen(onBack = { popOverlay() })
                         BrowserOverlay.Bookmarks -> BookmarksScreen(
@@ -1354,6 +1478,42 @@ private fun normalizeBrowserInput(input: String, searchEngine: String): String {
         "Kagi" -> "https://kagi.com/search?q=$encoded"
         else -> "https://www.google.com/search?q=$encoded"
     }
+}
+
+private fun suggestionNavigationTarget(suggestion: SuggestionViewModel): String {
+    val payload = suggestion.executionPayload?.trim()
+    if (!payload.isNullOrEmpty()) {
+        return payload.navigationPayloadValue()
+    }
+
+    return when {
+        suggestion.key.startsWith("nav:") -> suggestion.key.removePrefix("nav:")
+        suggestion.key.startsWith("search:") -> suggestion.key.removePrefix("search:")
+        suggestion.key.startsWith("history:") -> suggestion.key.removePrefix("history:")
+        suggestion.key.startsWith("closed:") -> suggestion.key.removePrefix("closed:")
+        else -> suggestion.key
+    }
+}
+
+private fun String.navigationPayloadValue(): String {
+    if (!startsWith("{")) return this
+
+    return runCatching {
+        val json = org.json.JSONObject(this)
+        json.optString("url")
+            .takeIf { it.isNotBlank() }
+            ?: json.optString("query").takeIf { it.isNotBlank() }
+            ?: this
+    }.getOrDefault(this)
+}
+
+private fun aiSearchQueryText(suggestion: SuggestionViewModel): String {
+    val aiPrefix = "ai_search:"
+    if (suggestion.key.startsWith(aiPrefix)) {
+        return suggestion.key.removePrefix(aiPrefix)
+    }
+
+    return suggestion.title
 }
 
 private fun SpaceColor.toComposeColor(): Color {

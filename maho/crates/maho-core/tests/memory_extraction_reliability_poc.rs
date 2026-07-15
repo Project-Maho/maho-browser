@@ -21,7 +21,7 @@ fn test_json_parse_reliability() {
             {"fact": "User lives in Tokyo", "category": "knowledge", "importance": 0.8}
         ]
     }"#;
-    
+
     let env: FactsEnvelope = serde_json::from_str(raw_response).unwrap();
     assert_eq!(env.facts.len(), 2);
     assert_eq!(env.facts[0].fact, "User prefers writing code in Rust");

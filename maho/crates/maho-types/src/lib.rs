@@ -1,33 +1,31 @@
 pub mod account;
+pub mod ai;
 pub mod air_traffic;
 pub mod animation;
 pub mod autofill;
 pub mod boost;
 pub mod chat;
-pub mod css_mod;
 pub mod common;
+pub mod css_mod;
 pub mod easel;
 pub mod events;
 pub mod extension;
 pub mod folder;
 pub mod identifiers;
 pub mod keyboard;
+pub mod llm;
 pub mod max_settings;
 pub mod mcp;
 pub mod note;
 pub mod passwords;
 pub mod profile;
 pub mod search_engine;
-pub mod sharing;
 pub mod settings;
+pub mod sharing;
 pub mod space;
 pub mod split_view;
 pub mod tab;
-pub mod traits;
-pub mod llm;
 pub mod tool;
-pub mod ai;
+pub mod traits;
 
 pub use events::shell_event_kind::ShellEventKind;
-
-

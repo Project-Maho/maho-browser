@@ -1,7 +1,7 @@
 use maho_core::maho_core::MahoCore;
-use maho_types::events::shell_event::ShellEvent;
-use maho_types::identifiers::{TabId, ProfileId};
 use maho_types::common::Url;
+use maho_types::events::shell_event::ShellEvent;
+use maho_types::identifiers::{ProfileId, TabId};
 use maho_types::space::SpaceColor;
 use maho_types::tab::TabRole;
 
@@ -34,10 +34,17 @@ fn test_activation_target_with_last_active() {
         is_private: false,
     });
     let after = core.get_tab_view_models();
-    let tab_id = after.iter().find(|t| !before.contains(&t.id)).unwrap().id.clone();
+    let tab_id = after
+        .iter()
+        .find(|t| !before.contains(&t.id))
+        .unwrap()
+        .id
+        .clone();
 
     // Activate the tab
-    core.handle_event(ShellEvent::ActivateTab { tab_id: tab_id.clone() });
+    core.handle_event(ShellEvent::ActivateTab {
+        tab_id: tab_id.clone(),
+    });
 
     // Verify get_activation_target_for_space returns the active tab
     assert_eq!(
@@ -66,9 +73,6 @@ fn test_activation_target_no_history_returns_first() {
     let target_tab = core.get_activation_target_for_space(&space_id);
     assert_eq!(target_tab, Some(google_tab_id));
 }
-
-
-
 
 #[test]
 fn test_activation_target_empty_space_returns_none() {

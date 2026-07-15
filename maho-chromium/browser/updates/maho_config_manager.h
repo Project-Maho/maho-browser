@@ -8,6 +8,7 @@
 #include <string>
 
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/singleton.h"
 #include "base/sequence_checker.h"
@@ -16,6 +17,7 @@
 #include "services/network/public/cpp/simple_url_loader.h"
 
 class Profile;
+struct MahoCore;
 
 namespace maho {
 namespace updates {
@@ -36,13 +38,24 @@ class MahoConfigManager {
   // Signal reload of configuration.
   void SignalReload(const base::FilePath& path, int version);
 
+  using ApplyConfigCallbackForTesting =
+      base::RepeatingCallback<bool(::MahoCore*, const base::FilePath&)>;
+  void SetApplyConfigCallbackForTesting(ApplyConfigCallbackForTesting callback);
+  void InstallDownloadedBlobForTesting(const base::FilePath& temp_path,
+                                       const std::string& sha256,
+                                       int version);
+  void ResetForTesting();
+
  private:
   MahoConfigManager();
   ~MahoConfigManager();
   friend struct base::DefaultSingletonTraits<MahoConfigManager>;
 
+  void LoadLastKnownGoodConfig();
   void OnManifestFetched(std::optional<std::string> body);
   void OnBlobDownloaded(base::FilePath temp_path);
+  void InstallDownloadedBlob(base::FilePath temp_path);
+  bool ApplyConfigToCore(const base::FilePath& path);
 
   SEQUENCE_CHECKER(sequence_checker_);
   bool initialized_ = false;
@@ -57,6 +70,7 @@ class MahoConfigManager {
   std::string downloading_url_;
   std::string downloading_sha256_;
   int downloading_version_ = 0;
+  ApplyConfigCallbackForTesting apply_config_callback_for_testing_;
 };
 
 }  // namespace updates

@@ -99,6 +99,12 @@ pub enum Commands {
         command: BookmarkCommands,
     },
 
+    /// Mail operations
+    Mail {
+        #[command(subcommand)]
+        command: MailCommands,
+    },
+
     /// Page content extraction (typed extractors)
     Page {
         #[command(subcommand)]
@@ -512,6 +518,75 @@ pub enum BookmarkCommands {
 }
 
 #[derive(Subcommand)]
+pub enum MailCommands {
+    /// List configured mail accounts
+    Accounts,
+    /// List folders for a mail account
+    Folders {
+        /// Mail account ID
+        #[arg(long)]
+        account_id: String,
+    },
+    /// List emails in a folder
+    List {
+        /// Mail account ID
+        #[arg(long)]
+        account_id: String,
+        /// Mail folder ID
+        #[arg(long)]
+        folder_id: String,
+        /// Maximum number of emails to return
+        #[arg(long)]
+        limit: Option<i64>,
+        /// Number of emails to skip
+        #[arg(long)]
+        offset: Option<i64>,
+    },
+    /// Get one email by ID
+    Get {
+        /// Email ID
+        email_id: String,
+    },
+    /// Search emails
+    Search {
+        /// Search query
+        query: String,
+        /// Optional mail account ID filter
+        #[arg(long)]
+        account_id: Option<String>,
+        /// Optional mail folder ID filter
+        #[arg(long)]
+        folder_id: Option<String>,
+        /// Maximum number of emails to return
+        #[arg(long)]
+        limit: Option<i64>,
+        /// Number of emails to skip
+        #[arg(long)]
+        offset: Option<i64>,
+    },
+    /// List all emails in a thread
+    Thread {
+        /// Thread ID
+        thread_id: String,
+    },
+    /// Extract a one-time password from recent mail
+    Otp {
+        /// Optional mail account ID filter
+        #[arg(long)]
+        account_id: Option<String>,
+        /// Optional mail folder ID filter
+        #[arg(long)]
+        folder_id: Option<String>,
+        /// Optional search query to narrow candidate messages
+        #[arg(long)]
+        query: Option<String>,
+        /// Only consider mail newer than this many seconds
+        #[arg(long)]
+        max_age_seconds: Option<i64>,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum PageCommands {
     /// Get readable content (markdown)
     Content {
@@ -713,6 +788,9 @@ async fn main() -> Result<()> {
         Commands::Bookmarks { command } => {
             cmd_bookmarks(command, socket_path.as_deref(), json_output).await
         }
+
+        // ─── Mail group ───────────────────────────────────────────────────────
+        Commands::Mail { command } => cmd_mail(command, socket_path.as_deref(), json_output).await,
 
         // ─── Page group ───────────────────────────────────────────────────
         Commands::Page { command } => cmd_page(command, socket_path.as_deref(), json_output).await,
@@ -1586,6 +1664,90 @@ async fn cmd_bookmarks(
     }
 }
 
+// ─── Mail command handlers ────────────────────────────────────────────────────
+
+fn mail_tool_request(command: MailCommands) -> (&'static str, serde_json::Value) {
+    match command {
+        MailCommands::Accounts => ("mail_list_accounts", serde_json::json!({})),
+        MailCommands::Folders { account_id } => (
+            "mail_list_folders",
+            serde_json::json!({ "account_id": account_id }),
+        ),
+        MailCommands::List {
+            account_id,
+            folder_id,
+            limit,
+            offset,
+        } => (
+            "mail_list_emails",
+            serde_json::json!({
+                "account_id": account_id,
+                "folder_id": folder_id,
+                "limit": limit,
+                "offset": offset,
+            }),
+        ),
+        MailCommands::Get { email_id } => (
+            "mail_get_email",
+            serde_json::json!({ "email_id": email_id }),
+        ),
+        MailCommands::Search {
+            query,
+            account_id,
+            folder_id,
+            limit,
+            offset,
+        } => (
+            "mail_search_emails",
+            serde_json::json!({
+                "query": query,
+                "account_id": account_id,
+                "folder_id": folder_id,
+                "limit": limit,
+                "offset": offset,
+            }),
+        ),
+        MailCommands::Thread { thread_id } => (
+            "mail_list_thread",
+            serde_json::json!({ "thread_id": thread_id }),
+        ),
+        MailCommands::Otp {
+            account_id,
+            folder_id,
+            query,
+            max_age_seconds,
+        } => (
+            "mail_extract_otp",
+            serde_json::json!({
+                "account_id": account_id,
+                "folder_id": folder_id,
+                "query": query,
+                "max_age_seconds": max_age_seconds,
+            }),
+        ),
+    }
+}
+
+async fn cmd_mail(
+    command: MailCommands,
+    socket_path: Option<&str>,
+    json_output: bool,
+) -> Result<()> {
+    let client = browser::connect(socket_path).await?;
+    let (tool, args) = mail_tool_request(command);
+    let result = browser::send_tool_call(&client, tool, args).await?;
+    print_tool_result(&result, json_output)
+}
+
+fn print_tool_result(result: &serde_json::Value, json_output: bool) -> Result<()> {
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(result)?);
+    } else {
+        println!("{}", result);
+    }
+    Ok(())
+}
+
 // ─── Page command handlers ────────────────────────────────────────────────────
 
 fn apply_tab_id(args: &mut serde_json::Value, tab: &Option<String>) {
@@ -1615,6 +1777,22 @@ async fn cmd_page(
     socket_path: Option<&str>,
     json_output: bool,
 ) -> Result<()> {
+    match &command {
+        PageCommands::Search { max_results, .. } => {
+            if max_results.is_some() {
+                eprintln!("Error: --max-results option is not supported.");
+                std::process::exit(2);
+            }
+        }
+        PageCommands::Screenshot { full_page, .. } => {
+            if *full_page {
+                eprintln!("Error: --full-page option is not supported.");
+                std::process::exit(2);
+            }
+        }
+        _ => {}
+    }
+
     let client = browser::connect(socket_path).await?;
     match command {
         PageCommands::Content { tab } => {
@@ -1944,7 +2122,7 @@ fn byok_base_url_from_env() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{map_browser_tool_name, select_byok_base_url};
+    use super::{mail_tool_request, map_browser_tool_name, select_byok_base_url, MailCommands};
 
     #[test]
     fn browser_tool_mapping_routes_tab_list_to_mcp_tool_name() {
@@ -1952,6 +2130,24 @@ mod tests {
             map_browser_tool_name("list_browser_tabs"),
             "browser_tab_list"
         );
+    }
+
+    #[test]
+    fn mail_search_command_routes_to_mail_search_emails() {
+        let (tool, args) = mail_tool_request(MailCommands::Search {
+            query: "receipt".to_string(),
+            account_id: Some("acc1".to_string()),
+            folder_id: Some("fold1".to_string()),
+            limit: Some(10),
+            offset: Some(5),
+        });
+
+        assert_eq!(tool, "mail_search_emails");
+        assert_eq!(args["query"], "receipt");
+        assert_eq!(args["account_id"], "acc1");
+        assert_eq!(args["folder_id"], "fold1");
+        assert_eq!(args["limit"], 10);
+        assert_eq!(args["offset"], 5);
     }
 
     #[test]
@@ -2018,7 +2214,7 @@ async fn cmd_run(
     // Resolve target workspace
     let resolved_ws_id = maho_cli::workspace::resolve_workspace_id(&db_path, workspace).await?;
 
-    let storage = SqliteStorage::open(&db_path.to_string_lossy())
+    let storage = maho_cli::workspace::open_storage(&db_path)
         .map_err(|e| anyhow::anyhow!("Failed to open database: {}", e))?;
 
     let workspaces = storage
@@ -2099,7 +2295,7 @@ async fn cmd_run(
     let anthropic_env = std::env::var("ANTHROPIC_API_KEY").ok();
 
     // We open a separate storage handle to read DB keys
-    let db_storage = SqliteStorage::open(&db_path.to_string_lossy())?;
+    let db_storage = maho_cli::workspace::open_storage(&db_path)?;
     let openai_db = db_storage.get_setting("byok:openai").ok().flatten();
     let anthropic_db = db_storage.get_setting("byok:anthropic").ok().flatten();
 
@@ -2330,7 +2526,7 @@ async fn cmd_mcp_add(
     let db_path = maho_cli::workspace::default_db_path();
     let resolved_ws_id = maho_cli::workspace::resolve_workspace_id(&db_path, workspace).await?;
 
-    let storage = SqliteStorage::open(&db_path.to_string_lossy())
+    let storage = maho_cli::workspace::open_storage(&db_path)
         .map_err(|e| anyhow::anyhow!("Failed to open database: {}", e))?;
 
     let transport = if mcp_socket_path.is_some() {
@@ -2381,7 +2577,7 @@ async fn cmd_mcp_list(workspace: Option<&str>, json_output: bool) -> Result<()> 
     let db_path = maho_cli::workspace::default_db_path();
     let resolved_ws_id = maho_cli::workspace::resolve_workspace_id(&db_path, workspace).await?;
 
-    let storage = SqliteStorage::open(&db_path.to_string_lossy())
+    let storage = maho_cli::workspace::open_storage(&db_path)
         .map_err(|e| anyhow::anyhow!("Failed to open database: {}", e))?;
 
     let servers = storage
@@ -2408,7 +2604,7 @@ async fn cmd_mcp_remove(name: &str, workspace: Option<&str>, json_output: bool) 
     let db_path = maho_cli::workspace::default_db_path();
     let resolved_ws_id = maho_cli::workspace::resolve_workspace_id(&db_path, workspace).await?;
 
-    let storage = SqliteStorage::open(&db_path.to_string_lossy())
+    let storage = maho_cli::workspace::open_storage(&db_path)
         .map_err(|e| anyhow::anyhow!("Failed to open database: {}", e))?;
 
     storage

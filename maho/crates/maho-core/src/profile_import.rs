@@ -1,6 +1,6 @@
-use serde::Deserialize;
-use maho_types::ai::{AiProfile, AiMcpServer, AiCliTool, McpTransport};
 use maho_storage::sqlite::SqliteStorage;
+use maho_types::ai::{AiCliTool, AiMcpServer, AiProfile, McpTransport};
+use serde::Deserialize;
 
 #[derive(Deserialize, Debug)]
 struct TomlProfileImport {
@@ -68,8 +68,8 @@ pub fn import_profile_from_toml(
         .ok_or_else(|| format!("Workspace '{}' not found", workspace_id))?;
 
     // 2. Parse TOML
-    let import_data: TomlProfileImport = toml::from_str(toml_str)
-        .map_err(|e| format!("Invalid TOML schema: {}", e))?;
+    let import_data: TomlProfileImport =
+        toml::from_str(toml_str).map_err(|e| format!("Invalid TOML schema: {}", e))?;
 
     if import_data.profile.name.trim().is_empty() {
         return Err("Profile name cannot be empty".to_string());
@@ -95,13 +95,22 @@ pub fn import_profile_from_toml(
                     other => return Err(format!("Unsupported MCP transport: {}", other)),
                 };
                 if transport == McpTransport::Stdio && mcp.command.is_none() {
-                    return Err(format!("Command is required for stdio MCP server '{}'", mcp.name));
+                    return Err(format!(
+                        "Command is required for stdio MCP server '{}'",
+                        mcp.name
+                    ));
                 }
                 if transport == McpTransport::Http && mcp.url.is_none() {
-                    return Err(format!("URL is required for http MCP server '{}'", mcp.name));
+                    return Err(format!(
+                        "URL is required for http MCP server '{}'",
+                        mcp.name
+                    ));
                 }
                 if transport == McpTransport::Uds && mcp.socket_path.is_none() {
-                    return Err(format!("Socket path is required for UDS MCP server '{}'", mcp.name));
+                    return Err(format!(
+                        "Socket path is required for UDS MCP server '{}'",
+                        mcp.name
+                    ));
                 }
 
                 let server_id = uuid::Uuid::new_v4().to_string();
@@ -122,7 +131,9 @@ pub fn import_profile_from_toml(
                     socket_path: mcp.socket_path.clone(),
                 };
 
-                storage.create_mcp_server(&server).map_err(|e| e.to_string())?;
+                storage
+                    .create_mcp_server(&server)
+                    .map_err(|e| e.to_string())?;
                 profile_mcp_servers.push(server_id);
             }
         }
@@ -132,8 +143,10 @@ pub fn import_profile_from_toml(
                 if cli.name.trim().is_empty() {
                     return Err("CLI tool name cannot be empty".to_string());
                 }
-                let parameters_schema: serde_json::Value = serde_json::from_str(&cli.parameters_schema)
-                    .map_err(|e| format!("Invalid JSON schema in CLI tool '{}': {}", cli.name, e))?;
+                let parameters_schema: serde_json::Value =
+                    serde_json::from_str(&cli.parameters_schema).map_err(|e| {
+                        format!("Invalid JSON schema in CLI tool '{}': {}", cli.name, e)
+                    })?;
 
                 let tool_id = uuid::Uuid::new_v4().to_string();
                 let tool = AiCliTool {
@@ -170,13 +183,17 @@ pub fn import_profile_from_toml(
         updated_at: now.clone(),
     };
 
-    storage.create_ai_profile(&profile).map_err(|e| e.to_string())?;
+    storage
+        .create_ai_profile(&profile)
+        .map_err(|e| e.to_string())?;
 
     // 6. Update workspace to use this profile
     let mut updated_ws = ws;
     updated_ws.profile_id = Some(profile_id.clone());
     updated_ws.updated_at = now;
-    storage.update_workspace(&updated_ws).map_err(|e| e.to_string())?;
+    storage
+        .update_workspace(&updated_ws)
+        .map_err(|e| e.to_string())?;
 
     Ok(profile_id)
 }

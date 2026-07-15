@@ -11,6 +11,8 @@
 
 #include "base/json/json_reader.h"
 #include "base/logging.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/containers/span.h"
 #include "maho_ffi.h"
 #include "url/gurl.h"
 
@@ -36,6 +38,31 @@ MahoCore* CreateWithStorage(const std::string& path) {
 
 void Destroy(MahoCore* core) {
   maho_core_free(core);
+}
+
+bool SetStorageKey(const std::string& hex_key) {
+  return maho_storage_set_sqlcipher_key(hex_key.c_str());
+}
+
+bool DeriveAndSetStorageKey(const std::string& key_file_path) {
+  uint32_t status = 0;
+  if (!maho_core_oscrypt_key_path_is_secure(key_file_path.c_str(), &status)) {
+    if (status != 1) { // 1 = IoError (meaning it does not exist)
+      LOG(ERROR) << "Maho storage key path exists but permission verification failed: status=" << status;
+      return false;
+    }
+  }
+  uint8_t key16[16] = {0};
+  if (!maho_core_derive_oscrypt_key(key_file_path.c_str(), key16, &status)) {
+    LOG(ERROR) << "Maho storage key derivation failed: status=" << status;
+    return false;
+  }
+  if (!maho_core_oscrypt_key_path_is_secure(key_file_path.c_str(), &status)) {
+    LOG(ERROR) << "Maho storage key path permission verification failed after derivation: status=" << status;
+    return false;
+  }
+  std::string hex_key = base::HexEncode(base::span<const uint8_t>(key16, 16u));
+  return SetStorageKey(hex_key);
 }
 
 bool SaveState(MahoCore* core) {
@@ -346,6 +373,16 @@ std::string HandleEvent(MahoCore* core, const char* event_json) {
   }
 
   return ret;
+}
+
+std::string GetPasswordProviderRegistry() {
+  char* raw_json = maho_core_get_password_provider_registry();
+  if (!raw_json) {
+    return "[]";
+  }
+  std::string json(raw_json);
+  maho_string_free(raw_json);
+  return json;
 }
 
 void FreeString(char* str) {

@@ -39,8 +39,6 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "maho/browser/ui/webui/maho_boost/maho_boost_page_handler.h"
-#include "maho/browser/ui/webui/maho_easel/maho_easel_page_handler.h"
-#include "maho/browser/ui/webui/maho_notes/maho_notes_page_handler.h"
 #include "maho/browser/ui/webui/maho_routines/maho_routines_page_handler.h"
 
 namespace maho {
@@ -327,48 +325,6 @@ IN_PROC_BROWSER_TEST_F(MahoWebUiPrivateBoundaryBrowserTest,
     base::RunLoop run_loop;
     remote.set_disconnect_handler(run_loop.QuitClosure());
     remote->GetDomain(base::BindOnce([](const std::string& domain) {
-      ADD_FAILURE() << "Callback should not be called under Incognito";
-    }));
-    run_loop.Run();
-
-    EXPECT_FALSE(remote.is_connected());
-  }
-
-  // Test Easel under Incognito OTR
-  {
-    mojo::Remote<maho_easel::mojom::PageHandler> remote;
-    mojo::PendingRemote<maho_easel::mojom::Page> page;
-    
-    auto handler = std::make_unique<MahoEaselPageHandler>(
-        remote.BindNewPipeAndPassReceiver(),
-        std::move(page),
-        inc_browser,
-        inc_contents);
-
-    base::RunLoop run_loop;
-    remote.set_disconnect_handler(run_loop.QuitClosure());
-    remote->GetCanvas(base::BindOnce([](std::vector<maho_easel::mojom::CanvasItemPtr> items) {
-      ADD_FAILURE() << "Callback should not be called under Incognito";
-    }));
-    run_loop.Run();
-
-    EXPECT_FALSE(remote.is_connected());
-  }
-
-  // Test Notes under Incognito OTR
-  {
-    mojo::Remote<maho_notes::mojom::PageHandler> remote;
-    mojo::PendingRemote<maho_notes::mojom::Page> page;
-    
-    auto handler = std::make_unique<MahoNotesPageHandler>(
-        remote.BindNewPipeAndPassReceiver(),
-        std::move(page),
-        inc_browser,
-        inc_contents);
-
-    base::RunLoop run_loop;
-    remote.set_disconnect_handler(run_loop.QuitClosure());
-    remote->GetNotes(base::BindOnce([](std::vector<maho_notes::mojom::NotePtr> notes) {
       ADD_FAILURE() << "Callback should not be called under Incognito";
     }));
     run_loop.Run();

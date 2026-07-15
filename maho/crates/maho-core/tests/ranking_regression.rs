@@ -1,6 +1,8 @@
 use maho_core::command_bar::CommandBarEngine;
 use maho_types::identifiers::SpaceId;
-use maho_types::traits::shell_renderer::{SearchContext, SuggestionType, SuggestionViewModel, TabViewModel};
+use maho_types::traits::shell_renderer::{
+    SearchContext, SuggestionType, SuggestionViewModel, TabViewModel,
+};
 
 fn make_tab(id: &str, title: &str, url: &str) -> TabViewModel {
     TabViewModel {
@@ -57,7 +59,10 @@ fn calculator_result_ranks_first() {
     let ctx = empty_ctx();
     let results = engine.search("2 + 2", None, &ctx);
 
-    assert!(!results.is_empty(), "should have at least one result for '2 + 2'");
+    assert!(
+        !results.is_empty(),
+        "should have at least one result for '2 + 2'"
+    );
     assert!(
         matches!(results[0].kind, SuggestionType::Calculator),
         "calculator result (score 3.0) must be ranked first; got {:?}",
@@ -79,16 +84,26 @@ fn unit_conversion_ranks_above_navigation_when_both_present() {
         None,
     );
     let mut ctx = empty_ctx();
-    ctx.tabs = vec![make_tab("t-nav", "Navigate 1 km to mile", "https://navigate.example.com")];
+    ctx.tabs = vec![make_tab(
+        "t-nav",
+        "Navigate 1 km to mile",
+        "https://navigate.example.com",
+    )];
 
     let results = engine.search("1 km to mile", None, &ctx);
 
     let unit_pos = pos_by_kind(&results, SuggestionType::UnitConversion);
     let nav_pos = pos_by_kind(&results, SuggestionType::Navigation);
 
-    assert!(unit_pos.is_some(), "unit conversion must be present for '1 km to mile'");
+    assert!(
+        unit_pos.is_some(),
+        "unit conversion must be present for '1 km to mile'"
+    );
     if let (Some(u), Some(n)) = (unit_pos, nav_pos) {
-        assert!(u < n, "unit conversion (pos {u}, score 2.8) must rank above navigation (pos {n}, score 2.0)");
+        assert!(
+            u < n,
+            "unit conversion (pos {u}, score 2.8) must rank above navigation (pos {n}, score 2.0)"
+        );
     }
 }
 
@@ -97,8 +112,16 @@ fn prefix_match_ranks_above_substring_match() {
     let engine = CommandBarEngine::new();
     let mut ctx = empty_ctx();
     ctx.tabs = vec![
-        make_tab("prefix", "rust programming language", "https://prefix.example.com"),
-        make_tab("substring", "the great rust programming", "https://sub.example.com"),
+        make_tab(
+            "prefix",
+            "rust programming language",
+            "https://prefix.example.com",
+        ),
+        make_tab(
+            "substring",
+            "the great rust programming",
+            "https://sub.example.com",
+        ),
     ];
 
     let results = engine.search("rust", None, &ctx);
@@ -138,7 +161,10 @@ fn exact_prefix_bookmark_ranks_above_fuzzy_history() {
     let hist_pos = pos_by_key(&results, "history:");
 
     assert!(bm_pos.is_some(), "bookmark must appear");
-    assert!(hist_pos.is_some(), "history entry must appear via full-scan (query < 3 chars)");
+    assert!(
+        hist_pos.is_some(),
+        "history entry must appear via full-scan (query < 3 chars)"
+    );
     assert!(
         bm_pos.unwrap() < hist_pos.unwrap(),
         "prefix-match bookmark (pos {}, score 1.0) must rank above fuzzy history (pos {})",
@@ -172,9 +198,13 @@ fn type_priority_tiebreak_tab_before_bookmark_before_archived() {
 
     let tab_pos = pos_by_key(&results, "tab:t-tiebreak").expect("tab must appear");
     let bm_pos = pos_by_key(&results, "bookmark:bm-tiebreak").expect("bookmark must appear");
-    let archived_pos = pos_by_key(&results, "archived:archived-tiebreak").expect("archived tab must appear");
+    let archived_pos =
+        pos_by_key(&results, "archived:archived-tiebreak").expect("archived tab must appear");
 
-    assert!(tab_pos < bm_pos, "Tab (type-priority 0, pos {tab_pos}) must precede Bookmark (priority 1, pos {bm_pos})");
+    assert!(
+        tab_pos < bm_pos,
+        "Tab (type-priority 0, pos {tab_pos}) must precede Bookmark (priority 1, pos {bm_pos})"
+    );
     assert!(bm_pos < archived_pos, "Bookmark (type-priority 1, pos {bm_pos}) must precede ArchivedTab (priority 3, pos {archived_pos})");
 }
 
@@ -295,7 +325,10 @@ fn new_tab_mode_places_navigation_first_for_url_query() {
     let ctx = empty_ctx();
     let results = engine.search("navigate.example.com", Some("newTab"), &ctx);
 
-    assert!(!results.is_empty(), "must have results for URL query in newTab mode");
+    assert!(
+        !results.is_empty(),
+        "must have results for URL query in newTab mode"
+    );
     assert!(
         matches!(results[0].kind, SuggestionType::Navigation),
         "first result must be Navigation in newTab mode for URL query (score 2.0+0.5=2.5); got {:?}",
@@ -313,8 +346,16 @@ fn frequency_boost_lifts_high_usage_result() {
 
     let mut ctx = empty_ctx();
     ctx.tabs = vec![
-        make_tab("high-freq", "frequency boost test page", "https://hi.example.com/freq"),
-        make_tab("low-freq", "frequency boost test page", "https://lo.example.com/freq"),
+        make_tab(
+            "high-freq",
+            "frequency boost test page",
+            "https://hi.example.com/freq",
+        ),
+        make_tab(
+            "low-freq",
+            "frequency boost test page",
+            "https://lo.example.com/freq",
+        ),
     ];
 
     let results = engine.search("frequency boost test", None, &ctx);
@@ -336,13 +377,24 @@ fn action_only_mode_returns_only_actions() {
         "New Tab history".to_string(),
         None,
     );
-    engine.add_action("new_tab_action".to_string(), "New Tab".to_string(), "Navigation".to_string());
-    engine.add_action("new_window_action".to_string(), "New Window".to_string(), "Navigation".to_string());
+    engine.add_action(
+        "new_tab_action".to_string(),
+        "New Tab".to_string(),
+        "Navigation".to_string(),
+    );
+    engine.add_action(
+        "new_window_action".to_string(),
+        "New Window".to_string(),
+        "Navigation".to_string(),
+    );
 
     let ctx = empty_ctx();
     let results = engine.search("> new", None, &ctx);
 
-    assert!(!results.is_empty(), "action-only mode must return actions matching 'new'");
+    assert!(
+        !results.is_empty(),
+        "action-only mode must return actions matching 'new'"
+    );
     for r in &results {
         assert!(
             matches!(r.kind, SuggestionType::Action),
@@ -356,8 +408,16 @@ fn action_only_mode_returns_only_actions() {
 #[test]
 fn action_only_mode_respects_frequency_boost_ordering() {
     let mut engine = CommandBarEngine::new();
-    engine.add_action("action_high".to_string(), "New Tab".to_string(), "Navigation".to_string());
-    engine.add_action("action_low".to_string(), "New Tab Settings".to_string(), "Navigation".to_string());
+    engine.add_action(
+        "action_high".to_string(),
+        "New Tab".to_string(),
+        "Navigation".to_string(),
+    );
+    engine.add_action(
+        "action_low".to_string(),
+        "New Tab Settings".to_string(),
+        "Navigation".to_string(),
+    );
     engine.load_usage_frequencies(vec![
         ("action:action_high".to_string(), 20),
         ("action:action_low".to_string(), 0),
@@ -400,8 +460,16 @@ fn incognito_mode_excludes_history_and_bookmarks_from_ranking() {
     let results = engine.search("incognito test", None, &ctx);
 
     for r in &results {
-        assert!(!matches!(r.kind, SuggestionType::History), "history must not appear in incognito mode (key: {})", r.key);
-        assert!(!matches!(r.kind, SuggestionType::Bookmark), "bookmark must not appear in incognito mode (key: {})", r.key);
+        assert!(
+            !matches!(r.kind, SuggestionType::History),
+            "history must not appear in incognito mode (key: {})",
+            r.key
+        );
+        assert!(
+            !matches!(r.kind, SuggestionType::Bookmark),
+            "bookmark must not appear in incognito mode (key: {})",
+            r.key
+        );
     }
     assert!(
         pos_by_key(&results, "tab:incognito-tab").is_some(),
@@ -419,7 +487,11 @@ fn golden_mixed_sources_tab_prefix_beats_bookmark_substring() {
     );
 
     let mut ctx = empty_ctx();
-    ctx.tabs = vec![make_tab("rust-tab", "rust programming", "https://tab.example.com/rust")];
+    ctx.tabs = vec![make_tab(
+        "rust-tab",
+        "rust programming",
+        "https://tab.example.com/rust",
+    )];
     ctx.bookmarks = vec![(
         "rust-bm".to_string(),
         "awesome rust resources".to_string(),
@@ -497,8 +569,14 @@ fn ranking_is_stable_across_repeated_identical_queries() {
     let keys2: Vec<&str> = run2.iter().map(|r| r.key.as_str()).collect();
     let keys3: Vec<&str> = run3.iter().map(|r| r.key.as_str()).collect();
 
-    assert_eq!(keys1, keys2, "first and second run must produce identical result order");
-    assert_eq!(keys2, keys3, "second and third run must produce identical result order");
+    assert_eq!(
+        keys1, keys2,
+        "first and second run must produce identical result order"
+    );
+    assert_eq!(
+        keys2, keys3,
+        "second and third run must produce identical result order"
+    );
 }
 
 #[test]
@@ -520,7 +598,10 @@ fn closed_tab_limit_does_not_crowd_out_other_types() {
 
     let results = engine.search("closed limit test", None, &ctx);
 
-    let closed_count = results.iter().filter(|r| matches!(r.kind, SuggestionType::ClosedTab)).count();
+    let closed_count = results
+        .iter()
+        .filter(|r| matches!(r.kind, SuggestionType::ClosedTab))
+        .count();
     assert!(
         closed_count <= 3,
         "at most 3 closed-tab results may appear; got {closed_count}"
@@ -537,11 +618,16 @@ fn search_suggestion_first_for_non_url_query() {
     let ctx = empty_ctx();
     for query in &["naver", "ㅇㅇ", "hello world"] {
         let results = engine.search(query, None, &ctx);
-        assert!(!results.is_empty(), "results should not be empty for '{}'", query);
+        assert!(
+            !results.is_empty(),
+            "results should not be empty for '{}'",
+            query
+        );
         assert!(
             matches!(results[0].kind, SuggestionType::Search),
             "first result should be Search for '{}'; got {:?}",
-            query, results[0].kind
+            query,
+            results[0].kind
         );
     }
 }
@@ -552,7 +638,10 @@ fn search_suggestion_title_uses_em_dash_format() {
     let ctx = empty_ctx();
     let query = "hello";
     let results = engine.search(query, None, &ctx);
-    let search_res = results.iter().find(|r| matches!(r.kind, SuggestionType::Search)).expect("Search suggestion must exist");
+    let search_res = results
+        .iter()
+        .find(|r| matches!(r.kind, SuggestionType::Search))
+        .expect("Search suggestion must exist");
     assert_eq!(search_res.title, "hello — Search with Google");
     assert!(search_res.subtitle.is_none());
 }
@@ -564,13 +653,20 @@ fn search_suggestion_still_emitted_for_url_query() {
     let query = "naver.com";
     let results = engine.search(query, None, &ctx);
     let search_pos = pos_by_kind(&results, SuggestionType::Search);
-    assert!(search_pos.is_some(), "Search suggestion should be present for URL query");
+    assert!(
+        search_pos.is_some(),
+        "Search suggestion should be present for URL query"
+    );
 }
 
 #[test]
 fn empty_query_yields_no_action_suggestions() {
     let mut engine = CommandBarEngine::new();
-    engine.add_action("mute_tab".to_string(), "Mute Tab".to_string(), "Tab Actions".to_string());
+    engine.add_action(
+        "mute_tab".to_string(),
+        "Mute Tab".to_string(),
+        "Tab Actions".to_string(),
+    );
 
     let ctx = empty_ctx();
     let results = engine.search("", None, &ctx);
@@ -585,7 +681,11 @@ fn empty_query_yields_no_action_suggestions() {
 #[test]
 fn text_match_surfaces_action_inline() {
     let mut engine = CommandBarEngine::new();
-    engine.add_action("mute_tab".to_string(), "Mute Tab".to_string(), "Tab Actions".to_string());
+    engine.add_action(
+        "mute_tab".to_string(),
+        "Mute Tab".to_string(),
+        "Tab Actions".to_string(),
+    );
 
     let ctx = empty_ctx();
     let results = engine.search("mute", None, &ctx);
@@ -605,7 +705,11 @@ fn incognito_search_builds_only_ephemeral_sources() {
         "Maho History".to_string(),
         None,
     );
-    engine.add_action("mute_tab".to_string(), "Mute Tab".to_string(), "Tabs".to_string());
+    engine.add_action(
+        "mute_tab".to_string(),
+        "Mute Tab".to_string(),
+        "Tabs".to_string(),
+    );
 
     let mut ctx = empty_ctx();
     ctx.is_incognito = true;
@@ -613,56 +717,88 @@ fn incognito_search_builds_only_ephemeral_sources() {
         make_tab("tab-a", "Maho Alpha", "https://example.test/a"),
         make_tab("tab-b", "비공개 탭", "https://example.test/b"),
     ];
-    ctx.spaces = vec![
-        maho_types::traits::shell_renderer::SpaceViewModel {
-            id: SpaceId::new("space-normal-v1"),
-            name: "Normal".to_string(),
-            color: maho_types::space::SpaceColor {
-                hue: 220.0,
-                saturation: 0.4,
-                brightness: 0.8,
-                grain: 0.0,
-            },
-            theme: None,
-            tab_count: 2,
-            is_active: true,
-            icon: None,
-            profile_id: None,
-            profile_name: None,
-            order_index: None,
-        }
-    ];
-    ctx.folders = vec![
-        maho_types::traits::shell_renderer::FolderViewModel {
-            id: maho_types::identifiers::FolderId::new("folder-normal-v1"),
-            name: "Normal Folder".to_string(),
-            tab_count: 1,
-            is_expanded: true,
-            tab_ids: vec![maho_types::identifiers::TabId::new("tab-b")],
-            is_pinned: false,
-            parent_folder_id: None,
-            provider_type: None,
-            config_json: None,
-        }
-    ];
-    ctx.archived_tabs = vec![make_tab("tab-archived-v1", "Archived Maho", "https://archived.test/")];
-    ctx.bookmarks = vec![("bookmark-v1".to_string(), "Maho Bookmark".to_string(), "https://bookmark.test/".to_string())];
-    ctx.closed_tabs = vec![make_tab("tab-closed-v1", "Closed Maho", "https://closed.test/")];
+    ctx.spaces = vec![maho_types::traits::shell_renderer::SpaceViewModel {
+        id: SpaceId::new("space-normal-v1"),
+        name: "Normal".to_string(),
+        color: maho_types::space::SpaceColor {
+            hue: 220.0,
+            saturation: 0.4,
+            brightness: 0.8,
+            grain: 0.0,
+        },
+        theme: None,
+        tab_count: 2,
+        is_active: true,
+        icon: None,
+        profile_id: None,
+        profile_name: None,
+        order_index: None,
+    }];
+    ctx.folders = vec![maho_types::traits::shell_renderer::FolderViewModel {
+        id: maho_types::identifiers::FolderId::new("folder-normal-v1"),
+        name: "Normal Folder".to_string(),
+        tab_count: 1,
+        is_expanded: true,
+        tab_ids: vec![maho_types::identifiers::TabId::new("tab-b")],
+        is_pinned: false,
+        parent_folder_id: None,
+        provider_type: None,
+        config_json: None,
+    }];
+    ctx.archived_tabs = vec![make_tab(
+        "tab-archived-v1",
+        "Archived Maho",
+        "https://archived.test/",
+    )];
+    ctx.bookmarks = vec![(
+        "bookmark-v1".to_string(),
+        "Maho Bookmark".to_string(),
+        "https://bookmark.test/".to_string(),
+    )];
+    ctx.closed_tabs = vec![make_tab(
+        "tab-closed-v1",
+        "Closed Maho",
+        "https://closed.test/",
+    )];
     ctx.extensions = vec![("extension-v1".to_string(), "Maho Extension".to_string())];
 
     let results = engine.search("maho", None, &ctx);
 
     for r in &results {
-        assert!(!matches!(r.kind, SuggestionType::History), "History should be forbidden");
-        assert!(!matches!(r.kind, SuggestionType::Bookmark), "Bookmark should be forbidden");
-        assert!(!matches!(r.kind, SuggestionType::Folder), "Folder should be forbidden");
-        assert!(!matches!(r.kind, SuggestionType::ArchivedTab), "ArchivedTab should be forbidden");
-        assert!(!matches!(r.kind, SuggestionType::ClosedTab), "ClosedTab should be forbidden");
+        assert!(
+            !matches!(r.kind, SuggestionType::History),
+            "History should be forbidden"
+        );
+        assert!(
+            !matches!(r.kind, SuggestionType::Bookmark),
+            "Bookmark should be forbidden"
+        );
+        assert!(
+            !matches!(r.kind, SuggestionType::Folder),
+            "Folder should be forbidden"
+        );
+        assert!(
+            !matches!(r.kind, SuggestionType::ArchivedTab),
+            "ArchivedTab should be forbidden"
+        );
+        assert!(
+            !matches!(r.kind, SuggestionType::ClosedTab),
+            "ClosedTab should be forbidden"
+        );
 
         if matches!(r.kind, SuggestionType::Action) {
-            assert!(r.key != "action:mute_tab", "Forbidden action mute_tab returned");
-            assert!(r.key != "action:open_space:space-normal-v1", "Forbidden space action returned");
-            assert!(r.key != "extension:extension-v1", "Forbidden extension action returned");
+            assert!(
+                r.key != "action:mute_tab",
+                "Forbidden action mute_tab returned"
+            );
+            assert!(
+                r.key != "action:open_space:space-normal-v1",
+                "Forbidden space action returned"
+            );
+            assert!(
+                r.key != "extension:extension-v1",
+                "Forbidden extension action returned"
+            );
         }
     }
 }
@@ -692,7 +828,10 @@ fn incognito_action_catalog_is_exact_ordered_existing_fields() {
     ];
 
     let actual_keys: Vec<String> = results.iter().map(|r| r.key.clone()).collect();
-    assert_eq!(actual_keys, expected_actions, "Incognito action catalog must match exact ordered ephemeral catalog");
+    assert_eq!(
+        actual_keys, expected_actions,
+        "Incognito action catalog must match exact ordered ephemeral catalog"
+    );
 }
 
 #[test]
@@ -701,9 +840,21 @@ fn normal_search_fixture_matches_preedit_sha() {
     use std::path::PathBuf;
 
     let mut engine = CommandBarEngine::new();
-    engine.add_history_entry("https://history.test/".to_string(), "Maho History".to_string(), None);
-    engine.add_action("close_tab".to_string(), "Close Tab".to_string(), "Tabs".to_string());
-    engine.add_action("toggle_sidebar".to_string(), "Toggle Sidebar".to_string(), "View".to_string());
+    engine.add_history_entry(
+        "https://history.test/".to_string(),
+        "Maho History".to_string(),
+        None,
+    );
+    engine.add_action(
+        "close_tab".to_string(),
+        "Close Tab".to_string(),
+        "Tabs".to_string(),
+    );
+    engine.add_action(
+        "toggle_sidebar".to_string(),
+        "Toggle Sidebar".to_string(),
+        "View".to_string(),
+    );
 
     let space_normal = SpaceId::new("space-normal-v1");
     let t_now = maho_types::common::DateTime::from_iso("2024-01-01T00:00:00Z");
@@ -797,7 +948,11 @@ fn normal_search_fixture_matches_preedit_sha() {
         spaces: vec![space_vm],
         folders: vec![folder_vm],
         archived_tabs: vec![tab_archived],
-        bookmarks: vec![("bookmark-v1".to_string(), "Maho Bookmark".to_string(), "https://bookmark.test/".to_string())],
+        bookmarks: vec![(
+            "bookmark-v1".to_string(),
+            "Maho Bookmark".to_string(),
+            "https://bookmark.test/".to_string(),
+        )],
         bookmark_favicons: vec![],
         closed_tabs: vec![tab_closed],
         extensions: vec![("extension-v1".to_string(), "Maho Extension".to_string())],
@@ -908,5 +1063,8 @@ fn normal_search_fixture_matches_preedit_sha() {
     let golden_path = golden_path.expect("Failed to locate command-normal-v1.json golden file");
     let golden_bytes = fs::read(golden_path).expect("Failed to read golden file");
 
-    assert_eq!(serialized_bytes, golden_bytes, "Serialized output does not match pre-edit golden file");
+    assert_eq!(
+        serialized_bytes, golden_bytes,
+        "Serialized output does not match pre-edit golden file"
+    );
 }

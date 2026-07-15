@@ -1,11 +1,11 @@
-use worker::*;
+use crate::auth::middleware::get_auth_context;
+use crate::db;
+use crate::errors::{AppError, Result};
+use chrono::{Datelike, TimeZone, Utc};
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use hmac::{Hmac, Mac};
-use chrono::{Datelike, TimeZone, Utc};
-use crate::errors::{AppError, Result};
-use crate::db;
-use crate::auth::middleware::get_auth_context;
+use worker::*;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -81,7 +81,11 @@ fn verify_signature(secret: &str, body: &[u8], signature_hex: &str) -> bool {
         return false;
     }
     use subtle::ConstantTimeEq;
-    computed_bytes.as_slice().ct_eq(&signature_bytes).unwrap_u8() == 1
+    computed_bytes
+        .as_slice()
+        .ct_eq(&signature_bytes)
+        .unwrap_u8()
+        == 1
 }
 
 fn hex_decode(hex_str: &str) -> Option<Vec<u8>> {
@@ -90,7 +94,7 @@ fn hex_decode(hex_str: &str) -> Option<Vec<u8>> {
     }
     let mut bytes = Vec::new();
     for i in (0..hex_str.len()).step_by(2) {
-        let res = u8::from_str_radix(&hex_str[i..i+2], 16).ok()?;
+        let res = u8::from_str_radix(&hex_str[i..i + 2], 16).ok()?;
         bytes.push(res);
     }
     Some(bytes)
@@ -109,7 +113,11 @@ fn calculate_period_start(created_at_sec: i64) -> i64 {
 
     let clamp_day = |y: i32, m: u32, d: u32| -> u32 {
         let mut target = d;
-        while Utc.with_ymd_and_hms(y, m, target, 0, 0, 0).single().is_none() {
+        while Utc
+            .with_ymd_and_hms(y, m, target, 0, 0, 0)
+            .single()
+            .is_none()
+        {
             target -= 1;
         }
         target
@@ -159,7 +167,10 @@ async fn notify_proxy_tier_update(
             return;
         }
     };
-    let service_token = match env.secret("MAHO_RELAY_SERVICE_TOKEN").map(|v| v.to_string()) {
+    let service_token = match env
+        .secret("MAHO_RELAY_SERVICE_TOKEN")
+        .map(|v| v.to_string())
+    {
         Ok(v) if !v.trim().is_empty() => v,
         _ => {
             console_error!("MAHO_RELAY_SERVICE_TOKEN missing; skipping proxy tier update");
@@ -204,7 +215,10 @@ async fn notify_proxy_tier_update(
                 console_log!("proxy tier updated: user={user_id} tier={tier}");
             }
             Ok(resp) => {
-                console_error!("proxy tier update failed: user={user_id} status={}", resp.status_code());
+                console_error!(
+                    "proxy tier update failed: user={user_id} status={}",
+                    resp.status_code()
+                );
             }
             Err(e) => {
                 console_error!("proxy tier update fetch err user={user_id}: {e}");
@@ -227,7 +241,10 @@ async fn notify_proxy_credits_update(
             return;
         }
     };
-    let service_token = match env.secret("MAHO_RELAY_SERVICE_TOKEN").map(|v| v.to_string()) {
+    let service_token = match env
+        .secret("MAHO_RELAY_SERVICE_TOKEN")
+        .map(|v| v.to_string())
+    {
         Ok(v) if !v.trim().is_empty() => v,
         _ => {
             console_error!("MAHO_RELAY_SERVICE_TOKEN missing; skipping proxy credits update");
@@ -270,7 +287,10 @@ async fn notify_proxy_credits_update(
                 console_log!("proxy credits updated: user={user_id} balance={new_balance_usd}");
             }
             Ok(resp) => {
-                console_error!("proxy credits update failed: user={user_id} status={}", resp.status_code());
+                console_error!(
+                    "proxy credits update failed: user={user_id} status={}",
+                    resp.status_code()
+                );
             }
             Err(e) => {
                 console_error!("proxy credits update fetch err user={user_id}: {e}");
@@ -288,7 +308,10 @@ async fn notify_proxy_topup(env: &Env, user_id: i32, amount_usd: f64) {
             return;
         }
     };
-    let service_token = match env.secret("MAHO_RELAY_SERVICE_TOKEN").map(|v| v.to_string()) {
+    let service_token = match env
+        .secret("MAHO_RELAY_SERVICE_TOKEN")
+        .map(|v| v.to_string())
+    {
         Ok(v) if !v.trim().is_empty() => v,
         _ => {
             console_error!("MAHO_RELAY_SERVICE_TOKEN missing; skipping proxy topup");
@@ -329,7 +352,10 @@ async fn notify_proxy_topup(env: &Env, user_id: i32, amount_usd: f64) {
                 console_log!("proxy topup: user={user_id} amount={amount_usd}");
             }
             Ok(resp) => {
-                console_error!("proxy topup failed: user={user_id} status={}", resp.status_code());
+                console_error!(
+                    "proxy topup failed: user={user_id} status={}",
+                    resp.status_code()
+                );
             }
             Err(e) => {
                 console_error!("proxy topup fetch err user={user_id}: {e}");
@@ -340,7 +366,8 @@ async fn notify_proxy_topup(env: &Env, user_id: i32, amount_usd: f64) {
 }
 
 pub async fn lemonsqueezy_webhook(mut req: Request, env: Env) -> Result<Response> {
-    let secret = env.secret("LS_WEBHOOK_SECRET")
+    let secret = env
+        .secret("LS_WEBHOOK_SECRET")
         .map(|v| v.to_string())
         .map_err(|_| AppError::Internal("LS_WEBHOOK_SECRET missing".to_string()))?;
     if secret.trim().is_empty() {
@@ -367,29 +394,43 @@ pub async fn lemonsqueezy_webhook(mut req: Request, env: Env) -> Result<Response
     }
 
     let event_name = &payload.meta.event_name;
-    let custom_data = payload.meta.custom_data.as_ref()
+    let custom_data = payload
+        .meta
+        .custom_data
+        .as_ref()
         .ok_or_else(|| AppError::BadRequest("missing_custom_data".to_string()))?;
-    let user_id_str = custom_data.user_id.as_ref()
+    let user_id_str = custom_data
+        .user_id
+        .as_ref()
         .ok_or_else(|| AppError::BadRequest("missing_user_id".to_string()))?;
-    let user_id: i32 = user_id_str.parse()
+    let user_id: i32 = user_id_str
+        .parse()
         .map_err(|_| AppError::BadRequest("invalid_user_id".to_string()))?;
 
     let is_sub_event = matches!(
         event_name.as_str(),
         "subscription_created"
-        | "subscription_updated"
-        | "subscription_cancelled"
-        | "subscription_resumed"
-        | "subscription_expired"
-        | "subscription_payment_failed"
-        | "subscription_payment_recovered"
+            | "subscription_updated"
+            | "subscription_cancelled"
+            | "subscription_resumed"
+            | "subscription_expired"
+            | "subscription_payment_failed"
+            | "subscription_payment_recovered"
     );
 
     if is_sub_event {
         let variant_id = payload.data.attributes.variant_id.unwrap_or(0);
-        let status = payload.data.attributes.status.clone().unwrap_or_else(|| "active".to_string());
+        let status = payload
+            .data
+            .attributes
+            .status
+            .clone()
+            .unwrap_or_else(|| "active".to_string());
 
-        let tier = if matches!(event_name.as_str(), "subscription_cancelled" | "subscription_expired" | "subscription_payment_failed") {
+        let tier = if matches!(
+            event_name.as_str(),
+            "subscription_cancelled" | "subscription_expired" | "subscription_payment_failed"
+        ) {
             "free"
         } else {
             match variant_id {
@@ -399,25 +440,36 @@ pub async fn lemonsqueezy_webhook(mut req: Request, env: Env) -> Result<Response
             }
         };
 
-        let created_at_sec = payload.data.attributes.created_at
+        let created_at_sec = payload
+            .data
+            .attributes
+            .created_at
             .as_ref()
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.timestamp())
             .unwrap_or(now_sec);
 
-        let expires_at = payload.data.attributes.renews_at
+        let expires_at = payload
+            .data
+            .attributes
+            .renews_at
             .as_ref()
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.timestamp());
 
-        let created_dt = Utc.timestamp_opt(created_at_sec, 0)
+        let created_dt = Utc
+            .timestamp_opt(created_at_sec, 0)
             .single()
             .unwrap_or_else(Utc::now);
         let anniversary_reset_day = Some(created_dt.day() as i32);
         let period_start_sec = calculate_period_start(created_at_sec);
         let period_start_at = Some(period_start_sec);
 
-        let customer_id_str = payload.data.attributes.customer_id.as_ref()
+        let customer_id_str = payload
+            .data
+            .attributes
+            .customer_id
+            .as_ref()
             .map(customer_id_to_string);
 
         let has_payment = match event_name.as_str() {
@@ -437,7 +489,8 @@ pub async fn lemonsqueezy_webhook(mut req: Request, env: Env) -> Result<Response
             has_payment,
             customer_id_str,
             Some(created_at_sec),
-        ).await?;
+        )
+        .await?;
 
         let base_ceiling = match tier {
             "pro" => 2.10,
@@ -445,16 +498,24 @@ pub async fn lemonsqueezy_webhook(mut req: Request, env: Env) -> Result<Response
             _ => 0.50,
         };
         notify_proxy_tier_update(&env, user_id, tier, period_start_sec, base_ceiling).await;
-
     } else if event_name == "order_created" {
         let variant_id = payload.data.attributes.variant_id.unwrap_or(0);
         let status = payload.data.attributes.status.clone().unwrap_or_default();
 
         if status == "paid" || status == "completed" || status.is_empty() {
-            let customer_id_str = payload.data.attributes.customer_id.as_ref()
+            let customer_id_str = payload
+                .data
+                .attributes
+                .customer_id
+                .as_ref()
                 .map(customer_id_to_string);
-            if let Err(e) = db::update_user_payment_method_and_customer(&db, user_id, true, customer_id_str).await {
-                console_error!("update_user_payment_method_and_customer failed for user {user_id}: {e}");
+            if let Err(e) =
+                db::update_user_payment_method_and_customer(&db, user_id, true, customer_id_str)
+                    .await
+            {
+                console_error!(
+                    "update_user_payment_method_and_customer failed for user {user_id}: {e}"
+                );
             }
 
             let amount_usd = match variant_id {
@@ -469,7 +530,9 @@ pub async fn lemonsqueezy_webhook(mut req: Request, env: Env) -> Result<Response
             if is_payg_credit {
                 match db::add_credit_balance(&db, user_id, amount_usd, now_sec).await {
                     Ok(new_balance) => {
-                        console_log!("PAYG credit +${amount_usd} user={user_id} balance=${new_balance}");
+                        console_log!(
+                            "PAYG credit +${amount_usd} user={user_id} balance=${new_balance}"
+                        );
                         notify_proxy_credits_update(&env, user_id, new_balance, amount_usd).await;
                     }
                     Err(e) => {
@@ -491,7 +554,8 @@ pub async fn lemonsqueezy_webhook(mut req: Request, env: Env) -> Result<Response
             match db::chargeback_credit(&db, user_id, refund_amount_usd, now_sec).await {
                 Ok(new_balance) => {
                     console_log!("REFUND: -${refund_amount_usd} user={user_id} event={event_id} balance=${new_balance}");
-                    notify_proxy_credits_update(&env, user_id, new_balance, -refund_amount_usd).await;
+                    notify_proxy_credits_update(&env, user_id, new_balance, -refund_amount_usd)
+                        .await;
                 }
                 Err(e) => {
                     console_error!("chargeback_credit failed user={user_id}: {e}");
@@ -535,8 +599,7 @@ pub async fn portal_session(req: Request, env: Env) -> Result<Response> {
     let _ = headers.set("Content-Type", "application/vnd.api+json");
 
     let mut init = RequestInit::new();
-    init.with_method(Method::Get)
-        .with_headers(headers);
+    init.with_method(Method::Get).with_headers(headers);
 
     let url = format!("https://api.lemonsqueezy.com/v1/customers/{customer_id}");
     let request = Request::new_with_init(&url, &init)?;
@@ -544,26 +607,34 @@ pub async fn portal_session(req: Request, env: Env) -> Result<Response> {
     match Fetch::Request(request).send().await {
         Ok(mut resp) if (200..300).contains(&resp.status_code()) => {
             #[derive(Deserialize)]
-            struct LSResponse { data: LSData }
+            struct LSResponse {
+                data: LSData,
+            }
             #[derive(Deserialize)]
-            struct LSData { attributes: LSAttributes }
+            struct LSData {
+                attributes: LSAttributes,
+            }
             #[derive(Deserialize)]
-            struct LSAttributes { urls: LSUrls }
+            struct LSAttributes {
+                urls: LSUrls,
+            }
             #[derive(Deserialize)]
-            struct LSUrls { customer_portal: String }
+            struct LSUrls {
+                customer_portal: String,
+            }
 
             if let Ok(ls_resp) = resp.json::<LSResponse>().await {
                 return Response::from_json(&PortalSessionResponse {
                     url: ls_resp.data.attributes.urls.customer_portal,
-                }).map_err(AppError::from);
+                })
+                .map_err(AppError::from);
             }
         }
         Ok(resp) => console_error!("LS Customers API status {}", resp.status_code()),
         Err(e) => console_error!("LS Customers API err: {e}"),
     }
 
-    Response::from_json(&PortalSessionResponse { url: fallback_url })
-        .map_err(AppError::from)
+    Response::from_json(&PortalSessionResponse { url: fallback_url }).map_err(AppError::from)
 }
 
 pub async fn invoices(req: Request, env: Env) -> Result<Response> {
@@ -584,8 +655,7 @@ pub async fn invoices(req: Request, env: Env) -> Result<Response> {
     let _ = headers.set("Content-Type", "application/vnd.api+json");
 
     let mut init = RequestInit::new();
-    init.with_method(Method::Get)
-        .with_headers(headers);
+    init.with_method(Method::Get).with_headers(headers);
 
     let email_encoded = urlencoding_encode(&user.email);
     let url = format!("https://api.lemonsqueezy.com/v1/orders?filter[user_email]={email_encoded}");
@@ -594,9 +664,14 @@ pub async fn invoices(req: Request, env: Env) -> Result<Response> {
     match Fetch::Request(request).send().await {
         Ok(mut resp) if (200..300).contains(&resp.status_code()) => {
             #[derive(Deserialize)]
-            struct LSOrdersResponse { data: Vec<LSOrderData> }
+            struct LSOrdersResponse {
+                data: Vec<LSOrderData>,
+            }
             #[derive(Deserialize)]
-            struct LSOrderData { id: String, attributes: LSOrderAttributes }
+            struct LSOrderData {
+                id: String,
+                attributes: LSOrderAttributes,
+            }
             #[derive(Deserialize)]
             struct LSOrderAttributes {
                 created_at: String,
@@ -606,22 +681,29 @@ pub async fn invoices(req: Request, env: Env) -> Result<Response> {
                 urls: LSOrderUrls,
             }
             #[derive(Deserialize)]
-            struct LSOrderUrls { receipt: Option<String> }
+            struct LSOrderUrls {
+                receipt: Option<String>,
+            }
 
             if let Ok(ls_resp) = resp.json::<LSOrdersResponse>().await {
-                let invoices: Vec<InvoiceEntry> = ls_resp.data.into_iter().map(|order| {
-                    let created_at = chrono::DateTime::parse_from_rfc3339(&order.attributes.created_at)
-                        .map(|dt| dt.timestamp())
-                        .unwrap_or(0);
-                    InvoiceEntry {
-                        id: order.id,
-                        created_at,
-                        amount_usd: (order.attributes.total as f64) / 100.0,
-                        currency: order.attributes.currency,
-                        status: order.attributes.status,
-                        pdf_url: order.attributes.urls.receipt.unwrap_or_default(),
-                    }
-                }).collect();
+                let invoices: Vec<InvoiceEntry> = ls_resp
+                    .data
+                    .into_iter()
+                    .map(|order| {
+                        let created_at =
+                            chrono::DateTime::parse_from_rfc3339(&order.attributes.created_at)
+                                .map(|dt| dt.timestamp())
+                                .unwrap_or(0);
+                        InvoiceEntry {
+                            id: order.id,
+                            created_at,
+                            amount_usd: (order.attributes.total as f64) / 100.0,
+                            currency: order.attributes.currency,
+                            status: order.attributes.status,
+                            pdf_url: order.attributes.urls.receipt.unwrap_or_default(),
+                        }
+                    })
+                    .collect();
                 return Response::from_json(&InvoicesResponse { invoices }).map_err(AppError::from);
             }
         }
@@ -640,7 +722,7 @@ fn urlencoding_encode(s: &str) -> String {
                 out.push(b as char);
             }
             _ => {
-                out.push_str(&format!("%{:02X}", b));
+                out.push_str(&format!("%{b:02X}"));
             }
         }
     }

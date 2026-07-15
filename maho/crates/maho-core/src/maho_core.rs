@@ -29,14 +29,17 @@ impl PersistThrottle {
 }
 
 use maho_types::account::{AccountInfo, AuthState};
+use maho_types::ai::{AiProfile, AiWorkspace};
 use maho_types::boost::{Boost, BoostUpdate};
 use maho_types::common::{MemoryPressureLevel, Url};
 use maho_types::events::core_update::{CoreUpdate, MemoryAction, SPLIT_VIEW_SCHEMA_VERSION};
 use maho_types::events::shell_event::ShellEvent;
 use maho_types::identifiers::{BoostId, FolderId, NoteId, ProfileId, SpaceId, TabId, WindowId};
-use maho_types::note::Note;
-use maho_types::settings::{AppearanceSettingsUpdate, PinnedCloseBehavior, Settings, SettingsUpdate};
 use maho_types::keyboard::{KeyCombo, KeyModifier};
+use maho_types::note::Note;
+use maho_types::settings::{
+    AppearanceSettingsUpdate, PinnedCloseBehavior, Settings, SettingsUpdate,
+};
 use maho_types::space::{RootItem, Space, SpaceColor};
 use maho_types::split_view::{SplitConfig, SplitViewConfig};
 use maho_types::tab::{Tab, TabLifecycleState, TabRole};
@@ -50,10 +53,10 @@ use crate::autofill_manager::AutofillManager;
 use crate::backup_manager::BackupManager;
 use crate::bookmark_manager::BookmarkManager;
 use crate::boost_manager::BoostManager;
-use crate::css_mod_manager::CssModManager;
 use crate::command_bar::CommandBarEngine;
 use crate::content_blocker::ContentBlocker;
 use crate::crash_recovery::CrashRecoveryManager;
+use crate::css_mod_manager::CssModManager;
 use crate::download_manager::DownloadManager;
 use crate::easel_manager::EaselManager;
 use crate::event_dispatcher::{
@@ -63,8 +66,7 @@ use crate::extension_bridge::ExtensionBridge;
 use crate::find_manager::FindManager;
 use crate::import_export_manager::ImportExportManager;
 use crate::llm_manager::LLMManager;
-use crate::tool_registry::ToolRegistry;
-use crate::memory_manager::{MemoryManager, MemoryResult, AuthSnapshot};
+use crate::memory_manager::{AuthSnapshot, MemoryManager, MemoryResult};
 use crate::note_manager::NoteManager;
 use crate::notification_manager::NotificationManager;
 use crate::password_manager::PasswordManager;
@@ -78,6 +80,7 @@ use crate::skills_manager::SkillsManager;
 use crate::space_manager::SpaceManager;
 use crate::sync_models::{SyncEntity, SyncEntityType};
 use crate::tab_lifecycle::{timestamp_millis_to_iso8601, TabLifecycleManager};
+use crate::tool_registry::ToolRegistry;
 
 fn private_tab_ids_from_tabs<'a, I>(tabs: I) -> HashSet<TabId>
 where
@@ -95,9 +98,13 @@ fn sanitize_space_for_private_tabs(space: &Space, private_ids: &HashSet<TabId>) 
     }
 
     let mut sanitized = space.clone();
-    sanitized.tab_order.retain(|tab_id| !private_ids.contains(tab_id));
+    sanitized
+        .tab_order
+        .retain(|tab_id| !private_ids.contains(tab_id));
     for folder in &mut sanitized.folders {
-        folder.tab_ids.retain(|tab_id| !private_ids.contains(tab_id));
+        folder
+            .tab_ids
+            .retain(|tab_id| !private_ids.contains(tab_id));
     }
     sanitized.root_order.retain(|item| match item {
         RootItem::Tab(tab_id) => !private_ids.contains(tab_id),
@@ -111,6 +118,101 @@ fn sanitize_space_for_private_tabs(space: &Space, private_ids: &HashSet<TabId>) 
         sanitized.last_active_tab_id = None;
     }
     sanitized
+}
+
+fn trusted_origin_from_url(url: &str) -> Option<String> {
+    let trimmed = url.trim();
+    let (scheme, rest) = trimmed.split_once("://")?;
+    if !is_valid_origin_scheme(scheme) || rest.is_empty() {
+        return None;
+    }
+
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    if authority.is_empty() || authority.chars().any(char::is_whitespace) {
+        return None;
+    }
+
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    if host_port.is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        "{}://{}",
+        scheme.to_ascii_lowercase(),
+        host_port.to_ascii_lowercase()
+    ))
+}
+
+fn is_valid_origin_scheme(scheme: &str) -> bool {
+    let mut chars = scheme.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_alphabetic()
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'))
+}
+
+fn default_agent_workspace(workspace_root: &str) -> AiWorkspace {
+    AiWorkspace {
+        id: "default".to_string(),
+        name: "Default Workspace".to_string(),
+        profile_id: Some("default".to_string()),
+        space_id: None,
+        workspace_root: Some(workspace_root.to_string()),
+        created_at: String::new(),
+        updated_at: String::new(),
+    }
+}
+
+fn default_agent_profile() -> AiProfile {
+    AiProfile {
+        id: "default".to_string(),
+        name: "Default Profile".to_string(),
+        system_prompt: String::new(),
+        preferred_model: None,
+        tools: vec![],
+        mcp_servers: vec![],
+        is_default: true,
+        created_at: String::new(),
+        updated_at: String::new(),
+    }
+}
+
+fn resolve_agent_workspace(
+    storage: &maho_storage::sqlite::SqliteStorage,
+    workspace_root: &str,
+    active_space_id: Option<&str>,
+) -> AiWorkspace {
+    let workspaces = storage.list_workspaces().unwrap_or_default();
+    if let Some(space_id) = active_space_id {
+        if let Some(workspace) = workspaces
+            .iter()
+            .find(|workspace| workspace.space_id.as_deref() == Some(space_id))
+        {
+            return workspace.clone();
+        }
+    }
+
+    workspaces
+        .into_iter()
+        .find(|workspace| workspace.workspace_root.as_deref() == Some(workspace_root))
+        .unwrap_or_else(|| default_agent_workspace(workspace_root))
+}
+
+fn resolve_agent_profile(
+    storage: &maho_storage::sqlite::SqliteStorage,
+    workspace: &AiWorkspace,
+) -> AiProfile {
+    workspace
+        .profile_id
+        .as_deref()
+        .and_then(|profile_id| storage.get_ai_profile(profile_id).ok().flatten())
+        .or_else(|| storage.get_ai_profile("blank").ok().flatten())
+        .unwrap_or_else(default_agent_profile)
 }
 
 fn sanitize_spaces_for_private_tabs<'a, I>(spaces: I, private_ids: &HashSet<TabId>) -> Vec<Space>
@@ -172,7 +274,9 @@ fn dedup_duplicate_pinned_favorites(
         .filter(|tab| !remove_ids.contains(&tab.id))
         .collect();
     for space in &mut spaces {
-        space.tab_order.retain(|tab_id| !remove_ids.contains(tab_id));
+        space
+            .tab_order
+            .retain(|tab_id| !remove_ids.contains(tab_id));
         space.root_order.retain(|item| match item {
             RootItem::Tab(tab_id) => !remove_ids.contains(tab_id),
             RootItem::Folder(_) => true,
@@ -227,6 +331,136 @@ mod tests {
             .expect("New tab should appear in view models")
             .id
             .clone()
+    }
+
+    fn write_agent_skill_config(skills: serde_json::Value) -> tempfile::NamedTempFile {
+        use std::io::Write as _;
+
+        let mut file = tempfile::Builder::new()
+            .suffix(".json")
+            .tempfile()
+            .expect("skill config tempfile must open");
+        let config = serde_json::json!({
+            "version": 1,
+            "min_brain_version": 1,
+            "skills": skills,
+        });
+        write!(file, "{}", config).expect("skill config tempfile must be written");
+        file
+    }
+
+    #[test]
+    fn agent_slash_tools_resolve_from_shared_config_skills() {
+        let mut core = MahoCore::new();
+        let config = write_agent_skill_config(serde_json::json!([
+            {
+                "id": "hot-config-skill",
+                "name": "Hot Config Skill",
+                "slash_command": "/hot-config",
+                "description": "Loaded through maho_core_apply_config/shared manager",
+                "icon": "sparkles",
+                "first_party": false,
+                "allowed_tools": ["browser_tab_get", "browser_page_read"],
+                "system_prompt": "Use hot-delivered skill instructions."
+            }
+        ]));
+        core.load_skills_from_dir(config.path())
+            .expect("shared skills config should load");
+
+        let tools = core
+            .resolve_agent_slash_allowed_tools("/hot-config")
+            .expect("slash command should resolve from shared manager");
+
+        assert_eq!(
+            tools,
+            vec![
+                "browser_tab_get".to_string(),
+                "browser_page_read".to_string(),
+            ]
+        );
+        assert!(core
+            .resolve_agent_slash_allowed_tools("/disk-only-missing")
+            .is_none());
+    }
+
+    #[test]
+    fn agent_system_prompt_appends_site_guidance_for_trusted_origin() {
+        let mut core = MahoCore::new();
+        let config = write_agent_skill_config(serde_json::json!([
+            {
+                "id": "notion-advisor",
+                "name": "Notion Advisor",
+                "slash_command": "/notion-advisor",
+                "description": "Advises on Notion pages",
+                "icon": "lightbulb",
+                "first_party": false,
+                "auto_inject": true,
+                "url_patterns": ["https://team.notion.so/*"],
+                "allowed_tools": ["browser_privileged_tool"],
+                "system_prompt": "Use Notion-specific project guidance."
+            }
+        ]));
+        core.load_skills_from_dir(config.path())
+            .expect("shared skills config should load");
+
+        let prompt = core
+            .compose_agent_system_prompt_with_skill_context(
+                "Profile prompt.",
+                Some("https://team.notion.so"),
+                2_000,
+            )
+            .expect("trusted origin should produce injected guidance");
+
+        assert!(prompt.starts_with("Profile prompt.\n\n<maho_site_guidance"));
+        assert!(prompt.contains("Advisory only"));
+        assert!(prompt.contains("Use Notion-specific project guidance."));
+        assert!(!prompt.contains("browser_privileged_tool"));
+    }
+
+    #[test]
+    fn agent_site_guidance_rejects_page_content_as_origin() {
+        let mut core = MahoCore::new();
+        let config = write_agent_skill_config(serde_json::json!([
+            {
+                "id": "notion-advisor",
+                "name": "Notion Advisor",
+                "slash_command": "/notion-advisor",
+                "description": "Advises on Notion pages",
+                "icon": "lightbulb",
+                "first_party": false,
+                "auto_inject": true,
+                "url_patterns": ["https://team.notion.so/*"],
+                "system_prompt": "Use Notion-specific project guidance."
+            }
+        ]));
+        core.load_skills_from_dir(config.path())
+            .expect("shared skills config should load");
+
+        let page_body = "This page body mentions https://team.notion.so but is not a browser-trusted active-tab origin.";
+
+        assert!(core
+            .compose_agent_system_prompt_with_skill_context(
+                "Profile prompt.",
+                Some(page_body),
+                2_000
+            )
+            .is_none());
+    }
+
+    #[test]
+    fn trusted_active_tab_origin_uses_tab_url_origin_only() {
+        let mut core = MahoCore::new();
+        let tab_id = create_tab(&mut core);
+
+        core.handle_event(ShellEvent::TabUrlUpdated {
+            tab_id,
+            url: Url::new("https://Docs.Example.com:8443/path?q=1#body"),
+        });
+
+        assert_eq!(
+            core.trusted_active_tab_origin().as_deref(),
+            Some("https://docs.example.com:8443")
+        );
     }
 
     #[test]
@@ -352,14 +586,19 @@ mod tests {
         let tab_id = create_tab(&mut core);
 
         assert!(
-            core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id.clone())),
+            core.space_manager
+                .get_root_order(&space_id)
+                .contains(&maho_types::space::RootItem::Tab(tab_id.clone())),
             "tab should be in root_order before favoriting"
         );
 
         core.favorite_tab(&tab_id);
 
         assert!(
-            !core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            !core
+                .space_manager
+                .get_root_order(&space_id)
+                .contains(&maho_types::space::RootItem::Tab(tab_id)),
             "tab must not be in root_order after favoriting"
         );
     }
@@ -372,14 +611,19 @@ mod tests {
 
         core.favorite_tab(&tab_id);
         assert!(
-            !core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id.clone())),
+            !core
+                .space_manager
+                .get_root_order(&space_id)
+                .contains(&maho_types::space::RootItem::Tab(tab_id.clone())),
             "tab must not be in root_order after favoriting"
         );
 
         core.transition_tab_role(&tab_id, TabRole::Normal);
 
         assert!(
-            core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            core.space_manager
+                .get_root_order(&space_id)
+                .contains(&maho_types::space::RootItem::Tab(tab_id)),
             "tab must be back in root_order after unfavoriting"
         );
     }
@@ -394,8 +638,14 @@ mod tests {
         core.transition_tab_role(&tab_id, TabRole::Normal);
 
         let order = core.space_manager.get_root_order(&space_id);
-        let count = order.iter().filter(|i| *i == &maho_types::space::RootItem::Tab(tab_id.clone())).count();
-        assert_eq!(count, 1, "tab should appear exactly once in root_order after roundtrip");
+        let count = order
+            .iter()
+            .filter(|i| *i == &maho_types::space::RootItem::Tab(tab_id.clone()))
+            .count();
+        assert_eq!(
+            count, 1,
+            "tab should appear exactly once in root_order after roundtrip"
+        );
     }
 
     #[test]
@@ -404,10 +654,15 @@ mod tests {
         let space_id = core.get_active_space_id().clone();
         let tab_id = create_tab(&mut core);
 
-        core.handle_event(ShellEvent::FavoriteTab { tab_id: tab_id.clone() });
+        core.handle_event(ShellEvent::FavoriteTab {
+            tab_id: tab_id.clone(),
+        });
 
         assert!(
-            !core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            !core
+                .space_manager
+                .get_root_order(&space_id)
+                .contains(&maho_types::space::RootItem::Tab(tab_id)),
             "tab must not be in root_order after FavoriteTab event"
         );
     }
@@ -418,8 +673,13 @@ mod tests {
         let space_id = core.get_active_space_id().clone();
         let tab_id = create_tab(&mut core);
 
-        core.handle_event(ShellEvent::FavoriteTab { tab_id: tab_id.clone() });
-        core.handle_event(ShellEvent::ChangeTabRole { tab_id: tab_id.clone(), new_role: TabRole::Normal });
+        core.handle_event(ShellEvent::FavoriteTab {
+            tab_id: tab_id.clone(),
+        });
+        core.handle_event(ShellEvent::ChangeTabRole {
+            tab_id: tab_id.clone(),
+            new_role: TabRole::Normal,
+        });
 
         assert!(
             core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
@@ -435,7 +695,10 @@ mod tests {
 
         core.favorite_tab(&tab_id);
         assert!(
-            !core.space_manager.get_root_order(&src_space_id).contains(&maho_types::space::RootItem::Tab(tab_id.clone())),
+            !core
+                .space_manager
+                .get_root_order(&src_space_id)
+                .contains(&maho_types::space::RootItem::Tab(tab_id.clone())),
             "pre-condition: favorited tab not in source root_order"
         );
 
@@ -447,15 +710,25 @@ mod tests {
             .expect("active space must have profile");
         let dest = core.create_space(
             "Dest",
-            SpaceColor { hue: 0.0, saturation: 0.5, brightness: 0.8, grain: 0.0 },
+            SpaceColor {
+                hue: 0.0,
+                saturation: 0.5,
+                brightness: 0.8,
+                grain: 0.0,
+            },
             profile_id,
         );
         let dest_space_id = dest.id.clone();
 
-        core.handle_event(ShellEvent::DeleteSpace { space_id: src_space_id.clone() });
+        core.handle_event(ShellEvent::DeleteSpace {
+            space_id: src_space_id.clone(),
+        });
 
         assert!(
-            !core.space_manager.get_root_order(&dest_space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            !core
+                .space_manager
+                .get_root_order(&dest_space_id)
+                .contains(&maho_types::space::RootItem::Tab(tab_id)),
             "favorited tab must not appear in destination root_order after DeleteSpace migration"
         );
     }
@@ -476,7 +749,12 @@ mod tests {
             .expect("active space must have profile");
         let dest = core.create_space(
             "Dest",
-            SpaceColor { hue: 0.0, saturation: 0.5, brightness: 0.8, grain: 0.0 },
+            SpaceColor {
+                hue: 0.0,
+                saturation: 0.5,
+                brightness: 0.8,
+                grain: 0.0,
+            },
             profile_id,
         );
         let dest_space_id = dest.id.clone();
@@ -487,7 +765,10 @@ mod tests {
         });
 
         assert!(
-            !core.space_manager.get_root_order(&dest_space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            !core
+                .space_manager
+                .get_root_order(&dest_space_id)
+                .contains(&maho_types::space::RootItem::Tab(tab_id)),
             "favorited tab must not appear in destination root_order after ExportSpaceIntoFolder"
         );
     }
@@ -498,8 +779,12 @@ mod tests {
         let space_id = core.get_active_space_id().clone();
         let tab_id = create_tab(&mut core);
 
-        let folder_vm = core.space_manager.create_folder(&space_id, "F", false, None).unwrap();
-        core.space_manager.add_tab_to_folder(&space_id, &folder_vm.id, tab_id.clone());
+        let folder_vm = core
+            .space_manager
+            .create_folder(&space_id, "F", false, None)
+            .unwrap();
+        core.space_manager
+            .add_tab_to_folder(&space_id, &folder_vm.id, tab_id.clone());
 
         core.favorite_tab(&tab_id);
         // ADR-11: favoriting decouples the tab from its folder.
@@ -513,7 +798,9 @@ mod tests {
         // Decoupled at favorite time, the tab is no longer folder-resident, so
         // unfavoriting restores it to root_order like any non-folder tab.
         assert!(
-            core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            core.space_manager
+                .get_root_order(&space_id)
+                .contains(&maho_types::space::RootItem::Tab(tab_id)),
             "decoupled tab must return to root_order after unfavoriting"
         );
     }
@@ -528,7 +815,9 @@ mod tests {
         core.transition_tab_role(&tab_id, TabRole::Normal);
 
         assert!(
-            core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            core.space_manager
+                .get_root_order(&space_id)
+                .contains(&maho_types::space::RootItem::Tab(tab_id)),
             "non-folder tab must be restored to root_order after unfavoriting"
         );
     }
@@ -541,16 +830,29 @@ mod tests {
 
         core.favorite_tab(&tab_id);
         assert!(
-            !core.space_manager.get_root_order(&src_space_id).contains(&maho_types::space::RootItem::Tab(tab_id.clone())),
+            !core
+                .space_manager
+                .get_root_order(&src_space_id)
+                .contains(&maho_types::space::RootItem::Tab(tab_id.clone())),
             "pre-condition: favorited tab not in src root_order"
         );
 
-        let profile_id = core.get_space_view_models()
+        let profile_id = core
+            .get_space_view_models()
             .into_iter()
             .find(|s| s.id == src_space_id)
             .and_then(|s| s.profile_id)
             .expect("active space must have profile");
-        let dest = core.create_space("Dest", SpaceColor { hue: 0.0, saturation: 0.5, brightness: 0.8, grain: 0.0 }, profile_id);
+        let dest = core.create_space(
+            "Dest",
+            SpaceColor {
+                hue: 0.0,
+                saturation: 0.5,
+                brightness: 0.8,
+                grain: 0.0,
+            },
+            profile_id,
+        );
         let dest_id = dest.id.clone();
 
         core.handle_event(ShellEvent::MoveTab {
@@ -560,7 +862,10 @@ mod tests {
         });
 
         assert!(
-            !core.space_manager.get_root_order(&dest_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            !core
+                .space_manager
+                .get_root_order(&dest_id)
+                .contains(&maho_types::space::RootItem::Tab(tab_id)),
             "favorited tab must not appear in destination root_order after MoveTab"
         );
     }
@@ -571,12 +876,22 @@ mod tests {
         let src_space_id = core.get_active_space_id().clone();
         let tab_id = create_tab(&mut core);
 
-        let profile_id = core.get_space_view_models()
+        let profile_id = core
+            .get_space_view_models()
             .into_iter()
             .find(|s| s.id == src_space_id)
             .and_then(|s| s.profile_id)
             .expect("active space must have profile");
-        let dest = core.create_space("Dest", SpaceColor { hue: 0.0, saturation: 0.5, brightness: 0.8, grain: 0.0 }, profile_id);
+        let dest = core.create_space(
+            "Dest",
+            SpaceColor {
+                hue: 0.0,
+                saturation: 0.5,
+                brightness: 0.8,
+                grain: 0.0,
+            },
+            profile_id,
+        );
         let dest_id = dest.id.clone();
 
         core.handle_event(ShellEvent::MoveTab {
@@ -586,7 +901,9 @@ mod tests {
         });
 
         assert!(
-            core.space_manager.get_root_order(&dest_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            core.space_manager
+                .get_root_order(&dest_id)
+                .contains(&maho_types::space::RootItem::Tab(tab_id)),
             "non-favorited tab must appear in destination root_order after MoveTab"
         );
     }
@@ -599,12 +916,22 @@ mod tests {
 
         core.favorite_tab(&tab_id);
 
-        let profile_id = core.get_space_view_models()
+        let profile_id = core
+            .get_space_view_models()
             .into_iter()
             .find(|s| s.id == src_space_id)
             .and_then(|s| s.profile_id)
             .expect("active space must have profile");
-        let dest = core.create_space("Dest", SpaceColor { hue: 0.0, saturation: 0.5, brightness: 0.8, grain: 0.0 }, profile_id);
+        let dest = core.create_space(
+            "Dest",
+            SpaceColor {
+                hue: 0.0,
+                saturation: 0.5,
+                brightness: 0.8,
+                grain: 0.0,
+            },
+            profile_id,
+        );
         let dest_id = dest.id.clone();
 
         core.handle_event(ShellEvent::MoveTabToSpace {
@@ -614,7 +941,10 @@ mod tests {
         });
 
         assert!(
-            !core.space_manager.get_root_order(&dest_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            !core
+                .space_manager
+                .get_root_order(&dest_id)
+                .contains(&maho_types::space::RootItem::Tab(tab_id)),
             "favorited tab must not appear in destination root_order after MoveTabToSpace"
         );
     }
@@ -627,15 +957,24 @@ mod tests {
 
         core.favorite_tab(&tab_id);
         assert!(
-            !core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id.clone())),
+            !core
+                .space_manager
+                .get_root_order(&space_id)
+                .contains(&maho_types::space::RootItem::Tab(tab_id.clone())),
             "pre-condition: favorited tab not in root_order"
         );
 
-        core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone(), expected_space_id: None });
+        core.handle_event(ShellEvent::CloseTab {
+            tab_id: tab_id.clone(),
+            expected_space_id: None,
+        });
         core.handle_event(ShellEvent::ReopenLastClosed);
 
         assert!(
-            !core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            !core
+                .space_manager
+                .get_root_order(&space_id)
+                .contains(&maho_types::space::RootItem::Tab(tab_id)),
             "reopened favorited tab must not appear in root_order"
         );
     }
@@ -646,11 +985,16 @@ mod tests {
         let space_id = core.get_active_space_id().clone();
         let tab_id = create_tab(&mut core);
 
-        core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone(), expected_space_id: None });
+        core.handle_event(ShellEvent::CloseTab {
+            tab_id: tab_id.clone(),
+            expected_space_id: None,
+        });
         core.handle_event(ShellEvent::ReopenLastClosed);
 
         assert!(
-            core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            core.space_manager
+                .get_root_order(&space_id)
+                .contains(&maho_types::space::RootItem::Tab(tab_id)),
             "reopened non-favorited tab must appear in root_order"
         );
     }
@@ -661,8 +1005,12 @@ mod tests {
         let space_id = core.get_active_space_id().clone();
         let tab_id = create_tab(&mut core);
 
-        let folder_vm = core.space_manager.create_folder(&space_id, "F", false, None).unwrap();
-        core.space_manager.add_tab_to_folder(&space_id, &folder_vm.id, tab_id.clone());
+        let folder_vm = core
+            .space_manager
+            .create_folder(&space_id, "F", false, None)
+            .unwrap();
+        core.space_manager
+            .add_tab_to_folder(&space_id, &folder_vm.id, tab_id.clone());
         core.favorite_tab(&tab_id);
 
         core.handle_event(ShellEvent::RemoveTabFromFolder {
@@ -672,7 +1020,10 @@ mod tests {
         });
 
         assert!(
-            !core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            !core
+                .space_manager
+                .get_root_order(&space_id)
+                .contains(&maho_types::space::RootItem::Tab(tab_id)),
             "favorited tab must not be added to root_order when removed from folder"
         );
     }
@@ -683,10 +1034,17 @@ mod tests {
         let space_id = core.get_active_space_id().clone();
         let tab_id = create_tab(&mut core);
 
-        let folder_vm = core.space_manager.create_folder(&space_id, "F", false, None).unwrap();
-        core.space_manager.add_tab_to_folder(&space_id, &folder_vm.id, tab_id.clone());
+        let folder_vm = core
+            .space_manager
+            .create_folder(&space_id, "F", false, None)
+            .unwrap();
+        core.space_manager
+            .add_tab_to_folder(&space_id, &folder_vm.id, tab_id.clone());
         assert!(
-            !core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id.clone())),
+            !core
+                .space_manager
+                .get_root_order(&space_id)
+                .contains(&maho_types::space::RootItem::Tab(tab_id.clone())),
             "pre-condition: folder-resident tab not in root_order"
         );
 
@@ -697,7 +1055,9 @@ mod tests {
         });
 
         assert!(
-            core.space_manager.get_root_order(&space_id).contains(&maho_types::space::RootItem::Tab(tab_id)),
+            core.space_manager
+                .get_root_order(&space_id)
+                .contains(&maho_types::space::RootItem::Tab(tab_id)),
             "non-favorited tab must be restored to root_order when removed from folder"
         );
     }
@@ -707,17 +1067,33 @@ mod tests {
         let mut core = MahoCore::new();
         let space_a = core.get_active_space_id().clone();
 
-        let folder_a = core.space_manager.create_folder(&space_a, "FA", false, None).unwrap();
+        let folder_a = core
+            .space_manager
+            .create_folder(&space_a, "FA", false, None)
+            .unwrap();
 
-        let profile_id = core.get_space_view_models()
+        let profile_id = core
+            .get_space_view_models()
             .into_iter()
             .find(|s| s.id == space_a)
             .and_then(|s| s.profile_id)
             .expect("active space must have profile");
-        let space_b_space = core.create_space("B", SpaceColor { hue: 0.5, saturation: 0.5, brightness: 0.5, grain: 0.0 }, profile_id);
+        let space_b_space = core.create_space(
+            "B",
+            SpaceColor {
+                hue: 0.5,
+                saturation: 0.5,
+                brightness: 0.5,
+                grain: 0.0,
+            },
+            profile_id,
+        );
         let space_b = space_b_space.id.clone();
 
-        let parent_b = core.space_manager.create_folder(&space_b, "Parent", false, None).unwrap();
+        let parent_b = core
+            .space_manager
+            .create_folder(&space_b, "Parent", false, None)
+            .unwrap();
 
         let updates = core.handle_event(ShellEvent::MoveFolderIntoFolder {
             space_id: space_a.clone(),
@@ -725,13 +1101,19 @@ mod tests {
             target_folder_id: parent_b.id.clone(),
         });
 
-        assert!(updates.is_empty(), "cross-space parent move should emit no updates");
+        assert!(
+            updates.is_empty(),
+            "cross-space parent move should emit no updates"
+        );
 
         let space_a_data = core.space_manager.get_space(&space_a).unwrap();
-        let folder_in_a = space_a_data.folders.iter().find(|f| f.id == folder_a.id).unwrap();
+        let folder_in_a = space_a_data
+            .folders
+            .iter()
+            .find(|f| f.id == folder_a.id)
+            .unwrap();
         assert_eq!(
-            folder_in_a.parent_folder_id,
-            None,
+            folder_in_a.parent_folder_id, None,
             "folder in space_a should NOT have parent from space_b"
         );
     }
@@ -742,11 +1124,15 @@ mod tests {
         let space_id = core.get_active_space_id().clone();
         create_tab(&mut core);
 
-        let json_str = core.get_sidebar_state_v2(&space_id)
+        let json_str = core
+            .get_sidebar_state_v2(&space_id)
             .expect("should return Some for space with tabs");
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert!(parsed.get("tree").is_some(), "JSON must have 'tree' key");
-        assert!(parsed.get("favicons").is_some(), "JSON must have 'favicons' key");
+        assert!(
+            parsed.get("favicons").is_some(),
+            "JSON must have 'favicons' key"
+        );
         assert!(parsed["tree"].is_array());
         assert!(parsed["favicons"].is_object());
     }
@@ -770,13 +1156,16 @@ mod tests {
             favicon: Some(favicon_data.clone()),
         });
 
-        let json_str = core.get_sidebar_state_v2(&space_id)
+        let json_str = core
+            .get_sidebar_state_v2(&space_id)
             .expect("should return Some");
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         let favicons = parsed["favicons"].as_object().unwrap();
-        let b64_str = favicons[&tab_id.to_string()].as_str()
+        let b64_str = favicons[&tab_id.to_string()]
+            .as_str()
             .expect("favicon value must be a string");
-        let decoded = base64::engine::general_purpose::STANDARD.decode(b64_str)
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(b64_str)
             .expect("favicon must be valid base64");
         assert_eq!(decoded, favicon_data.data);
     }
@@ -948,7 +1337,12 @@ fn format_key_combo_label(key_combo: &KeyCombo) -> String {
     let is_mac = cfg!(target_os = "macos");
     let mut parts: Vec<&str> = Vec::new();
 
-    for modifier in [KeyModifier::Ctrl, KeyModifier::Alt, KeyModifier::Shift, KeyModifier::Meta] {
+    for modifier in [
+        KeyModifier::Ctrl,
+        KeyModifier::Alt,
+        KeyModifier::Shift,
+        KeyModifier::Meta,
+    ] {
         if key_combo.modifiers.contains(&modifier) {
             if is_mac {
                 parts.push(match modifier {
@@ -1045,6 +1439,64 @@ impl MahoCore {
         self.skills_manager.load_skills_from_dir(dir_path)
     }
 
+    pub fn resolve_agent_slash_allowed_tools(&self, slash_command: &str) -> Option<Vec<String>> {
+        self.skills_manager
+            .find_by_slash(slash_command)
+            .map(|skill| skill.allowed_tools.clone())
+    }
+
+    pub fn trusted_active_tab_origin(&self) -> Option<String> {
+        self.tab_manager
+            .get_active_tab_id()
+            .and_then(|tab_id| self.tab_manager.get_tab(tab_id))
+            .and_then(|tab| trusted_origin_from_url(tab.url.as_ref()))
+    }
+
+    pub fn resolve_agent_base_system_prompt(
+        &self,
+        session_id: &str,
+        workspace_root: &str,
+        active_space_id: Option<&str>,
+    ) -> String {
+        let Some(storage) = self.storage.as_ref() else {
+            return String::new();
+        };
+
+        if let Ok(Some(snapshot)) = storage.get_system_prompt_snapshot(session_id) {
+            return snapshot;
+        }
+
+        let workspace = resolve_agent_workspace(storage, workspace_root, active_space_id);
+        let profile = resolve_agent_profile(storage, &workspace);
+        crate::config_resolver::resolve_config(None, &profile, &workspace).system_prompt
+    }
+
+    pub fn compose_agent_system_prompt_with_skill_context(
+        &self,
+        base_system_prompt: &str,
+        trusted_origin: Option<&str>,
+        token_budget_chars: usize,
+    ) -> Option<String> {
+        let origin = trusted_origin?;
+        let skill_context = self
+            .skills_manager
+            .build_injected_context(origin, token_budget_chars);
+        if skill_context.is_empty() {
+            return None;
+        }
+
+        if base_system_prompt.is_empty() {
+            return Some(skill_context);
+        }
+
+        let mut composed =
+            String::with_capacity(base_system_prompt.len() + skill_context.len() + 2);
+        composed.push_str(base_system_prompt);
+        composed.push_str("\n\n");
+        composed.push_str(&skill_context);
+        Some(composed)
+    }
+
     pub fn space_manager(&self) -> &SpaceManager {
         &self.space_manager
     }
@@ -1060,7 +1512,6 @@ impl MahoCore {
     pub fn tool_registry(&self) -> &ToolRegistry {
         &self.tool_registry
     }
-
 
     pub fn new() -> Self {
         let update_listeners: UpdateListeners = Rc::new(RefCell::new(Vec::new()));
@@ -1330,16 +1781,20 @@ impl MahoCore {
 
         let ntp_url = Some(maho_types::common::Url::new("chrome://newtab"));
 
-        let favorite_tab = self
-            .tab_manager
-            .create_tab(active_space_id.clone(), ntp_url.clone(), None, None, false);
+        let favorite_tab = self.tab_manager.create_tab(
+            active_space_id.clone(),
+            ntp_url.clone(),
+            None,
+            None,
+            false,
+        );
         self.space_manager
             .add_tab_to_space(&active_space_id, favorite_tab.id.clone(), None);
         self.tab_manager.favorite_tab(&favorite_tab.id);
 
-        let pinned_tab = self
-            .tab_manager
-            .create_tab(active_space_id.clone(), ntp_url, None, None, false);
+        let pinned_tab =
+            self.tab_manager
+                .create_tab(active_space_id.clone(), ntp_url, None, None, false);
         self.space_manager
             .add_tab_to_space(&active_space_id, pinned_tab.id.clone(), None);
         self.tab_manager.pin_tab(&pinned_tab.id);
@@ -1457,15 +1912,14 @@ impl MahoCore {
             lmdb.put("tabs", &tabs_json)
                 .map_err(|e| PersistenceError::Storage(e.to_string()))?;
             let private_ids = private_tab_ids_from_tabs(self.tab_manager.get_all_tabs());
-            self.tab_preview_manager.persist_to_storage(lmdb, &private_ids);
+            self.tab_preview_manager
+                .persist_to_storage(lmdb, &private_ids);
         }
 
         if dirty & LMDB_DIRTY_SPACES != 0 {
             let private_ids = private_tab_ids_from_tabs(self.tab_manager.get_all_tabs());
-            let spaces = sanitize_spaces_for_private_tabs(
-                self.space_manager.get_all_spaces(),
-                &private_ids,
-            );
+            let spaces =
+                sanitize_spaces_for_private_tabs(self.space_manager.get_all_spaces(), &private_ids);
             let spaces_json = serde_json::to_vec(&spaces)
                 .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
             lmdb.put("spaces", &spaces_json)
@@ -1515,7 +1969,9 @@ impl MahoCore {
                         if tab.is_private {
                             continue;
                         }
-                        let tab_creation_time_micros = if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&tab.created_at.0) {
+                        let tab_creation_time_micros = if let Ok(dt) =
+                            chrono::DateTime::parse_from_rfc3339(&tab.created_at.0)
+                        {
                             dt.timestamp_micros() as u64
                         } else {
                             0
@@ -1527,11 +1983,14 @@ impl MahoCore {
                         });
                     }
                 }
-                persist_map.insert(window_id.0.clone(), maho_types::split_view::SplitViewPersistConfig {
-                    panes: stable_panes,
-                    orientation: config.orientation.clone(),
-                    ratios: config.ratios.clone(),
-                });
+                persist_map.insert(
+                    window_id.0.clone(),
+                    maho_types::split_view::SplitViewPersistConfig {
+                        panes: stable_panes,
+                        orientation: config.orientation.clone(),
+                        ratios: config.ratios.clone(),
+                    },
+                );
             }
             let split_view_json = serde_json::to_vec(&persist_map)
                 .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
@@ -1604,7 +2063,8 @@ impl MahoCore {
                 let tabs: Vec<maho_types::tab::Tab> = serde_json::from_slice(&tabs_data)
                     .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
 
-                let migrated_tabs: Vec<&maho_types::tab::Tab> = tabs.iter().filter(|tab| !tab.is_private).collect();
+                let migrated_tabs: Vec<&maho_types::tab::Tab> =
+                    tabs.iter().filter(|tab| !tab.is_private).collect();
                 let migrated_data = serde_json::to_vec(&migrated_tabs)
                     .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
 
@@ -1616,7 +2076,8 @@ impl MahoCore {
                     ("tabs.pre_migration_backup", &tabs_data),
                     ("tabs", &migrated_data),
                     ("schema_version", &version_bytes),
-                ]).map_err(|e| PersistenceError::Storage(e.to_string()))?;
+                ])
+                .map_err(|e| PersistenceError::Storage(e.to_string()))?;
 
                 let fav_count = tabs.iter().filter(|t| t.role.is_favorite()).count(); // L3-EXEMPT: role query
                 eprintln!(
@@ -1694,11 +2155,12 @@ impl MahoCore {
             let tabs: Vec<maho_types::tab::Tab> = serde_json::from_slice(&tabs_data)
                 .map_err(|e| PersistenceError::Serialization(e.to_string()))?;
             loaded_private_ids = private_tab_ids_from_tabs(tabs.iter());
-            let persisted_tabs: Vec<maho_types::tab::Tab> = tabs
-                .into_iter()
-                .filter(|tab| !tab.is_private)
-                .collect();
-            let fav_count = persisted_tabs.iter().filter(|t| t.role.is_favorite()).count(); // L3-EXEMPT: role query
+            let persisted_tabs: Vec<maho_types::tab::Tab> =
+                tabs.into_iter().filter(|tab| !tab.is_private).collect();
+            let fav_count = persisted_tabs
+                .iter()
+                .filter(|t| t.role.is_favorite())
+                .count(); // L3-EXEMPT: role query
             eprintln!(
                 "[Maho] load_state: restoring {} tabs ({} favorites)",
                 persisted_tabs.len(),
@@ -1710,7 +2172,12 @@ impl MahoCore {
                 }
                 self.tab_manager.restore_tab(tab);
             }
-            let tab_ids: Vec<maho_types::identifiers::TabId> = self.tab_manager.get_all_tabs().iter().map(|t| t.id.clone()).collect();
+            let tab_ids: Vec<maho_types::identifiers::TabId> = self
+                .tab_manager
+                .get_all_tabs()
+                .iter()
+                .map(|t| t.id.clone())
+                .collect();
             self.tab_preview_manager.load_from_storage(lmdb, &tab_ids);
         }
 
@@ -1746,7 +2213,9 @@ impl MahoCore {
                 let tm = &self.tab_manager;
                 self.space_manager
                     .enforce_cross_space_tab_residency(&tab_owners, &|tid| {
-                        tm.get_tab(tid).map(|t| t.role.is_favorite()).unwrap_or(false) // L3-EXEMPT: role query
+                        tm.get_tab(tid)
+                            .map(|t| t.role.is_favorite())
+                            .unwrap_or(false) // L3-EXEMPT: role query
                     });
             }
 
@@ -1756,7 +2225,8 @@ impl MahoCore {
                 .into_iter()
                 .map(|t| t.id.clone())
                 .collect();
-            self.space_manager.strip_favorited_tabs_from_root_orders(&favorited_ids);
+            self.space_manager
+                .strip_favorited_tabs_from_root_orders(&favorited_ids);
         }
 
         // Restore split_view_configs
@@ -1764,18 +2234,24 @@ impl MahoCore {
             .get("split_view_configs")
             .map_err(|e| PersistenceError::Storage(e.to_string()))?
         {
-            if let Ok(persist_map) = serde_json::from_slice::<HashMap<String, maho_types::split_view::SplitViewPersistConfig>>(&split_view_data) {
+            if let Ok(persist_map) = serde_json::from_slice::<
+                HashMap<String, maho_types::split_view::SplitViewPersistConfig>,
+            >(&split_view_data)
+            {
                 self.split_view_configs.clear();
                 for (window_str, persist_config) in persist_map {
                     let window_id = WindowId::new(window_str);
                     let mut resolved_panes = Vec::new();
                     let mut skip_window = false;
                     for stable_pane in &persist_config.panes {
-                        let matching_tabs: Vec<&maho_types::tab::Tab> = self.tab_manager
+                        let matching_tabs: Vec<&maho_types::tab::Tab> = self
+                            .tab_manager
                             .get_all_tabs()
                             .into_iter()
                             .filter(|t| {
-                                let t_created_micros = if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&t.created_at.0) {
+                                let t_created_micros = if let Ok(dt) =
+                                    chrono::DateTime::parse_from_rfc3339(&t.created_at.0)
+                                {
                                     dt.timestamp_micros() as u64
                                 } else {
                                     0
@@ -1805,11 +2281,14 @@ impl MahoCore {
                     }
 
                     if !skip_window && resolved_panes.len() >= 2 {
-                        self.split_view_configs.insert(window_id, maho_types::split_view::SplitViewConfig {
-                            panes: resolved_panes,
-                            orientation: persist_config.orientation,
-                            ratios: persist_config.ratios,
-                        });
+                        self.split_view_configs.insert(
+                            window_id,
+                            maho_types::split_view::SplitViewConfig {
+                                panes: resolved_panes,
+                                orientation: persist_config.orientation,
+                                ratios: persist_config.ratios,
+                            },
+                        );
                     }
                 }
             }
@@ -1863,7 +2342,10 @@ impl MahoCore {
         let last_hlc = match storage.get_last_hlc_ts() {
             Ok(ts) => ts,
             Err(e) => {
-                eprintln!("[sync] Failed to load last HLC timestamp, defaulting to 0: {}", e);
+                eprintln!(
+                    "[sync] Failed to load last HLC timestamp, defaulting to 0: {}",
+                    e
+                );
                 0
             }
         };
@@ -1938,7 +2420,9 @@ impl MahoCore {
 
         // Load autofill addresses
         if let Ok(addresses) = storage.load_autofill_addresses() {
-            for (id, name, street, city, state, zip, country, phone, email, address_line2) in addresses {
+            for (id, name, street, city, state, zip, country, phone, email, address_line2) in
+                addresses
+            {
                 let addr = maho_types::autofill::AutofillAddress {
                     id,
                     name,
@@ -1970,7 +2454,8 @@ impl MahoCore {
         }
         // Load profiles
         if let Ok(profile_jsons) = storage.get_all_profiles() {
-            let profiles: Vec<maho_types::profile::ProfileConfig> = profile_jsons.iter()
+            let profiles: Vec<maho_types::profile::ProfileConfig> = profile_jsons
+                .iter()
                 .filter_map(|j| serde_json::from_str(j).ok())
                 .collect();
             if !profiles.is_empty() {
@@ -1984,14 +2469,15 @@ impl MahoCore {
 
         if let Ok(passwords) = storage.get_all_passwords() {
             for (id, domain, username, created_at, last_used, password) in passwords {
-                self.password_manager.restore_password(maho_types::passwords::SavedPassword {
-                    id,
-                    domain,
-                    username,
-                    created_at,
-                    last_used,
-                    password,
-                });
+                self.password_manager
+                    .restore_password(maho_types::passwords::SavedPassword {
+                        id,
+                        domain,
+                        username,
+                        created_at,
+                        last_used,
+                        password,
+                    });
             }
         }
 
@@ -1999,7 +2485,12 @@ impl MahoCore {
         if let Ok(engines) = storage.load_search_engines() {
             for (id, name, url_template, shortcut, icon_url, is_default) in engines {
                 // Skip built-in engines as they are already initialized
-                if id == "google" || id == "duckduckgo" || id == "bing" || id == "brave" || id == "ecosia" {
+                if id == "google"
+                    || id == "duckduckgo"
+                    || id == "bing"
+                    || id == "brave"
+                    || id == "ecosia"
+                {
                     // Only update the is_default status for built-in engines
                     if is_default {
                         self.command_bar.set_default_search_engine(&id);
@@ -2073,7 +2564,8 @@ impl MahoCore {
                     serde_json::from_str::<maho_types::keyboard::KeyCombo>(&key_combo_json)
                 {
                     // Ignore conflicts during restore, restore full state
-                    self.shortcut_manager.restore_shortcut_state(&action, key_combo, enabled, updated_at);
+                    self.shortcut_manager
+                        .restore_shortcut_state(&action, key_combo, enabled, updated_at);
                 }
             }
         }
@@ -2110,11 +2602,22 @@ impl MahoCore {
         self.password_manager.list_passwords()
     }
 
+    fn assert_password_security(&self) {
+        if self.storage.is_some() {
+            assert!(
+                maho_storage::sqlite::is_key_configured(),
+                "SQLCipher key must be configured when storage is initialized"
+            );
+        }
+    }
+
     pub fn password_by_id(&self, id: &str) -> Option<&maho_types::passwords::SavedPassword> {
+        self.assert_password_security();
         self.password_manager.password_by_id(id)
     }
 
     pub fn delete_password_persisted(&mut self, password_id: &str) -> bool {
+        self.assert_password_security();
         if self.password_manager.delete_password(password_id) {
             if let Some(ref storage) = self.storage {
                 let _ = storage.delete_password(password_id);
@@ -2130,6 +2633,7 @@ impl MahoCore {
         username: String,
         password: Option<String>,
     ) -> maho_types::passwords::SavedPassword {
+        self.assert_password_security();
         let added = self
             .password_manager
             .add_password(domain, username, password)
@@ -2146,16 +2650,18 @@ impl MahoCore {
         added
     }
 
-    pub fn update_password_username_persisted(
-        &mut self,
-        id: &str,
-        username: String,
-    ) -> bool {
+    pub fn update_password_username_persisted(&mut self, id: &str, username: String) -> bool {
+        self.assert_password_security();
         if !self.password_manager.update_username(id, username) {
             return false;
         }
 
-        if let Some(password) = self.password_manager.list_passwords().iter().find(|p| p.id == id) {
+        if let Some(password) = self
+            .password_manager
+            .list_passwords()
+            .iter()
+            .find(|p| p.id == id)
+        {
             if let Some(ref storage) = self.storage {
                 let _ = storage.save_password(
                     &password.id,
@@ -2367,7 +2873,12 @@ impl MahoCore {
         if let Some(ref storage) = self.storage {
             let _ = storage.delete_bookmark(bookmark_id);
         }
-        self.push_sync_entity(SyncEntityType::Bookmark, bookmark_id.to_string(), "{}".to_string(), true);
+        self.push_sync_entity(
+            SyncEntityType::Bookmark,
+            bookmark_id.to_string(),
+            "{}".to_string(),
+            true,
+        );
     }
 
     pub fn move_bookmark(&mut self, bookmark_id: &str, folder_id: Option<&str>) {
@@ -2376,9 +2887,20 @@ impl MahoCore {
         if let Some(ref storage) = self.storage {
             let _ = storage.move_bookmark(bookmark_id, folder_id);
         }
-        if let Some(bm) = self.bookmark_manager.get_all_bookmarks().iter().find(|b| b.id.0 == bookmark_id).cloned() {
+        if let Some(bm) = self
+            .bookmark_manager
+            .get_all_bookmarks()
+            .iter()
+            .find(|b| b.id.0 == bookmark_id)
+            .cloned()
+        {
             if let Ok(payload) = serde_json::to_string(&bm) {
-                self.push_sync_entity(SyncEntityType::Bookmark, bookmark_id.to_string(), payload, false);
+                self.push_sync_entity(
+                    SyncEntityType::Bookmark,
+                    bookmark_id.to_string(),
+                    payload,
+                    false,
+                );
             }
         }
     }
@@ -2479,7 +3001,12 @@ impl MahoCore {
         let note = self.note_manager.create_note(linked_tab, content);
         self.persist_note(&note);
         if let Ok(payload) = serde_json::to_string(&note) {
-            self.push_sync_entity(SyncEntityType::Note, note.id.as_ref().to_string(), payload, false);
+            self.push_sync_entity(
+                SyncEntityType::Note,
+                note.id.as_ref().to_string(),
+                payload,
+                false,
+            );
         }
         note
     }
@@ -2489,7 +3016,12 @@ impl MahoCore {
         if let Some(note) = self.note_manager.get_note(note_id) {
             self.persist_note(note);
             if let Ok(payload) = serde_json::to_string(note) {
-                self.push_sync_entity(SyncEntityType::Note, note_id.as_ref().to_string(), payload, false);
+                self.push_sync_entity(
+                    SyncEntityType::Note,
+                    note_id.as_ref().to_string(),
+                    payload,
+                    false,
+                );
             }
         }
     }
@@ -2499,7 +3031,12 @@ impl MahoCore {
         if let Some(ref storage) = self.storage {
             let _ = storage.delete_note(note_id.as_ref());
         }
-        self.push_sync_entity(SyncEntityType::Note, note_id.as_ref().to_string(), "{}".to_string(), true);
+        self.push_sync_entity(
+            SyncEntityType::Note,
+            note_id.as_ref().to_string(),
+            "{}".to_string(),
+            true,
+        );
         note
     }
 
@@ -2507,7 +3044,12 @@ impl MahoCore {
         let boost = self.boost_manager.create(domain, name);
         self.persist_boost(&boost);
         if let Ok(payload) = serde_json::to_string(&boost) {
-            self.push_sync_entity(SyncEntityType::Boost, boost.id.as_ref().to_string(), payload, false);
+            self.push_sync_entity(
+                SyncEntityType::Boost,
+                boost.id.as_ref().to_string(),
+                payload,
+                false,
+            );
         }
         boost
     }
@@ -2517,7 +3059,12 @@ impl MahoCore {
         if let Some(boost) = self.boost_manager.get_boost(boost_id) {
             self.persist_boost(boost);
             if let Ok(payload) = serde_json::to_string(boost) {
-                self.push_sync_entity(SyncEntityType::Boost, boost_id.as_ref().to_string(), payload, false);
+                self.push_sync_entity(
+                    SyncEntityType::Boost,
+                    boost_id.as_ref().to_string(),
+                    payload,
+                    false,
+                );
             }
         }
     }
@@ -2527,7 +3074,12 @@ impl MahoCore {
         if let Some(ref storage) = self.storage {
             let _ = storage.delete_boost(boost_id.as_ref());
         }
-        self.push_sync_entity(SyncEntityType::Boost, boost_id.as_ref().to_string(), "{}".to_string(), true);
+        self.push_sync_entity(
+            SyncEntityType::Boost,
+            boost_id.as_ref().to_string(),
+            "{}".to_string(),
+            true,
+        );
         boost
     }
 
@@ -2555,9 +3107,10 @@ impl MahoCore {
         boost_id: &BoostId,
         workspace_gradient_hue_deg: Option<f64>,
     ) -> Option<String> {
-        self.boost_manager
-            .get_boost(boost_id)
-            .map(|b| self.boost_manager.compose_css(b, workspace_gradient_hue_deg))
+        self.boost_manager.get_boost(boost_id).map(|b| {
+            self.boost_manager
+                .compose_css(b, workspace_gradient_hue_deg)
+        })
     }
 
     pub fn create_temp_boost_persisted(&mut self, domain: String) -> Boost {
@@ -2607,13 +3160,21 @@ impl MahoCore {
         Some(boost)
     }
 
-    pub fn append_zap_selector_persisted(&mut self, boost_id: &BoostId, selector: String) -> Option<Boost> {
+    pub fn append_zap_selector_persisted(
+        &mut self,
+        boost_id: &BoostId,
+        selector: String,
+    ) -> Option<Boost> {
         let boost = self.boost_manager.append_zap_selector(boost_id, selector)?;
         self.persist_boost(&boost);
         Some(boost)
     }
 
-    pub fn remove_zap_selector_persisted(&mut self, boost_id: &BoostId, selector: &str) -> Option<Boost> {
+    pub fn remove_zap_selector_persisted(
+        &mut self,
+        boost_id: &BoostId,
+        selector: &str,
+    ) -> Option<Boost> {
         let boost = self.boost_manager.remove_zap_selector(boost_id, selector)?;
         self.persist_boost(&boost);
         Some(boost)
@@ -2678,7 +3239,12 @@ impl MahoCore {
             });
         }
         if let Ok(payload) = serde_json::to_string(&added) {
-            self.push_sync_entity(SyncEntityType::AutofillAddress, added.id.clone(), payload, false);
+            self.push_sync_entity(
+                SyncEntityType::AutofillAddress,
+                added.id.clone(),
+                payload,
+                false,
+            );
         }
         added
     }
@@ -2689,7 +3255,12 @@ impl MahoCore {
             if let Some(ref storage) = self.storage {
                 let _ = storage.delete_autofill_address(id);
             }
-            self.push_sync_entity(SyncEntityType::AutofillAddress, id.to_string(), "{}".to_string(), true);
+            self.push_sync_entity(
+                SyncEntityType::AutofillAddress,
+                id.to_string(),
+                "{}".to_string(),
+                true,
+            );
         }
         deleted
     }
@@ -2709,7 +3280,12 @@ impl MahoCore {
             );
         }
         if let Ok(payload) = serde_json::to_string(&added) {
-            self.push_sync_entity(SyncEntityType::AutofillPayment, added.id.clone(), payload, false);
+            self.push_sync_entity(
+                SyncEntityType::AutofillPayment,
+                added.id.clone(),
+                payload,
+                false,
+            );
         }
         added
     }
@@ -2720,7 +3296,12 @@ impl MahoCore {
             if let Some(ref storage) = self.storage {
                 let _ = storage.delete_autofill_payment(id);
             }
-            self.push_sync_entity(SyncEntityType::AutofillPayment, id.to_string(), "{}".to_string(), true);
+            self.push_sync_entity(
+                SyncEntityType::AutofillPayment,
+                id.to_string(),
+                "{}".to_string(),
+                true,
+            );
         }
         deleted
     }
@@ -2759,7 +3340,12 @@ impl MahoCore {
             );
         }
         if let Ok(payload) = serde_json::to_string(&item) {
-            self.push_sync_entity(SyncEntityType::ReadingListItem, item.id.clone(), payload, false);
+            self.push_sync_entity(
+                SyncEntityType::ReadingListItem,
+                item.id.clone(),
+                payload,
+                false,
+            );
         }
         item
     }
@@ -2772,7 +3358,12 @@ impl MahoCore {
         if let Some(ref storage) = self.storage {
             let _ = storage.delete_reading_list_item(id);
         }
-        self.push_sync_entity(SyncEntityType::ReadingListItem, id.to_string(), "{}".to_string(), true);
+        self.push_sync_entity(
+            SyncEntityType::ReadingListItem,
+            id.to_string(),
+            "{}".to_string(),
+            true,
+        );
         item
     }
 
@@ -2783,9 +3374,20 @@ impl MahoCore {
                 let now = maho_types::common::DateTime::now();
                 let _ = storage.update_reading_list_read_status(id, true, Some(&now.0));
             }
-            if let Some(item) = self.reading_list_manager.get_all_items().iter().find(|i| i.id == id).cloned() {
+            if let Some(item) = self
+                .reading_list_manager
+                .get_all_items()
+                .iter()
+                .find(|i| i.id == id)
+                .cloned()
+            {
                 if let Ok(payload) = serde_json::to_string(&item) {
-                    self.push_sync_entity(SyncEntityType::ReadingListItem, id.to_string(), payload, false);
+                    self.push_sync_entity(
+                        SyncEntityType::ReadingListItem,
+                        id.to_string(),
+                        payload,
+                        false,
+                    );
                 }
             }
         }
@@ -2798,9 +3400,20 @@ impl MahoCore {
             if let Some(ref storage) = self.storage {
                 let _ = storage.update_reading_list_read_status(id, false, None);
             }
-            if let Some(item) = self.reading_list_manager.get_all_items().iter().find(|i| i.id == id).cloned() {
+            if let Some(item) = self
+                .reading_list_manager
+                .get_all_items()
+                .iter()
+                .find(|i| i.id == id)
+                .cloned()
+            {
                 if let Ok(payload) = serde_json::to_string(&item) {
-                    self.push_sync_entity(SyncEntityType::ReadingListItem, id.to_string(), payload, false);
+                    self.push_sync_entity(
+                        SyncEntityType::ReadingListItem,
+                        id.to_string(),
+                        payload,
+                        false,
+                    );
                 }
             }
         }
@@ -2834,7 +3447,12 @@ impl MahoCore {
             if let Some(ref storage) = self.storage {
                 let _ = storage.delete_easel(id);
             }
-            self.push_sync_entity(SyncEntityType::Easel, id.to_string(), "{}".to_string(), true);
+            self.push_sync_entity(
+                SyncEntityType::Easel,
+                id.to_string(),
+                "{}".to_string(),
+                true,
+            );
         }
         removed
     }
@@ -2885,7 +3503,12 @@ impl MahoCore {
             let _ = storage.save_shared_collection(&collection);
         }
         if let Ok(payload) = serde_json::to_string(&collection) {
-            self.push_sync_entity(SyncEntityType::SharedCollection, collection.id.clone(), payload, false);
+            self.push_sync_entity(
+                SyncEntityType::SharedCollection,
+                collection.id.clone(),
+                payload,
+                false,
+            );
         }
         match serde_json::to_string(&collection) {
             Ok(json) => Some(json),
@@ -2914,9 +3537,20 @@ impl MahoCore {
             if let Some(ref storage) = self.storage {
                 let _ = storage.update_shared_collection_permission(collection_id, permission);
             }
-            if let Some(col) = self.sharing_manager.get_all_for_storage().iter().find(|c| c.id == collection_id).cloned() {
+            if let Some(col) = self
+                .sharing_manager
+                .get_all_for_storage()
+                .iter()
+                .find(|c| c.id == collection_id)
+                .cloned()
+            {
                 if let Ok(payload) = serde_json::to_string(col) {
-                    self.push_sync_entity(SyncEntityType::SharedCollection, collection_id.to_string(), payload, false);
+                    self.push_sync_entity(
+                        SyncEntityType::SharedCollection,
+                        collection_id.to_string(),
+                        payload,
+                        false,
+                    );
                 }
             }
         } else {
@@ -2934,7 +3568,12 @@ impl MahoCore {
         if let Some(ref storage) = self.storage {
             let _ = storage.delete_shared_collection(collection_id);
         }
-        self.push_sync_entity(SyncEntityType::SharedCollection, collection_id.to_string(), "{}".to_string(), true);
+        self.push_sync_entity(
+            SyncEntityType::SharedCollection,
+            collection_id.to_string(),
+            "{}".to_string(),
+            true,
+        );
     }
 
     pub fn get_shared_collections(&self) -> Option<String> {
@@ -2946,12 +3585,23 @@ impl MahoCore {
         let joined = self.sharing_manager.join_collection(share_link);
         if joined {
             if let Some(id) = share_link.split('/').next_back() {
-                if let Some(col) = self.sharing_manager.get_all_for_storage().iter().find(|c| c.id == id).cloned() {
+                if let Some(col) = self
+                    .sharing_manager
+                    .get_all_for_storage()
+                    .iter()
+                    .find(|c| c.id == id)
+                    .cloned()
+                {
                     if let Some(ref storage) = self.storage {
                         let _ = storage.save_shared_collection(col);
                     }
                     if let Ok(payload) = serde_json::to_string(col) {
-                        self.push_sync_entity(SyncEntityType::SharedCollection, id.to_string(), payload, false);
+                        self.push_sync_entity(
+                            SyncEntityType::SharedCollection,
+                            id.to_string(),
+                            payload,
+                            false,
+                        );
                     }
                 }
             }
@@ -3069,7 +3719,11 @@ impl MahoCore {
         self.split_view_configs.remove(window_id);
     }
 
-    fn remove_split_view_pane(&mut self, window_id: &WindowId, pane_id: &str) -> Option<SplitViewConfig> {
+    fn remove_split_view_pane(
+        &mut self,
+        window_id: &WindowId,
+        pane_id: &str,
+    ) -> Option<SplitViewConfig> {
         let mut config = self.split_view_configs.get(window_id)?.clone();
         if let Some(pos) = config.panes.iter().position(|p| p.tab_id.0 == pane_id) {
             config.panes.remove(pos);
@@ -3088,7 +3742,8 @@ impl MahoCore {
                 } else {
                     config.ratios = vec![1.0 / config.panes.len() as f64; config.panes.len()];
                 }
-                self.split_view_configs.insert(window_id.clone(), config.clone());
+                self.split_view_configs
+                    .insert(window_id.clone(), config.clone());
                 Some(config)
             }
         } else {
@@ -3096,7 +3751,12 @@ impl MahoCore {
         }
     }
 
-    fn resize_split_view_pane(&mut self, window_id: &WindowId, pane_id: &str, ratio: f64) -> Option<SplitViewConfig> {
+    fn resize_split_view_pane(
+        &mut self,
+        window_id: &WindowId,
+        pane_id: &str,
+        ratio: f64,
+    ) -> Option<SplitViewConfig> {
         let mut config = self.split_view_configs.get(window_id)?.clone();
         if let Some(pos) = config.panes.iter().position(|p| p.tab_id.0 == pane_id) {
             if config.panes.len() > 1 && pos < config.ratios.len() {
@@ -3120,7 +3780,8 @@ impl MahoCore {
                         }
                     }
                 }
-                self.split_view_configs.insert(window_id.clone(), config.clone());
+                self.split_view_configs
+                    .insert(window_id.clone(), config.clone());
                 Some(config)
             } else {
                 Some(config)
@@ -3176,7 +3837,12 @@ impl MahoCore {
                     self.push_tab_sync(tab_id);
                 }
                 CoreUpdate::TabClosed { tab_id, .. } => {
-                    self.push_sync_entity(SyncEntityType::Tab, tab_id.to_string(), "{}".to_string(), true);
+                    self.push_sync_entity(
+                        SyncEntityType::Tab,
+                        tab_id.to_string(),
+                        "{}".to_string(),
+                        true,
+                    );
                 }
                 CoreUpdate::SpaceCreated { space } => {
                     self.push_space_sync(&space.id);
@@ -3185,7 +3851,12 @@ impl MahoCore {
                     self.push_space_sync(space_id);
                 }
                 CoreUpdate::SpaceDeleted { space_id } => {
-                    self.push_sync_entity(SyncEntityType::Space, space_id.to_string(), "{}".to_string(), true);
+                    self.push_sync_entity(
+                        SyncEntityType::Space,
+                        space_id.to_string(),
+                        "{}".to_string(),
+                        true,
+                    );
                 }
                 CoreUpdate::ActiveSpaceChanged { space_id, .. } => {
                     self.push_space_sync(space_id);
@@ -3202,7 +3873,12 @@ impl MahoCore {
                     }
                 }
                 CoreUpdate::FolderCreated { folder } => {
-                    let all_spaces: Vec<SpaceId> = self.space_manager.get_all_spaces().iter().map(|s| s.id.clone()).collect();
+                    let all_spaces: Vec<SpaceId> = self
+                        .space_manager
+                        .get_all_spaces()
+                        .iter()
+                        .map(|s| s.id.clone())
+                        .collect();
                     for sid in all_spaces {
                         if let Some(space) = self.space_manager.get_space(&sid) {
                             if space.folders.iter().any(|f| f.id == folder.id) {
@@ -3213,7 +3889,12 @@ impl MahoCore {
                     }
                 }
                 CoreUpdate::FolderUpdated { folder_id, .. } => {
-                    let all_spaces: Vec<SpaceId> = self.space_manager.get_all_spaces().iter().map(|s| s.id.clone()).collect();
+                    let all_spaces: Vec<SpaceId> = self
+                        .space_manager
+                        .get_all_spaces()
+                        .iter()
+                        .map(|s| s.id.clone())
+                        .collect();
                     for sid in all_spaces {
                         if let Some(space) = self.space_manager.get_space(&sid) {
                             if space.folders.iter().any(|f| f.id == *folder_id) {
@@ -3244,17 +3925,28 @@ impl MahoCore {
             }
             ShellEvent::MoveTab { tab_id, .. } => {
                 self.push_tab_sync(tab_id);
-                if let Some(space_id) = self.tab_manager.get_tab(tab_id).map(|t| t.space_id.clone()) {
+                if let Some(space_id) = self.tab_manager.get_tab(tab_id).map(|t| t.space_id.clone())
+                {
                     self.push_space_sync(&space_id);
                 }
             }
-            ShellEvent::MoveTabToSpace { tab_id, target_space_id, .. } => {
+            ShellEvent::MoveTabToSpace {
+                tab_id,
+                target_space_id,
+                ..
+            } => {
                 self.push_tab_sync(tab_id);
                 self.push_space_sync(target_space_id);
             }
-            ShellEvent::MoveTabToRoot { tab_id, space_id, .. }
-            | ShellEvent::MoveTabToFolder { tab_id, space_id, .. }
-            | ShellEvent::RemoveTabFromFolder { tab_id, space_id, .. } => {
+            ShellEvent::MoveTabToRoot {
+                tab_id, space_id, ..
+            }
+            | ShellEvent::MoveTabToFolder {
+                tab_id, space_id, ..
+            }
+            | ShellEvent::RemoveTabFromFolder {
+                tab_id, space_id, ..
+            } => {
                 self.push_tab_sync(tab_id);
                 self.push_space_sync(space_id);
             }
@@ -3352,9 +4044,9 @@ impl MahoCore {
 
             ShellEvent::SwitchProfile { .. } => LMDB_DIRTY_ACTIVE_PROFILE,
 
-            ShellEvent::SignIn { .. }
-            | ShellEvent::SignOut
-            | ShellEvent::ToggleSync => LMDB_DIRTY_ACCOUNT,
+            ShellEvent::SignIn { .. } | ShellEvent::SignOut | ShellEvent::ToggleSync => {
+                LMDB_DIRTY_ACCOUNT
+            }
 
             ShellEvent::ClearSplitView { .. }
             | ShellEvent::CreateSplit { .. }
@@ -3366,7 +4058,13 @@ impl MahoCore {
     }
 
     fn handle_event_inner(&mut self, event: ShellEvent) -> Vec<CoreUpdate> {
-        if let ShellEvent::CreateTab { tab_id: Some(explicit_id), window_id, is_private, .. } = &event {
+        if let ShellEvent::CreateTab {
+            tab_id: Some(explicit_id),
+            window_id,
+            is_private,
+            ..
+        } = &event
+        {
             if let Some(mut tab) = self.tab_manager.get_tab(explicit_id).cloned() {
                 if tab.window_id != *window_id || tab.is_private != *is_private {
                     tab.window_id = *window_id;
@@ -3405,11 +4103,18 @@ impl MahoCore {
                     schema_version: SPLIT_VIEW_SCHEMA_VERSION,
                 }];
             }
-            ShellEvent::CreateSplit { window_id, tab_ids, orientation } => {
-                self.set_split_view_config(window_id.clone(), SplitConfig {
-                    tab_ids: tab_ids.clone(),
-                    orientation: orientation.clone(),
-                });
+            ShellEvent::CreateSplit {
+                window_id,
+                tab_ids,
+                orientation,
+            } => {
+                self.set_split_view_config(
+                    window_id.clone(),
+                    SplitConfig {
+                        tab_ids: tab_ids.clone(),
+                        orientation: orientation.clone(),
+                    },
+                );
                 let config = self.get_split_view_config(window_id);
                 return vec![CoreUpdate::SplitViewChanged {
                     window_id: window_id.clone(),
@@ -3425,7 +4130,11 @@ impl MahoCore {
                     schema_version: SPLIT_VIEW_SCHEMA_VERSION,
                 }];
             }
-            ShellEvent::ResizeSplit { window_id, pane_id, ratio } => {
+            ShellEvent::ResizeSplit {
+                window_id,
+                pane_id,
+                ratio,
+            } => {
                 let config = self.resize_split_view_pane(window_id, pane_id, *ratio);
                 return vec![CoreUpdate::SplitViewChanged {
                     window_id: window_id.clone(),
@@ -3631,7 +4340,15 @@ impl MahoCore {
                 }
                 return vec![];
             }
-            ShellEvent::InstallCssMod { name, css, description, author, version, homepage, source_url } => {
+            ShellEvent::InstallCssMod {
+                name,
+                css,
+                description,
+                author,
+                version,
+                homepage,
+                source_url,
+            } => {
                 let now = chrono::Utc::now().to_rfc3339();
                 let css_mod = maho_types::css_mod::CssMod {
                     id: uuid::Uuid::new_v4().to_string(),
@@ -3651,7 +4368,12 @@ impl MahoCore {
                     let _ = storage.save_css_mod(&css_mod);
                 }
                 if let Ok(payload) = serde_json::to_string(&css_mod) {
-                    self.push_sync_entity(SyncEntityType::CssMod, css_mod.id.clone(), payload, false);
+                    self.push_sync_entity(
+                        SyncEntityType::CssMod,
+                        css_mod.id.clone(),
+                        payload,
+                        false,
+                    );
                 }
                 return vec![];
             }
@@ -3662,7 +4384,12 @@ impl MahoCore {
                             let _ = storage.save_css_mod(m);
                         }
                         if let Ok(payload) = serde_json::to_string(m) {
-                            self.push_sync_entity(SyncEntityType::CssMod, mod_id.clone(), payload, false);
+                            self.push_sync_entity(
+                                SyncEntityType::CssMod,
+                                mod_id.clone(),
+                                payload,
+                                false,
+                            );
                         }
                     }
                 }
@@ -3673,33 +4400,52 @@ impl MahoCore {
                 if let Some(storage) = &self.storage {
                     let _ = storage.delete_css_mod(mod_id);
                 }
-                self.push_sync_entity(SyncEntityType::CssMod, mod_id.clone(), "{}".to_string(), true);
+                self.push_sync_entity(
+                    SyncEntityType::CssMod,
+                    mod_id.clone(),
+                    "{}".to_string(),
+                    true,
+                );
                 return vec![];
             }
             ShellEvent::UpdateCssMod { mod_id, css } => {
                 let now = chrono::Utc::now().to_rfc3339();
-                if let Some(updated) = self.css_mod_manager.update_mod_css(mod_id, css.clone(), &now) {
+                if let Some(updated) =
+                    self.css_mod_manager
+                        .update_mod_css(mod_id, css.clone(), &now)
+                {
                     if let Some(storage) = &self.storage {
                         let _ = storage.save_css_mod(updated);
                     }
                     if let Ok(payload) = serde_json::to_string(updated) {
-                        self.push_sync_entity(SyncEntityType::CssMod, mod_id.clone(), payload, false);
+                        self.push_sync_entity(
+                            SyncEntityType::CssMod,
+                            mod_id.clone(),
+                            payload,
+                            false,
+                        );
                     }
                 }
                 return vec![];
             }
-            ShellEvent::SearchHistory { query, limit, is_incognito } => {
+            ShellEvent::SearchHistory {
+                query,
+                limit,
+                is_incognito,
+            } => {
                 let entries = if *is_incognito {
                     Vec::new()
                 } else {
                     self.search_history(query, *limit)
                         .into_iter()
-                        .map(|(id, url, title)| maho_types::events::core_update::HistoryEntry {
-                            id,
-                            url,
-                            title,
-                            visited_at: String::new(),
-                        })
+                        .map(
+                            |(id, url, title)| maho_types::events::core_update::HistoryEntry {
+                                id,
+                                url,
+                                title,
+                                visited_at: String::new(),
+                            },
+                        )
                         .collect()
                 };
                 return vec![CoreUpdate::HistoryResults { entries }];
@@ -3795,13 +4541,23 @@ impl MahoCore {
                 }
                 return vec![];
             }
-            ShellEvent::AddPassword { domain, username, password } => {
+            ShellEvent::AddPassword {
+                domain,
+                username,
+                password,
+            } => {
                 let pw = self
                     .password_manager
                     .add_password(domain.clone(), username.clone(), Some(password.clone()))
                     .clone();
                 if let Some(ref storage) = self.storage {
-                    let _ = storage.save_password(&pw.id, &pw.domain, &pw.username, &pw.created_at, pw.password.as_deref());
+                    let _ = storage.save_password(
+                        &pw.id,
+                        &pw.domain,
+                        &pw.username,
+                        &pw.created_at,
+                        pw.password.as_deref(),
+                    );
                 }
                 return vec![CoreUpdate::PasswordsSearchResult {
                     passwords: vec![pw],
@@ -3840,7 +4596,12 @@ impl MahoCore {
                     }
                 }
                 if let Ok(payload) = serde_json::to_string(&settings) {
-                    self.push_sync_entity(SyncEntityType::Settings, "global_settings".to_string(), payload, false);
+                    self.push_sync_entity(
+                        SyncEntityType::Settings,
+                        "global_settings".to_string(),
+                        payload,
+                        false,
+                    );
                 }
                 return vec![CoreUpdate::SettingsChanged { settings }];
             }
@@ -3889,10 +4650,12 @@ impl MahoCore {
                 if let Some((_sid, folders)) = self.llm_manager.take_pending_tidy_tabs() {
                     let mut updates = Vec::new();
                     for tidy_folder in &folders {
-                        if let Some(folder_vm) =
-                            self.space_manager
-                                .create_folder(space_id, &tidy_folder.name, false, None)
-                        {
+                        if let Some(folder_vm) = self.space_manager.create_folder(
+                            space_id,
+                            &tidy_folder.name,
+                            false,
+                            None,
+                        ) {
                             for tab_id in &tidy_folder.tab_ids {
                                 self.space_manager.add_tab_to_folder(
                                     space_id,
@@ -3903,7 +4666,12 @@ impl MahoCore {
                             updates.push(CoreUpdate::FolderCreated { folder: folder_vm });
                         }
                     }
-                    if self.settings_manager.get_settings().general.auto_delete_empty_folders_on_tidy {
+                    if self
+                        .settings_manager
+                        .get_settings()
+                        .general
+                        .auto_delete_empty_folders_on_tidy
+                    {
                         let removed = self.space_manager.remove_empty_folders_in_space(space_id);
                         for folder_id in removed {
                             updates.push(CoreUpdate::FolderDeleted { folder_id });
@@ -3952,10 +4720,15 @@ impl MahoCore {
                     .max()
                     .unwrap_or(0);
 
-                let new_role = TabRole::Favorite { order: max_order + 1 };
+                let new_role = TabRole::Favorite {
+                    order: max_order + 1,
+                };
                 return self.transition_tab_role(tab_id, new_role);
             }
-            ShellEvent::ChangeTabRole { ref tab_id, ref new_role } => {
+            ShellEvent::ChangeTabRole {
+                ref tab_id,
+                ref new_role,
+            } => {
                 return self.transition_tab_role(tab_id, new_role.clone());
             }
             ShellEvent::PinTab { ref tab_id } => {
@@ -3973,7 +4746,10 @@ impl MahoCore {
             ShellEvent::UnpinTab { ref tab_id } => {
                 return self.transition_tab_role(tab_id, TabRole::Normal);
             }
-            ShellEvent::CloseTab { ref tab_id, ref expected_space_id } => {
+            ShellEvent::CloseTab {
+                ref tab_id,
+                ref expected_space_id,
+            } => {
                 if let Some(ref expected_sid) = expected_space_id {
                     if let Some(tab) = self.tab_manager.get_tab(tab_id) {
                         debug_assert_eq!(
@@ -4009,7 +4785,8 @@ impl MahoCore {
                     .map(|t| matches!(t.state, TabLifecycleState::Suspended { .. }))
                     .unwrap_or(false);
 
-                if is_favorite { // L3-EXEMPT: close protection check
+                if is_favorite {
+                    // L3-EXEMPT: close protection check
                     if !already_suspended {
                         self.tab_manager.suspend_tab(tab_id);
                         self.persist_lmdb_now_partial(LMDB_DIRTY_TABS);
@@ -4070,7 +4847,8 @@ impl MahoCore {
                                             })
                                             .unwrap_or(false)
                                     });
-                                self.space_manager.set_last_active_tab(&space_id, next_active);
+                                self.space_manager
+                                    .set_last_active_tab(&space_id, next_active);
                             }
                         }
 
@@ -4112,8 +4890,12 @@ impl MahoCore {
                             .get_tab(tab_id)
                             .map(|t| t.role.is_favorite()) // L3-EXEMPT: local query
                             .unwrap_or(false);
-                        self.space_manager
-                            .apply_tab_residency(target_space_id, tab_id, is_favorite, false); // L3-EXEMPT: local parameter
+                        self.space_manager.apply_tab_residency(
+                            target_space_id,
+                            tab_id,
+                            is_favorite,
+                            false,
+                        ); // L3-EXEMPT: local parameter
                     }
                     if !tab_ids.is_empty() || is_active_space {
                         updates.push(CoreUpdate::TabsMigrated {
@@ -4143,7 +4925,10 @@ impl MahoCore {
                 }
                 return updates;
             }
-            ShellEvent::ExportSpaceIntoFolder { ref space_id, ref target_space_id } => {
+            ShellEvent::ExportSpaceIntoFolder {
+                ref space_id,
+                ref target_space_id,
+            } => {
                 if space_id == target_space_id {
                     return vec![CoreUpdate::Error {
                         context: "export_space_into_folder".to_string(),
@@ -4179,10 +4964,12 @@ impl MahoCore {
                     }];
                 }
 
-                let folder_vm = match self
-                    .space_manager
-                    .create_folder(target_space_id, &source_space.name, false, None)
-                {
+                let folder_vm = match self.space_manager.create_folder(
+                    target_space_id,
+                    &source_space.name,
+                    false,
+                    None,
+                ) {
                     Some(folder) => folder,
                     None => {
                         return vec![CoreUpdate::Error {
@@ -4203,8 +4990,11 @@ impl MahoCore {
                     self.space_manager.remove_tab_from_space(space_id, tab_id);
                     self.space_manager
                         .add_tab_to_space(target_space_id, tab_id.clone(), None);
-                    self.space_manager
-                        .add_tab_to_folder(target_space_id, &folder_vm.id, tab_id.clone());
+                    self.space_manager.add_tab_to_folder(
+                        target_space_id,
+                        &folder_vm.id,
+                        tab_id.clone(),
+                    );
                 }
 
                 let source_was_active = self.space_manager.get_active_space_id() == space_id;
@@ -4248,11 +5038,17 @@ impl MahoCore {
                 // Memory: persist user turn for future fact extraction
                 if let Some(ref storage) = self.storage {
                     let id = uuid::Uuid::new_v4().to_string();
-                    let session_id = context.session_id.clone()
+                    let session_id = context
+                        .session_id
+                        .clone()
                         .unwrap_or_else(|| "default".to_string());
                     let url_ctx = context.page_url.clone();
                     let _ = storage.insert_conversation_turn(
-                        &id, &session_id, "user", message, url_ctx.as_deref(),
+                        &id,
+                        &session_id,
+                        "user",
+                        message,
+                        url_ctx.as_deref(),
                     );
                 }
                 return vec![self.llm_manager.request_chat_completion(message, context)];
@@ -4265,13 +5061,11 @@ impl MahoCore {
                 let page_context_text = page_context.as_ref().map(|ctx| {
                     serde_json::to_string_pretty(ctx).unwrap_or_else(|_| ctx.title.clone())
                 });
-                if let Some(prompt) =
-                    self.skills_manager.build_prompt(
-                        skill_id,
-                        user_input,
-                        page_context_text.as_deref().unwrap_or(""),
-                    )
-                {
+                if let Some(prompt) = self.skills_manager.build_prompt(
+                    skill_id,
+                    user_input,
+                    page_context_text.as_deref().unwrap_or(""),
+                ) {
                     if let Some(skill) = self.skills_manager.get_skill(skill_id) {
                         return vec![CoreUpdate::SkillPromptReady {
                             skill_id: skill.id.clone(),
@@ -4282,7 +5076,10 @@ impl MahoCore {
                 }
                 return vec![];
             }
-            ShellEvent::LlmResult { ref request_id, ref result } => {
+            ShellEvent::LlmResult {
+                ref request_id,
+                ref result,
+            } => {
                 // Memory: persist assistant turn
                 if let Some(ref storage) = self.storage {
                     if let Some(session_id) =
@@ -4290,7 +5087,11 @@ impl MahoCore {
                     {
                         let id = uuid::Uuid::new_v4().to_string();
                         let _ = storage.insert_conversation_turn(
-                            &id, &session_id, "assistant", result, None,
+                            &id,
+                            &session_id,
+                            "assistant",
+                            result,
+                            None,
                         );
                     }
                 }
@@ -4298,16 +5099,25 @@ impl MahoCore {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(result) {
                     if let Some(tool_calls) = json.get("tool_calls").and_then(|tc| tc.as_array()) {
                         if !tool_calls.is_empty() {
-                            let messages = json.get("messages").cloned().unwrap_or(serde_json::json!([]));
+                            let messages = json
+                                .get("messages")
+                                .cloned()
+                                .unwrap_or(serde_json::json!([]));
 
-                            let tab_summaries: Vec<(String, String, String)> = self.tab_manager.get_all_tabs()
+                            let tab_summaries: Vec<(String, String, String)> = self
+                                .tab_manager
+                                .get_all_tabs()
                                 .iter()
                                 .map(|t| (t.id.to_string(), t.title.clone(), t.url.0.clone()))
                                 .collect();
-                            let active_tab_info = self.tab_manager.get_active_tab_id()
+                            let active_tab_info = self
+                                .tab_manager
+                                .get_active_tab_id()
                                 .and_then(|id| self.tab_manager.get_tab(id))
                                 .map(|t| (t.title.clone(), t.url.0.clone()));
-                            let active_ref = active_tab_info.as_ref().map(|(t, u)| (t.as_str(), u.as_str()));
+                            let active_ref = active_tab_info
+                                .as_ref()
+                                .map(|(t, u)| (t.as_str(), u.as_str()));
 
                             // Temporarily take storage to avoid borrow conflict with tool_registry
                             let storage = self.storage.take();
@@ -4318,12 +5128,14 @@ impl MahoCore {
                                 &tab_summaries,
                                 active_ref,
                                 &|query, limit| {
-                                    storage.as_ref()
+                                    storage
+                                        .as_ref()
                                         .and_then(|s| s.search_history(query, limit).ok())
                                         .unwrap_or_default()
                                 },
                                 &|query| {
-                                    storage.as_ref()
+                                    storage
+                                        .as_ref()
                                         .and_then(|s| s.search_bookmarks(query).ok())
                                         .unwrap_or_default()
                                 },
@@ -4336,34 +5148,44 @@ impl MahoCore {
                 // No tool_calls → normal path through llm_manager
                 return self.llm_manager.handle_result(request_id, result);
             }
-            ShellEvent::LlmError { ref request_id, ref error } => {
+            ShellEvent::LlmError {
+                ref request_id,
+                ref error,
+            } => {
                 return self.llm_manager.handle_error(request_id, error);
             }
             ShellEvent::ChatSessionEnded { ref session_id } => {
                 if let Some(ref storage) = self.storage {
                     if let Ok(turns) = storage.load_conversation_session(session_id) {
-                        let raw_text = turns.iter()
+                        let raw_text = turns
+                            .iter()
                             .map(|(role, content)| format!("[{}] {}", role, content))
                             .collect::<Vec<_>>()
                             .join("\n");
                         if !raw_text.is_empty() {
-                            self.memory_manager.extract_from_session(
-                                session_id.clone(), raw_text,
-                            );
+                            self.memory_manager
+                                .extract_from_session(session_id.clone(), raw_text);
                         }
                     }
                 }
                 return vec![];
             }
-            ShellEvent::ToolPermissionResponse { ref call_id, granted } => {
-                return self.tool_registry.handle_tool_permission_response(call_id, *granted);
+            ShellEvent::ToolPermissionResponse {
+                ref call_id,
+                granted,
+            } => {
+                return self
+                    .tool_registry
+                    .handle_tool_permission_response(call_id, *granted);
             }
             ShellEvent::ToolActionResult {
                 ref call_id,
                 success,
                 ref result,
             } => {
-                return self.tool_registry.handle_tool_action_result(call_id, *success, result);
+                return self
+                    .tool_registry
+                    .handle_tool_action_result(call_id, *success, result);
             }
             _ => {}
         }
@@ -4491,14 +5313,24 @@ impl MahoCore {
     }
 
     pub fn tick(&mut self) -> Vec<CoreUpdate> {
-        let global_archive_timeout = self.settings_manager.get_settings().general.archive_timeout_hours;
+        let global_archive_timeout = self
+            .settings_manager
+            .get_settings()
+            .general
+            .archive_timeout_hours;
         let archive_timeout = self
             .profile_manager
             .get_active_profile()
             .and_then(|p| p.archive_timeout_hours)
             .unwrap_or(global_archive_timeout);
-        let today_timeout = self.settings_manager.get_settings().general.today_tab_timeout_hours;
-        let mut updates = self.tab_manager.tick_with_settings(archive_timeout, today_timeout);
+        let today_timeout = self
+            .settings_manager
+            .get_settings()
+            .general
+            .today_tab_timeout_hours;
+        let mut updates = self
+            .tab_manager
+            .tick_with_settings(archive_timeout, today_timeout);
 
         let evicted = self.tab_manager.enforce_archive_cap();
         for (tab_id, space_id) in &evicted {
@@ -4584,9 +5416,10 @@ impl MahoCore {
     }
 
     pub fn get_space_theme(&self, space_id: &SpaceId) -> Option<maho_types::space::SpaceTheme> {
-        self.space_manager.get_space(space_id).and_then(|s| s.theme.clone())
+        self.space_manager
+            .get_space(space_id)
+            .and_then(|s| s.theme.clone())
     }
-
 
     pub fn get_active_space_id(&self) -> SpaceId {
         self.space_manager.get_active_space_id().clone()
@@ -4626,14 +5459,11 @@ impl MahoCore {
 
     fn seed_default_favorite_for_space(&mut self, space_id: &SpaceId) {
         let google_url = maho_types::common::Url::new("https://www.google.com");
-        let tab = self.tab_manager.create_tab(
-            space_id.clone(),
-            Some(google_url),
-            None,
-            None,
-            false,
-        );
-        self.tab_manager.update_tab_title(&tab.id, "Google".to_string());
+        let tab =
+            self.tab_manager
+                .create_tab(space_id.clone(), Some(google_url), None, None, false);
+        self.tab_manager
+            .update_tab_title(&tab.id, "Google".to_string());
         self.space_manager
             .add_tab_to_space(space_id, tab.id.clone(), None);
         self.tab_manager.favorite_tab(&tab.id);
@@ -4776,7 +5606,12 @@ impl MahoCore {
             }
         }
         if let Ok(payload) = serde_json::to_string(&settings) {
-            self.push_sync_entity(SyncEntityType::Settings, "global_settings".to_string(), payload, false);
+            self.push_sync_entity(
+                SyncEntityType::Settings,
+                "global_settings".to_string(),
+                payload,
+                false,
+            );
         }
     }
 
@@ -4988,7 +5823,10 @@ impl MahoCore {
             .get_tab_order(space_id)
             .into_iter()
             .filter_map(|tab_id| self.tab_manager.get_tab(&tab_id))
-            .filter(|tab| tab.role == TabRole::Pinned && !matches!(tab.state, TabLifecycleState::Archived { .. }))
+            .filter(|tab| {
+                tab.role == TabRole::Pinned
+                    && !matches!(tab.state, TabLifecycleState::Archived { .. })
+            })
             .map(|tab| self.make_view_model(tab))
             .collect()
     }
@@ -4998,7 +5836,9 @@ impl MahoCore {
             .get_tab_order(space_id)
             .into_iter()
             .filter_map(|tab_id| self.tab_manager.get_tab(&tab_id))
-            .filter(|tab| !tab.role.is_pinned() && !matches!(tab.state, TabLifecycleState::Archived { .. }))
+            .filter(|tab| {
+                !tab.role.is_pinned() && !matches!(tab.state, TabLifecycleState::Archived { .. })
+            })
             .map(|tab| self.make_view_model(tab))
             .collect()
     }
@@ -5064,7 +5904,10 @@ impl MahoCore {
                     continue;
                 }
                 if let Some(tab) = self.tab_manager.get_tab(&tab_id) {
-                    if tab.role.is_favorite() && !matches!(tab.state, TabLifecycleState::Archived { .. }) { // L3-EXEMPT: role query
+                    if tab.role.is_favorite()
+                        && !matches!(tab.state, TabLifecycleState::Archived { .. })
+                    {
+                        // L3-EXEMPT: role query
                         tabs.push(self.make_view_model(tab));
                     }
                 }
@@ -5128,7 +5971,10 @@ impl MahoCore {
             .collect()
     }
 
-    pub fn get_sidebar_tree(&self, space_id: &SpaceId) -> Vec<maho_types::traits::shell_renderer::SidebarNode> {
+    pub fn get_sidebar_tree(
+        &self,
+        space_id: &SpaceId,
+    ) -> Vec<maho_types::traits::shell_renderer::SidebarNode> {
         self.space_manager.get_sidebar_tree(space_id, |tab_id| {
             let tab = self.tab_manager.get_tab(tab_id)?;
             if matches!(tab.state, TabLifecycleState::Archived { .. }) {
@@ -5173,10 +6019,7 @@ impl MahoCore {
                 SidebarNode::Tab { tab } => {
                     if let Some(ref img) = tab.favicon {
                         let b64 = base64::engine::general_purpose::STANDARD.encode(&img.data);
-                        favicons.insert(
-                            tab.id.to_string(),
-                            serde_json::Value::String(b64),
-                        );
+                        favicons.insert(tab.id.to_string(), serde_json::Value::String(b64));
                     }
                 }
                 SidebarNode::Folder { children, .. } => {
@@ -5213,7 +6056,13 @@ impl MahoCore {
     }
 
     pub fn favorite_tab(&mut self, tab_id: &TabId) -> bool {
-        if self.tab_manager.get_tab(tab_id).map(|tab| tab.role.is_favorite()).unwrap_or(false) { // L3-EXEMPT: role query
+        if self
+            .tab_manager
+            .get_tab(tab_id)
+            .map(|tab| tab.role.is_favorite())
+            .unwrap_or(false)
+        {
+            // L3-EXEMPT: role query
             return true;
         }
 
@@ -5244,7 +6093,9 @@ impl MahoCore {
             .max()
             .unwrap_or(0);
 
-        let new_role = TabRole::Favorite { order: max_order + 1 };
+        let new_role = TabRole::Favorite {
+            order: max_order + 1,
+        };
         let _updates = self.transition_tab_role(tab_id, new_role);
         true
     }
@@ -5261,10 +6112,14 @@ impl MahoCore {
             let space_id = tab.space_id.clone();
             let is_in_folder = self.space_manager.is_tab_in_folder(&space_id, id);
             self.space_manager.apply_tab_residency(
-                &space_id, id, new_role.is_favorite(), is_in_folder // L3-EXEMPT: role query
+                &space_id,
+                id,
+                new_role.is_favorite(),
+                is_in_folder, // L3-EXEMPT: role query
             );
 
-            if new_role.is_favorite() { // L3-EXEMPT: role query
+            if new_role.is_favorite() {
+                // L3-EXEMPT: role query
                 let folder_ids: Vec<_> = self
                     .space_manager
                     .get_folder_view_models(&space_id)
@@ -5272,7 +6127,8 @@ impl MahoCore {
                     .map(|f| f.id)
                     .collect();
                 for folder_id in folder_ids {
-                    self.space_manager.remove_tab_from_folder(&space_id, &folder_id, id);
+                    self.space_manager
+                        .remove_tab_from_folder(&space_id, &folder_id, id);
                 }
                 let mut favorited = std::collections::HashSet::new();
                 favorited.insert(id.clone());
@@ -5285,9 +6141,11 @@ impl MahoCore {
             self.push_tab_sync(id);
             self.push_space_sync(&space_id);
         }
-        vec![
-            CoreUpdate::TabRoleChanged { tab_id: id.clone(), old_role: old, new_role },
-        ]
+        vec![CoreUpdate::TabRoleChanged {
+            tab_id: id.clone(),
+            old_role: old,
+            new_role,
+        }]
     }
 
     fn enforce_residency_for_tab(&mut self, tab_id: &TabId) {
@@ -5301,7 +6159,9 @@ impl MahoCore {
             let tm = &self.tab_manager;
             self.space_manager
                 .enforce_cross_space_tab_residency(&owners, &|tid| {
-                    tm.get_tab(tid).map(|t| t.role.is_favorite()).unwrap_or(false) // L3-EXEMPT: role query
+                    tm.get_tab(tid)
+                        .map(|t| t.role.is_favorite())
+                        .unwrap_or(false) // L3-EXEMPT: role query
                 });
         }
     }
@@ -5331,7 +6191,9 @@ impl MahoCore {
             .get_all_boosts()
             .into_iter()
             .map(|b| {
-                let enabled = self.boost_manager.get_active(&b.domain)
+                let enabled = self
+                    .boost_manager
+                    .get_active(&b.domain)
                     .map(|a| a.id == b.id)
                     .unwrap_or(false);
                 maho_types::traits::shell_renderer::BoostViewModel {
@@ -5394,23 +6256,37 @@ impl MahoCore {
         }
     }
 
-    pub fn register_extension_sync_callback(&mut self, callback: Option<Box<dyn Fn(&str, bool, bool) + Send + Sync>>) {
+    pub fn register_extension_sync_callback(
+        &mut self,
+        callback: Option<Box<dyn Fn(&str, bool, bool) + Send + Sync>>,
+    ) {
         self.extension_bridge.sync_callback = callback;
     }
 
-    pub fn register_side_panel(&mut self, extension_id: &str, options: crate::extension_bridge::SidePanelOptions) {
-        self.extension_bridge.register_side_panel(extension_id, options);
+    pub fn register_side_panel(
+        &mut self,
+        extension_id: &str,
+        options: crate::extension_bridge::SidePanelOptions,
+    ) {
+        self.extension_bridge
+            .register_side_panel(extension_id, options);
     }
 
     pub fn unregister_side_panel(&mut self, extension_id: &str) {
         self.extension_bridge.unregister_side_panel(extension_id);
     }
 
-    pub fn get_side_panel_options(&self, extension_id: &str) -> Option<crate::extension_bridge::SidePanelOptions> {
+    pub fn get_side_panel_options(
+        &self,
+        extension_id: &str,
+    ) -> Option<crate::extension_bridge::SidePanelOptions> {
         self.extension_bridge.side_panels.get(extension_id).cloned()
     }
 
-    pub fn set_installed_extensions(&mut self, exts: Vec<crate::extension_bridge::InstalledExtension>) {
+    pub fn set_installed_extensions(
+        &mut self,
+        exts: Vec<crate::extension_bridge::InstalledExtension>,
+    ) {
         for ext in &exts {
             let old_ext = self.extension_bridge.extensions.get(&ext.id);
             let state_changed = match old_ext {
@@ -5428,7 +6304,8 @@ impl MahoCore {
                     Ok(version) => {
                         let device_id = self.account_manager.device_id_hash();
                         let payload_str = payload.to_string();
-                        let fields_hlc_json = crate::sync_models::build_fields_hlc(&payload_str, version, device_id);
+                        let fields_hlc_json =
+                            crate::sync_models::build_fields_hlc(&payload_str, version, device_id);
                         let sync_entity = SyncEntity {
                             entity_type: SyncEntityType::Extension,
                             entity_id: ext.id.clone(),
@@ -5627,11 +6504,14 @@ impl MahoCore {
         };
         vm.sections.push(extensions_section);
 
-        let boost_items: Vec<SettingsItem> = self.boost_manager
+        let boost_items: Vec<SettingsItem> = self
+            .boost_manager
             .get_all_boosts()
             .into_iter()
             .map(|b| {
-                let is_active = self.boost_manager.get_active(&b.domain)
+                let is_active = self
+                    .boost_manager
+                    .get_active(&b.domain)
                     .map(|a| a.id == b.id)
                     .unwrap_or(false);
                 SettingsItem {
@@ -5895,7 +6775,12 @@ impl MahoCore {
             );
         }
         if let Ok(payload) = serde_json::to_string(&engine) {
-            self.push_sync_entity(SyncEntityType::SearchEngine, engine.id.clone(), payload, false);
+            self.push_sync_entity(
+                SyncEntityType::SearchEngine,
+                engine.id.clone(),
+                payload,
+                false,
+            );
         }
     }
 
@@ -5904,7 +6789,12 @@ impl MahoCore {
         if let Some(ref storage) = self.storage {
             let _ = storage.delete_search_engine(id);
         }
-        self.push_sync_entity(SyncEntityType::SearchEngine, id.to_string(), "{}".to_string(), true);
+        self.push_sync_entity(
+            SyncEntityType::SearchEngine,
+            id.to_string(),
+            "{}".to_string(),
+            true,
+        );
     }
 
     pub fn set_default_search_engine_persisted(&mut self, id: &str) -> bool {
@@ -6037,7 +6927,12 @@ impl MahoCore {
             );
         }
         if let Ok(payload) = serde_json::to_string(&folder) {
-            self.push_sync_entity(SyncEntityType::BookmarkFolder, folder.id.clone(), payload, false);
+            self.push_sync_entity(
+                SyncEntityType::BookmarkFolder,
+                folder.id.clone(),
+                payload,
+                false,
+            );
         }
         folder
     }
@@ -6052,7 +6947,12 @@ impl MahoCore {
                 let _ = storage.delete_bookmark_folder(folder_id);
             }
         }
-        self.push_sync_entity(SyncEntityType::BookmarkFolder, folder_id.to_string(), "{}".to_string(), true);
+        self.push_sync_entity(
+            SyncEntityType::BookmarkFolder,
+            folder_id.to_string(),
+            "{}".to_string(),
+            true,
+        );
         folder
     }
 
@@ -6183,7 +7083,12 @@ impl MahoCore {
         if let Some(note) = self.note_manager.get_note(&note_id) {
             self.persist_note(note);
             if let Ok(payload) = serde_json::to_string(note) {
-                self.push_sync_entity(SyncEntityType::Note, note_id_str.to_string(), payload, false);
+                self.push_sync_entity(
+                    SyncEntityType::Note,
+                    note_id_str.to_string(),
+                    payload,
+                    false,
+                );
             }
         }
     }
@@ -6195,7 +7100,12 @@ impl MahoCore {
         if let Some(note) = self.note_manager.get_note(&note_id) {
             self.persist_note(note);
             if let Ok(payload) = serde_json::to_string(note) {
-                self.push_sync_entity(SyncEntityType::Note, note_id_str.to_string(), payload, false);
+                self.push_sync_entity(
+                    SyncEntityType::Note,
+                    note_id_str.to_string(),
+                    payload,
+                    false,
+                );
             }
         }
     }
@@ -6206,7 +7116,12 @@ impl MahoCore {
         if let Some(note) = self.note_manager.get_note(&note_id) {
             self.persist_note(note);
             if let Ok(payload) = serde_json::to_string(note) {
-                self.push_sync_entity(SyncEntityType::Note, note_id_str.to_string(), payload, false);
+                self.push_sync_entity(
+                    SyncEntityType::Note,
+                    note_id_str.to_string(),
+                    payload,
+                    false,
+                );
             }
         }
     }
@@ -6244,10 +7159,6 @@ impl MahoCore {
             Vec::new()
         }
     }
-
-
-
-
 
     pub fn get_reader_settings_json(&self) -> String {
         serde_json::to_string(self.settings_manager.get_reader_settings())
@@ -6561,7 +7472,12 @@ impl MahoCore {
     }
 
     fn push_shortcut_sync(&mut self, action: &str) {
-        let binding_opt = self.shortcut_manager.get_all_bindings().iter().find(|b| b.action == action).cloned();
+        let binding_opt = self
+            .shortcut_manager
+            .get_all_bindings()
+            .iter()
+            .find(|b| b.action == action)
+            .cloned();
         if let Some(binding) = binding_opt {
             let payload = serde_json::json!({
                 "action": binding.action,
@@ -6572,7 +7488,8 @@ impl MahoCore {
                 Ok(version) => {
                     let device_id = self.account_manager.device_id_hash();
                     let payload_str = payload.to_string();
-                    let fields_hlc_json = crate::sync_models::build_fields_hlc(&payload_str, version, device_id);
+                    let fields_hlc_json =
+                        crate::sync_models::build_fields_hlc(&payload_str, version, device_id);
                     let sync_entity = crate::sync_models::SyncEntity {
                         entity_type: crate::sync_models::SyncEntityType::Shortcut,
                         entity_id: action.to_string(),
@@ -6628,7 +7545,13 @@ impl MahoCore {
 
     pub fn toggle_shortcut_persisted(&mut self, action: &str, enabled: bool) {
         self.shortcut_manager.toggle_shortcut(action, enabled);
-        let updated_at = self.shortcut_manager.get_all_bindings().iter().find(|b| b.action == action).map(|b| b.updated_at).unwrap_or(0);
+        let updated_at = self
+            .shortcut_manager
+            .get_all_bindings()
+            .iter()
+            .find(|b| b.action == action)
+            .map(|b| b.updated_at)
+            .unwrap_or(0);
         if let Some(ref storage) = self.storage {
             let _ = storage.save_shortcut_enabled(action, enabled, updated_at);
         }
@@ -6644,7 +7567,13 @@ impl MahoCore {
             .shortcut_manager
             .set_shortcut(action, key_combo.clone());
         if result.is_ok() {
-            let updated_at = self.shortcut_manager.get_all_bindings().iter().find(|b| b.action == action).map(|b| b.updated_at).unwrap_or(0);
+            let updated_at = self
+                .shortcut_manager
+                .get_all_bindings()
+                .iter()
+                .find(|b| b.action == action)
+                .map(|b| b.updated_at)
+                .unwrap_or(0);
             if let Some(ref storage) = self.storage {
                 if let Ok(json) = serde_json::to_string(&key_combo) {
                     let _ = storage.save_shortcut(action, &json, updated_at);
@@ -6664,7 +7593,12 @@ impl MahoCore {
     }
 
     pub fn reset_all_shortcuts_persisted(&mut self) {
-        let actions: Vec<String> = self.shortcut_manager.get_all_bindings().iter().map(|b| b.action.clone()).collect();
+        let actions: Vec<String> = self
+            .shortcut_manager
+            .get_all_bindings()
+            .iter()
+            .map(|b| b.action.clone())
+            .collect();
         self.shortcut_manager.reset_all_shortcuts();
         if let Some(ref storage) = self.storage {
             let _ = storage.delete_all_shortcuts();
@@ -6719,8 +7653,12 @@ impl MahoCore {
 
         for binding in bindings {
             if binding.updated_at > 0 {
-                let local_opt = self.shortcut_manager.get_all_bindings().iter()
-                    .find(|b| b.action == binding.action).cloned();
+                let local_opt = self
+                    .shortcut_manager
+                    .get_all_bindings()
+                    .iter()
+                    .find(|b| b.action == binding.action)
+                    .cloned();
                 if let Some(local_b) = local_opt {
                     if binding.updated_at <= local_b.updated_at {
                         continue;
@@ -6748,11 +7686,19 @@ impl MahoCore {
         };
 
         for incoming_b in bindings {
-            let local_opt = self.shortcut_manager.get_all_bindings().iter().find(|b| b.action == incoming_b.action).cloned();
+            let local_opt = self
+                .shortcut_manager
+                .get_all_bindings()
+                .iter()
+                .find(|b| b.action == incoming_b.action)
+                .cloned();
             if let Some(local_b) = local_opt {
                 if incoming_b.updated_at > local_b.updated_at {
                     if incoming_b.is_custom {
-                        let _ = self.set_shortcut_persisted(&incoming_b.action, incoming_b.key_combo.clone());
+                        let _ = self.set_shortcut_persisted(
+                            &incoming_b.action,
+                            incoming_b.key_combo.clone(),
+                        );
                     } else {
                         self.reset_shortcut_persisted(&incoming_b.action);
                     }
@@ -6760,13 +7706,26 @@ impl MahoCore {
                     if let Some(ref storage) = self.storage {
                         if incoming_b.is_custom {
                             if let Ok(json) = serde_json::to_string(&incoming_b.key_combo) {
-                                let _ = storage.save_shortcut(&incoming_b.action, &json, incoming_b.updated_at);
+                                let _ = storage.save_shortcut(
+                                    &incoming_b.action,
+                                    &json,
+                                    incoming_b.updated_at,
+                                );
                             }
                         } else {
-                            let _ = storage.save_shortcut_enabled(&incoming_b.action, incoming_b.enabled, incoming_b.updated_at);
+                            let _ = storage.save_shortcut_enabled(
+                                &incoming_b.action,
+                                incoming_b.enabled,
+                                incoming_b.updated_at,
+                            );
                         }
                     }
-                    self.shortcut_manager.restore_shortcut_state(&incoming_b.action, incoming_b.key_combo, incoming_b.enabled, incoming_b.updated_at);
+                    self.shortcut_manager.restore_shortcut_state(
+                        &incoming_b.action,
+                        incoming_b.key_combo,
+                        incoming_b.enabled,
+                        incoming_b.updated_at,
+                    );
                 }
             }
         }
@@ -7044,9 +8003,7 @@ impl MahoCore {
             "newtab" => {
                 let url_param = parse_query_param(query, "url");
                 match url_param {
-                    None => {
-                        serde_json::json!({"error": "missing url parameter"}).to_string()
-                    }
+                    None => serde_json::json!({"error": "missing url parameter"}).to_string(),
                     Some(raw_url) => {
                         let space_id = self.get_active_space_id().clone();
                         let url_value = Url(urlencoding_decode(raw_url));
@@ -7244,7 +8201,12 @@ impl MahoCore {
     pub fn next_hlc_ts(&self) -> Result<u64, String> {
         let now_ms = chrono::Utc::now().timestamp_millis() as u64;
         let last_hlc = self.last_hlc_ts.get();
-        let new_hlc = std::cmp::max(now_ms, last_hlc.checked_add(1).ok_or("HLC logical clock overflow")?);
+        let new_hlc = std::cmp::max(
+            now_ms,
+            last_hlc
+                .checked_add(1)
+                .ok_or("HLC logical clock overflow")?,
+        );
         if let Some(ref s) = self.storage {
             s.set_last_hlc_ts(new_hlc).map_err(|e| e.to_string())?;
         }
@@ -7257,11 +8219,15 @@ impl MahoCore {
         let now_ms = std::cmp::max(now_ms, 1577836800000); // 2020-01-01 floor
         let limit = now_ms.checked_add(3600000).ok_or("HLC limit overflow")?;
         if received_hlc > limit {
-            return Err(format!("Received HLC timestamp {} exceeds limit {}", received_hlc, limit));
+            return Err(format!(
+                "Received HLC timestamp {} exceeds limit {}",
+                received_hlc, limit
+            ));
         }
         let local_hlc = self.last_hlc_ts.get();
         let new_hlc = std::cmp::max(std::cmp::max(local_hlc, received_hlc), now_ms)
-            .checked_add(1).ok_or("HLC logical clock overflow")?;
+            .checked_add(1)
+            .ok_or("HLC logical clock overflow")?;
         if let Some(ref s) = self.storage {
             s.set_last_hlc_ts(new_hlc).map_err(|e| e.to_string())?;
         }
@@ -7288,11 +8254,13 @@ impl MahoCore {
     }
 
     pub fn get_account_state_json(&self) -> String {
-        serde_json::to_string(&self.account_manager.get_account()).unwrap_or_else(|_| "null".to_string())
+        serde_json::to_string(&self.account_manager.get_account())
+            .unwrap_or_else(|_| "null".to_string())
     }
 
     pub fn get_auth_state_json(&self) -> String {
-        serde_json::to_string(&self.account_manager.get_auth_state()).unwrap_or_else(|_| "null".to_string())
+        serde_json::to_string(&self.account_manager.get_auth_state())
+            .unwrap_or_else(|_| "null".to_string())
     }
 
     pub fn get_account_tier(&self) -> Option<maho_types::account::UserTier> {
@@ -7309,11 +8277,15 @@ impl MahoCore {
     }
 
     pub fn get_sync_server_url(&self) -> Option<String> {
-        self.sync_manager.as_ref().map(|sm| sm.config().server_url.clone())
+        self.sync_manager
+            .as_ref()
+            .map(|sm| sm.config().server_url.clone())
     }
 
     pub fn get_sync_key(&self) -> Option<String> {
-        self.sync_manager.as_ref().and_then(|sm| sm.config().sync_key.clone())
+        self.sync_manager
+            .as_ref()
+            .and_then(|sm| sm.config().sync_key.clone())
     }
 
     pub fn handle_incoming_websocket_message(&mut self, message_json: &str) -> Result<(), String> {
@@ -7356,13 +8328,15 @@ impl MahoCore {
 
     pub fn get_sync_auth_token(&self) -> String {
         let token = if let Some(ref storage) = self.storage {
-            storage.get_setting("auth:access_token").ok().flatten().filter(|s| !s.is_empty())
+            storage
+                .get_setting("auth:access_token")
+                .ok()
+                .flatten()
+                .filter(|s| !s.is_empty())
         } else {
             None
         };
-        token.unwrap_or_else(|| {
-            self.get_sync_key().unwrap_or_default()
-        })
+        token.unwrap_or_else(|| self.get_sync_key().unwrap_or_default())
     }
 
     pub fn get_connected_devices(&self) -> String {
@@ -7400,7 +8374,7 @@ impl MahoCore {
         .to_string()
     }
 
-    pub fn join_sync(&mut self, recovery_phrase: &str) -> String {
+    pub fn join_sync(&mut self, server_url: &str, recovery_phrase: &str) -> String {
         use crate::sync_crypto;
         // Decode recovery phrase to seed
         let seed = match sync_crypto::decode_recovery_phrase(recovery_phrase) {
@@ -7434,7 +8408,7 @@ impl MahoCore {
                 .to_string();
             }
         };
-        self.start_sync("wss://sync.mahobrowser.com", &room_id);
+        self.start_sync(server_url, &room_id);
         if let Some(ref mut sm) = self.sync_manager {
             sm.set_encryption_key(encryption_key);
         }
@@ -7487,12 +8461,7 @@ impl MahoCore {
         }
     }
 
-    pub fn ack_sync_entity(
-        &mut self,
-        entity_type_str: &str,
-        entity_id: &str,
-        version: u64,
-    ) {
+    pub fn ack_sync_entity(&mut self, entity_type_str: &str, entity_id: &str, version: u64) {
         let type_lower = entity_type_str.to_lowercase();
         let device_id = self.account_manager.device_id_hash();
         if let Some(ref mut sm) = self.sync_manager {
@@ -7559,9 +8528,9 @@ impl MahoCore {
         };
 
         let parse_dt = |dt_str: &str| -> i64 {
-            chrono::DateTime::parse_from_rfc3339(dt_str).map(|d| d.timestamp()).unwrap_or_else(|_| {
-                dt_str.parse::<i64>().unwrap_or(0)
-            })
+            chrono::DateTime::parse_from_rfc3339(dt_str)
+                .map(|d| d.timestamp())
+                .unwrap_or_else(|_| dt_str.parse::<i64>().unwrap_or(0))
         };
 
         let is_disabled = |et: SyncEntityType| -> bool {
@@ -7579,9 +8548,16 @@ impl MahoCore {
         // Spaces
         let mut spaces = Vec::new();
         if !is_disabled(SyncEntityType::Space) {
-            for space in sanitize_spaces_for_private_tabs(self.space_manager.get_all_spaces(), &private_ids) {
+            for space in
+                sanitize_spaces_for_private_tabs(self.space_manager.get_all_spaces(), &private_ids)
+            {
                 let payload = serde_json::to_string(&space).map_err(|e| e.to_string())?;
-                let sync_ent = self.create_sync_entity(SyncEntityType::Space, space.id.to_string(), payload, chrono::Utc::now().timestamp());
+                let sync_ent = self.create_sync_entity(
+                    SyncEntityType::Space,
+                    space.id.to_string(),
+                    payload,
+                    chrono::Utc::now().timestamp(),
+                );
                 hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
                 spaces.push(sync_ent);
             }
@@ -7596,7 +8572,12 @@ impl MahoCore {
                     continue;
                 }
                 let payload = serde_json::to_string(tab).map_err(|e| e.to_string())?;
-                let sync_ent = self.create_sync_entity(SyncEntityType::Tab, tab.id.to_string(), payload, parse_dt(&tab.created_at.0));
+                let sync_ent = self.create_sync_entity(
+                    SyncEntityType::Tab,
+                    tab.id.to_string(),
+                    payload,
+                    parse_dt(&tab.created_at.0),
+                );
                 hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
                 tabs.push(sync_ent);
             }
@@ -7608,7 +8589,12 @@ impl MahoCore {
         if !is_disabled(SyncEntityType::Bookmark) {
             for bm in self.bookmark_manager.get_all_bookmarks() {
                 let payload = serde_json::to_string(bm).map_err(|e| e.to_string())?;
-                let sync_ent = self.create_sync_entity(SyncEntityType::Bookmark, bm.id.0.clone(), payload, parse_dt(&bm.created_at.0));
+                let sync_ent = self.create_sync_entity(
+                    SyncEntityType::Bookmark,
+                    bm.id.0.clone(),
+                    payload,
+                    parse_dt(&bm.created_at.0),
+                );
                 hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
                 bookmarks.push(sync_ent);
             }
@@ -7620,7 +8606,12 @@ impl MahoCore {
         if !is_disabled(SyncEntityType::BookmarkFolder) {
             for folder in self.bookmark_manager.get_folders() {
                 let payload = serde_json::to_string(folder).map_err(|e| e.to_string())?;
-                let sync_ent = self.create_sync_entity(SyncEntityType::BookmarkFolder, folder.id.to_string(), payload, parse_dt(&folder.created_at.0));
+                let sync_ent = self.create_sync_entity(
+                    SyncEntityType::BookmarkFolder,
+                    folder.id.to_string(),
+                    payload,
+                    parse_dt(&folder.created_at.0),
+                );
                 hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
                 bookmark_folders.push(sync_ent);
             }
@@ -7632,7 +8623,12 @@ impl MahoCore {
         if !is_disabled(SyncEntityType::Note) {
             for note in self.note_manager.get_all_notes() {
                 let payload = serde_json::to_string(note).map_err(|e| e.to_string())?;
-                let sync_ent = self.create_sync_entity(SyncEntityType::Note, note.id.to_string(), payload, parse_dt(&note.created_at.0));
+                let sync_ent = self.create_sync_entity(
+                    SyncEntityType::Note,
+                    note.id.to_string(),
+                    payload,
+                    parse_dt(&note.created_at.0),
+                );
                 hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
                 notes.push(sync_ent);
             }
@@ -7644,7 +8640,12 @@ impl MahoCore {
         if !is_disabled(SyncEntityType::Boost) {
             for boost in self.boost_manager.get_all_boosts() {
                 let payload = serde_json::to_string(boost).map_err(|e| e.to_string())?;
-                let sync_ent = self.create_sync_entity(SyncEntityType::Boost, boost.id.to_string(), payload, parse_dt(&boost.created_at.0));
+                let sync_ent = self.create_sync_entity(
+                    SyncEntityType::Boost,
+                    boost.id.to_string(),
+                    payload,
+                    parse_dt(&boost.created_at.0),
+                );
                 hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
                 boosts.push(sync_ent);
             }
@@ -7656,7 +8657,12 @@ impl MahoCore {
         if !is_disabled(SyncEntityType::ReadingListItem) {
             for item in self.reading_list_manager.get_all_items() {
                 let payload = serde_json::to_string(item).map_err(|e| e.to_string())?;
-                let sync_ent = self.create_sync_entity(SyncEntityType::ReadingListItem, item.id.to_string(), payload, parse_dt(&item.added_at.0));
+                let sync_ent = self.create_sync_entity(
+                    SyncEntityType::ReadingListItem,
+                    item.id.to_string(),
+                    payload,
+                    parse_dt(&item.added_at.0),
+                );
                 hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
                 reading_list.push(sync_ent);
             }
@@ -7678,7 +8684,12 @@ impl MahoCore {
                             is_default,
                         };
                         let payload = serde_json::to_string(&se).map_err(|e| e.to_string())?;
-                        let sync_ent = self.create_sync_entity(SyncEntityType::SearchEngine, id, payload, chrono::Utc::now().timestamp());
+                        let sync_ent = self.create_sync_entity(
+                            SyncEntityType::SearchEngine,
+                            id,
+                            payload,
+                            chrono::Utc::now().timestamp(),
+                        );
                         hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
                         search_engines.push(sync_ent);
                     }
@@ -7698,7 +8709,12 @@ impl MahoCore {
                             "keyCombo": serde_json::from_str::<serde_json::Value>(&key_combo_json).unwrap_or(serde_json::Value::Null),
                             "enabled": enabled
                         }).to_string();
-                        let sync_ent = self.create_sync_entity(SyncEntityType::Shortcut, action, payload, chrono::Utc::now().timestamp());
+                        let sync_ent = self.create_sync_entity(
+                            SyncEntityType::Shortcut,
+                            action,
+                            payload,
+                            chrono::Utc::now().timestamp(),
+                        );
                         hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
                         shortcuts.push(sync_ent);
                     }
@@ -7712,7 +8728,9 @@ impl MahoCore {
         if !is_disabled(SyncEntityType::Memory) {
             if let Some(ref storage) = self.storage {
                 if let Ok(memories_raw) = storage.load_all_memories() {
-                    for (id, fact, source, session_id, categories, importance, metadata) in memories_raw {
+                    for (id, fact, source, session_id, categories, importance, metadata) in
+                        memories_raw
+                    {
                         let payload = serde_json::json!({
                             "id": id,
                             "fact": fact,
@@ -7721,8 +8739,14 @@ impl MahoCore {
                             "categories": categories,
                             "importance": importance,
                             "metadata": metadata
-                        }).to_string();
-                        let sync_ent = self.create_sync_entity(SyncEntityType::Memory, id, payload, chrono::Utc::now().timestamp());
+                        })
+                        .to_string();
+                        let sync_ent = self.create_sync_entity(
+                            SyncEntityType::Memory,
+                            id,
+                            payload,
+                            chrono::Utc::now().timestamp(),
+                        );
                         hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
                         memories.push(sync_ent);
                     }
@@ -7736,7 +8760,12 @@ impl MahoCore {
         if !is_disabled(SyncEntityType::Extension) {
             for ext in self.get_installed_extensions() {
                 let payload = serde_json::to_string(&ext).map_err(|e| e.to_string())?;
-                let sync_ent = self.create_sync_entity(SyncEntityType::Extension, ext.id.clone(), payload, chrono::Utc::now().timestamp());
+                let sync_ent = self.create_sync_entity(
+                    SyncEntityType::Extension,
+                    ext.id.clone(),
+                    payload,
+                    chrono::Utc::now().timestamp(),
+                );
                 hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
                 extensions.push(sync_ent);
             }
@@ -7748,7 +8777,12 @@ impl MahoCore {
         if !is_disabled(SyncEntityType::CssMod) {
             for css_mod in self.css_mod_manager.get_all_mods() {
                 let payload = serde_json::to_string(css_mod).map_err(|e| e.to_string())?;
-                let sync_ent = self.create_sync_entity(SyncEntityType::CssMod, css_mod.id.clone(), payload, css_mod.created_at.parse::<i64>().unwrap_or(0));
+                let sync_ent = self.create_sync_entity(
+                    SyncEntityType::CssMod,
+                    css_mod.id.clone(),
+                    payload,
+                    css_mod.created_at.parse::<i64>().unwrap_or(0),
+                );
                 hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
                 css_mods.push(sync_ent);
             }
@@ -7760,7 +8794,12 @@ impl MahoCore {
         if !is_disabled(SyncEntityType::Easel) {
             for easel in self.easel_manager.get_all_easels() {
                 let payload = serde_json::to_string(easel).map_err(|e| e.to_string())?;
-                let sync_ent = self.create_sync_entity(SyncEntityType::Easel, easel.id.to_string(), payload, chrono::Utc::now().timestamp());
+                let sync_ent = self.create_sync_entity(
+                    SyncEntityType::Easel,
+                    easel.id.to_string(),
+                    payload,
+                    chrono::Utc::now().timestamp(),
+                );
                 hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
                 easels.push(sync_ent);
             }
@@ -7775,14 +8814,25 @@ impl MahoCore {
                 if let Ok(convs) = storage.list_conversations(999999) {
                     for conv in convs {
                         let payload = serde_json::to_string(&conv).map_err(|e| e.to_string())?;
-                        let sync_ent = self.create_sync_entity(SyncEntityType::Conversation, conv.id.clone(), payload, parse_dt(&conv.created_at));
+                        let sync_ent = self.create_sync_entity(
+                            SyncEntityType::Conversation,
+                            conv.id.clone(),
+                            payload,
+                            parse_dt(&conv.created_at),
+                        );
                         hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
                         conversations.push(sync_ent);
 
                         if let Ok(turns) = storage.get_conversation_messages(&conv.id) {
                             for turn in turns {
-                                let payload = serde_json::to_string(&turn).map_err(|e| e.to_string())?;
-                                let sync_ent = self.create_sync_entity(SyncEntityType::ConversationTurn, turn.id.clone(), payload, parse_dt(&turn.created_at));
+                                let payload =
+                                    serde_json::to_string(&turn).map_err(|e| e.to_string())?;
+                                let sync_ent = self.create_sync_entity(
+                                    SyncEntityType::ConversationTurn,
+                                    turn.id.clone(),
+                                    payload,
+                                    parse_dt(&turn.created_at),
+                                );
                                 hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
                                 conversation_turns.push(sync_ent);
                             }
@@ -7799,12 +8849,38 @@ impl MahoCore {
         if !is_disabled(SyncEntityType::AutofillAddress) {
             if let Some(ref storage) = self.storage {
                 if let Ok(addresses_raw) = storage.load_autofill_addresses() {
-                    for (id, name, street, city, state, zip, country, phone, email, address_line2) in addresses_raw {
+                    for (
+                        id,
+                        name,
+                        street,
+                        city,
+                        state,
+                        zip,
+                        country,
+                        phone,
+                        email,
+                        address_line2,
+                    ) in addresses_raw
+                    {
                         let addr = maho_types::autofill::AutofillAddress {
-                            id: id.clone(), name, street, city, state, zip, country, phone, email, address_line2
+                            id: id.clone(),
+                            name,
+                            street,
+                            city,
+                            state,
+                            zip,
+                            country,
+                            phone,
+                            email,
+                            address_line2,
                         };
                         let payload = serde_json::to_string(&addr).map_err(|e| e.to_string())?;
-                        let sync_ent = self.create_sync_entity(SyncEntityType::AutofillAddress, id, payload, chrono::Utc::now().timestamp());
+                        let sync_ent = self.create_sync_entity(
+                            SyncEntityType::AutofillAddress,
+                            id,
+                            payload,
+                            chrono::Utc::now().timestamp(),
+                        );
                         hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
                         autofill_addresses.push(sync_ent);
                     }
@@ -7820,10 +8896,19 @@ impl MahoCore {
                 if let Ok(payments_raw) = storage.load_autofill_payments() {
                     for (id, card_name, last_four, expiry, card_network) in payments_raw {
                         let payment = maho_types::autofill::AutofillPayment {
-                            id: id.clone(), card_name, last_four, expiry, card_network
+                            id: id.clone(),
+                            card_name,
+                            last_four,
+                            expiry,
+                            card_network,
                         };
                         let payload = serde_json::to_string(&payment).map_err(|e| e.to_string())?;
-                        let sync_ent = self.create_sync_entity(SyncEntityType::AutofillPayment, id, payload, chrono::Utc::now().timestamp());
+                        let sync_ent = self.create_sync_entity(
+                            SyncEntityType::AutofillPayment,
+                            id,
+                            payload,
+                            chrono::Utc::now().timestamp(),
+                        );
                         hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
                         autofill_payments.push(sync_ent);
                     }
@@ -7837,7 +8922,12 @@ impl MahoCore {
         if !is_disabled(SyncEntityType::Settings) {
             let settings = self.settings_manager.get_settings();
             let payload = serde_json::to_string(settings).map_err(|e| e.to_string())?;
-            let sync_ent = self.create_sync_entity(SyncEntityType::Settings, "global_settings".to_string(), payload, chrono::Utc::now().timestamp());
+            let sync_ent = self.create_sync_entity(
+                SyncEntityType::Settings,
+                "global_settings".to_string(),
+                payload,
+                chrono::Utc::now().timestamp(),
+            );
             hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
             settings_list.push(sync_ent);
         }
@@ -7850,7 +8940,12 @@ impl MahoCore {
                 if let Ok(collections_raw) = storage.get_all_shared_collections() {
                     for col in collections_raw {
                         let payload = serde_json::to_string(&col).map_err(|e| e.to_string())?;
-                        let sync_ent = self.create_sync_entity(SyncEntityType::SharedCollection, col.id.clone(), payload, chrono::Utc::now().timestamp());
+                        let sync_ent = self.create_sync_entity(
+                            SyncEntityType::SharedCollection,
+                            col.id.clone(),
+                            payload,
+                            chrono::Utc::now().timestamp(),
+                        );
                         hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
                         shared_collections.push(sync_ent);
                     }
@@ -7864,10 +8959,14 @@ impl MahoCore {
 
         let snap_json = serde_json::to_vec(&snap).map_err(|e| e.to_string())?;
 
-        let sync_key_opt = self.sync_manager.as_ref().and_then(|sm| sm.encryption_key.as_ref());
+        let sync_key_opt = self
+            .sync_manager
+            .as_ref()
+            .and_then(|sm| sm.encryption_key.as_ref());
         match sync_key_opt {
             Some(key) => {
-                let encrypted = crate::sync_crypto::encrypt_update(&snap_json, key).map_err(|e| e.to_string())?;
+                let encrypted = crate::sync_crypto::encrypt_update(&snap_json, key)
+                    .map_err(|e| e.to_string())?;
                 Ok(encrypted)
             }
             None => Err("Encryption key is not set".to_string()),
@@ -7875,13 +8974,18 @@ impl MahoCore {
     }
 
     pub fn apply_snapshot(&mut self, encrypted_blob: &[u8]) -> Result<(), String> {
-        let sync_key_opt = self.sync_manager.as_ref().and_then(|sm| sm.encryption_key.as_ref());
+        let sync_key_opt = self
+            .sync_manager
+            .as_ref()
+            .and_then(|sm| sm.encryption_key.as_ref());
         let decrypted_bytes = match sync_key_opt {
-            Some(key) => crate::sync_crypto::decrypt_update(encrypted_blob, key).map_err(|e| e.to_string())?,
+            Some(key) => crate::sync_crypto::decrypt_update(encrypted_blob, key)
+                .map_err(|e| e.to_string())?,
             None => return Err("Encryption key is not set".to_string()),
         };
 
-        let snap: crate::snapshot::Snapshot = serde_json::from_slice(&decrypted_bytes).map_err(|e| e.to_string())?;
+        let snap: crate::snapshot::Snapshot =
+            serde_json::from_slice(&decrypted_bytes).map_err(|e| e.to_string())?;
         let mut ordered_entities = Vec::new();
 
         let type_keys = vec![
@@ -7944,7 +9048,8 @@ impl MahoCore {
                     if let Err(e) = s.set_sync_last_pulled_version(t.as_str(), *last_pulled) {
                         eprintln!(
                             "[sync] Failed to persist last_pulled_version for {}: {}",
-                            t.as_str(), e
+                            t.as_str(),
+                            e
                         );
                     }
                 }
@@ -7954,7 +9059,13 @@ impl MahoCore {
         Ok(())
     }
 
-    fn push_sync_entity(&mut self, entity_type: SyncEntityType, id: String, payload_json: String, deleted: bool) {
+    fn push_sync_entity(
+        &mut self,
+        entity_type: SyncEntityType,
+        id: String,
+        payload_json: String,
+        deleted: bool,
+    ) {
         if let Some(ref sm) = self.sync_manager {
             if sm.config().disabled_entity_types.contains(&entity_type) {
                 return; // Disabled entity type, skip sync push!
@@ -7992,9 +9103,16 @@ impl MahoCore {
                 let exceeds_count = count >= 500;
 
                 if exceeds_time || exceeds_count {
-                    let is_leader = self.sync_manager.as_ref().map(|sm| sm.is_leader()).unwrap_or(false);
-                    let startup_grace_passed = chrono::Utc::now() - self.sync_startup_time.get() >= chrono::Duration::minutes(5);
-                    let dedup_window_passed = chrono::Utc::now() - self.sync_last_upload_attempt.get() >= chrono::Duration::minutes(30);
+                    let is_leader = self
+                        .sync_manager
+                        .as_ref()
+                        .map(|sm| sm.is_leader())
+                        .unwrap_or(false);
+                    let startup_grace_passed = chrono::Utc::now() - self.sync_startup_time.get()
+                        >= chrono::Duration::minutes(5);
+                    let dedup_window_passed = chrono::Utc::now()
+                        - self.sync_last_upload_attempt.get()
+                        >= chrono::Duration::minutes(30);
 
                     if is_leader && startup_grace_passed && dedup_window_passed {
                         println!("[sync] Triggering scheduled snapshot upload (exceeds_time={}, exceeds_count={})", exceeds_time, exceeds_count);
@@ -8014,7 +9132,9 @@ impl MahoCore {
     }
 
     pub fn trigger_async_snapshot_upload(&self) {
-        let Some(ref sm) = self.sync_manager else { return; };
+        let Some(ref sm) = self.sync_manager else {
+            return;
+        };
         if !sm.is_leader() {
             return;
         }
@@ -8023,11 +9143,18 @@ impl MahoCore {
             None => return,
         };
         let server_url = sm.config().server_url.clone();
-        let rest_url = server_url.replace("wss://", "https://").replace("ws://", "http://");
+        let rest_url = server_url
+            .replace("wss://", "https://")
+            .replace("ws://", "http://");
         let snapshot_endpoint = format!("{}/sync/snapshots", rest_url);
         let client = crate::http::shared_http_client();
         let token = if let Some(ref storage) = self.storage {
-            storage.get_setting("auth:access_token").ok().flatten().filter(|s| !s.is_empty()).unwrap_or_else(|| room_id.clone())
+            storage
+                .get_setting("auth:access_token")
+                .ok()
+                .flatten()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| room_id.clone())
         } else {
             room_id.clone()
         };
@@ -8069,14 +9196,16 @@ impl MahoCore {
         std::thread::spawn(move || {
             let result = match tokio::runtime::Handle::try_current() {
                 Ok(h) => h.block_on(async {
-                    client.post(&snapshot_endpoint)
+                    client
+                        .post(&snapshot_endpoint)
                         .header("Authorization", format!("Bearer {}", token))
                         .json(&json_body)
                         .send()
                         .await
                 }),
                 Err(_) => crate::memory_manager::get_runtime().block_on(async {
-                    client.post(&snapshot_endpoint)
+                    client
+                        .post(&snapshot_endpoint)
                         .header("Authorization", format!("Bearer {}", token))
                         .json(&json_body)
                         .send()
@@ -8093,30 +9222,53 @@ impl MahoCore {
         });
     }
 
-
-
     pub fn bootstrap_sync_join_flow(&mut self, room_id: &str) -> Result<(), String> {
-        let Some(ref sm) = self.sync_manager else { return Ok(()); };
+        let Some(ref sm) = self.sync_manager else {
+            return Ok(());
+        };
         let server_url = sm.config().server_url.clone();
-        let rest_url = server_url.replace("wss://", "https://").replace("ws://", "http://");
+        let rest_url = server_url
+            .replace("wss://", "https://")
+            .replace("ws://", "http://");
         let snapshot_endpoint = format!("{}/sync/snapshots", rest_url);
         let client = crate::http::shared_http_client();
         let room_id = room_id.to_string();
         let token = if let Some(ref storage) = self.storage {
-            storage.get_setting("auth:access_token").ok().flatten().filter(|s| !s.is_empty()).unwrap_or_else(|| room_id.clone())
+            storage
+                .get_setting("auth:access_token")
+                .ok()
+                .flatten()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| room_id.clone())
         } else {
             room_id.clone()
         };
 
         let download_fut = async {
-            match client.head(&snapshot_endpoint).header("Authorization", format!("Bearer {}", token)).send().await {
+            match client
+                .head(&snapshot_endpoint)
+                .header("Authorization", format!("Bearer {}", token))
+                .send()
+                .await
+            {
                 Ok(resp) if resp.status().is_success() => {
-                    match client.get(&snapshot_endpoint).header("Authorization", format!("Bearer {}", token)).send().await {
-                        Ok(resp) => resp.json::<serde_json::Value>().await.map_err(|e| format!("JSON download failed: {:?}", e)),
+                    match client
+                        .get(&snapshot_endpoint)
+                        .header("Authorization", format!("Bearer {}", token))
+                        .send()
+                        .await
+                    {
+                        Ok(resp) => resp
+                            .json::<serde_json::Value>()
+                            .await
+                            .map_err(|e| format!("JSON download failed: {:?}", e)),
                         Err(e) => Err(format!("Download request failed: {:?}", e)),
                     }
                 }
-                Ok(resp) => Err(format!("No snapshot exists on relay (status: {})", resp.status())),
+                Ok(resp) => Err(format!(
+                    "No snapshot exists on relay (status: {})",
+                    resp.status()
+                )),
                 Err(e) => Err(format!("Head request failed: {:?}", e)),
             }
         };
@@ -8128,9 +9280,13 @@ impl MahoCore {
 
         match result {
             Ok(json_val) => {
-                let base64_blob = json_val["blob"].as_str().ok_or_else(|| "Missing blob field in snapshot response".to_string())?;
+                let base64_blob = json_val["blob"]
+                    .as_str()
+                    .ok_or_else(|| "Missing blob field in snapshot response".to_string())?;
                 use base64::Engine;
-                let encrypted_bytes = base64::engine::general_purpose::STANDARD.decode(base64_blob).map_err(|e| format!("Base64 decode failed: {:?}", e))?;
+                let encrypted_bytes = base64::engine::general_purpose::STANDARD
+                    .decode(base64_blob)
+                    .map_err(|e| format!("Base64 decode failed: {:?}", e))?;
 
                 println!("[sync] Snapshot found on relay, applying...");
                 if let Err(e) = self.apply_snapshot(&encrypted_bytes) {
@@ -8156,7 +9312,8 @@ impl MahoCore {
         let mut incoming_private_ids: HashSet<TabId> = HashSet::new();
         for entity in &entities {
             if entity.entity_type == SyncEntityType::Tab && !entity.deleted {
-                if let Ok(tab) = serde_json::from_str::<maho_types::tab::Tab>(&entity.payload_json) {
+                if let Ok(tab) = serde_json::from_str::<maho_types::tab::Tab>(&entity.payload_json)
+                {
                     if tab.is_private {
                         incoming_private_ids.insert(tab.id);
                     }
@@ -8171,26 +9328,35 @@ impl MahoCore {
         let mut valid_entities = Vec::new();
         for mut entity in entities {
             if entity.entity_type == SyncEntityType::Tab && !entity.deleted {
-                if let Ok(tab) = serde_json::from_str::<maho_types::tab::Tab>(&entity.payload_json) {
+                if let Ok(tab) = serde_json::from_str::<maho_types::tab::Tab>(&entity.payload_json)
+                {
                     if tab.is_private {
                         continue;
                     }
                 }
             }
             if entity.entity_type == SyncEntityType::Space && !entity.deleted {
-                if let Ok(space) = serde_json::from_str::<maho_types::space::Space>(&entity.payload_json) {
+                if let Ok(space) =
+                    serde_json::from_str::<maho_types::space::Space>(&entity.payload_json)
+                {
                     let sanitized = sanitize_space_for_private_tabs(&space, &blocked_private_ids);
                     match serde_json::to_string(&sanitized) {
                         Ok(payload) => entity.payload_json = payload,
                         Err(e) => {
-                            eprintln!("Rejected remote space {} due to sanitize serialization error: {}", entity.entity_id, e);
+                            eprintln!(
+                                "Rejected remote space {} due to sanitize serialization error: {}",
+                                entity.entity_id, e
+                            );
                             continue;
                         }
                     }
                 }
             }
             if let Err(e) = self.update_hlc_ts_on_receive(entity.version) {
-                eprintln!("Rejected remote entity {} due to invalid HLC: {}", entity.entity_id, e);
+                eprintln!(
+                    "Rejected remote entity {} due to invalid HLC: {}",
+                    entity.entity_id, e
+                );
                 continue;
             }
             valid_entities.push(entity);
@@ -8205,9 +9371,14 @@ impl MahoCore {
         for entity in &applied {
             match entity.entity_type {
                 SyncEntityType::Extension => {
-                    if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&entity.payload_json) {
+                    if let Ok(payload) =
+                        serde_json::from_str::<serde_json::Value>(&entity.payload_json)
+                    {
                         if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
-                            let enabled = payload.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+                            let enabled = payload
+                                .get("enabled")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(true);
                             let deleted = entity.deleted;
 
                             if let Some(ext) = self.extension_bridge.extensions.get_mut(id) {
@@ -8223,7 +9394,9 @@ impl MahoCore {
                     }
                 }
                 SyncEntityType::Shortcut => {
-                    if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&entity.payload_json) {
+                    if let Ok(payload) =
+                        serde_json::from_str::<serde_json::Value>(&entity.payload_json)
+                    {
                         if let Some(action) = payload.get("action").and_then(|v| v.as_str()) {
                             if entity.deleted {
                                 self.shortcut_manager.reset_shortcut(action);
@@ -8232,22 +9405,62 @@ impl MahoCore {
                                 }
                             } else {
                                 if let Some(key_combo_val) = payload.get("keyCombo") {
-                                    if let Ok(key_combo) = serde_json::from_value::<maho_types::keyboard::KeyCombo>(key_combo_val.clone()) {
-                                        let _ = self.shortcut_manager.set_shortcut(action, key_combo.clone());
-                                        let enabled = self.shortcut_manager.get_all_bindings().iter().find(|b| b.action == action).map(|b| b.enabled).unwrap_or(true);
-                                        self.shortcut_manager.restore_shortcut_state(action, key_combo.clone(), enabled, entity.version);
+                                    if let Ok(key_combo) =
+                                        serde_json::from_value::<maho_types::keyboard::KeyCombo>(
+                                            key_combo_val.clone(),
+                                        )
+                                    {
+                                        let _ = self
+                                            .shortcut_manager
+                                            .set_shortcut(action, key_combo.clone());
+                                        let enabled = self
+                                            .shortcut_manager
+                                            .get_all_bindings()
+                                            .iter()
+                                            .find(|b| b.action == action)
+                                            .map(|b| b.enabled)
+                                            .unwrap_or(true);
+                                        self.shortcut_manager.restore_shortcut_state(
+                                            action,
+                                            key_combo.clone(),
+                                            enabled,
+                                            entity.version,
+                                        );
                                         if let Some(ref storage) = self.storage {
                                             if let Ok(json) = serde_json::to_string(&key_combo) {
-                                                let _ = storage.save_shortcut(action, &json, entity.version);
+                                                let _ = storage.save_shortcut(
+                                                    action,
+                                                    &json,
+                                                    entity.version,
+                                                );
                                             }
                                         }
                                     }
                                 }
-                                if let Some(enabled) = payload.get("enabled").and_then(|v| v.as_bool()) {
-                                    let key_combo = self.shortcut_manager.get_all_bindings().iter().find(|b| b.action == action).map(|b| b.key_combo.clone()).unwrap_or_else(|| maho_types::keyboard::KeyCombo::new("", vec![]));
-                                    self.shortcut_manager.restore_shortcut_state(action, key_combo, enabled, entity.version);
+                                if let Some(enabled) =
+                                    payload.get("enabled").and_then(|v| v.as_bool())
+                                {
+                                    let key_combo = self
+                                        .shortcut_manager
+                                        .get_all_bindings()
+                                        .iter()
+                                        .find(|b| b.action == action)
+                                        .map(|b| b.key_combo.clone())
+                                        .unwrap_or_else(|| {
+                                            maho_types::keyboard::KeyCombo::new("", vec![])
+                                        });
+                                    self.shortcut_manager.restore_shortcut_state(
+                                        action,
+                                        key_combo,
+                                        enabled,
+                                        entity.version,
+                                    );
                                     if let Some(ref storage) = self.storage {
-                                        let _ = storage.save_shortcut_enabled(action, enabled, entity.version);
+                                        let _ = storage.save_shortcut_enabled(
+                                            action,
+                                            enabled,
+                                            entity.version,
+                                        );
                                     }
                                 }
                             }
@@ -8258,24 +9471,38 @@ impl MahoCore {
                     if entity.deleted {
                         let space_id = maho_types::identifiers::SpaceId::new(&entity.entity_id);
                         self.space_manager.delete_space(&space_id);
-                    } else if let Ok(space) = serde_json::from_str::<maho_types::space::Space>(&entity.payload_json) {
+                    } else if let Ok(space) =
+                        serde_json::from_str::<maho_types::space::Space>(&entity.payload_json)
+                    {
                         self.space_manager.upsert_space(space);
                     }
-                    let favorited_tab_ids: std::collections::HashSet<maho_types::identifiers::TabId> = self.tab_manager.get_all_favorite_tabs().iter().map(|t| t.id.clone()).collect();
-                    self.space_manager.strip_favorited_tabs_from_root_orders(&favorited_tab_ids);
+                    let favorited_tab_ids: std::collections::HashSet<
+                        maho_types::identifiers::TabId,
+                    > = self
+                        .tab_manager
+                        .get_all_favorite_tabs()
+                        .iter()
+                        .map(|t| t.id.clone())
+                        .collect();
+                    self.space_manager
+                        .strip_favorited_tabs_from_root_orders(&favorited_tab_ids);
                 }
                 SyncEntityType::Tab => {
                     if entity.deleted {
                         let tab_id = maho_types::identifiers::TabId::new(&entity.entity_id);
                         self.tab_manager.close_tab(&tab_id);
-                    } else if let Ok(tab) = serde_json::from_str::<maho_types::tab::Tab>(&entity.payload_json) {
+                    } else if let Ok(tab) =
+                        serde_json::from_str::<maho_types::tab::Tab>(&entity.payload_json)
+                    {
                         let is_favorite = tab.role.is_favorite(); // L3-EXEMPT: local query
                         let tab_id = tab.id.clone();
                         self.tab_manager.restore_tab(tab);
-                        if is_favorite { // L3-EXEMPT: local parameter
+                        if is_favorite {
+                            // L3-EXEMPT: local parameter
                             let mut favorited_tab_ids = std::collections::HashSet::new();
                             favorited_tab_ids.insert(tab_id);
-                            self.space_manager.strip_favorited_tabs_from_root_orders(&favorited_tab_ids);
+                            self.space_manager
+                                .strip_favorited_tabs_from_root_orders(&favorited_tab_ids);
                         }
                     }
                 }
@@ -8285,7 +9512,9 @@ impl MahoCore {
                         if let Some(ref storage) = self.storage {
                             let _ = storage.delete_bookmark(&entity.entity_id);
                         }
-                    } else if let Ok(bm) = serde_json::from_str::<crate::bookmark_manager::Bookmark>(&entity.payload_json) {
+                    } else if let Ok(bm) = serde_json::from_str::<crate::bookmark_manager::Bookmark>(
+                        &entity.payload_json,
+                    ) {
                         self.bookmark_manager.restore_bookmark(bm.clone());
                         if let Some(ref storage) = self.storage {
                             let _ = storage.save_bookmark(
@@ -8304,7 +9533,10 @@ impl MahoCore {
                         if let Some(ref storage) = self.storage {
                             let _ = storage.delete_bookmark_folder(&entity.entity_id);
                         }
-                    } else if let Ok(folder) = serde_json::from_str::<crate::bookmark_manager::BookmarkFolder>(&entity.payload_json) {
+                    } else if let Ok(folder) = serde_json::from_str::<
+                        crate::bookmark_manager::BookmarkFolder,
+                    >(&entity.payload_json)
+                    {
                         self.bookmark_manager.restore_folder(folder.clone());
                         if let Some(ref storage) = self.storage {
                             let _ = storage.save_bookmark_folder(
@@ -8323,7 +9555,9 @@ impl MahoCore {
                         if let Some(ref storage) = self.storage {
                             let _ = storage.delete_note(&entity.entity_id);
                         }
-                    } else if let Ok(note) = serde_json::from_str::<maho_types::note::Note>(&entity.payload_json) {
+                    } else if let Ok(note) =
+                        serde_json::from_str::<maho_types::note::Note>(&entity.payload_json)
+                    {
                         self.note_manager.restore_note(note.clone());
                         if let Some(ref storage) = self.storage {
                             let _ = storage.save_note(
@@ -8344,7 +9578,9 @@ impl MahoCore {
                         if let Some(ref storage) = self.storage {
                             let _ = storage.delete_boost(&entity.entity_id);
                         }
-                    } else if let Ok(boost) = serde_json::from_str::<maho_types::boost::Boost>(&entity.payload_json) {
+                    } else if let Ok(boost) =
+                        serde_json::from_str::<maho_types::boost::Boost>(&entity.payload_json)
+                    {
                         self.boost_manager.restore_boost(boost.clone());
                         if let Some(ref storage) = self.storage {
                             let _ = storage.save_boost(&boost);
@@ -8357,7 +9593,10 @@ impl MahoCore {
                         if let Some(ref storage) = self.storage {
                             let _ = storage.delete_reading_list_item(&entity.entity_id);
                         }
-                    } else if let Ok(item) = serde_json::from_str::<crate::reading_list_manager::ReadingListItem>(&entity.payload_json) {
+                    } else if let Ok(item) = serde_json::from_str::<
+                        crate::reading_list_manager::ReadingListItem,
+                    >(&entity.payload_json)
+                    {
                         self.reading_list_manager.insert_item(item.clone());
                         if let Some(ref storage) = self.storage {
                             let tags_json = serde_json::to_string(&item.tags).unwrap_or_default();
@@ -8384,7 +9623,10 @@ impl MahoCore {
                         if let Some(ref storage) = self.storage {
                             let _ = storage.delete_search_engine(&entity.entity_id);
                         }
-                    } else if let Ok(se) = serde_json::from_str::<maho_types::search_engine::SearchEngine>(&entity.payload_json) {
+                    } else if let Ok(se) = serde_json::from_str::<
+                        maho_types::search_engine::SearchEngine,
+                    >(&entity.payload_json)
+                    {
                         self.command_bar.add_search_engine(se.clone());
                         if let Some(ref storage) = self.storage {
                             let _ = storage.save_search_engine(
@@ -8397,7 +9639,9 @@ impl MahoCore {
                             );
                         }
                     }
-                    updates.push(CoreUpdate::SearchEnginesUpdated { engines: self.command_bar.get_search_engines() });
+                    updates.push(CoreUpdate::SearchEnginesUpdated {
+                        engines: self.command_bar.get_search_engines(),
+                    });
                 }
                 SyncEntityType::Memory => {
                     if entity.deleted {
@@ -8405,17 +9649,36 @@ impl MahoCore {
                             let _ = storage.delete_memory(&entity.entity_id);
                             let _ = self.memory_manager.rebuild_index(storage);
                         }
-                    } else if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&entity.payload_json) {
+                    } else if let Ok(payload) =
+                        serde_json::from_str::<serde_json::Value>(&entity.payload_json)
+                    {
                         if let Some(fact) = payload.get("fact").and_then(|v| v.as_str()) {
                             let id = entity.entity_id.clone();
-                            let source = payload.get("source").and_then(|v| v.as_str()).unwrap_or("");
+                            let source =
+                                payload.get("source").and_then(|v| v.as_str()).unwrap_or("");
                             let session_id = payload.get("session_id").and_then(|v| v.as_str());
-                            let categories = payload.get("categories").and_then(|v| v.as_str()).unwrap_or("");
-                            let importance = payload.get("importance").and_then(|v| v.as_f64()).unwrap_or(0.5);
+                            let categories = payload
+                                .get("categories")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            let importance = payload
+                                .get("importance")
+                                .and_then(|v| v.as_f64())
+                                .unwrap_or(0.5);
                             let metadata = payload.get("metadata").and_then(|v| v.as_str());
 
                             if let Some(ref storage) = self.storage {
-                                let _ = storage.insert_memory(&id, fact, source, session_id, categories, importance, metadata);
+                                let _ = storage.insert_memory(
+                                    maho_storage::sqlite::MemoryInsertParams {
+                                        id: &id,
+                                        fact,
+                                        source,
+                                        session_id,
+                                        categories,
+                                        importance,
+                                        metadata,
+                                    },
+                                );
                                 self.memory_manager.embed_fact(id, fact.to_string());
                             }
                         }
@@ -8427,7 +9690,9 @@ impl MahoCore {
                         if let Some(ref storage) = self.storage {
                             let _ = storage.delete_css_mod(&entity.entity_id);
                         }
-                    } else if let Ok(css_mod) = serde_json::from_str::<maho_types::css_mod::CssMod>(&entity.payload_json) {
+                    } else if let Ok(css_mod) =
+                        serde_json::from_str::<maho_types::css_mod::CssMod>(&entity.payload_json)
+                    {
                         self.css_mod_manager.install_mod(css_mod.clone());
                         if let Some(ref storage) = self.storage {
                             let _ = storage.save_css_mod(&css_mod);
@@ -8441,7 +9706,9 @@ impl MahoCore {
                         if let Some(ref storage) = self.storage {
                             let _ = storage.delete_easel(&entity.entity_id);
                         }
-                    } else if let Ok(easel) = serde_json::from_str::<maho_types::easel::Easel>(&entity.payload_json) {
+                    } else if let Ok(easel) =
+                        serde_json::from_str::<maho_types::easel::Easel>(&entity.payload_json)
+                    {
                         self.easel_manager.restore_easel(easel.clone());
                         if let Some(ref storage) = self.storage {
                             let _ = storage.save_easel(&easel);
@@ -8453,9 +9720,16 @@ impl MahoCore {
                         if let Some(ref storage) = self.storage {
                             let _ = storage.delete_conversation(&entity.entity_id);
                         }
-                    } else if let Ok(conv) = serde_json::from_str::<maho_types::chat::Conversation>(&entity.payload_json) {
+                    } else if let Ok(conv) =
+                        serde_json::from_str::<maho_types::chat::Conversation>(&entity.payload_json)
+                    {
                         if let Some(ref storage) = self.storage {
-                            let _ = storage.create_conversation(&conv.id, conv.title.as_deref(), conv.space_id.as_deref(), conv.model.as_deref());
+                            let _ = storage.create_conversation(
+                                &conv.id,
+                                conv.title.as_deref(),
+                                conv.space_id.as_deref(),
+                                conv.model.as_deref(),
+                            );
                         }
                     }
                 }
@@ -8464,9 +9738,18 @@ impl MahoCore {
                         if let Some(ref storage) = self.storage {
                             let _ = storage.delete_conversation_turn(&entity.entity_id);
                         }
-                    } else if let Ok(turn) = serde_json::from_str::<maho_types::chat::ConversationTurn>(&entity.payload_json) {
+                    } else if let Ok(turn) = serde_json::from_str::<
+                        maho_types::chat::ConversationTurn,
+                    >(&entity.payload_json)
+                    {
                         if let Some(ref storage) = self.storage {
-                            let _ = storage.insert_conversation_turn(&turn.id, &turn.session_id, &turn.role, &turn.content, turn.url_context.as_deref());
+                            let _ = storage.insert_conversation_turn(
+                                &turn.id,
+                                &turn.session_id,
+                                &turn.role,
+                                &turn.content,
+                                turn.url_context.as_deref(),
+                            );
                         }
                     }
                 }
@@ -8475,20 +9758,25 @@ impl MahoCore {
                         if let Some(ref storage) = self.storage {
                             let _ = storage.delete_autofill_address(&entity.entity_id);
                         }
-                    } else if let Ok(addr) = serde_json::from_str::<maho_types::autofill::AutofillAddress>(&entity.payload_json) {
+                    } else if let Ok(addr) = serde_json::from_str::<
+                        maho_types::autofill::AutofillAddress,
+                    >(&entity.payload_json)
+                    {
                         if let Some(ref storage) = self.storage {
-                            let _ = storage.save_autofill_address(maho_storage::sqlite::AutofillAddressParams {
-                                id: &addr.id,
-                                name: &addr.name,
-                                street: &addr.street,
-                                city: &addr.city,
-                                state: &addr.state,
-                                zip: &addr.zip,
-                                country: &addr.country,
-                                phone: addr.phone.as_deref(),
-                                email: addr.email.as_deref(),
-                                address_line2: addr.address_line2.as_deref(),
-                            });
+                            let _ = storage.save_autofill_address(
+                                maho_storage::sqlite::AutofillAddressParams {
+                                    id: &addr.id,
+                                    name: &addr.name,
+                                    street: &addr.street,
+                                    city: &addr.city,
+                                    state: &addr.state,
+                                    zip: &addr.zip,
+                                    country: &addr.country,
+                                    phone: addr.phone.as_deref(),
+                                    email: addr.email.as_deref(),
+                                    address_line2: addr.address_line2.as_deref(),
+                                },
+                            );
                         }
                     }
                 }
@@ -8497,7 +9785,10 @@ impl MahoCore {
                         if let Some(ref storage) = self.storage {
                             let _ = storage.delete_autofill_payment(&entity.entity_id);
                         }
-                    } else if let Ok(pay) = serde_json::from_str::<maho_types::autofill::AutofillPayment>(&entity.payload_json) {
+                    } else if let Ok(pay) = serde_json::from_str::<
+                        maho_types::autofill::AutofillPayment,
+                    >(&entity.payload_json)
+                    {
                         if let Some(ref storage) = self.storage {
                             let _ = storage.save_autofill_payment(
                                 &pay.id,
@@ -8511,9 +9802,13 @@ impl MahoCore {
                 }
                 SyncEntityType::Settings => {
                     if !entity.deleted {
-                        if let Ok(settings) = serde_json::from_str::<maho_types::settings::Settings>(&entity.payload_json) {
+                        if let Ok(settings) = serde_json::from_str::<maho_types::settings::Settings>(
+                            &entity.payload_json,
+                        ) {
                             self.settings_manager.restore_settings(settings);
-                            updates.push(CoreUpdate::SettingsChanged { settings: self.settings_manager.get_settings().clone() });
+                            updates.push(CoreUpdate::SettingsChanged {
+                                settings: self.settings_manager.get_settings().clone(),
+                            });
                         }
                     }
                 }
@@ -8522,7 +9817,10 @@ impl MahoCore {
                         if let Some(ref storage) = self.storage {
                             let _ = storage.delete_shared_collection(&entity.entity_id);
                         }
-                    } else if let Ok(col) = serde_json::from_str::<maho_types::sharing::SharedCollection>(&entity.payload_json) {
+                    } else if let Ok(col) = serde_json::from_str::<
+                        maho_types::sharing::SharedCollection,
+                    >(&entity.payload_json)
+                    {
                         if let Some(ref storage) = self.storage {
                             let _ = storage.save_shared_collection(&col);
                         }
@@ -8582,7 +9880,13 @@ impl MahoCore {
         // Then push to in-memory sync manager
         if let Some(ref mut sm) = self.sync_manager {
             let cache_key = format!("{}:{}", entity.entity_type.as_str(), entity.entity_id);
-            sm.set_entity_version_in_cache(&cache_key, entity.version, entity.device_id, entity.fields_hlc_json.clone(), Some(entity.payload_json.clone()));
+            sm.set_entity_version_in_cache(
+                &cache_key,
+                entity.version,
+                entity.device_id,
+                entity.fields_hlc_json.clone(),
+                Some(entity.payload_json.clone()),
+            );
             sm.push_entity(entity);
         }
     }
@@ -8593,13 +9897,18 @@ impl MahoCore {
             Some(s) => s,
             None => return Ok(()),
         };
-        let entries = storage.load_pending_sync_entities()
+        let entries = storage
+            .load_pending_sync_entities()
             .map_err(|e| PersistenceError::Storage(e.to_string()))?;
-        for (id, entity_type_str, entity_id, version, modified_at, payload_json, deleted) in entries {
+        for (id, entity_type_str, entity_id, version, modified_at, payload_json, deleted) in entries
+        {
             let entity_type = match parse_sync_entity_type(&entity_type_str) {
                 Some(et) => et,
                 None => {
-                    eprintln!("[sync] Skipping unknown pending entity type '{}'", entity_type_str);
+                    eprintln!(
+                        "[sync] Skipping unknown pending entity type '{}'",
+                        entity_type_str
+                    );
                     continue;
                 }
             };
@@ -8637,11 +9946,17 @@ impl MahoCore {
                     for fact in &facts {
                         let id = uuid::Uuid::new_v4().to_string();
                         let categories = serde_json::json!([fact.category]).to_string();
-                        let _ = storage.insert_memory(
-                            &id, &fact.fact, "chat", Some(&session_id),
-                            &categories, fact.importance as f64, None,
-                        );
-                        self.memory_manager.embed_fact(id.clone(), fact.fact.clone());
+                        let _ = storage.insert_memory(maho_storage::sqlite::MemoryInsertParams {
+                            id: &id,
+                            fact: &fact.fact,
+                            source: "chat",
+                            session_id: Some(&session_id),
+                            categories: &categories,
+                            importance: fact.importance as f64,
+                            metadata: None,
+                        });
+                        self.memory_manager
+                            .embed_fact(id.clone(), fact.fact.clone());
                         new_ids.push(id.clone());
 
                         let payload = serde_json::json!({
@@ -8652,7 +9967,8 @@ impl MahoCore {
                             "categories": categories,
                             "importance": fact.importance as f64,
                             "metadata": serde_json::Value::Null,
-                        }).to_string();
+                        })
+                        .to_string();
                         facts_to_push.push((id, payload));
                     }
                     updates.push(CoreUpdate::MemoryFactsExtracted {
@@ -8678,12 +9994,18 @@ impl MahoCore {
                 if let Some(ref storage) = self.storage {
                     let token_count = (content.len() / 4) as i64;
                     let _ = storage.upsert_memory_block(
-                        "browsing_summary", &content, "warm", token_count,
+                        "browsing_summary",
+                        &content,
+                        "warm",
+                        token_count,
                     );
                     let now = chrono::Utc::now();
                     let now_iso = now.to_rfc3339();
                     let _ = storage.upsert_memory_block(
-                        "_meta:last_browsing_summary", &now_iso, "cold", 0,
+                        "_meta:last_browsing_summary",
+                        &now_iso,
+                        "cold",
+                        0,
                     );
                     self.memory_manager.note_summary_completed(now);
                 }
@@ -8691,7 +10013,9 @@ impl MahoCore {
             MemoryResult::BrowsingSummaryDue => {
                 if let Some(ref storage) = self.storage {
                     let mut last_summary_at = None;
-                    if let Ok(Some(content)) = storage.get_memory_block("_meta:last_browsing_summary") {
+                    if let Ok(Some(content)) =
+                        storage.get_memory_block("_meta:last_browsing_summary")
+                    {
                         if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&content) {
                             last_summary_at = Some(dt.with_timezone(&chrono::Utc));
                         }
@@ -8734,33 +10058,50 @@ impl MahoCore {
     }
 
     /// Set or replace a hot/warm memory block (used by Personalization UI)
-    pub fn set_memory_block(&self, label: &str, content: &str, tier: &str)
-        -> Result<(), crate::error::CoreError>
-    {
+    pub fn set_memory_block(
+        &self,
+        label: &str,
+        content: &str,
+        tier: &str,
+    ) -> Result<(), crate::error::CoreError> {
         if let Some(ref storage) = self.storage {
             let token_count = (content.len() / 4) as i64;
-            storage.upsert_memory_block(label, content, tier, token_count)
+            storage
+                .upsert_memory_block(label, content, tier, token_count)
                 .map_err(|e| crate::error::CoreError::Storage(e.to_string()))?;
         }
         Ok(())
     }
 
     pub fn get_memory_block(&self, label: &str) -> Option<String> {
-        self.storage.as_ref()?.get_memory_block(label).ok().flatten()
+        self.storage
+            .as_ref()?
+            .get_memory_block(label)
+            .ok()
+            .flatten()
     }
 
     pub fn delete_memory(&mut self, id: &str) -> bool {
-        let Some(ref storage) = self.storage else { return false; };
+        let Some(ref storage) = self.storage else {
+            return false;
+        };
         let deleted = storage.delete_memory(id).unwrap_or(false);
         if deleted {
             let _ = self.memory_manager.rebuild_index(storage);
-            self.push_sync_entity(SyncEntityType::Memory, id.to_string(), "{}".to_string(), true);
+            self.push_sync_entity(
+                SyncEntityType::Memory,
+                id.to_string(),
+                "{}".to_string(),
+                true,
+            );
         }
         deleted
     }
 
     pub fn clear_all_memories(&mut self) -> bool {
-        let Some(ref storage) = self.storage else { return false; };
+        let Some(ref storage) = self.storage else {
+            return false;
+        };
         let memories_to_delete = storage.load_all_memories().unwrap_or_default();
         let ok = storage.delete_all_memories().is_ok();
         if ok {
@@ -8772,11 +10113,19 @@ impl MahoCore {
         ok
     }
 
-    pub fn create_conversation_persisted(&mut self, id: &str, title: Option<&str>, space_id: Option<&str>, model: Option<&str>) -> bool {
+    pub fn create_conversation_persisted(
+        &mut self,
+        id: &str,
+        title: Option<&str>,
+        space_id: Option<&str>,
+        model: Option<&str>,
+    ) -> bool {
         let mut payload_opt = None;
         let mut ok = false;
         if let Some(ref storage) = self.storage {
-            ok = storage.create_conversation(id, title, space_id, model).is_ok();
+            ok = storage
+                .create_conversation(id, title, space_id, model)
+                .is_ok();
             if ok {
                 if let Ok(convs) = storage.list_conversations(999999) {
                     if let Some(conv) = convs.iter().find(|c| c.id == id) {
@@ -8791,13 +10140,21 @@ impl MahoCore {
         ok
     }
 
-    pub fn save_conversation_message_persisted(&mut self, session_id: &str, role: &str, content: &str, url_context: Option<&str>) -> bool {
+    pub fn save_conversation_message_persisted(
+        &mut self,
+        session_id: &str,
+        role: &str,
+        content: &str,
+        url_context: Option<&str>,
+    ) -> bool {
         let mut payload_opt = None;
         let mut id_opt = None;
         let mut ok = false;
         if let Some(ref storage) = self.storage {
             let id = uuid::Uuid::new_v4().to_string();
-            ok = storage.insert_conversation_turn(&id, session_id, role, content, url_context).is_ok();
+            ok = storage
+                .insert_conversation_turn(&id, session_id, role, content, url_context)
+                .is_ok();
             if ok {
                 if let Ok(turns) = storage.get_conversation_messages(session_id) {
                     if let Some(turn) = turns.iter().find(|t| t.id == id) {
@@ -8823,7 +10180,12 @@ impl MahoCore {
             }
         }
         for turn_id in &turn_ids {
-            self.push_sync_entity(SyncEntityType::ConversationTurn, turn_id.clone(), "{}".to_string(), true);
+            self.push_sync_entity(
+                SyncEntityType::ConversationTurn,
+                turn_id.clone(),
+                "{}".to_string(),
+                true,
+            );
         }
         let mut ok = false;
         if let Some(ref storage) = self.storage {
@@ -8833,7 +10195,12 @@ impl MahoCore {
             ok = storage.delete_conversation(id).unwrap_or(false);
         }
         if ok {
-            self.push_sync_entity(SyncEntityType::Conversation, id.to_string(), "{}".to_string(), true);
+            self.push_sync_entity(
+                SyncEntityType::Conversation,
+                id.to_string(),
+                "{}".to_string(),
+                true,
+            );
         }
         ok
     }
@@ -8881,51 +10248,78 @@ impl MahoCore {
         let mut hot_used = 0usize;
         let hot_blocks = storage.list_memory_blocks_by_tier("hot").ok()?;
         for (label, content) in &hot_blocks {
-            if content.trim().is_empty() { continue; }
+            if content.trim().is_empty() {
+                continue;
+            }
             let entry_chars = label.len() + content.len() + 8;
             let truncated = if hot_used + entry_chars > hot_budget_chars {
                 let remaining = hot_budget_chars.saturating_sub(hot_used + label.len() + 8);
-                if remaining == 0 { break; }
+                if remaining == 0 {
+                    break;
+                }
                 let mut end = remaining.min(content.len());
-                while !content.is_char_boundary(end) && end > 0 { end -= 1; }
+                while !content.is_char_boundary(end) && end > 0 {
+                    end -= 1;
+                }
                 &content[..end]
             } else {
                 content.as_str()
             };
             out.push_str(&format!("## {}\n{}\n\n", label, truncated));
             hot_used += label.len() + truncated.len() + 8;
-            if hot_used >= hot_budget_chars { break; }
+            if hot_used >= hot_budget_chars {
+                break;
+            }
         }
 
         let warm_budget_chars = WARM_BUDGET_TOKENS * CHARS_PER_TOKEN;
         let mut warm_used = 0usize;
-        let warm_blocks = storage.list_memory_blocks_by_tier("warm").ok().unwrap_or_default();
+        let warm_blocks = storage
+            .list_memory_blocks_by_tier("warm")
+            .ok()
+            .unwrap_or_default();
         for (label, content) in &warm_blocks {
-            if content.trim().is_empty() { continue; }
+            if content.trim().is_empty() {
+                continue;
+            }
             let entry_chars = label.len() + content.len() + 8;
             let truncated = if warm_used + entry_chars > warm_budget_chars {
                 let remaining = warm_budget_chars.saturating_sub(warm_used + label.len() + 8);
-                if remaining == 0 { break; }
+                if remaining == 0 {
+                    break;
+                }
                 let mut end = remaining.min(content.len());
-                while !content.is_char_boundary(end) && end > 0 { end -= 1; }
+                while !content.is_char_boundary(end) && end > 0 {
+                    end -= 1;
+                }
                 &content[..end]
             } else {
                 content.as_str()
             };
             out.push_str(&format!("## {}\n{}\n\n", label, truncated));
             warm_used += label.len() + truncated.len() + 8;
-            if warm_used >= warm_budget_chars { break; }
+            if warm_used >= warm_budget_chars {
+                break;
+            }
         }
 
-        if out.is_empty() { None } else { Some(out) }
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
     }
 
     pub fn fts_relevant_memories(&self, query: &str, top_k: usize) -> Vec<(String, String, f64)> {
-        let Some(storage) = self.storage.as_ref() else { return Vec::new(); };
+        let Some(storage) = self.storage.as_ref() else {
+            return Vec::new();
+        };
         const COLD_BUDGET_TOKENS: usize = 1000;
         const CHARS_PER_TOKEN: usize = 4;
         let budget_chars = COLD_BUDGET_TOKENS * CHARS_PER_TOKEN;
-        let raw = storage.search_memories_fts(query, top_k).unwrap_or_default();
+        let raw = storage
+            .search_memories_fts(query, top_k)
+            .unwrap_or_default();
         let mut out = Vec::new();
         let mut used = 0usize;
         for (id, content, importance) in raw {
@@ -8968,11 +10362,26 @@ fn parse_sync_entity_type(s: &str) -> Option<SyncEntityType> {
 // === Trait implementations for EventDispatcher ===
 
 impl TabManagerInterface for TabLifecycleManager {
-    fn create_tab(&mut self, space_id: SpaceId, url: Option<Url>, parent_id: Option<TabId>, window_id: Option<i64>, is_private: bool) -> Tab {
+    fn create_tab(
+        &mut self,
+        space_id: SpaceId,
+        url: Option<Url>,
+        parent_id: Option<TabId>,
+        window_id: Option<i64>,
+        is_private: bool,
+    ) -> Tab {
         self.create_tab(space_id, url, parent_id, window_id, is_private)
     }
 
-    fn create_tab_with_id(&mut self, tab_id: TabId, space_id: SpaceId, url: Option<Url>, parent_id: Option<TabId>, window_id: Option<i64>, is_private: bool) -> Tab {
+    fn create_tab_with_id(
+        &mut self,
+        tab_id: TabId,
+        space_id: SpaceId,
+        url: Option<Url>,
+        parent_id: Option<TabId>,
+        window_id: Option<i64>,
+        is_private: bool,
+    ) -> Tab {
         self.create_tab_with_id(tab_id, space_id, url, parent_id, window_id, is_private)
     }
 
@@ -9021,7 +10430,12 @@ impl TabManagerInterface for TabLifecycleManager {
         self.transition_tab_role(tab_id, new_role)
     }
 
-    fn reorder_favorite(&mut self, tab_id: &TabId, new_index: usize, space_ids: &std::collections::HashSet<SpaceId>) {
+    fn reorder_favorite(
+        &mut self,
+        tab_id: &TabId,
+        new_index: usize,
+        space_ids: &std::collections::HashSet<SpaceId>,
+    ) {
         self.reorder_favorite(tab_id, new_index, space_ids)
     }
 
@@ -9181,7 +10595,13 @@ impl SpaceManagerInterface for SpaceManager {
         self.move_tab_to_root(space_id, folder_id, tab_id, before_tab_id)
     }
 
-    fn reorder_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId, parent_folder_id: Option<&FolderId>, before_folder_id: Option<&FolderId>) -> Result<(), crate::space_manager::FolderError> {
+    fn reorder_folder(
+        &mut self,
+        space_id: &SpaceId,
+        folder_id: &FolderId,
+        parent_folder_id: Option<&FolderId>,
+        before_folder_id: Option<&FolderId>,
+    ) -> Result<(), crate::space_manager::FolderError> {
         self.reorder_folder(space_id, folder_id, parent_folder_id, before_folder_id)
     }
 
@@ -9205,7 +10625,10 @@ impl SpaceManagerInterface for SpaceManager {
             .map(|space| self.to_view_model(space))
     }
 
-    fn get_space_ids_for_profile(&self, profile_id: &ProfileId) -> std::collections::HashSet<SpaceId> {
+    fn get_space_ids_for_profile(
+        &self,
+        profile_id: &ProfileId,
+    ) -> std::collections::HashSet<SpaceId> {
         self.get_space_ids_for_profile(profile_id)
     }
 
@@ -9228,7 +10651,14 @@ impl SpaceManagerInterface for SpaceManager {
         provider_type: Option<String>,
         config_json: Option<String>,
     ) -> Option<maho_types::traits::shell_renderer::FolderViewModel> {
-        self.create_folder_with_provider(space_id, name, is_pinned, parent_folder_id, provider_type, config_json)
+        self.create_folder_with_provider(
+            space_id,
+            name,
+            is_pinned,
+            parent_folder_id,
+            provider_type,
+            config_json,
+        )
     }
 
     fn rename_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId, name: &str) {
@@ -9265,11 +10695,20 @@ impl SpaceManagerInterface for SpaceManager {
         self.find_folder_expanded(space_id, folder_id)
     }
 
-    fn set_folder_pinned(&mut self, space_id: &SpaceId, folder_id: &FolderId, is_pinned: bool) -> bool {
+    fn set_folder_pinned(
+        &mut self,
+        space_id: &SpaceId,
+        folder_id: &FolderId,
+        is_pinned: bool,
+    ) -> bool {
         self.set_folder_pinned(space_id, folder_id, is_pinned)
     }
 
-    fn move_folder(&mut self, folder_id: &FolderId, new_parent: Option<FolderId>) -> Result<(), crate::space_manager::FolderError> {
+    fn move_folder(
+        &mut self,
+        folder_id: &FolderId,
+        new_parent: Option<FolderId>,
+    ) -> Result<(), crate::space_manager::FolderError> {
         self.move_folder(folder_id, new_parent)
     }
 
@@ -9291,7 +10730,12 @@ impl SpaceManagerInterface for SpaceManager {
         self.move_folder_to_space(folder_id, source_space_id, target_space_id)
     }
 
-    fn move_folder_to_root(&mut self, space_id: &SpaceId, folder_id: &FolderId, before_folder_id: Option<&FolderId>) {
+    fn move_folder_to_root(
+        &mut self,
+        space_id: &SpaceId,
+        folder_id: &FolderId,
+        before_folder_id: Option<&FolderId>,
+    ) {
         self.move_folder_to_root(space_id, folder_id, before_folder_id)
     }
 
@@ -9350,7 +10794,8 @@ impl CommandBarInterface for CommandBarEngine {
 }
 
 fn extract_domain_from_url(url: &str) -> Option<String> {
-    let host = url.strip_prefix("https://")
+    let host = url
+        .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))
         .unwrap_or(url);
     let host = host.split('/').next()?.split(':').next()?;

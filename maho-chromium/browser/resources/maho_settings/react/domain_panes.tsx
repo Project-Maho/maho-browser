@@ -2189,7 +2189,7 @@ function SyncPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore
               </ManagedSettingRow>
               {pendingKeyInfo ? (
                 <SyncRecoveryPhraseRow keyInfo={pendingKeyInfo} onContinue={async () => {
-                  await handler.startSync(pendingKeyInfo.syncKey);
+                  await handler.configureSyncEncryption(pendingKeyInfo.recoveryPhrase);
                   await loadStatus();
                 }} />
               ) : null}

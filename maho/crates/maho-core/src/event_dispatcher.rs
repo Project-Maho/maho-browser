@@ -1,5 +1,5 @@
-use maho_types::common::{MemoryPressureLevel, Url};
 use maho_types::chat::ChatRequestContext;
+use maho_types::common::{MemoryPressureLevel, Url};
 use maho_types::events::core_update::{CoreUpdate, FolderUpdate, MemoryAction};
 use maho_types::events::shell_event::{QuickAction, ShellEvent};
 use maho_types::identifiers::{FolderId, NoteId, ProfileId, SpaceId, TabId};
@@ -13,8 +13,23 @@ use maho_types::traits::shell_renderer::{
 use crate::space_manager::FolderError;
 
 pub trait TabManagerInterface {
-    fn create_tab(&mut self, space_id: SpaceId, url: Option<Url>, parent_id: Option<TabId>, window_id: Option<i64>, is_private: bool) -> Tab;
-    fn create_tab_with_id(&mut self, tab_id: TabId, space_id: SpaceId, url: Option<Url>, parent_id: Option<TabId>, window_id: Option<i64>, is_private: bool) -> Tab;
+    fn create_tab(
+        &mut self,
+        space_id: SpaceId,
+        url: Option<Url>,
+        parent_id: Option<TabId>,
+        window_id: Option<i64>,
+        is_private: bool,
+    ) -> Tab;
+    fn create_tab_with_id(
+        &mut self,
+        tab_id: TabId,
+        space_id: SpaceId,
+        url: Option<Url>,
+        parent_id: Option<TabId>,
+        window_id: Option<i64>,
+        is_private: bool,
+    ) -> Tab;
     fn close_tab(&mut self, tab_id: &TabId) -> Option<Tab>;
     fn activate_tab(&mut self, tab_id: &TabId);
     fn duplicate_tab(&mut self, tab_id: &TabId) -> Option<Tab>;
@@ -29,7 +44,12 @@ pub trait TabManagerInterface {
     fn unpin_tab(&mut self, tab_id: &TabId);
     fn favorite_tab(&mut self, tab_id: &TabId);
     fn transition_tab_role(&mut self, tab_id: &TabId, new_role: TabRole) -> bool;
-    fn reorder_favorite(&mut self, tab_id: &TabId, new_index: usize, space_ids: &std::collections::HashSet<SpaceId>);
+    fn reorder_favorite(
+        &mut self,
+        tab_id: &TabId,
+        new_index: usize,
+        space_ids: &std::collections::HashSet<SpaceId>,
+    );
     fn mute_tab(&mut self, tab_id: &TabId);
     fn unmute_tab(&mut self, tab_id: &TabId);
     fn freeze_tab(&mut self, tab_id: &TabId);
@@ -82,13 +102,27 @@ pub trait SpaceManagerInterface {
         tab_id: &TabId,
         before_tab_id: Option<&TabId>,
     );
-    fn reorder_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId, parent_folder_id: Option<&FolderId>, before_folder_id: Option<&FolderId>) -> Result<(), FolderError>;
-    fn move_folder_to_root(&mut self, space_id: &SpaceId, folder_id: &FolderId, before_folder_id: Option<&FolderId>);
+    fn reorder_folder(
+        &mut self,
+        space_id: &SpaceId,
+        folder_id: &FolderId,
+        parent_folder_id: Option<&FolderId>,
+        before_folder_id: Option<&FolderId>,
+    ) -> Result<(), FolderError>;
+    fn move_folder_to_root(
+        &mut self,
+        space_id: &SpaceId,
+        folder_id: &FolderId,
+        before_folder_id: Option<&FolderId>,
+    );
     fn get_active_space_id(&self) -> &SpaceId;
     fn get_space_order(&self) -> &[SpaceId];
     fn get_space(&self, space_id: &SpaceId) -> Option<&maho_types::space::Space>;
     fn get_space_view_model(&self, space_id: &SpaceId) -> Option<SpaceViewModel>;
-    fn get_space_ids_for_profile(&self, profile_id: &ProfileId) -> std::collections::HashSet<SpaceId>;
+    fn get_space_ids_for_profile(
+        &self,
+        profile_id: &ProfileId,
+    ) -> std::collections::HashSet<SpaceId>;
     fn create_folder(
         &mut self,
         space_id: &SpaceId,
@@ -118,8 +152,17 @@ pub trait SpaceManagerInterface {
     fn remove_tab_from_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId, tab_id: &TabId);
     fn toggle_folder_expanded(&mut self, space_id: &SpaceId, folder_id: &FolderId) -> bool;
     fn find_folder_expanded(&self, space_id: &SpaceId, folder_id: &FolderId) -> Option<bool>;
-    fn set_folder_pinned(&mut self, space_id: &SpaceId, folder_id: &FolderId, is_pinned: bool) -> bool;
-    fn move_folder(&mut self, folder_id: &FolderId, new_parent: Option<FolderId>) -> Result<(), FolderError>;
+    fn set_folder_pinned(
+        &mut self,
+        space_id: &SpaceId,
+        folder_id: &FolderId,
+        is_pinned: bool,
+    ) -> bool;
+    fn move_folder(
+        &mut self,
+        folder_id: &FolderId,
+        new_parent: Option<FolderId>,
+    ) -> Result<(), FolderError>;
     fn move_folder_in_space(
         &mut self,
         space_id: &SpaceId,

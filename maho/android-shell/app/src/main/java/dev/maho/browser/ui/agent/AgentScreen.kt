@@ -74,9 +74,10 @@ private enum class AgentTaskState {
 @Composable
 fun AgentScreen(
     relayUrl: String = "ws://10.0.2.2:8080/ws/agent",
+    initialGoal: String? = null,
     onBack: () -> Unit,
 ) {
-    var goalInput by remember { mutableStateOf("") }
+    var goalInput by remember(initialGoal) { mutableStateOf(initialGoal.orEmpty()) }
     var urlSeedInput by remember { mutableStateOf("") }
     var taskState by remember { mutableStateOf(AgentTaskState.Idle) }
     var activeTaskId by remember { mutableStateOf<String?>(null) }

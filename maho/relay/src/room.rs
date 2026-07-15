@@ -1,10 +1,10 @@
-use worker::*;
-use serde::{Deserialize, Serialize};
-use base64::Engine;
-use crate::errors::AppError;
-use crate::db;
 use crate::auth::tokens::hash_token_str;
+use crate::db;
+use crate::errors::AppError;
 use crate::RoomDO;
+use base64::Engine;
+use serde::{Deserialize, Serialize};
+use worker::*;
 
 const AUTH_TIMEOUT_SECS: u64 = 5;
 const MAX_MESSAGE_SIZE: usize = 1_048_576;
@@ -175,8 +175,12 @@ pub async fn handle_ws_message(
             continue;
         }
         match echo_text.as_ref() {
-            Some(t) => { let _ = peer.send_with_str(t); }
-            None => { let _ = peer.send_with_bytes(&payload_bytes); }
+            Some(t) => {
+                let _ = peer.send_with_str(t);
+            }
+            None => {
+                let _ = peer.send_with_bytes(&payload_bytes);
+            }
         }
     }
 
@@ -266,22 +270,32 @@ async fn process_auth(
         let token_hash = hash_token_str(&token);
         match db::find_active_session_context_by_access_hash(&db, &token_hash).await {
             Ok(Some(context)) => {
-                db::claim_room_ownership(&db, &key, context.user.id, now).await.ok();
+                db::claim_room_ownership(&db, &key, context.user.id, now)
+                    .await
+                    .ok();
                 match db::get_room_owner_user_id(&db, &key).await {
                     Ok(Some(owner_id)) if owner_id != context.user.id => {
-                        let _ = ws.send_with_str(r#"{"type":"error","msg":"room_owned_by_another_user"}"#);
+                        let _ = ws.send_with_str(
+                            r#"{"type":"error","msg":"room_owned_by_another_user"}"#,
+                        );
                         let _ = ws.close::<&str>(Some(1008), Some("room_owned_by_another_user"));
                         return Ok(());
                     }
                     Ok(_) => {}
                     Err(e) => {
-                        console_error!("room ownership lookup failed key={}: {e}", redact_key(&key));
+                        console_error!(
+                            "room ownership lookup failed key={}: {e}",
+                            redact_key(&key)
+                        );
                         let _ = ws.send_with_str(r#"{"type":"error","msg":"auth_lookup_failed"}"#);
                         let _ = ws.close::<&str>(Some(1011), Some("auth_lookup_failed"));
                         return Ok(());
                     }
                 }
-                if let Err(e) = db::touch_session_and_device(&db, context.session.id, context.device.id, now).await {
+                if let Err(e) =
+                    db::touch_session_and_device(&db, context.session.id, context.device.id, now)
+                        .await
+                {
                     console_error!("touch_session_and_device failed: {e}");
                 }
             }
@@ -315,10 +329,8 @@ async fn process_auth(
             Ok(messages) => {
                 for m in messages {
                     let b64 = base64::engine::general_purpose::STANDARD.encode(&m.blob);
-                    let payload = format!(
-                        r#"{{"type":"catchup","seq":{},"blob":"{}"}}"#,
-                        m.seq, b64
-                    );
+                    let payload =
+                        format!(r#"{{"type":"catchup","seq":{},"blob":"{}"}}"#, m.seq, b64);
                     if ws.send_with_str(&payload).is_err() {
                         return Ok(());
                     }

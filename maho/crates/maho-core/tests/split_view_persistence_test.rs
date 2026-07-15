@@ -33,8 +33,18 @@ fn test_split_view_persistence_roundtrip() {
 
         let tabs = core.get_tab_view_models();
         assert_eq!(tabs.len(), 2);
-        let tab1 = tabs.iter().find(|t| t.url == "https://example1.com").unwrap().id.clone();
-        let tab2 = tabs.iter().find(|t| t.url == "https://example2.com").unwrap().id.clone();
+        let tab1 = tabs
+            .iter()
+            .find(|t| t.url == "https://example1.com")
+            .unwrap()
+            .id
+            .clone();
+        let tab2 = tabs
+            .iter()
+            .find(|t| t.url == "https://example2.com")
+            .unwrap()
+            .id
+            .clone();
 
         // Create split in window-1
         core.handle_event(ShellEvent::CreateSplit {
@@ -54,17 +64,29 @@ fn test_split_view_persistence_roundtrip() {
     restored.load_state().expect("state should restore");
 
     let w = WindowId::new("window-1");
-    let config = restored.get_split_view_config(&w).expect("split config should be restored");
+    let config = restored
+        .get_split_view_config(&w)
+        .expect("split config should be restored");
     println!("[DEBUG] Restored config panes: {:?}", config.panes);
     assert_eq!(config.orientation, Orientation::Horizontal);
     assert_eq!(config.panes.len(), 2);
-    
+
     // We expect the restored TabIds to be matched properly by the StablePaneIdentity mapping
     let restored_tabs = restored.get_tab_view_models();
     println!("[DEBUG] Restored tabs in tab_manager: {:?}", restored_tabs);
     assert_eq!(restored_tabs.len(), 2);
-    let r_tab1 = restored_tabs.iter().find(|t| t.url == "https://example1.com").unwrap().id.clone();
-    let r_tab2 = restored_tabs.iter().find(|t| t.url == "https://example2.com").unwrap().id.clone();
+    let r_tab1 = restored_tabs
+        .iter()
+        .find(|t| t.url == "https://example1.com")
+        .unwrap()
+        .id
+        .clone();
+    let r_tab2 = restored_tabs
+        .iter()
+        .find(|t| t.url == "https://example2.com")
+        .unwrap()
+        .id
+        .clone();
 
     assert_eq!(config.panes[0].tab_id, r_tab1);
     assert_eq!(config.panes[1].tab_id, r_tab2);
@@ -116,16 +138,18 @@ fn test_split_view_persistence_ambiguity() {
     {
         let db = maho_storage::lmdb::LmdbStorage::open(&storage_path).expect("open db");
         let tabs_bytes = db.get("tabs").expect("get tabs").expect("tabs exist");
-        let mut tabs_val: serde_json::Value = serde_json::from_slice(&tabs_bytes).expect("parse tabs json");
-        
+        let mut tabs_val: serde_json::Value =
+            serde_json::from_slice(&tabs_bytes).expect("parse tabs json");
+
         if let Some(arr) = tabs_val.as_array_mut() {
             for tab in arr {
-                tab["created_at"] = serde_json::Value::String("2026-07-09T08:00:00.000Z".to_string());
+                tab["created_at"] =
+                    serde_json::Value::String("2026-07-09T08:00:00.000Z".to_string());
             }
         }
 
         let updated_tabs = serde_json::to_vec(&tabs_val).expect("serialize tabs");
-        
+
         // Rewrite split_view_configs with matching stable pane identities
         // Tab creation time in micros: 2026-07-09T08:00:00Z = 1783584000000000
         let stable_panes = serde_json::json!([
@@ -152,7 +176,8 @@ fn test_split_view_persistence_ambiguity() {
         let split_json = serde_json::to_vec(&persist_map).expect("serialize split view");
 
         db.put("tabs", &updated_tabs).expect("put tabs");
-        db.put("split_view_configs", &split_json).expect("put split view");
+        db.put("split_view_configs", &split_json)
+            .expect("put split view");
     }
 
     // Load state in a fresh instance
@@ -162,7 +187,10 @@ fn test_split_view_persistence_ambiguity() {
     let w = WindowId::new("window-1");
     // Should skip restoring due to ambiguity
     let config = restored.get_split_view_config(&w);
-    assert!(config.is_none(), "Ambiguity should cause split view to be skipped cleanly");
+    assert!(
+        config.is_none(),
+        "Ambiguity should cause split view to be skipped cleanly"
+    );
 }
 
 #[test]
@@ -210,7 +238,10 @@ fn test_split_view_persistence_no_match() {
 
     let w = WindowId::new("window-1");
     let config = restored.get_split_view_config(&w);
-    assert!(config.is_none(), "No-match should cause split view to be skipped cleanly");
+    assert!(
+        config.is_none(),
+        "No-match should cause split view to be skipped cleanly"
+    );
 }
 
 #[test]
@@ -241,8 +272,18 @@ fn test_split_view_persistence_orientation_and_ratio() {
         });
 
         let tabs = core.get_tab_view_models();
-        let tab1 = tabs.iter().find(|t| t.url == "https://example1.com").unwrap().id.clone();
-        let tab2 = tabs.iter().find(|t| t.url == "https://example2.com").unwrap().id.clone();
+        let tab1 = tabs
+            .iter()
+            .find(|t| t.url == "https://example1.com")
+            .unwrap()
+            .id
+            .clone();
+        let tab2 = tabs
+            .iter()
+            .find(|t| t.url == "https://example2.com")
+            .unwrap()
+            .id
+            .clone();
 
         core.handle_event(ShellEvent::CreateSplit {
             window_id: w.clone(),
@@ -265,7 +306,9 @@ fn test_split_view_persistence_orientation_and_ratio() {
     restored.load_state().expect("state should restore");
 
     let w = WindowId::new("window-1");
-    let config = restored.get_split_view_config(&w).expect("split config should be restored");
+    let config = restored
+        .get_split_view_config(&w)
+        .expect("split config should be restored");
     assert_eq!(config.orientation, Orientation::Vertical);
     assert_eq!(config.panes.len(), 2);
     // Custom ratios: tab1 = 0.35, remaining tab2 = 0.65

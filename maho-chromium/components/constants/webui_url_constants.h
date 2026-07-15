@@ -11,9 +11,6 @@ inline constexpr char kMahoAIURL[] = "chrome://maho-ai/";
 inline constexpr char kMahoSettingsHost[] = "maho-settings";
 inline constexpr char kMahoSettingsURL[] = "chrome://maho-settings/";
 
-inline constexpr char kMahoNotesHost[] = "maho-notes";
-inline constexpr char kMahoNotesURL[] = "chrome://maho-notes/";
-
 // Legacy trusted host — kept as a compile-time reference but no longer
 // registered as a live WebUI.  All runtime use should go through the
 // untrusted constants below.
@@ -24,9 +21,6 @@ inline constexpr char kMahoBoostURL[] = "chrome://maho-boost/";
 inline constexpr char kMahoBoostUntrustedHost[] = "maho-boost-editor";
 inline constexpr char kMahoBoostUntrustedURL[] =
     "chrome-untrusted://maho-boost-editor/";
-
-inline constexpr char kMahoEaselHost[] = "maho-easel";
-inline constexpr char kMahoEaselURL[] = "chrome://maho-easel/";
 
 inline constexpr char kMahoTestHost[] = "maho-test";
 inline constexpr char kMahoTestURL[] = "chrome://maho-test/";

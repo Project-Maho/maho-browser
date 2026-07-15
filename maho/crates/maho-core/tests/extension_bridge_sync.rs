@@ -1,8 +1,8 @@
-use maho_core::maho_core::MahoCore;
 use maho_core::extension_bridge::InstalledExtension;
+use maho_core::maho_core::MahoCore;
 use maho_types::events::core_update::CoreUpdate;
-use std::rc::Rc;
 use std::cell::RefCell;
+use std::rc::Rc;
 
 #[test]
 fn set_installed_extensions_replaces_map() {
@@ -46,17 +46,15 @@ fn set_installed_extensions_replaces_map() {
 #[test]
 fn clear_installed_extensions_empties_map() {
     let mut core = MahoCore::new();
-    let extensions = vec![
-        InstalledExtension {
-            id: "ext1".to_string(),
-            name: "Extension One".to_string(),
-            version: "1.0.0".to_string(),
-            description: String::new(),
-            enabled: true,
-            permissions: vec![],
-            manifest_version: 0,
-        },
-    ];
+    let extensions = vec![InstalledExtension {
+        id: "ext1".to_string(),
+        name: "Extension One".to_string(),
+        version: "1.0.0".to_string(),
+        description: String::new(),
+        enabled: true,
+        permissions: vec![],
+        manifest_version: 0,
+    }];
 
     core.set_installed_extensions(extensions);
     assert_eq!(core.get_installed_extensions().len(), 1);
@@ -68,17 +66,15 @@ fn clear_installed_extensions_empties_map() {
 #[test]
 fn set_then_toggle_keeps_id_and_flips_enabled() {
     let mut core = MahoCore::new();
-    let extensions = vec![
-        InstalledExtension {
-            id: "ext1".to_string(),
-            name: "Extension One".to_string(),
-            version: "1.0.0".to_string(),
-            description: String::new(),
-            enabled: true,
-            permissions: vec![],
-            manifest_version: 0,
-        },
-    ];
+    let extensions = vec![InstalledExtension {
+        id: "ext1".to_string(),
+        name: "Extension One".to_string(),
+        version: "1.0.0".to_string(),
+        description: String::new(),
+        enabled: true,
+        permissions: vec![],
+        manifest_version: 0,
+    }];
 
     core.set_installed_extensions(extensions);
     let enabled = core.toggle_extension("ext1");
@@ -111,7 +107,10 @@ fn register_extension_emits_update() {
 
     let received = updates.borrow();
     assert_eq!(received.len(), 1);
-    assert!(matches!(received[0], CoreUpdate::InstalledExtensionsUpdated));
+    assert!(matches!(
+        received[0],
+        CoreUpdate::InstalledExtensionsUpdated
+    ));
 }
 
 #[test]
@@ -129,17 +128,15 @@ fn test_extension_sync_push_and_callback() {
     })));
 
     // Step 1: Initial set of installed extensions (will push sync entity since it is a new detection)
-    let extensions = vec![
-        InstalledExtension {
-            id: "ext-sync-test".to_string(),
-            name: "Sync Test".to_string(),
-            version: "1.0.0".to_string(),
-            description: String::new(),
-            enabled: true,
-            permissions: vec![],
-            manifest_version: 0,
-        },
-    ];
+    let extensions = vec![InstalledExtension {
+        id: "ext-sync-test".to_string(),
+        name: "Sync Test".to_string(),
+        version: "1.0.0".to_string(),
+        description: String::new(),
+        enabled: true,
+        permissions: vec![],
+        manifest_version: 0,
+    }];
     core.set_installed_extensions(extensions);
 
     // Verify that the entity is pushed in outgoing queue
@@ -162,7 +159,8 @@ fn test_extension_sync_push_and_callback() {
         payload_json: serde_json::json!({
             "id": "ext-sync-test",
             "enabled": false,
-        }).to_string(),
+        })
+        .to_string(),
         deleted: false,
         queue_row_id: None,
         fields_hlc_json: None,
@@ -187,17 +185,17 @@ fn test_extension_sync_push_and_callback() {
 
 #[test]
 fn extension_can_register_side_panel() {
-    use maho_core::extension_bridge::{ExtensionBridge, SidePanelOptions, SidePanelLayout};
-    let mut bridge = ExtensionBridge::new(
-        Box::new(|| vec![]),
-        Box::new(|| None),
-    );
+    use maho_core::extension_bridge::{ExtensionBridge, SidePanelLayout, SidePanelOptions};
+    let mut bridge = ExtensionBridge::new(Box::new(|| vec![]), Box::new(|| None));
     let ext_id = "ext1";
-    bridge.register_side_panel(ext_id, SidePanelOptions {
-        path: "panel.html".into(),
-        layout: SidePanelLayout::Right,
-        default_width: 320,
-    });
+    bridge.register_side_panel(
+        ext_id,
+        SidePanelOptions {
+            path: "panel.html".into(),
+            layout: SidePanelLayout::Right,
+            default_width: 320,
+        },
+    );
     let panels = bridge.list_side_panels();
     assert_eq!(panels.len(), 1);
     assert_eq!(panels[0].extension_id, ext_id);

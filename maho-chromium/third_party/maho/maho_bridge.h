@@ -18,6 +18,9 @@ MahoCore* Create();
 MahoCore* CreateWithStorage(const std::string& path);
 void Destroy(MahoCore* core);
 
+bool SetStorageKey(const std::string& hex_key);
+bool DeriveAndSetStorageKey(const std::string& key_file_path);
+
 // Durable state persistence (tab/space state via LMDB + SQLite).
 // Returns true on success.  Silently succeeds on in-memory cores.
 bool SaveState(MahoCore* core);
@@ -76,6 +79,9 @@ std::string SearchHistory(MahoCore* core,
 // Bookmarks search (returns JSON)
 std::string SearchBookmarks(MahoCore* core,
                             const char* query);
+
+// Get password provider registry (returns JSON)
+std::string GetPasswordProviderRegistry();
 
 // Generic event handler (returns JSON)
 std::string HandleEvent(MahoCore* core, const char* event_json);

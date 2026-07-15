@@ -352,13 +352,7 @@ struct MainBrowserView: View {
             NotesView()
         }
         .sheet(isPresented: $showAiChat) {
-            ConversationListView(
-                pageUrl: browserVM.currentUrl,
-                pageTitle: browserVM.currentTitle,
-                pageText: "",
-                autoOpenChatOnAppear: autoOpenAiChatOnAppear,
-                initialQuery: askAIQuery
-            )
+            AgentWebView(query: askAIQuery ?? "")
         }
         .onAppear {
             loadBrowserState()

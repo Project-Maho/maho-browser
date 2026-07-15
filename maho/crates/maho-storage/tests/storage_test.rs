@@ -1,16 +1,24 @@
 use maho_storage::lmdb::LmdbStorage;
-use maho_storage::sqlite::SqliteStorage;
+use maho_storage::sqlite::{MemoryInsertParams, SqliteStorage};
+
+fn test_key() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+fn sqlite_store() -> SqliteStorage {
+    SqliteStorage::open_in_memory_with_key(&test_key()).unwrap()
+}
 
 // === SQLite Tests ===
 
 #[test]
 fn sqlite_open_in_memory() {
-    SqliteStorage::open_in_memory().unwrap();
+    sqlite_store();
 }
 
 #[test]
 fn sqlite_add_and_search_history() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     db.add_history_entry("https://rust-lang.org", "Rust")
         .unwrap();
     let results = db.search_history("Rust", 10).unwrap();
@@ -21,7 +29,7 @@ fn sqlite_add_and_search_history() {
 
 #[test]
 fn sqlite_search_history_by_url() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     db.add_history_entry("https://rust-lang.org", "Rust")
         .unwrap();
     let results = db.search_history("rust-lang", 10).unwrap();
@@ -30,7 +38,7 @@ fn sqlite_search_history_by_url() {
 
 #[test]
 fn sqlite_search_history_empty() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     db.add_history_entry("https://example.com", "Example")
         .unwrap();
     let results = db.search_history("nonexistent", 10).unwrap();
@@ -39,7 +47,7 @@ fn sqlite_search_history_empty() {
 
 #[test]
 fn sqlite_search_history_limit() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     for i in 0..10 {
         db.add_history_entry(&format!("https://example.com/{i}"), &format!("Page {i}"))
             .unwrap();
@@ -50,20 +58,20 @@ fn sqlite_search_history_limit() {
 
 #[test]
 fn sqlite_get_setting_none() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     assert!(db.get_setting("missing").unwrap().is_none());
 }
 
 #[test]
 fn sqlite_set_and_get_setting() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     db.set_setting("theme", "dark").unwrap();
     assert_eq!(db.get_setting("theme").unwrap().as_deref(), Some("dark"));
 }
 
 #[test]
 fn sqlite_set_setting_overwrite() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     db.set_setting("theme", "light").unwrap();
     db.set_setting("theme", "dark").unwrap();
     assert_eq!(db.get_setting("theme").unwrap().as_deref(), Some("dark"));
@@ -71,7 +79,7 @@ fn sqlite_set_setting_overwrite() {
 
 #[test]
 fn sqlite_multiple_history_entries() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     db.add_history_entry("https://a.com", "Site A").unwrap();
     db.add_history_entry("https://b.com", "Site B").unwrap();
     db.add_history_entry("https://c.com", "Site C").unwrap();
@@ -81,7 +89,7 @@ fn sqlite_multiple_history_entries() {
 
 #[test]
 fn sqlite_save_and_load_notes() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     db.save_note(
         "n1",
         Some("tab1"),
@@ -111,7 +119,7 @@ fn sqlite_save_and_load_notes() {
 
 #[test]
 fn sqlite_delete_note() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     db.save_note(
         "n1",
         None,
@@ -128,7 +136,7 @@ fn sqlite_delete_note() {
 
 #[test]
 fn sqlite_update_note_content() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     db.save_note(
         "n1",
         None,
@@ -147,7 +155,7 @@ fn sqlite_update_note_content() {
 
 #[test]
 fn sqlite_save_and_load_boosts() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     let boost1 = maho_types::boost::Boost {
         id: maho_types::identifiers::BoostId::new("b1"),
         domain: "example.com".to_string(),
@@ -187,20 +195,29 @@ fn sqlite_save_and_load_boosts() {
     assert!(loaded.color.color_boost_enabled);
     assert_eq!(loaded.color.dot_angle_deg, 45.0);
     assert_eq!(loaded.typography.font_family, "Helvetica");
-    assert_eq!(loaded.typography.case_mode, maho_types::boost::CaseMode::Capitalize);
-    assert_eq!(loaded.typography.size_mode, maho_types::boost::SizeMode::K125);
+    assert_eq!(
+        loaded.typography.case_mode,
+        maho_types::boost::CaseMode::Capitalize
+    );
+    assert_eq!(
+        loaded.typography.size_mode,
+        maho_types::boost::SizeMode::K125
+    );
     assert_eq!(loaded.zap_selectors, vec![".ad-banner".to_string()]);
     assert_eq!(loaded.custom_css, "body { background: blue; }");
-    
+
     // Test active boost state
     assert_eq!(db.get_active_boost("example.com").unwrap(), None);
     db.set_active_boost("example.com", Some("b1")).unwrap();
-    assert_eq!(db.get_active_boost("example.com").unwrap().as_deref(), Some("b1"));
+    assert_eq!(
+        db.get_active_boost("example.com").unwrap().as_deref(),
+        Some("b1")
+    );
 }
 
 #[test]
 fn sqlite_delete_boost() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     let boost1 = maho_types::boost::Boost {
         id: maho_types::identifiers::BoostId::new("b1"),
         domain: "example.com".to_string(),
@@ -237,7 +254,7 @@ fn sqlite_delete_boost() {
 
 #[test]
 fn sqlite_save_and_load_permissions() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     db.save_permission("https://example.com", "camera", "allow")
         .unwrap();
     db.save_permission("https://example.com", "microphone", "deny")
@@ -253,7 +270,7 @@ fn sqlite_save_and_load_permissions() {
 
 #[test]
 fn sqlite_delete_permissions_for_origin() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     db.save_permission("https://example.com", "camera", "allow")
         .unwrap();
     db.save_permission("https://example.com", "microphone", "deny")
@@ -269,7 +286,7 @@ fn sqlite_delete_permissions_for_origin() {
 
 #[test]
 fn sqlite_save_and_load_atc_rules() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     db.save_atc_rule(
         "r1",
         "Close old tabs",
@@ -294,7 +311,7 @@ fn sqlite_save_and_load_atc_rules() {
 
 #[test]
 fn sqlite_delete_atc_rule() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     db.save_atc_rule("r1", "Rule", None, None, None, None, true)
         .unwrap();
     assert!(db.delete_atc_rule("r1").unwrap());
@@ -304,7 +321,7 @@ fn sqlite_delete_atc_rule() {
 
 #[test]
 fn sqlite_save_and_load_recent_searches() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     db.save_search("rust programming").unwrap();
     db.save_search("sqlite tutorial").unwrap();
     db.save_search("cargo workspace").unwrap();
@@ -316,7 +333,7 @@ fn sqlite_save_and_load_recent_searches() {
 
 #[test]
 fn sqlite_clear_search_history() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     db.save_search("query1").unwrap();
     db.save_search("query2").unwrap();
     db.clear_search_history().unwrap();
@@ -325,7 +342,7 @@ fn sqlite_clear_search_history() {
 
 #[test]
 fn sqlite_delete_history_entry_by_url() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     db.add_history_entry("https://example.com", "Example")
         .unwrap();
     db.add_history_entry("https://other.com", "Other").unwrap();
@@ -342,7 +359,7 @@ fn sqlite_delete_history_entry_by_url() {
 
 #[test]
 fn sqlite_delete_history_entry_by_url_nonexistent() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     let deleted = db
         .delete_history_entry_by_url("https://nonexistent.com")
         .unwrap();
@@ -351,7 +368,7 @@ fn sqlite_delete_history_entry_by_url_nonexistent() {
 
 #[test]
 fn sqlite_save_and_get_zoom() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     db.save_zoom("https://example.com", 1.5).unwrap();
     assert_eq!(
         db.get_zoom_for_site("https://example.com").unwrap(),
@@ -367,7 +384,7 @@ fn sqlite_save_and_get_zoom() {
 
 #[test]
 fn sqlite_delete_zoom() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     db.save_zoom("https://example.com", 1.25).unwrap();
     assert!(db.delete_zoom("https://example.com").unwrap());
     assert!(!db.delete_zoom("https://example.com").unwrap());
@@ -376,7 +393,7 @@ fn sqlite_delete_zoom() {
 
 #[test]
 fn sqlite_save_and_load_downloads() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     db.save_download(
         "d1",
         "file.zip",
@@ -412,7 +429,7 @@ fn sqlite_save_and_load_downloads() {
 
 #[test]
 fn sqlite_update_download_progress() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     db.save_download(
         "d1",
         "file.zip",
@@ -437,7 +454,7 @@ fn sqlite_update_download_progress() {
 
 #[test]
 fn sqlite_delete_download() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     db.save_download(
         "d1",
         "file.zip",
@@ -521,10 +538,11 @@ fn sqlite_boosts_migration_self_healing() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("test.db");
     let db_path_str = db_path.to_str().unwrap();
+    let key = test_key();
 
     {
         let conn = rusqlite::Connection::open(db_path_str).unwrap();
-        conn.pragma_update(None, "key", "maho_secure_key").unwrap();
+        conn.pragma_update(None, "key", &key).unwrap();
         conn.execute_batch(
             "CREATE TABLE boosts (
                 id TEXT PRIMARY KEY,
@@ -535,11 +553,12 @@ fn sqlite_boosts_migration_self_healing() {
             );
             CREATE INDEX idx_boosts_url_pattern ON boosts(url_pattern);
             INSERT INTO boosts (id, url_pattern, custom_css, custom_js, enabled)
-            VALUES ('old_id', '*://example.com/*', 'body { color: red; }', 'console.log()', 1);"
-        ).unwrap();
+            VALUES ('old_id', '*://example.com/*', 'body { color: red; }', 'console.log()', 1);",
+        )
+        .unwrap();
     }
 
-    let storage = SqliteStorage::open(db_path_str).unwrap();
+    let storage = SqliteStorage::open_with_key(db_path_str, &key).unwrap();
 
     let boosts = storage.load_boosts().unwrap();
     assert!(boosts.is_empty());
@@ -580,11 +599,12 @@ fn sqlite_boosts_migration_self_healing() {
 
 #[test]
 fn sqlite_conversation_crud() {
-    let db = SqliteStorage::open_in_memory().unwrap();
-    
+    let db = sqlite_store();
+
     // Create conversation
-    db.create_conversation("c1", Some("Title 1"), Some("space1"), Some("model1")).unwrap();
-    
+    db.create_conversation("c1", Some("Title 1"), Some("space1"), Some("model1"))
+        .unwrap();
+
     // List conversations
     let list = db.list_conversations(10).unwrap();
     assert_eq!(list.len(), 1);
@@ -592,12 +612,12 @@ fn sqlite_conversation_crud() {
     assert_eq!(list[0].title.as_deref(), Some("Title 1"));
     assert_eq!(list[0].space_id.as_deref(), Some("space1"));
     assert_eq!(list[0].model.as_deref(), Some("model1"));
-    
+
     // Rename conversation
     assert!(db.rename_conversation("c1", "New Title").unwrap());
     let list = db.list_conversations(10).unwrap();
     assert_eq!(list[0].title.as_deref(), Some("New Title"));
-    
+
     // Delete conversation
     assert!(db.delete_conversation("c1").unwrap());
     let list = db.list_conversations(10).unwrap();
@@ -606,13 +626,16 @@ fn sqlite_conversation_crud() {
 
 #[test]
 fn sqlite_conversation_turns() {
-    let db = SqliteStorage::open_in_memory().unwrap();
-    db.create_conversation("c1", Some("Title 1"), Some("space1"), Some("model1")).unwrap();
-    
+    let db = sqlite_store();
+    db.create_conversation("c1", Some("Title 1"), Some("space1"), Some("model1"))
+        .unwrap();
+
     // Insert conversation turns
-    db.insert_conversation_turn("t1", "c1", "user", "Hello", Some("https://example.com")).unwrap();
-    db.insert_conversation_turn("t2", "c1", "assistant", "Hi there!", None).unwrap();
-    
+    db.insert_conversation_turn("t1", "c1", "user", "Hello", Some("https://example.com"))
+        .unwrap();
+    db.insert_conversation_turn("t2", "c1", "assistant", "Hi there!", None)
+        .unwrap();
+
     // Load turns
     let turns = db.get_conversation_messages("c1").unwrap();
     assert_eq!(turns.len(), 2);
@@ -620,7 +643,7 @@ fn sqlite_conversation_turns() {
     assert_eq!(turns[0].role, "user");
     assert_eq!(turns[0].content, "Hello");
     assert_eq!(turns[0].url_context.as_deref(), Some("https://example.com"));
-    
+
     assert_eq!(turns[1].id, "t2");
     assert_eq!(turns[1].role, "assistant");
     assert_eq!(turns[1].content, "Hi there!");
@@ -629,17 +652,19 @@ fn sqlite_conversation_turns() {
 
 #[test]
 fn sqlite_conversation_cascade_delete() {
-    let db = SqliteStorage::open_in_memory().unwrap();
-    db.create_conversation("c1", Some("Title 1"), Some("space1"), Some("model1")).unwrap();
-    db.insert_conversation_turn("t1", "c1", "user", "Hello", None).unwrap();
-    
+    let db = sqlite_store();
+    db.create_conversation("c1", Some("Title 1"), Some("space1"), Some("model1"))
+        .unwrap();
+    db.insert_conversation_turn("t1", "c1", "user", "Hello", None)
+        .unwrap();
+
     // Verify turns exist
     let turns = db.get_conversation_messages("c1").unwrap();
     assert_eq!(turns.len(), 1);
-    
+
     // Delete conversation
     db.delete_conversation("c1").unwrap();
-    
+
     // Verify turns are deleted (cascade)
     let turns = db.get_conversation_messages("c1").unwrap();
     assert!(turns.is_empty());
@@ -647,7 +672,7 @@ fn sqlite_conversation_cascade_delete() {
 
 #[test]
 fn sqlite_ai_profiles_crud() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     use maho_types::ai::AiProfile;
 
     let profile = AiProfile {
@@ -702,7 +727,7 @@ fn sqlite_ai_profiles_crud() {
 
 #[test]
 fn sqlite_ai_workspaces_crud() {
-    let db = SqliteStorage::open_in_memory().unwrap();
+    let db = sqlite_store();
     use maho_types::ai::AiWorkspace;
 
     let ws = AiWorkspace {
@@ -748,8 +773,8 @@ fn sqlite_ai_workspaces_crud() {
 
 #[test]
 fn sqlite_ai_mcp_servers_and_cli_tools_crud() {
-    let db = SqliteStorage::open_in_memory().unwrap();
-    use maho_types::ai::{AiWorkspace, AiMcpServer, AiCliTool, McpTransport};
+    let db = sqlite_store();
+    use maho_types::ai::{AiCliTool, AiMcpServer, AiWorkspace, McpTransport};
 
     // First create a workspace
     let ws = AiWorkspace {
@@ -789,7 +814,10 @@ fn sqlite_ai_mcp_servers_and_cli_tools_crud() {
     assert_eq!(loaded_mcp.command.as_deref(), Some("npx"));
     assert_eq!(loaded_mcp.auth_keychain_id.as_deref(), Some("key-id"));
     assert!(loaded_mcp.trusted);
-    assert_eq!(loaded_mcp.trusted_tools.as_ref().unwrap(), &vec!["tool-a".to_string()]);
+    assert_eq!(
+        loaded_mcp.trusted_tools.as_ref().unwrap(),
+        &vec!["tool-a".to_string()]
+    );
     assert_eq!(loaded_mcp.timeout_ms, 30000);
     assert_eq!(loaded_mcp.output_cap_bytes, 5000);
     assert_eq!(loaded_mcp.socket_path, None);
@@ -875,11 +903,12 @@ fn test_autofill_migration_idempotent() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("test.db");
     let db_path_str = db_path.to_str().unwrap();
+    let key = test_key();
 
     // 1. Create connection manually and set up OLD schema
     {
         let conn = rusqlite::Connection::open(db_path_str).unwrap();
-        conn.pragma_update(None, "key", "maho_secure_key").unwrap();
+        conn.pragma_update(None, "key", &key).unwrap();
         conn.execute_batch(
             "CREATE TABLE autofill_addresses (
                 id TEXT PRIMARY KEY,
@@ -906,7 +935,7 @@ fn test_autofill_migration_idempotent() {
     }
 
     // 2. Open via SqliteStorage (this runs initialize_schema -> migration)
-    let storage = SqliteStorage::open(db_path_str).unwrap();
+    let storage = SqliteStorage::open_with_key(db_path_str, &key).unwrap();
 
     // Verify migrations added the columns and they default to NULL / None
     let addresses = storage.load_autofill_addresses().unwrap();
@@ -920,26 +949,24 @@ fn test_autofill_migration_idempotent() {
     assert_eq!(payments[0].4, None); // card_network
 
     // 3. Save new values using new columns
-    storage.save_autofill_address(maho_storage::sqlite::AutofillAddressParams {
-        id: "addr-new",
-        name: "New Name",
-        street: "New St",
-        city: "New City",
-        state: "NS",
-        zip: "54321",
-        country: "US",
-        phone: Some("987-654"),
-        email: Some("new@test.com"),
-        address_line2: Some("Apt 4B"),
-    }).unwrap();
+    storage
+        .save_autofill_address(maho_storage::sqlite::AutofillAddressParams {
+            id: "addr-new",
+            name: "New Name",
+            street: "New St",
+            city: "New City",
+            state: "NS",
+            zip: "54321",
+            country: "US",
+            phone: Some("987-654"),
+            email: Some("new@test.com"),
+            address_line2: Some("Apt 4B"),
+        })
+        .unwrap();
 
-    storage.save_autofill_payment(
-        "card-new",
-        "New Card",
-        "1111",
-        "01/30",
-        Some("visa"),
-    ).unwrap();
+    storage
+        .save_autofill_payment("card-new", "New Card", "1111", "01/30", Some("visa"))
+        .unwrap();
 
     // Verify round-trip
     let addresses = storage.load_autofill_addresses().unwrap();
@@ -951,7 +978,7 @@ fn test_autofill_migration_idempotent() {
     assert_eq!(new_pay.4, Some("visa".to_string()));
 
     // 4. Run migrations again to verify idempotence
-    let storage = SqliteStorage::open(db_path_str).unwrap();
+    let storage = SqliteStorage::open_with_key(db_path_str, &key).unwrap();
 
     let addresses = storage.load_autofill_addresses().unwrap();
     let new_addr = addresses.iter().find(|a| a.0 == "addr-new").unwrap();
@@ -960,17 +987,44 @@ fn test_autofill_migration_idempotent() {
 
 #[test]
 fn sqlite_search_memories_fts_ordering() {
-    let db = SqliteStorage::open_in_memory().unwrap();
-    
+    let db = sqlite_store();
+
     // Add facts with different BM25 relevance for query "Rust"
-    db.insert_memory("f1", "Rust is a systems programming language focused on safety and speed.", "src1", None, "[]", 0.8, None).unwrap();
-    db.insert_memory("f2", "We write software using many tools.", "src2", None, "[]", 0.5, None).unwrap();
-    db.insert_memory("f3", "Rust programming is very cool and fast.", "src3", None, "[]", 0.9, None).unwrap();
-    
+    db.insert_memory(MemoryInsertParams {
+        id: "f1",
+        fact: "Rust is a systems programming language focused on safety and speed.",
+        source: "src1",
+        session_id: None,
+        categories: "[]",
+        importance: 0.8,
+        metadata: None,
+    })
+    .unwrap();
+    db.insert_memory(MemoryInsertParams {
+        id: "f2",
+        fact: "We write software using many tools.",
+        source: "src2",
+        session_id: None,
+        categories: "[]",
+        importance: 0.5,
+        metadata: None,
+    })
+    .unwrap();
+    db.insert_memory(MemoryInsertParams {
+        id: "f3",
+        fact: "Rust programming is very cool and fast.",
+        source: "src3",
+        session_id: None,
+        categories: "[]",
+        importance: 0.9,
+        metadata: None,
+    })
+    .unwrap();
+
     // Search for "Rust"
     let results = db.search_memories_fts("Rust", 5).unwrap();
     assert_eq!(results.len(), 2);
-    
+
     // Check that we got the relevant items
     let matched_ids: Vec<String> = results.iter().map(|(id, _, _)| id.clone()).collect();
     assert!(matched_ids.contains(&"f1".to_string()));
@@ -979,24 +1033,47 @@ fn sqlite_search_memories_fts_ordering() {
 
 #[test]
 fn sqlite_search_notes_fts_ordering() {
-    let db = SqliteStorage::open_in_memory().unwrap();
-    
-    db.save_note("n1", None, None, "Rust programming language", "2025-01-01", "2025-01-01").unwrap();
-    db.save_note("n2", None, None, "Random other notes", "2025-01-02", "2025-01-02").unwrap();
-    db.save_note("n3", None, None, "Learning Rust is fun", "2025-01-03", "2025-01-03").unwrap();
-    
+    let db = sqlite_store();
+
+    db.save_note(
+        "n1",
+        None,
+        None,
+        "Rust programming language",
+        "2025-01-01",
+        "2025-01-01",
+    )
+    .unwrap();
+    db.save_note(
+        "n2",
+        None,
+        None,
+        "Random other notes",
+        "2025-01-02",
+        "2025-01-02",
+    )
+    .unwrap();
+    db.save_note(
+        "n3",
+        None,
+        None,
+        "Learning Rust is fun",
+        "2025-01-03",
+        "2025-01-03",
+    )
+    .unwrap();
+
     db.reindex_all_notes_fts(&[
         ("n1".to_string(), "Rust programming language".to_string()),
         ("n2".to_string(), "Random other notes".to_string()),
         ("n3".to_string(), "Learning Rust is fun".to_string()),
-    ]).unwrap();
-    
+    ])
+    .unwrap();
+
     let results = db.search_notes_fts("Rust").unwrap();
     assert_eq!(results.len(), 2);
-    
+
     let matched_ids: Vec<String> = results.iter().map(|(id, _)| id.clone()).collect();
     assert!(matched_ids.contains(&"n1".to_string()));
     assert!(matched_ids.contains(&"n3".to_string()));
 }
-
-

@@ -257,12 +257,7 @@ Use the exact tab ids provided. Do not include prose.\n\nTabs:\n{}",
         }
 
         let tools_schema = request_context.tools.as_ref().map(|tools| {
-            serde_json::Value::Array(
-                tools
-                    .iter()
-                    .map(|tool| tool.to_openai_function())
-                    .collect(),
-            )
+            serde_json::Value::Array(tools.iter().map(|tool| tool.to_openai_function()).collect())
         });
         let prompt = if let Some(tools) = tools_schema {
             serde_json::json!({
@@ -275,7 +270,7 @@ Use the exact tab ids provided. Do not include prose.\n\nTabs:\n{}",
         };
         let session_id = request_context.session_id.clone();
         let context = LLMRequestContext::Chat {
-            chat: request_context,
+            chat: Box::new(request_context),
         };
         self.pending_requests.insert(
             request_id.clone(),
@@ -392,7 +387,6 @@ Use the exact tab ids provided. Do not include prose.\n\nTabs:\n{}",
             _ => vec![],
         }
     }
-
 
     /// Returns the session_id associated with a pending LLM request (for memory persistence).
     pub fn lookup_session_for_request(&self, request_id: &str) -> Option<String> {
@@ -515,10 +509,7 @@ mod tests {
             let messages: Vec<serde_json::Value> = serde_json::from_str(prompt).unwrap();
             assert_eq!(messages.len(), 2);
             assert_eq!(messages[0]["role"], "system");
-            assert!(messages[0]["content"]
-                .as_str()
-                .unwrap()
-                .contains("Maho AI"));
+            assert!(messages[0]["content"].as_str().unwrap().contains("Maho AI"));
             assert_eq!(messages[1]["role"], "user");
             assert_eq!(messages[1]["content"], "Hello");
         } else {
@@ -541,10 +532,16 @@ mod tests {
             CoreUpdate::ChatCompletionReady { response, .. } if response == "Hello! How can I help?"
         ));
         assert_eq!(manager.chat_history.len(), 2);
-        assert_eq!(manager.chat_history[0], ("user".to_string(), "Hi there".to_string()));
+        assert_eq!(
+            manager.chat_history[0],
+            ("user".to_string(), "Hi there".to_string())
+        );
         assert_eq!(
             manager.chat_history[1],
-            ("assistant".to_string(), "Hello! How can I help?".to_string())
+            (
+                "assistant".to_string(),
+                "Hello! How can I help?".to_string()
+            )
         );
     }
 
@@ -552,10 +549,8 @@ mod tests {
     fn test_chat_history_cap() {
         let mut manager = LLMManager::new();
         for i in 0..12 {
-            let update = manager.request_chat_completion(
-                &format!("msg {}", i),
-                &ChatRequestContext::default(),
-            );
+            let update = manager
+                .request_chat_completion(&format!("msg {}", i), &ChatRequestContext::default());
             let rid = match update {
                 CoreUpdate::RequestLlmCompletion { request_id, .. } => request_id,
                 _ => panic!(),
@@ -608,7 +603,10 @@ mod tests {
             "Summarize this page",
             &ChatRequestContext::new(ChatRequestMode::PageQuestion).with_page_context(page_context),
         );
-        if let CoreUpdate::RequestLlmCompletion { prompt, context, .. } = &update {
+        if let CoreUpdate::RequestLlmCompletion {
+            prompt, context, ..
+        } = &update
+        {
             let messages: Vec<serde_json::Value> = serde_json::from_str(prompt).unwrap();
             assert_eq!(messages.len(), 3);
             assert_eq!(messages[0]["role"], "system");
@@ -636,18 +634,66 @@ mod tests {
 
         // 12 tabs: github, news, docs, social mix
         let tabs: Vec<(TabId, String, String)> = vec![
-            (TabId::new("t1"), "rust-lang/rust PR #1234".into(), "https://github.com/rust-lang/rust/pull/1234".into()),
-            (TabId::new("t2"), "tokio issues".into(), "https://github.com/tokio-rs/tokio/issues".into()),
-            (TabId::new("t3"), "serde docs".into(), "https://docs.rs/serde/latest".into()),
-            (TabId::new("t4"), "Hacker News".into(), "https://news.ycombinator.com".into()),
-            (TabId::new("t5"), "TechCrunch AI".into(), "https://techcrunch.com/ai".into()),
-            (TabId::new("t6"), "Rust Book".into(), "https://doc.rust-lang.org/book".into()),
-            (TabId::new("t7"), "Twitter".into(), "https://twitter.com/home".into()),
-            (TabId::new("t8"), "Reddit r/rust".into(), "https://reddit.com/r/rust".into()),
-            (TabId::new("t9"), "MDN Web Docs".into(), "https://developer.mozilla.org".into()),
-            (TabId::new("t10"), "AWS Console".into(), "https://console.aws.amazon.com".into()),
-            (TabId::new("t11"), "Figma Project".into(), "https://figma.com/file/xyz".into()),
-            (TabId::new("t12"), "YouTube".into(), "https://youtube.com".into()),
+            (
+                TabId::new("t1"),
+                "rust-lang/rust PR #1234".into(),
+                "https://github.com/rust-lang/rust/pull/1234".into(),
+            ),
+            (
+                TabId::new("t2"),
+                "tokio issues".into(),
+                "https://github.com/tokio-rs/tokio/issues".into(),
+            ),
+            (
+                TabId::new("t3"),
+                "serde docs".into(),
+                "https://docs.rs/serde/latest".into(),
+            ),
+            (
+                TabId::new("t4"),
+                "Hacker News".into(),
+                "https://news.ycombinator.com".into(),
+            ),
+            (
+                TabId::new("t5"),
+                "TechCrunch AI".into(),
+                "https://techcrunch.com/ai".into(),
+            ),
+            (
+                TabId::new("t6"),
+                "Rust Book".into(),
+                "https://doc.rust-lang.org/book".into(),
+            ),
+            (
+                TabId::new("t7"),
+                "Twitter".into(),
+                "https://twitter.com/home".into(),
+            ),
+            (
+                TabId::new("t8"),
+                "Reddit r/rust".into(),
+                "https://reddit.com/r/rust".into(),
+            ),
+            (
+                TabId::new("t9"),
+                "MDN Web Docs".into(),
+                "https://developer.mozilla.org".into(),
+            ),
+            (
+                TabId::new("t10"),
+                "AWS Console".into(),
+                "https://console.aws.amazon.com".into(),
+            ),
+            (
+                TabId::new("t11"),
+                "Figma Project".into(),
+                "https://figma.com/file/xyz".into(),
+            ),
+            (
+                TabId::new("t12"),
+                "YouTube".into(),
+                "https://youtube.com".into(),
+            ),
         ];
 
         let update = manager.request_tidy_tabs(&space_id, tabs);
@@ -655,7 +701,10 @@ mod tests {
         // Verify the prompt contains all 12 tab titles and URLs
         let (request_id, prompt) = match &update {
             CoreUpdate::RequestLlmCompletion {
-                request_id, prompt, request_type, ..
+                request_id,
+                prompt,
+                request_type,
+                ..
             } => {
                 assert!(matches!(request_type, LLMRequestType::TidyTabs));
                 (request_id.clone(), prompt.clone())
@@ -664,7 +713,9 @@ mod tests {
         };
 
         let prompt_json: serde_json::Value = serde_json::from_str(&prompt).unwrap();
-        let messages = prompt_json.as_array().expect("prompt must be a messages array");
+        let messages = prompt_json
+            .as_array()
+            .expect("prompt must be a messages array");
         assert_eq!(messages.len(), 2, "prompt must have system + user message");
         assert_eq!(messages[0]["role"], "system");
         assert_eq!(messages[1]["role"], "user");
@@ -686,7 +737,10 @@ mod tests {
         assert_eq!(updates.len(), 1);
 
         match &updates[0] {
-            CoreUpdate::TidyTabsReady { space_id: sid, folders } => {
+            CoreUpdate::TidyTabsReady {
+                space_id: sid,
+                folders,
+            } => {
                 assert_eq!(sid, &space_id);
                 assert_eq!(folders.len(), 3);
                 let dev = folders.iter().find(|f| f.name == "Development").unwrap();
@@ -715,14 +769,16 @@ mod tests {
         let update = manager.request_tidy_tabs(&space_id, tabs);
 
         let (request_id, prompt) = match &update {
-            CoreUpdate::RequestLlmCompletion { request_id, prompt, .. } => {
-                (request_id.clone(), prompt.clone())
-            }
+            CoreUpdate::RequestLlmCompletion {
+                request_id, prompt, ..
+            } => (request_id.clone(), prompt.clone()),
             _ => panic!("Expected RequestLlmCompletion"),
         };
 
         let prompt_json: serde_json::Value = serde_json::from_str(&prompt).unwrap();
-        let messages = prompt_json.as_array().expect("prompt must be a messages array");
+        let messages = prompt_json
+            .as_array()
+            .expect("prompt must be a messages array");
         assert_eq!(messages.len(), 2);
         let user_content = messages[1]["content"].as_str().unwrap();
         assert!(user_content.contains("Group these 0"));
@@ -731,7 +787,10 @@ mod tests {
         let empty_result = r#"{"folders": []}"#;
         let updates = manager.handle_result(&request_id, empty_result);
         // parse_tidy_tabs_result returns None for empty folders → no updates
-        assert!(updates.is_empty(), "Empty folder list should produce no updates");
+        assert!(
+            updates.is_empty(),
+            "Empty folder list should produce no updates"
+        );
         assert!(manager.take_pending_tidy_tabs().is_none());
     }
 
@@ -739,9 +798,11 @@ mod tests {
     fn test_tidy_tabs_malformed_json_no_panic() {
         let mut manager = LLMManager::new();
         let space_id = SpaceId::new("space-bad");
-        let tabs = vec![
-            (TabId::new("t1"), "Tab One".into(), "https://example.com".into()),
-        ];
+        let tabs = vec![(
+            TabId::new("t1"),
+            "Tab One".into(),
+            "https://example.com".into(),
+        )];
 
         let update = manager.request_tidy_tabs(&space_id, tabs);
         let request_id = match &update {
@@ -756,15 +817,17 @@ mod tests {
             "{\"wrong_key\": []}",
             "",
             "null",
-            "{\"folders\": [{\"name\": 123, \"tab_ids\": []}]}",  // name not string
+            "{\"folders\": [{\"name\": 123, \"tab_ids\": []}]}", // name not string
         ];
 
         for (i, bad_json) in malformed_cases.iter().enumerate() {
             if i > 0 {
                 // Re-issue a request for subsequent iterations since the first one was consumed
-                let tabs2 = vec![
-                    (TabId::new("t1"), "Tab One".into(), "https://example.com".into()),
-                ];
+                let tabs2 = vec![(
+                    TabId::new("t1"),
+                    "Tab One".into(),
+                    "https://example.com".into(),
+                )];
                 let u = manager.request_tidy_tabs(&space_id, tabs2);
                 let rid = match &u {
                     CoreUpdate::RequestLlmCompletion { request_id, .. } => request_id.clone(),

@@ -105,7 +105,11 @@ impl RoutineEvent {
             return Some(Self::OnStartup);
         }
         if let Some(rest) = s.strip_prefix("on_many_tabs:") {
-            return rest.trim().parse::<u32>().ok().map(|threshold| Self::OnManyTabs { threshold });
+            return rest
+                .trim()
+                .parse::<u32>()
+                .ok()
+                .map(|threshold| Self::OnManyTabs { threshold });
         }
         None
     }
@@ -180,7 +184,6 @@ pub struct RoutineView {
     pub source: RoutineSource,
 }
 
-
 // ---------------------------------------------------------------------------
 // Hardcoded Recipes
 // ---------------------------------------------------------------------------
@@ -190,7 +193,8 @@ static ROUTINES: &[Routine] = &[
         id: "morning_briefing",
         name: "Morning Briefing",
         cron: "0 8 * * *",
-        description: "Summarize top 5 most-read tabs from yesterday + headlines from bookmarked news sites.",
+        description:
+            "Summarize top 5 most-read tabs from yesterday + headlines from bookmarked news sites.",
     },
     Routine {
         id: "close_old_tabs",
@@ -535,10 +539,18 @@ impl CronSchedule {
             Some(d) => d,
             None => return false,
         };
-        let minute_ok = self.minute.value.map_or(true, |v| dt.format("%M").to_string().parse::<u32>().unwrap_or(99) == v);
-        let hour_ok = self.hour.value.map_or(true, |v| dt.format("%H").to_string().parse::<u32>().unwrap_or(99) == v);
-        let dom_ok = self.day_of_month.value.map_or(true, |v| dt.format("%d").to_string().parse::<u32>().unwrap_or(99) == v);
-        let month_ok = self.month.value.map_or(true, |v| dt.format("%m").to_string().parse::<u32>().unwrap_or(99) == v);
+        let minute_ok = self.minute.value.map_or(true, |v| {
+            dt.format("%M").to_string().parse::<u32>().unwrap_or(99) == v
+        });
+        let hour_ok = self.hour.value.map_or(true, |v| {
+            dt.format("%H").to_string().parse::<u32>().unwrap_or(99) == v
+        });
+        let dom_ok = self.day_of_month.value.map_or(true, |v| {
+            dt.format("%d").to_string().parse::<u32>().unwrap_or(99) == v
+        });
+        let month_ok = self.month.value.map_or(true, |v| {
+            dt.format("%m").to_string().parse::<u32>().unwrap_or(99) == v
+        });
         let dow_ok = self.day_of_week.value.map_or(true, |v| {
             // chrono: Monday=1..Sunday=7; cron: Sunday=0, Monday=1..Saturday=6
             let chrono_dow = dt.format("%u").to_string().parse::<u32>().unwrap_or(99);
@@ -657,7 +669,10 @@ impl RoutineScheduler {
                 let schedule = match CronSchedule::parse(routine.cron) {
                     Some(s) => s,
                     None => {
-                        eprintln!("[RoutineScheduler] failed to parse cron for {}: {}", routine.id, routine.cron);
+                        eprintln!(
+                            "[RoutineScheduler] failed to parse cron for {}: {}",
+                            routine.id, routine.cron
+                        );
                         continue;
                     }
                 };
@@ -702,7 +717,10 @@ impl RoutineScheduler {
             let schedule = match CronSchedule::parse(cron) {
                 Some(s) => s,
                 None => {
-                    eprintln!("[RoutineScheduler] failed to parse cron for custom {}: {}", c.id, cron);
+                    eprintln!(
+                        "[RoutineScheduler] failed to parse cron for custom {}: {}",
+                        c.id, cron
+                    );
                     continue;
                 }
             };
@@ -738,6 +756,13 @@ impl RoutineScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_init() {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(|| {
+            let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
+        });
+    }
 
     #[test]
     fn test_list_returns_4_routines() {
@@ -969,9 +994,8 @@ mod tests {
             Arc::new(std::sync::Mutex::new(HashMap::new()));
 
         let sg = storage.clone();
-        let storage_get: StorageGetFn = Arc::new(move |key: &str| {
-            sg.lock().unwrap().get(key).cloned()
-        });
+        let storage_get: StorageGetFn =
+            Arc::new(move |key: &str| sg.lock().unwrap().get(key).cloned());
         let ss = storage.clone();
         let storage_set: StorageSetFn = Arc::new(move |key: &str, val: &str| {
             ss.lock().unwrap().insert(key.to_string(), val.to_string());
@@ -1022,9 +1046,8 @@ mod tests {
             Arc::new(std::sync::Mutex::new(HashMap::new()));
 
         let sg = storage.clone();
-        let storage_get: StorageGetFn = Arc::new(move |key: &str| {
-            sg.lock().unwrap().get(key).cloned()
-        });
+        let storage_get: StorageGetFn =
+            Arc::new(move |key: &str| sg.lock().unwrap().get(key).cloned());
         let ss = storage.clone();
         let storage_set: StorageSetFn = Arc::new(move |key: &str, val: &str| {
             ss.lock().unwrap().insert(key.to_string(), val.to_string());
@@ -1072,7 +1095,10 @@ mod tests {
         let ev = RoutineEvent::OnManyTabs { threshold: 20 };
         assert_eq!(ev.to_trigger_string(), "on_many_tabs:20");
         assert_eq!(RoutineEvent::parse("on_many_tabs:20"), Some(ev));
-        assert_eq!(RoutineEvent::parse("on_startup"), Some(RoutineEvent::OnStartup));
+        assert_eq!(
+            RoutineEvent::parse("on_startup"),
+            Some(RoutineEvent::OnStartup)
+        );
         assert_eq!(RoutineEvent::OnStartup.to_trigger_string(), "on_startup");
         assert_eq!(RoutineEvent::parse("bogus"), None);
         assert_eq!(RoutineEvent::parse("on_many_tabs:notanumber"), None);
@@ -1098,13 +1124,19 @@ mod tests {
 
     #[test]
     fn test_list_all_routines_merges_builtin_and_custom() {
+        test_init();
         let storage = SqliteStorage::open_in_memory().unwrap();
         storage
             .create_custom_routine(&make_custom("c1", Some("0 9 * * *"), None))
             .unwrap();
         let all = list_all_routines(&storage).unwrap();
         assert_eq!(all.len(), 5);
-        assert_eq!(all.iter().filter(|v| matches!(v.source, RoutineSource::Builtin)).count(), 4);
+        assert_eq!(
+            all.iter()
+                .filter(|v| matches!(v.source, RoutineSource::Builtin))
+                .count(),
+            4
+        );
         let custom = all.iter().find(|v| v.id == "c1").unwrap();
         assert!(matches!(custom.source, RoutineSource::Custom));
         assert_eq!(custom.cron.as_deref(), Some("0 9 * * *"));
@@ -1112,6 +1144,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_custom_routine_create_list_run() {
+        test_init();
         let storage = SqliteStorage::open_in_memory().unwrap();
         storage
             .create_custom_routine(&make_custom("c1", Some("0 9 * * *"), None))
@@ -1143,11 +1176,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_routine_resolved_builtin_still_works() {
+        test_init();
         let storage = SqliteStorage::open_in_memory().unwrap();
-        let result = run_routine_resolved("morning_briefing", UserTier::Max, &storage, |prompt| async move {
-            assert!(prompt.contains("Morning Briefing"));
-            Ok("briefing".to_string())
-        })
+        let result = run_routine_resolved(
+            "morning_briefing",
+            UserTier::Max,
+            &storage,
+            |prompt| async move {
+                assert!(prompt.contains("Morning Briefing"));
+                Ok("briefing".to_string())
+            },
+        )
         .await
         .unwrap();
         assert_eq!(result.id, "morning_briefing");
@@ -1155,6 +1194,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_custom_routine_tier_gate() {
+        test_init();
         let storage = SqliteStorage::open_in_memory().unwrap();
         storage
             .create_custom_routine(&make_custom("c1", Some("0 9 * * *"), None))
@@ -1168,16 +1208,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_custom_routine_unknown_id_not_found() {
+        test_init();
         let storage = SqliteStorage::open_in_memory().unwrap();
         let result = run_routine_resolved("ghost", UserTier::Max, &storage, |_| async {
             Ok("nope".to_string())
         })
         .await;
-        assert_eq!(result.unwrap_err(), RoutineError::NotFound("ghost".to_string()));
+        assert_eq!(
+            result.unwrap_err(),
+            RoutineError::NotFound("ghost".to_string())
+        );
     }
 
     #[tokio::test]
     async fn test_fire_event_routines_matches_and_gates() {
+        test_init();
         let storage = SqliteStorage::open_in_memory().unwrap();
         storage
             .create_custom_routine(&make_custom("evt", None, Some("on_many_tabs:20")))
@@ -1229,13 +1274,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_fire_event_routines_not_max_is_noop() {
+        test_init();
         let storage = SqliteStorage::open_in_memory().unwrap();
         storage
             .create_custom_routine(&make_custom("evt", None, Some("on_startup")))
             .unwrap();
-        let results = fire_event_routines(RoutineEvent::OnStartup, UserTier::Pro, &storage, |_| async {
-            Ok("x".to_string())
-        })
+        let results = fire_event_routines(
+            RoutineEvent::OnStartup,
+            UserTier::Pro,
+            &storage,
+            |_| async { Ok("x".to_string()) },
+        )
         .await
         .unwrap();
         assert!(results.is_empty());
@@ -1256,10 +1305,12 @@ mod tests {
         let storage: Arc<std::sync::Mutex<HashMap<String, String>>> =
             Arc::new(std::sync::Mutex::new(HashMap::new()));
         let sg = storage.clone();
-        let storage_get: StorageGetFn = Arc::new(move |key: &str| sg.lock().unwrap().get(key).cloned());
+        let storage_get: StorageGetFn =
+            Arc::new(move |key: &str| sg.lock().unwrap().get(key).cloned());
         let ss = storage.clone();
-        let storage_set: StorageSetFn =
-            Arc::new(move |key: &str, val: &str| { ss.lock().unwrap().insert(key.to_string(), val.to_string()); });
+        let storage_set: StorageSetFn = Arc::new(move |key: &str, val: &str| {
+            ss.lock().unwrap().insert(key.to_string(), val.to_string());
+        });
 
         // Custom cron routine due every day at 08:00; last_run defaults to 0 → due.
         let custom_provider: CustomRoutinesProviderFn =
@@ -1293,6 +1344,9 @@ mod tests {
         assert_eq!(captured.len(), 1);
         assert!(captured[0].contains("Custom c_daily"));
         // Persisted last-run for the custom routine.
-        assert!(storage.lock().unwrap().contains_key("routines:last_run:c_daily"));
+        assert!(storage
+            .lock()
+            .unwrap()
+            .contains_key("routines:last_run:c_daily"));
     }
 }

@@ -397,11 +397,22 @@ impl ExtensionBridge {
 }
 
 pub fn find_password_provider(exts: &[InstalledExtension]) -> Option<String> {
-    exts.iter()
+    for ext in exts {
+        if ext.enabled && ext.permissions.iter().any(|p| p == "passwords") {
+            if ext.id != "nngceckbapebfimnlniiiahkandclblb" && ext.id != "aeblfdkhhhdcdjpifhhbdiojplfjncoa" {
+                eprintln!("Warning: Extension {} has passwords permission but is not an approved password manager provider.", ext.id);
+            }
+        }
+    }
+
+    let mut exts_sorted = exts.to_vec();
+    exts_sorted.sort_by(|a, b| a.id.cmp(&b.id));
+
+    exts_sorted.iter()
         .find(|ext| {
-            ext.enabled && (ext.permissions.iter().any(|p| p == "passwords")
-                || ext.id == "nngceckbapebfimnlniiiahkandclblb"
-                || ext.id == "aeblfdkhhhdcdjpifhhbdiojplfjncoa")
+            ext.enabled
+                && (ext.id == "nngceckbapebfimnlniiiahkandclblb"
+                    || ext.id == "aeblfdkhhhdcdjpifhhbdiojplfjncoa")
         })
         .map(|ext| ext.id.clone())
 }
@@ -418,9 +429,15 @@ enum ExtensionPayload {
 
 pub fn parse_extension_payload(json: &str) -> Result<Vec<InstalledExtension>, serde_json::Error> {
     match serde_json::from_str::<ExtensionPayload>(json)? {
-        ExtensionPayload::V1 { schema_version, extensions } => {
+        ExtensionPayload::V1 {
+            schema_version,
+            extensions,
+        } => {
             if schema_version != 1 {
-                return Err(serde::de::Error::custom(format!("Unsupported schema version: {}", schema_version)));
+                return Err(serde::de::Error::custom(format!(
+                    "Unsupported schema version: {}",
+                    schema_version
+                )));
             }
             Ok(extensions)
         }
@@ -457,18 +474,56 @@ mod tests {
     #[test]
     fn detect_password_provider_by_permission() {
         let extensions = vec![
-            InstalledExtension { id: "abc".into(), name: "Some Ext".into(), permissions: vec!["tabs".into()], enabled: true, ..Default::default() },
-            InstalledExtension { id: "bw123".into(), name: "Bitwarden".into(), permissions: vec!["passwords".into(), "storage".into()], enabled: true, ..Default::default() },
+            InstalledExtension {
+                id: "abc".into(),
+                name: "Some Ext".into(),
+                permissions: vec!["tabs".into()],
+                enabled: true,
+                ..Default::default()
+            },
+            InstalledExtension {
+                id: "nngceckbapebfimnlniiiahkandclblb".into(),
+                name: "Bitwarden".into(),
+                permissions: vec!["passwords".into(), "storage".into()],
+                enabled: true,
+                ..Default::default()
+            },
         ];
         let result = find_password_provider(&extensions);
-        assert_eq!(result, Some("bw123".to_string()));
+        assert_eq!(result, Some("nngceckbapebfimnlniiiahkandclblb".to_string()));
+    }
+
+    #[test]
+    fn detect_password_provider_deterministic_sorting() {
+        let extensions = vec![
+            InstalledExtension {
+                id: "nngceckbapebfimnlniiiahkandclblb".into(),
+                name: "Bitwarden".into(),
+                permissions: vec!["passwords".into(), "storage".into()],
+                enabled: true,
+                ..Default::default()
+            },
+            InstalledExtension {
+                id: "aeblfdkhhhdcdjpifhhbdiojplfjncoa".into(),
+                name: "1Password".into(),
+                permissions: vec!["passwords".into(), "storage".into()],
+                enabled: true,
+                ..Default::default()
+            },
+        ];
+        let result = find_password_provider(&extensions);
+        assert_eq!(result, Some("aeblfdkhhhdcdjpifhhbdiojplfjncoa".to_string()));
     }
 
     #[test]
     fn no_password_provider_when_none_have_permission() {
-        let extensions = vec![
-            InstalledExtension { id: "abc".into(), name: "Bitwarden Fake".into(), permissions: vec!["tabs".into()], enabled: true, ..Default::default() },
-        ];
+        let extensions = vec![InstalledExtension {
+            id: "abc".into(),
+            name: "Bitwarden Fake".into(),
+            permissions: vec!["tabs".into()],
+            enabled: true,
+            ..Default::default()
+        }];
         let result = find_password_provider(&extensions);
         assert_eq!(result, None);
     }

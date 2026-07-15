@@ -96,10 +96,13 @@ enum class SuggestionType {
     @SerialName("history") History,
     @SerialName("action") Action,
     @SerialName("navigation") Navigation,
+    @SerialName("search") Search,
     @SerialName("calculator") Calculator,
-    @SerialName("unit_conversion") UnitConversion,
-    @SerialName("archived_tab") ArchivedTab,
-    @SerialName("closed_tab") ClosedTab,
+    @SerialName("unitconversion") UnitConversion,
+    @SerialName("archivedtab") ArchivedTab,
+    @SerialName("closedtab") ClosedTab,
+    @SerialName("folder") Folder,
+    @SerialName("aiAnswer") AiAnswer,
 }
 
 @Serializable
@@ -108,6 +111,7 @@ data class SuggestionViewModel(
     val key: String,
     val title: String,
     val subtitle: String? = null,
+    @SerialName("executionPayload") val executionPayload: String? = null,
     val icon: ImageData? = null,
     @SerialName("relevanceScore") val relevanceScore: Double,
     @SerialName("matchRanges") val matchRanges: List<List<Int>>? = null,

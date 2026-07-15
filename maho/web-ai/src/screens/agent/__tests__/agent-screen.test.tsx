@@ -1,290 +1,207 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/preact';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
-interface StreamSubscriber {
-  onToken?: (token: string) => void;
-  onComplete?: (finalMessage: string) => void;
-  onError?: (error: string) => void;
-  onToolDelta?: (delta: { id?: string; name?: string; args?: unknown }) => void;
-}
-
-interface ToolResult {
-  success: boolean;
-  output: string;
-}
-
-const mockBridge = {
-  byokGetKey: vi.fn<(provider: string) => Promise<string | null>>(),
-  chatSessionStart: vi.fn<() => Promise<string>>(),
-  chatSessionFree: vi.fn<(handle: string) => Promise<void>>(),
-  chatSendMessage: vi.fn<() => Promise<void>>(),
-  chatCancelTurn: vi.fn<(handle: string) => Promise<void>>(),
-  chatRegisterTool: vi.fn<() => Promise<void>>(),
-  chatSendToolResult: vi.fn<(handle: string, toolCallId: string, result: ToolResult) => Promise<void>>(),
-};
-
-vi.mock('../../../hooks/use-bridge', () => ({
-  useBridge: () => mockBridge,
-}));
-
+import { App } from '../../../app';
+import type { MahoBridge } from '../../../bridge/types';
 import { AgentScreen } from '../agent-screen';
 
-function getSubscriber(): Required<StreamSubscriber> {
-  const globalWindow = window as Window & {
-    __mahoAgentStreamSubscribers?: Map<string, StreamSubscriber>;
+type CompletePayload = { readonly full_text: string; readonly tool_calls_json: string };
+type EventType = 'token' | 'complete' | 'error';
+
+function makeMockBridge() {
+  let eventQueue: string[] = [];
+  const agentCreateSession = vi.fn<MahoBridge['agentCreateSession']>().mockResolvedValue('handle-1');
+  const agentSendMessage = vi.fn<MahoBridge['agentSendMessage']>().mockResolvedValue(true);
+  const agentCancel = vi.fn<MahoBridge['agentCancel']>().mockResolvedValue(true);
+  const agentFreeSession = vi.fn<MahoBridge['agentFreeSession']>().mockResolvedValue(undefined);
+  const agentPollEvent = vi.fn<MahoBridge['agentPollEvent']>().mockImplementation(async () => eventQueue.shift() ?? null);
+
+  const bridge: MahoBridge = {
+    byokGetProviders: vi.fn<MahoBridge['byokGetProviders']>().mockResolvedValue([]),
+    byokGetKey: vi.fn<MahoBridge['byokGetKey']>().mockResolvedValue(null),
+    byokSetKey: vi.fn<MahoBridge['byokSetKey']>().mockResolvedValue(true),
+    byokDeleteKey: vi.fn<MahoBridge['byokDeleteKey']>().mockResolvedValue(true),
+    byokValidateKey: vi.fn<MahoBridge['byokValidateKey']>().mockResolvedValue(true),
+    chatSessionStart: vi.fn<MahoBridge['chatSessionStart']>().mockResolvedValue('chat-handle'),
+    chatSessionResume: vi.fn<MahoBridge['chatSessionResume']>().mockResolvedValue(undefined),
+    chatSessionFree: vi.fn<MahoBridge['chatSessionFree']>().mockResolvedValue(undefined),
+    chatSendMessage: vi.fn<MahoBridge['chatSendMessage']>().mockResolvedValue(undefined),
+    chatCancelTurn: vi.fn<MahoBridge['chatCancelTurn']>().mockResolvedValue(undefined),
+    chatPollEvents: vi.fn<MahoBridge['chatPollEvents']>().mockResolvedValue([]),
+    chatRegisterTool: vi.fn<MahoBridge['chatRegisterTool']>().mockResolvedValue(undefined),
+    chatSendToolResult: vi.fn<MahoBridge['chatSendToolResult']>().mockResolvedValue(undefined),
+    chatAppendAssistantMessage: vi.fn<MahoBridge['chatAppendAssistantMessage']>().mockResolvedValue(undefined),
+    chatGetHistory: vi.fn<MahoBridge['chatGetHistory']>().mockResolvedValue([]),
+    conversationCreate: vi.fn<MahoBridge['conversationCreate']>().mockResolvedValue('conversation-1'),
+    conversationList: vi.fn<MahoBridge['conversationList']>().mockResolvedValue([]),
+    conversationGet: vi.fn<MahoBridge['conversationGet']>().mockResolvedValue(null),
+    conversationDelete: vi.fn<MahoBridge['conversationDelete']>().mockResolvedValue(true),
+    conversationRename: vi.fn<MahoBridge['conversationRename']>().mockResolvedValue(true),
+    conversationGetMessages: vi.fn<MahoBridge['conversationGetMessages']>().mockResolvedValue([]),
+    getSpaceAIConfig: vi.fn<MahoBridge['getSpaceAIConfig']>().mockResolvedValue(null),
+    setSpaceAIConfig: vi.fn<MahoBridge['setSpaceAIConfig']>().mockResolvedValue(undefined),
+    pinchEstimateCost: vi.fn<MahoBridge['pinchEstimateCost']>().mockResolvedValue({
+      estimatedCostUsd: 0,
+      inputTokens: 0,
+      model: 'test',
+      outputTokens: 0,
+    }),
+    agentCreateSession,
+    agentFreeSession,
+    agentSendMessage,
+    agentCancel,
+    agentPollEvent,
+    agentListTools: vi.fn<MahoBridge['agentListTools']>().mockResolvedValue([]),
+    capturePhoto: vi.fn<MahoBridge['capturePhoto']>().mockResolvedValue(null),
+    captureScreenshot: vi.fn<MahoBridge['captureScreenshot']>().mockResolvedValue(null),
+    openSettings: vi.fn<MahoBridge['openSettings']>().mockResolvedValue(undefined),
+    hapticFeedback: vi.fn<MahoBridge['hapticFeedback']>().mockResolvedValue(undefined),
   };
-  const map = globalWindow.__mahoAgentStreamSubscribers;
-  if (!map || map.size === 0) throw new Error('Expected stream subscriber');
-  const sub = map.values().next().value;
-  if (!sub) throw new Error('Expected stream subscriber');
-  return sub as Required<StreamSubscriber>;
+
+  return {
+    agentCancel,
+    agentCreateSession,
+    agentFreeSession,
+    agentSendMessage,
+    bridge,
+    clearQueue: () => {
+      eventQueue = [];
+    },
+    enqueueEvent: (type: EventType, data: string | CompletePayload) => {
+      eventQueue.push(JSON.stringify({ type, data }));
+    },
+  };
 }
+
+function promptInput() {
+  return (
+    screen.queryByRole('textbox', { name: 'Task description' }) ??
+    screen.getByRole('textbox', { name: 'Message' })
+  );
+}
+
+async function submitPrompt(prompt: string) {
+  fireEvent.input(promptInput(), { target: { value: prompt } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+  await waitFor(() => expect(mockCtx.agentSendMessage).toHaveBeenCalledWith('handle-1', prompt));
+}
+
+let mockCtx = makeMockBridge();
+
+beforeEach(() => {
+  window.location.hash = '#agent';
+  mockCtx = makeMockBridge();
+});
 
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
-  const globalWindow = window as Window & { __mahoAgentStreamSubscribers?: Map<string, StreamSubscriber> };
-  globalWindow.__mahoAgentStreamSubscribers?.clear();
+  mockCtx.clearQueue();
 });
 
-beforeEach(() => {
-  mockBridge.byokGetKey.mockImplementation(async (provider: string) =>
-    provider === 'openai' ? 'sk-test' : null,
-  );
-  mockBridge.chatSessionStart.mockResolvedValue('agent-session-1');
-  mockBridge.chatSessionFree.mockResolvedValue(undefined);
-  mockBridge.chatSendMessage.mockResolvedValue(undefined);
-  mockBridge.chatCancelTurn.mockResolvedValue(undefined);
-  mockBridge.chatRegisterTool.mockResolvedValue(undefined);
-  mockBridge.chatSendToolResult.mockResolvedValue(undefined);
-});
+describe('AgentScreen CompactShell contract', () => {
+  it('renders the compact structure with one new-session control and no emoji text', () => {
+    const { container } = render(<AgentScreen bridge={mockCtx.bridge} />);
 
-describe('AgentScreen', () => {
-  it('shows BYOK CTA and disables Run Agent when API key is missing', async () => {
-    mockBridge.byokGetKey.mockResolvedValue(null);
+    expect(screen.getByTestId('agent-screen')).toBeInTheDocument();
+    expect(screen.getByTestId('agent-topbar')).toBeInTheDocument();
+    expect(screen.getByTestId('agent-stage')).toHaveTextContent('Ready when you are');
+    expect(screen.getByTestId('agent-composer')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Start new session' })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'New task' })).not.toBeInTheDocument();
+    expect(container.textContent ?? '').not.toMatch(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u);
+  });
 
-    render(<AgentScreen />);
+  it('submits manually, renders the user turn, and clears the persistent composer', async () => {
+    render(<AgentScreen bridge={mockCtx.bridge} />);
 
+    await submitPrompt('Summarise this page');
+
+    expect(mockCtx.agentCreateSession).toHaveBeenCalledOnce();
+    expect(within(screen.getByTestId('agent-message-user')).getByText('Summarise this page')).toBeInTheDocument();
+    expect(promptInput()).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Stop current run' })).toBeInTheDocument();
+  });
+
+  it('uses Enter to send, Shift+Enter for newline intent, and ignores IME Enter', async () => {
+    render(<AgentScreen bridge={mockCtx.bridge} />);
+
+    fireEvent.input(promptInput(), { target: { value: 'Line one' } });
+    fireEvent.keyDown(promptInput(), { key: 'Enter', shiftKey: true });
+    expect(mockCtx.agentSendMessage).not.toHaveBeenCalled();
+
+    fireEvent.compositionStart(promptInput());
+    fireEvent.keyDown(promptInput(), { key: 'Enter' });
+    expect(mockCtx.agentSendMessage).not.toHaveBeenCalled();
+
+    fireEvent.compositionEnd(promptInput());
+    fireEvent.keyDown(promptInput(), { key: 'Enter' });
+    await waitFor(() => expect(mockCtx.agentSendMessage).toHaveBeenCalledWith('handle-1', 'Line one'));
+  });
+
+  it('auto-submits a non-empty goal exactly once per mount', async () => {
+    const view = render(<AgentScreen bridge={mockCtx.bridge} goal="Review pinned tabs" />);
+
+    await waitFor(() => expect(mockCtx.agentSendMessage).toHaveBeenCalledWith('handle-1', 'Review pinned tabs'));
+    view.rerender(<AgentScreen bridge={mockCtx.bridge} goal="Review pinned tabs" />);
+
+    await waitFor(() => expect(mockCtx.agentSendMessage).toHaveBeenCalledTimes(1));
+  });
+
+  it('accumulates tokens into the assistant turn and shows pending state while streaming', async () => {
+    render(<AgentScreen bridge={mockCtx.bridge} />);
+    await submitPrompt('Go');
+
+    expect(screen.getByTestId('agent-pending-thought')).toHaveTextContent('Thinking');
+    act(() => mockCtx.enqueueEvent('token', 'Hello'));
+    await waitFor(() => expect(screen.getByTestId('agent-message-assistant')).toHaveTextContent('Hello'));
+    act(() => mockCtx.enqueueEvent('token', ' world'));
+
+    await waitFor(() => expect(screen.getByTestId('agent-message-assistant')).toHaveTextContent('Hello world'));
+  });
+
+  it('handles complete and error events through stable thread affordances', async () => {
+    render(<AgentScreen bridge={mockCtx.bridge} />);
+    await submitPrompt('Go');
+
+    act(() => mockCtx.enqueueEvent('complete', { full_text: 'Task done.', tool_calls_json: '[]' }));
+    await waitFor(() => expect(screen.getByTestId('agent-message-assistant')).toHaveTextContent('Task done.'));
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeInTheDocument();
+
+    fireEvent.input(promptInput(), { target: { value: 'Again' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    act(() => mockCtx.enqueueEvent('error', 'Execution error: network timeout'));
+
+    await waitFor(() => expect(screen.getByTestId('agent-error-banner')).toHaveTextContent('Execution error: network timeout'));
+  });
+
+  it('stops the current run and resets through the single topbar new-session action', async () => {
+    render(<AgentScreen bridge={mockCtx.bridge} />);
+    await submitPrompt('Go');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop current run' }));
+    await waitFor(() => expect(mockCtx.agentCancel).toHaveBeenCalledWith('handle-1'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start new session' }));
     await waitFor(() => {
-      expect(screen.getByText('API key required')).toBeTruthy();
-      expect(screen.getByText('Configure API key')).toBeTruthy();
+      expect(mockCtx.agentFreeSession).toHaveBeenCalledWith('handle-1');
+      expect(screen.getByTestId('agent-stage')).toBeInTheDocument();
     });
   });
 
-  it('submits task: calls chatSessionStart + chatRegisterTool×4 + chatSendMessage', async () => {
-    render(<AgentScreen />);
+  it('frees the native handle on unmount', async () => {
+    const view = render(<AgentScreen bridge={mockCtx.bridge} />);
+    await submitPrompt('Go');
 
-    await waitFor(() => {
-      expect(screen.getByLabelText('Task description')).toBeTruthy();
-    });
+    view.unmount();
 
-    const textarea = screen.getByLabelText('Task description');
-    fireEvent.input(textarea, { target: { value: 'Navigate to google.com' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Run Agent' }));
-
-    await waitFor(() => {
-      expect(mockBridge.chatSessionStart).toHaveBeenCalled();
-      expect(mockBridge.chatRegisterTool).toHaveBeenCalledTimes(4);
-      expect(mockBridge.chatSendMessage).toHaveBeenCalledWith('agent-session-1', {
-        kind: 'text',
-        text: 'Navigate to google.com',
-      });
-    });
+    await waitFor(() => expect(mockCtx.agentFreeSession).toHaveBeenCalledWith('handle-1'));
   });
 
-  it('appends streaming tokens as thinking entries', async () => {
-    render(<AgentScreen />);
+  it('renders AgentScreen from the #agent route', async () => {
+    window.location.hash = '#agent';
 
-    await waitFor(() => expect(screen.getByLabelText('Task description')).toBeTruthy());
+    render(<App />);
 
-    const textarea = screen.getByLabelText('Task description');
-    fireEvent.input(textarea, { target: { value: 'test task' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Run Agent' }));
-
-    await waitFor(() => {
-      const gw = window as Window & { __mahoAgentStreamSubscribers?: Map<string, StreamSubscriber> };
-      expect(gw.__mahoAgentStreamSubscribers?.size).toBeGreaterThan(0);
-    });
-
-    act(() => {
-      getSubscriber().onToken('Navigating to page...');
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText('Navigating to page...')).toBeTruthy();
-    });
-  });
-
-  it('renders tool card on tool delta with awaiting_approval stage', async () => {
-    render(<AgentScreen />);
-
-    await waitFor(() => expect(screen.getByLabelText('Task description')).toBeTruthy());
-
-    fireEvent.input(screen.getByLabelText('Task description'), { target: { value: 'go' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Run Agent' }));
-
-    await waitFor(() => {
-      const gw = window as Window & { __mahoAgentStreamSubscribers?: Map<string, StreamSubscriber> };
-      expect(gw.__mahoAgentStreamSubscribers?.size).toBeGreaterThan(0);
-    });
-
-    act(() => {
-      getSubscriber().onToolDelta({
-        id: 'tc-1',
-        name: 'browser_navigate',
-        args: { url: 'https://google.com' },
-      });
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText('browser_navigate')).toBeTruthy();
-      expect(screen.getByText('pending')).toBeTruthy();
-      expect(screen.getByRole('button', { name: 'Approve browser_navigate' })).toBeTruthy();
-      expect(screen.getByRole('button', { name: 'Deny browser_navigate' })).toBeTruthy();
-    });
-  });
-
-  it('approve calls chatSendToolResult with stub OK result', async () => {
-    render(<AgentScreen />);
-
-    await waitFor(() => expect(screen.getByLabelText('Task description')).toBeTruthy());
-
-    fireEvent.input(screen.getByLabelText('Task description'), { target: { value: 'go' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Run Agent' }));
-
-    await waitFor(() => {
-      const gw = window as Window & { __mahoAgentStreamSubscribers?: Map<string, StreamSubscriber> };
-      expect(gw.__mahoAgentStreamSubscribers?.size).toBeGreaterThan(0);
-    });
-
-    act(() => {
-      getSubscriber().onToolDelta({
-        id: 'tc-2',
-        name: 'screenshot',
-        args: {},
-      });
-    });
-
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Approve screenshot' })).toBeTruthy());
-
-    fireEvent.click(screen.getByRole('button', { name: 'Approve screenshot' }));
-
-    await waitFor(() => {
-      expect(mockBridge.chatSendToolResult).toHaveBeenCalledWith(
-        'agent-session-1',
-        'tc-2',
-        { success: true, output: JSON.stringify({ ok: true, data: '[stub]' }) },
-      );
-    });
-  });
-
-  it('deny calls chatSendToolResult with error', async () => {
-    render(<AgentScreen />);
-
-    await waitFor(() => expect(screen.getByLabelText('Task description')).toBeTruthy());
-
-    fireEvent.input(screen.getByLabelText('Task description'), { target: { value: 'go' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Run Agent' }));
-
-    await waitFor(() => {
-      const gw = window as Window & { __mahoAgentStreamSubscribers?: Map<string, StreamSubscriber> };
-      expect(gw.__mahoAgentStreamSubscribers?.size).toBeGreaterThan(0);
-    });
-
-    act(() => {
-      getSubscriber().onToolDelta({
-        id: 'tc-3',
-        name: 'dom_query',
-        args: { selector: 'h1' },
-      });
-    });
-
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Deny dom_query' })).toBeTruthy());
-
-    fireEvent.click(screen.getByRole('button', { name: 'Deny dom_query' }));
-
-    await waitFor(() => {
-      expect(mockBridge.chatSendToolResult).toHaveBeenCalledWith(
-        'agent-session-1',
-        'tc-3',
-        { success: false, output: JSON.stringify({ error: 'user_denied' }) },
-      );
-    });
-  });
-
-  it('stream complete shows final result and New Task button', async () => {
-    render(<AgentScreen />);
-
-    await waitFor(() => expect(screen.getByLabelText('Task description')).toBeTruthy());
-
-    fireEvent.input(screen.getByLabelText('Task description'), { target: { value: 'go' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Run Agent' }));
-
-    await waitFor(() => {
-      const gw = window as Window & { __mahoAgentStreamSubscribers?: Map<string, StreamSubscriber> };
-      expect(gw.__mahoAgentStreamSubscribers?.size).toBeGreaterThan(0);
-    });
-
-    act(() => {
-      getSubscriber().onComplete('Task completed successfully.');
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText('Task completed successfully.')).toBeTruthy();
-      expect(screen.getByText('New Task')).toBeTruthy();
-    });
-  });
-
-  it('cancel calls chatCancelTurn', async () => {
-    render(<AgentScreen />);
-
-    await waitFor(() => expect(screen.getByLabelText('Task description')).toBeTruthy());
-
-    fireEvent.input(screen.getByLabelText('Task description'), { target: { value: 'go' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Run Agent' }));
-
-    await waitFor(() => {
-      const gw = window as Window & { __mahoAgentStreamSubscribers?: Map<string, StreamSubscriber> };
-      expect(gw.__mahoAgentStreamSubscribers?.size).toBeGreaterThan(0);
-    });
-
-    act(() => {
-      getSubscriber().onToken('working...');
-    });
-
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy());
-
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-
-    await waitFor(() => {
-      expect(mockBridge.chatCancelTurn).toHaveBeenCalledWith('agent-session-1');
-    });
-  });
-
-  it('new task frees session and resets state', async () => {
-    render(<AgentScreen />);
-
-    await waitFor(() => expect(screen.getByLabelText('Task description')).toBeTruthy());
-
-    fireEvent.input(screen.getByLabelText('Task description'), { target: { value: 'go' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Run Agent' }));
-
-    await waitFor(() => {
-      const gw = window as Window & { __mahoAgentStreamSubscribers?: Map<string, StreamSubscriber> };
-      expect(gw.__mahoAgentStreamSubscribers?.size).toBeGreaterThan(0);
-    });
-
-    act(() => {
-      getSubscriber().onComplete('Done.');
-    });
-
-    await waitFor(() => expect(screen.getByText('New Task')).toBeTruthy());
-
-    fireEvent.click(screen.getByText('New Task'));
-
-    await waitFor(() => {
-      expect(mockBridge.chatSessionFree).toHaveBeenCalledWith('agent-session-1');
-      expect(screen.getByLabelText('Task description')).toBeTruthy();
-    });
+    await waitFor(() => expect(screen.getByTestId('agent-screen')).toBeInTheDocument());
   });
 });

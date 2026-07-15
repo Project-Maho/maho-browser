@@ -16,6 +16,7 @@ inline constexpr char kMoveTabToRoot[]      = "move_tab_to_root";
 inline constexpr char kMoveTabToFolder[]    = "move_tab_to_folder";
 inline constexpr char kMoveFolderIntoFolder[] = "move_folder_into_folder";
 inline constexpr char kMoveFolderToRoot[]   = "move_folder_to_root";
+inline constexpr char kSetFolderPinned[]    = "set_folder_pinned";
 
 }  // namespace maho::sidebar
 

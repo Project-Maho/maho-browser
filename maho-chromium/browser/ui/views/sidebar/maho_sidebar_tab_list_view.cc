@@ -6407,6 +6407,16 @@ void MahoSidebarTabListView::HandlePostDropTransition(
 
   const bool to_pinned =
       (plan.pin_transition.kind == SidebarDropPlan::PinTransition::Kind::kPin);
+
+  if (plan.pin_transition.is_folder) {
+    DispatchShellEventEx(
+        maho::sidebar::kSetFolderPinned,
+        {ShellEventField("space_id", plan.pin_transition.space_id),
+         ShellEventField("folder_id", plan.pin_transition.node_id),
+         ShellEventField("is_pinned", to_pinned)});
+    return;
+  }
+
   const std::string& tab_id = plan.pin_transition.node_id;
 
   int index = payload.tab_strip_index;

@@ -23,8 +23,17 @@ object BridgeCommandBar {
 
     // ── Queries ────────────────────────────────────────────────────────
 
-    fun query(text: String, mode: String?): List<CoreUpdate> =
-        MahoBridge.sendEvent(ShellEvent.CommandBarQuery(text = text, mode = mode))
+    /**
+     * Send a command-bar query event to core.
+     *
+     * @param text     The search text entered by the user.
+     * @param mode     Optional mode string (null = default).
+     * @param isIncognito Whether the query is issued from an incognito context.
+     */
+    fun query(text: String, mode: String? = null, isIncognito: Boolean = false): List<CoreUpdate> =
+        MahoBridge.sendEvent(
+            ShellEvent.CommandBarQuery(text = text, mode = mode, isIncognito = isIncognito)
+        )
 
     fun selectItem(index: Int, key: String): List<CoreUpdate> =
         MahoBridge.sendEvent(ShellEvent.CommandBarSelect(index = index, key = key))
@@ -78,4 +87,14 @@ object BridgeCommandBar {
      */
     fun suggestionsFrom(update: CoreUpdate.CommandBarResults): List<SuggestionViewModel> =
         update.suggestions
+
+    /**
+     * Convenience: flattens all [CoreUpdate.CommandBarResults] from a list of updates
+     * into a single suggestions list. Returns the suggestions from the last
+     * [CoreUpdate.CommandBarResults] found, or null if none present.
+     */
+    fun suggestions(updates: List<CoreUpdate>): List<SuggestionViewModel>? =
+        updates.filterIsInstance<CoreUpdate.CommandBarResults>()
+            .lastOrNull()
+            ?.suggestions
 }

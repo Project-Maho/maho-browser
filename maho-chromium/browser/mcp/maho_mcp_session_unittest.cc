@@ -22,6 +22,208 @@
 namespace maho {
 namespace {
 
+// ---------------------------------------------------------------------------
+// R-8: non-revealing, generation-bound target resolution (task-8-mcp-session).
+// ---------------------------------------------------------------------------
+
+// A delegate that models the private-context boundary: it can mark tabs
+// ineligible (OTR/closed), report no eligible active tab or browser, and fail
+// revalidation when its generation advances. It also records how many times
+// each resolution entry point is called so tests can prove resolve-once.
+//
+// Defined above the primary fixture so MahoMcpSessionTest can install it for
+// the R-8 target-resolution tests without a forward reference.
+class ResolvingFakeDelegate : public MahoMcpBrowserDelegate {
+ public:
+  int active_tab_id = 7;
+  bool has_eligible_active = true;
+  bool has_eligible_browser = true;
+  std::set<int> eligible_tabs = {7, 11};
+  int64_t generation = 1;
+
+  int resolve_tab_calls = 0;
+  int resolve_profile_calls = 0;
+  int revalidate_calls = 0;
+
+  struct PendingStart {
+    std::string capture_id;
+    int requested_tab_id = 0;
+    StartNetworkCaptureCallback callback;
+  };
+  std::deque<PendingStart> pending_starts;
+  std::deque<StopNetworkCaptureCallback> pending_stops;
+  std::vector<std::string> canceled_capture_ids;
+
+  MahoMcpTargetResolution ResolveTabTarget(int requested_tab_id) override {
+    ++resolve_tab_calls;
+    MahoMcpTargetResolution resolution;
+    if (requested_tab_id == 0) {
+      if (!has_eligible_active) {
+        resolution.error = MahoMcpTargetError::kNoEligibleActiveTab;
+        return resolution;
+      }
+      resolution.target.valid = true;
+      resolution.target.tab_id = active_tab_id;
+      resolution.target.browser_id = 100;
+      resolution.target.generation = generation;
+      return resolution;
+    }
+    if (eligible_tabs.find(requested_tab_id) == eligible_tabs.end()) {
+      resolution.error = MahoMcpTargetError::kTabNotFound;
+      return resolution;
+    }
+    resolution.target.valid = true;
+    resolution.target.tab_id = requested_tab_id;
+    resolution.target.browser_id = 100;
+    resolution.target.generation = generation;
+    return resolution;
+  }
+
+  MahoMcpTargetResolution ResolveProfileTarget() override {
+    ++resolve_profile_calls;
+    MahoMcpTargetResolution resolution;
+    if (!has_eligible_browser) {
+      resolution.error = MahoMcpTargetError::kNoEligibleActiveBrowser;
+      return resolution;
+    }
+    resolution.target.valid = true;
+    resolution.target.browser_id = 100;
+    resolution.target.generation = generation;
+    return resolution;
+  }
+
+  bool RevalidateTarget(const ResolvedMahoMcpTarget& target) override {
+    ++revalidate_calls;
+    if (!target.valid) {
+      return false;
+    }
+    if (target.generation != generation) {
+      return false;
+    }
+    if (target.tab_id != 0 &&
+        eligible_tabs.find(target.tab_id) == eligible_tabs.end()) {
+      return false;
+    }
+    return true;
+  }
+
+  std::vector<MahoMcpSession::TabInfo> GetTabList() override {
+    std::vector<MahoMcpSession::TabInfo> tabs;
+    for (int id : eligible_tabs) {
+      MahoMcpSession::TabInfo t;
+      t.id = id;
+      t.title = "tab";
+      t.url = "https://example.com/";
+      t.is_active = (id == active_tab_id);
+      tabs.push_back(t);
+    }
+    return tabs;
+  }
+
+  void StartNetworkCapture(const std::string& capture_id,
+                           int tab_id,
+                           StartNetworkCaptureCallback callback) override {
+    pending_starts.push_back(
+        PendingStart{capture_id, tab_id, std::move(callback)});
+  }
+  void StopNetworkCapture(const std::string& capture_id,
+                          StopNetworkCaptureCallback callback) override {
+    pending_stops.push_back(std::move(callback));
+  }
+  void CancelNetworkCapture(const std::string& capture_id) override {
+    canceled_capture_ids.push_back(capture_id);
+  }
+
+  std::vector<MahoMcpSession::ConsoleMessage> GetConsoleMessages(
+      int tab_id) override {
+    return {};
+  }
+  std::vector<MahoMcpSession::NavigationEvent> GetNavigationEvents(
+      int tab_id,
+      int64_t since_ms) override {
+    return {};
+  }
+  std::string GetPageText(int tab_id) override { return std::string(); }
+  base::Value GetAccessibilitySnapshot(
+      int tab_id,
+      MahoMcpSession::RefTable* out_refs) override {
+    return base::Value(base::DictValue());
+  }
+  PageContentResult GetPageContent(int tab_id) override { return {}; }
+  PageContextResult GetPageContext(int tab_id) override { return {}; }
+  SearchResult SearchInPage(int tab_id, const std::string& query) override {
+    return {};
+  }
+  QuerySelectorResult QuerySelector(int tab_id,
+                                    const std::string& selector) override {
+    return {};
+  }
+  std::string GetElementText(int tab_id, const std::string& ref_id) override {
+    return std::string();
+  }
+  std::string GetElementAttribute(int tab_id,
+                                  const std::string& ref_id,
+                                  const std::string& attribute) override {
+    return std::string();
+  }
+  bool WaitForSelector(int tab_id,
+                       const std::string& selector,
+                       int timeout_ms) override {
+    return false;
+  }
+  int CreateNewTab(const GURL& url) override { return 99; }
+  bool CloseTab(int tab_id) override { return true; }
+  std::vector<BookmarkInfo> SearchBookmarks(const std::string& query) override {
+    return {};
+  }
+  BookmarkInfo CreateBookmark(const std::string& title,
+                              const GURL& url,
+                              const std::string& folder) override {
+    return BookmarkInfo();
+  }
+  std::vector<HistoryEntry> SearchHistory(const std::string& query,
+                                          size_t max_results) override {
+    return {};
+  }
+  void CaptureFullPagePngBase64(
+      int tab_id,
+      base::OnceCallback<void(std::string)> callback) override {
+    std::move(callback).Run(std::string());
+  }
+  void CaptureElementPngBase64(
+      int tab_id,
+      ui::AXNodeID ax_id,
+      base::OnceCallback<void(std::string)> callback) override {
+    std::move(callback).Run(std::string());
+  }
+  bool Scroll(int tab_id,
+              const std::string& direction,
+              int pixels,
+              std::optional<ui::AXNodeID> ax_id) override {
+    return false;
+  }
+  bool Click(int tab_id, ui::AXNodeID ax_id) override { return false; }
+  bool Type(int tab_id, ui::AXNodeID ax_id, const std::string& text) override {
+    return false;
+  }
+  bool Select(int tab_id,
+              ui::AXNodeID ax_id,
+              const std::string& value) override {
+    return false;
+  }
+  bool Hover(int tab_id, ui::AXNodeID ax_id) override { return false; }
+  bool KeyPress(int tab_id,
+                const std::string& key,
+                const std::vector<std::string>& modifiers) override {
+    return false;
+  }
+  bool ActivateTab(int tab_id) override { return true; }
+  bool Navigate(int tab_id, const GURL& url) override { return true; }
+  bool SetViewportSize(int tab_id, int width, int height) override {
+    return true;
+  }
+};
+
 class MahoMcpSessionTest : public testing::Test {
  protected:
   void SetUp() override {
@@ -29,7 +231,64 @@ class MahoMcpSessionTest : public testing::Test {
     session_ = std::make_unique<MahoMcpSession>(getuid());
   }
 
+  void TearDown() override {
+    // Safe no-op for tests that never installed a resolving delegate: the
+    // members below stay null and SetBrowserDelegate(nullptr) is idempotent.
+    session_.reset();
+    MahoMcpSession::SetBrowserDelegate(nullptr);
+    delegate_.reset();
+  }
+
+  // Installs a ResolvingFakeDelegate + lease registry and initializes a fresh
+  // session for the R-8 target-resolution tests. Regression tests keep the
+  // default SetUp() session and never call this, so the lazily-created
+  // TaskEnvironment/lease registry below never come into existence for them
+  // (avoids a duplicate TaskEnvironment in fixtures that own their own).
+  void InitResolvingSession() {
+    resolution_task_environment_ =
+        std::make_unique<base::test::TaskEnvironment>();
+    delegate_ = std::make_unique<ResolvingFakeDelegate>();
+    MahoMcpSession::SetBrowserDelegate(delegate_.get());
+    lease_registry_ = std::make_unique<MahoMcpLeaseRegistry>();
+    session_ =
+        std::make_unique<MahoMcpSession>(getuid(), lease_registry_.get());
+    session_->SetDeferredResponseSender(base::BindRepeating(
+        &MahoMcpSessionTest::CaptureDeferred, base::Unretained(this)));
+    auto responses = session_->ProcessData(
+        R"({"jsonrpc":"2.0","method":"initialize","id":1,)"
+        R"("params":{"protocolVersion":"2025-03-26",)"
+        R"("clientInfo":{"name":"t","version":"0.1.0"}}})"
+        "\n");
+    EXPECT_EQ(responses.size(), 1u);
+    EXPECT_EQ(session_->state(), MahoMcpSession::State::kActive);
+  }
+
+  std::vector<std::string> CallToolRaw(const std::string& name,
+                                       const std::string& args,
+                                       int id) {
+    return session_->ProcessData(base::StringPrintf(
+        R"({"jsonrpc":"2.0","method":"tools/call","id":%d,)"
+        R"("params":{"name":"%s","arguments":%s}})"
+        "\n",
+        id, name.c_str(), args.c_str()));
+  }
+
+  base::Value ParseLine(const std::string& line) {
+    std::optional<base::Value> parsed =
+        base::JSONReader::Read(line, base::JSON_PARSE_RFC);
+    EXPECT_TRUE(parsed.has_value());
+    return parsed.has_value() ? std::move(*parsed) : base::Value();
+  }
+
+  void CaptureDeferred(std::string line) {
+    deferred_responses_.push_back(std::move(line));
+  }
+
+  std::unique_ptr<base::test::TaskEnvironment> resolution_task_environment_;
+  std::unique_ptr<MahoMcpLeaseRegistry> lease_registry_;
+  std::unique_ptr<ResolvingFakeDelegate> delegate_;
   std::unique_ptr<MahoMcpSession> session_;
+  std::vector<std::string> deferred_responses_;
 };
 
 TEST_F(MahoMcpSessionTest, RejectsToolCallBeforeInitialize) {
@@ -512,6 +771,347 @@ class FakeAsyncNetworkDelegate : public MahoMcpBrowserDelegate {
   std::string last_search_history_query_;
   size_t last_search_history_max_results_ = 0;
 };
+
+class FakeMailReadDelegate : public FakeAsyncNetworkDelegate {
+ public:
+  enum class MailReadMethod {
+    kListAccounts,
+    kListFolders,
+    kListEmails,
+    kGetEmail,
+    kSearchEmails,
+    kListThread,
+  };
+
+  struct PendingMailRead {
+    MailReadMethod method = MailReadMethod::kListAccounts;
+    std::string account_id;
+    std::string folder_id;
+    std::string email_id;
+    std::string query_json;
+    std::string message_id;
+    int64_t limit = 0;
+    int64_t offset = 0;
+    MailReadCallback callback;
+  };
+
+  void MailListAccounts(MailReadCallback callback) override {
+    PendingMailRead pending;
+    pending.method = MailReadMethod::kListAccounts;
+    pending.callback = std::move(callback);
+    pending_mail_reads_.push_back(std::move(pending));
+  }
+
+  void MailListFolders(const std::string& account_id,
+                       MailReadCallback callback) override {
+    PendingMailRead pending;
+    pending.method = MailReadMethod::kListFolders;
+    pending.account_id = account_id;
+    pending.callback = std::move(callback);
+    pending_mail_reads_.push_back(std::move(pending));
+  }
+
+  void MailListEmails(const std::string& account_id,
+                      const std::string& folder_id,
+                      int64_t limit,
+                      int64_t offset,
+                      MailReadCallback callback) override {
+    PendingMailRead pending;
+    pending.method = MailReadMethod::kListEmails;
+    pending.account_id = account_id;
+    pending.folder_id = folder_id;
+    pending.limit = limit;
+    pending.offset = offset;
+    pending.callback = std::move(callback);
+    pending_mail_reads_.push_back(std::move(pending));
+  }
+
+  void MailGetEmail(const std::string& email_id,
+                    MailReadCallback callback) override {
+    PendingMailRead pending;
+    pending.method = MailReadMethod::kGetEmail;
+    pending.email_id = email_id;
+    pending.callback = std::move(callback);
+    pending_mail_reads_.push_back(std::move(pending));
+  }
+
+  void MailSearchEmails(const std::string& query_json,
+                        MailReadCallback callback) override {
+    PendingMailRead pending;
+    pending.method = MailReadMethod::kSearchEmails;
+    pending.query_json = query_json;
+    pending.callback = std::move(callback);
+    pending_mail_reads_.push_back(std::move(pending));
+  }
+
+  void MailListThread(const std::string& account_id,
+                      const std::string& message_id,
+                      MailReadCallback callback) override {
+    PendingMailRead pending;
+    pending.method = MailReadMethod::kListThread;
+    pending.account_id = account_id;
+    pending.message_id = message_id;
+    pending.callback = std::move(callback);
+    pending_mail_reads_.push_back(std::move(pending));
+  }
+
+  PendingMailRead TakePendingMailRead() {
+    PendingMailRead pending = std::move(pending_mail_reads_.front());
+    pending_mail_reads_.pop_front();
+    return pending;
+  }
+
+  size_t pending_mail_read_count() const {
+    return pending_mail_reads_.size();
+  }
+
+ private:
+  std::deque<PendingMailRead> pending_mail_reads_;
+};
+
+class MahoMcpSessionMailReadTest : public testing::Test {
+ protected:
+  void SetUp() override {
+    delegate_ = std::make_unique<FakeMailReadDelegate>();
+    MahoMcpSession::SetBrowserDelegate(delegate_.get());
+    session_ = std::make_unique<MahoMcpSession>(getuid());
+    session_->SetDeferredResponseSender(base::BindRepeating(
+        &MahoMcpSessionMailReadTest::CaptureDeferred,
+        base::Unretained(this)));
+    auto responses = session_->ProcessData(
+        R"({"jsonrpc":"2.0","method":"initialize","id":1,)"
+        R"("params":{"protocolVersion":"2025-03-26",)"
+        R"("clientInfo":{"name":"test-client","version":"0.1.0"}}})"
+        "\n");
+    ASSERT_EQ(responses.size(), 1u);
+    ASSERT_EQ(session_->state(), MahoMcpSession::State::kActive);
+  }
+
+  void TearDown() override {
+    session_.reset();
+    MahoMcpSession::SetBrowserDelegate(nullptr);
+    delegate_.reset();
+  }
+
+  std::vector<std::string> CallToolRaw(const std::string& name,
+                                       const std::string& args,
+                                       int id) {
+    return session_->ProcessData(base::StringPrintf(
+        R"({"jsonrpc":"2.0","method":"tools/call","id":%d,)"
+        R"("params":{"name":"%s","arguments":%s}})"
+        "\n",
+        id, name.c_str(), args.c_str()));
+  }
+
+  base::Value ParseLine(const std::string& line) {
+    std::optional<base::Value> parsed =
+        base::JSONReader::Read(line, base::JSON_PARSE_RFC);
+    EXPECT_TRUE(parsed.has_value());
+    return parsed.has_value() ? std::move(*parsed) : base::Value();
+  }
+
+  void CaptureDeferred(std::string line) {
+    deferred_responses_.push_back(std::move(line));
+  }
+
+  void ExpectImmediateError(const std::vector<std::string>& responses,
+                            int expected_code) {
+    ASSERT_EQ(responses.size(), 1u);
+    base::Value response = ParseLine(responses.front());
+    const auto* error = response.GetDict().FindDict("error");
+    ASSERT_TRUE(error);
+    EXPECT_EQ(error->FindInt("code").value(), expected_code);
+  }
+
+  void ExpectSingleDeferredTextPayload(const std::string& expected_json) {
+    ASSERT_EQ(deferred_responses_.size(), 1u);
+    base::Value response = ParseLine(deferred_responses_.back());
+    const auto* result = response.GetDict().FindDict("result");
+    ASSERT_TRUE(result);
+    const auto* content = result->FindList("content");
+    ASSERT_TRUE(content);
+    ASSERT_EQ(content->size(), 1u);
+    const auto* item = (*content)[0].GetIfDict();
+    ASSERT_TRUE(item);
+    EXPECT_EQ(*item->FindString("type"), "text");
+    const std::string* text = item->FindString("text");
+    ASSERT_TRUE(text);
+    EXPECT_EQ(*text, expected_json);
+    EXPECT_TRUE(base::JSONReader::Read(*text, base::JSON_PARSE_RFC).has_value());
+    deferred_responses_.clear();
+  }
+
+  std::unique_ptr<FakeMailReadDelegate> delegate_;
+  std::unique_ptr<MahoMcpSession> session_;
+  std::vector<std::string> deferred_responses_;
+};
+
+TEST_F(MahoMcpSessionMailReadTest,
+       MailRequiredArgumentValidationRejectsMissingOrWrongTypes) {
+  struct Case {
+    const char* tool;
+    const char* args;
+  };
+  const std::vector<Case> cases = {
+      {"mail_list_accounts", "17"},
+      {"mail_list_folders", R"({})"},
+      {"mail_list_folders", R"({"account_id":17})"},
+      {"mail_list_emails", R"({"folder_id":"inbox"})"},
+      {"mail_list_emails", R"({"account_id":"acct"})"},
+      {"mail_list_emails", R"({"account_id":17,"folder_id":"inbox"})"},
+      {"mail_list_emails", R"({"account_id":"acct","folder_id":17})"},
+      {"mail_list_emails",
+       R"({"account_id":"acct","folder_id":"inbox","limit":"many"})"},
+      {"mail_get_email", R"({})"},
+      {"mail_get_email", R"({"email_id":17})"},
+      {"mail_search_emails", R"({})"},
+      {"mail_search_emails", R"({"query":17})"},
+      {"mail_search_emails", R"({"query":"q","offset":"later"})"},
+      {"mail_list_thread", R"({"message_id":"msg"})"},
+      {"mail_list_thread", R"({"account_id":"acct"})"},
+      {"mail_list_thread", R"({"account_id":17,"message_id":"msg"})"},
+      {"mail_list_thread", R"({"account_id":"acct","message_id":17})"},
+  };
+
+  int id = 100;
+  for (const Case& c : cases) {
+    auto responses = CallToolRaw(c.tool, c.args, id++);
+    ExpectImmediateError(responses, -32602);
+    EXPECT_EQ(delegate_->pending_mail_read_count(), 0u) << c.tool;
+    EXPECT_TRUE(deferred_responses_.empty()) << c.tool;
+  }
+}
+
+TEST_F(MahoMcpSessionMailReadTest,
+       MailReadToolsReturnDeferredTextContentOnSuccess) {
+  {
+    auto responses = CallToolRaw("mail_list_accounts", R"({})", 200);
+    EXPECT_TRUE(responses.empty());
+    ASSERT_EQ(delegate_->pending_mail_read_count(), 1u);
+    auto pending = delegate_->TakePendingMailRead();
+    EXPECT_EQ(pending.method,
+              FakeMailReadDelegate::MailReadMethod::kListAccounts);
+    std::move(pending.callback).Run(true, R"({"accounts":[{"id":"acct"}]})");
+    ExpectSingleDeferredTextPayload(R"({"accounts":[{"id":"acct"}]})");
+  }
+
+  {
+    auto responses =
+        CallToolRaw("mail_list_folders", R"({"account_id":"acct"})", 201);
+    EXPECT_TRUE(responses.empty());
+    ASSERT_EQ(delegate_->pending_mail_read_count(), 1u);
+    auto pending = delegate_->TakePendingMailRead();
+    EXPECT_EQ(pending.method,
+              FakeMailReadDelegate::MailReadMethod::kListFolders);
+    EXPECT_EQ(pending.account_id, "acct");
+    std::move(pending.callback).Run(true, R"({"folders":[{"id":"inbox"}]})");
+    ExpectSingleDeferredTextPayload(R"({"folders":[{"id":"inbox"}]})");
+  }
+
+  {
+    auto responses = CallToolRaw(
+        "mail_list_emails",
+        R"({"account_id":"acct","folder_id":"inbox"})", 202);
+    EXPECT_TRUE(responses.empty());
+    ASSERT_EQ(delegate_->pending_mail_read_count(), 1u);
+    auto pending = delegate_->TakePendingMailRead();
+    EXPECT_EQ(pending.method,
+              FakeMailReadDelegate::MailReadMethod::kListEmails);
+    EXPECT_EQ(pending.account_id, "acct");
+    EXPECT_EQ(pending.folder_id, "inbox");
+    EXPECT_EQ(pending.limit, 50);
+    EXPECT_EQ(pending.offset, 0);
+    std::move(pending.callback).Run(true, R"({"emails":[{"id":"email"}]})");
+    ExpectSingleDeferredTextPayload(R"({"emails":[{"id":"email"}]})");
+  }
+
+  {
+    auto responses =
+        CallToolRaw("mail_get_email", R"({"email_id":"email"})", 203);
+    EXPECT_TRUE(responses.empty());
+    ASSERT_EQ(delegate_->pending_mail_read_count(), 1u);
+    auto pending = delegate_->TakePendingMailRead();
+    EXPECT_EQ(pending.method, FakeMailReadDelegate::MailReadMethod::kGetEmail);
+    EXPECT_EQ(pending.email_id, "email");
+    std::move(pending.callback).Run(true, R"({"id":"email","subject":"Hi"})");
+    ExpectSingleDeferredTextPayload(R"({"id":"email","subject":"Hi"})");
+  }
+
+  {
+    auto responses = CallToolRaw(
+        "mail_search_emails",
+        R"({"query":"receipt","account_id":"acct","folder_id":"inbox",)"
+        R"("limit":7,"offset":3})",
+        204);
+    EXPECT_TRUE(responses.empty());
+    ASSERT_EQ(delegate_->pending_mail_read_count(), 1u);
+    auto pending = delegate_->TakePendingMailRead();
+    EXPECT_EQ(pending.method,
+              FakeMailReadDelegate::MailReadMethod::kSearchEmails);
+
+    std::optional<base::Value> search_query =
+        base::JSONReader::Read(pending.query_json, base::JSON_PARSE_RFC);
+    ASSERT_TRUE(search_query.has_value());
+    const auto& query_dict = search_query->GetDict();
+    EXPECT_EQ(*query_dict.FindString("query"), "receipt");
+    EXPECT_EQ(*query_dict.FindString("account_id"), "acct");
+    EXPECT_EQ(*query_dict.FindString("folder_id"), "inbox");
+    EXPECT_EQ(query_dict.FindInt("limit").value(), 7);
+    EXPECT_EQ(query_dict.FindInt("offset").value(), 3);
+
+    std::move(pending.callback).Run(true, R"({"emails":[{"id":"match"}]})");
+    ExpectSingleDeferredTextPayload(R"({"emails":[{"id":"match"}]})");
+  }
+
+  {
+    auto responses = CallToolRaw(
+        "mail_list_thread",
+        R"({"account_id":"acct","message_id":"message"})", 205);
+    EXPECT_TRUE(responses.empty());
+    ASSERT_EQ(delegate_->pending_mail_read_count(), 1u);
+    auto pending = delegate_->TakePendingMailRead();
+    EXPECT_EQ(pending.method,
+              FakeMailReadDelegate::MailReadMethod::kListThread);
+    EXPECT_EQ(pending.account_id, "acct");
+    EXPECT_EQ(pending.message_id, "message");
+    std::move(pending.callback).Run(true, R"({"thread":[{"id":"message"}]})");
+    ExpectSingleDeferredTextPayload(R"({"thread":[{"id":"message"}]})");
+  }
+}
+
+TEST_F(MahoMcpSessionMailReadTest, MailDelegateFailureReturnsDeferredError) {
+  auto responses =
+      CallToolRaw("mail_get_email", R"({"email_id":"email"})", 300);
+
+  EXPECT_TRUE(responses.empty());
+  ASSERT_EQ(delegate_->pending_mail_read_count(), 1u);
+  auto pending = delegate_->TakePendingMailRead();
+  std::move(pending.callback).Run(false, "broker offline");
+
+  ASSERT_EQ(deferred_responses_.size(), 1u);
+  base::Value response = ParseLine(deferred_responses_.back());
+  const auto* error = response.GetDict().FindDict("error");
+  ASSERT_TRUE(error);
+  EXPECT_EQ(error->FindInt("code").value(), -32000);
+  EXPECT_EQ(*error->FindString("message"), "broker offline");
+}
+
+TEST_F(MahoMcpSessionMailReadTest,
+       MailExtractOtpReturnsSynchronousDocumentedErrorOnly) {
+  auto responses = CallToolRaw("mail_extract_otp", R"({})", 400);
+
+  ASSERT_EQ(responses.size(), 1u);
+  base::Value response = ParseLine(responses.front());
+  const auto* error = response.GetDict().FindDict("error");
+  ASSERT_TRUE(error);
+  EXPECT_EQ(error->FindInt("code").value(), -32000);
+  EXPECT_EQ(*error->FindString("message"),
+            "mail_extract_otp is not served by the mail read broker in this "
+            "build; one-time passwords are delivered through the browser OTP "
+            "push/arbitration path.");
+  EXPECT_EQ(delegate_->pending_mail_read_count(), 0u);
+  EXPECT_TRUE(deferred_responses_.empty());
+}
 
 class MahoMcpSessionNetworkCaptureTest : public testing::Test {
  protected:
@@ -1164,255 +1764,10 @@ TEST_F(MahoMcpSessionNetworkCaptureTest,
 
 // ---------------------------------------------------------------------------
 // R-8: non-revealing, generation-bound target resolution (task-8-mcp-session).
+// The ResolvingFakeDelegate and the resolution infra used by the tests below
+// live on MahoMcpSessionTest (see top of file); each test opts in with
+// InitResolvingSession().
 // ---------------------------------------------------------------------------
-
-// A delegate that models the private-context boundary: it can mark tabs
-// ineligible (OTR/closed), report no eligible active tab or browser, and fail
-// revalidation when its generation advances. It also records how many times
-// each resolution entry point is called so tests can prove resolve-once.
-class ResolvingFakeDelegate : public MahoMcpBrowserDelegate {
- public:
-  int active_tab_id = 7;
-  bool has_eligible_active = true;
-  bool has_eligible_browser = true;
-  std::set<int> eligible_tabs = {7, 11};
-  int64_t generation = 1;
-
-  int resolve_tab_calls = 0;
-  int resolve_profile_calls = 0;
-  int revalidate_calls = 0;
-
-  struct PendingStart {
-    std::string capture_id;
-    int requested_tab_id = 0;
-    StartNetworkCaptureCallback callback;
-  };
-  std::deque<PendingStart> pending_starts;
-  std::deque<StopNetworkCaptureCallback> pending_stops;
-  std::vector<std::string> canceled_capture_ids;
-
-  MahoMcpTargetResolution ResolveTabTarget(int requested_tab_id) override {
-    ++resolve_tab_calls;
-    MahoMcpTargetResolution resolution;
-    if (requested_tab_id == 0) {
-      if (!has_eligible_active) {
-        resolution.error = MahoMcpTargetError::kNoEligibleActiveTab;
-        return resolution;
-      }
-      resolution.target.valid = true;
-      resolution.target.tab_id = active_tab_id;
-      resolution.target.browser_id = 100;
-      resolution.target.generation = generation;
-      return resolution;
-    }
-    if (eligible_tabs.find(requested_tab_id) == eligible_tabs.end()) {
-      resolution.error = MahoMcpTargetError::kTabNotFound;
-      return resolution;
-    }
-    resolution.target.valid = true;
-    resolution.target.tab_id = requested_tab_id;
-    resolution.target.browser_id = 100;
-    resolution.target.generation = generation;
-    return resolution;
-  }
-
-  MahoMcpTargetResolution ResolveProfileTarget() override {
-    ++resolve_profile_calls;
-    MahoMcpTargetResolution resolution;
-    if (!has_eligible_browser) {
-      resolution.error = MahoMcpTargetError::kNoEligibleActiveBrowser;
-      return resolution;
-    }
-    resolution.target.valid = true;
-    resolution.target.browser_id = 100;
-    resolution.target.generation = generation;
-    return resolution;
-  }
-
-  bool RevalidateTarget(const ResolvedMahoMcpTarget& target) override {
-    ++revalidate_calls;
-    if (!target.valid) {
-      return false;
-    }
-    if (target.generation != generation) {
-      return false;
-    }
-    if (target.tab_id != 0 &&
-        eligible_tabs.find(target.tab_id) == eligible_tabs.end()) {
-      return false;
-    }
-    return true;
-  }
-
-  std::vector<MahoMcpSession::TabInfo> GetTabList() override {
-    std::vector<MahoMcpSession::TabInfo> tabs;
-    for (int id : eligible_tabs) {
-      MahoMcpSession::TabInfo t;
-      t.id = id;
-      t.title = "tab";
-      t.url = "https://example.com/";
-      t.is_active = (id == active_tab_id);
-      tabs.push_back(t);
-    }
-    return tabs;
-  }
-
-  void StartNetworkCapture(const std::string& capture_id,
-                           int tab_id,
-                           StartNetworkCaptureCallback callback) override {
-    pending_starts.push_back(
-        PendingStart{capture_id, tab_id, std::move(callback)});
-  }
-  void StopNetworkCapture(const std::string& capture_id,
-                          StopNetworkCaptureCallback callback) override {
-    pending_stops.push_back(std::move(callback));
-  }
-  void CancelNetworkCapture(const std::string& capture_id) override {
-    canceled_capture_ids.push_back(capture_id);
-  }
-
-  std::vector<MahoMcpSession::ConsoleMessage> GetConsoleMessages(
-      int tab_id) override {
-    return {};
-  }
-  std::vector<MahoMcpSession::NavigationEvent> GetNavigationEvents(
-      int tab_id,
-      int64_t since_ms) override {
-    return {};
-  }
-  std::string GetPageText(int tab_id) override { return std::string(); }
-  base::Value GetAccessibilitySnapshot(
-      int tab_id,
-      MahoMcpSession::RefTable* out_refs) override {
-    return base::Value(base::DictValue());
-  }
-  PageContentResult GetPageContent(int tab_id) override { return {}; }
-  PageContextResult GetPageContext(int tab_id) override { return {}; }
-  SearchResult SearchInPage(int tab_id, const std::string& query) override {
-    return {};
-  }
-  QuerySelectorResult QuerySelector(int tab_id,
-                                    const std::string& selector) override {
-    return {};
-  }
-  std::string GetElementText(int tab_id, const std::string& ref_id) override {
-    return std::string();
-  }
-  std::string GetElementAttribute(int tab_id,
-                                  const std::string& ref_id,
-                                  const std::string& attribute) override {
-    return std::string();
-  }
-  bool WaitForSelector(int tab_id,
-                       const std::string& selector,
-                       int timeout_ms) override {
-    return false;
-  }
-  int CreateNewTab(const GURL& url) override { return 99; }
-  bool CloseTab(int tab_id) override { return true; }
-  std::vector<BookmarkInfo> SearchBookmarks(const std::string& query) override {
-    return {};
-  }
-  BookmarkInfo CreateBookmark(const std::string& title,
-                              const GURL& url,
-                              const std::string& folder) override {
-    return BookmarkInfo();
-  }
-  std::vector<HistoryEntry> SearchHistory(const std::string& query,
-                                          size_t max_results) override {
-    return {};
-  }
-  void CaptureFullPagePngBase64(
-      int tab_id,
-      base::OnceCallback<void(std::string)> callback) override {
-    std::move(callback).Run(std::string());
-  }
-  void CaptureElementPngBase64(
-      int tab_id,
-      ui::AXNodeID ax_id,
-      base::OnceCallback<void(std::string)> callback) override {
-    std::move(callback).Run(std::string());
-  }
-  bool Scroll(int tab_id,
-              const std::string& direction,
-              int pixels,
-              std::optional<ui::AXNodeID> ax_id) override {
-    return false;
-  }
-  bool Click(int tab_id, ui::AXNodeID ax_id) override { return false; }
-  bool Type(int tab_id, ui::AXNodeID ax_id, const std::string& text) override {
-    return false;
-  }
-  bool Select(int tab_id,
-              ui::AXNodeID ax_id,
-              const std::string& value) override {
-    return false;
-  }
-  bool Hover(int tab_id, ui::AXNodeID ax_id) override { return false; }
-  bool KeyPress(int tab_id,
-                const std::string& key,
-                const std::vector<std::string>& modifiers) override {
-    return false;
-  }
-  bool ActivateTab(int tab_id) override { return true; }
-  bool Navigate(int tab_id, const GURL& url) override { return true; }
-  bool SetViewportSize(int tab_id, int width, int height) override {
-    return true;
-  }
-};
-
-class MahoMcpSessionResolutionTest : public testing::Test {
- protected:
-  void SetUp() override {
-    delegate_ = std::make_unique<ResolvingFakeDelegate>();
-    MahoMcpSession::SetBrowserDelegate(delegate_.get());
-    session_ =
-        std::make_unique<MahoMcpSession>(getuid(), &lease_registry_);
-    session_->SetDeferredResponseSender(base::BindRepeating(
-        &MahoMcpSessionResolutionTest::CaptureDeferred,
-        base::Unretained(this)));
-    auto responses = session_->ProcessData(
-        R"({"jsonrpc":"2.0","method":"initialize","id":1,)"
-        R"("params":{"protocolVersion":"2025-03-26",)"
-        R"("clientInfo":{"name":"t","version":"0.1.0"}}})"
-        "\n");
-    EXPECT_EQ(responses.size(), 1u);
-    EXPECT_EQ(session_->state(), MahoMcpSession::State::kActive);
-  }
-
-  void TearDown() override {
-    session_.reset();
-    MahoMcpSession::SetBrowserDelegate(nullptr);
-    delegate_.reset();
-  }
-
-  std::vector<std::string> CallToolRaw(const std::string& name,
-                                       const std::string& args,
-                                       int id) {
-    return session_->ProcessData(base::StringPrintf(
-        R"({"jsonrpc":"2.0","method":"tools/call","id":%d,)"
-        R"("params":{"name":"%s","arguments":%s}})"
-        "\n",
-        id, name.c_str(), args.c_str()));
-  }
-
-  base::Value ParseLine(const std::string& line) {
-    std::optional<base::Value> parsed =
-        base::JSONReader::Read(line, base::JSON_PARSE_RFC);
-    EXPECT_TRUE(parsed.has_value());
-    return parsed.has_value() ? std::move(*parsed) : base::Value();
-  }
-
-  void CaptureDeferred(std::string line) {
-    deferred_responses_.push_back(std::move(line));
-  }
-
-  base::test::TaskEnvironment task_environment_;
-  MahoMcpLeaseRegistry lease_registry_;
-  std::unique_ptr<ResolvingFakeDelegate> delegate_;
-  std::unique_ptr<MahoMcpSession> session_;
-  std::vector<std::string> deferred_responses_;
-};
 
 TEST_F(MahoMcpSessionTest, ToolSetsAreExactAndEvaluateJsStaysDenied) {
   // No production delegate: the advertised tool set is independent of the
@@ -1440,6 +1795,7 @@ TEST_F(MahoMcpSessionTest, ToolSetsAreExactAndEvaluateJsStaysDenied) {
     ASSERT_TRUE(name);
     advertised.insert(*name);
   }
+  EXPECT_EQ(advertised.size(), tools->size());
 
   const std::set<std::string> expected = {
       "browser_tab_list",
@@ -1462,6 +1818,13 @@ TEST_F(MahoMcpSessionTest, ToolSetsAreExactAndEvaluateJsStaysDenied) {
       "browser_get_allowed_domains",
       "browser_routines_list",
       "browser_routines_run",
+      "mail_list_accounts",
+      "mail_list_folders",
+      "mail_list_emails",
+      "mail_get_email",
+      "mail_search_emails",
+      "mail_list_thread",
+      "mail_extract_otp",
       "browser_acquire_lease",
       "browser_heartbeat_lease",
       "browser_release_lease",
@@ -1511,7 +1874,9 @@ TEST_F(MahoMcpSessionTest, ToolSetsAreExactAndEvaluateJsStaysDenied) {
   EXPECT_TRUE(ping_result->FindBool("pong").value());
 }
 
-TEST_F(MahoMcpSessionResolutionTest, EveryTargetedToolUsesStableResolution) {
+TEST_F(MahoMcpSessionTest, EveryTargetedToolUsesStableResolution) {
+  InitResolvingSession();
+
   const std::vector<std::string> tab_target_tools = {
       "browser_tab_get",
       "browser_navigate",
@@ -1568,7 +1933,9 @@ TEST_F(MahoMcpSessionResolutionTest, EveryTargetedToolUsesStableResolution) {
   EXPECT_EQ(delegate_->resolve_profile_calls, prof_before);
 }
 
-TEST_F(MahoMcpSessionResolutionTest, NoCachedOrZeroActiveFallback) {
+TEST_F(MahoMcpSessionTest, NoCachedOrZeroActiveFallback) {
+  InitResolvingSession();
+
   // Explicit unknown/OTR id is indistinguishable from unknown: -32004.
   {
     auto responses = CallToolRaw("browser_page_text", R"({"tab_id":4242})", 200);
@@ -1617,7 +1984,9 @@ TEST_F(MahoMcpSessionResolutionTest, NoCachedOrZeroActiveFallback) {
   }
 }
 
-TEST_F(MahoMcpSessionResolutionTest, AsyncDenialCompletesExactlyOnce) {
+TEST_F(MahoMcpSessionTest, AsyncDenialCompletesExactlyOnce) {
+  InitResolvingSession();
+
   ASSERT_TRUE(
       CallToolRaw("browser_network_start_capture", R"({"tab_id":7})", 300)
           .empty());
@@ -1642,7 +2011,9 @@ TEST_F(MahoMcpSessionResolutionTest, AsyncDenialCompletesExactlyOnce) {
   EXPECT_EQ(error->FindInt("code").value(), -32004);
 }
 
-TEST_F(MahoMcpSessionResolutionTest, OmittedTargetForwardsResolvedConcreteId) {
+TEST_F(MahoMcpSessionTest, OmittedTargetForwardsResolvedConcreteId) {
+  InitResolvingSession();
+
   // The frontmost active tab resolves to id 7. An omitted-target tool must
   // forward that resolved concrete id to the delegate, never 0 (which would
   // let the delegate re-resolve "active" at a later, possibly-OTR moment).
@@ -1653,7 +2024,9 @@ TEST_F(MahoMcpSessionResolutionTest, OmittedTargetForwardsResolvedConcreteId) {
   EXPECT_EQ(delegate_->pending_starts.front().requested_tab_id, 7);
 }
 
-TEST_F(MahoMcpSessionResolutionTest, CaptureAndLeaseRemainBoundToGeneration) {
+TEST_F(MahoMcpSessionTest, CaptureAndLeaseRemainBoundToGeneration) {
+  InitResolvingSession();
+
   // Capture succeeds while the bound generation is still valid.
   ASSERT_TRUE(
       CallToolRaw("browser_network_start_capture", R"({"tab_id":7})", 400)

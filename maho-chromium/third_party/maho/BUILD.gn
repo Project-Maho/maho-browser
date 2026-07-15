@@ -144,7 +144,72 @@ source_set("maho_core_prebuilt") {
   public_configs = [ ":maho_core_prebuilt_config" ]
 }
 
-static_library("maho_mail_ffi") {
-  sources = [ "maho_mail_ffi_dummy.cc" ]
+# C ABI header for the standalone maho-mail-ffi mail backend static lib.
+source_set("maho_mail_ffi_headers") {
+  sources = [ "maho_mail_ffi.h" ]
+  public_configs = [ ":maho_include_config" ]
+}
+
+# Prebuilt maho-mail-ffi Rust static library. Standalone crate at
+# //maho/mail-core with its OWN Cargo workspace (avoids the libsqlite3-sys /
+# bundled-sqlcipher conflict with the main maho workspace). Built via
+# `cargo build --release` in maho/mail-core and copied into prebuilt/<cpu>/.
+# Owns its own SQLCipher DB and drives real IMAP sync/IDLE/backfill.
+config("maho_mail_ffi_prebuilt_config") {
+  if (target_cpu == "arm64") {
+    lib_dirs = [ "prebuilt/arm64" ]
+    if (is_win) {
+      inputs = [ "prebuilt/arm64/maho_mail_ffi.lib" ]
+    } else {
+      inputs = [ "prebuilt/arm64/libmaho_mail_ffi.a" ]
+    }
+  } else if (target_cpu == "x64") {
+    lib_dirs = [ "prebuilt/x64" ]
+    if (is_win) {
+      inputs = [ "prebuilt/x64/maho_mail_ffi.lib" ]
+    } else {
+      inputs = [ "prebuilt/x64/libmaho_mail_ffi.a" ]
+    }
+  }
+
+  if (is_win) {
+    libs = [
+      "maho_mail_ffi.lib",
+      "ws2_32.lib",
+      "userenv.lib",
+      "ntdll.lib",
+      "iphlpapi.lib",
+      "bcrypt.lib",
+      "crypt32.lib",
+      "secur32.lib",
+    ]
+  } else {
+    libs = [ "maho_mail_ffi" ]
+    if (is_mac) {
+      frameworks = [
+        "CoreFoundation.framework",
+        "Security.framework",
+        "SystemConfiguration.framework",
+      ]
+      libs += [
+        "resolv",
+        "c++",
+      ]
+    } else if (is_linux) {
+      libs += [
+        "dl",
+        "rt",
+        "pthread",
+        "m",
+      ]
+    }
+  }
+}
+
+# Real mail backend. Replaces the former maho_mail_ffi_dummy.cc no-op stub;
+# the target name is unchanged so the mail helper's BUILD.gn dep still resolves.
+source_set("maho_mail_ffi") {
+  public_configs = [ ":maho_mail_ffi_prebuilt_config" ]
+  public_deps = [ ":maho_mail_ffi_headers" ]
 }
 

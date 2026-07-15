@@ -1,9 +1,9 @@
-use std::pin::Pin;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures_util::{Stream, StreamExt};
 use maho_types::chat::{ChatContent, ChatContentPart};
 use maho_types::llm::{LLMStreamChunk, ModelInfo};
 use serde_json::Value;
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use std::pin::Pin;
 
 use crate::llm_provider::LLMProvider;
 use crate::stream_utils;
@@ -59,11 +59,15 @@ impl LLMProvider for AnthropicProvider {
         });
 
         if let Some(sys) = system_text {
-            body.as_object_mut().unwrap().insert("system".to_string(), Value::String(sys));
+            body.as_object_mut()
+                .unwrap()
+                .insert("system".to_string(), Value::String(sys));
         }
 
         if !tools.is_empty() {
-            body.as_object_mut().unwrap().insert("tools".to_string(), Value::Array(tools));
+            body.as_object_mut()
+                .unwrap()
+                .insert("tools".to_string(), Value::Array(tools));
         }
 
         req = req.json(&body);
@@ -138,15 +142,25 @@ impl LLMProvider for AnthropicProvider {
                                 let delta_type = delta.get("type").and_then(|t| t.as_str());
                                 match delta_type {
                                     Some("text_delta") => {
-                                        if let Some(text) = delta.get("text").and_then(|t| t.as_str()) {
+                                        if let Some(text) =
+                                            delta.get("text").and_then(|t| t.as_str())
+                                        {
                                             if !text.is_empty() {
-                                                let _ = tx.try_send(Ok(LLMStreamChunk::Token(text.to_string())));
+                                                let _ = tx.try_send(Ok(LLMStreamChunk::Token(
+                                                    text.to_string(),
+                                                )));
                                             }
                                         }
                                     }
                                     Some("input_json_delta") => {
-                                        let index = json.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
-                                        let partial_json = delta.get("partial_json").and_then(|p| p.as_str()).unwrap_or_default().to_string();
+                                        let index =
+                                            json.get("index").and_then(|i| i.as_u64()).unwrap_or(0)
+                                                as usize;
+                                        let partial_json = delta
+                                            .get("partial_json")
+                                            .and_then(|p| p.as_str())
+                                            .unwrap_or_default()
+                                            .to_string();
                                         let _ = tx.try_send(Ok(LLMStreamChunk::ToolCallDelta {
                                             index,
                                             id: None,
@@ -160,10 +174,20 @@ impl LLMProvider for AnthropicProvider {
                         }
                         Some("content_block_start") => {
                             if let Some(content_block) = json.get("content_block") {
-                                if content_block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
-                                    let index = json.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
-                                    let id = content_block.get("id").and_then(|i| i.as_str()).map(|s| s.to_string());
-                                    let name = content_block.get("name").and_then(|n| n.as_str()).map(|s| s.to_string());
+                                if content_block.get("type").and_then(|t| t.as_str())
+                                    == Some("tool_use")
+                                {
+                                    let index =
+                                        json.get("index").and_then(|i| i.as_u64()).unwrap_or(0)
+                                            as usize;
+                                    let id = content_block
+                                        .get("id")
+                                        .and_then(|i| i.as_str())
+                                        .map(|s| s.to_string());
+                                    let name = content_block
+                                        .get("name")
+                                        .and_then(|n| n.as_str())
+                                        .map(|s| s.to_string());
                                     let _ = tx.try_send(Ok(LLMStreamChunk::ToolCallDelta {
                                         index,
                                         id,
@@ -174,7 +198,8 @@ impl LLMProvider for AnthropicProvider {
                             }
                         }
                         Some("error") => {
-                            let err_msg = json.get("error")
+                            let err_msg = json
+                                .get("error")
                                 .and_then(|e| e.get("message"))
                                 .and_then(|m| m.as_str())
                                 .unwrap_or("Unknown Anthropic error");
@@ -243,20 +268,23 @@ pub fn chat_content_to_anthropic_value(content: &ChatContent) -> Value {
             })])
         }
         ChatContent::Mixed(parts) => {
-            let items: Vec<Value> = parts.iter().map(|p| match p {
-                ChatContentPart::Text(s) => serde_json::json!({ "type": "text", "text": s }),
-                ChatContentPart::Image { mime, data } => {
-                    let b64 = BASE64.encode(data);
-                    serde_json::json!({
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": mime,
-                            "data": b64
-                        }
-                    })
-                }
-            }).collect();
+            let items: Vec<Value> = parts
+                .iter()
+                .map(|p| match p {
+                    ChatContentPart::Text(s) => serde_json::json!({ "type": "text", "text": s }),
+                    ChatContentPart::Image { mime, data } => {
+                        let b64 = BASE64.encode(data);
+                        serde_json::json!({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": mime,
+                                "data": b64
+                            }
+                        })
+                    }
+                })
+                .collect();
             Value::Array(items)
         }
     }
@@ -292,7 +320,10 @@ mod tests {
     fn test_anthropic_mixed_format() {
         let parts = vec![
             ChatContentPart::Text("what is this?".to_string()),
-            ChatContentPart::Image { mime: "image/png".to_string(), data: vec![1u8, 2, 3] },
+            ChatContentPart::Image {
+                mime: "image/png".to_string(),
+                data: vec![1u8, 2, 3],
+            },
         ];
         let content = ChatContent::Mixed(parts);
         let val = chat_content_to_anthropic_value(&content);

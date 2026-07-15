@@ -1,7 +1,7 @@
 use maho_core::maho_core::MahoCore;
+use maho_types::common::Url;
 use maho_types::events::shell_event::ShellEvent;
 use maho_types::identifiers::TabId;
-use maho_types::common::Url;
 
 fn setup_core_with_tabs(count: usize) -> (MahoCore, Vec<TabId>) {
     let mut core = MahoCore::new();
@@ -37,7 +37,10 @@ fn test_get_tab_snapshot_by_id_found() {
     let json_str = json_opt.unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
     assert_eq!(parsed["id"].as_str().unwrap(), tab_id.as_ref());
-    assert_eq!(parsed["url"].as_str().unwrap(), &format!("https://example.com/2"));
+    assert_eq!(
+        parsed["url"].as_str().unwrap(),
+        &format!("https://example.com/2")
+    );
     assert_eq!(parsed["title"].as_str().unwrap(), "New Tab");
     assert!(parsed["isPinned"].is_boolean());
     assert!(parsed["scrollPosition"]["x"].is_number());

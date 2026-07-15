@@ -1,9 +1,9 @@
-use worker::*;
-use serde::{Deserialize, Serialize};
-use base64::Engine;
-use crate::errors::{AppError, Result};
-use crate::db;
 use crate::auth::middleware::get_auth_context;
+use crate::db;
+use crate::errors::{AppError, Result};
+use base64::Engine;
+use serde::{Deserialize, Serialize};
+use worker::*;
 
 #[derive(Debug, Deserialize)]
 pub struct UploadSnapshotRequest {
@@ -25,10 +25,13 @@ const MAX_SNAPSHOT_BYTES: usize = 100 * 1024 * 1024;
 pub async fn upload_snapshot(mut req: Request, env: Env) -> Result<Response> {
     let db = env.d1("MAHO_DB")?;
     let auth = get_auth_context(&req, &db).await?;
-    let room_id = db::get_latest_room_for_user(&db, auth.user.id).await?
+    let room_id = db::get_latest_room_for_user(&db, auth.user.id)
+        .await?
         .ok_or_else(|| AppError::BadRequest("no_room_for_user".to_string()))?;
 
-    let payload: UploadSnapshotRequest = req.json().await
+    let payload: UploadSnapshotRequest = req
+        .json()
+        .await
         .map_err(|e| AppError::BadRequest(format!("invalid_json: {e}")))?;
 
     let decoded = base64::engine::general_purpose::STANDARD
@@ -42,9 +45,11 @@ pub async fn upload_snapshot(mut req: Request, env: Env) -> Result<Response> {
     let db = env.d1("MAHO_DB")?;
     let now = chrono::Utc::now().timestamp();
 
-    let existing = db.prepare("SELECT hlc_ts_ceiling FROM snapshots WHERE room_id = ?1")
+    let existing = db
+        .prepare("SELECT hlc_ts_ceiling FROM snapshots WHERE room_id = ?1")
         .bind(&[db::js(&room_id)?])?
-        .first::<serde_json::Value>(None).await?;
+        .first::<serde_json::Value>(None)
+        .await?;
 
     if let Some(row) = existing {
         if let Some(existing_hlc) = row.get("hlc_ts_ceiling").and_then(|v| v.as_i64()) {
@@ -61,10 +66,10 @@ pub async fn upload_snapshot(mut req: Request, env: Env) -> Result<Response> {
             hlc_ts_ceiling = ?2,
             creator_device_id = ?3,
             blob = ?4,
-            created_at = ?5"
+            created_at = ?5",
     );
-    let blob_js: wasm_bindgen::JsValue = serde_wasm_bindgen::to_value(&decoded)
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let blob_js: wasm_bindgen::JsValue =
+        serde_wasm_bindgen::to_value(&decoded).map_err(|e| AppError::Internal(e.to_string()))?;
     let stmt = stmt.bind(&[
         db::js(&room_id)?,
         db::js(&payload.hlc_ts_ceiling)?,
@@ -76,7 +81,9 @@ pub async fn upload_snapshot(mut req: Request, env: Env) -> Result<Response> {
 
     let _ = db::touch_session_and_device(&db, auth.session.id, auth.device.id, now).await;
 
-    Response::ok("").map(|r| r.with_status(200)).map_err(AppError::from)
+    Response::ok("")
+        .map(|r| r.with_status(200))
+        .map_err(AppError::from)
 }
 
 pub async fn latest_snapshot(req: Request, env: Env) -> Result<Response> {
@@ -112,8 +119,6 @@ pub async fn latest_snapshot(req: Request, env: Env) -> Result<Response> {
             };
             Response::from_json(&response).map_err(AppError::from)
         }
-        None => {
-            Response::error("not_found", 404).map_err(AppError::from)
-        }
+        None => Response::error("not_found", 404).map_err(AppError::from),
     }
 }

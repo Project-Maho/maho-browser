@@ -1,6 +1,6 @@
-use crate::sqlite::SqliteStorage;
 use crate::error::StorageError;
-use maho_types::ai::{AiProfile, AiWorkspace, AiMcpServer, AiCliTool, McpTransport};
+use crate::sqlite::SqliteStorage;
+use maho_types::ai::{AiCliTool, AiMcpServer, AiProfile, AiWorkspace, McpTransport};
 use rusqlite::params;
 
 impl SqliteStorage {
@@ -8,7 +8,8 @@ impl SqliteStorage {
 
     pub fn create_ai_profile(&self, profile: &AiProfile) -> Result<(), StorageError> {
         let tools_json = serde_json::to_string(&profile.tools).unwrap_or_else(|_| "[]".to_string());
-        let mcp_servers_json = serde_json::to_string(&profile.mcp_servers).unwrap_or_else(|_| "[]".to_string());
+        let mcp_servers_json =
+            serde_json::to_string(&profile.mcp_servers).unwrap_or_else(|_| "[]".to_string());
         let is_default_val = if profile.is_default { 1 } else { 0 };
 
         self.conn.execute(
@@ -44,7 +45,8 @@ impl SqliteStorage {
             let is_default_val: i32 = row.get(6)?;
 
             let tools: Vec<String> = serde_json::from_str(&tools_json).unwrap_or_default();
-            let mcp_servers: Vec<String> = serde_json::from_str(&mcp_servers_json).unwrap_or_default();
+            let mcp_servers: Vec<String> =
+                serde_json::from_str(&mcp_servers_json).unwrap_or_default();
 
             Ok(Some(AiProfile {
                 id: row.get(0)?,
@@ -74,7 +76,8 @@ impl SqliteStorage {
             let is_default_val: i32 = row.get(6)?;
 
             let tools: Vec<String> = serde_json::from_str(&tools_json).unwrap_or_default();
-            let mcp_servers: Vec<String> = serde_json::from_str(&mcp_servers_json).unwrap_or_default();
+            let mcp_servers: Vec<String> =
+                serde_json::from_str(&mcp_servers_json).unwrap_or_default();
 
             Ok(AiProfile {
                 id: row.get(0)?,
@@ -98,7 +101,8 @@ impl SqliteStorage {
 
     pub fn update_ai_profile(&self, profile: &AiProfile) -> Result<(), StorageError> {
         let tools_json = serde_json::to_string(&profile.tools).unwrap_or_else(|_| "[]".to_string());
-        let mcp_servers_json = serde_json::to_string(&profile.mcp_servers).unwrap_or_else(|_| "[]".to_string());
+        let mcp_servers_json =
+            serde_json::to_string(&profile.mcp_servers).unwrap_or_else(|_| "[]".to_string());
         let is_default_val = if profile.is_default { 1 } else { 0 };
 
         self.conn.execute(
@@ -121,10 +125,8 @@ impl SqliteStorage {
     }
 
     pub fn delete_ai_profile(&self, id: &str) -> Result<(), StorageError> {
-        self.conn.execute(
-            "DELETE FROM ai_profiles WHERE id = ?1",
-            params![id],
-        )?;
+        self.conn
+            .execute("DELETE FROM ai_profiles WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -142,7 +144,8 @@ impl SqliteStorage {
             let is_default_val: i32 = row.get(6)?;
 
             let tools: Vec<String> = serde_json::from_str(&tools_json).unwrap_or_default();
-            let mcp_servers: Vec<String> = serde_json::from_str(&mcp_servers_json).unwrap_or_default();
+            let mcp_servers: Vec<String> =
+                serde_json::from_str(&mcp_servers_json).unwrap_or_default();
 
             Ok(Some(AiProfile {
                 id: row.get(0)?,
@@ -182,7 +185,7 @@ impl SqliteStorage {
     pub fn get_workspace(&self, id: &str) -> Result<Option<AiWorkspace>, StorageError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, profile_id, space_id, workspace_root, created_at, updated_at
-             FROM ai_workspaces WHERE id = ?1"
+             FROM ai_workspaces WHERE id = ?1",
         )?;
 
         let mut rows = stmt.query(params![id])?;
@@ -202,10 +205,13 @@ impl SqliteStorage {
         }
     }
 
-    pub fn get_workspace_by_space(&self, space_id: &str) -> Result<Option<AiWorkspace>, StorageError> {
+    pub fn get_workspace_by_space(
+        &self,
+        space_id: &str,
+    ) -> Result<Option<AiWorkspace>, StorageError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, profile_id, space_id, workspace_root, created_at, updated_at
-             FROM ai_workspaces WHERE space_id = ?1"
+             FROM ai_workspaces WHERE space_id = ?1",
         )?;
 
         let mut rows = stmt.query(params![space_id])?;
@@ -232,7 +238,7 @@ impl SqliteStorage {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, profile_id, space_id, workspace_root, created_at, updated_at
              FROM ai_workspaces
-             ORDER BY created_at, id"
+             ORDER BY created_at, id",
         )?;
 
         let rows = stmt.query_map(params![], |row| {
@@ -272,10 +278,8 @@ impl SqliteStorage {
     }
 
     pub fn delete_workspace(&self, id: &str) -> Result<(), StorageError> {
-        self.conn.execute(
-            "DELETE FROM ai_workspaces WHERE id = ?1",
-            params![id],
-        )?;
+        self.conn
+            .execute("DELETE FROM ai_workspaces WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -288,7 +292,10 @@ impl SqliteStorage {
             McpTransport::Uds => "uds",
         };
         let trusted_val = if server.trusted { 1 } else { 0 };
-        let trusted_tools_json = server.trusted_tools.as_ref().map(|t| serde_json::to_string(t).unwrap_or_default());
+        let trusted_tools_json = server
+            .trusted_tools
+            .as_ref()
+            .map(|t| serde_json::to_string(t).unwrap_or_default());
 
         self.conn.execute(
             "INSERT INTO ai_mcp_servers (id, workspace_id, name, transport, command, url, auth_keychain_id, trusted, trusted_tools_json, timeout_ms, output_cap_bytes, created_at, updated_at, socket_path)
@@ -406,7 +413,10 @@ impl SqliteStorage {
             McpTransport::Uds => "uds",
         };
         let trusted_val = if server.trusted { 1 } else { 0 };
-        let trusted_tools_json = server.trusted_tools.as_ref().map(|t| serde_json::to_string(t).unwrap_or_default());
+        let trusted_tools_json = server
+            .trusted_tools
+            .as_ref()
+            .map(|t| serde_json::to_string(t).unwrap_or_default());
 
         self.conn.execute(
             "UPDATE ai_mcp_servers
@@ -443,7 +453,8 @@ impl SqliteStorage {
 
     pub fn create_cli_tool(&self, tool: &AiCliTool) -> Result<(), StorageError> {
         let sensitive_val = if tool.sensitive { 1 } else { 0 };
-        let schema_str = serde_json::to_string(&tool.parameters_schema).unwrap_or_else(|_| "{}".to_string());
+        let schema_str =
+            serde_json::to_string(&tool.parameters_schema).unwrap_or_else(|_| "{}".to_string());
 
         self.conn.execute(
             "INSERT INTO ai_cli_tools (id, workspace_id, name, description, command_template, parameters_schema_json, sensitive, timeout_ms, output_cap_bytes, working_directory, created_at, updated_at)
@@ -476,7 +487,8 @@ impl SqliteStorage {
 
         if let Some(row) = rows.next()? {
             let schema_str: String = row.get(5)?;
-            let parameters_schema: serde_json::Value = serde_json::from_str(&schema_str).unwrap_or_default();
+            let parameters_schema: serde_json::Value =
+                serde_json::from_str(&schema_str).unwrap_or_default();
             let sensitive_val: i32 = row.get(6)?;
             let timeout_ms: i64 = row.get(7)?;
             let output_cap_bytes: i64 = row.get(8)?;
@@ -508,7 +520,8 @@ impl SqliteStorage {
 
         let rows = stmt.query_map(params![workspace_id], |row| {
             let schema_str: String = row.get(5)?;
-            let parameters_schema: serde_json::Value = serde_json::from_str(&schema_str).unwrap_or_default();
+            let parameters_schema: serde_json::Value =
+                serde_json::from_str(&schema_str).unwrap_or_default();
             let sensitive_val: i32 = row.get(6)?;
             let timeout_ms: i64 = row.get(7)?;
             let output_cap_bytes: i64 = row.get(8)?;
@@ -538,7 +551,8 @@ impl SqliteStorage {
 
     pub fn update_cli_tool(&self, tool: &AiCliTool) -> Result<(), StorageError> {
         let sensitive_val = if tool.sensitive { 1 } else { 0 };
-        let schema_str = serde_json::to_string(&tool.parameters_schema).unwrap_or_else(|_| "{}".to_string());
+        let schema_str =
+            serde_json::to_string(&tool.parameters_schema).unwrap_or_else(|_| "{}".to_string());
 
         self.conn.execute(
             "UPDATE ai_cli_tools

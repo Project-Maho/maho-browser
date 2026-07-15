@@ -48,6 +48,9 @@ source_set("maho_updates_lib") {
   deps = [
     ":maho_updates_prefs",
     "//base",
+    "//maho/browser:maho_core_holder",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
     "//chrome/browser:browser_process",
     "//chrome/browser/profiles:profile",
     "//components/prefs",

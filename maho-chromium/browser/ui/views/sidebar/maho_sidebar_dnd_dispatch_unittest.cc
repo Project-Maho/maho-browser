@@ -1,6 +1,9 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
+#include "maho/browser/ui/views/sidebar/maho_sidebar_dnd_events.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_drop_planner.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_section_policy.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.h"
@@ -4423,6 +4426,245 @@ TEST_F(SidebarStateModelContractTest, ShowTabRowContextMenuUnselectedClearsSelec
   MahoTabContextMenu* menu = list->active_context_menu_for_testing();
   ASSERT_NE(menu, nullptr);
   EXPECT_EQ(menu->selected_tab_ids_for_testing().size(), 0u);
+}
+
+// ---------------------------------------------------------------------------
+// Whole-folder Normal<->Pinned drag transitions.
+//
+// A folder that crosses the Pinned/Normal boundary flips its pin state and must
+// emit a typed set_folder_pinned(bool) event before any positional reorder. A
+// same-section folder drop is a pure reorder and must not emit a pin event.
+// ---------------------------------------------------------------------------
+
+SidebarDragPayload MakePinnedFolderPayload(const std::string& folder_id) {
+  SidebarDragPayload payload = MakeFolderPayload(folder_id);
+  payload.origin = SidebarDragOrigin::kPinnedSection;
+  return payload;
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       FolderDropToPinnedSectionPlanEmitsFolderPinTransition) {
+  SidebarDropPlan plan =
+      ResolveDropPlan(SectionKind::kPinned, MakeFolderPayload("folder-1"));
+  EXPECT_TRUE(plan.is_valid);
+  EXPECT_TRUE(plan.steps.empty());
+  EXPECT_EQ(plan.pin_transition.kind,
+            SidebarDropPlan::PinTransition::Kind::kPin);
+  EXPECT_TRUE(plan.pin_transition.is_folder);
+  EXPECT_EQ(plan.pin_transition.node_id, "folder-1");
+  EXPECT_EQ(plan.pin_transition.space_id, "space-1");
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       FolderDropToNormalSectionPlanEmitsFolderUnpinTransition) {
+  SidebarDropPlan plan = ResolveDropPlan(SectionKind::kNormal,
+                                         MakePinnedFolderPayload("folder-p"));
+  EXPECT_TRUE(plan.is_valid);
+  EXPECT_TRUE(plan.steps.empty());
+  EXPECT_EQ(plan.pin_transition.kind,
+            SidebarDropPlan::PinTransition::Kind::kUnpin);
+  EXPECT_TRUE(plan.pin_transition.is_folder);
+  EXPECT_EQ(plan.pin_transition.node_id, "folder-p");
+  EXPECT_EQ(plan.pin_transition.space_id, "space-1");
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       SameSectionFolderDropPlanEmitsNoPinTransition) {
+  SidebarDropPlan normal_plan =
+      ResolveDropPlan(SectionKind::kNormal, MakeFolderPayload("folder-n"));
+  EXPECT_TRUE(normal_plan.is_valid);
+  EXPECT_EQ(normal_plan.pin_transition.kind,
+            SidebarDropPlan::PinTransition::Kind::kNone);
+  EXPECT_FALSE(normal_plan.pin_transition.is_folder);
+
+  SidebarDropPlan pinned_plan =
+      ResolveDropPlan(SectionKind::kPinned, MakePinnedFolderPayload("folder-p"));
+  EXPECT_TRUE(pinned_plan.is_valid);
+  EXPECT_EQ(pinned_plan.pin_transition.kind,
+            SidebarDropPlan::PinTransition::Kind::kNone);
+  EXPECT_FALSE(pinned_plan.pin_transition.is_folder);
+}
+
+TEST_F(SidebarDnDDispatchTest, FolderDropToFavoritesRemainsInvalid) {
+  EXPECT_FALSE(
+      ResolveDropPlan(SectionKind::kFavorites, MakeFolderPayload("folder-n"))
+          .is_valid);
+  EXPECT_FALSE(ResolveDropPlan(SectionKind::kFavorites,
+                               MakePinnedFolderPayload("folder-p"))
+                   .is_valid);
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       HandlePostDropTransitionFolderPinDispatchesSetFolderPinnedTrue) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  SidebarDragPayload payload = MakeFolderPayload("folder-1");
+  SidebarDropPlan plan = ResolveDropPlan(SectionKind::kPinned, payload);
+  list.HandlePostDropTransition(payload, plan);
+
+  ASSERT_EQ(observer_.events.size(), 1u);
+  EXPECT_EQ(observer_.events[0].kind, "set_folder_pinned");
+  SCOPED_TRACE(observer_.events[0].json);
+  auto parsed = ParseJson(observer_.events[0].json);
+  ASSERT_TRUE(parsed.has_value());
+  const base::DictValue& dict = parsed->GetDict();
+  EXPECT_EQ(*dict.FindString("space_id"), "space-1");
+  EXPECT_EQ(*dict.FindString("folder_id"), "folder-1");
+  std::optional<bool> is_pinned = dict.FindBool("is_pinned");
+  ASSERT_TRUE(is_pinned.has_value());
+  EXPECT_TRUE(*is_pinned);
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       HandlePostDropTransitionFolderUnpinDispatchesSetFolderPinnedFalse) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  SidebarDragPayload payload = MakePinnedFolderPayload("folder-p");
+  SidebarDropPlan plan = ResolveDropPlan(SectionKind::kNormal, payload);
+  list.HandlePostDropTransition(payload, plan);
+
+  ASSERT_EQ(observer_.events.size(), 1u);
+  EXPECT_EQ(observer_.events[0].kind, "set_folder_pinned");
+  SCOPED_TRACE(observer_.events[0].json);
+  auto parsed = ParseJson(observer_.events[0].json);
+  ASSERT_TRUE(parsed.has_value());
+  const base::DictValue& dict = parsed->GetDict();
+  EXPECT_EQ(*dict.FindString("folder_id"), "folder-p");
+  std::optional<bool> is_pinned = dict.FindBool("is_pinned");
+  ASSERT_TRUE(is_pinned.has_value());
+  EXPECT_FALSE(*is_pinned);
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       HandlePostDropTransitionSameSectionFolderDispatchesNoEvent) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  SidebarDragPayload payload = MakeFolderPayload("folder-n");
+  SidebarDropPlan plan = ResolveDropPlan(SectionKind::kNormal, payload);
+  list.HandlePostDropTransition(payload, plan);
+  EXPECT_TRUE(observer_.events.empty());
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       HandlePostDropTransitionTabPinDoesNotDispatchSetFolderPinned) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  SidebarDragPayload payload =
+      MakeTabPayload("tab-1", SidebarDragOrigin::kNormalSection);
+  SidebarDropPlan plan = ResolveDropPlan(SectionKind::kPinned, payload);
+  ASSERT_EQ(plan.pin_transition.kind,
+            SidebarDropPlan::PinTransition::Kind::kPin);
+  ASSERT_FALSE(plan.pin_transition.is_folder);
+  list.HandlePostDropTransition(payload, plan);
+  for (const auto& ev : observer_.events) {
+    EXPECT_NE(ev.kind, "set_folder_pinned");
+  }
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       FolderDropToPinnedSectionLaneDispatchesSetFolderPinnedBeforeReorder) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+  model.pinned_tree.push_back(MakeFolderNode("target-folder"));
+  list.Update(model, /*browser=*/nullptr);
+
+  views::View* lane =
+      list.FindInsertionLaneBeforeFolderByIdForTesting("target-folder");
+  ASSERT_TRUE(lane);
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeFolderPayload("source-folder"), &data);
+  ui::DropTargetEvent event = MakeDropEvent(data);
+
+  auto callback = lane->GetDropCallback(event);
+  ASSERT_TRUE(callback);
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
+  ASSERT_EQ(observer_.events.size(), 2u);
+  EXPECT_EQ(observer_.events[0].kind, "set_folder_pinned");
+  EXPECT_NE(observer_.events[0].json.find("\"folder_id\":\"source-folder\""),
+            std::string::npos);
+  EXPECT_NE(observer_.events[0].json.find("\"is_pinned\":true"),
+            std::string::npos);
+  EXPECT_EQ(observer_.events[1].kind, "reorder_folder");
+  EXPECT_NE(observer_.events[1].json.find("\"folder_id\":\"source-folder\""),
+            std::string::npos);
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       FolderDropToNormalSectionLaneDispatchesSetFolderPinnedFalseBeforeReorder) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+  model.normal_tree.push_back(MakeFolderNode("target-folder"));
+  list.Update(model, /*browser=*/nullptr);
+
+  views::View* lane =
+      list.FindInsertionLaneBeforeFolderByIdForTesting("target-folder");
+  ASSERT_TRUE(lane);
+
+  ui::OSExchangeData data;
+  WriteDropData(MakePinnedFolderPayload("source-folder"), &data);
+  ui::DropTargetEvent event = MakeDropEvent(data);
+
+  auto callback = lane->GetDropCallback(event);
+  ASSERT_TRUE(callback);
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
+  ASSERT_EQ(observer_.events.size(), 2u);
+  EXPECT_EQ(observer_.events[0].kind, "set_folder_pinned");
+  EXPECT_NE(observer_.events[0].json.find("\"is_pinned\":false"),
+            std::string::npos);
+  EXPECT_EQ(observer_.events[1].kind, "reorder_folder");
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       SameSectionFolderReorderLaneEmitsReorderWithoutPinEvent) {
+  MahoSidebarTabListView list(/*browser=*/nullptr);
+  MahoSidebarTabListModel model;
+  model.active_space_id = "space-1";
+  model.normal_tree.push_back(MakeFolderNode("target-folder"));
+  model.normal_tree.push_back(MakeFolderNode("next-folder"));
+  list.Update(model, /*browser=*/nullptr);
+
+  views::View* lane =
+      list.FindInsertionLaneBeforeFolderByIdForTesting("next-folder");
+  ASSERT_TRUE(lane);
+
+  ui::OSExchangeData data;
+  WriteDropData(MakeFolderPayload("source-folder"), &data);
+  ui::DropTargetEvent event = MakeDropEvent(data);
+
+  auto callback = lane->GetDropCallback(event);
+  ASSERT_TRUE(callback);
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
+  ASSERT_EQ(observer_.events.size(), 1u);
+  EXPECT_EQ(observer_.events[0].kind, "reorder_folder");
+  for (const auto& ev : observer_.events) {
+    EXPECT_NE(ev.kind, "set_folder_pinned");
+  }
+}
+
+TEST_F(SidebarDnDDispatchTest,
+       TabDropToPinnedSectionStillDispatchesPinTabAndNoFolderEvent) {
+  ui::OSExchangeData data;
+  WriteDropData(MakeTabPayload("source-tab", SidebarDragOrigin::kNormalSection),
+                &data);
+  ui::DropTargetEvent event = MakeDropEvent(data);
+  auto callback = GetSectionDropCallbackForTesting(
+      MahoSidebarTabSection::kPinned, event);
+
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  ASSERT_EQ(output, ui::mojom::DragOperation::kMove);
+  ASSERT_EQ(observer_.events.size(), 1u);
+  EXPECT_EQ(observer_.events[0].kind, "pin_tab");
+  EXPECT_NE(observer_.events[0].kind, "set_folder_pinned");
 }
 
 }  // namespace

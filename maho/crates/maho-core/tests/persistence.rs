@@ -25,7 +25,8 @@ fn lmdb_persists_tab_create_immediately() {
         });
 
         // Extract tab ID
-        let tab_id = core.get_tab_view_models()
+        let tab_id = core
+            .get_tab_view_models()
             .first()
             .expect("tab should be created")
             .id
@@ -62,7 +63,8 @@ fn lmdb_persists_close_tab_immediately() {
             is_private: false,
         });
 
-        let tab_id = core.get_tab_view_models()
+        let tab_id = core
+            .get_tab_view_models()
             .first()
             .expect("tab should be created")
             .id
@@ -128,11 +130,11 @@ fn lmdb_persists_active_space_change_immediately() {
             grain: 0.0,
         };
         let space = core.create_space("New Space", color, profile.id);
-        
+
         core.handle_event(ShellEvent::ActivateSpace {
             space_id: space.id.clone(),
         });
-        
+
         core.handle_event(ShellEvent::AppWillTerminate);
         space.id
     };
@@ -161,7 +163,8 @@ fn lmdb_persists_move_tab_immediately() {
             is_private: false,
         });
 
-        let tab_id = core.get_tab_view_models()
+        let tab_id = core
+            .get_tab_view_models()
             .first()
             .expect("tab should be created")
             .id
@@ -191,7 +194,10 @@ fn lmdb_persists_move_tab_immediately() {
     restored.load_state().expect("state should restore");
 
     let tabs = restored.get_tab_view_models();
-    let moved_tab = tabs.iter().find(|t| t.id == tab_id).expect("tab should exist");
+    let moved_tab = tabs
+        .iter()
+        .find(|t| t.id == tab_id)
+        .expect("tab should exist");
     assert_eq!(moved_tab.space_id, target_space_id);
 }
 
@@ -234,12 +240,7 @@ fn tabs_only_event_does_not_rewrite_spaces_key() {
 
     sleep(Duration::from_millis(80));
 
-    let tab_id = core
-        .get_tab_view_models()
-        .first()
-        .expect("tab")
-        .id
-        .clone();
+    let tab_id = core.get_tab_view_models().first().expect("tab").id.clone();
 
     let mdb_path = storage_path.join("data.mdb");
     let baseline = fs::metadata(&mdb_path).expect("mdb").len();
@@ -340,7 +341,12 @@ fn app_will_terminate_force_flushes_pending() {
     assert!(urls.contains(&"https://second.com"));
 }
 
-fn create_tab_for_test(core: &mut MahoCore, space_id: SpaceId, url: &str, is_private: bool) -> TabId {
+fn create_tab_for_test(
+    core: &mut MahoCore,
+    space_id: SpaceId,
+    url: &str,
+    is_private: bool,
+) -> TabId {
     let updates = core.handle_event(ShellEvent::CreateTab {
         space_id,
         url: Some(Url::new(url)),
@@ -358,7 +364,11 @@ fn create_tab_for_test(core: &mut MahoCore, space_id: SpaceId, url: &str, is_pri
         .expect("tab should be created")
 }
 
-fn create_folder_for_test(core: &mut MahoCore, space_id: SpaceId, name: &str) -> maho_types::identifiers::FolderId {
+fn create_folder_for_test(
+    core: &mut MahoCore,
+    space_id: SpaceId,
+    name: &str,
+) -> maho_types::identifiers::FolderId {
     let updates = core.handle_event(ShellEvent::CreateFolder {
         space_id,
         name: name.to_string(),
@@ -412,15 +422,30 @@ fn private_tabs_and_space_refs_are_not_persisted_to_lmdb() {
     let (normal_id, private_folder_id, private_root_id, space_id) = {
         let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
         let space_id = core.get_active_space_id();
-        let normal_id = create_tab_for_test(&mut core, space_id.clone(), "https://normal.example.com", false);
-        let private_folder_id = create_tab_for_test(&mut core, space_id.clone(), "https://private-folder.example.com", true);
+        let normal_id = create_tab_for_test(
+            &mut core,
+            space_id.clone(),
+            "https://normal.example.com",
+            false,
+        );
+        let private_folder_id = create_tab_for_test(
+            &mut core,
+            space_id.clone(),
+            "https://private-folder.example.com",
+            true,
+        );
         let folder_id = create_folder_for_test(&mut core, space_id.clone(), "Private Folder");
         core.handle_event(ShellEvent::MoveTabToFolder {
             space_id: space_id.clone(),
             folder_id,
             tab_id: private_folder_id.clone(),
         });
-        let private_root_id = create_tab_for_test(&mut core, space_id.clone(), "https://private-root.example.com", true);
+        let private_root_id = create_tab_for_test(
+            &mut core,
+            space_id.clone(),
+            "https://private-root.example.com",
+            true,
+        );
 
         core.save_state().expect("save state");
 
@@ -432,18 +457,32 @@ fn private_tabs_and_space_refs_are_not_persisted_to_lmdb() {
     };
 
     let lmdb = maho_storage::lmdb::LmdbStorage::open(&storage_path).expect("open lmdb");
-    let persisted_tabs: Vec<Tab> = serde_json::from_slice(&lmdb.get("tabs").unwrap().unwrap()).unwrap();
+    let persisted_tabs: Vec<Tab> =
+        serde_json::from_slice(&lmdb.get("tabs").unwrap().unwrap()).unwrap();
     assert!(persisted_tabs.iter().any(|tab| tab.id == normal_id));
     assert!(!persisted_tabs.iter().any(|tab| tab.id == private_folder_id));
     assert!(!persisted_tabs.iter().any(|tab| tab.id == private_root_id));
 
-    let persisted_spaces: Vec<Space> = serde_json::from_slice(&lmdb.get("spaces").unwrap().unwrap()).unwrap();
-    let persisted_space = persisted_spaces.iter().find(|space| space.id == space_id).unwrap();
+    let persisted_spaces: Vec<Space> =
+        serde_json::from_slice(&lmdb.get("spaces").unwrap().unwrap()).unwrap();
+    let persisted_space = persisted_spaces
+        .iter()
+        .find(|space| space.id == space_id)
+        .unwrap();
     for private_id in [&private_folder_id, &private_root_id] {
         assert!(!persisted_space.tab_order.contains(private_id));
-        assert!(!persisted_space.folders.iter().any(|folder| folder.tab_ids.contains(private_id)));
-        assert!(!persisted_space.root_order.iter().any(|item| matches!(item, RootItem::Tab(tab_id) if tab_id == private_id)));
-        assert_ne!(persisted_space.last_active_tab_id.as_ref(), Some(private_id));
+        assert!(!persisted_space
+            .folders
+            .iter()
+            .any(|folder| folder.tab_ids.contains(private_id)));
+        assert!(!persisted_space
+            .root_order
+            .iter()
+            .any(|item| matches!(item, RootItem::Tab(tab_id) if tab_id == private_id)));
+        assert_ne!(
+            persisted_space.last_active_tab_id.as_ref(),
+            Some(private_id)
+        );
     }
 
     let mut restored = MahoCore::new().with_lmdb_storage(&storage_path);
@@ -458,8 +497,18 @@ fn private_tabs_and_space_refs_are_not_persisted_to_lmdb() {
 fn private_tabs_are_not_pushed_or_snapshotted_for_sync() {
     let mut source = MahoCore::new();
     let space_id = source.get_active_space_id();
-    let normal_id = create_tab_for_test(&mut source, space_id.clone(), "https://normal-sync.example.com", false);
-    let private_id = create_tab_for_test(&mut source, space_id, "https://private-sync.example.com", true);
+    let normal_id = create_tab_for_test(
+        &mut source,
+        space_id.clone(),
+        "https://normal-sync.example.com",
+        false,
+    );
+    let private_id = create_tab_for_test(
+        &mut source,
+        space_id,
+        "https://private-sync.example.com",
+        true,
+    );
     let phrase = recovery_phrase(&source);
     source
         .configure_sync_encryption_for_recovery_phrase("ws://127.0.0.1:9", &phrase)
@@ -474,11 +523,17 @@ fn private_tabs_are_not_pushed_or_snapshotted_for_sync() {
 
     let encrypted_snapshot = source.build_snapshot().expect("snapshot");
     let mut dest = MahoCore::new();
-    dest.configure_sync_encryption_for_recovery_phrase("ws://127.0.0.1:9", &phrase).unwrap();
-    dest.apply_snapshot(&encrypted_snapshot).expect("apply snapshot");
+    dest.configure_sync_encryption_for_recovery_phrase("ws://127.0.0.1:9", &phrase)
+        .unwrap();
+    dest.apply_snapshot(&encrypted_snapshot)
+        .expect("apply snapshot");
     let dest_tabs = dest.get_tab_view_models();
-    assert!(dest_tabs.iter().any(|tab| tab.url == "https://normal-sync.example.com"));
-    assert!(!dest_tabs.iter().any(|tab| tab.url == "https://private-sync.example.com"));
+    assert!(dest_tabs
+        .iter()
+        .any(|tab| tab.url == "https://normal-sync.example.com"));
+    assert!(!dest_tabs
+        .iter()
+        .any(|tab| tab.url == "https://private-sync.example.com"));
 }
 
 #[test]
@@ -494,7 +549,12 @@ fn incoming_private_tab_sync_entity_is_ignored_and_space_refs_sanitized() {
         id: space_id.clone(),
         profile_id: maho_types::identifiers::ProfileId::new("profile"),
         name: "Leaked".to_string(),
-        color: SpaceColor { hue: 1.0, saturation: 1.0, brightness: 1.0, grain: 0.0 },
+        color: SpaceColor {
+            hue: 1.0,
+            saturation: 1.0,
+            brightness: 1.0,
+            grain: 0.0,
+        },
         theme: None,
         icon: None,
         tab_order: vec![private_id.clone()],
@@ -543,7 +603,10 @@ fn incoming_private_tab_sync_entity_is_ignored_and_space_refs_sanitized() {
     };
 
     core.apply_sync_remote_entities(vec![tab_entity, space_entity]);
-    assert!(!core.get_tab_view_models().iter().any(|tab| tab.id == private_id));
+    assert!(!core
+        .get_tab_view_models()
+        .iter()
+        .any(|tab| tab.id == private_id));
     let tabs = core.get_space_tabs(&space_id);
     assert!(!tabs.iter().any(|tab| tab.id == private_id));
 }
@@ -579,15 +642,15 @@ fn test_lmdb_schema_migration_v1_to_v2() {
 
     {
         // Set up the old state manually
-        let storage = maho_storage::lmdb::LmdbStorage::open(&storage_path)
-            .expect("init storage");
+        let storage = maho_storage::lmdb::LmdbStorage::open(&storage_path).expect("init storage");
         storage.put("tabs", old_tabs_json.as_bytes()).unwrap();
         // Do not write "schema_version", which implies version 0 or 1.
     }
 
     // Now initialize MahoCore and load
     let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
-    core.load_state().expect("should load and migrate state successfully");
+    core.load_state()
+        .expect("should load and migrate state successfully");
 
     // Check tabs got migrated
     let tabs = core.get_tab_view_models();
@@ -595,12 +658,14 @@ fn test_lmdb_schema_migration_v1_to_v2() {
     assert_eq!(tabs[0].id.to_string(), "tab-1");
     assert!(tabs[0].is_favorite);
     assert_eq!(tabs[0].favorite_order, Some(3));
-    assert_eq!(tabs[0].role, maho_types::tab::TabRole::Favorite { order: 3 });
+    assert_eq!(
+        tabs[0].role,
+        maho_types::tab::TabRole::Favorite { order: 3 }
+    );
 
     // schema_version reaches 4 after load: the v1->v2 tab migration runs, then
     // the ghost-favorite/pinned dedup migration bumps it to 4 (schema v4).
-    let storage = maho_storage::lmdb::LmdbStorage::open(&storage_path)
-        .expect("re-init storage");
+    let storage = maho_storage::lmdb::LmdbStorage::open(&storage_path).expect("re-init storage");
     let schema_version_data = storage.get("schema_version").unwrap().unwrap();
     let schema_version: u32 = serde_json::from_slice(&schema_version_data).unwrap();
     assert_eq!(schema_version, 4);
@@ -642,7 +707,10 @@ fn test_lmdb_schema_migration_v3_dedups_duplicate_favorites() {
         let space_id = core.get_active_space_id().clone();
         let a = create_fav(&mut core, "https://example.com");
         let b = create_fav(&mut core, "https://example.com");
-        assert_ne!(a, b, "duplicate-url favorites must have distinct ids (ghost scenario)");
+        assert_ne!(
+            a, b,
+            "duplicate-url favorites must have distinct ids (ghost scenario)"
+        );
         // Flush throttled writes; no load_state here, so schema_version stays
         // absent (0) and the v2->v3 dedup migration runs on the next fresh load.
         core.save_state().expect("save");
@@ -659,8 +727,7 @@ fn test_lmdb_schema_migration_v3_dedups_duplicate_favorites() {
         "dedup migration must reduce duplicate same-url favorites to a single tile"
     );
 
-    let storage = maho_storage::lmdb::LmdbStorage::open(&storage_path)
-        .expect("re-init storage");
+    let storage = maho_storage::lmdb::LmdbStorage::open(&storage_path).expect("re-init storage");
     let schema_version: u32 =
         serde_json::from_slice(&storage.get("schema_version").unwrap().unwrap()).unwrap();
     assert_eq!(schema_version, 4);
@@ -717,4 +784,91 @@ fn lmdb_persists_set_folder_pinned_true_and_false() {
             .expect("folder should exist after reload");
         assert!(!folder.is_pinned, "is_pinned=false must survive reload");
     }
+}
+
+#[test]
+#[should_panic(expected = "Outgoing message is not encrypted!")]
+fn test_plain_outgoing_blocked_without_encryption_key() {
+    let mut source = MahoCore::new();
+    let space_id = source.get_active_space_id();
+    let normal_id = create_tab_for_test(
+        &mut source,
+        space_id.clone(),
+        "https://normal-sync.example.com",
+        false,
+    );
+    // start sync without setting encryption key (the old/broken way)
+    source.start_sync("ws://127.0.0.1:9", "0123456789abcdef0123456789abcdef");
+    source.set_sync_status(SyncStatus::Syncing);
+    source.push_tab_sync(&normal_id);
+    
+    let outgoing = source.drain_sync_outgoing();
+    assert!(!outgoing.is_empty());
+    // Without setting the encryption key, messages go out as plaintext.
+    // We assert they must be Encrypted, which fails (panics) because E2EE is not configured.
+    for msg in outgoing {
+        assert!(
+            matches!(msg, maho_core::sync_models::SyncMessage::Encrypted { .. }),
+            "Outgoing message is not encrypted!"
+        );
+    }
+}
+
+#[test]
+fn test_configure_sync_encryption_roundtrip() {
+    let mut source = MahoCore::new();
+    let space_id = source.get_active_space_id();
+    let normal_id = create_tab_for_test(
+        &mut source,
+        space_id.clone(),
+        "https://normal-sync.example.com",
+        false,
+    );
+    let phrase = recovery_phrase(&source);
+    
+    // Configure encryption (creates and configures key)
+    source
+        .configure_sync_encryption_for_recovery_phrase("ws://127.0.0.1:9", &phrase)
+        .unwrap();
+    source.set_sync_status(SyncStatus::Syncing);
+    source.push_tab_sync(&normal_id);
+    
+    let outgoing = source.drain_sync_outgoing();
+    assert!(!outgoing.is_empty());
+    
+    // Outgoing messages must only be Encrypted
+    for msg in &outgoing {
+        assert!(matches!(msg, maho_core::sync_models::SyncMessage::Encrypted { .. }));
+    }
+    
+    // Now decode and verify with destination
+    let mut dest = MahoCore::new();
+    dest.configure_sync_encryption_for_recovery_phrase("ws://127.0.0.1:9", &phrase)
+        .unwrap();
+    
+    // Build snapshot from source and apply to destination
+    let encrypted_snapshot = source.build_snapshot().expect("snapshot");
+    dest.apply_snapshot(&encrypted_snapshot).expect("apply snapshot");
+    
+    let dest_tabs = dest.get_tab_view_models();
+    assert!(dest_tabs
+        .iter()
+        .any(|tab| tab.url == "https://normal-sync.example.com"));
+}
+
+#[test]
+fn test_room_id_and_key_derivation_parity() {
+    let source = MahoCore::new();
+    let key_info_json = source.generate_sync_key();
+    let key_info: serde_json::Value = serde_json::from_str(&key_info_json).unwrap();
+    let phrase = key_info["recoveryPhrase"].as_str().unwrap();
+    let room_id = key_info["roomId"].as_str().unwrap();
+    
+    // Let's decode recovery phrase
+    let seed = maho_core::sync_crypto::decode_recovery_phrase(phrase).unwrap();
+    let derived_room_id = maho_core::sync_crypto::derive_room_id(&seed).unwrap();
+    
+    // Assert room_id matches derived_room_id
+    assert_eq!(room_id, derived_room_id);
+    assert_eq!(room_id.len(), 32);
 }

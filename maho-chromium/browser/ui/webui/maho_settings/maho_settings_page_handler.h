@@ -33,6 +33,10 @@ class MahoModelListFetcher;
 class MahoManagedConnectionTest;
 }  // namespace maho::ai
 
+namespace device_reauth {
+class DeviceAuthenticator;
+}
+
 class MahoSettingsPageHandler
     : public maho_settings::mojom::PageHandler,
       public maho::MahoExtensionStateBridge::Observer,
@@ -269,6 +273,29 @@ class MahoSettingsPageHandler
   void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
   void OnProviderModelsRefreshed(const std::string& provider_id,
                                  const std::vector<std::string>& model_ids);
+  void OnReauthRevealComplete(
+      const std::string& password_id,
+      std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator,
+      RevealPasswordCallback callback,
+      bool success);
+  void OnReauthAddComplete(
+      const std::string& domain,
+      const std::string& username,
+      const std::string& password,
+      std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator,
+      AddPasswordCallback callback,
+      bool success);
+  void OnReauthUpdateComplete(
+      const std::string& password_id,
+      const std::string& username,
+      std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator,
+      UpdatePasswordUsernameCallback callback,
+      bool success);
+  void OnReauthDeleteComplete(
+      const std::string& password_id,
+      std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator,
+      DeletePasswordCallback callback,
+      bool success);
 
   struct PendingByokSave {
     PendingByokSave(std::string provider,

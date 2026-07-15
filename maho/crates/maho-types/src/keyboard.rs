@@ -65,7 +65,7 @@ impl KeyCombo {
         let mut mods: Vec<String> = self
             .modifiers
             .iter()
-            .map(|m| format!("{:?}", m).to_lowercase())
+            .map(|m| format!("{m:?}").to_lowercase())
             .collect();
         mods.sort();
         format!("{}+{}", mods.join("+"), self.key.to_lowercase())

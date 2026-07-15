@@ -14,8 +14,10 @@
 // passed as opaque pointers (*mut / *const) and their layouts are not exposed
 // to C++/Swift clients, and thus do not require static layout assertions.
 
+use maho_ffi::{
+    MahoAgentPermissionDecision, MahoAgentSecureKey, MahoAgentToolResult, MahoChatConfig,
+};
 use std::mem;
-use maho_ffi::{MahoChatConfig, MahoAgentPermissionDecision, MahoAgentSecureKey, MahoAgentToolResult};
 
 const _: () = {
     // Assert size and alignment of MahoChatConfig

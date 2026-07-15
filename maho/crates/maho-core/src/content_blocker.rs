@@ -58,7 +58,10 @@ fn extract_origin_from_source_url(source_url: &str) -> Option<&str> {
         .split(['/', '?', '#'])
         .next()
         .unwrap_or(without_scheme);
-    let without_userinfo = without_path.rsplit_once('@').map(|(_, host)| host).unwrap_or(without_path);
+    let without_userinfo = without_path
+        .rsplit_once('@')
+        .map(|(_, host)| host)
+        .unwrap_or(without_path);
     let origin = if without_userinfo.starts_with('[') {
         // IPv6 bracket notation — don't strip port via naive rsplit
         without_userinfo
@@ -258,9 +261,7 @@ impl ContentBlocker {
     }
 
     pub fn deserialize_engine(&mut self, data: &[u8]) -> Result<(), String> {
-        self.engine
-            .deserialize(data)
-            .map_err(|e| format!("{e:?}"))
+        self.engine.deserialize(data).map_err(|e| format!("{e:?}"))
     }
 
     pub fn get_content_rules(&self) -> String {

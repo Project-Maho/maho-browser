@@ -97,6 +97,13 @@ pub fn is_readonly_dogfood_tool(raw_name: &str) -> bool {
             | "browser_network_get_har"
             | "browser_get_allowed_domains"
             | "browser_routines_list"
+            | "mail_list_accounts"
+            | "mail_list_folders"
+            | "mail_list_emails"
+            | "mail_get_email"
+            | "mail_search_emails"
+            | "mail_list_thread"
+            | "mail_extract_otp"
     )
 }
 
@@ -371,6 +378,15 @@ impl McpClient {
                 })
             }
             McpTransport::Uds => {
+                #[cfg(not(unix))]
+                {
+                    let _ = &config;
+                    anyhow::bail!(
+                        "UDS transport is not supported on this platform (use named-pipe transport)"
+                    );
+                }
+                #[cfg(unix)]
+                {
                 let socket_path = config.socket_path.as_ref().ok_or_else(|| {
                     anyhow::anyhow!("Socket path is required for UDS transport")
                 })?;
@@ -446,6 +462,7 @@ impl McpClient {
                     output_cap,
                     resolved_permission,
                 })
+                }
             }
         }
     }
@@ -679,6 +696,13 @@ mod tests {
             "browser_network_get_har",
             "browser_get_allowed_domains",
             "browser_routines_list",
+            "mail_list_accounts",
+            "mail_list_folders",
+            "mail_list_emails",
+            "mail_get_email",
+            "mail_search_emails",
+            "mail_list_thread",
+            "mail_extract_otp",
         ] {
             assert!(is_readonly_dogfood_tool(name), "{name} must be read-only");
         }
@@ -707,6 +731,7 @@ mod tests {
             "browser_heartbeat_lease",
             "browser_release_lease",
             "browser_routines_run",
+            "mail_send",
         ] {
             assert!(
                 !is_readonly_dogfood_tool(name),
@@ -753,4 +778,3 @@ mod tests {
         );
     }
 }
-

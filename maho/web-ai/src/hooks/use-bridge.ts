@@ -1,5 +1,5 @@
 /**
- * useBridge — React hook that returns a stable MahoBridge implementation
+ * useBridge — hook that returns a stable MahoBridge implementation
  * backed by the JSON-RPC dispatcher. Components call bridge methods
  * directly without knowing which platform they run on.
  */
@@ -44,7 +44,16 @@ function makeBridge(): MahoBridge {
     setSpaceAIConfig: (spaceId, config) => call('setSpaceAIConfig', { spaceId, config }),
 
     // --- Pinch ---
-    pinchEstimateCost: (pageContent, requestedModel) => call('pinchEstimateCost', { pageContent, model: requestedModel }),
+    pinchEstimateCost: (pageContent, requestedModel) =>
+      call('pinchEstimateCost', { pageContent, model: requestedModel }),
+
+    // --- Agent Session ---
+    agentCreateSession: (sessionId) => call('agentCreateSession', { sessionId }),
+    agentFreeSession: (handle) => call('agentFreeSession', { handle }),
+    agentSendMessage: (handle, message) => call('agentSendMessage', { handle, message }),
+    agentCancel: (handle) => call('agentCancel', { handle }),
+    agentPollEvent: (handle) => call('agentPollEvent', { handle }),
+    agentListTools: (handle) => call('agentListTools', { handle }),
 
     // --- Native-only actions ---
     capturePhoto: () => call('capturePhoto'),

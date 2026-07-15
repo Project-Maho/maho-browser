@@ -1,4 +1,10 @@
+use serde::Serialize;
 use worker::*;
+
+#[derive(Serialize)]
+struct ErrorResponse<'a> {
+    error: &'a str,
+}
 
 #[derive(Debug)]
 pub enum AppError {
@@ -54,7 +60,7 @@ impl AppError {
             AppError::Internal(msg) => (500, msg.clone()),
         };
 
-        let res = Response::from_json(&serde_json::json!({ "error": msg }))?;
+        let res = Response::from_json(&ErrorResponse { error: &msg })?;
         Ok(res.with_status(status))
     }
 }

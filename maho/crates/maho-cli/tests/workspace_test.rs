@@ -27,7 +27,7 @@ fn make_ws(id: &str, name: &str, root: Option<&str>, created_at: &str) -> AiWork
 async fn cli_default_matches_webui_rule() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("maho.db");
-    let storage = SqliteStorage::open(&db_path.to_string_lossy()).unwrap();
+    let storage = maho_cli::workspace::open_storage(&db_path).unwrap();
 
     // ws-oldest is created first (earliest created_at) → it is workspaces[0] after ORDER BY.
     let ws_oldest = make_ws("ws-oldest", "Oldest", None, "2024-01-01T00:00:00Z");
@@ -59,7 +59,7 @@ async fn cli_default_matches_webui_rule() {
 async fn list_workspaces_deterministic_order() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("maho.db");
-    let storage = SqliteStorage::open(&db_path.to_string_lossy()).unwrap();
+    let storage = maho_cli::workspace::open_storage(&db_path).unwrap();
 
     // Insert in reverse chronological order to prove ORDER BY, not insertion order, governs.
     let ws_c = make_ws("ws-c", "C", None, "2025-03-01T00:00:00Z");

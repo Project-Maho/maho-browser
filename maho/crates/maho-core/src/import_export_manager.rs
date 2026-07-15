@@ -71,7 +71,6 @@ pub struct BoostExport {
     pub custom_css: Option<String>,
 }
 
-
 #[derive(Clone, Debug, Serialize)]
 pub struct BrowserProfile {
     pub source: ImportSource,

@@ -1,12 +1,12 @@
 //! Memory feature backend: extracts facts from chat sessions, embeds them,
 //! retrieves them as AI context. Operates as a sub-manager owned by MahoCore.
 
+use instant_distance::{Builder, HnswMap, Search};
+use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use serde::{Serialize, Deserialize};
-use instant_distance::{Builder, HnswMap, Search};
 
 use crate::embedding;
 use crate::llm_client;
@@ -25,15 +25,27 @@ pub struct RawFact {
     #[serde(default = "default_importance")]
     pub importance: f32,
 }
-fn default_importance() -> f32 { 0.5 }
+fn default_importance() -> f32 {
+    0.5
+}
 
 #[derive(Debug)]
 pub enum MemoryResult {
-    FactsExtracted { session_id: String, facts: Vec<RawFact> },
-    EmbeddingsReady { fact_id: String, embedding: Vec<f32> },
-    BrowsingSummaryReady { content: String },
+    FactsExtracted {
+        session_id: String,
+        facts: Vec<RawFact>,
+    },
+    EmbeddingsReady {
+        fact_id: String,
+        embedding: Vec<f32>,
+    },
+    BrowsingSummaryReady {
+        content: String,
+    },
     BrowsingSummaryDue,
-    Failed { reason: String },
+    Failed {
+        reason: String,
+    },
 }
 
 /// Wrapper for instant-distance Point trait
@@ -106,8 +118,12 @@ impl MemoryManager {
     }
 
     /// Build HNSW from all stored embeddings. Call at MahoCore startup.
-    pub fn rebuild_index(&mut self, storage: &SqliteStorage) -> Result<(), crate::error::CoreError> {
-        let entries = storage.load_all_active_memory_embeddings()
+    pub fn rebuild_index(
+        &mut self,
+        storage: &SqliteStorage,
+    ) -> Result<(), crate::error::CoreError> {
+        let entries = storage
+            .load_all_active_memory_embeddings()
             .map_err(|e| crate::error::CoreError::Storage(e.to_string()))?;
         if entries.is_empty() {
             self.hnsw = None;
@@ -132,7 +148,9 @@ impl MemoryManager {
 
     /// Top-K semantic search.
     pub fn search(&self, query_embedding: &[f32], top_k: usize) -> Vec<String> {
-        let Some(ref hnsw) = self.hnsw else { return Vec::new(); };
+        let Some(ref hnsw) = self.hnsw else {
+            return Vec::new();
+        };
         let q = Embedding(query_embedding.to_vec());
         let mut search = Search::default();
         hnsw.search(&q, &mut search)
@@ -143,12 +161,24 @@ impl MemoryManager {
 
     /// Triggered at session-end. Sync method spawns an async extraction.
     pub fn extract_from_session(&mut self, session_id: String, raw_text: String) {
-        let Some(auth) = self.auth.clone() else { return; };
+        let Some(auth) = self.auth.clone() else {
+            return;
+        };
         let tx = self.result_tx.clone();
         let h = get_runtime().spawn(async move {
             match llm_client::extract_facts_json(&auth, &raw_text).await {
-                Ok(facts) => { let _ = tx.send(MemoryResult::FactsExtracted { session_id, facts }).await; }
-                Err(e)    => { let _ = tx.send(MemoryResult::Failed { reason: format!("extract: {e}") }).await; }
+                Ok(facts) => {
+                    let _ = tx
+                        .send(MemoryResult::FactsExtracted { session_id, facts })
+                        .await;
+                }
+                Err(e) => {
+                    let _ = tx
+                        .send(MemoryResult::Failed {
+                            reason: format!("extract: {e}"),
+                        })
+                        .await;
+                }
             }
         });
         self.active_tasks.push(h);
@@ -156,12 +186,24 @@ impl MemoryManager {
 
     /// Triggered for nightly browsing summary.
     pub fn summarize_browsing(&mut self, raw_text: String) {
-        let Some(auth) = self.auth.clone() else { return; };
+        let Some(auth) = self.auth.clone() else {
+            return;
+        };
         let tx = self.result_tx.clone();
         let h = get_runtime().spawn(async move {
             match llm_client::summarize_browsing(&auth, &raw_text).await {
-                Ok(content) => { let _ = tx.send(MemoryResult::BrowsingSummaryReady { content }).await; }
-                Err(e)      => { let _ = tx.send(MemoryResult::Failed { reason: format!("summary: {e}") }).await; }
+                Ok(content) => {
+                    let _ = tx
+                        .send(MemoryResult::BrowsingSummaryReady { content })
+                        .await;
+                }
+                Err(e) => {
+                    let _ = tx
+                        .send(MemoryResult::Failed {
+                            reason: format!("summary: {e}"),
+                        })
+                        .await;
+                }
             }
         });
         self.active_tasks.push(h);
@@ -171,16 +213,37 @@ impl MemoryManager {
     pub fn embed_fact(&mut self, fact_id: String, content: String) {
         let tx = self.result_tx.clone();
         let h = get_runtime().spawn(async move {
-            let result = tokio::task::spawn_blocking(move || {
-                embedding::embed(&[content])
-            }).await;
+            let result = tokio::task::spawn_blocking(move || embedding::embed(&[content])).await;
             match result {
                 Ok(Ok(mut vecs)) if !vecs.is_empty() => {
-                    let _ = tx.send(MemoryResult::EmbeddingsReady { fact_id, embedding: vecs.remove(0) }).await;
+                    let _ = tx
+                        .send(MemoryResult::EmbeddingsReady {
+                            fact_id,
+                            embedding: vecs.remove(0),
+                        })
+                        .await;
                 }
-                Ok(Err(e)) => { let _ = tx.send(MemoryResult::Failed { reason: format!("embed: {e}") }).await; }
-                Err(e)     => { let _ = tx.send(MemoryResult::Failed { reason: format!("embed join: {e}") }).await; }
-                _ => { let _ = tx.send(MemoryResult::Failed { reason: "empty embedding".into() }).await; }
+                Ok(Err(e)) => {
+                    let _ = tx
+                        .send(MemoryResult::Failed {
+                            reason: format!("embed: {e}"),
+                        })
+                        .await;
+                }
+                Err(e) => {
+                    let _ = tx
+                        .send(MemoryResult::Failed {
+                            reason: format!("embed join: {e}"),
+                        })
+                        .await;
+                }
+                _ => {
+                    let _ = tx
+                        .send(MemoryResult::Failed {
+                            reason: "empty embedding".into(),
+                        })
+                        .await;
+                }
             }
         });
         self.active_tasks.push(h);
@@ -189,7 +252,9 @@ impl MemoryManager {
     /// Drain results — called by MahoCore each tick. Caller persists via storage.
     pub fn drain_results(&mut self) -> Vec<MemoryResult> {
         let mut out = Vec::new();
-        while let Ok(r) = self.result_rx.try_recv() { out.push(r); }
+        while let Ok(r) = self.result_rx.try_recv() {
+            out.push(r);
+        }
         self.active_tasks.retain(|h| !h.is_finished());
         out
     }

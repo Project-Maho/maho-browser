@@ -90,15 +90,15 @@ impl<'de> Deserialize<'de> for ThemeColor {
                                         "c array must have exactly 3 elements",
                                     ));
                                 }
-                                let r = arr[0].as_u64().ok_or_else(|| {
-                                    de::Error::custom("c[0] must be a number")
-                                })?;
-                                let g = arr[1].as_u64().ok_or_else(|| {
-                                    de::Error::custom("c[1] must be a number")
-                                })?;
-                                let b = arr[2].as_u64().ok_or_else(|| {
-                                    de::Error::custom("c[2] must be a number")
-                                })?;
+                                let r = arr[0]
+                                    .as_u64()
+                                    .ok_or_else(|| de::Error::custom("c[0] must be a number"))?;
+                                let g = arr[1]
+                                    .as_u64()
+                                    .ok_or_else(|| de::Error::custom("c[1] must be a number"))?;
+                                let b = arr[2]
+                                    .as_u64()
+                                    .ok_or_else(|| de::Error::custom("c[2] must be a number"))?;
                                 c_raw = Some(CValue::Rgb([r as u16, g as u16, b as u16]));
                             } else {
                                 return Err(de::Error::custom(
@@ -212,13 +212,17 @@ impl SpaceTheme {
     pub fn validate(&self) -> bool {
         match self {
             SpaceTheme::Solid { .. } => true,
-            SpaceTheme::Gradient { harmony, scheme, .. } => {
+            SpaceTheme::Gradient {
+                harmony, scheme, ..
+            } => {
                 if matches!(harmony, ColorHarmony::Floating) && scheme.is_none() {
                     return false;
                 }
                 true
             }
-            SpaceTheme::Zen { harmony, scheme, .. } => {
+            SpaceTheme::Zen {
+                harmony, scheme, ..
+            } => {
                 if let Some(ColorHarmony::Floating) = harmony {
                     if scheme.is_none() {
                         return false;
@@ -230,29 +234,26 @@ impl SpaceTheme {
     }
 }
 
-
 impl SpaceTheme {
     pub fn base_color(&self) -> SpaceColor {
         match self {
             SpaceTheme::Solid { color, .. } => color.clone(),
-            SpaceTheme::Gradient { colors, .. } | SpaceTheme::Zen { colors, .. } => {
-                colors
-                    .iter()
-                    .find(|c| c.is_primary)
-                    .or_else(|| colors.first())
-                    .map(|c| SpaceColor {
-                        hue: c.hue,
-                        saturation: c.saturation,
-                        brightness: c.brightness,
-                        grain: 0.0,
-                    })
-                    .unwrap_or(SpaceColor {
-                        hue: 0.58,
-                        saturation: 0.8,
-                        brightness: 0.9,
-                        grain: 0.0,
-                    })
-            }
+            SpaceTheme::Gradient { colors, .. } | SpaceTheme::Zen { colors, .. } => colors
+                .iter()
+                .find(|c| c.is_primary)
+                .or_else(|| colors.first())
+                .map(|c| SpaceColor {
+                    hue: c.hue,
+                    saturation: c.saturation,
+                    brightness: c.brightness,
+                    grain: 0.0,
+                })
+                .unwrap_or(SpaceColor {
+                    hue: 0.58,
+                    saturation: 0.8,
+                    brightness: 0.9,
+                    grain: 0.0,
+                }),
         }
     }
 
@@ -415,8 +416,28 @@ mod tests {
     fn space_theme_gradient_roundtrip() {
         let theme = SpaceTheme::Gradient {
             colors: vec![
-                ThemeColor { hue: 0.5, saturation: 0.8, brightness: 0.9, is_custom: false, is_primary: true, c_raw: None, position: None, lightness: None, algorithm: None },
-                ThemeColor { hue: 0.0, saturation: 0.8, brightness: 0.9, is_custom: false, is_primary: false, c_raw: None, position: None, lightness: None, algorithm: None },
+                ThemeColor {
+                    hue: 0.5,
+                    saturation: 0.8,
+                    brightness: 0.9,
+                    is_custom: false,
+                    is_primary: true,
+                    c_raw: None,
+                    position: None,
+                    lightness: None,
+                    algorithm: None,
+                },
+                ThemeColor {
+                    hue: 0.0,
+                    saturation: 0.8,
+                    brightness: 0.9,
+                    is_custom: false,
+                    is_primary: false,
+                    c_raw: None,
+                    position: None,
+                    lightness: None,
+                    algorithm: None,
+                },
             ],
             harmony: ColorHarmony::Complementary,
             scheme: None,
@@ -429,7 +450,13 @@ mod tests {
         assert!(json.contains("\"gradientColors\""));
         let decoded: SpaceTheme = serde_json::from_str(&json).unwrap();
         match decoded {
-            SpaceTheme::Gradient { colors, harmony, opacity, texture, .. } => {
+            SpaceTheme::Gradient {
+                colors,
+                harmony,
+                opacity,
+                texture,
+                ..
+            } => {
                 assert_eq!(colors.len(), 2);
                 assert!(colors[0].is_primary);
                 assert!(!colors[1].is_primary);
@@ -444,7 +471,12 @@ mod tests {
     #[test]
     fn space_theme_base_color_solid() {
         let theme = SpaceTheme::Solid {
-            color: SpaceColor { hue: 0.3, saturation: 0.5, brightness: 0.7, grain: 0.1 },
+            color: SpaceColor {
+                hue: 0.3,
+                saturation: 0.5,
+                brightness: 0.7,
+                grain: 0.1,
+            },
             opacity: 1.0,
             schema_version: 0,
         };
@@ -457,8 +489,28 @@ mod tests {
     fn space_theme_base_color_gradient_uses_primary() {
         let theme = SpaceTheme::Gradient {
             colors: vec![
-                ThemeColor { hue: 0.1, saturation: 0.5, brightness: 0.9, is_custom: false, is_primary: false, c_raw: None, position: None, lightness: None, algorithm: None },
-                ThemeColor { hue: 0.6, saturation: 0.8, brightness: 0.7, is_custom: false, is_primary: true, c_raw: None, position: None, lightness: None, algorithm: None },
+                ThemeColor {
+                    hue: 0.1,
+                    saturation: 0.5,
+                    brightness: 0.9,
+                    is_custom: false,
+                    is_primary: false,
+                    c_raw: None,
+                    position: None,
+                    lightness: None,
+                    algorithm: None,
+                },
+                ThemeColor {
+                    hue: 0.6,
+                    saturation: 0.8,
+                    brightness: 0.7,
+                    is_custom: false,
+                    is_primary: true,
+                    c_raw: None,
+                    position: None,
+                    lightness: None,
+                    algorithm: None,
+                },
             ],
             harmony: ColorHarmony::Analogous,
             scheme: None,
@@ -479,7 +531,14 @@ mod tests {
 
     #[test]
     fn color_harmony_roundtrip() {
-        for harmony in [ColorHarmony::Complementary, ColorHarmony::SingleAnalogous, ColorHarmony::SplitComplementary, ColorHarmony::Analogous, ColorHarmony::Triadic, ColorHarmony::Custom] {
+        for harmony in [
+            ColorHarmony::Complementary,
+            ColorHarmony::SingleAnalogous,
+            ColorHarmony::SplitComplementary,
+            ColorHarmony::Analogous,
+            ColorHarmony::Triadic,
+            ColorHarmony::Custom,
+        ] {
             let json = serde_json::to_string(&harmony).unwrap();
             let decoded: ColorHarmony = serde_json::from_str(&json).unwrap();
             assert_eq!(serde_json::to_string(&decoded).unwrap(), json);
@@ -489,16 +548,17 @@ mod tests {
     #[test]
     fn space_theme_zen_roundtrip() {
         let theme = SpaceTheme::Zen {
-            colors: vec![
-                ThemeColor {
-                    hue: 0.0, saturation: 0.0, brightness: 0.0,
-                    is_custom: false, is_primary: true,
-                    c_raw: Some(CValue::Rgb([74, 144, 217])),
-                    position: None,
-                    lightness: None,
-                    algorithm: None,
-                },
-            ],
+            colors: vec![ThemeColor {
+                hue: 0.0,
+                saturation: 0.0,
+                brightness: 0.0,
+                is_custom: false,
+                is_primary: true,
+                c_raw: Some(CValue::Rgb([74, 144, 217])),
+                position: None,
+                lightness: None,
+                algorithm: None,
+            }],
             harmony: None,
             scheme: None,
             opacity: 1.0,
@@ -506,11 +566,20 @@ mod tests {
             schema_version: 0,
         };
         let json = serde_json::to_string(&theme).unwrap();
-        assert!(json.contains("\"type\":\"zen\""), "serialized zen type: {json}");
+        assert!(
+            json.contains("\"type\":\"zen\""),
+            "serialized zen type: {json}"
+        );
         assert!(json.contains("\"gradientColors\""));
         let decoded: SpaceTheme = serde_json::from_str(&json).unwrap();
         match decoded {
-            SpaceTheme::Zen { colors, harmony, opacity, texture, .. } => {
+            SpaceTheme::Zen {
+                colors,
+                harmony,
+                opacity,
+                texture,
+                ..
+            } => {
                 assert_eq!(colors.len(), 1);
                 assert!(colors[0].is_primary);
                 assert!(harmony.is_none());
@@ -526,8 +595,11 @@ mod tests {
     fn space_theme_zen_with_harmony_roundtrip() {
         let theme = SpaceTheme::Zen {
             colors: vec![ThemeColor {
-                hue: 0.0, saturation: 0.0, brightness: 0.0,
-                is_custom: true, is_primary: true,
+                hue: 0.0,
+                saturation: 0.0,
+                brightness: 0.0,
+                is_custom: true,
+                is_primary: true,
                 c_raw: Some(CValue::Hex("#ff6b35".to_string())),
                 position: None,
                 lightness: None,
@@ -555,8 +627,28 @@ mod tests {
     fn space_theme_zen_base_color_uses_hsb_when_available() {
         let theme = SpaceTheme::Zen {
             colors: vec![
-                ThemeColor { hue: 0.2, saturation: 0.6, brightness: 0.8, is_custom: false, is_primary: false, c_raw: None, position: None, lightness: None, algorithm: None },
-                ThemeColor { hue: 0.7, saturation: 0.9, brightness: 0.5, is_custom: false, is_primary: true, c_raw: None, position: None, lightness: None, algorithm: None },
+                ThemeColor {
+                    hue: 0.2,
+                    saturation: 0.6,
+                    brightness: 0.8,
+                    is_custom: false,
+                    is_primary: false,
+                    c_raw: None,
+                    position: None,
+                    lightness: None,
+                    algorithm: None,
+                },
+                ThemeColor {
+                    hue: 0.7,
+                    saturation: 0.9,
+                    brightness: 0.5,
+                    is_custom: false,
+                    is_primary: true,
+                    c_raw: None,
+                    position: None,
+                    lightness: None,
+                    algorithm: None,
+                },
             ],
             harmony: None,
             scheme: None,
@@ -593,7 +685,8 @@ mod tests {
 
     #[test]
     fn theme_color_flat_hsb_roundtrip() {
-        let json = r#"{"hue":220.0,"saturation":0.7,"brightness":0.85,"isPrimary":true,"isCustom":false}"#;
+        let json =
+            r#"{"hue":220.0,"saturation":0.7,"brightness":0.85,"isPrimary":true,"isCustom":false}"#;
         let tc: ThemeColor = serde_json::from_str(json).unwrap();
         assert!((tc.hue - 220.0).abs() < 0.001);
         assert!(tc.c_raw.is_none());
@@ -621,7 +714,8 @@ mod tests {
 
     #[test]
     fn space_theme_schema_version_defaults_to_zero() {
-        let json = r#"{"type":"solid","color":{"hue":0.5,"saturation":0.8,"brightness":0.9,"grain":0.1}}"#;
+        let json =
+            r#"{"type":"solid","color":{"hue":0.5,"saturation":0.8,"brightness":0.9,"grain":0.1}}"#;
         let theme: SpaceTheme = serde_json::from_str(json).unwrap();
         match theme {
             SpaceTheme::Solid { schema_version, .. } => assert_eq!(schema_version, 0),
@@ -637,10 +731,16 @@ mod tests {
             SpaceTheme::Solid { schema_version, .. } => {
                 assert_eq!(schema_version, 2);
                 let re = serde_json::to_string(&SpaceTheme::Solid {
-                    color: SpaceColor { hue: 0.5, saturation: 0.8, brightness: 0.9, grain: 0.1 },
+                    color: SpaceColor {
+                        hue: 0.5,
+                        saturation: 0.8,
+                        brightness: 0.9,
+                        grain: 0.1,
+                    },
                     opacity: 1.0,
                     schema_version: 2,
-                }).unwrap();
+                })
+                .unwrap();
                 assert!(re.contains("\"schemaVersion\":2"), "re-serialized: {re}");
             }
             _ => panic!("Expected Solid variant"),
@@ -650,12 +750,20 @@ mod tests {
     #[test]
     fn space_theme_schema_version_zero_not_serialized() {
         let theme = SpaceTheme::Solid {
-            color: SpaceColor { hue: 0.5, saturation: 0.8, brightness: 0.9, grain: 0.1 },
+            color: SpaceColor {
+                hue: 0.5,
+                saturation: 0.8,
+                brightness: 0.9,
+                grain: 0.1,
+            },
             opacity: 1.0,
             schema_version: 0,
         };
         let re = serde_json::to_string(&theme).unwrap();
-        assert!(!re.contains("schemaVersion"), "zero schema_version must be omitted: {re}");
+        assert!(
+            !re.contains("schemaVersion"),
+            "zero schema_version must be omitted: {re}"
+        );
     }
 }
 

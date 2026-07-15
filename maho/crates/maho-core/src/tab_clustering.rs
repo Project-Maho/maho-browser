@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use maho_types::tab::Tab;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 const DEFAULT_TIME_WINDOW_SECS: f64 = 1800.0;
 
@@ -113,8 +113,8 @@ fn format_time(ts: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use maho_types::common::{DateTime, ScrollPosition, Url};
     use maho_types::identifiers::{SpaceId, TabId};
-    use maho_types::common::{DateTime, Url, ScrollPosition};
     use maho_types::tab::{TabLifecycleState, TabRole};
 
     fn make_test_tab(id: &str, url: &str, time: &str) -> Tab {
@@ -142,9 +142,9 @@ mod tests {
     #[test]
     fn test_cluster_tabs_by_domain_and_time_default_window() {
         let t1 = make_test_tab("1", "https://www.github.com/foo", "2026-07-09T10:00:00Z");
-        let t2 = make_test_tab("2", "https://github.com/bar",     "2026-07-09T10:20:00Z");
-        let t3 = make_test_tab("3", "https://github.com/baz",     "2026-07-09T11:30:00Z");
-        let t4 = make_test_tab("4", "https://google.com",         "2026-07-09T10:00:00Z");
+        let t2 = make_test_tab("2", "https://github.com/bar", "2026-07-09T10:20:00Z");
+        let t3 = make_test_tab("3", "https://github.com/baz", "2026-07-09T11:30:00Z");
+        let t4 = make_test_tab("4", "https://google.com", "2026-07-09T10:00:00Z");
 
         let tabs = vec![&t1, &t2, &t3, &t4];
         let clusters = cluster_tabs(&tabs, DEFAULT_TIME_WINDOW_SECS);
@@ -163,7 +163,10 @@ mod tests {
         let tabs = vec![&t1, &t2];
 
         let strict = cluster_tabs(&tabs, 1800.0);
-        assert!(strict.is_empty(), "3h gap must NOT cluster under 30-min window");
+        assert!(
+            strict.is_empty(),
+            "3h gap must NOT cluster under 30-min window"
+        );
 
         let relaxed = cluster_tabs(&tabs, 4.0 * 3600.0);
         assert_eq!(relaxed.len(), 1, "3h gap SHOULD cluster under 4h window");
@@ -171,12 +174,16 @@ mod tests {
 
     #[test]
     fn test_cluster_tabs_uses_etld_plus_one() {
-        let t1 = make_test_tab("1", "https://news.bbc.co.uk/x",  "2026-07-09T10:00:00Z");
+        let t1 = make_test_tab("1", "https://news.bbc.co.uk/x", "2026-07-09T10:00:00Z");
         let t2 = make_test_tab("2", "https://sport.bbc.co.uk/y", "2026-07-09T10:15:00Z");
         let tabs = vec![&t1, &t2];
 
         let clusters = cluster_tabs(&tabs, DEFAULT_TIME_WINDOW_SECS);
-        assert_eq!(clusters.len(), 1, "subdomains of bbc.co.uk must fold to eTLD+1");
+        assert_eq!(
+            clusters.len(),
+            1,
+            "subdomains of bbc.co.uk must fold to eTLD+1"
+        );
         assert_eq!(clusters[0].domain, "bbc.co.uk");
     }
 
@@ -187,7 +194,11 @@ mod tests {
         let clusters = cluster_tabs(&[&t1, &t2], DEFAULT_TIME_WINDOW_SECS);
 
         assert_eq!(clusters.len(), 1);
-        assert!(clusters[0].first_active_at.starts_with("2026-07-09T10:00:00"));
-        assert!(clusters[0].last_active_at.starts_with("2026-07-09T10:20:00"));
+        assert!(clusters[0]
+            .first_active_at
+            .starts_with("2026-07-09T10:00:00"));
+        assert!(clusters[0]
+            .last_active_at
+            .starts_with("2026-07-09T10:20:00"));
     }
 }

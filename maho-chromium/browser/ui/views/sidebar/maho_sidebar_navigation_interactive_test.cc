@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "content/public/test/browser_test.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -1027,35 +1028,6 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   // Verify that the overlay is dismissed automatically
   EXPECT_FALSE(container->IsSpacesOverlayVisible());
 }
-
-IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
-                        LibraryOpensEaselsPaneWithEmbeddedWebUI) {
-  ResolveViews();
-
-  auto* sidebar = GetSidebarView();
-  ASSERT_TRUE(sidebar);
-  auto* rail = sidebar->library_rail_view_for_testing();
-  ASSERT_TRUE(rail);
-  auto* easels_button = rail->button_for_category_for_testing(
-      MahoSidebarLibraryRailView::Category::kEasels);
-  ASSERT_TRUE(easels_button);
-  EXPECT_FALSE(easels_button->GetVisible());
-
-  sidebar->OpenLibrary(MahoSidebarLibraryRailView::Category::kEasels);
-  base::RunLoop().RunUntilIdle();
-
-  EXPECT_TRUE(sidebar->is_library_mode_for_testing());
-  EXPECT_EQ(MahoSidebarLibraryRailView::Category::kEasels,
-            sidebar->active_library_category_for_testing());
-  ASSERT_TRUE(sidebar->easel_view_for_testing());
-  EXPECT_TRUE(sidebar->easel_view_for_testing()->GetVisible());
-  EXPECT_EQ(MahoSidebarLibraryRailView::Category::kEasels,
-            rail->selected_category());
-
-  EXPECT_TRUE(sidebar->easel_view_for_testing()->web_view_for_testing());
-}
-
-
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
                        ToggleArchiveModeAliasOpensAndClosesLibrary) {

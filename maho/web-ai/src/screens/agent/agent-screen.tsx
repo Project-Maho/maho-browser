@@ -1,573 +1,200 @@
-import { type JSX } from 'preact';
 import { useCallback, useEffect, useReducer, useRef } from 'preact/hooks';
+import type { AgentEvent, AgentHandle, MahoBridge } from '../../bridge/types';
+import { useAgentSession } from '../../hooks/use-agent-session';
 import { useBridge } from '../../hooks/use-bridge';
-import { Icon } from '../../ui/icon';
-
-interface ToolDefinition {
-  name: string;
-  description: string;
-  parameters: Record<string, unknown>;
-}
-
-interface ToolResult {
-  success: boolean;
-  output: string;
-}
-
-interface ToolCallDelta {
-  index?: number;
-  id?: string;
-  toolCallId?: string;
-  name?: string;
-  tool?: string;
-  args?: unknown;
-  arguments?: unknown;
-  argumentsDelta?: string;
-}
-
-interface StreamSubscriber {
-  onToken?: (token: string) => void;
-  onComplete?: (finalMessage: string) => void;
-  onError?: (error: string) => void;
-  onToolDelta?: (delta: ToolCallDelta) => void;
-}
-
-interface AgentBridgeMethods {
-  byokGetKey(provider: string): Promise<string | null>;
-  chatSessionStart(opts: { model: string; systemInstruction: string; apiKey: string; endpoint: string }): Promise<string>;
-  chatSessionFree(handle: string): Promise<void>;
-  chatSendMessage(handle: string, content: { kind: string; text: string }): Promise<void>;
-  chatCancelTurn(handle: string): Promise<void>;
-  chatRegisterTool(handle: string, tool: ToolDefinition): Promise<void>;
-  chatSendToolResult(handle: string, toolCallId: string, result: ToolResult): Promise<void>;
-}
-
-type AgentBridge = AgentBridgeMethods;
-
-function subscribeStream(sessionId: string, sub: StreamSubscriber): () => void {
-  const globalWindow = window as Window & {
-    __mahoAgentStreamSubscribers?: Map<string, StreamSubscriber>;
-  };
-  if (!globalWindow.__mahoAgentStreamSubscribers) {
-    globalWindow.__mahoAgentStreamSubscribers = new Map();
-  }
-  globalWindow.__mahoAgentStreamSubscribers.set(sessionId, sub);
-  return () => {
-    globalWindow.__mahoAgentStreamSubscribers?.delete(sessionId);
-  };
-}
-
-const AGENT_SYSTEM_PROMPT =
-  'You are a web agent for Maho Browser. You can navigate pages, query the DOM, take screenshots, and summarize page content. Execute user tasks step by step using the available tools.';
-
-const AGENT_TOOLS: ToolDefinition[] = [
-  {
-    name: 'browser_navigate',
-    description: 'Navigate to a URL',
-    parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] },
-  },
-  {
-    name: 'dom_query',
-    description: 'Query DOM with CSS selector',
-    parameters: { type: 'object', properties: { selector: { type: 'string' } }, required: ['selector'] },
-  },
-  {
-    name: 'screenshot',
-    description: 'Take screenshot of current page',
-    parameters: { type: 'object', properties: {} },
-  },
-  {
-    name: 'page_summary',
-    description: 'Summarize current page',
-    parameters: { type: 'object', properties: {} },
-  },
-];
-
-// ─── Types ──────────────────────────────────────────────────────────────────
-
-type AgentPhase = 'idle' | 'submitted' | 'streaming' | 'awaiting_approval' | 'complete' | 'cancelled' | 'error';
-
-interface ThinkingEntry {
-  kind: 'thinking';
-  id: string;
-  text: string;
-}
-
-interface ToolCallEntry {
-  kind: 'tool-call';
-  id: string;
-  toolCallId: string;
-  toolName: string;
-  argsText: string;
-  status: 'pending' | 'approved' | 'denied' | 'result';
-}
-
-interface ResultEntry {
-  kind: 'result';
-  id: string;
-  text: string;
-}
-
-type LogEntry = ThinkingEntry | ToolCallEntry | ResultEntry;
-
-interface AgentState {
-  phase: AgentPhase;
-  task: string;
-  log: LogEntry[];
-  sessionId: string | null;
-  missingApiKey: boolean;
-  errorMessage: string | null;
-}
-
-type AgentAction =
-  | { type: 'SET_TASK'; value: string }
-  | { type: 'BYOK_MISSING' }
-  | { type: 'BYOK_OK' }
-  | { type: 'SUBMIT'; sessionId: string }
-  | { type: 'STREAM_TOKEN'; text: string }
-  | { type: 'TOOL_DELTA'; delta: ToolCallDelta }
-  | { type: 'TOOL_APPROVED'; toolCallId: string }
-  | { type: 'TOOL_DENIED'; toolCallId: string }
-  | { type: 'STREAM_COMPLETE'; finalMessage: string }
-  | { type: 'STREAM_ERROR'; message: string }
-  | { type: 'CANCEL' }
-  | { type: 'RESET' };
+import { agentReducer, initialAgentState } from './agent-reducer';
+import './agent.css';
+import { Composer } from './composer';
+import { CompactStage } from './compact-stage';
+import { CompactTopbar } from './compact-topbar';
+import { ConversationThread } from './conversation-thread';
+import { freeSessionAfterTeardown, freeSessionForReset } from './session-cleanup';
+import { isRunActive } from './agent-types';
+import { useAgentAutoScroll } from './use-agent-auto-scroll';
 
 export interface AgentScreenProps {
   onBack?: () => void;
-  bridge?: AgentBridge;
+  goal?: string;
+  bridge?: MahoBridge;
 }
 
-// ─── Reducer ────────────────────────────────────────────────────────────────
-
-function initialState(): AgentState {
-  return {
-    phase: 'idle',
-    task: '',
-    log: [],
-    sessionId: null,
-    missingApiKey: false,
-    errorMessage: null,
-  };
-}
-
-function reducer(state: AgentState, action: AgentAction): AgentState {
-  switch (action.type) {
-    case 'SET_TASK':
-      return { ...state, task: action.value };
-
-    case 'BYOK_MISSING':
-      return { ...state, missingApiKey: true };
-
-    case 'BYOK_OK':
-      return { ...state, missingApiKey: false };
-
-    case 'SUBMIT':
-      return {
-        ...state,
-        phase: 'submitted',
-        log: [],
-        sessionId: action.sessionId,
-        errorMessage: null,
-      };
-
-    case 'STREAM_TOKEN': {
-      const lastEntry = state.log[state.log.length - 1];
-      let nextLog: LogEntry[];
-      if (lastEntry && lastEntry.kind === 'thinking') {
-        nextLog = state.log.map((entry, idx) =>
-          idx === state.log.length - 1 && entry.kind === 'thinking'
-            ? { ...entry, text: entry.text + action.text }
-            : entry,
-        );
-      } else {
-        nextLog = [
-          ...state.log,
-          { kind: 'thinking', id: createId('think'), text: action.text },
-        ];
-      }
-      return { ...state, phase: 'streaming', log: nextLog };
-    }
-
-    case 'TOOL_DELTA': {
-      const toolCallId = action.delta.id ?? action.delta.toolCallId ?? `tool-${action.delta.index ?? 0}`;
-      const toolName = action.delta.name ?? action.delta.tool ?? 'unknown';
-      const argsText = formatArgs(action.delta.args ?? action.delta.arguments ?? action.delta.argumentsDelta ?? '{}');
-      const existingIdx = state.log.findIndex(
-        (e) => e.kind === 'tool-call' && e.toolCallId === toolCallId,
-      );
-
-      let nextLog: LogEntry[];
-      if (existingIdx >= 0) {
-        nextLog = state.log.map((entry, idx) => {
-          if (idx !== existingIdx || entry.kind !== 'tool-call') return entry;
-          return {
-            ...entry,
-            toolName: toolName || entry.toolName,
-            argsText: argsText || entry.argsText,
-          };
-        });
-      } else {
-        nextLog = [
-          ...state.log,
-          { kind: 'tool-call', id: createId('toolcall'), toolCallId, toolName, argsText, status: 'pending' },
-        ];
-      }
-      return { ...state, phase: 'awaiting_approval', log: nextLog };
-    }
-
-    case 'TOOL_APPROVED':
-      return {
-        ...state,
-        phase: 'streaming',
-        log: state.log.map((e) =>
-          e.kind === 'tool-call' && e.toolCallId === action.toolCallId
-            ? { ...e, status: 'approved' as const }
-            : e,
-        ),
-      };
-
-    case 'TOOL_DENIED':
-      return {
-        ...state,
-        phase: 'streaming',
-        log: state.log.map((e) =>
-          e.kind === 'tool-call' && e.toolCallId === action.toolCallId
-            ? { ...e, status: 'denied' as const }
-            : e,
-        ),
-      };
-
-    case 'STREAM_COMPLETE': {
-      const resultLog: LogEntry[] = action.finalMessage
-        ? [...state.log, { kind: 'result', id: createId('result'), text: action.finalMessage }]
-        : state.log;
-      return { ...state, phase: 'complete', log: resultLog };
-    }
-
-    case 'STREAM_ERROR':
-      return { ...state, phase: 'error', errorMessage: action.message };
-
-    case 'CANCEL':
-      return { ...state, phase: 'cancelled' };
-
-    case 'RESET':
-      return { ...initialState(), missingApiKey: state.missingApiKey };
-
-    default:
-      return state;
-  }
-}
-
-// ─── Component ──────────────────────────────────────────────────────────────
-
-export function AgentScreen({ onBack, bridge: bridgeProp }: AgentScreenProps) {
+export function AgentScreen({ onBack, goal, bridge: bridgeProp }: AgentScreenProps) {
   const bridgeFromHook = useBridge();
-  const bridge = (bridgeProp ?? bridgeFromHook) as unknown as AgentBridge;
-  const [state, dispatch] = useReducer(reducer, undefined, initialState);
-  const logRef = useRef<HTMLDivElement | null>(null);
-  const sessionRef = useRef<string | null>(null);
+  const bridge = bridgeProp ?? bridgeFromHook;
+  const [state, dispatch] = useReducer(agentReducer, undefined, initialAgentState);
+  const handleRef = useRef<AgentHandle | null>(null);
+  const submittedGoalRef = useRef(false);
+  const cancelledTurnIdsRef = useRef<Set<string>>(new Set());
+  const { forceBottom, onScroll, scrollRef } = useAgentAutoScroll(state.scrollRevision);
 
-  // Check BYOK on mount
-  useEffect(() => {
-    void (async () => {
-      const key = await bridge.byokGetKey('openai');
-      if (!key) {
-        const anthropicKey = await bridge.byokGetKey('anthropic');
-        if (!anthropicKey) {
-          dispatch({ type: 'BYOK_MISSING' });
-          return;
+  handleRef.current = state.handle;
+
+  const submitPrompt = useCallback(
+    async (rawPrompt: string) => {
+      const prompt = rawPrompt.trim();
+      if (!prompt) return;
+
+      const turnId = createId('turn');
+      dispatch({ type: 'SUBMIT_PROMPT', createdAt: new Date(), messageId: createId('user'), prompt, turnId });
+      forceBottom();
+
+      try {
+        const handle = await ensureSessionHandle(bridge, handleRef.current, turnId, cancelledTurnIdsRef.current);
+        if (handle === null) return;
+        handleRef.current = handle;
+        dispatch({ type: 'SESSION_READY', handle });
+
+        if (cancelledTurnIdsRef.current.has(turnId)) return;
+        const sent = await bridge.agentSendMessage(handle, prompt);
+        if (!sent) {
+          dispatch({ type: 'AGENT_ERROR', message: 'Agent did not accept the message.' });
         }
+      } catch (error) {
+        dispatch({ type: 'AGENT_ERROR', message: messageFromError(error, 'Failed to start agent session') });
       }
-      dispatch({ type: 'BYOK_OK' });
-    })();
-  }, [bridge]);
+    },
+    [bridge, forceBottom],
+  );
 
-  // Subscribe to stream events
-  useEffect(() => {
-    if (!state.sessionId) return undefined;
-    return subscribeStream(state.sessionId, {
-      onToken: (token) => dispatch({ type: 'STREAM_TOKEN', text: token }),
-      onComplete: (finalMessage) => dispatch({ type: 'STREAM_COMPLETE', finalMessage }),
-      onError: (error) => dispatch({ type: 'STREAM_ERROR', message: error }),
-      onToolDelta: (delta) => dispatch({ type: 'TOOL_DELTA', delta }),
-    });
-  }, [state.sessionId]);
-
-  // Auto-scroll log
-  useEffect(() => {
-    const node = logRef.current;
-    if (node) {
-      node.scrollTop = node.scrollHeight;
+  const handleAgentEvent = useCallback((event: AgentEvent) => {
+    switch (event.kind) {
+      case 'token':
+        dispatch({ type: 'AGENT_TOKEN', createdAt: new Date(), messageId: createId('assistant'), token: event.token });
+        break;
+      case 'complete':
+        dispatch({
+          type: 'AGENT_COMPLETE',
+          createdAt: new Date(),
+          fullText: event.fullText,
+          messageId: createId('assistant'),
+        });
+        break;
+      case 'error':
+        dispatch({ type: 'AGENT_ERROR', message: event.message });
+        break;
+      default:
+        assertNever(event);
     }
-  }, [state.log]);
+  }, []);
 
-  // Cleanup session on unmount
+  useAgentSession({
+    bridge,
+    handle: state.phase === 'streaming' ? state.handle : null,
+    onEvent: handleAgentEvent,
+  });
+
+  useEffect(() => {
+    const trimmedGoal = goal?.trim() ?? '';
+    if (!trimmedGoal || submittedGoalRef.current) return;
+    submittedGoalRef.current = true;
+    dispatch({ type: 'SET_DRAFT', value: trimmedGoal });
+    void submitPrompt(trimmedGoal);
+  }, [goal, submitPrompt]);
+
   useEffect(() => {
     return () => {
-      const handle = sessionRef.current;
-      if (handle) {
-        void bridge.chatSessionFree(handle).catch(() => undefined);
+      const handle = handleRef.current;
+      if (handle !== null) {
+        freeSessionAfterTeardown(bridge, handle);
       }
     };
   }, [bridge]);
 
-  const handleSubmit = useCallback(async () => {
-    const taskText = state.task.trim();
-    if (!taskText || state.missingApiKey) return;
+  const handleSubmit = useCallback(() => {
+    if (isRunActive(state.phase)) return;
+    void submitPrompt(state.draft);
+  }, [state.draft, state.phase, submitPrompt]);
 
-    try {
-      const key = (await bridge.byokGetKey('openai')) ?? (await bridge.byokGetKey('anthropic')) ?? '';
-      const sessionId = await bridge.chatSessionStart({
-        model: 'gpt-4o',
-        systemInstruction: AGENT_SYSTEM_PROMPT,
-        apiKey: key,
-        endpoint: 'https://api.openai.com/v1',
-      });
-
-      sessionRef.current = sessionId;
-
-      await Promise.all(AGENT_TOOLS.map((tool) => bridge.chatRegisterTool(sessionId, tool)));
-
-      dispatch({ type: 'SUBMIT', sessionId });
-
-      await bridge.chatSendMessage(sessionId, { kind: 'text', text: taskText });
-    } catch (err) {
-      dispatch({ type: 'STREAM_ERROR', message: err instanceof Error ? err.message : 'Failed to start agent session' });
+  const handleStop = useCallback(async () => {
+    if (state.activeTurnId !== null) {
+      cancelledTurnIdsRef.current.add(state.activeTurnId);
     }
-  }, [bridge, state.task, state.missingApiKey]);
 
-  const handleApprove = useCallback(async (toolCallId: string) => {
-    if (!state.sessionId) return;
-    const result: ToolResult = { success: true, output: JSON.stringify({ ok: true, data: '[stub]' }) };
-    dispatch({ type: 'TOOL_APPROVED', toolCallId });
-    await bridge.chatSendToolResult(state.sessionId, toolCallId, result);
-  }, [bridge, state.sessionId]);
-
-  const handleDeny = useCallback(async (toolCallId: string) => {
-    if (!state.sessionId) return;
-    const result: ToolResult = { success: false, output: JSON.stringify({ error: 'user_denied' }) };
-    dispatch({ type: 'TOOL_DENIED', toolCallId });
-    await bridge.chatSendToolResult(state.sessionId, toolCallId, result);
-  }, [bridge, state.sessionId]);
-
-  const handleCancel = useCallback(async () => {
-    if (!state.sessionId) return;
-    await bridge.chatCancelTurn(state.sessionId);
+    const handle = handleRef.current;
+    if (handle !== null) {
+      try {
+        await bridge.agentCancel(handle);
+      } catch (error) {
+        dispatch({ type: 'AGENT_ERROR', message: messageFromError(error, 'Failed to stop current run') });
+        return;
+      }
+    }
     dispatch({ type: 'CANCEL' });
-  }, [bridge, state.sessionId]);
+  }, [bridge, state.activeTurnId]);
 
-  const handleNewTask = useCallback(async () => {
-    if (state.sessionId) {
-      await bridge.chatSessionFree(state.sessionId);
-      sessionRef.current = null;
+  const handleNewSession = useCallback(async () => {
+    if (isRunActive(state.phase)) return;
+    const handle = handleRef.current;
+    if (handle !== null) {
+      await freeSessionForReset(bridge, handle);
+      handleRef.current = null;
     }
+    cancelledTurnIdsRef.current.clear();
     dispatch({ type: 'RESET' });
-  }, [bridge, state.sessionId]);
+  }, [bridge, state.phase]);
 
-  const isActive = state.phase === 'submitted' || state.phase === 'streaming' || state.phase === 'awaiting_approval';
+  const handleOpenSettings = useCallback(async () => {
+    try {
+      await bridge.openSettings();
+    } catch (error) {
+      dispatch({ type: 'AGENT_ERROR', message: messageFromError(error, 'Failed to open settings') });
+    }
+  }, [bridge]);
+
+  const showThread = state.messages.length > 0 || state.errorMessage !== null;
 
   return (
     <div class="agent-screen" data-testid="agent-screen">
-      <header class="agent-header">
-        <div class="agent-header-main">
-          {onBack && (
-            <button type="button" class="agent-back-button" onClick={onBack} aria-label="Back">
-              <Icon name="chevron-left" size={18} aria-hidden />
-            </button>
-          )}
-          <div class="agent-header-copy">
-            <p class="agent-eyebrow">Agent</p>
-            <h1 class="agent-title">Web Agent</h1>
-          </div>
-        </div>
-        <div class="agent-header-actions">
-          {(state.phase === 'complete' || state.phase === 'cancelled' || state.phase === 'error') && (
-            <button
-              type="button"
-              class="agent-new-button"
-              onClick={() => void handleNewTask()}
-              aria-label="New task"
-            >
-              + New
-            </button>
-          )}
-        </div>
-      </header>
-
-      <main class="agent-content">
-        {state.missingApiKey ? (
-          <section class="agent-empty-state agent-empty-state--cta">
-            <div class="agent-empty-icon" aria-hidden="true"><span>🔑</span></div>
-            <h2 class="agent-empty-heading">API key required</h2>
-            <p class="agent-empty-copy">Add an OpenAI or Anthropic key to use the Web Agent.</p>
-            <button
-              type="button"
-              class="agent-cta-button"
-              onClick={() => { window.location.hash = '#byok'; }}
-            >
-              Configure API key
-            </button>
-          </section>
-        ) : state.phase === 'idle' ? (
-          <section class="agent-task-input">
-            <textarea
-              class="agent-textarea"
-              aria-label="Task description"
-              placeholder="Describe a task for the agent…"
-              rows={4}
-              value={state.task}
-              onInput={(e) => dispatch({ type: 'SET_TASK', value: (e.target as HTMLTextAreaElement).value })}
-            />
-            <button
-              type="button"
-              class="agent-run-button"
-              aria-label="Run Agent"
-              disabled={!state.task.trim() || state.missingApiKey}
-              onClick={() => void handleSubmit()}
-            >
-              Run Agent
-            </button>
-          </section>
-        ) : (
-          <>
-            {state.errorMessage && (
-              <div class="agent-error-banner" role="alert">{state.errorMessage}</div>
-            )}
-            <div ref={logRef} class="agent-log" role="log" aria-live="polite">
-              {state.log.map((entry) => renderLogEntry(entry, handleApprove, handleDeny))}
-            </div>
-            {isActive && (
-              <button
-                type="button"
-                class="agent-cancel-button"
-                aria-label="Cancel"
-                onClick={() => void handleCancel()}
-              >
-                Cancel
-              </button>
-            )}
-            {(state.phase === 'complete' || state.phase === 'cancelled' || state.phase === 'error') && (
-              <button
-                type="button"
-                class="agent-new-task-button"
-                aria-label="New task"
-                onClick={() => void handleNewTask()}
-              >
-                New Task
-              </button>
-            )}
-          </>
-        )}
-      </main>
+      <CompactTopbar
+        isRunning={isRunActive(state.phase)}
+        onBack={onBack}
+        onNewSession={() => void handleNewSession()}
+        onOpenSettings={() => void handleOpenSettings()}
+      />
+      {showThread ? (
+        <ConversationThread
+          errorMessage={state.errorMessage}
+          messages={state.messages}
+          onScroll={onScroll}
+          phase={state.phase}
+          scrollRef={scrollRef}
+        />
+      ) : (
+        <CompactStage hasSession={state.handle !== null || Boolean(goal?.trim())} />
+      )}
+      <Composer
+        draft={state.draft}
+        hasMessages={showThread}
+        phase={state.phase}
+        onDraftChange={(value) => dispatch({ type: 'SET_DRAFT', value })}
+        onStop={() => void handleStop()}
+        onSubmit={handleSubmit}
+      />
     </div>
   );
 }
 
-// ─── Log entry rendering ────────────────────────────────────────────────────
-
-function renderLogEntry(
-  entry: LogEntry,
-  onApprove: (id: string) => Promise<void>,
-  onDeny: (id: string) => Promise<void>,
-): JSX.Element {
-  switch (entry.kind) {
-    case 'thinking':
-      return (
-        <div key={entry.id} class="agent-thinking-entry">
-          <span class="agent-thinking-prefix" aria-hidden="true">🤖</span>
-          <span class="agent-thinking-text">{entry.text}</span>
-        </div>
-      );
-    case 'tool-call':
-      return (
-        <div key={entry.id} class="agent-tool-card">
-          <div class="agent-tool-header">
-            <strong class="agent-tool-name">{entry.toolName}</strong>
-            <span class={`agent-tool-badge agent-tool-badge--${entry.status}`}>{entry.status}</span>
-          </div>
-          <pre class="agent-tool-args">{entry.argsText}</pre>
-          {entry.status === 'pending' && (
-            <div class="agent-tool-actions">
-              <button
-                type="button"
-                class="agent-tool-approve"
-                aria-label={`Approve ${entry.toolName}`}
-                onClick={() => void onApprove(entry.toolCallId)}
-              >
-                Approve
-              </button>
-              <button
-                type="button"
-                class="agent-tool-deny"
-                aria-label={`Deny ${entry.toolName}`}
-                onClick={() => void onDeny(entry.toolCallId)}
-              >
-                Deny
-              </button>
-            </div>
-          )}
-        </div>
-      );
-    case 'result':
-      return (
-        <div key={entry.id} class="agent-result-block">
-          <MarkdownRenderer text={entry.text} />
-        </div>
-      );
-  }
-}
-
-// ─── Minimal markdown renderer (extracted from chat-screen pattern) ─────────
-
-function MarkdownRenderer({ text }: { text: string }): JSX.Element {
-  const lines = text.replace(/\r\n/g, '\n').split('\n');
-  const blocks: JSX.Element[] = [];
-
-  for (let i = 0; i < lines.length;) {
-    const line = lines[i] ?? '';
-    if (!line.trim()) { i++; continue; }
-
-    if (line.startsWith('```')) {
-      const codeLines: string[] = [];
-      i++;
-      while (i < lines.length && !lines[i]?.startsWith('```')) {
-        codeLines.push(lines[i] ?? '');
-        i++;
-      }
-      if (i < lines.length) i++;
-      blocks.push(<pre key={`code-${blocks.length}`} class="agent-md-pre"><code>{codeLines.join('\n')}</code></pre>);
-      continue;
-    }
-
-    if (line.startsWith('- ')) {
-      const items: string[] = [];
-      while (i < lines.length && (lines[i] ?? '').startsWith('- ')) {
-        items.push((lines[i] ?? '').slice(2));
-        i++;
-      }
-      blocks.push(
-        <ul key={`list-${blocks.length}`} class="agent-md-list">
-          {items.map((item, idx) => <li key={idx}>{item}</li>)}
-        </ul>,
-      );
-      continue;
-    }
-
-    const pLines: string[] = [];
-    while (i < lines.length) {
-      const cur = lines[i] ?? '';
-      if (!cur.trim() || cur.startsWith('```') || cur.startsWith('- ')) break;
-      pLines.push(cur);
-      i++;
-    }
-    blocks.push(<p key={`p-${blocks.length}`} class="agent-md-p">{pLines.join(' ')}</p>);
+async function ensureSessionHandle(
+  bridge: MahoBridge,
+  existingHandle: AgentHandle | null,
+  turnId: string,
+  cancelledTurnIds: ReadonlySet<string>,
+): Promise<AgentHandle | null> {
+  if (existingHandle !== null) {
+    return existingHandle;
   }
 
-  return <div class="agent-md">{blocks}</div>;
+  const handle = await bridge.agentCreateSession(createId('agent-session'));
+  if (cancelledTurnIds.has(turnId)) {
+    freeSessionAfterTeardown(bridge, handle);
+    return null;
+  }
+  return handle;
 }
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
+function messageFromError(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
 
 function createId(prefix: string): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -576,13 +203,6 @@ function createId(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function formatArgs(value: unknown): string {
-  if (typeof value === 'string') {
-    try {
-      return JSON.stringify(JSON.parse(value), null, 2);
-    } catch {
-      return value;
-    }
-  }
-  return JSON.stringify(value, null, 2) ?? '{}';
+function assertNever(value: never): never {
+  throw new Error(`Unhandled agent event: ${JSON.stringify(value)}`);
 }

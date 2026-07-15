@@ -6,6 +6,8 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Test
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 
 class CodableRoundTripTest {
@@ -221,5 +223,179 @@ class CodableRoundTripTest {
         assertTrue(encoded.contains("\"close\""))
         val decoded = json.decodeFromString(GeneralSettingsUpdate.serializer(), encoded)
         assertEquals(PinnedCloseBehavior.Close, decoded.pinnedCloseBehavior)
+    }
+
+    @Test
+    fun `SuggestionType all wire names round trip to exact core values`() {
+        val cases = mapOf(
+            SuggestionType.Tab         to "\"tab\"",
+            SuggestionType.Bookmark    to "\"bookmark\"",
+            SuggestionType.History     to "\"history\"",
+            SuggestionType.Action      to "\"action\"",
+            SuggestionType.Navigation  to "\"navigation\"",
+            SuggestionType.Search      to "\"search\"",
+            SuggestionType.Calculator  to "\"calculator\"",
+            SuggestionType.UnitConversion to "\"unitconversion\"",
+            SuggestionType.ArchivedTab to "\"archivedtab\"",
+            SuggestionType.ClosedTab   to "\"closedtab\"",
+            SuggestionType.Folder      to "\"folder\"",
+            SuggestionType.AiAnswer    to "\"aiAnswer\"",
+        )
+        for ((kind, expectedWire) in cases) {
+            val encoded = json.encodeToString(SuggestionType.serializer(), kind)
+            assertEquals("wire value for $kind", expectedWire, encoded)
+            val decoded = json.decodeFromString(SuggestionType.serializer(), encoded)
+            assertEquals("round-trip for $kind", kind, decoded)
+        }
+    }
+
+    @Test
+    fun `CoreUpdate CommandBarResults decodes all new suggestion kinds with executionPayload`() {
+        val rawJson = """
+            {
+                "kind": "command_bar_results",
+                "suggestions": [
+                    {
+                        "kind": "search",
+                        "key": "s1",
+                        "title": "maho browser",
+                        "relevanceScore": 0.9,
+                        "executionPayload": "{\"query\":\"maho browser\"}"
+                    },
+                    {
+                        "kind": "aiAnswer",
+                        "key": "ai1",
+                        "title": "Ask Maho AI",
+                        "relevanceScore": 0.85
+                    },
+                    {
+                        "kind": "folder",
+                        "key": "f1",
+                        "title": "Work",
+                        "relevanceScore": 0.7
+                    },
+                    {
+                        "kind": "unitconversion",
+                        "key": "uc1",
+                        "title": "1 km = 0.621 mi",
+                        "relevanceScore": 0.8,
+                        "executionPayload": "{\"from\":\"km\",\"to\":\"mi\"}"
+                    },
+                    {
+                        "kind": "archivedtab",
+                        "key": "at1",
+                        "title": "Old Tab",
+                        "relevanceScore": 0.6
+                    },
+                    {
+                        "kind": "closedtab",
+                        "key": "ct1",
+                        "title": "Recently Closed",
+                        "relevanceScore": 0.5
+                    }
+                ]
+            }
+        """.trimIndent()
+
+        val update = json.decodeFromString(CoreUpdate.serializer(), rawJson)
+        assertTrue(update is CoreUpdate.CommandBarResults)
+        val results = update as CoreUpdate.CommandBarResults
+
+        assertEquals(6, results.suggestions.size)
+
+        val search = results.suggestions[0]
+        assertEquals(SuggestionType.Search, search.kind)
+        assertEquals("s1", search.key)
+        assertNotNull(search.executionPayload)
+        assertEquals("{\"query\":\"maho browser\"}", search.executionPayload)
+
+        val aiAnswer = results.suggestions[1]
+        assertEquals(SuggestionType.AiAnswer, aiAnswer.kind)
+        assertNull(aiAnswer.executionPayload)
+
+        val folder = results.suggestions[2]
+        assertEquals(SuggestionType.Folder, folder.kind)
+
+        val unitConversion = results.suggestions[3]
+        assertEquals(SuggestionType.UnitConversion, unitConversion.kind)
+        assertNotNull(unitConversion.executionPayload)
+
+        val archivedTab = results.suggestions[4]
+        assertEquals(SuggestionType.ArchivedTab, archivedTab.kind)
+
+        val closedTab = results.suggestions[5]
+        assertEquals(SuggestionType.ClosedTab, closedTab.kind)
+    }
+
+    @Test
+    fun `SuggestionViewModel executionPayload present when non-null`() {
+        val suggestion = SuggestionViewModel(
+            kind = SuggestionType.Search,
+            key = "k1",
+            title = "test query",
+            executionPayload = "{\"url\":\"https://example.com\"}",
+            relevanceScore = 1.0,
+        )
+        val encoded = json.encodeToString(SuggestionViewModel.serializer(), suggestion)
+        assertTrue("must serialize executionPayload key", encoded.contains("\"executionPayload\""))
+        val decoded = json.decodeFromString(SuggestionViewModel.serializer(), encoded)
+        assertEquals(suggestion.executionPayload, decoded.executionPayload)
+    }
+
+    @Test
+    fun `SuggestionViewModel executionPayload null when absent`() {
+        val rawJson = """
+            {
+                "kind": "history",
+                "key": "h1",
+                "title": "Example",
+                "relevanceScore": 0.5
+            }
+        """.trimIndent()
+        val decoded = json.decodeFromString(SuggestionViewModel.serializer(), rawJson)
+        assertNull(decoded.executionPayload)
+    }
+
+    @Test
+    fun `CommandBarQuery encodes isIncognito true with is_incognito wire key`() {
+        val event = ShellEvent.CommandBarQuery(text = "hello", isIncognito = true)
+        val encoded = json.encodeToString(ShellEvent.serializer(), event)
+        assertTrue(
+            "encoded JSON must contain \"is_incognito\":true",
+            encoded.contains("\"is_incognito\":true")
+        )
+    }
+
+    @Test
+    fun `CommandBarQuery encodes isIncognito false by default`() {
+        val event = ShellEvent.CommandBarQuery(text = "hello")
+        val encoded = json.encodeToString(ShellEvent.serializer(), event)
+        // encodeDefaults=true means it will always be emitted; assert false value
+        assertTrue(
+            "encoded JSON must contain is_incognito key",
+            encoded.contains("is_incognito")
+        )
+        assertTrue(
+            "is_incognito must be false by default",
+            encoded.contains("\"is_incognito\":false")
+        )
+    }
+
+    @Test
+    fun `CommandBarQuery isIncognito round trips`() {
+        val original = ShellEvent.CommandBarQuery(text = "incognito search", isIncognito = true)
+        val encoded = json.encodeToString(ShellEvent.serializer(), original)
+        val decoded = json.decodeFromString(ShellEvent.serializer(), encoded)
+        assertEquals(original, decoded)
+    }
+
+    @Test
+    fun `CommandBarQuery isIncognito decodes from raw JSON`() {
+        val rawJson = """{"kind":"command_bar_query","text":"foo","is_incognito":true}"""
+        val decoded = json.decodeFromString(ShellEvent.serializer(), rawJson)
+        assertTrue(decoded is ShellEvent.CommandBarQuery)
+        val query = decoded as ShellEvent.CommandBarQuery
+        assertEquals("foo", query.text)
+        assertEquals(true, query.isIncognito)
     }
 }

@@ -1,9 +1,244 @@
+use std::path::{Path, PathBuf};
+use std::sync::RwLock;
+
 use rusqlite::Connection;
 
 use crate::StorageError;
 
+/// Process-wide SQLCipher key slot. The browser (C++ via OSCrypt) injects the
+/// real key once at startup through [`set_sqlcipher_key`]; it is never baked
+/// into source. `open`/`open_in_memory` read from here so existing call sites
+/// keep their signatures while the key stays dependency-injected.
+static SQLCIPHER_KEY: RwLock<Option<String>> = RwLock::new(None);
+
+/// Inject the SQLCipher key used by [`SqliteStorage::open`] and
+/// [`SqliteStorage::open_in_memory`]. Call once before opening any database.
+pub fn set_sqlcipher_key(key: &str) -> Result<(), StorageError> {
+    ensure_sqlcipher_key(key)?;
+    let mut guard = SQLCIPHER_KEY
+        .write()
+        .map_err(|_| StorageError::KeyStoreUnavailable)?;
+    *guard = Some(key.to_string());
+    Ok(())
+}
+
+/// Remove the injected key (primarily for teardown / tests).
+pub fn clear_sqlcipher_key() -> Result<(), StorageError> {
+    let mut guard = SQLCIPHER_KEY
+        .write()
+        .map_err(|_| StorageError::KeyStoreUnavailable)?;
+    *guard = None;
+    Ok(())
+}
+
+/// Check if the SQLCipher key is configured process-wide.
+pub fn is_key_configured() -> bool {
+    injected_key().is_ok()
+}
+
+fn injected_key() -> Result<String, StorageError> {
+    let guard = SQLCIPHER_KEY
+        .read()
+        .map_err(|_| StorageError::KeyStoreUnavailable)?;
+    guard.clone().ok_or(StorageError::KeyNotConfigured)
+}
+
+fn ensure_sqlcipher_key(key: &str) -> Result<(), StorageError> {
+    if key.is_empty() {
+        return Err(StorageError::EmptySqlCipherKey);
+    }
+    Ok(())
+}
+
+fn apply_key(conn: &Connection, key: &str) -> Result<(), StorageError> {
+    ensure_sqlcipher_key(key)?;
+    conn.pragma_update(None, "key", key)
+        .map_err(StorageError::Encryption)
+}
+
+/// A plaintext SQLite DB can read `sqlite_master` with no key; an encrypted
+/// SQLCipher DB errors instead. That difference is how we detect the need to
+/// migrate.
+fn is_plaintext_database(path: &Path) -> bool {
+    let Ok(conn) = Connection::open(path) else {
+        return false;
+    };
+    conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
+        r.get::<_, i64>(0)
+    })
+    .is_ok()
+}
+
+fn verify_encrypted_opens(path: &Path, key: &str) -> bool {
+    let Ok(conn) = Connection::open(path) else {
+        return false;
+    };
+    if apply_key(&conn, key).is_err() {
+        return false;
+    }
+    conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
+        r.get::<_, i64>(0)
+    })
+    .is_ok()
+}
+
+fn export_encrypted(
+    plain_path: &Path,
+    encrypted_path: &Path,
+    key: &str,
+) -> Result<(), StorageError> {
+    ensure_sqlcipher_key(key)?;
+    let conn = Connection::open(plain_path)?;
+    let encrypted_path = encrypted_path.to_string_lossy();
+    conn.execute(
+        "ATTACH DATABASE ?1 AS encrypted KEY ?2",
+        rusqlite::params![encrypted_path.as_ref(), key],
+    )
+    .map_err(|e| StorageError::Migration(format!("encrypted attach failed: {e}")))?;
+    let export_result = conn.execute_batch("SELECT sqlcipher_export('encrypted');");
+    let detach_result = conn.execute_batch("DETACH DATABASE encrypted;");
+    export_result.map_err(|e| StorageError::Migration(format!("sqlcipher_export failed: {e}")))?;
+    detach_result.map_err(|e| StorageError::Migration(format!("encrypted detach failed: {e}")))?;
+    Ok(())
+}
+
+/// One-time plaintext -> SQLCipher migration. Delegates to the injectable inner
+/// so tests can drive the verification-failure (rollback) path deterministically.
+fn migrate_plaintext_to_encrypted(db_path: &str, key: &str) -> Result<(), StorageError> {
+    migrate_plaintext_to_encrypted_inner(db_path, key, verify_encrypted_opens)
+}
+
+fn secure_delete_and_remove(path: &Path) -> std::io::Result<()> {
+    use std::io::Write;
+    if !path.exists() {
+        return Ok(());
+    }
+    let metadata = std::fs::metadata(path)?;
+    let len = metadata.len();
+
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)?;
+
+    let zero_buffer = vec![0u8; 65536];
+    let mut remaining = len;
+    while remaining > 0 {
+        let chunk_size = std::cmp::min(remaining, zero_buffer.len() as u64) as usize;
+        file.write_all(&zero_buffer[..chunk_size])?;
+        remaining -= chunk_size as u64;
+    }
+    file.sync_all()?;
+    drop(file);
+
+    std::fs::remove_file(path)?;
+    Ok(())
+}
+
+fn migrate_plaintext_to_encrypted_inner(
+    db_path: &str,
+    key: &str,
+    verify: impl Fn(&Path, &str) -> bool,
+) -> Result<(), StorageError> {
+    if db_path == ":memory:" {
+        return Ok(());
+    }
+    let path = Path::new(db_path);
+
+    let backup_path = migration_backup_path(path);
+    // Boot cleanup: delete legacy plain backup if encrypted DB is already verified and healthy
+    if backup_path.exists() && path.exists() && verify(path, key) {
+        if let Err(e) = secure_delete_and_remove(&backup_path) {
+            eprintln!("Warning: Failed to clean up stale plain backup DB at {}: {}", backup_path.display(), e);
+        }
+    }
+
+    if !path.exists() || !is_plaintext_database(path) {
+        return Ok(());
+    }
+
+    let temp_path = migration_temp_path(path);
+    if temp_path.exists() {
+        std::fs::remove_file(&temp_path).map_err(|e| {
+            StorageError::Migration(format!("could not clear stale temp file: {e}"))
+        })?;
+    }
+
+    if let Err(e) = export_encrypted(path, &temp_path, key) {
+        cleanup_migration_temp(&temp_path, "after export failure")?;
+        return Err(e);
+    }
+
+    if !verify(&temp_path, key) {
+        cleanup_migration_temp(&temp_path, "after verification failure")?;
+        return Err(StorageError::Migration(
+            "encrypted copy failed verification; original left intact".to_string(),
+        ));
+    }
+
+    std::fs::rename(path, &backup_path)
+        .map_err(|e| StorageError::Migration(format!("backup rename failed: {e}")))?;
+    if let Err(e) = std::fs::rename(&temp_path, path) {
+        let restore_result = std::fs::rename(&backup_path, path);
+        let cleanup_result = std::fs::remove_file(&temp_path);
+        let mut message = format!("atomic swap failed: {e}");
+        match restore_result {
+            Ok(()) => message.push_str("; original restored"),
+            Err(restore_error) => {
+                message.push_str(&format!(
+                    "; original backup restore failed: {restore_error}"
+                ));
+            }
+        }
+        if let Err(cleanup_error) = cleanup_result {
+            message.push_str(&format!("; temp cleanup failed: {cleanup_error}"));
+        }
+        return Err(StorageError::Migration(message));
+    }
+
+    // Securely delete and remove plain_backup file on success
+    if let Err(e) = secure_delete_and_remove(&backup_path) {
+        eprintln!("Warning: Failed to securely delete plain backup DB at {}: {}", backup_path.display(), e);
+    }
+
+    Ok(())
+}
+
+fn migration_temp_path(path: &Path) -> PathBuf {
+    path.with_extension("db.encrypting")
+}
+
+fn migration_backup_path(path: &Path) -> PathBuf {
+    path.with_extension("db.plain_backup")
+}
+
+fn cleanup_migration_temp(path: &Path, context: &str) -> Result<(), StorageError> {
+    if !path.exists() {
+        return Ok(());
+    }
+    std::fs::remove_file(path)
+        .map_err(|e| StorageError::Migration(format!("could not clear temp file {context}: {e}")))
+}
+
 type BookmarkRecord = (String, String, String, Option<String>, String);
-type PasswordRecord = (String, String, String, String, Option<String>, Option<String>);
+type PasswordRecord = (
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+);
+pub type AutofillPaymentRecord = (String, String, String, String, Option<String>);
+pub type EntityVersionRecord = (u64, u32, Option<String>, Option<String>);
+pub type MemoryRecord = (
+    String,
+    String,
+    String,
+    Option<String>,
+    String,
+    f64,
+    Option<String>,
+);
 type AutofillAddressRecord = (
     String,
     String,
@@ -31,6 +266,16 @@ pub struct AutofillAddressParams<'a> {
     pub address_line2: Option<&'a str>,
 }
 
+pub struct MemoryInsertParams<'a> {
+    pub id: &'a str,
+    pub fact: &'a str,
+    pub source: &'a str,
+    pub session_id: Option<&'a str>,
+    pub categories: &'a str,
+    pub importance: f64,
+    pub metadata: Option<&'a str>,
+}
+
 /// SQLite storage for persistent data (history, bookmarks, settings)
 pub struct SqliteStorage {
     pub(crate) conn: Connection,
@@ -38,43 +283,48 @@ pub struct SqliteStorage {
 }
 
 impl SqliteStorage {
-    pub fn open(path: &str) -> Result<Self, StorageError> {
-        let conn = Connection::open(path).map_err(|e| {
-            eprintln!("[SqliteStorage::open] FAIL at Connection::open({path}): {e}");
-            e
-        })?;
-        let _ = conn.pragma_update(None, "key", "maho_secure_key");
-        conn.execute("PRAGMA foreign_keys = ON;", []).map_err(|e| {
-            eprintln!("[SqliteStorage::open] FAIL at PRAGMA foreign_keys: {e}");
-            e
-        })?;
-        let storage = Self { conn, path: path.to_string() };
-        storage.initialize_schema().map_err(|e| {
-            eprintln!(
-                "[SqliteStorage::open] FAIL at initialize_schema() for {path}: {e}. \
-                 Likely cause: schema mismatch with an old DB. \
-                 To reset, move the DB aside: mv \"{path}\" \"{path}.bak\" and relaunch."
-            );
-            e
-        })?;
-        storage.run_migrations().map_err(|e| {
-            eprintln!(
-                "[SqliteStorage::open] FAIL at run_migrations() for {path}: {e}. \
-                 A schema migration query failed. Same reset instruction as above applies."
-            );
-            e
-        })?;
-        Ok(storage)
-    }
-
-    pub fn open_in_memory() -> Result<Self, StorageError> {
-        let conn = Connection::open_in_memory()?;
-        let _ = conn.pragma_update(None, "key", "maho_secure_key");
+    /// Open (creating if needed) an encrypted database at `path`, migrating a
+    /// pre-existing plaintext database to SQLCipher first. The key is
+    /// dependency-injected by the caller.
+    pub fn open_with_key(path: &str, key: &str) -> Result<Self, StorageError> {
+        migrate_plaintext_to_encrypted(path, key)?;
+        let conn = Connection::open(path)?;
+        apply_key(&conn, key)?;
         conn.execute("PRAGMA foreign_keys = ON;", [])?;
-        let storage = Self { conn, path: ":memory:".to_string() };
+        let storage = Self {
+            conn,
+            path: path.to_string(),
+        };
         storage.initialize_schema()?;
         storage.run_migrations()?;
         Ok(storage)
+    }
+
+    /// Open the on-disk database using the process-wide injected key.
+    /// Returns [`StorageError::KeyNotConfigured`] if no key was set.
+    pub fn open(path: &str) -> Result<Self, StorageError> {
+        let key = injected_key()?;
+        Self::open_with_key(path, &key)
+    }
+
+    /// Open an in-memory database with a caller-supplied key.
+    pub fn open_in_memory_with_key(key: &str) -> Result<Self, StorageError> {
+        let conn = Connection::open_in_memory()?;
+        apply_key(&conn, key)?;
+        conn.execute("PRAGMA foreign_keys = ON;", [])?;
+        let storage = Self {
+            conn,
+            path: ":memory:".to_string(),
+        };
+        storage.initialize_schema()?;
+        storage.run_migrations()?;
+        Ok(storage)
+    }
+
+    /// Open an in-memory database using the process-wide injected key.
+    pub fn open_in_memory() -> Result<Self, StorageError> {
+        let key = injected_key()?;
+        Self::open_in_memory_with_key(&key)
     }
 
     pub fn path(&self) -> &str {
@@ -83,7 +333,9 @@ impl SqliteStorage {
 
     fn run_migrations(&self) -> Result<(), StorageError> {
         // NOTE: password stored as plaintext TEXT column. Encryption at rest is a future improvement.
-        let _ = self.conn.execute("ALTER TABLE passwords ADD COLUMN password TEXT", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE passwords ADD COLUMN password TEXT", []);
         let _ = self.conn.execute(
             "ALTER TABLE shortcuts ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1",
             [],
@@ -93,27 +345,44 @@ impl SqliteStorage {
             [],
         );
 
-        let has_dot_pos_x: bool = self.conn.query_row(
-            "SELECT 1 FROM pragma_table_info('boosts') WHERE name='dot_pos_x'",
-            [],
-            |_| Ok(true),
-        ).unwrap_or(false);
+        let has_dot_pos_x: bool = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM pragma_table_info('boosts') WHERE name='dot_pos_x'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
 
         if !has_dot_pos_x {
             let _ = self.conn.execute(
-                "ALTER TABLE boosts ADD COLUMN dot_pos_x REAL NOT NULL DEFAULT 0.76", []);
+                "ALTER TABLE boosts ADD COLUMN dot_pos_x REAL NOT NULL DEFAULT 0.76",
+                [],
+            );
             let _ = self.conn.execute(
-                "ALTER TABLE boosts ADD COLUMN dot_pos_y REAL NOT NULL DEFAULT 0.66", []);
+                "ALTER TABLE boosts ADD COLUMN dot_pos_y REAL NOT NULL DEFAULT 0.66",
+                [],
+            );
             let _ = self.conn.execute(
-                "ALTER TABLE boosts ADD COLUMN dot_distance REAL NOT NULL DEFAULT 0", []);
+                "ALTER TABLE boosts ADD COLUMN dot_distance REAL NOT NULL DEFAULT 0",
+                [],
+            );
             let _ = self.conn.execute(
-                "ALTER TABLE boosts ADD COLUMN secondary_dot_pos_x REAL NOT NULL DEFAULT 0.5", []);
+                "ALTER TABLE boosts ADD COLUMN secondary_dot_pos_x REAL NOT NULL DEFAULT 0.5",
+                [],
+            );
             let _ = self.conn.execute(
-                "ALTER TABLE boosts ADD COLUMN secondary_dot_pos_y REAL NOT NULL DEFAULT 0.81", []);
+                "ALTER TABLE boosts ADD COLUMN secondary_dot_pos_y REAL NOT NULL DEFAULT 0.81",
+                [],
+            );
             let _ = self.conn.execute(
-                "ALTER TABLE boosts ADD COLUMN change_was_made INTEGER NOT NULL DEFAULT 0", []);
+                "ALTER TABLE boosts ADD COLUMN change_was_made INTEGER NOT NULL DEFAULT 0",
+                [],
+            );
             let _ = self.conn.execute(
-                "ALTER TABLE boosts ADD COLUMN size_mode TEXT NOT NULL DEFAULT 'k100'", []);
+                "ALTER TABLE boosts ADD COLUMN size_mode TEXT NOT NULL DEFAULT 'k100'",
+                [],
+            );
 
             self.conn.execute_batch(
                 "UPDATE boosts SET size_mode = CASE
@@ -127,24 +396,28 @@ impl SqliteStorage {
                     WHEN size_override < 1.175 THEN 'k110'
                     WHEN size_override < 1.375 THEN 'k125'
                     ELSE 'k150'
-                END;"
+                END;",
             )?;
         }
 
         // --- Conversation Migration (Legacy Schema Detection & Migration) ---
         let table_exists = |table_name: &str| -> bool {
-            self.conn.query_row(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
-                rusqlite::params![table_name],
-                |_| Ok(true),
-            ).unwrap_or(false)
+            self.conn
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
+                    rusqlite::params![table_name],
+                    |_| Ok(true),
+                )
+                .unwrap_or(false)
         };
 
         if table_exists("chat_sessions") {
-            let mut stmt = self.conn.prepare("SELECT id, title, created_at FROM chat_sessions")?;
-            let sessions: Vec<(String, Option<String>, String)> = stmt.query_map([], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-            })?.collect::<Result<_, _>>()?;
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id, title, created_at FROM chat_sessions")?;
+            let sessions: Vec<(String, Option<String>, String)> = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                .collect::<Result<_, _>>()?;
             for (id, title, created_at) in sessions {
                 let _ = self.conn.execute(
                     "INSERT OR IGNORE INTO conversations (id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
@@ -152,10 +425,20 @@ impl SqliteStorage {
                 );
             }
             if table_exists("chat_messages") {
-                let mut stmt = self.conn.prepare("SELECT id, session_id, role, content, created_at FROM chat_messages")?;
-                let messages: Vec<(String, String, String, String, String)> = stmt.query_map([], |row| {
-                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
-                })?.collect::<Result<_, _>>()?;
+                let mut stmt = self.conn.prepare(
+                    "SELECT id, session_id, role, content, created_at FROM chat_messages",
+                )?;
+                let messages: Vec<(String, String, String, String, String)> = stmt
+                    .query_map([], |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ))
+                    })?
+                    .collect::<Result<_, _>>()?;
                 for (id, session_id, role, content, created_at) in messages {
                     let _ = self.conn.execute(
                         "INSERT OR IGNORE INTO conversation_turns (id, session_id, role, content, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -168,10 +451,12 @@ impl SqliteStorage {
         }
 
         if table_exists("ai_sessions") {
-            let mut stmt = self.conn.prepare("SELECT id, title, created_at FROM ai_sessions")?;
-            let sessions: Vec<(String, Option<String>, String)> = stmt.query_map([], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-            })?.collect::<Result<_, _>>()?;
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id, title, created_at FROM ai_sessions")?;
+            let sessions: Vec<(String, Option<String>, String)> = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                .collect::<Result<_, _>>()?;
             for (id, title, created_at) in sessions {
                 let _ = self.conn.execute(
                     "INSERT OR IGNORE INTO conversations (id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
@@ -179,10 +464,20 @@ impl SqliteStorage {
                 );
             }
             if table_exists("ai_messages") {
-                let mut stmt = self.conn.prepare("SELECT id, session_id, role, content, created_at FROM ai_messages")?;
-                let messages: Vec<(String, String, String, String, String)> = stmt.query_map([], |row| {
-                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
-                })?.collect::<Result<_, _>>()?;
+                let mut stmt = self
+                    .conn
+                    .prepare("SELECT id, session_id, role, content, created_at FROM ai_messages")?;
+                let messages: Vec<(String, String, String, String, String)> = stmt
+                    .query_map([], |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ))
+                    })?
+                    .collect::<Result<_, _>>()?;
                 for (id, session_id, role, content, created_at) in messages {
                     let _ = self.conn.execute(
                         "INSERT OR IGNORE INTO conversation_turns (id, session_id, role, content, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -195,17 +490,24 @@ impl SqliteStorage {
         }
 
         if table_exists("session_event_logs") {
-            let has_role: bool = self.conn.query_row(
-                "SELECT 1 FROM pragma_table_info('session_event_logs') WHERE name='role'",
-                [],
-                |_| Ok(true),
-            ).unwrap_or(false);
+            let has_role: bool = self
+                .conn
+                .query_row(
+                    "SELECT 1 FROM pragma_table_info('session_event_logs') WHERE name='role'",
+                    [],
+                    |_| Ok(true),
+                )
+                .unwrap_or(false);
 
             if has_role {
-                let mut stmt = self.conn.prepare("SELECT session_id, role, content, created_at FROM session_event_logs")?;
-                let logs: Vec<(String, String, String, String)> = stmt.query_map([], |row| {
-                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-                })?.collect::<Result<_, _>>()?;
+                let mut stmt = self.conn.prepare(
+                    "SELECT session_id, role, content, created_at FROM session_event_logs",
+                )?;
+                let logs: Vec<(String, String, String, String)> = stmt
+                    .query_map([], |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                    })?
+                    .collect::<Result<_, _>>()?;
                 for (session_id, role, content, created_at) in logs {
                     let _ = self.conn.execute(
                         "INSERT OR IGNORE INTO conversations (id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
@@ -247,13 +549,14 @@ impl SqliteStorage {
                 );
                 CREATE INDEX IF NOT EXISTS idx_custom_routines_enabled ON custom_routines(enabled);",
             )
-            .map_err(|e| StorageError::Other(format!("custom_routines migration failed: {}", e)))?;
+            .map_err(|e| StorageError::Other(format!("custom_routines migration failed: {e}")))?;
         Ok(())
     }
 
     fn run_ai_extensibility_migrations(&self) -> Result<(), StorageError> {
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS ai_profiles (
+        self.conn
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS ai_profiles (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 system_prompt TEXT NOT NULL DEFAULT '',
@@ -308,8 +611,9 @@ impl SqliteStorage {
             CREATE INDEX IF NOT EXISTS idx_ai_workspaces_space ON ai_workspaces(space_id);
             CREATE INDEX IF NOT EXISTS idx_ai_workspaces_profile ON ai_workspaces(profile_id);
             CREATE INDEX IF NOT EXISTS idx_ai_mcp_servers_workspace ON ai_mcp_servers(workspace_id);
-            CREATE INDEX IF NOT EXISTS idx_ai_cli_tools_workspace ON ai_cli_tools(workspace_id);"
-        ).map_err(|e| StorageError::Other(format!("Migration failed: {}", e)))?;
+            CREATE INDEX IF NOT EXISTS idx_ai_cli_tools_workspace ON ai_cli_tools(workspace_id);",
+            )
+            .map_err(|e| StorageError::Other(format!("Migration failed: {e}")))?;
 
         let has_prompt_col: bool = self.conn.query_row(
             "SELECT 1 FROM pragma_table_info('conversations') WHERE name='system_prompt_snapshot'",
@@ -317,19 +621,29 @@ impl SqliteStorage {
             |_| Ok(true)
         ).unwrap_or(false);
         if !has_prompt_col {
-            let _ = self.conn.execute("ALTER TABLE conversations ADD COLUMN system_prompt_snapshot TEXT", []);
+            let _ = self.conn.execute(
+                "ALTER TABLE conversations ADD COLUMN system_prompt_snapshot TEXT",
+                [],
+            );
         }
 
-        let has_socket_path_col: bool = self.conn.query_row(
-            "SELECT 1 FROM pragma_table_info('ai_mcp_servers') WHERE name='socket_path'",
-            [],
-            |_| Ok(true)
-        ).unwrap_or(false);
+        let has_socket_path_col: bool = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM pragma_table_info('ai_mcp_servers') WHERE name='socket_path'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
         if !has_socket_path_col {
             let _ = self.conn.execute("PRAGMA foreign_keys=OFF;", []);
-            let _ = self.conn.execute("CREATE TABLE ai_mcp_servers_dg_tmp AS SELECT * FROM ai_mcp_servers;", []);
+            let _ = self.conn.execute(
+                "CREATE TABLE ai_mcp_servers_dg_tmp AS SELECT * FROM ai_mcp_servers;",
+                [],
+            );
             let _ = self.conn.execute("DROP TABLE ai_mcp_servers;", []);
-            let _ = self.conn.execute("
+            let _ = self.conn.execute(
+                "
                 CREATE TABLE ai_mcp_servers (
                     id TEXT PRIMARY KEY,
                     workspace_id TEXT NOT NULL REFERENCES ai_workspaces(id) ON DELETE CASCADE,
@@ -347,7 +661,9 @@ impl SqliteStorage {
                     socket_path TEXT,
                     UNIQUE(workspace_id, name)
                 );
-            ", []);
+            ",
+                [],
+            );
             let _ = self.conn.execute("
                 INSERT INTO ai_mcp_servers (id, workspace_id, name, transport, command, url, auth_keychain_id, trusted, trusted_tools_json, timeout_ms, output_cap_bytes, created_at, updated_at)
                 SELECT id, workspace_id, name, transport, command, url, auth_keychain_id, trusted, trusted_tools_json, timeout_ms, output_cap_bytes, created_at, updated_at
@@ -358,15 +674,14 @@ impl SqliteStorage {
             let _ = self.conn.execute("PRAGMA foreign_keys=ON;", []);
         }
 
-        let count: i64 = self.conn.query_row(
-            "SELECT count(*) FROM ai_profiles",
-            [],
-            |row| row.get(0)
-        ).unwrap_or(0);
+        let count: i64 = self
+            .conn
+            .query_row("SELECT count(*) FROM ai_profiles", [], |row| row.get(0))
+            .unwrap_or(0);
 
         if count == 0 {
             let now = chrono::Utc::now().to_rfc3339();
-            
+
             self.conn.execute(
                 "INSERT INTO ai_profiles (id, name, system_prompt, preferred_model, tools_json, mcp_servers_json, is_default, created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -381,7 +696,7 @@ impl SqliteStorage {
                     now,
                     now
                 ]
-            ).map_err(|e| StorageError::Other(format!("Seeding Blank profile failed: {}", e)))?;
+            ).map_err(|e| StorageError::Other(format!("Seeding Blank profile failed: {e}")))?;
 
             self.conn.execute(
                 "INSERT INTO ai_profiles (id, name, system_prompt, preferred_model, tools_json, mcp_servers_json, is_default, created_at, updated_at)
@@ -397,7 +712,7 @@ impl SqliteStorage {
                     now,
                     now
                 ]
-            ).map_err(|e| StorageError::Other(format!("Seeding Code Reviewer profile failed: {}", e)))?;
+            ).map_err(|e| StorageError::Other(format!("Seeding Code Reviewer profile failed: {e}")))?;
 
             self.conn.execute(
                 "INSERT INTO ai_profiles (id, name, system_prompt, preferred_model, tools_json, mcp_servers_json, is_default, created_at, updated_at)
@@ -413,7 +728,7 @@ impl SqliteStorage {
                     now,
                     now
                 ]
-            ).map_err(|e| StorageError::Other(format!("Seeding Researcher profile failed: {}", e)))?;
+            ).map_err(|e| StorageError::Other(format!("Seeding Researcher profile failed: {e}")))?;
 
             self.conn.execute(
                 "INSERT INTO ai_profiles (id, name, system_prompt, preferred_model, tools_json, mcp_servers_json, is_default, created_at, updated_at)
@@ -429,7 +744,7 @@ impl SqliteStorage {
                     now,
                     now
                 ]
-            ).map_err(|e| StorageError::Other(format!("Seeding Writer profile failed: {}", e)))?;
+            ).map_err(|e| StorageError::Other(format!("Seeding Writer profile failed: {e}")))?;
 
             self.conn.execute(
                 "INSERT INTO ai_profiles (id, name, system_prompt, preferred_model, tools_json, mcp_servers_json, is_default, created_at, updated_at)
@@ -445,22 +760,29 @@ impl SqliteStorage {
                     now,
                     now
                 ]
-            ).map_err(|e| StorageError::Other(format!("Seeding Debugger profile failed: {}", e)))?;
+            ).map_err(|e| StorageError::Other(format!("Seeding Debugger profile failed: {e}")))?;
         }
 
         Ok(())
     }
 
     fn initialize_schema(&self) -> Result<(), StorageError> {
-        let has_old_schema: bool = self.conn.query_row(
-            "SELECT 1 FROM pragma_table_info('boosts') WHERE name='url_pattern'",
-            [],
-            |_| Ok(true)
-        ).unwrap_or(false);
+        let has_old_schema: bool = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM pragma_table_info('boosts') WHERE name='url_pattern'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
         if has_old_schema {
-            let _ = self.conn.execute("DROP TABLE IF EXISTS domain_boost_state", []);
+            let _ = self
+                .conn
+                .execute("DROP TABLE IF EXISTS domain_boost_state", []);
             let _ = self.conn.execute("DROP TABLE IF EXISTS boosts", []);
-            let _ = self.conn.execute("DROP INDEX IF EXISTS idx_boosts_url_pattern", []);
+            let _ = self
+                .conn
+                .execute("DROP INDEX IF EXISTS idx_boosts_url_pattern", []);
         }
 
         self.conn.execute_batch(
@@ -733,48 +1055,77 @@ impl SqliteStorage {
             CREATE INDEX IF NOT EXISTS idx_entity_versions_type ON entity_versions(entity_type);",
         )?;
 
-        let has_acked_at: bool = self.conn.query_row(
-            "SELECT 1 FROM pragma_table_info('sync_queue') WHERE name='acked_at'",
-            [],
-            |_| Ok(true)
-        ).unwrap_or(false);
+        let has_acked_at: bool = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM pragma_table_info('sync_queue') WHERE name='acked_at'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
         if !has_acked_at {
-            let _ = self.conn.execute("ALTER TABLE sync_queue ADD COLUMN acked_at INTEGER", []);
+            let _ = self
+                .conn
+                .execute("ALTER TABLE sync_queue ADD COLUMN acked_at INTEGER", []);
         }
 
-        let has_fields_hlc: bool = self.conn.query_row(
-            "SELECT 1 FROM pragma_table_info('entity_versions') WHERE name='fields_hlc_json'",
-            [],
-            |_| Ok(true)
-        ).unwrap_or(false);
+        let has_fields_hlc: bool = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM pragma_table_info('entity_versions') WHERE name='fields_hlc_json'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
         if !has_fields_hlc {
-            let _ = self.conn.execute("ALTER TABLE entity_versions ADD COLUMN fields_hlc_json TEXT", []);
+            let _ = self.conn.execute(
+                "ALTER TABLE entity_versions ADD COLUMN fields_hlc_json TEXT",
+                [],
+            );
         }
 
-        let has_payload: bool = self.conn.query_row(
-            "SELECT 1 FROM pragma_table_info('entity_versions') WHERE name='payload_json'",
-            [],
-            |_| Ok(true)
-        ).unwrap_or(false);
+        let has_payload: bool = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM pragma_table_info('entity_versions') WHERE name='payload_json'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
         if !has_payload {
-            let _ = self.conn.execute("ALTER TABLE entity_versions ADD COLUMN payload_json TEXT", []);
+            let _ = self.conn.execute(
+                "ALTER TABLE entity_versions ADD COLUMN payload_json TEXT",
+                [],
+            );
         }
-        let has_address_line2: bool = self.conn.query_row(
-            "SELECT 1 FROM pragma_table_info('autofill_addresses') WHERE name='address_line2'",
-            [],
-            |_| Ok(true)
-        ).unwrap_or(false);
+        let has_address_line2: bool = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM pragma_table_info('autofill_addresses') WHERE name='address_line2'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
         if !has_address_line2 {
-            let _ = self.conn.execute("ALTER TABLE autofill_addresses ADD COLUMN address_line2 TEXT", []);
+            let _ = self.conn.execute(
+                "ALTER TABLE autofill_addresses ADD COLUMN address_line2 TEXT",
+                [],
+            );
         }
 
-        let has_card_network: bool = self.conn.query_row(
-            "SELECT 1 FROM pragma_table_info('autofill_payments') WHERE name='card_network'",
-            [],
-            |_| Ok(true)
-        ).unwrap_or(false);
+        let has_card_network: bool = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM pragma_table_info('autofill_payments') WHERE name='card_network'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
         if !has_card_network {
-            let _ = self.conn.execute("ALTER TABLE autofill_payments ADD COLUMN card_network TEXT", []);
+            let _ = self.conn.execute(
+                "ALTER TABLE autofill_payments ADD COLUMN card_network TEXT",
+                [],
+            );
         }
 
         // Reset sent_at to NULL for old unacknowledged entries older than 30 days to trigger retransmission
@@ -864,10 +1215,7 @@ impl SqliteStorage {
         Ok(affected > 0)
     }
 
-    pub fn search_bookmarks(
-        &self,
-        query: &str,
-    ) -> Result<Vec<BookmarkRecord>, StorageError> {
+    pub fn search_bookmarks(&self, query: &str) -> Result<Vec<BookmarkRecord>, StorageError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, url, title, folder_id, created_at FROM bookmarks WHERE title LIKE ?1 OR url LIKE ?1 ORDER BY created_at DESC",
         )?;
@@ -888,9 +1236,7 @@ impl SqliteStorage {
         Ok(results)
     }
 
-    pub fn get_all_bookmarks(
-        &self,
-    ) -> Result<Vec<BookmarkRecord>, StorageError> {
+    pub fn get_all_bookmarks(&self) -> Result<Vec<BookmarkRecord>, StorageError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, url, title, folder_id, created_at FROM bookmarks ORDER BY created_at DESC",
         )?;
@@ -1073,10 +1419,10 @@ impl SqliteStorage {
     // === Easels ===
 
     pub fn save_easel(&self, easel: &maho_types::easel::Easel) -> Result<(), StorageError> {
-        let canvas_items_json = serde_json::to_string(&easel.canvas_items)
-            .unwrap_or_else(|_| "[]".to_string());
-        let viewport_json = serde_json::to_string(&easel.viewport)
-            .unwrap_or_else(|_| "{}".to_string());
+        let canvas_items_json =
+            serde_json::to_string(&easel.canvas_items).unwrap_or_else(|_| "[]".to_string());
+        let viewport_json =
+            serde_json::to_string(&easel.viewport).unwrap_or_else(|_| "{}".to_string());
         self.conn.execute(
             "INSERT OR REPLACE INTO easels (id, name, canvas_items_json, viewport_json, updated_at) VALUES (?1, ?2, ?3, ?4, datetime('now'))",
             rusqlite::params![easel.id.as_ref(), easel.name, canvas_items_json, viewport_json],
@@ -1155,13 +1501,14 @@ impl SqliteStorage {
             maho_types::boost::CaseMode::Lower => "lower",
             maho_types::boost::CaseMode::Capitalize => "capitalize",
         };
-        let zap_selectors_json = serde_json::to_string(&boost.zap_selectors).unwrap_or_else(|_| "[]".to_string());
+        let zap_selectors_json =
+            serde_json::to_string(&boost.zap_selectors).unwrap_or_else(|_| "[]".to_string());
         let font_family_val: Option<&str> = if boost.typography.font_family.is_empty() {
             None
         } else {
             Some(&boost.typography.font_family)
         };
-        
+
         self.conn.execute(
             "INSERT OR REPLACE INTO boosts (
                 id, domain, name, enable_color_boost, dot_angle_deg, secondary_dot_angle_deg_delta,
@@ -1234,7 +1581,9 @@ impl SqliteStorage {
             let secondary_dot_pos_x = row.get::<_, f64>(20).unwrap_or(0.5) as f32;
             let secondary_dot_pos_y = row.get::<_, f64>(21).unwrap_or(0.81) as f32;
             let change_was_made = row.get::<_, i32>(22).unwrap_or(0) != 0;
-            let size_mode_str = row.get::<_, String>(23).unwrap_or_else(|_| "k100".to_string());
+            let size_mode_str = row
+                .get::<_, String>(23)
+                .unwrap_or_else(|_| "k100".to_string());
 
             let case_mode = match text_case_str.as_str() {
                 "upper" => maho_types::boost::CaseMode::Upper,
@@ -1246,17 +1595,24 @@ impl SqliteStorage {
             let size_mode = maho_types::boost::SizeMode::from_db_string(&size_mode_str)
                 .unwrap_or(maho_types::boost::SizeMode::K100);
 
-            let zap_selectors: Vec<String> = serde_json::from_str(&zap_selectors_json).unwrap_or_default();
+            let zap_selectors: Vec<String> =
+                serde_json::from_str(&zap_selectors_json).unwrap_or_default();
 
             Ok(maho_types::boost::Boost {
                 id: maho_types::identifiers::BoostId::new(id),
                 domain,
                 name,
                 color: maho_types::boost::ColorBoost {
-                    dot_pos: maho_types::boost::Point { x: dot_pos_x, y: dot_pos_y },
+                    dot_pos: maho_types::boost::Point {
+                        x: dot_pos_x,
+                        y: dot_pos_y,
+                    },
                     dot_distance,
                     dot_angle_deg,
-                    secondary_dot_pos: maho_types::boost::Point { x: secondary_dot_pos_x, y: secondary_dot_pos_y },
+                    secondary_dot_pos: maho_types::boost::Point {
+                        x: secondary_dot_pos_x,
+                        y: secondary_dot_pos_y,
+                    },
                     secondary_dot_angle_deg_delta,
                     magic_theme,
                     color_boost_enabled,
@@ -1291,7 +1647,11 @@ impl SqliteStorage {
         Ok(affected > 0)
     }
 
-    pub fn set_active_boost(&self, domain: &str, active_boost_id: Option<&str>) -> Result<(), StorageError> {
+    pub fn set_active_boost(
+        &self,
+        domain: &str,
+        active_boost_id: Option<&str>,
+    ) -> Result<(), StorageError> {
         self.conn.execute(
             "INSERT OR REPLACE INTO domain_boost_state (domain, active_boost_id) VALUES (?1, ?2)",
             rusqlite::params![domain, active_boost_id],
@@ -1300,7 +1660,9 @@ impl SqliteStorage {
     }
 
     pub fn get_active_boost(&self, domain: &str) -> Result<Option<String>, StorageError> {
-        let mut stmt = self.conn.prepare("SELECT active_boost_id FROM domain_boost_state WHERE domain = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT active_boost_id FROM domain_boost_state WHERE domain = ?1")?;
         let mut rows = stmt.query(rusqlite::params![domain])?;
         if let Some(row) = rows.next()? {
             Ok(row.get::<_, Option<String>>(0)?)
@@ -1311,7 +1673,10 @@ impl SqliteStorage {
 
     // === CSS Mods ===
 
-    pub fn save_css_mod(&self, mod_entry: &maho_types::css_mod::CssMod) -> Result<(), StorageError> {
+    pub fn save_css_mod(
+        &self,
+        mod_entry: &maho_types::css_mod::CssMod,
+    ) -> Result<(), StorageError> {
         self.conn.execute(
             "INSERT OR REPLACE INTO css_mods (id, name, description, author, version, css, enabled, homepage, source_url, created_at, updated_at)\n         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             rusqlite::params![
@@ -1350,11 +1715,14 @@ impl SqliteStorage {
                 updated_at: row.get(10)?,
             })
         })?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(StorageError::from)
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StorageError::from)
     }
 
     pub fn delete_css_mod(&self, id: &str) -> Result<bool, StorageError> {
-        let affected = self.conn.execute("DELETE FROM css_mods WHERE id = ?1", [id])?;
+        let affected = self
+            .conn
+            .execute("DELETE FROM css_mods WHERE id = ?1", [id])?;
         Ok(affected > 0)
     }
 
@@ -1668,9 +2036,7 @@ impl SqliteStorage {
         Ok(())
     }
 
-    pub fn get_all_passwords(
-        &self,
-    ) -> Result<Vec<PasswordRecord>, StorageError> {
+    pub fn get_all_passwords(&self) -> Result<Vec<PasswordRecord>, StorageError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, domain, username, created_at, last_used, password FROM passwords ORDER BY domain",
         )?;
@@ -1722,9 +2088,7 @@ impl SqliteStorage {
         Ok(())
     }
 
-    pub fn load_autofill_addresses(
-        &self,
-    ) -> Result<Vec<AutofillAddressRecord>, StorageError> {
+    pub fn load_autofill_addresses(&self) -> Result<Vec<AutofillAddressRecord>, StorageError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, street, city, state, zip, country, phone, email, address_line2 FROM autofill_addresses",
         )?;
@@ -1774,12 +2138,10 @@ impl SqliteStorage {
         Ok(())
     }
 
-    pub fn load_autofill_payments(
-        &self,
-    ) -> Result<Vec<(String, String, String, String, Option<String>)>, StorageError> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, card_name, last_four, expiry, card_network FROM autofill_payments")?;
+    pub fn load_autofill_payments(&self) -> Result<Vec<AutofillPaymentRecord>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, card_name, last_four, expiry, card_network FROM autofill_payments",
+        )?;
         let rows = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -1869,7 +2231,12 @@ impl SqliteStorage {
 
     // === Shortcuts ===
 
-    pub fn save_shortcut(&self, action: &str, key_combo_json: &str, updated_at: u64) -> Result<(), StorageError> {
+    pub fn save_shortcut(
+        &self,
+        action: &str,
+        key_combo_json: &str,
+        updated_at: u64,
+    ) -> Result<(), StorageError> {
         self.conn.execute(
             "INSERT INTO shortcuts (action, key_combo_json, is_custom, enabled, updated_at) VALUES (?1, ?2, 1, 1, ?3) ON CONFLICT(action) DO UPDATE SET key_combo_json = excluded.key_combo_json, is_custom = 1, enabled = COALESCE(shortcuts.enabled, 1), updated_at = excluded.updated_at",
             rusqlite::params![action, key_combo_json, updated_at as i64],
@@ -1877,7 +2244,12 @@ impl SqliteStorage {
         Ok(())
     }
 
-    pub fn save_shortcut_enabled(&self, action: &str, enabled: bool, updated_at: u64) -> Result<(), StorageError> {
+    pub fn save_shortcut_enabled(
+        &self,
+        action: &str,
+        enabled: bool,
+        updated_at: u64,
+    ) -> Result<(), StorageError> {
         self.conn.execute(
             "INSERT INTO shortcuts (action, key_combo_json, is_custom, enabled, updated_at) VALUES (?1, '', 0, ?2, ?3) ON CONFLICT(action) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at",
             rusqlite::params![action, enabled as i32, updated_at as i64],
@@ -1927,9 +2299,7 @@ impl SqliteStorage {
         Ok(affected > 0)
     }
 
-    pub fn load_bookmark_folders(
-        &self,
-    ) -> Result<Vec<BookmarkFolderRecord>, StorageError> {
+    pub fn load_bookmark_folders(&self) -> Result<Vec<BookmarkFolderRecord>, StorageError> {
         let mut stmt = self
             .conn
             .prepare("SELECT id, name, parent_id, created_at FROM bookmark_folders")?;
@@ -2202,7 +2572,7 @@ impl SqliteStorage {
         &self,
         entity_type: &str,
         entity_id: &str,
-    ) -> Result<Option<(u64, u32, Option<String>, Option<String>)>, StorageError> {
+    ) -> Result<Option<EntityVersionRecord>, StorageError> {
         let mut stmt = self.conn.prepare(
             "SELECT hlc_ts, device_id, fields_hlc_json, payload_json FROM entity_versions WHERE entity_type = ?1 AND entity_id = ?2",
         )?;
@@ -2295,8 +2665,139 @@ impl SqliteStorage {
 mod tests {
     use super::*;
 
+    fn test_key() -> String {
+        uuid::Uuid::new_v4().to_string()
+    }
+
     fn test_store() -> SqliteStorage {
-        SqliteStorage::open_in_memory().unwrap()
+        SqliteStorage::open_in_memory_with_key(&test_key()).unwrap()
+    }
+
+    const RECENT_CREATED_AT: &str = "2999-01-01 00:00:00";
+    const OLD_CREATED_AT: &str = "2020-01-01 00:00:00";
+
+    struct MemoryFactFixture<'a> {
+        id: &'a str,
+        fact: &'a str,
+        importance: f64,
+        created_at: &'a str,
+    }
+
+    fn insert_memory_fact(db: &SqliteStorage, fact: &MemoryFactFixture<'_>) {
+        db.conn
+            .execute(
+                "INSERT INTO memory_facts \
+                 (id, fact, source, session_id, categories, importance, metadata, created_at) \
+                 VALUES (?1, ?2, 'test', NULL, '[]', ?3, NULL, ?4)",
+                rusqlite::params![fact.id, fact.fact, fact.importance, fact.created_at],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO memory_facts_fts (id, fact) VALUES (?1, ?2)",
+                rusqlite::params![fact.id, fact.fact],
+            )
+            .unwrap();
+    }
+
+    fn string_column(db: &SqliteStorage, sql: &str) -> Vec<String> {
+        let mut stmt = db.conn.prepare(sql).unwrap();
+        stmt.query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<String>>>()
+            .unwrap()
+    }
+
+    fn memory_search_ids(results: &[(String, String, f64)]) -> Vec<&str> {
+        results.iter().map(|(id, _, _)| id.as_str()).collect()
+    }
+
+    fn note_search_ids(results: &[(String, f64)]) -> Vec<&str> {
+        results.iter().map(|(id, _)| id.as_str()).collect()
+    }
+
+    #[test]
+    fn plaintext_migration_failure_keeps_original_database() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("migration.db");
+        let path_str = db_path.to_str().unwrap();
+        {
+            let conn = rusqlite::Connection::open(path_str).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE marker (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO marker (value) VALUES ('still here');",
+            )
+            .unwrap();
+        }
+
+        let key = test_key();
+        let err = migrate_plaintext_to_encrypted_inner(path_str, &key, |_, _| false).unwrap_err();
+
+        assert!(matches!(err, StorageError::Migration(_)));
+        assert!(is_plaintext_database(&db_path));
+        assert!(!migration_temp_path(&db_path).exists());
+        let conn = rusqlite::Connection::open(path_str).unwrap();
+        let value: String = conn
+            .query_row("SELECT value FROM marker WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(value, "still here");
+    }
+
+    #[test]
+    fn plaintext_migration_success_deletes_plaintext_backup() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("migration.db");
+        let backup_path = migration_backup_path(&db_path);
+        let path_str = db_path.to_str().unwrap();
+        {
+            let conn = rusqlite::Connection::open(path_str).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE marker (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO marker (value) VALUES ('backed up');",
+            )
+            .unwrap();
+        }
+
+        let key = test_key();
+        migrate_plaintext_to_encrypted_inner(path_str, &key, verify_encrypted_opens).unwrap();
+
+        assert!(!backup_path.exists());
+        assert!(!is_plaintext_database(&db_path));
+        assert!(verify_encrypted_opens(&db_path, &key));
+    }
+
+    #[test]
+    fn plaintext_migration_stale_backup_cleanup() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("migration.db");
+        let backup_path = migration_backup_path(&db_path);
+        let path_str = db_path.to_str().unwrap();
+        let key = test_key();
+
+        // 1. Create a valid encrypted DB
+        {
+            let conn = rusqlite::Connection::open(path_str).unwrap();
+            apply_key(&conn, &key).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE marker (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO marker (value) VALUES ('secure data');",
+            )
+            .unwrap();
+        }
+
+        // 2. Create a stale backup file
+        std::fs::write(&backup_path, b"stale plaintext backup content").unwrap();
+        assert!(backup_path.exists());
+
+        // 3. Call migration again (which should trigger clean-up)
+        migrate_plaintext_to_encrypted_inner(path_str, &key, verify_encrypted_opens).unwrap();
+
+        // 4. Assert backup is cleaned up
+        assert!(!backup_path.exists());
+        assert!(db_path.exists());
+        assert!(verify_encrypted_opens(&db_path, &key));
     }
 
     #[test]
@@ -2304,10 +2805,11 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let db_path = temp_dir.path().join("test.db");
         let path_str = db_path.to_str().unwrap();
+        let key = test_key();
 
         {
             let seed_conn = rusqlite::Connection::open(path_str).unwrap();
-            seed_conn.pragma_update(None, "key", "maho_secure_key").unwrap();
+            seed_conn.pragma_update(None, "key", &key).unwrap();
             seed_conn.execute_batch("
                 CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, title TEXT, created_at TEXT);
                 CREATE TABLE chat_messages (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, created_at TEXT);
@@ -2317,19 +2819,29 @@ mod tests {
             ").unwrap();
             seed_conn.execute("INSERT INTO chat_sessions VALUES ('v1-sess', 'V1 Title', '2026-06-01 10:00:00')", []).unwrap();
             seed_conn.execute("INSERT INTO chat_messages VALUES ('v1-msg-1', 'v1-sess', 'user', 'Hello V1', '2026-06-01 10:00:01')", []).unwrap();
-            seed_conn.execute("INSERT INTO ai_sessions VALUES ('v2-sess', 'V2 Title', '2026-06-02 10:00:00')", []).unwrap();
+            seed_conn
+                .execute(
+                    "INSERT INTO ai_sessions VALUES ('v2-sess', 'V2 Title', '2026-06-02 10:00:00')",
+                    [],
+                )
+                .unwrap();
             seed_conn.execute("INSERT INTO ai_messages VALUES ('v2-msg-1', 'v2-sess', 'assistant', 'Hello V2', '2026-06-02 10:00:01')", []).unwrap();
             seed_conn.execute("INSERT INTO session_event_logs VALUES ('v3-sess', 'user', 'Hello V3', '2026-06-03 10:00:01')", []).unwrap();
         }
 
         // Open via SqliteStorage which will automatically run migrations!
-        let storage = SqliteStorage::open(path_str).unwrap();
+        let storage = SqliteStorage::open_with_key(path_str, &key).unwrap();
 
         // Verify the sessions are in the `conversations` table
-        let mut stmt = storage.conn.prepare("SELECT id, title FROM conversations ORDER BY id").unwrap();
-        let sessions: Vec<(String, Option<String>)> = stmt.query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        }).unwrap().collect::<Result<_, _>>().unwrap();
+        let mut stmt = storage
+            .conn
+            .prepare("SELECT id, title FROM conversations ORDER BY id")
+            .unwrap();
+        let sessions: Vec<(String, Option<String>)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
 
         assert_eq!(sessions.len(), 3);
         assert_eq!(sessions[0].0, "v1-sess");
@@ -2339,10 +2851,15 @@ mod tests {
         assert_eq!(sessions[2].0, "v3-sess");
 
         // Verify conversation turns
-        let mut stmt = storage.conn.prepare("SELECT session_id, role, content FROM conversation_turns ORDER BY session_id").unwrap();
-        let turns: Vec<(String, String, String)> = stmt.query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-        }).unwrap().collect::<Result<_, _>>().unwrap();
+        let mut stmt = storage
+            .conn
+            .prepare("SELECT session_id, role, content FROM conversation_turns ORDER BY session_id")
+            .unwrap();
+        let turns: Vec<(String, String, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
 
         assert_eq!(turns.len(), 3);
         assert_eq!(turns[0].0, "v1-sess");
@@ -2360,7 +2877,7 @@ mod tests {
 
     #[test]
     fn test_enqueue_sync_entity() {
-        let db = SqliteStorage::open_in_memory().unwrap();
+        let db = test_store();
         let id = db
             .enqueue_sync_entity("bookmarks", "bm-1", 1, 1000, r#"{"title":"Test"}"#, false)
             .unwrap();
@@ -2381,7 +2898,7 @@ mod tests {
 
     #[test]
     fn test_load_pending_sync_entities_order() {
-        let db = SqliteStorage::open_in_memory().unwrap();
+        let db = test_store();
         let id1 = db
             .enqueue_sync_entity("bookmarks", "bm-1", 1, 1000, "{}", false)
             .unwrap();
@@ -2448,7 +2965,7 @@ mod tests {
 
     #[test]
     fn test_mark_sync_entities_sent() {
-        let db = SqliteStorage::open_in_memory().unwrap();
+        let db = test_store();
         let id1 = db
             .enqueue_sync_entity("bookmarks", "bm-1", 1, 1000, "{}", false)
             .unwrap();
@@ -2465,7 +2982,7 @@ mod tests {
 
     #[test]
     fn test_ack_sync_entities() {
-        let db = SqliteStorage::open_in_memory().unwrap();
+        let db = test_store();
         let id1 = db
             .enqueue_sync_entity("bookmarks", "bm-1", 1, 1000, "{}", false)
             .unwrap();
@@ -2482,14 +2999,14 @@ mod tests {
 
     #[test]
     fn test_get_last_pulled_version_default() {
-        let db = SqliteStorage::open_in_memory().unwrap();
+        let db = test_store();
         let version = db.get_sync_last_pulled_version("bookmarks").unwrap();
         assert_eq!(version, 0);
     }
 
     #[test]
     fn test_set_and_get_last_pulled_version() {
-        let db = SqliteStorage::open_in_memory().unwrap();
+        let db = test_store();
         db.set_sync_last_pulled_version("bookmarks", 42).unwrap();
         let version = db.get_sync_last_pulled_version("bookmarks").unwrap();
         assert_eq!(version, 42);
@@ -2501,7 +3018,7 @@ mod tests {
 
     #[test]
     fn test_pulled_version_per_entity_type() {
-        let db = SqliteStorage::open_in_memory().unwrap();
+        let db = test_store();
         db.set_sync_last_pulled_version("bookmarks", 10).unwrap();
         db.set_sync_last_pulled_version("notes", 20).unwrap();
 
@@ -2510,9 +3027,204 @@ mod tests {
     }
 
     #[test]
+    fn test_search_memories_fts_importance_ordering() {
+        // Given: two equally relevant, equally recent facts with different importance.
+        let db = test_store();
+        insert_memory_fact(
+            &db,
+            &MemoryFactFixture {
+                id: "high-importance",
+                fact: "saturn project context",
+                importance: 0.9,
+                created_at: RECENT_CREATED_AT,
+            },
+        );
+        insert_memory_fact(
+            &db,
+            &MemoryFactFixture {
+                id: "low-importance",
+                fact: "saturn project context",
+                importance: 0.1,
+                created_at: RECENT_CREATED_AT,
+            },
+        );
+
+        // When: hybrid FTS search scores the shared query term.
+        let results = db.search_memories_fts("saturn", 2).unwrap();
+
+        // Then: larger importance makes the negative bm25 score more negative, so it ranks first.
+        assert_eq!(
+            memory_search_ids(&results),
+            vec!["high-importance", "low-importance"]
+        );
+    }
+
+    #[test]
+    fn test_search_memories_fts_recency_ordering() {
+        // Given: two equally relevant, equally important facts with different ages.
+        let db = test_store();
+        insert_memory_fact(
+            &db,
+            &MemoryFactFixture {
+                id: "recent-fact",
+                fact: "orion project context",
+                importance: 0.7,
+                created_at: RECENT_CREATED_AT,
+            },
+        );
+        insert_memory_fact(
+            &db,
+            &MemoryFactFixture {
+                id: "old-fact",
+                fact: "orion project context",
+                importance: 0.7,
+                created_at: OLD_CREATED_AT,
+            },
+        );
+
+        // When: hybrid FTS search applies the recency multiplier.
+        let results = db.search_memories_fts("orion", 2).unwrap();
+
+        // Then: the recent fact keeps the strongest negative score and ranks first.
+        assert_eq!(memory_search_ids(&results), vec!["recent-fact", "old-fact"]);
+    }
+
+    #[test]
+    fn test_search_memories_fts_relevance_still_dominates_reasonably() {
+        // Given: a stronger textual match with decent importance and a weaker high-importance match.
+        let db = test_store();
+        insert_memory_fact(
+            &db,
+            &MemoryFactFixture {
+                id: "strong-decent-importance",
+                fact: "nebula nebula nebula nebula nebula context",
+                importance: 0.7,
+                created_at: RECENT_CREATED_AT,
+            },
+        );
+        insert_memory_fact(
+            &db,
+            &MemoryFactFixture {
+                id: "weak-high-importance",
+                fact: "nebula context",
+                importance: 1.0,
+                created_at: RECENT_CREATED_AT,
+            },
+        );
+
+        // When: current hybrid scoring multiplies negative bm25 by importance.
+        let results = db.search_memories_fts("nebula", 2).unwrap();
+
+        // Then: empirically, the 1.0-importance weak match outranks the stronger
+        // 0.7-importance match. Lock that behavior rather than imposing relevance dominance.
+        assert_eq!(
+            memory_search_ids(&results),
+            vec!["weak-high-importance", "strong-decent-importance"]
+        );
+    }
+
+    #[test]
+    fn test_search_memories_fts_respects_top_k() {
+        // Given: more matching facts than the requested result limit.
+        let db = test_store();
+        for index in 0..5 {
+            let id = format!("top-k-{index}");
+            let fact = format!("topk project context {index}");
+            insert_memory_fact(
+                &db,
+                &MemoryFactFixture {
+                    id: &id,
+                    fact: &fact,
+                    importance: 0.5,
+                    created_at: RECENT_CREATED_AT,
+                },
+            );
+        }
+
+        // When: search is capped below the number of matches.
+        let results = db.search_memories_fts("topk", 3).unwrap();
+
+        // Then: SQLite LIMIT is honored by the public search API.
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn test_prune_old_memories_keeps_highest_importance_recent() {
+        // Given: more memory facts than the retention limit with varied priority and age.
+        let db = test_store();
+        for fact in [
+            MemoryFactFixture {
+                id: "highest-recent",
+                fact: "prune token highest recent",
+                importance: 0.9,
+                created_at: RECENT_CREATED_AT,
+            },
+            MemoryFactFixture {
+                id: "highest-old",
+                fact: "prune token highest old",
+                importance: 0.9,
+                created_at: OLD_CREATED_AT,
+            },
+            MemoryFactFixture {
+                id: "medium-recent",
+                fact: "prune token medium recent",
+                importance: 0.5,
+                created_at: RECENT_CREATED_AT,
+            },
+            MemoryFactFixture {
+                id: "medium-old",
+                fact: "prune token medium old",
+                importance: 0.5,
+                created_at: OLD_CREATED_AT,
+            },
+            MemoryFactFixture {
+                id: "low-recent",
+                fact: "prune token low recent",
+                importance: 0.1,
+                created_at: RECENT_CREATED_AT,
+            },
+        ] {
+            insert_memory_fact(&db, &fact);
+        }
+
+        // When: pruning keeps only the three highest-priority facts.
+        db.prune_old_memories(3).unwrap();
+
+        // Then: rows are retained by importance DESC, then created_at DESC.
+        assert_eq!(
+            string_column(
+                &db,
+                "SELECT id FROM memory_facts ORDER BY importance DESC, created_at DESC",
+            ),
+            vec!["highest-recent", "highest-old", "medium-recent"]
+        );
+        assert_eq!(
+            string_column(&db, "SELECT id FROM memory_facts_fts ORDER BY id"),
+            vec!["highest-old", "highest-recent", "medium-recent"]
+        );
+    }
+
+    #[test]
+    fn test_search_notes_fts_bm25_order() {
+        // Given: note FTS rows with one strong and one weak match for the same term.
+        let db = test_store();
+        db.index_note_fts("strong-note", "lumen lumen lumen lumen lumen context")
+            .unwrap();
+        db.index_note_fts("weak-note", "lumen context").unwrap();
+
+        // When: plain note FTS search orders by bm25 rank.
+        let results = db.search_notes_fts("lumen").unwrap();
+
+        // Then: SQLite's more negative bm25 score ranks first under ORDER BY rank ASC.
+        assert_eq!(note_search_ids(&results), vec!["strong-note", "weak-note"]);
+        assert!(results[0].1 < results[1].1);
+    }
+
+    #[test]
     fn test_boost_migration_adds_new_columns_and_migrates_size() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "key", "maho_secure_key").unwrap();
+        let key = test_key();
+        conn.pragma_update(None, "key", &key).unwrap();
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS boosts (
@@ -2536,8 +3248,9 @@ mod tests {
                 updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS passwords (id TEXT PRIMARY KEY);
-            CREATE TABLE IF NOT EXISTS shortcuts (id TEXT PRIMARY KEY);"
-        ).unwrap();
+            CREATE TABLE IF NOT EXISTS shortcuts (id TEXT PRIMARY KEY);",
+        )
+        .unwrap();
 
         conn.execute(
             "INSERT INTO boosts (id, domain, name, brightness, saturation, contrast,
@@ -2545,40 +3258,60 @@ mod tests {
              VALUES ('b1', 'example.com', 'Test', 1.0, 1.0, 1.0,
                 1.25, 'capitalize', '2025-01-01T00:00:00', '2025-01-01T00:00:00')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
-        let db = SqliteStorage { conn, path: ":memory:".to_string() };
+        let db = SqliteStorage {
+            conn,
+            path: ":memory:".to_string(),
+        };
         db.run_migrations().unwrap();
 
-        let dot_pos_x: f64 = db.conn.query_row(
-            "SELECT dot_pos_x FROM boosts WHERE id = 'b1'", [], |r| r.get(0)
-        ).unwrap();
+        let dot_pos_x: f64 = db
+            .conn
+            .query_row("SELECT dot_pos_x FROM boosts WHERE id = 'b1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
         assert!((dot_pos_x - 0.76).abs() < 0.01);
 
-        let dot_pos_y: f64 = db.conn.query_row(
-            "SELECT dot_pos_y FROM boosts WHERE id = 'b1'", [], |r| r.get(0)
-        ).unwrap();
+        let dot_pos_y: f64 = db
+            .conn
+            .query_row("SELECT dot_pos_y FROM boosts WHERE id = 'b1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
         assert!((dot_pos_y - 0.66).abs() < 0.01);
 
-        let size_mode: String = db.conn.query_row(
-            "SELECT size_mode FROM boosts WHERE id = 'b1'", [], |r| r.get(0)
-        ).unwrap();
+        let size_mode: String = db
+            .conn
+            .query_row("SELECT size_mode FROM boosts WHERE id = 'b1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
         assert_eq!(size_mode, "k125");
 
-        let brightness: f64 = db.conn.query_row(
-            "SELECT brightness FROM boosts WHERE id = 'b1'", [], |r| r.get(0)
-        ).unwrap();
+        let brightness: f64 = db
+            .conn
+            .query_row("SELECT brightness FROM boosts WHERE id = 'b1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
         assert!((brightness - 1.0).abs() < f64::EPSILON);
 
-        let change_was_made: i32 = db.conn.query_row(
-            "SELECT change_was_made FROM boosts WHERE id = 'b1'", [], |r| r.get(0)
-        ).unwrap();
+        let change_was_made: i32 = db
+            .conn
+            .query_row(
+                "SELECT change_was_made FROM boosts WHERE id = 'b1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(change_was_made, 0);
 
         db.run_migrations().unwrap();
     }
 }
-
 
 impl SqliteStorage {
     // === Memory facts ===
@@ -2603,29 +3336,28 @@ impl SqliteStorage {
         Ok(affected > 0)
     }
 
-    pub fn insert_memory(
-        &self,
-        id: &str,
-        fact: &str,
-        source: &str,
-        session_id: Option<&str>,
-        categories: &str,
-        importance: f64,
-        metadata: Option<&str>,
-    ) -> Result<(), StorageError> {
+    pub fn insert_memory(&self, params: MemoryInsertParams<'_>) -> Result<(), StorageError> {
         self.conn.execute(
             "INSERT OR REPLACE INTO memory_facts \
              (id, fact, source, session_id, categories, importance, metadata) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            rusqlite::params![id, fact, source, session_id, categories, importance, metadata],
+            rusqlite::params![
+                params.id,
+                params.fact,
+                params.source,
+                params.session_id,
+                params.categories,
+                params.importance,
+                params.metadata
+            ],
         )?;
         let _ = self.conn.execute(
             "DELETE FROM memory_facts_fts WHERE id = ?1",
-            rusqlite::params![id],
+            rusqlite::params![params.id],
         );
         self.conn.execute(
             "INSERT INTO memory_facts_fts (id, fact) VALUES (?1, ?2)",
-            rusqlite::params![id, fact],
+            rusqlite::params![params.id, params.fact],
         )?;
         self.prune_old_memories(1000)?;
         Ok(())
@@ -2646,7 +3378,6 @@ impl SqliteStorage {
         Ok(())
     }
 
-
     pub fn update_memory_embedding(&self, fact_id: &str, bytes: &[u8]) -> Result<(), StorageError> {
         self.conn.execute(
             "UPDATE memory_facts SET embedding = ?1 WHERE id = ?2",
@@ -2655,7 +3386,7 @@ impl SqliteStorage {
         Ok(())
     }
 
-    pub fn load_all_memories(&self) -> Result<Vec<(String, String, String, Option<String>, String, f64, Option<String>)>, StorageError> {
+    pub fn load_all_memories(&self) -> Result<Vec<MemoryRecord>, StorageError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, fact, source, session_id, categories, importance, metadata FROM memory_facts",
         )?;
@@ -2711,7 +3442,10 @@ impl SqliteStorage {
         }
     }
 
-    pub fn list_memory_blocks_by_tier(&self, tier: &str) -> Result<Vec<(String, String)>, StorageError> {
+    pub fn list_memory_blocks_by_tier(
+        &self,
+        tier: &str,
+    ) -> Result<Vec<(String, String)>, StorageError> {
         let mut stmt = self.conn.prepare(
             "SELECT label, content FROM memory_blocks WHERE tier = ?1 ORDER BY updated_at DESC",
         )?;
@@ -2719,7 +3453,9 @@ impl SqliteStorage {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?;
         let mut out = Vec::new();
-        for row in rows { out.push(row?); }
+        for row in rows {
+            out.push(row?);
+        }
         Ok(out)
     }
 
@@ -2740,21 +3476,27 @@ impl SqliteStorage {
             ))
         })?;
         let mut out = Vec::new();
-        for row in rows { out.push(row?); }
+        for row in rows {
+            out.push(row?);
+        }
         Ok(out)
     }
 
     // === Memory embeddings ===
 
-    pub fn load_all_active_memory_embeddings(&self) -> Result<Vec<(String, Vec<u8>)>, StorageError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, embedding FROM memory_facts WHERE embedding IS NOT NULL",
-        )?;
+    pub fn load_all_active_memory_embeddings(
+        &self,
+    ) -> Result<Vec<(String, Vec<u8>)>, StorageError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, embedding FROM memory_facts WHERE embedding IS NOT NULL")?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
         })?;
         let mut out = Vec::new();
-        for row in rows { out.push(row?); }
+        for row in rows {
+            out.push(row?);
+        }
         Ok(out)
     }
 
@@ -2780,7 +3522,9 @@ impl SqliteStorage {
             ))
         })?;
         let mut out = Vec::new();
-        for row in rows { out.push(row?); }
+        for row in rows {
+            out.push(row?);
+        }
         Ok(out)
     }
 
@@ -2825,7 +3569,9 @@ impl SqliteStorage {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?;
         let mut out = Vec::new();
-        for row in rows { out.push(row?); }
+        for row in rows {
+            out.push(row?);
+        }
         Ok(out)
     }
 
@@ -2850,7 +3596,9 @@ impl SqliteStorage {
             })
         })?;
         let mut out = Vec::new();
-        for row in rows { out.push(row?); }
+        for row in rows {
+            out.push(row?);
+        }
         Ok(out)
     }
 
@@ -2873,7 +3621,9 @@ impl SqliteStorage {
             })
         })?;
         let mut out = Vec::new();
-        for row in rows { out.push(row?); }
+        for row in rows {
+            out.push(row?);
+        }
         Ok(out)
     }
 

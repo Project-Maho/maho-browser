@@ -90,6 +90,44 @@ def build_stt_ffi_prebuilt(rust_target, cpu_dir):
     print(f'Size: {os.path.getsize(dst_lib) / 1024 / 1024:.1f} MB')
 
 
+def build_mail_ffi_prebuilt(rust_target, cpu_dir):
+    """Build the standalone maho-mail-ffi static lib and copy it to prebuilt/.
+
+    maho-mail-ffi (crate dir maho/mail-core) is its own cargo workspace (NOT a
+    member of maho/ — avoids the libsqlite3-sys/bundled-sqlcipher conflict), so
+    it is built from its crate dir. Its build.rs regenerates the C header via
+    cbindgen; that header is copied into third_party/maho/ below.
+    """
+    lib_name = 'maho_mail_ffi.lib' if sys.platform == 'win32' else 'libmaho_mail_ffi.a'
+    crate_dir = os.path.join(MAHO_ROOT, 'mail-core')
+    output_dir = os.path.join(PREBUILT_DIR, cpu_dir)
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f'Building maho-mail-ffi for {rust_target}...')
+    subprocess.run(
+        ['cargo', 'build', '--release', '--target', rust_target],
+        cwd=crate_dir,
+        check=True,
+    )
+
+    src_lib = os.path.join(crate_dir, 'target', rust_target, 'release', lib_name)
+    dst_lib = os.path.join(output_dir, lib_name)
+    if not os.path.exists(src_lib):
+        sys.exit(f'Build artifact not found: {src_lib}')
+    shutil.copy2(src_lib, dst_lib)
+    if sys.platform == 'darwin':
+        subprocess.run(['ranlib', '-c', dst_lib], check=True)
+    print(f'Copied {src_lib} -> {dst_lib}')
+    print(f'Size: {os.path.getsize(dst_lib) / 1024 / 1024:.1f} MB')
+
+    src_header = os.path.join(crate_dir, 'generated', 'maho_mail_ffi.h')
+    dst_header = os.path.normpath(
+        os.path.join(MAHO_CHROMIUM_ROOT, 'third_party', 'maho', 'maho_mail_ffi.h'))
+    if os.path.exists(src_header):
+        shutil.copy2(src_header, dst_header)
+        print(f'Copied {src_header} -> {dst_header}')
+
+
 def build_rust_prebuilt(target=None):
     rust_target, cpu_dir, lib_name = get_target_triple(target)
     output_dir = os.path.join(PREBUILT_DIR, cpu_dir)
@@ -115,6 +153,7 @@ def build_rust_prebuilt(target=None):
     print(f'Size: {os.path.getsize(dst_lib) / 1024 / 1024:.1f} MB')
 
     build_stt_ffi_prebuilt(rust_target, cpu_dir)
+    build_mail_ffi_prebuilt(rust_target, cpu_dir)
 
     # Run cbindgen to update the FFI header
     print('Generating maho_ffi.h using cbindgen...')

@@ -1,10 +1,10 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
+use futures_util::StreamExt;
 use std::ffi::{c_char, c_void, CString};
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
-use futures_util::StreamExt;
 
 #[derive(Clone, Debug)]
 pub struct ChatConfig {
@@ -19,7 +19,13 @@ pub use maho_types::tool::ToolDescriptor;
 #[derive(Clone)]
 pub struct MahoChatEventSink {
     pub on_token: Option<unsafe extern "C" fn(user_data: *mut c_void, token: *const c_char)>,
-    pub on_complete: Option<unsafe extern "C" fn(user_data: *mut c_void, full_text: *const c_char, tool_calls_json: *const c_char)>,
+    pub on_complete: Option<
+        unsafe extern "C" fn(
+            user_data: *mut c_void,
+            full_text: *const c_char,
+            tool_calls_json: *const c_char,
+        ),
+    >,
     pub on_error: Option<unsafe extern "C" fn(user_data: *mut c_void, error: *const c_char)>,
     pub user_data: *mut c_void,
 }
@@ -43,7 +49,11 @@ impl MahoChatEventSink {
             let c_full_text = CString::new(full_text).unwrap_or_default();
             let c_tool_calls_json = CString::new(tool_calls_json).unwrap_or_default();
             unsafe {
-                cb(self.user_data, c_full_text.as_ptr(), c_tool_calls_json.as_ptr());
+                cb(
+                    self.user_data,
+                    c_full_text.as_ptr(),
+                    c_tool_calls_json.as_ptr(),
+                );
             }
         }
     }
@@ -120,13 +130,15 @@ impl ChatSession {
         }));
     }
 
-
     pub fn append_assistant_message(&mut self, content: &str, tool_calls_json: &str) {
         let mut msg = serde_json::json!({
             "role": "assistant"
         });
         if !content.is_empty() {
-            msg.as_object_mut().unwrap().insert("content".to_string(), serde_json::Value::String(content.to_string()));
+            msg.as_object_mut().unwrap().insert(
+                "content".to_string(),
+                serde_json::Value::String(content.to_string()),
+            );
         }
         if !tool_calls_json.is_empty() {
             if let Ok(serde_json::Value::Array(tcs)) = serde_json::from_str(tool_calls_json) {
@@ -141,13 +153,22 @@ impl ChatSession {
                         }
                     })
                 }).collect();
-                msg.as_object_mut().unwrap().insert("tool_calls".to_string(), serde_json::Value::Array(mapped_tcs));
+                msg.as_object_mut().unwrap().insert(
+                    "tool_calls".to_string(),
+                    serde_json::Value::Array(mapped_tcs),
+                );
             }
         }
         self.history.push(msg);
     }
 
-    pub fn send_tool_result(&mut self, tool_call_id: &str, tool_name: &str, result: &str, trigger: bool) -> bool {
+    pub fn send_tool_result(
+        &mut self,
+        tool_call_id: &str,
+        tool_name: &str,
+        result: &str,
+        trigger: bool,
+    ) -> bool {
         self.history.push(serde_json::json!({
             "role": "tool",
             "tool_call_id": tool_call_id,
@@ -180,17 +201,21 @@ impl ChatSession {
 
         let config = self.config.clone();
         let messages = self.history.clone();
-        
-        let tools: Vec<serde_json::Value> = self.tools.iter().map(|tool| {
-            serde_json::json!({
-                "type": "function",
-                "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.parameters_schema
-                }
+
+        let tools: Vec<serde_json::Value> = self
+            .tools
+            .iter()
+            .map(|tool| {
+                serde_json::json!({
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.parameters_schema
+                    }
+                })
             })
-        }).collect();
+            .collect();
 
         let runtime = get_runtime();
         let handle = runtime.spawn(async move {
@@ -220,7 +245,8 @@ async fn run_completion(
     sink: MahoChatEventSink,
 ) {
     let client = crate::http::shared_http_client();
-    let mut req = client.post(&config.endpoint)
+    let mut req = client
+        .post(&config.endpoint)
         .header("Content-Type", "application/json");
 
     if !config.api_key.is_empty() {
@@ -234,7 +260,9 @@ async fn run_completion(
     });
 
     if !tools.is_empty() {
-        body.as_object_mut().unwrap().insert("tools".to_string(), serde_json::Value::Array(tools));
+        body.as_object_mut()
+            .unwrap()
+            .insert("tools".to_string(), serde_json::Value::Array(tools));
     }
 
     let res = match req.json(&body).send().await {
@@ -304,29 +332,49 @@ async fn run_completion(
                                 }
                             }
 
-                            if let Some(delta_tool_calls) = delta.get("tool_calls").and_then(|tc| tc.as_array()) {
+                            if let Some(delta_tool_calls) =
+                                delta.get("tool_calls").and_then(|tc| tc.as_array())
+                            {
                                 for tc in delta_tool_calls {
-                                    let index = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                                    let index =
+                                        tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0)
+                                            as usize;
                                     if tool_calls.len() <= index {
-                                        tool_calls.resize(index + 1, serde_json::json!({
-                                            "index": index,
-                                            "id": "",
-                                            "name": "",
-                                            "arguments": ""
-                                        }));
+                                        tool_calls.resize(
+                                            index + 1,
+                                            serde_json::json!({
+                                                "index": index,
+                                                "id": "",
+                                                "name": "",
+                                                "arguments": ""
+                                            }),
+                                        );
                                     }
 
                                     let tc_obj = tool_calls[index].as_object_mut().unwrap();
                                     if let Some(id) = tc.get("id").and_then(|id| id.as_str()) {
-                                        tc_obj.insert("id".to_string(), serde_json::Value::String(id.to_string()));
+                                        tc_obj.insert(
+                                            "id".to_string(),
+                                            serde_json::Value::String(id.to_string()),
+                                        );
                                     }
                                     if let Some(func) = tc.get("function") {
-                                        if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
-                                            tc_obj.insert("name".to_string(), serde_json::Value::String(name.to_string()));
+                                        if let Some(name) =
+                                            func.get("name").and_then(|n| n.as_str())
+                                        {
+                                            tc_obj.insert(
+                                                "name".to_string(),
+                                                serde_json::Value::String(name.to_string()),
+                                            );
                                         }
-                                        if let Some(args) = func.get("arguments").and_then(|a| a.as_str()) {
+                                        if let Some(args) =
+                                            func.get("arguments").and_then(|a| a.as_str())
+                                        {
                                             let current_args = tc_obj.get_mut("arguments").unwrap();
-                                            let mut new_args = current_args.as_str().unwrap_or_default().to_string();
+                                            let mut new_args = current_args
+                                                .as_str()
+                                                .unwrap_or_default()
+                                                .to_string();
                                             new_args.push_str(args);
                                             *current_args = serde_json::Value::String(new_args);
                                         }
@@ -341,15 +389,18 @@ async fn run_completion(
     }
 
     let tool_calls_json = if !tool_calls.is_empty() {
-        let mapped_tool_calls: Vec<serde_json::Value> = tool_calls.into_iter().map(|tc| {
-            let tc_obj = tc.as_object().unwrap();
-            serde_json::json!({
-                "index": tc_obj.get("index").unwrap(),
-                "id": tc_obj.get("id").unwrap(),
-                "name": tc_obj.get("name").unwrap(),
-                "arguments_json": tc_obj.get("arguments").unwrap()
+        let mapped_tool_calls: Vec<serde_json::Value> = tool_calls
+            .into_iter()
+            .map(|tc| {
+                let tc_obj = tc.as_object().unwrap();
+                serde_json::json!({
+                    "index": tc_obj.get("index").unwrap(),
+                    "id": tc_obj.get("id").unwrap(),
+                    "name": tc_obj.get("name").unwrap(),
+                    "arguments_json": tc_obj.get("arguments").unwrap()
+                })
             })
-        }).collect();
+            .collect();
         serde_json::to_string(&mapped_tool_calls).unwrap_or_default()
     } else {
         String::new()

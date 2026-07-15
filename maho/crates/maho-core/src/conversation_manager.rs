@@ -11,7 +11,9 @@ impl ConversationManager {
         space_id: Option<&str>,
         model: Option<&str>,
     ) -> bool {
-        storage.create_conversation(id, title, space_id, model).is_ok()
+        storage
+            .create_conversation(id, title, space_id, model)
+            .is_ok()
     }
 
     pub fn list(storage: &SqliteStorage, limit: usize) -> Vec<Conversation> {
@@ -19,7 +21,9 @@ impl ConversationManager {
     }
 
     pub fn get_messages(storage: &SqliteStorage, session_id: &str) -> Vec<ConversationTurn> {
-        storage.get_conversation_messages(session_id).unwrap_or_default()
+        storage
+            .get_conversation_messages(session_id)
+            .unwrap_or_default()
     }
 
     pub fn save_message(

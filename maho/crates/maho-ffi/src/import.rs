@@ -29,12 +29,13 @@ fn to_json_cstring<T: serde::Serialize>(val: &T) -> *mut c_char {
 /// `maho_import_string_free`. Returns null on allocation failure.
 #[no_mangle]
 pub unsafe extern "C" fn maho_import_detect_browsers() -> *mut c_char {
-    crate::ffi_safe!({
-
-    let browsers = detect_installed_browsers();
-    to_json_cstring(&browsers)
-
-    }, ptr::null_mut())
+    crate::ffi_safe!(
+        {
+            let browsers = detect_installed_browsers();
+            to_json_cstring(&browsers)
+        },
+        ptr::null_mut()
+    )
 }
 
 /// Free a string returned by `maho_import_detect_browsers`.
@@ -44,13 +45,14 @@ pub unsafe extern "C" fn maho_import_detect_browsers() -> *mut c_char {
 /// be called more than once per pointer.
 #[no_mangle]
 pub unsafe extern "C" fn maho_import_string_free(s: *mut c_char) {
-    crate::ffi_safe!({
-
-    if !s.is_null() {
-        drop(CString::from_raw(s));
-    }
-
-    }, ())
+    crate::ffi_safe!(
+        {
+            if !s.is_null() {
+                drop(CString::from_raw(s));
+            }
+        },
+        ()
+    )
 }
 
 use std::ffi::c_void;
@@ -88,7 +90,10 @@ fn pending_password_csv_slot() -> &'static std::sync::Mutex<Option<std::path::Pa
 }
 
 fn take_pending_password_csv() -> Option<std::path::PathBuf> {
-    pending_password_csv_slot().lock().ok().and_then(|mut g| g.take())
+    pending_password_csv_slot()
+        .lock()
+        .ok()
+        .and_then(|mut g| g.take())
 }
 
 /// Progress callback type invoked from the import background thread.
@@ -164,141 +169,164 @@ pub unsafe extern "C" fn maho_import_orchestrator_start(
     items_bitmask: u32,
     essentials_json: *const c_char,
     callback: MahoImportProgressCallback,
-    cookie_cb: Option<unsafe extern "C" fn(
-        host: *const c_char,
-        name: *const c_char,
-        value: *const c_char,
-        path: *const c_char,
-        expires: i64,
-        is_secure: bool,
-        is_httponly: bool,
-        same_site: i32,
-        user_data: *mut c_void,
-    )>,
-    autofill_cb: Option<unsafe extern "C" fn(
-        field_name: *const c_char,
-        value: *const c_char,
-        times_used: i32,
-        first_used: i64,
-        last_used: i64,
-        user_data: *mut c_void,
-    )>,
-    favicon_cb: Option<unsafe extern "C" fn(
-        url: *const c_char,
-        png_bytes: *const u8,
-        png_len: usize,
-        user_data: *mut c_void,
-    )>,
+    cookie_cb: Option<
+        unsafe extern "C" fn(
+            host: *const c_char,
+            name: *const c_char,
+            value: *const c_char,
+            path: *const c_char,
+            expires: i64,
+            is_secure: bool,
+            is_httponly: bool,
+            same_site: i32,
+            user_data: *mut c_void,
+        ),
+    >,
+    autofill_cb: Option<
+        unsafe extern "C" fn(
+            field_name: *const c_char,
+            value: *const c_char,
+            times_used: i32,
+            first_used: i64,
+            last_used: i64,
+            user_data: *mut c_void,
+        ),
+    >,
+    favicon_cb: Option<
+        unsafe extern "C" fn(
+            url: *const c_char,
+            png_bytes: *const u8,
+            png_len: usize,
+            user_data: *mut c_void,
+        ),
+    >,
     user_data: *mut c_void,
 ) -> *mut MahoImportSession {
-    crate::ffi_safe!({
-
-    if core_ptr.is_null() || browser_json.is_null() {
-        return ptr::null_mut();
-    }
-
-    // SAFETY(H15): Acquire the import gate so concurrent FFI calls on MahoCore
-    // are rejected for the duration of this import session.
-    if !crate::import_gate::enter() {
-        // Another import is already active.
-        return ptr::null_mut();
-    }
-
-    let browser_str = match CStr::from_ptr(browser_json).to_str() {
-        Ok(s) => s,
-        Err(_) => { crate::import_gate::exit(); return ptr::null_mut(); }
-    };
-    let browser: DetectedBrowser = match serde_json::from_str(browser_str) {
-        Ok(b) => b,
-        Err(_) => { crate::import_gate::exit(); return ptr::null_mut(); }
-    };
-
-    let essentials: Vec<String> = if essentials_json.is_null() {
-        Vec::new()
-    } else {
-        match CStr::from_ptr(essentials_json).to_str() {
-            Ok(s) => serde_json::from_str(s).unwrap_or_default(),
-            Err(_) => Vec::new(),
-        }
-    };
-
-    let destination = Arc::new(MahoCoreDestination::new_with_callbacks(
-        core_ptr,
-        cookie_cb,
-        autofill_cb,
-        favicon_cb,
-        user_data,
-    ));
-    let cancel_token = Arc::new(AtomicBool::new(false));
-    let cancel_clone = cancel_token.clone();
-    let ctx = CallbackContext { callback, user_data };
-    let password_csv_path = take_pending_password_csv();
-
-    let handle = thread::Builder::new()
-        .name("maho-import-orchestrator".into())
-        .spawn(move || {
-            let _gate = crate::import_gate::GateGuard;
-            let mut orchestrator = Orchestrator::new(destination);
-            if !essentials.is_empty() {
-                orchestrator.set_selected_essentials(essentials);
+    crate::ffi_safe!(
+        {
+            if core_ptr.is_null() || browser_json.is_null() {
+                return ptr::null_mut();
             }
-            if let Some(path) = password_csv_path {
-                orchestrator.set_password_csv_path(path);
+
+            // SAFETY(H15): Acquire the import gate so concurrent FFI calls on MahoCore
+            // are rejected for the duration of this import session.
+            if !crate::import_gate::enter() {
+                // Another import is already active.
+                return ptr::null_mut();
             }
-            let orchestrator = Arc::new(orchestrator);
-            let orchestrator_worker = orchestrator.clone();
 
-            let (tx, rx) = mpsc::channel();
-            let browser_for_worker = browser.clone();
+            let browser_str = match CStr::from_ptr(browser_json).to_str() {
+                Ok(s) => s,
+                Err(_) => {
+                    crate::import_gate::exit();
+                    return ptr::null_mut();
+                }
+            };
+            let browser: DetectedBrowser = match serde_json::from_str(browser_str) {
+                Ok(b) => b,
+                Err(_) => {
+                    crate::import_gate::exit();
+                    return ptr::null_mut();
+                }
+            };
 
-            let worker = thread::Builder::new()
-                .name("maho-import-worker".into())
+            let essentials: Vec<String> = if essentials_json.is_null() {
+                Vec::new()
+            } else {
+                match CStr::from_ptr(essentials_json).to_str() {
+                    Ok(s) => serde_json::from_str(s).unwrap_or_default(),
+                    Err(_) => Vec::new(),
+                }
+            };
+
+            let destination = Arc::new(MahoCoreDestination::new_with_callbacks(
+                core_ptr,
+                cookie_cb,
+                autofill_cb,
+                favicon_cb,
+                user_data,
+            ));
+            let cancel_token = Arc::new(AtomicBool::new(false));
+            let cancel_clone = cancel_token.clone();
+            let ctx = CallbackContext {
+                callback,
+                user_data,
+            };
+            let password_csv_path = take_pending_password_csv();
+
+            let handle = thread::Builder::new()
+                .name("maho-import-orchestrator".into())
                 .spawn(move || {
-                    let _ = orchestrator_worker.start_import(&browser_for_worker, items_bitmask, tx);
+                    let _gate = crate::import_gate::GateGuard;
+                    let mut orchestrator = Orchestrator::new(destination);
+                    if !essentials.is_empty() {
+                        orchestrator.set_selected_essentials(essentials);
+                    }
+                    if let Some(path) = password_csv_path {
+                        orchestrator.set_password_csv_path(path);
+                    }
+                    let orchestrator = Arc::new(orchestrator);
+                    let orchestrator_worker = orchestrator.clone();
+
+                    let (tx, rx) = mpsc::channel();
+                    let browser_for_worker = browser.clone();
+
+                    let worker = thread::Builder::new()
+                        .name("maho-import-worker".into())
+                        .spawn(move || {
+                            let _ = orchestrator_worker.start_import(
+                                &browser_for_worker,
+                                items_bitmask,
+                                tx,
+                            );
+                        })
+                        .ok();
+
+                    loop {
+                        if cancel_clone.load(Ordering::SeqCst) {
+                            orchestrator.cancel();
+                            ctx.invoke(3, 0, 0, ptr::null());
+                            break;
+                        }
+                        match rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                            Ok(progress) => {
+                                ctx.forward_progress(&progress);
+                            }
+                            Err(mpsc::RecvTimeoutError::Timeout) => {
+                                // Loop again to check cancellation
+                            }
+                            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                                // Drain remaining events and exit
+                                for progress in rx.try_iter() {
+                                    ctx.forward_progress(&progress);
+                                }
+                                break;
+                            }
+                        }
+                    }
+
+                    if let Some(h) = worker {
+                        let _ = h.join();
+                    }
                 })
                 .ok();
 
-            loop {
-                if cancel_clone.load(Ordering::SeqCst) {
-                    orchestrator.cancel();
-                    ctx.invoke(3, 0, 0, ptr::null());
-                    break;
+            match handle {
+                Some(h) => {
+                    let session = Box::new(MahoImportSession {
+                        cancel_token,
+                        thread: Some(h),
+                    });
+                    Box::into_raw(session)
                 }
-                match rx.recv_timeout(std::time::Duration::from_millis(100)) {
-                    Ok(progress) => {
-                        ctx.forward_progress(&progress);
-                    }
-                    Err(mpsc::RecvTimeoutError::Timeout) => {
-                        // Loop again to check cancellation
-                    }
-                    Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        // Drain remaining events and exit
-                        for progress in rx.try_iter() {
-                            ctx.forward_progress(&progress);
-                        }
-                        break;
-                    }
+                None => {
+                    crate::import_gate::exit();
+                    ptr::null_mut()
                 }
             }
-
-            if let Some(h) = worker {
-                let _ = h.join();
-            }
-        })
-        .ok();
-
-    match handle {
-        Some(h) => {
-            let session = Box::new(MahoImportSession {
-                cancel_token,
-                thread: Some(h),
-            });
-            Box::into_raw(session)
-        }
-        None => { crate::import_gate::exit(); ptr::null_mut() }
-    }
-
-    }, ptr::null_mut())
+        },
+        ptr::null_mut()
+    )
 }
 
 /// Cancel an in-flight import. Safe to call from any thread. The cancellation
@@ -309,15 +337,16 @@ pub unsafe extern "C" fn maho_import_orchestrator_start(
 /// or NULL (no-op).
 #[no_mangle]
 pub unsafe extern "C" fn maho_import_orchestrator_cancel(handle: *mut MahoImportSession) {
-    crate::ffi_safe!({
-
-    if handle.is_null() {
-        return;
-    }
-    let session = &*handle;
-    session.cancel_token.store(true, Ordering::SeqCst);
-
-    }, ())
+    crate::ffi_safe!(
+        {
+            if handle.is_null() {
+                return;
+            }
+            let session = &*handle;
+            session.cancel_token.store(true, Ordering::SeqCst);
+        },
+        ()
+    )
 }
 
 /// Free the import session handle. MUST be called after the terminal callback
@@ -329,17 +358,18 @@ pub unsafe extern "C" fn maho_import_orchestrator_cancel(handle: *mut MahoImport
 /// or NULL (no-op). Must not be called more than once per handle.
 #[no_mangle]
 pub unsafe extern "C" fn maho_import_orchestrator_free(handle: *mut MahoImportSession) {
-    crate::ffi_safe!({
-
-    if handle.is_null() {
-        return;
-    }
-    let mut session = Box::from_raw(handle);
-    if let Some(thread) = session.thread.take() {
-        let _ = thread.join();
-    }
-
-    }, ())
+    crate::ffi_safe!(
+        {
+            if handle.is_null() {
+                return;
+            }
+            let mut session = Box::from_raw(handle);
+            if let Some(thread) = session.thread.take() {
+                let _ = thread.join();
+            }
+        },
+        ()
+    )
 }
 
 /// Set the user-provided passwords CSV path for the next import session.
@@ -352,20 +382,23 @@ pub unsafe extern "C" fn maho_import_orchestrator_free(handle: *mut MahoImportSe
 /// `path` must be a valid null-terminated UTF-8 C string, or NULL (clears).
 #[no_mangle]
 pub unsafe extern "C" fn maho_import_orchestrator_set_password_csv(path: *const c_char) {
-    crate::ffi_safe!({
-
-    let slot = pending_password_csv_slot();
-    let Ok(mut guard) = slot.lock() else { return; };
-    if path.is_null() {
-        *guard = None;
-        return;
-    }
-    match CStr::from_ptr(path).to_str() {
-        Ok(s) => *guard = Some(std::path::PathBuf::from(s)),
-        Err(_) => *guard = None,
-    }
-
-    }, ())
+    crate::ffi_safe!(
+        {
+            let slot = pending_password_csv_slot();
+            let Ok(mut guard) = slot.lock() else {
+                return;
+            };
+            if path.is_null() {
+                *guard = None;
+                return;
+            }
+            match CStr::from_ptr(path).to_str() {
+                Ok(s) => *guard = Some(std::path::PathBuf::from(s)),
+                Err(_) => *guard = None,
+            }
+        },
+        ()
+    )
 }
 
 struct CallbackContext {
@@ -396,10 +429,20 @@ impl CallbackContext {
             } => {
                 let msg = CString::new(status.as_str()).ok();
                 let msg_ptr = msg.as_ref().map(|m| m.as_ptr()).unwrap_or(ptr::null());
-                self.invoke(1, import_type_to_bit(*import_type), *imported as i32, msg_ptr);
+                self.invoke(
+                    1,
+                    import_type_to_bit(*import_type),
+                    *imported as i32,
+                    msg_ptr,
+                );
             }
             ImportProgress::TypeComplete { import_type, count } => {
-                self.invoke(2, import_type_to_bit(*import_type), *count as i32, ptr::null());
+                self.invoke(
+                    2,
+                    import_type_to_bit(*import_type),
+                    *count as i32,
+                    ptr::null(),
+                );
             }
             ImportProgress::AllComplete => {
                 self.invoke(3, 0, 0, ptr::null());

@@ -124,6 +124,14 @@ impl SqliteStorage {
 mod tests {
     use super::*;
 
+    fn test_key() -> String {
+        uuid::Uuid::new_v4().to_string()
+    }
+
+    fn test_storage() -> SqliteStorage {
+        SqliteStorage::open_in_memory_with_key(&test_key()).unwrap()
+    }
+
     fn sample(id: &str) -> CustomRoutine {
         CustomRoutine {
             id: id.to_string(),
@@ -138,7 +146,7 @@ mod tests {
 
     #[test]
     fn create_get_roundtrip() {
-        let storage = SqliteStorage::open_in_memory().unwrap();
+        let storage = test_storage();
         let r = sample("r1");
         storage.create_custom_routine(&r).unwrap();
         let got = storage.get_custom_routine("r1").unwrap();
@@ -147,13 +155,13 @@ mod tests {
 
     #[test]
     fn get_missing_returns_none() {
-        let storage = SqliteStorage::open_in_memory().unwrap();
+        let storage = test_storage();
         assert_eq!(storage.get_custom_routine("nope").unwrap(), None);
     }
 
     #[test]
     fn list_orders_and_includes_event_trigger() {
-        let storage = SqliteStorage::open_in_memory().unwrap();
+        let storage = test_storage();
         let mut cron = sample("cron1");
         cron.created_at = "2026-07-13T00:00:00Z".to_string();
         let mut evt = sample("evt1");
@@ -175,7 +183,7 @@ mod tests {
 
     #[test]
     fn delete_removes_row() {
-        let storage = SqliteStorage::open_in_memory().unwrap();
+        let storage = test_storage();
         storage.create_custom_routine(&sample("r1")).unwrap();
         assert!(storage.delete_custom_routine("r1").unwrap());
         assert!(!storage.delete_custom_routine("r1").unwrap());
@@ -184,11 +192,13 @@ mod tests {
 
     #[test]
     fn set_enabled_toggles() {
-        let storage = SqliteStorage::open_in_memory().unwrap();
+        let storage = test_storage();
         storage.create_custom_routine(&sample("r1")).unwrap();
         assert!(storage.set_custom_routine_enabled("r1", false).unwrap());
         assert!(!storage.get_custom_routine("r1").unwrap().unwrap().enabled);
-        assert!(!storage.set_custom_routine_enabled("missing", false).unwrap());
+        assert!(!storage
+            .set_custom_routine_enabled("missing", false)
+            .unwrap());
     }
 
     #[test]
@@ -197,12 +207,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("routines.sqlite");
         let path_str = path.to_str().unwrap();
+        let key = test_key();
         {
-            let s = SqliteStorage::open(path_str).unwrap();
+            let s = SqliteStorage::open_with_key(path_str, &key).unwrap();
             s.create_custom_routine(&sample("persist")).unwrap();
         }
         // Reopen: run_migrations runs again; CREATE TABLE IF NOT EXISTS must be a no-op.
-        let s2 = SqliteStorage::open(path_str).unwrap();
+        let s2 = SqliteStorage::open_with_key(path_str, &key).unwrap();
         assert!(s2.get_custom_routine("persist").unwrap().is_some());
     }
 }

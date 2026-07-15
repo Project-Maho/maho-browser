@@ -164,8 +164,16 @@ fn mobile_partial_write_preserves_folders_and_root_order() {
     );
     let applied = apply_one(&mut core, desktop).expect("first desktop write must apply");
     let seeded = parse_space(&applied);
-    assert_eq!(seeded.folders.len(), 1, "precondition: desktop seeded 1 folder");
-    assert_eq!(seeded.root_order.len(), 2, "precondition: desktop seeded 2 root items");
+    assert_eq!(
+        seeded.folders.len(),
+        1,
+        "precondition: desktop seeded 1 folder"
+    );
+    assert_eq!(
+        seeded.root_order.len(),
+        2,
+        "precondition: desktop seeded 2 root items"
+    );
 
     // Device B (mobile): partial write carrying ONLY `name`, with a higher
     // field-level HLC so the field genuinely wins (would clobber under naive LWW).
@@ -179,8 +187,8 @@ fn mobile_partial_write_preserves_folders_and_root_order() {
         device_b,
         mobile_payload,
     );
-    let merged_entity = apply_one(&mut core, mobile)
-        .expect("mobile partial write must apply (name field wins)");
+    let merged_entity =
+        apply_one(&mut core, mobile).expect("mobile partial write must apply (name field wins)");
     let merged = parse_space(&merged_entity);
 
     // The scalar field the mobile client actually edited must win...
@@ -257,13 +265,23 @@ fn concurrent_field_writes_converge() {
             ]
         })
         .to_string();
-        let write_a =
-            entity_with_field_hlc(SyncEntityType::Space, "space-2", base + 100, dev_a, a_payload);
+        let write_a = entity_with_field_hlc(
+            SyncEntityType::Space,
+            "space-2",
+            base + 100,
+            dev_a,
+            a_payload,
+        );
 
         // Device B: updates ONLY `name`.
         let b_payload = serde_json::json!({"name": "Renamed by B"}).to_string();
-        let write_b =
-            entity_with_field_hlc(SyncEntityType::Space, "space-2", base + 200, dev_b, b_payload);
+        let write_b = entity_with_field_hlc(
+            SyncEntityType::Space,
+            "space-2",
+            base + 200,
+            dev_b,
+            b_payload,
+        );
 
         let final_entity = if apply_a_first {
             apply_one(&mut core, write_a).expect("device A folders write must apply");
@@ -314,7 +332,11 @@ fn tab_role_preserved_under_partial_space_write() {
         tab_payload("tab-pinned", "Docs", serde_json::json!({"type": "pinned"})),
     );
     let seeded = parse_tab(&apply_one(&mut core, pinned_seed).expect("pinned seed must apply"));
-    assert_eq!(seeded.role, TabRole::Pinned, "precondition: seeded tab is Pinned");
+    assert_eq!(
+        seeded.role,
+        TabRole::Pinned,
+        "precondition: seeded tab is Pinned"
+    );
 
     // Mobile partial write: only updates `title`, higher HLC, NO role field.
     let pinned_partial = entity_with_field_hlc(
@@ -324,9 +346,8 @@ fn tab_role_preserved_under_partial_space_write() {
         device_mobile,
         serde_json::json!({"title": "Docs (mobile)"}).to_string(),
     );
-    let merged = parse_tab(
-        &apply_one(&mut core, pinned_partial).expect("partial title write must apply"),
-    );
+    let merged =
+        parse_tab(&apply_one(&mut core, pinned_partial).expect("partial title write must apply"));
     assert_eq!(
         merged.title, "Docs (mobile)",
         "mobile's title edit should win"
@@ -365,7 +386,10 @@ fn tab_role_preserved_under_partial_space_write() {
     );
     let merged_fav =
         parse_tab(&apply_one(&mut core, fav_partial).expect("partial title write must apply"));
-    assert_eq!(merged_fav.title, "Mail (mobile)", "mobile's title edit should win");
+    assert_eq!(
+        merged_fav.title, "Mail (mobile)",
+        "mobile's title edit should win"
+    );
     assert_eq!(
         merged_fav.role,
         TabRole::Favorite { order: 3 },

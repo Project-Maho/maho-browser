@@ -277,6 +277,7 @@ sealed class ShellEvent {
     data class CommandBarQuery(
         val text: String,
         val mode: String? = null,
+        @SerialName("is_incognito") val isIncognito: Boolean = false,
     ) : ShellEvent()
 
     @Serializable @SerialName("command_bar_select")

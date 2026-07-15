@@ -1,6 +1,11 @@
 // Barrel export for src/bridge/
 
 export type {
+  AgentEvent,
+  AgentHandle,
+  AgentToolDescriptor,
+  AgentToolPermission,
+  AgentToolProvenance,
   BridgeError,
   ChatContent,
   ChatEvent,

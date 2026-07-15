@@ -301,6 +301,91 @@ pub struct BrowserRoutinesRunParams {
     pub id: String,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+/// Parameters for mail account listing.
+pub struct MailListAccountsParams {}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+/// Parameters for mail folder listing.
+pub struct MailListFoldersParams {
+    /// Mail account ID.
+    #[schemars(description = "Mail account ID")]
+    pub account_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+/// Parameters for mail email listing.
+pub struct MailListEmailsParams {
+    /// Mail account ID.
+    #[schemars(description = "Mail account ID")]
+    pub account_id: String,
+    /// Mail folder ID.
+    #[schemars(description = "Mail folder ID")]
+    pub folder_id: String,
+    /// Maximum emails to return.
+    #[schemars(description = "Maximum emails to return")]
+    pub limit: Option<i64>,
+    /// Number of emails to skip.
+    #[schemars(description = "Number of emails to skip")]
+    pub offset: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+/// Parameters for retrieving one mail email.
+pub struct MailGetEmailParams {
+    /// Email ID to retrieve.
+    #[schemars(description = "Email ID to retrieve")]
+    pub email_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+/// Parameters for mail search.
+pub struct MailSearchEmailsParams {
+    /// Search query.
+    #[schemars(description = "Search query")]
+    pub query: String,
+    /// Optional mail account ID filter.
+    #[schemars(description = "Optional mail account ID filter")]
+    pub account_id: Option<String>,
+    /// Optional mail folder ID filter.
+    #[schemars(description = "Optional mail folder ID filter")]
+    pub folder_id: Option<String>,
+    /// Maximum emails to return.
+    #[schemars(description = "Maximum emails to return")]
+    pub limit: Option<i64>,
+    /// Number of emails to skip.
+    #[schemars(description = "Number of emails to skip")]
+    pub offset: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+/// Parameters for listing a mail thread.
+pub struct MailListThreadParams {
+    /// Mail account ID containing the message.
+    #[schemars(description = "Mail account ID containing the message")]
+    pub account_id: String,
+    /// Message ID whose thread to list.
+    #[schemars(description = "Message ID whose thread to list")]
+    pub message_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+/// Parameters for extracting a one-time password from mail.
+pub struct MailExtractOtpParams {
+    /// Optional mail account ID filter.
+    #[schemars(description = "Optional mail account ID filter")]
+    pub account_id: Option<String>,
+    /// Optional mail folder ID filter.
+    #[schemars(description = "Optional mail folder ID filter")]
+    pub folder_id: Option<String>,
+    /// Optional search query to narrow candidate messages.
+    #[schemars(description = "Optional search query to narrow candidate messages")]
+    pub query: Option<String>,
+    /// Only consider mail newer than this many seconds.
+    #[schemars(description = "Only consider mail newer than this many seconds")]
+    pub max_age_seconds: Option<i64>,
+}
+
 /// The MCP server that bridges stdio (rmcp) to the browser's UDS socket.
 #[derive(Debug, Clone)]
 pub struct MahoBrowserMcpServer {
@@ -944,6 +1029,132 @@ impl MahoBrowserMcpServer {
             .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
         Ok(serde_json::to_string(&result).unwrap_or_default())
     }
+
+    #[tool(description = "List configured mail accounts via the browser mail broker")]
+    async fn mail_list_accounts(
+        &self,
+        #[allow(unused_variables)] Parameters(_params): Parameters<MailListAccountsParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("mail_list_accounts", json!({}))
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "List mail folders for an account via the browser mail broker")]
+    async fn mail_list_folders(
+        &self,
+        Parameters(params): Parameters<MailListFoldersParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool(
+                "mail_list_folders",
+                json!({"account_id": params.account_id}),
+            )
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "List emails via the browser mail broker")]
+    async fn mail_list_emails(
+        &self,
+        Parameters(params): Parameters<MailListEmailsParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool(
+                "mail_list_emails",
+                json!({
+                    "account_id": params.account_id,
+                    "folder_id": params.folder_id,
+                    "limit": params.limit,
+                    "offset": params.offset,
+                }),
+            )
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "Get one email by ID via the browser mail broker")]
+    async fn mail_get_email(
+        &self,
+        Parameters(params): Parameters<MailGetEmailParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool("mail_get_email", json!({"email_id": params.email_id}))
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "Search emails via the browser mail broker")]
+    async fn mail_search_emails(
+        &self,
+        Parameters(params): Parameters<MailSearchEmailsParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool(
+                "mail_search_emails",
+                json!({
+                    "query": params.query,
+                    "account_id": params.account_id,
+                    "folder_id": params.folder_id,
+                    "limit": params.limit,
+                    "offset": params.offset,
+                }),
+            )
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(description = "List emails in a thread via the browser mail broker")]
+    async fn mail_list_thread(
+        &self,
+        Parameters(params): Parameters<MailListThreadParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool(
+                "mail_list_thread",
+                json!({"account_id": params.account_id, "message_id": params.message_id}),
+            )
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    #[tool(
+        description = "Extract a one-time password from recent mail via the browser mail broker"
+    )]
+    async fn mail_extract_otp(
+        &self,
+        Parameters(params): Parameters<MailExtractOtpParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let result = self
+            .client
+            .call_tool(
+                "mail_extract_otp",
+                json!({
+                    "account_id": params.account_id,
+                    "folder_id": params.folder_id,
+                    "query": params.query,
+                    "max_age_seconds": params.max_age_seconds,
+                }),
+            )
+            .await
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        Ok(serde_json::to_string(&result).unwrap_or_default())
+    }
+
+    // TODO(mail-send): add a write-gated mail_send tool after compose/send broker support lands.
 }
 
 #[tool_handler]
@@ -1580,6 +1791,94 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["_params"]["timeout_ms"], 3000);
         assert_eq!(parsed["_params"]["visible"], true);
+
+        drop(server);
+        handle.await.unwrap();
+    }
+
+    fn assert_tool_method(result: &str, method: &str) -> serde_json::Value {
+        let parsed: serde_json::Value = serde_json::from_str(result).unwrap();
+        assert_eq!(parsed["_method"], method);
+        parsed
+    }
+
+    #[tokio::test]
+    async fn mail_tools_proxy_to_browser_broker() {
+        let (mock, handle) = MockBrowser::start().await;
+        let client = BrowserClient::connect(&mock.sock_path).await.unwrap();
+        let server = MahoBrowserMcpServer::new_with_client(Arc::new(client));
+
+        let accounts = server
+            .mail_list_accounts(Parameters(MailListAccountsParams {}))
+            .await
+            .unwrap();
+        assert_tool_method(&accounts, "mail_list_accounts");
+
+        let folders = server
+            .mail_list_folders(Parameters(MailListFoldersParams {
+                account_id: "acc1".into(),
+            }))
+            .await
+            .unwrap();
+        let parsed = assert_tool_method(&folders, "mail_list_folders");
+        assert_eq!(parsed["_params"]["account_id"], "acc1");
+
+        let list = server
+            .mail_list_emails(Parameters(MailListEmailsParams {
+                account_id: "acc1".into(),
+                folder_id: "fold1".into(),
+                limit: Some(20),
+                offset: Some(5),
+            }))
+            .await
+            .unwrap();
+        let parsed = assert_tool_method(&list, "mail_list_emails");
+        assert_eq!(parsed["_params"]["folder_id"], "fold1");
+
+        let email = server
+            .mail_get_email(Parameters(MailGetEmailParams {
+                email_id: "em1".into(),
+            }))
+            .await
+            .unwrap();
+        let parsed = assert_tool_method(&email, "mail_get_email");
+        assert_eq!(parsed["_params"]["email_id"], "em1");
+
+        let search = server
+            .mail_search_emails(Parameters(MailSearchEmailsParams {
+                query: "receipt".into(),
+                account_id: Some("acc1".into()),
+                folder_id: None,
+                limit: Some(10),
+                offset: None,
+            }))
+            .await
+            .unwrap();
+        let parsed = assert_tool_method(&search, "mail_search_emails");
+        assert_eq!(parsed["_params"]["query"], "receipt");
+
+        let thread = server
+            .mail_list_thread(Parameters(MailListThreadParams {
+                account_id: "acc1".into(),
+                message_id: "msg1".into(),
+            }))
+            .await
+            .unwrap();
+        let parsed = assert_tool_method(&thread, "mail_list_thread");
+        assert_eq!(parsed["_params"]["account_id"], "acc1");
+        assert_eq!(parsed["_params"]["message_id"], "msg1");
+
+        let otp = server
+            .mail_extract_otp(Parameters(MailExtractOtpParams {
+                account_id: Some("acc1".into()),
+                folder_id: Some("fold1".into()),
+                query: Some("login code".into()),
+                max_age_seconds: Some(600),
+            }))
+            .await
+            .unwrap();
+        let parsed = assert_tool_method(&otp, "mail_extract_otp");
+        assert_eq!(parsed["_params"]["max_age_seconds"], 600);
 
         drop(server);
         handle.await.unwrap();

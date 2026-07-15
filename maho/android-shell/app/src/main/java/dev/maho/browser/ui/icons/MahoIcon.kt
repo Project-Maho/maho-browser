@@ -9,6 +9,8 @@ enum class MahoIcon(@DrawableRes val drawableRes: Int) {
     Close(R.drawable.ic_x),
     ReloadSync(R.drawable.ic_rotate_cw),
     Search(R.drawable.ic_search),
+    Copy(R.drawable.ic_copy),
+    Bot(R.drawable.ic_bot),
     Globe(R.drawable.ic_globe),
     Downloads(R.drawable.ic_download),
     Archive(R.drawable.ic_clock),

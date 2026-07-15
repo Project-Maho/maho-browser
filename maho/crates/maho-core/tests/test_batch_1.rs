@@ -8,8 +8,8 @@ use maho_types::events::shell_event::ShellEvent;
 use maho_types::identifiers::{FolderId, SpaceId, TabId};
 use maho_types::settings::{GeneralSettingsUpdate, PinnedCloseBehavior, SettingsUpdate};
 use maho_types::space::{SpaceColor, SpaceConfigUpdate};
-use maho_types::traits::shell_renderer::{SearchContext, SuggestionType, TabViewModel};
 use maho_types::tab::TabRole;
+use maho_types::traits::shell_renderer::{SearchContext, SuggestionType, TabViewModel};
 
 fn make_color(hue: f64) -> SpaceColor {
     SpaceColor {
@@ -229,17 +229,29 @@ fn tab_close_decreases_count() {
 #[test]
 fn private_tab_close_does_not_enter_closed_tab_suggestions() {
     let mut core = MahoCore::new();
-    let normal_id = create_tab_with_url_and_privacy(&mut core, "https://closed-normal.example.com", false);
-    let private_id = create_tab_with_url_and_privacy(&mut core, "https://closed-private.example.com", true);
+    let normal_id =
+        create_tab_with_url_and_privacy(&mut core, "https://closed-normal.example.com", false);
+    let private_id =
+        create_tab_with_url_and_privacy(&mut core, "https://closed-private.example.com", true);
 
-    core.handle_event(ShellEvent::CloseTab { tab_id: normal_id, expected_space_id: None });
-    core.handle_event(ShellEvent::CloseTab { tab_id: private_id, expected_space_id: None });
+    core.handle_event(ShellEvent::CloseTab {
+        tab_id: normal_id,
+        expected_space_id: None,
+    });
+    core.handle_event(ShellEvent::CloseTab {
+        tab_id: private_id,
+        expected_space_id: None,
+    });
 
     let normal_results = core.command_bar_search_with_tabs("closed-normal", None, vec![], false);
     let private_results = core.command_bar_search_with_tabs("closed-private", None, vec![], false);
 
-    assert!(normal_results.iter().any(|result| matches!(result.kind, SuggestionType::ClosedTab)));
-    assert!(!private_results.iter().any(|result| matches!(result.kind, SuggestionType::ClosedTab)));
+    assert!(normal_results
+        .iter()
+        .any(|result| matches!(result.kind, SuggestionType::ClosedTab)));
+    assert!(!private_results
+        .iter()
+        .any(|result| matches!(result.kind, SuggestionType::ClosedTab)));
 }
 
 #[test]
@@ -549,7 +561,10 @@ fn tab_close_others_keeps_target() {
 fn tab_reopen_last_closed_no_panic() {
     let mut core = MahoCore::new();
     let tab_id = create_tab_with_url(&mut core, "https://example.com");
-    core.handle_event(ShellEvent::CloseTab { tab_id, expected_space_id: None });
+    core.handle_event(ShellEvent::CloseTab {
+        tab_id,
+        expected_space_id: None,
+    });
     core.handle_event(ShellEvent::ReopenLastClosed);
 }
 
@@ -1074,7 +1089,11 @@ fn command_bar_url_query_no_panic() {
 fn incognito_command_bar_query_excludes_history_and_bookmarks() {
     let mut core = MahoCore::new();
     core.add_history_entry("https://hidden-history.example.com", "Hidden History");
-    core.add_bookmark("https://hidden-bookmark.example.com", "Hidden Bookmark", None);
+    core.add_bookmark(
+        "https://hidden-bookmark.example.com",
+        "Hidden Bookmark",
+        None,
+    );
 
     let updates = core.handle_event(ShellEvent::CommandBarQuery {
         text: "hidden".to_string(),
@@ -1090,8 +1109,12 @@ fn incognito_command_bar_query_excludes_history_and_bookmarks() {
         })
         .expect("command bar results should be emitted");
 
-    assert!(!suggestions.iter().any(|result| matches!(result.kind, SuggestionType::History)));
-    assert!(!suggestions.iter().any(|result| matches!(result.kind, SuggestionType::Bookmark)));
+    assert!(!suggestions
+        .iter()
+        .any(|result| matches!(result.kind, SuggestionType::History)));
+    assert!(!suggestions
+        .iter()
+        .any(|result| matches!(result.kind, SuggestionType::Bookmark)));
 }
 
 #[test]
@@ -1640,20 +1663,20 @@ fn boost_for_url_subdomain_matching() {
     let vms = core.get_boost_view_models();
     assert_eq!(vms.len(), 1);
     let boost_id = vms[0].id.clone();
-    
+
     core.handle_event(ShellEvent::SetActiveBoost {
         domain: "example.com".to_string(),
         boost_id: Some(boost_id.clone()),
     });
-    
+
     let matched = core.get_boosts_for_url("https://www.example.com/page");
     assert_eq!(matched.len(), 1);
     assert_eq!(matched[0].id, boost_id);
-    
+
     let matched_sub = core.get_boosts_for_url("http://sub.example.com:8080/foo");
     assert_eq!(matched_sub.len(), 1);
     assert_eq!(matched_sub[0].id, boost_id);
-    
+
     let matched_other = core.get_boosts_for_url("https://example.org/");
     assert!(matched_other.is_empty());
 }
@@ -1704,7 +1727,11 @@ fn boost_update_emits_boost_updated() {
         "UpdateBoost must emit exactly one BoostUpdated; got {:?}",
         updates
     );
-    if let [CoreUpdate::BoostUpdated { boost_id: returned_id, .. }] = updates.as_slice() {
+    if let [CoreUpdate::BoostUpdated {
+        boost_id: returned_id,
+        ..
+    }] = updates.as_slice()
+    {
         assert_eq!(*returned_id, boost_id);
     }
 }
@@ -1895,23 +1922,35 @@ fn private_active_tab_blocks_history_bookmark_and_form_writes() {
     let db_path = temp_dir.path().join("maho-core.sqlite");
     let mut core = MahoCore::new().with_storage(db_path.to_str().unwrap());
 
-    let normal_id = create_tab_with_url_and_privacy(&mut core, "https://normal-write.example.com", false);
+    let normal_id =
+        create_tab_with_url_and_privacy(&mut core, "https://normal-write.example.com", false);
     core.add_history_entry("https://normal-write.example.com", "Normal Write");
     assert_eq!(core.search_history("normal-write", 10).len(), 1);
 
-    let private_id = create_tab_with_url_and_privacy(&mut core, "https://private-write.example.com", true);
+    let private_id =
+        create_tab_with_url_and_privacy(&mut core, "https://private-write.example.com", true);
     core.add_history_entry("https://private-write.example.com", "Private Write");
     assert!(core.search_history("private-write", 10).is_empty());
 
     let before_bookmarks = core.get_all_bookmark_entries().len();
-    core.add_bookmark("https://private-write.example.com", "Private Bookmark", None);
+    core.add_bookmark(
+        "https://private-write.example.com",
+        "Private Bookmark",
+        None,
+    );
     assert_eq!(core.get_all_bookmark_entries().len(), before_bookmarks);
 
     core.save_form_data(private_id.as_ref(), "{\"secret\":true}".to_string());
-    assert!(core.get_crash_recovery().get_form_data(private_id.as_ref()).is_none());
+    assert!(core
+        .get_crash_recovery()
+        .get_form_data(private_id.as_ref())
+        .is_none());
 
     core.save_form_data(normal_id.as_ref(), "{\"ok\":true}".to_string());
-    assert!(core.get_crash_recovery().get_form_data(normal_id.as_ref()).is_some());
+    assert!(core
+        .get_crash_recovery()
+        .get_form_data(normal_id.as_ref())
+        .is_some());
 }
 
 #[test]
@@ -1919,7 +1958,8 @@ fn incognito_search_history_returns_no_entries() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let db_path = temp_dir.path().join("maho-core.sqlite");
     let mut core = MahoCore::new().with_storage(db_path.to_str().unwrap());
-    let _tab_id = create_tab_with_url_and_privacy(&mut core, "https://stored-history.example.com", false);
+    let _tab_id =
+        create_tab_with_url_and_privacy(&mut core, "https://stored-history.example.com", false);
     core.add_history_entry("https://stored-history.example.com", "Stored History");
 
     let normal = core.handle_event(ShellEvent::SearchHistory {
@@ -2077,7 +2117,10 @@ fn url_scheme_newtab() {
     let mut core = MahoCore::new();
     let before_count = core.get_tab_view_models().len();
     let result = core.handle_url_scheme("maho://newtab");
-    assert!(result.contains("\"error\""), "expected error JSON, got: {result}");
+    assert!(
+        result.contains("\"error\""),
+        "expected error JSON, got: {result}"
+    );
     assert_eq!(
         core.get_tab_view_models().len(),
         before_count,
@@ -2090,7 +2133,10 @@ fn url_scheme_newtab_missing_url() {
     let mut core = MahoCore::new();
     let before_count = core.get_tab_view_models().len();
     let result = core.handle_url_scheme("maho://newtab");
-    assert!(result.contains("\"error\""), "expected error JSON, got: {result}");
+    assert!(
+        result.contains("\"error\""),
+        "expected error JSON, got: {result}"
+    );
     assert_eq!(core.get_tab_view_models().len(), before_count);
 }
 
@@ -2099,7 +2145,10 @@ fn url_scheme_newtab_with_url() {
     let mut core = MahoCore::new();
     let before_count = core.get_tab_view_models().len();
     let result = core.handle_url_scheme("maho://newtab?url=https%3A%2F%2Fexample.com");
-    assert!(result.contains("\"ok\":true"), "expected ok JSON, got: {result}");
+    assert!(
+        result.contains("\"ok\":true"),
+        "expected ok JSON, got: {result}"
+    );
     assert!(result.contains("\"action\":\"newtab\""));
     assert!(
         core.get_tab_view_models().len() > before_count,
@@ -2472,8 +2521,6 @@ fn create_folder(core: &mut MahoCore, space_id: SpaceId, name: &str) -> FolderId
         .clone()
 }
 
-
-
 #[test]
 fn folder_move_into_folder_sets_parent() {
     // Create 2 folders in default space
@@ -2835,7 +2882,8 @@ fn move_nested_folder_to_root_among_regular_folders() {
     let rb_pos = root_ids.iter().position(|id| *id == regular_b).unwrap();
     assert!(child_pos < rb_pos);
 
-    let child_vm = core.get_folder_view_models(&space_id)
+    let child_vm = core
+        .get_folder_view_models(&space_id)
         .into_iter()
         .find(|f| f.id == child)
         .unwrap();
@@ -2892,7 +2940,11 @@ fn cross_type_url_dedup_tab_beats_history() {
     );
 
     let mut ctx = empty_ctx();
-    ctx.tabs = vec![make_tab_vm("t1", "Rust Programming Language", "https://rust-lang.org")];
+    ctx.tabs = vec![make_tab_vm(
+        "t1",
+        "Rust Programming Language",
+        "https://rust-lang.org",
+    )];
 
     let results = engine.search("rust", None, &ctx);
 
@@ -2924,7 +2976,11 @@ fn cross_type_url_dedup_bookmark_beats_history_when_no_tab() {
     );
 
     let mut ctx = empty_ctx();
-    ctx.bookmarks = vec![("bm1".to_string(), "Example Page".to_string(), "https://example.com/page".to_string())];
+    ctx.bookmarks = vec![(
+        "bm1".to_string(),
+        "Example Page".to_string(),
+        "https://example.com/page".to_string(),
+    )];
 
     let results = engine.search("example", None, &ctx);
 
@@ -2938,7 +2994,11 @@ fn cross_type_url_dedup_bookmark_beats_history_when_no_tab() {
         })
         .collect();
 
-    assert_eq!(matches.len(), 1, "bookmark and history for same URL should collapse to one result");
+    assert_eq!(
+        matches.len(),
+        1,
+        "bookmark and history for same URL should collapse to one result"
+    );
 }
 
 #[test]
@@ -2951,7 +3011,11 @@ fn cross_type_url_dedup_closed_tab_collapses_with_history() {
     );
 
     let mut ctx = empty_ctx();
-    ctx.closed_tabs = vec![make_tab_vm("c1", "Closed Example", "https://closed.example.com")];
+    ctx.closed_tabs = vec![make_tab_vm(
+        "c1",
+        "Closed Example",
+        "https://closed.example.com",
+    )];
 
     let results = engine.search("closed example", None, &ctx);
 
@@ -2983,7 +3047,11 @@ fn cross_type_url_dedup_different_urls_not_collapsed() {
     );
 
     let mut ctx = empty_ctx();
-    ctx.tabs = vec![make_tab_vm("t1", "Beta Example", "https://beta.example.com")];
+    ctx.tabs = vec![make_tab_vm(
+        "t1",
+        "Beta Example",
+        "https://beta.example.com",
+    )];
 
     let results = engine.search("example", None, &ctx);
 
@@ -2996,7 +3064,10 @@ fn cross_type_url_dedup_different_urls_not_collapsed() {
         .filter(|r| r.execution_payload.as_deref() == Some("https://beta.example.com"))
         .count();
 
-    assert_eq!(alpha_count, 1, "distinct URL alpha.example.com should appear");
+    assert_eq!(
+        alpha_count, 1,
+        "distinct URL alpha.example.com should appear"
+    );
     assert_eq!(beta_count, 1, "distinct URL beta.example.com should appear");
 }
 
@@ -3036,27 +3107,49 @@ fn type_priority_tiebreak_results_are_deterministic() {
     );
 
     let mut ctx = empty_ctx();
-    ctx.tabs = vec![make_tab_vm("t1", "Tiebreak Test Page", "https://tiebreak2.example.com")];
+    ctx.tabs = vec![make_tab_vm(
+        "t1",
+        "Tiebreak Test Page",
+        "https://tiebreak2.example.com",
+    )];
 
     let results_a = engine.search("tiebreak test page", None, &ctx);
     let results_b = engine.search("tiebreak test page", None, &ctx);
 
     let keys_a: Vec<_> = results_a.iter().map(|r| r.key.clone()).collect();
     let keys_b: Vec<_> = results_b.iter().map(|r| r.key.clone()).collect();
-    assert_eq!(keys_a, keys_b, "identical queries must produce identical result order");
+    assert_eq!(
+        keys_a, keys_b,
+        "identical queries must produce identical result order"
+    );
 }
 
 #[test]
 fn non_url_results_not_collapsed_by_url_dedup() {
     let mut engine = CommandBarEngine::new();
-    engine.add_action("new_tab".to_string(), "New Tab".to_string(), "Navigation".to_string());
-    engine.add_action("new_window".to_string(), "New Window".to_string(), "Navigation".to_string());
+    engine.add_action(
+        "new_tab".to_string(),
+        "New Tab".to_string(),
+        "Navigation".to_string(),
+    );
+    engine.add_action(
+        "new_window".to_string(),
+        "New Window".to_string(),
+        "Navigation".to_string(),
+    );
 
     let ctx = empty_ctx();
     let results = engine.search("> new", None, &ctx);
 
-    let action_count = results.iter().filter(|r| matches!(r.kind, SuggestionType::Action)).count();
-    assert!(action_count >= 2, "distinct actions should not be collapsed by URL dedup; got {}", action_count);
+    let action_count = results
+        .iter()
+        .filter(|r| matches!(r.kind, SuggestionType::Action))
+        .count();
+    assert!(
+        action_count >= 2,
+        "distinct actions should not be collapsed by URL dedup; got {}",
+        action_count
+    );
 }
 
 #[test]
@@ -3069,7 +3162,11 @@ fn url_dedup_normalises_trailing_slash() {
     );
 
     let mut ctx = empty_ctx();
-    ctx.tabs = vec![make_tab_vm("t1", "Trailing Slash Page", "https://trailing.example.com")];
+    ctx.tabs = vec![make_tab_vm(
+        "t1",
+        "Trailing Slash Page",
+        "https://trailing.example.com",
+    )];
 
     let results = engine.search("trailing slash", None, &ctx);
 
@@ -3102,7 +3199,9 @@ fn set_pinned_close_behavior(core: &mut MahoCore, behavior: PinnedCloseBehavior)
 
 fn pin_tab_with_url(core: &mut MahoCore, url: &str) -> TabId {
     let tab_id = create_tab_with_url(core, url);
-    core.handle_event(ShellEvent::PinTab { tab_id: tab_id.clone() });
+    core.handle_event(ShellEvent::PinTab {
+        tab_id: tab_id.clone(),
+    });
     tab_id
 }
 
@@ -3112,7 +3211,8 @@ fn pinned_close_switch_mode_keeps_tab_in_pinned_list() {
     let tab_id = pin_tab_with_url(&mut core, "https://example.com");
     let space_id = core.get_active_space_id();
 
-    core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone(),
+    core.handle_event(ShellEvent::CloseTab {
+        tab_id: tab_id.clone(),
         expected_space_id: None,
     });
 
@@ -3130,7 +3230,8 @@ fn pinned_close_close_mode_removes_tab() {
     let tab_id = pin_tab_with_url(&mut core, "https://example.com");
     let space_id = core.get_active_space_id();
 
-    core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone(),
+    core.handle_event(ShellEvent::CloseTab {
+        tab_id: tab_id.clone(),
         expected_space_id: None,
     });
 
@@ -3153,12 +3254,16 @@ fn pinned_close_reset_mode_keeps_tab_and_resets_url() {
         url: Url::new("https://other.com"),
     });
 
-    core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone(),
+    core.handle_event(ShellEvent::CloseTab {
+        tab_id: tab_id.clone(),
         expected_space_id: None,
     });
 
     let pinned = core.get_pinned_tabs(&space_id);
-    let tab_vm = pinned.iter().find(|t| t.id == tab_id).expect("tab must remain pinned");
+    let tab_vm = pinned
+        .iter()
+        .find(|t| t.id == tab_id)
+        .expect("tab must remain pinned");
     assert_eq!(
         tab_vm.url, "https://example.com",
         "URL must be reset to pinned_url under reset mode"
@@ -3172,7 +3277,9 @@ fn pinned_close_switch_mode_moves_last_active_to_another_tab() {
     let pinned_id = pin_tab_with_url(&mut core, "https://pinned.com");
     let other_id = create_tab_in_space(&mut core, &space_id);
 
-    core.handle_event(ShellEvent::ActivateTab { tab_id: pinned_id.clone() });
+    core.handle_event(ShellEvent::ActivateTab {
+        tab_id: pinned_id.clone(),
+    });
 
     assert_eq!(
         core.get_last_active_tab_for_space(&space_id),
@@ -3180,7 +3287,8 @@ fn pinned_close_switch_mode_moves_last_active_to_another_tab() {
         "pinned tab must be last-active before CloseTab"
     );
 
-    core.handle_event(ShellEvent::CloseTab { tab_id: pinned_id.clone(),
+    core.handle_event(ShellEvent::CloseTab {
+        tab_id: pinned_id.clone(),
         expected_space_id: None,
     });
 
@@ -3204,12 +3312,16 @@ fn pinned_close_unload_switch_mode_suspends_tab_and_keeps_it_pinned() {
     let tab_id = pin_tab_with_url(&mut core, "https://example.com");
     let space_id = core.get_active_space_id();
 
-    core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone(),
+    core.handle_event(ShellEvent::CloseTab {
+        tab_id: tab_id.clone(),
         expected_space_id: None,
     });
 
     let pinned = core.get_pinned_tabs(&space_id);
-    let tab_vm = pinned.iter().find(|t| t.id == tab_id).expect("tab must remain pinned");
+    let tab_vm = pinned
+        .iter()
+        .find(|t| t.id == tab_id)
+        .expect("tab must remain pinned");
     assert_eq!(
         tab_vm.lifecycle_state, "suspended",
         "tab must be suspended (unloaded) under unload-switch mode"
@@ -3249,7 +3361,9 @@ fn test_boost_commit_persists_state() {
     };
     mgr.update(&id, update);
 
-    let committed = mgr.commit_boost(&id).expect("commit_boost must return Some for a known id");
+    let committed = mgr
+        .commit_boost(&id)
+        .expect("commit_boost must return Some for a known id");
     assert!(committed.change_was_made);
 
     let retrieved = mgr.get_boost(&id).expect("boost must exist after commit");
@@ -3312,10 +3426,18 @@ fn test_boost_discard_after_update_blocked_by_change_flag() {
     mgr.update(&id, update);
 
     let discard_result = mgr.discard_boost(&id);
-    assert!(discard_result.is_none(), "discard must be blocked when change_was_made is true");
+    assert!(
+        discard_result.is_none(),
+        "discard must be blocked when change_was_made is true"
+    );
 
-    let still_there = mgr.get_boost(&id).expect("boost must still exist after blocked discard");
-    assert!(still_there.color.magic_theme, "update must still be present");
+    let still_there = mgr
+        .get_boost(&id)
+        .expect("boost must still exist after blocked discard");
+    assert!(
+        still_there.color.magic_theme,
+        "update must still be present"
+    );
     assert_eq!(still_there.custom_css, "h1 { display: none; }");
     assert_eq!(mgr.list_for_domain("discard.com").len(), 1);
 }
@@ -3327,14 +3449,21 @@ fn pinned_tab_suspend_then_close_deletes_tab() {
     let space_id = core.get_active_space_id();
 
     // 1. First click: Suspend the pinned tab
-    core.handle_event(ShellEvent::SuspendTab { tab_id: tab_id.clone() });
+    core.handle_event(ShellEvent::SuspendTab {
+        tab_id: tab_id.clone(),
+    });
 
     // Verify it is suspended in core view model
-    let tab_vm = core.get_tab_view_models().into_iter().find(|t| t.id == tab_id).unwrap();
+    let tab_vm = core
+        .get_tab_view_models()
+        .into_iter()
+        .find(|t| t.id == tab_id)
+        .unwrap();
     assert_eq!(tab_vm.lifecycle_state, "suspended");
 
     // 2. Second click: Close the suspended tab
-    core.handle_event(ShellEvent::CloseTab { tab_id: tab_id.clone(),
+    core.handle_event(ShellEvent::CloseTab {
+        tab_id: tab_id.clone(),
         expected_space_id: None,
     });
 

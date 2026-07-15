@@ -106,23 +106,35 @@ struct ArcBottomBar: View {
     }
 
     private var homeFloatingBar: some View {
-        HStack(spacing: 0) {
-            tabButton
+        GeometryReader { geometry in
+            let newTabWidth = homeNewTabWidth(for: geometry.size.width)
 
-            Spacer(minLength: ShellTheme.Spacing.medium)
+            ZStack {
+                HStack(spacing: 0) {
+                    tabButton
 
-            homeAiButton
+                    Spacer(minLength: 0)
 
-            Spacer(minLength: ShellTheme.Spacing.medium)
+                    HStack(spacing: ShellTheme.Spacing.medium) {
+                        homeAiButton
+                        homeSettingsButton
+                    }
+                }
 
-            homeNewTabButton
-
-            Spacer(minLength: ShellTheme.Spacing.medium)
-
-            homeSettingsButton
+                homeNewTabButton(width: newTabWidth)
+            }
+            .frame(width: geometry.size.width, height: ShellTheme.Size.touchTarget)
         }
+        .frame(height: ShellTheme.Size.touchTarget)
+        .frame(maxWidth: .infinity)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("arcBottomBar")
+    }
+
+    private func homeNewTabWidth(for barWidth: CGFloat) -> CGFloat {
+        let rightGroupWidth = ShellTheme.Size.touchTarget * 2 + ShellTheme.Spacing.medium
+        let centeredButtonMaximumWidth = barWidth - rightGroupWidth * 2
+        return min(112, max(80, centeredButtonMaximumWidth))
     }
 
     private var displayTitle: String {
@@ -178,12 +190,12 @@ struct ArcBottomBar: View {
         .accessibilityHint("Double tap to open the tab switcher. Touch and hold to switch spaces.")
     }
 
-    private var homeNewTabButton: some View {
+    private func homeNewTabButton(width: CGFloat = 112) -> some View {
         Button(action: onAddressTapped) {
             Image(lucide: Lucide.plus)
                 .font(.body.weight(.semibold))
                 .foregroundStyle(foregroundColor)
-                .frame(width: 112, height: ShellTheme.Size.bottomBarCapsuleHeight)
+                .frame(width: width, height: ShellTheme.Size.bottomBarCapsuleHeight)
                 .background(capsuleBackground)
                 .overlay(capsuleStroke)
         }
@@ -203,8 +215,8 @@ struct ArcBottomBar: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("homeAiButton")
-        .accessibilityLabel("AI chat")
-        .accessibilityHint("Opens AI chat.")
+        .accessibilityLabel("Agent")
+        .accessibilityHint("Opens the AI agent.")
     }
 
     private var homeSettingsButton: some View {

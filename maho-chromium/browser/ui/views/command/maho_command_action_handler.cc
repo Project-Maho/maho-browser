@@ -559,11 +559,6 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
   } else if (action_id == "show_archive") {
     maho::sidebar_prefs::ToggleSidebarPanelExpanded(
         browser->profile()->GetPrefs());
-  } else if (action_id == "new_note") {
-    GURL notes_url(maho::kMahoNotesURL);
-    NavigateParams params(browser, notes_url, ui::PAGE_TRANSITION_GENERATED);
-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
-    Navigate(&params);
   } else if (action_id == "open_boost_editor") {
     MahoBoostWindowController::GetForBrowser(browser, browser->profile())
         .ShowForActiveDomain(

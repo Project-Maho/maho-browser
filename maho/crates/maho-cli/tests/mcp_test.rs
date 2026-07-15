@@ -15,7 +15,7 @@ fn test_mcp_lifecycle() {
     let db_path = db_file.path();
 
     // Initialize default workspace in database first
-    let storage = maho_storage::sqlite::SqliteStorage::open(&db_path.to_string_lossy()).unwrap();
+    let storage = maho_cli::workspace::open_storage(db_path).unwrap();
     let ws = maho_types::ai::AiWorkspace {
         id: "default".to_string(),
         name: "Default Workspace".to_string(),

@@ -1,7 +1,0 @@
-[     254ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:9228/favicon.ico:0
-[     274ms] [TIMEEND] Main._createAppUI: 18.666015625 ms @ http://127.0.0.1:9228/devtools/entrypoints/main/main.js:10
-[     291ms] [INFO] Autofocus processing was blocked because a document already has a focused element. @ http://127.0.0.1:9228/devtools/inspector.html?ws=127.0.0.1:9228/devtools/page/87913906D66323E31089F9EE4751F1F0:0
-[     328ms] [TIMEEND] Main._showAppUI: 49.64697265625 ms @ http://127.0.0.1:9228/devtools/entrypoints/main/main.js:10
-[     451ms] [TIMEEND] Main._initializeTarget: 122.718017578125 ms @ http://127.0.0.1:9228/devtools/entrypoints/main/main.js:10
-[     461ms] [ERROR] WebSocket connection to 'ws://127.0.0.1:9228/devtools/page/87913906D66323E31089F9EE4751F1F0' failed: Error during WebSocket handshake: Unexpected response code: 403 @ http://127.0.0.1:9228/devtools/core/sdk/sdk.js:24
-[     552ms] [TIMEEND] Main._lateInitialization: 0.23388671875 ms @ http://127.0.0.1:9228/devtools/entrypoints/main/main.js:10

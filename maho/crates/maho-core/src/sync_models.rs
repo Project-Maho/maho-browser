@@ -272,7 +272,9 @@ fn hostname() -> String {
 }
 
 pub fn build_fields_hlc(payload_json: &str, version: u64, device_id: u32) -> Option<String> {
-    if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(payload_json) {
+    if let Ok(serde_json::Value::Object(map)) =
+        serde_json::from_str::<serde_json::Value>(payload_json)
+    {
         let mut fields = std::collections::HashMap::new();
         for key in map.keys() {
             fields.insert(key.clone(), (version, device_id));

@@ -1,8 +1,8 @@
+use argon2::password_hash::rand_core::{CryptoRng, Error as RandError, RngCore};
 use argon2::password_hash::{PasswordHash, SaltString};
 use argon2::{Argon2, PasswordHasher, PasswordVerifier};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use argon2::password_hash::rand_core::{RngCore, CryptoRng, Error as RandError};
 
 #[derive(Debug)]
 pub enum PasswordError {
@@ -15,8 +15,8 @@ impl std::fmt::Display for PasswordError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PasswordError::HmacError => write!(f, "HMAC derivation failed"),
-            PasswordError::HashError(e) => write!(f, "Argon2 hash error: {}", e),
-            PasswordError::Argon2Error(e) => write!(f, "Argon2 error: {}", e),
+            PasswordError::HashError(e) => write!(f, "Argon2 hash error: {e}"),
+            PasswordError::Argon2Error(e) => write!(f, "Argon2 error: {e}"),
         }
     }
 }
@@ -52,13 +52,7 @@ impl RngCore for GetRandomRng {
         let _ = getrandom::getrandom(dest);
     }
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> std::result::Result<(), RandError> {
-        getrandom::getrandom(dest).map_err(|e| {
-            let code = std::num::NonZeroU32::new(e.code().get() as u32);
-            match code {
-                Some(c) => RandError::from(c),
-                None => RandError::from(std::num::NonZeroU32::new(1).unwrap()),
-            }
-        })
+        getrandom::getrandom(dest).map_err(|e| RandError::from(e.code()))
     }
 }
 
@@ -95,7 +89,8 @@ pub fn hash_password(password: &str, pepper: &[u8]) -> Result<String, PasswordEr
 pub fn verify_password(
     password: &str,
     password_hash: &str,
-    pepper: &[u8]) -> Result<bool, PasswordError> {
+    pepper: &[u8],
+) -> Result<bool, PasswordError> {
     let peppered = get_peppered_password(password, pepper)?;
     let parsed_hash = PasswordHash::new(password_hash)?;
     let argon2 = get_argon2_instance()?;

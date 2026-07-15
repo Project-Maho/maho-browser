@@ -8,6 +8,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import type {
+  AgentEvent,
+  AgentHandle,
   BridgeError,
   ChatEvent,
   KeyValidationResult,
@@ -24,6 +26,10 @@ import type {
 // SessionHandle must be string, never number
 type AssertSessionIsString = SessionHandle extends string ? true : never;
 const _sessionCheck: AssertSessionIsString = true;
+
+// AgentHandle must be string
+type AssertAgentHandleIsString = AgentHandle extends string ? true : never;
+const _agentHandleCheck: AssertAgentHandleIsString = true;
 
 // Provider must be string
 type AssertProviderIsString = Provider extends string ? true : never;
@@ -45,6 +51,10 @@ const _bridgeErrorCheck: AssertBridgeErrorHasKind = true;
 type AssertChatEventHasKind = ChatEvent extends { kind: string } ? true : never;
 const _chatEventCheck: AssertChatEventHasKind = true;
 
+// AgentEvent is discriminated on 'kind'
+type AssertAgentEventHasKind = AgentEvent extends { kind: string } ? true : never;
+const _agentEventCheck: AssertAgentEventHasKind = true;
+
 // PinchSummaryEvent is discriminated on 'kind'
 type AssertPinchEventHasKind = PinchSummaryEvent extends { kind: string } ? true : never;
 const _pinchEventCheck: AssertPinchEventHasKind = true;
@@ -53,6 +63,11 @@ describe('bridge type exports', () => {
   it('all types are importable and distinct from any', () => {
     // Runtime confirmation that type imports resolve (not `any`)
     const types: string[] = [
+      'AgentEvent',
+      'AgentHandle',
+      'AgentToolDescriptor',
+      'AgentToolPermission',
+      'AgentToolProvenance',
       'BridgeError',
       'ChatContent',
       'ChatEvent',
@@ -60,6 +75,7 @@ describe('bridge type exports', () => {
       'ChatSessionOpts',
       'ConversationMeta',
       'CostEstimate',
+      'HapticStyle',
       'KeyValidationResult',
       'MahoBridge',
       'PinchSummaryEvent',
@@ -73,17 +89,19 @@ describe('bridge type exports', () => {
       'ToolDefinition',
       'ToolResult',
     ];
-    expect(types).toHaveLength(19);
+    expect(types).toHaveLength(25);
   });
 
-  it('MahoBridge has exactly 28 method signatures', () => {
+  it('MahoBridge has exactly 34 method signatures', () => {
     // Count keys on the interface via a dummy conformance object
     const methodNames: (keyof MahoBridge)[] = [
+      // BYOK (5)
       'byokGetProviders',
       'byokGetKey',
       'byokSetKey',
       'byokDeleteKey',
       'byokValidateKey',
+      // Chat Session (10)
       'chatSessionStart',
       'chatSessionResume',
       'chatSessionFree',
@@ -94,27 +112,45 @@ describe('bridge type exports', () => {
       'chatSendToolResult',
       'chatAppendAssistantMessage',
       'chatGetHistory',
+      // Conversations (6)
       'conversationCreate',
       'conversationList',
       'conversationGet',
       'conversationDelete',
       'conversationRename',
       'conversationGetMessages',
+      // Space AI Config (2)
       'getSpaceAIConfig',
       'setSpaceAIConfig',
+      // Pinch (1)
       'pinchEstimateCost',
+      // Agent Session (6)
+      'agentCreateSession',
+      'agentFreeSession',
+      'agentSendMessage',
+      'agentCancel',
+      'agentPollEvent',
+      'agentListTools',
+      // Native-only (4)
       'capturePhoto',
       'captureScreenshot',
       'openSettings',
       'hapticFeedback',
     ];
-    expect(methodNames).toHaveLength(28);
+    expect(methodNames).toHaveLength(34);
   });
 
   it('chatSessionStart returns Promise<SessionHandle> (string), not number', () => {
     // Type-level: if this compiles, SessionHandle = string is confirmed
     type StartReturn = ReturnType<MahoBridge['chatSessionStart']>;
     type AssertStringPromise = StartReturn extends Promise<string> ? true : never;
+    const _check: AssertStringPromise = true;
+    expect(_check).toBe(true);
+  });
+
+  it('agentCreateSession returns Promise<AgentHandle> (string)', () => {
+    type AgentReturn = ReturnType<MahoBridge['agentCreateSession']>;
+    type AssertStringPromise = AgentReturn extends Promise<string> ? true : never;
     const _check: AssertStringPromise = true;
     expect(_check).toBe(true);
   });
@@ -134,6 +170,11 @@ describe('bridge type exports', () => {
     expect(kinds).toHaveLength(4);
   });
 
+  it('AgentEvent covers all 3 discriminants', () => {
+    const kinds: AgentEvent['kind'][] = ['token', 'complete', 'error'];
+    expect(kinds).toHaveLength(3);
+  });
+
   it('KeyValidationResult has valid boolean and optional error', () => {
     const result: KeyValidationResult = { valid: true };
     expect(result.valid).toBe(true);
@@ -147,9 +188,11 @@ describe('bridge type exports', () => {
 
 // Suppress unused variable warnings for compile-time-only assertions
 void _sessionCheck;
+void _agentHandleCheck;
 void _providerCheck;
 void _platformCheck;
 void _rpcIdCheck;
 void _bridgeErrorCheck;
 void _chatEventCheck;
+void _agentEventCheck;
 void _pinchEventCheck;

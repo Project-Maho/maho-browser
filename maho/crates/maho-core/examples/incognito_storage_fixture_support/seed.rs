@@ -129,9 +129,7 @@ fn seed_sqlite(sqlite: &SqliteStorage) -> Result<u64, String> {
     sqlite
         .create_conversation("conv-normal-v1", Some("Normal Chat"), None, None)
         .map_err(e("conversation"))?;
-    sqlite
-        .set_last_hlc_ts(1)
-        .map_err(e("hlc"))?;
+    sqlite.set_last_hlc_ts(1).map_err(e("hlc"))?;
 
     Ok(19)
 }

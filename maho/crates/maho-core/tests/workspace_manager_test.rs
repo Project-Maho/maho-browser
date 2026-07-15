@@ -1,15 +1,17 @@
+use maho_core::tool_registry::ToolRegistry;
 use maho_core::workspace_manager::WorkspaceManager;
 use maho_storage::sqlite::SqliteStorage;
-use maho_types::ai::{AiMcpServer, AiCliTool, McpTransport};
-use maho_types::tool::{ToolDescriptor, ToolProvenance, ToolPermission};
-use maho_core::tool_registry::ToolRegistry;
+use maho_types::ai::{AiCliTool, AiMcpServer, McpTransport};
+use maho_types::tool::{ToolDescriptor, ToolPermission, ToolProvenance};
 
 #[test]
 fn test_create_workspace_assigns_blank_profile() {
     let storage = SqliteStorage::open_in_memory().unwrap();
     let manager = WorkspaceManager::new(storage);
 
-    let ws = manager.create_workspace("Test WS", Some("space-1")).unwrap();
+    let ws = manager
+        .create_workspace("Test WS", Some("space-1"))
+        .unwrap();
     assert_eq!(ws.name, "Test WS");
     assert_eq!(ws.profile_id, Some("blank".to_string()));
     assert_eq!(ws.space_id, Some("space-1".to_string()));
@@ -69,14 +71,16 @@ fn test_register_mcp_server_and_tools() {
     manager.register_mcp_server(&ws.id, mcp).unwrap();
 
     let mut registry = ToolRegistry::new();
-    registry.register_tool(ToolDescriptor {
-        name: "mcp:test-mcp/test_tool".to_string(),
-        description: "Test tool description".to_string(),
-        parameters_schema: serde_json::json!({}),
-        provenance: ToolProvenance::External("test-mcp".to_string()),
-        sensitive: false,
-        permission: ToolPermission::AutoApprove,
-    }).unwrap();
+    registry
+        .register_tool(ToolDescriptor {
+            name: "mcp:test-mcp/test_tool".to_string(),
+            description: "Test tool description".to_string(),
+            parameters_schema: serde_json::json!({}),
+            provenance: ToolProvenance::External("test-mcp".to_string()),
+            sensitive: false,
+            permission: ToolPermission::AutoApprove,
+        })
+        .unwrap();
 
     let tools = manager.get_effective_tools(&ws.id, &registry).unwrap();
     let names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
@@ -138,10 +142,16 @@ command_template = "rg --json {pattern}"
 parameters_schema = '{"type":"object","properties":{"pattern":{"type":"string"}}}'
     "#;
 
-    let profile_id = maho_core::profile_import::import_profile_from_toml(&manager.storage, &ws.id, toml_str).unwrap();
+    let profile_id =
+        maho_core::profile_import::import_profile_from_toml(&manager.storage, &ws.id, toml_str)
+            .unwrap();
 
     // Verify profile in DB
-    let profile = manager.storage.get_ai_profile(&profile_id).unwrap().unwrap();
+    let profile = manager
+        .storage
+        .get_ai_profile(&profile_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(profile.name, "My Agent");
     assert_eq!(profile.system_prompt, "You are a helpful assistant");
     assert_eq!(profile.preferred_model, Some("gpt-4o".to_string()));
@@ -154,7 +164,10 @@ parameters_schema = '{"type":"object","properties":{"pattern":{"type":"string"}}
     let mcps = manager.storage.list_mcp_servers(&ws.id).unwrap();
     assert_eq!(mcps.len(), 1);
     assert_eq!(mcps[0].name, "context7");
-    assert_eq!(mcps[0].command, Some("npx @context7/mcp-server".to_string()));
+    assert_eq!(
+        mcps[0].command,
+        Some("npx @context7/mcp-server".to_string())
+    );
 
     // Verify CLI tool registered
     let clis = manager.storage.list_cli_tools(&ws.id).unwrap();
@@ -187,15 +200,23 @@ parameters_schema = '{"type":"object"}'
 sensitive = false
     "#;
 
-    let _profile_id = maho_core::profile_import::import_profile_from_toml(&manager.storage, &ws.id, toml_str).unwrap();
+    let _profile_id =
+        maho_core::profile_import::import_profile_from_toml(&manager.storage, &ws.id, toml_str)
+            .unwrap();
 
     let mcps = manager.storage.list_mcp_servers(&ws.id).unwrap();
     assert_eq!(mcps.len(), 1);
-    assert_eq!(mcps[0].trusted, false, "TOML trusted=true MUST be ignored on import");
+    assert_eq!(
+        mcps[0].trusted, false,
+        "TOML trusted=true MUST be ignored on import"
+    );
 
     let clis = manager.storage.list_cli_tools(&ws.id).unwrap();
     assert_eq!(clis.len(), 1);
-    assert_eq!(clis[0].sensitive, true, "TOML sensitive=false on CLI MUST default to true on import");
+    assert_eq!(
+        clis[0].sensitive, true,
+        "TOML sensitive=false on CLI MUST default to true on import"
+    );
 }
 
 #[test]
@@ -216,7 +237,11 @@ description = "Search files"
 command_template = "rg --json {pattern}"
 parameters_schema = '{"type": invalid json'
     "#;
-    let res = maho_core::profile_import::import_profile_from_toml(&manager.storage, &ws.id, toml_invalid_cli);
+    let res = maho_core::profile_import::import_profile_from_toml(
+        &manager.storage,
+        &ws.id,
+        toml_invalid_cli,
+    );
     assert!(res.is_err());
 
     // Empty profile name
@@ -225,6 +250,10 @@ parameters_schema = '{"type": invalid json'
 name = ""
 system_prompt = "No name"
     "#;
-    let res = maho_core::profile_import::import_profile_from_toml(&manager.storage, &ws.id, toml_empty_name);
+    let res = maho_core::profile_import::import_profile_from_toml(
+        &manager.storage,
+        &ws.id,
+        toml_empty_name,
+    );
     assert!(res.is_err());
 }

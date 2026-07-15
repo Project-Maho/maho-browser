@@ -1,6 +1,6 @@
+use crate::sync_models::SyncEntity;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::sync_models::SyncEntity;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

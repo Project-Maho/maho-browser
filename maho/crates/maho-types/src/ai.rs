@@ -7,8 +7,8 @@ pub struct AiProfile {
     pub name: String,
     pub system_prompt: String,
     pub preferred_model: Option<String>,
-    pub tools: Vec<String>,           // namespace refs
-    pub mcp_servers: Vec<String>,     // server IDs
+    pub tools: Vec<String>,       // namespace refs
+    pub mcp_servers: Vec<String>, // server IDs
     pub is_default: bool,
     pub created_at: String,
     pub updated_at: String,

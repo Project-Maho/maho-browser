@@ -31,7 +31,7 @@ pub fn fetch_linux_keyring_key(browser_name: &str) -> Option<ChromiumKey> {
     };
 
     // Try to get password from Freedesktop Secret Service API via `secret-service` crate
-    if let Ok(ss) = secret_service::SecretService::connect(secret_service::EncryptionType::Dh) {
+    if let Ok(ss) = secret_service::blocking::SecretService::connect(secret_service::EncryptionType::Dh) {
         if let Ok(collection) = ss.get_default_collection() {
             let search_attributes = [
                 ("application", service_name),

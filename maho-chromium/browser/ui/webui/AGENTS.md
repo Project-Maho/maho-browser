@@ -3,7 +3,7 @@
 **Generated:** 2026-07-14
 
 ## OVERVIEW
-Mojo-backed WebUI surfaces. 14 production features + 1 test harness. Each feature = `{feature}.mojom` + `_page_handler.cc/h` + `_ui.cc/h`. Handlers are thin — delegate to `browser/ai/` helpers or `browser/ui/` managers.
+Mojo-backed WebUI surfaces. 12 production features + 1 test harness. Each feature = `{feature}.mojom` + `_page_handler.cc/h` + `_ui.cc/h`. Handlers are thin — delegate to `browser/ai/` helpers or `browser/ui/` managers.
 
 ## SURFACES
 | Dir | URL | Notes |
@@ -11,8 +11,6 @@ Mojo-backed WebUI surfaces. 14 production features + 1 test harness. Each featur
 | `maho_settings/` | `chrome://maho-settings` | App settings hub |
 | `maho_ai/` | `chrome://maho-ai` | Chat, BYOK config, tool use |
 | `maho_boost/` | `chrome://maho-boost` | Site injection settings |
-| `maho_notes/` | `chrome://maho-notes` | Per-tab notes |
-| `maho_easel/` | `chrome://maho-easel` | Canvas/drawing tool |
 | `maho_space_config/` | `chrome://maho-space-config` | Space name/icon/color config |
 | **`maho_space_create/`** | **`chrome://maho-space-create`** | **Theme picker** (permanent — see ADR) |
 | `maho_space_manage/` | — | Space list management |

@@ -14,7 +14,6 @@
 //! reference to the `MahoCore` pointer and the UI thread does not call
 //! mutating functions on it until the import completes (or is cancelled).
 
-use std::ffi::{c_void, CString};
 use maho_core::maho_core::MahoCore;
 use maho_import::orchestrator::ImportDestination;
 use maho_types::common::Url;
@@ -22,8 +21,11 @@ use maho_types::events::core_update::CoreUpdate;
 use maho_types::events::shell_event::ShellEvent;
 use maho_types::identifiers::{FolderId, ProfileId, SpaceId, TabId};
 use maho_types::space::SpaceColor;
+use std::ffi::{c_void, CString};
 
-use crate::import::{MahoImportCookieCallback, MahoImportAutofillCallback, MahoImportFaviconCallback};
+use crate::import::{
+    MahoImportAutofillCallback, MahoImportCookieCallback, MahoImportFaviconCallback,
+};
 
 /// Wrapper to make `*mut MahoCore` usable across threads.
 ///
@@ -137,12 +139,7 @@ impl ImportDestination for MahoCoreDestination {
         Some(tab_id_str)
     }
 
-    fn create_tab_in_folder(
-        &self,
-        space_id: &str,
-        url: &str,
-        folder_id: &str,
-    ) -> Option<String> {
+    fn create_tab_in_folder(&self, space_id: &str, url: &str, folder_id: &str) -> Option<String> {
         // First create the tab
         let tab_id_str = self.create_tab(space_id, url)?;
 
@@ -217,8 +214,7 @@ impl ImportDestination for MahoCoreDestination {
             None
         };
 
-        self.core_mut()
-            .add_bookmark(url, title, folder_id);
+        self.core_mut().add_bookmark(url, title, folder_id);
 
         // TODO: Expose add_bookmark return value from MahoCore.
         None
@@ -243,13 +239,17 @@ impl ImportDestination for MahoCoreDestination {
         is_httponly: bool,
         same_site: i32,
     ) -> bool {
-        let Some(cb) = self.cookie_cb else { return false; };
+        let Some(cb) = self.cookie_cb else {
+            return false;
+        };
         let (Some(hc), Some(nc), Some(vc), Some(pc)) = (
             CString::new(host).ok(),
             CString::new(name).ok(),
             CString::new(value).ok(),
             CString::new(path).ok(),
-        ) else { return false; };
+        ) else {
+            return false;
+        };
         unsafe {
             cb(
                 hc.as_ptr(),
@@ -274,11 +274,13 @@ impl ImportDestination for MahoCoreDestination {
         first_used: i64,
         last_used: i64,
     ) -> bool {
-        let Some(cb) = self.autofill_cb else { return false; };
-        let (Some(fnc), Some(vc)) = (
-            CString::new(field_name).ok(),
-            CString::new(value).ok(),
-        ) else { return false; };
+        let Some(cb) = self.autofill_cb else {
+            return false;
+        };
+        let (Some(fnc), Some(vc)) = (CString::new(field_name).ok(), CString::new(value).ok())
+        else {
+            return false;
+        };
         unsafe {
             cb(
                 fnc.as_ptr(),

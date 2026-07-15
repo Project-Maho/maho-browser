@@ -258,8 +258,17 @@ if (!is_win) {
       "//components/sessions",
       "//content/public/browser",
       "//content/test:test_support",
-      "//testing/gtest",
-      "//url",
-    ]
+       "//testing/gtest",
+       "//url",
+     ]
+   }
+ }
+
+if (is_win) {
+  # R-8 browser_tests are POSIX-only (Unix-domain-socket MCP transport premise).
+  # Provide an empty target on Windows so cross-platform references in
+  # //chrome/test:browser_tests resolve without pulling in POSIX-only tests.
+  group("browser_tests") {
+    testonly = true
   }
 }

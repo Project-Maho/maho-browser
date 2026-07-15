@@ -120,7 +120,11 @@ impl ShortcutManager {
 
     pub fn merge_bindings(&mut self, incoming: Vec<ShortcutBinding>) {
         for incoming_b in incoming {
-            if let Some(local_b) = self.bindings.iter_mut().find(|b| b.action == incoming_b.action) {
+            if let Some(local_b) = self
+                .bindings
+                .iter_mut()
+                .find(|b| b.action == incoming_b.action)
+            {
                 if incoming_b.updated_at > local_b.updated_at {
                     local_b.key_combo = incoming_b.key_combo;
                     local_b.is_custom = incoming_b.is_custom;
@@ -131,7 +135,13 @@ impl ShortcutManager {
         }
     }
 
-    pub fn restore_shortcut_state(&mut self, action: &str, key_combo: KeyCombo, enabled: bool, updated_at: u64) {
+    pub fn restore_shortcut_state(
+        &mut self,
+        action: &str,
+        key_combo: KeyCombo,
+        enabled: bool,
+        updated_at: u64,
+    ) {
         if let Some(binding) = self.bindings.iter_mut().find(|b| b.action == action) {
             binding.key_combo = key_combo;
             binding.is_custom = true;

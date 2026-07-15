@@ -317,6 +317,12 @@ bool maho_core_is_native_password_provider_active(struct MahoCore *ptr);
 char *maho_core_search_passwords(struct MahoCore *ptr, const char *query);
 
 /**
+ * Returns a JSON-serialized list of all password provider descriptors in the registry.
+ * Caller must free with `maho_string_free`.
+ */
+char *maho_core_get_password_provider_registry(void);
+
+/**
  * # Safety
  * `ptr` must be a valid pointer returned by `maho_core_new`.
  * `password_id` must be a valid null-terminated C string.
@@ -699,12 +705,27 @@ void maho_core_clear_history(struct MahoCore *ptr);
 
 /**
  * # Safety
+ * `key_hex` must be a valid null-terminated C string (hex-encoded key).
+ * Call once, before `maho_core_new_with_storage`.
+ */
+bool maho_storage_set_sqlcipher_key(const char *key_hex);
+
+/**
+ * # Safety
  * `path` must be a valid null-terminated C string pointing to a directory.
  * The caller must ensure the directory exists or can be created.
  * Returns a pointer to a new MahoCore instance with both LMDB and SQLite storage initialized.
  * Returns null on error. Caller must free with `maho_core_free`.
  */
 struct MahoCore *maho_core_new_with_storage(const char *path);
+
+/**
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new` or
+ * `maho_core_new_with_storage`. `path` must be a valid null-terminated C string
+ * pointing to a verified JSON config blob.
+ */
+bool maho_core_apply_config(struct MahoCore *core, const char *path);
 
 /**
  * # Safety
@@ -1662,10 +1683,24 @@ char *maho_core_generate_sync_key(struct MahoCore *ptr);
 /**
  * # Safety
  * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `server_url` must be a valid null-terminated C string.
  * `recovery_phrase` must be a valid null-terminated C string.
  * Caller must free the returned string with `maho_string_free`.
  */
-char *maho_core_join_sync(struct MahoCore *ptr, const char *recovery_phrase);
+char *maho_core_join_sync(struct MahoCore *ptr,
+                          const char *server_url,
+                          const char *recovery_phrase);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `server_url` must be a valid null-terminated C string.
+ * `recovery_phrase` must be a valid null-terminated C string.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_configure_sync_encryption(struct MahoCore *ptr,
+                                          const char *server_url,
+                                          const char *recovery_phrase);
 
 /**
  * # Safety

@@ -15,7 +15,9 @@ fn snapshot_entries_is_complete_sorted_and_read_only() {
 
     // Insert out of byte-sorted order to prove the enumerator sorts.
     storage.put("spaces", b"[]").expect("put spaces");
-    storage.put("active_space_id", b"\"space-1\"").expect("put active");
+    storage
+        .put("active_space_id", b"\"space-1\"")
+        .expect("put active");
     storage.put("tabs", b"[]").expect("put tabs");
     storage.put("schema_version", b"4").expect("put schema");
 
@@ -96,5 +98,9 @@ fn snapshot_tabs_exposes_scroll_inside_tabs_value() {
         .iter()
         .map(|t| t["scroll_position"].as_i64().expect("scroll_position i64"))
         .collect();
-    assert_eq!(scrolls, vec![0, 640], "per-tab scroll decoded from tabs json");
+    assert_eq!(
+        scrolls,
+        vec![0, 640],
+        "per-tab scroll decoded from tabs json"
+    );
 }

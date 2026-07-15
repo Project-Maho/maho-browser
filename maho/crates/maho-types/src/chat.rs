@@ -175,7 +175,10 @@ impl ChatContent {
 
     /// Convenience constructor for an image message.
     pub fn image(mime: impl Into<String>, data: Vec<u8>) -> Self {
-        Self::Image { mime: mime.into(), data }
+        Self::Image {
+            mime: mime.into(),
+            data,
+        }
     }
 }
 
@@ -193,12 +196,27 @@ pub struct ChatMessage {
 
 impl ChatMessage {
     pub fn user(content: ChatContent) -> Self {
-        Self { role: "user".to_string(), content, tool_calls: None, tool_call_id: None }
+        Self {
+            role: "user".to_string(),
+            content,
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
     pub fn assistant(content: ChatContent) -> Self {
-        Self { role: "assistant".to_string(), content, tool_calls: None, tool_call_id: None }
+        Self {
+            role: "assistant".to_string(),
+            content,
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
     pub fn system(content: ChatContent) -> Self {
-        Self { role: "system".to_string(), content, tool_calls: None, tool_call_id: None }
+        Self {
+            role: "system".to_string(),
+            content,
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
 }

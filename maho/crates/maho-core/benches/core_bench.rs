@@ -11,11 +11,11 @@ fn bench_create_tab(c: &mut Criterion) {
             core.handle_event(ShellEvent::CreateTab {
                 space_id: SpaceId("space-1".into()),
                 url: Some(Url("https://example.com".into())),
-        parent_id: None,
-        tab_id: None,
-        window_id: None,
-        is_private: false,
-    });
+                parent_id: None,
+                tab_id: None,
+                window_id: None,
+                is_private: false,
+            });
         });
     });
 }
@@ -28,17 +28,20 @@ fn bench_close_tab(c: &mut Criterion) {
                 core.handle_event(ShellEvent::CreateTab {
                     space_id: SpaceId("space-1".into()),
                     url: Some(Url("https://example.com".into())),
-        parent_id: None,
-        tab_id: None,
-        window_id: None,
-        is_private: false,
-    });
+                    parent_id: None,
+                    tab_id: None,
+                    window_id: None,
+                    is_private: false,
+                });
                 let tab_id = core.get_tab_view_models().first().map(|t| t.id.clone());
                 (core, tab_id)
             },
             |(mut core, tab_id)| {
                 if let Some(id) = tab_id {
-                    core.handle_event(ShellEvent::CloseTab { tab_id: id, expected_space_id: None });
+                    core.handle_event(ShellEvent::CloseTab {
+                        tab_id: id,
+                        expected_space_id: None,
+                    });
                 }
             },
         );
@@ -87,11 +90,11 @@ fn bench_command_bar_query(c: &mut Criterion) {
                     core.handle_event(ShellEvent::CreateTab {
                         space_id: SpaceId("space-1".into()),
                         url: Some(Url(format!("https://example.com/{i}"))),
-        parent_id: None,
-        tab_id: None,
-        window_id: None,
-        is_private: false,
-    });
+                        parent_id: None,
+                        tab_id: None,
+                        window_id: None,
+                        is_private: false,
+                    });
                 }
                 core
             },

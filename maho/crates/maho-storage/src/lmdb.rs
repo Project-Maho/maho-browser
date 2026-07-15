@@ -4,6 +4,8 @@ use std::path::Path;
 
 use crate::StorageError;
 
+pub type SnapshotEntry = (Vec<u8>, Vec<u8>);
+
 /// LMDB storage for hot data (tab state, space state, session data)
 pub struct LmdbStorage {
     env: Env,
@@ -58,9 +60,9 @@ impl LmdbStorage {
     /// `(key, value)` rows, no write txn / db creation / put / delete / cursor
     /// mutation. Value bytes match [`LmdbStorage::get`]; per-tab
     /// `scroll_position` lives inside the `tabs` JSON value, not a separate key.
-    pub fn snapshot_entries(&self) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StorageError> {
+    pub fn snapshot_entries(&self) -> Result<Vec<SnapshotEntry>, StorageError> {
         let rtxn = self.env.read_txn()?;
-        let mut entries: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        let mut entries: Vec<SnapshotEntry> = Vec::new();
         for item in self.db.iter(&rtxn)? {
             let (key, value) = item?;
             entries.push((key.as_bytes().to_vec(), value));
@@ -70,17 +72,17 @@ impl LmdbStorage {
     }
 
     pub fn save_preview(&self, tab_id: &str, image_data: &[u8]) -> Result<(), StorageError> {
-        let key = format!("preview:{}", tab_id);
+        let key = format!("preview:{tab_id}");
         self.put(&key, image_data)
     }
 
     pub fn load_preview(&self, tab_id: &str) -> Result<Option<Vec<u8>>, StorageError> {
-        let key = format!("preview:{}", tab_id);
+        let key = format!("preview:{tab_id}");
         self.get(&key)
     }
 
     pub fn delete_preview(&self, tab_id: &str) -> Result<bool, StorageError> {
-        let key = format!("preview:{}", tab_id);
+        let key = format!("preview:{tab_id}");
         self.delete(&key)
     }
 }

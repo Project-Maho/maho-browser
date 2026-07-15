@@ -21,10 +21,10 @@ TEST_F(MahoCommandActionHandlerTest, ForgedActionIdsAreDenied) {
   }
 
   for (const char* forged :
-       {"new_tab", "new_incognito", "open_history", "open_bookmarks",
-        "next_space", "select_tab_1", "add_split_view", "remove_split_view",
-        "ai_panel", "settings", "little_arc", "new_note", "", "toggle_sidebarX",
-        "CLOSE_TAB", "print", "action:close_tab"}) {
+        {"new_tab", "new_incognito", "open_history", "open_bookmarks",
+         "next_space", "select_tab_1", "add_split_view", "remove_split_view",
+         "ai_panel", "settings", "little_arc", "", "toggle_sidebarX",
+         "CLOSE_TAB", "print", "action:close_tab"}) {
     EXPECT_FALSE(IsPrimaryIncognitoAllowedActionId(forged)) << forged;
   }
 }

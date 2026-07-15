@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::autofill::{AutofillAddress, AutofillPayment};
+use crate::boost::Boost;
 use crate::chat::ChatRequestContext;
 use crate::common::{ImageData, Url};
 use crate::identifiers::{BoostId, DownloadId, FolderId, ProfileId, SpaceId, TabId, WindowId};
@@ -10,12 +11,11 @@ use crate::profile::ProfileConfig;
 use crate::search_engine::SearchEngineViewModel;
 use crate::settings::Settings;
 use crate::space::{ActiveSpaceModel, SpaceColor, SpaceConfigUpdate};
-use crate::tab::{TabLifecycleState, TabRole};
-use crate::boost::Boost;
 use crate::split_view::SplitViewConfig;
+use crate::tab::{TabLifecycleState, TabRole};
 use crate::traits::shell_renderer::{
-    DownloadViewModel, FolderViewModel, NotificationViewModel, PermissionRequest,
-    SpaceViewModel, SuggestionViewModel, TabStateUpdate, TabViewModel,
+    DownloadViewModel, FolderViewModel, NotificationViewModel, PermissionRequest, SpaceViewModel,
+    SuggestionViewModel, TabStateUpdate, TabViewModel,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -120,21 +120,11 @@ pub enum LLMRequestType {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LLMRequestContext {
-    TidyTabTitle {
-        tab_id: TabId,
-    },
-    TidyDownload {
-        download_id: DownloadId,
-    },
-    PagePreview {
-        url: Url,
-    },
-    TidyTabs {
-        space_id: SpaceId,
-    },
-    Chat {
-        chat: ChatRequestContext,
-    },
+    TidyTabTitle { tab_id: TabId },
+    TidyDownload { download_id: DownloadId },
+    PagePreview { url: Url },
+    TidyTabs { space_id: SpaceId },
+    Chat { chat: Box<ChatRequestContext> },
 }
 
 pub const SPLIT_VIEW_SCHEMA_VERSION: u32 = 1;
@@ -561,12 +551,15 @@ pub fn set_core_update_callback<F>(callback: F)
 where
     F: Fn(CoreUpdate) + Send + Sync + 'static,
 {
-    let mut lock = CORE_UPDATE_CALLBACK.get_or_init(|| Mutex::new(None)).lock().unwrap();
+    let mut lock = CORE_UPDATE_CALLBACK
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     *lock = Some(Box::new(callback));
 }
 
 pub fn emit_core_update(update: CoreUpdate) {
-    if let Some(ref lock) = CORE_UPDATE_CALLBACK.get() {
+    if let Some(lock) = CORE_UPDATE_CALLBACK.get() {
         if let Ok(guard) = lock.lock() {
             if let Some(ref cb) = *guard {
                 cb(update);
@@ -574,4 +567,3 @@ pub fn emit_core_update(update: CoreUpdate) {
         }
     }
 }
-

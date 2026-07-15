@@ -1,10 +1,10 @@
 use maho_core::maho_core::MahoCore;
-use maho_types::events::shell_event::ShellEvent;
-use maho_types::events::core_update::CoreUpdate;
-use maho_types::identifiers::TabId;
 use maho_types::common::Url;
+use maho_types::events::core_update::CoreUpdate;
+use maho_types::events::shell_event::ShellEvent;
+use maho_types::identifiers::TabId;
 use maho_types::space::RootItem;
-use maho_types::tab::{TabRole, TabLifecycleState};
+use maho_types::tab::{TabLifecycleState, TabRole};
 
 fn create_tab_id(core: &mut MahoCore, url: &str) -> TabId {
     let space_id = core.get_active_space_id().clone();
@@ -16,10 +16,13 @@ fn create_tab_id(core: &mut MahoCore, url: &str) -> TabId {
         window_id: None,
         is_private: false,
     });
-    updates.iter().find_map(|u| match u {
-        CoreUpdate::TabCreated { tab } => Some(tab.id.clone()),
-        _ => None,
-    }).expect("TabCreated event not found")
+    updates
+        .iter()
+        .find_map(|u| match u {
+            CoreUpdate::TabCreated { tab } => Some(tab.id.clone()),
+            _ => None,
+        })
+        .expect("TabCreated event not found")
 }
 
 #[test]
@@ -32,7 +35,9 @@ fn test_favorites_regression_unique_identities() {
 
     // 2. Favorite tab A (in B-arch this transitions its role to Favorite,
     // and it remains a separate tab identity)
-    core.handle_event(ShellEvent::FavoriteTab { tab_id: tab_a_id.clone() });
+    core.handle_event(ShellEvent::FavoriteTab {
+        tab_id: tab_a_id.clone(),
+    });
 
     // 3. Create tab B (Normal tab with same URL)
     let tab_b_id = create_tab_id(&mut core, "https://example.com");
@@ -73,8 +78,12 @@ fn test_surface_duplication_absence_property() {
     }
 
     // Favorite 2 of them
-    core.handle_event(ShellEvent::FavoriteTab { tab_id: tabs[0].clone() });
-    core.handle_event(ShellEvent::FavoriteTab { tab_id: tabs[2].clone() });
+    core.handle_event(ShellEvent::FavoriteTab {
+        tab_id: tabs[0].clone(),
+    });
+    core.handle_event(ShellEvent::FavoriteTab {
+        tab_id: tabs[2].clone(),
+    });
 
     // Assert surface duplication absence
     let favorites = core.get_favorite_tabs(&space_id);
@@ -85,7 +94,11 @@ fn test_surface_duplication_absence_property() {
             maho_types::space::RootItem::Tab(tid) => tid == &fav.id,
             _ => false,
         });
-        assert!(!is_in_root, "TabId {:?} found in both favorites list and root list!", fav.id);
+        assert!(
+            !is_in_root,
+            "TabId {:?} found in both favorites list and root list!",
+            fav.id
+        );
     }
 }
 
@@ -109,7 +122,9 @@ fn test_role_exclusivity_contract() {
     assert!(!tab.role.is_favorite());
 
     // Transition to Favorite
-    core.handle_event(ShellEvent::FavoriteTab { tab_id: tab_id.clone() });
+    core.handle_event(ShellEvent::FavoriteTab {
+        tab_id: tab_id.clone(),
+    });
     let tab = core.tab_manager().get_tab(&tab_id).unwrap();
     assert!(matches!(tab.role, TabRole::Favorite { .. }));
     assert!(tab.role.is_favorite());
@@ -167,8 +182,13 @@ fn test_favorite_close_leaves_no_ghost() {
     let mut core = MahoCore::new();
     let space_id = core.get_active_space_id().clone();
     let tab_id = create_tab_id(&mut core, "https://example.com");
-    core.handle_event(ShellEvent::FavoriteTab { tab_id: tab_id.clone() });
-    assert!(core.get_favorite_tabs(&space_id).iter().any(|t| t.id == tab_id));
+    core.handle_event(ShellEvent::FavoriteTab {
+        tab_id: tab_id.clone(),
+    });
+    assert!(core
+        .get_favorite_tabs(&space_id)
+        .iter()
+        .any(|t| t.id == tab_id));
 
     core.handle_event(ShellEvent::CloseTab {
         tab_id: tab_id.clone(),
@@ -177,11 +197,16 @@ fn test_favorite_close_leaves_no_ghost() {
 
     // Under ADR-11 close protection, the favorite tab persists as suspended
     assert!(
-        core.get_favorite_tabs(&space_id).iter().any(|t| t.id == tab_id),
+        core.get_favorite_tabs(&space_id)
+            .iter()
+            .any(|t| t.id == tab_id),
         "closing a favorited tab must retain it in the favorites grid (suspended)"
     );
     assert!(
-        matches!(core.tab_manager().get_tab(&tab_id).unwrap().state, TabLifecycleState::Suspended { .. }),
+        matches!(
+            core.tab_manager().get_tab(&tab_id).unwrap().state,
+            TabLifecycleState::Suspended { .. }
+        ),
         "closed favorite must be transitioned to Suspended state"
     );
 }
@@ -192,8 +217,12 @@ fn test_is_tab_pinned_strict_excludes_favorite() {
     let pinned = create_tab_id(&mut core, "https://pinned.example");
     let fav = create_tab_id(&mut core, "https://fav.example");
     let normal = create_tab_id(&mut core, "https://normal.example");
-    core.handle_event(ShellEvent::PinTab { tab_id: pinned.clone() });
-    core.handle_event(ShellEvent::FavoriteTab { tab_id: fav.clone() });
+    core.handle_event(ShellEvent::PinTab {
+        tab_id: pinned.clone(),
+    });
+    core.handle_event(ShellEvent::FavoriteTab {
+        tab_id: fav.clone(),
+    });
 
     assert!(core.is_tab_pinned(pinned.as_ref()));
     assert!(
@@ -207,13 +236,20 @@ fn test_is_tab_pinned_strict_excludes_favorite() {
 fn test_activate_suspended_favorite_resolves_to_active() {
     let mut core = MahoCore::new();
     let tab_id = create_tab_id(&mut core, "https://example.com");
-    core.handle_event(ShellEvent::FavoriteTab { tab_id: tab_id.clone() });
+    core.handle_event(ShellEvent::FavoriteTab {
+        tab_id: tab_id.clone(),
+    });
 
     // Suspend the favorite tab
-    core.handle_event(ShellEvent::SuspendTab { tab_id: tab_id.clone() });
-    
+    core.handle_event(ShellEvent::SuspendTab {
+        tab_id: tab_id.clone(),
+    });
+
     let tab = core.tab_manager().get_tab(&tab_id).unwrap();
-    assert!(matches!(tab.state, maho_types::tab::TabLifecycleState::Suspended { .. }));
+    assert!(matches!(
+        tab.state,
+        maho_types::tab::TabLifecycleState::Suspended { .. }
+    ));
 
     // Listen to updates
     let updates = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -223,19 +259,30 @@ fn test_activate_suspended_favorite_resolves_to_active() {
     }));
 
     // Activate the favorite tab
-    core.handle_event(ShellEvent::ActivateTab { tab_id: tab_id.clone() });
-    
+    core.handle_event(ShellEvent::ActivateTab {
+        tab_id: tab_id.clone(),
+    });
+
     // Verify it transitions back to Active
     let tab = core.tab_manager().get_tab(&tab_id).unwrap();
-    assert!(matches!(tab.state, maho_types::tab::TabLifecycleState::Active));
+    assert!(matches!(
+        tab.state,
+        maho_types::tab::TabLifecycleState::Active
+    ));
 
     // Verify TabLifecycleChanged event is generated
     let collected = updates.borrow();
     let has_lifecycle_change = collected.iter().any(|u| match u {
-        CoreUpdate::TabLifecycleChanged { tab_id: tid, state: maho_types::tab::TabLifecycleState::Active } => tid == &tab_id,
+        CoreUpdate::TabLifecycleChanged {
+            tab_id: tid,
+            state: maho_types::tab::TabLifecycleState::Active,
+        } => tid == &tab_id,
         _ => false,
     });
-    assert!(has_lifecycle_change, "ActivateTab must emit TabLifecycleChanged to Active");
+    assert!(
+        has_lifecycle_change,
+        "ActivateTab must emit TabLifecycleChanged to Active"
+    );
 }
 
 /// Transitioning a Normal tab to Favorite must seed `pinned_url` from the
@@ -248,7 +295,10 @@ fn favorite_transition_seeds_pinned_url() {
     core.transition_tab_role(&id, TabRole::Favorite { order: 1 });
 
     let tab = core.tab_manager().get_tab(&id).unwrap();
-    assert!(tab.pinned_url.is_some(), "favorite transition must seed pinned_url");
+    assert!(
+        tab.pinned_url.is_some(),
+        "favorite transition must seed pinned_url"
+    );
     assert_eq!(tab.pinned_url.as_ref(), Some(&tab.url));
 }
 
@@ -267,8 +317,14 @@ fn same_role_transition_is_noop() {
     let updates = core.transition_tab_role(&id, TabRole::Favorite { order: 1 });
     let after = core.tab_manager().get_tab(&id).unwrap().pinned_url.clone();
 
-    assert_eq!(before, after, "pinned_url must be unchanged on same-role transition");
-    assert!(updates.is_empty(), "same-role transition must emit no CoreUpdate");
+    assert_eq!(
+        before, after,
+        "pinned_url must be unchanged on same-role transition"
+    );
+    assert!(
+        updates.is_empty(),
+        "same-role transition must emit no CoreUpdate"
+    );
 }
 
 /// Favoriting a tab that currently lives inside a folder must decouple it from
@@ -387,7 +443,10 @@ fn load_state_backfills_pinned_url() {
     let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
     core.load_state().expect("state should restore");
 
-    let pinned = core.tab_manager().get_tab(&TabId::new("tab-pinned")).unwrap();
+    let pinned = core
+        .tab_manager()
+        .get_tab(&TabId::new("tab-pinned"))
+        .unwrap();
     assert_eq!(
         pinned.pinned_url.as_ref(),
         Some(&pinned.url),
@@ -401,8 +460,14 @@ fn load_state_backfills_pinned_url() {
         "favorite tab pinned_url must be backfilled from url"
     );
 
-    let normal = core.tab_manager().get_tab(&TabId::new("tab-normal")).unwrap();
-    assert_eq!(normal.pinned_url, None, "normal tab pinned_url must stay None");
+    let normal = core
+        .tab_manager()
+        .get_tab(&TabId::new("tab-normal"))
+        .unwrap();
+    assert_eq!(
+        normal.pinned_url, None,
+        "normal tab pinned_url must stay None"
+    );
 }
 
 /// `is_tab_close_protected` must report true for BOTH Pinned and Favorite tabs
@@ -413,8 +478,12 @@ fn is_tab_close_protected_true_for_pinned_and_favorite() {
     let pinned = create_tab_id(&mut core, "https://pinned.example");
     let fav = create_tab_id(&mut core, "https://fav.example");
     let normal = create_tab_id(&mut core, "https://normal.example");
-    core.handle_event(ShellEvent::PinTab { tab_id: pinned.clone() });
-    core.handle_event(ShellEvent::FavoriteTab { tab_id: fav.clone() });
+    core.handle_event(ShellEvent::PinTab {
+        tab_id: pinned.clone(),
+    });
+    core.handle_event(ShellEvent::FavoriteTab {
+        tab_id: fav.clone(),
+    });
 
     assert!(core.is_tab_close_protected(pinned.as_ref()));
     assert!(core.is_tab_close_protected(fav.as_ref()));

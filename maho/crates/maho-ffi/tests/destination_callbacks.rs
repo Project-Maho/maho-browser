@@ -20,21 +20,29 @@ struct CallbackCounters {
 }
 
 unsafe extern "C" fn cookie_cb(
-    host: *const c_char, name: *const c_char, value: *const c_char, path: *const c_char,
-    expires: i64, _is_secure: bool, _is_httponly: bool, _same_site: i32,
+    host: *const c_char,
+    name: *const c_char,
+    value: *const c_char,
+    path: *const c_char,
+    expires: i64,
+    _is_secure: bool,
+    _is_httponly: bool,
+    _same_site: i32,
     user_data: *mut c_void,
 ) {
     let ctrs = &*(user_data as *const CallbackCounters);
     ctrs.cookie_calls.fetch_add(1, Ordering::SeqCst);
-    *ctrs.last_cookie_host.lock().unwrap() =
-        CStr::from_ptr(host).to_str().unwrap().to_string();
+    *ctrs.last_cookie_host.lock().unwrap() = CStr::from_ptr(host).to_str().unwrap().to_string();
     assert!(!name.is_null() && !value.is_null() && !path.is_null());
     assert!(expires >= 0);
 }
 
 unsafe extern "C" fn autofill_cb(
-    field_name: *const c_char, value: *const c_char,
-    _times_used: i32, _first_used: i64, _last_used: i64,
+    field_name: *const c_char,
+    value: *const c_char,
+    _times_used: i32,
+    _first_used: i64,
+    _last_used: i64,
     user_data: *mut c_void,
 ) {
     let ctrs = &*(user_data as *const CallbackCounters);
@@ -45,11 +53,15 @@ unsafe extern "C" fn autofill_cb(
 }
 
 unsafe extern "C" fn favicon_cb(
-    url: *const c_char, png_bytes: *const u8, png_len: usize, user_data: *mut c_void,
+    url: *const c_char,
+    png_bytes: *const u8,
+    png_len: usize,
+    user_data: *mut c_void,
 ) {
     let ctrs = &*(user_data as *const CallbackCounters);
     ctrs.favicon_calls.fetch_add(1, Ordering::SeqCst);
-    ctrs.last_favicon_len.store(png_len as u32, Ordering::SeqCst);
+    ctrs.last_favicon_len
+        .store(png_len as u32, Ordering::SeqCst);
     assert!(!url.is_null());
     assert!(!png_bytes.is_null() || png_len == 0);
 }
@@ -76,7 +88,16 @@ fn destination_callbacks_dispatch_through_ffi() {
         )
     };
 
-    assert!(dest.add_cookie("example.com", "session", "abc", "/", 1_700_000_000, true, true, 1));
+    assert!(dest.add_cookie(
+        "example.com",
+        "session",
+        "abc",
+        "/",
+        1_700_000_000,
+        true,
+        true,
+        1
+    ));
     assert!(dest.add_autofill("email", "user@example.com", 5, 1000, 2000));
     let png = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
     assert!(dest.add_favicon("https://example.com/favicon.ico", &png));
@@ -88,14 +109,20 @@ fn destination_callbacks_dispatch_through_ffi() {
     assert_eq!(*counters.last_autofill_field.lock().unwrap(), "email");
     assert_eq!(counters.last_favicon_len.load(Ordering::SeqCst), 8);
 
-    unsafe { let _ = Arc::from_raw(counters_ptr as *const CallbackCounters); }
+    unsafe {
+        let _ = Arc::from_raw(counters_ptr as *const CallbackCounters);
+    }
 }
 
 #[test]
 fn destination_returns_false_when_callbacks_unset() {
     let dest = unsafe {
         MahoCoreDestination::new_with_callbacks(
-            std::ptr::null_mut(), None, None, None, std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            None,
+            None,
+            None,
+            std::ptr::null_mut(),
         )
     };
     assert!(!dest.add_cookie("a", "b", "c", "/", 0, false, false, 0));
@@ -128,5 +155,7 @@ fn destination_handles_null_bytes_in_strings_gracefully() {
     assert!(!dest.add_cookie("host\0with\0nulls", "n", "v", "/", 0, false, false, 0));
     assert_eq!(counters.cookie_calls.load(Ordering::SeqCst), 0);
 
-    unsafe { let _ = Arc::from_raw(counters_ptr as *const CallbackCounters); }
+    unsafe {
+        let _ = Arc::from_raw(counters_ptr as *const CallbackCounters);
+    }
 }
