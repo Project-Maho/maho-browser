@@ -20,6 +20,7 @@
 #include "base/strings/string_util.h"
 #include "base/task/thread_pool.h"
 #include "base/base64.h"
+#include "base/uuid.h"
 #include "components/os_crypt/async/browser/os_crypt_async.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
@@ -351,7 +352,7 @@ std::vector<maho_settings::mojom::ATCRulePtr> BuildATCRulesOnCoreSequence() {
     if (!dict) continue;
     const std::string* id = dict->FindString("id");
     const std::string* pattern = dict->FindString("url_pattern");
-    const std::string* target = dict->FindString("target_space_id");
+    const std::string* target = dict->FindString("space_id");
     std::optional<bool> enabled = dict->FindBool("enabled");
     if (!id || !pattern || !target) continue;
 
@@ -372,27 +373,28 @@ maho_settings::mojom::ATCRulePtr AddATCRuleOnCoreSequence(
   MahoCore* core = maho::GetCore();
   if (!core) return nullptr;
 
+  // The Rust ATCRule contract requires id/name/enabled and names the space
+  // field `space_id`. Generate the id here so the core echoes it back.
+  const std::string id = base::Uuid::GenerateRandomV4().AsLowercaseString();
+
   base::DictValue rule_dict;
+  rule_dict.Set("id", id);
+  rule_dict.Set("name", url_pattern);
+  rule_dict.Set("space_id", target_space_id);
   rule_dict.Set("url_pattern", url_pattern);
-  rule_dict.Set("target_space_id", target_space_id);
+  rule_dict.Set("enabled", true);
   std::string rule_json;
   base::JSONWriter::Write(rule_dict, &rule_json);
 
+  // maho_core_add_atc_rule returns the bare rule id string (not JSON).
   char* result_str = maho_core_add_atc_rule(core, rule_json.c_str());
   if (!result_str) return nullptr;
-  std::string result(result_str);
+  std::string returned_id(result_str);
   maho_string_free(result_str);
-
-  std::optional<base::Value> parsed =
-      base::JSONReader::Read(result, base::JSON_PARSE_RFC);
-  if (!parsed || !parsed->is_dict()) return nullptr;
-
-  const auto& dict = parsed->GetDict();
-  const std::string* id = dict.FindString("id");
-  if (!id) return nullptr;
+  if (returned_id.empty()) return nullptr;
 
   auto rule = maho_settings::mojom::ATCRule::New();
-  rule->id = *id;
+  rule->id = returned_id;
   rule->url_pattern = url_pattern;
   rule->target_space_id = target_space_id;
   rule->enabled = true;
