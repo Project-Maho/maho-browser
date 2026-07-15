@@ -1,0 +1,46 @@
+[package]
+name = "maho-mail-ffi"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Real mail backend FFI static lib for the Maho Mail helper process. Isolated Cargo workspace (own libsqlite3-sys) — NOT a member of maho/Cargo.toml."
+
+# Standalone workspace root. Intentionally NOT a member of maho/Cargo.toml
+# (libsqlite3-sys / bundled-sqlcipher conflict). Mirrors maho/relay/.
+[workspace]
+
+[lib]
+# staticlib -> libmaho_mail_ffi.a consumed by third_party/maho/BUILD.gn
+# rlib      -> lets the in-crate test suite link against the library.
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# Reuse the Tauri-free domain library: db (SQLCipher + migrations), models,
+# services (account/email/folder), imap_client, folder_normalize, error.
+maho-core = { path = "../../mail/crates/maho-core" }
+
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tokio-util = "0.7"
+rusqlite = { version = "0.33", features = ["bundled-sqlcipher"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+thiserror = "2"
+log = "0.4"
+futures = "0.3"
+reqwest = { version = "0.12", features = ["json", "blocking", "rustls-tls"], default-features = false }
+regex = "1"
+
+# AES-256-GCM credential decryption (mirrors maho-core credential_store scheme),
+# keyed by the INJECTED credential_key rather than the OS keyring.
+aes-gcm = "0.10"
+base64 = "0.22"
+
+[build-dependencies]
+cbindgen = "0.27"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

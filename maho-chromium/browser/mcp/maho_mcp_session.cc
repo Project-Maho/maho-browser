@@ -42,6 +42,11 @@ namespace {
 constexpr char kMcpProtocolVersion[] = "2025-03-26";
 constexpr char kServerName[] = "maho-browser";
 constexpr char kServerVersion[] = "0.4.1";
+constexpr char kMailReadBrokerUnavailable[] = "Mail read broker unavailable";
+constexpr char kMailExtractOtpUnavailable[] =
+    "mail_extract_otp is not served by the mail read broker in this build; "
+    "one-time passwords are delivered through the browser OTP push/arbitration "
+    "path.";
 
 MahoMcpBrowserDelegate* g_browser_delegate = nullptr;
 
@@ -81,6 +86,131 @@ std::optional<base::Value> CloneMessageId(
     return std::nullopt;
   }
   return id->Clone();
+}
+
+// T8: build the completion for an async mail read. On broker failure it emits a
+// -32000; on success it forwards the durable JSON broker payload verbatim as
+// MCP text content so the browser side never has to reparse it.
+base::OnceCallback<void(bool, std::string)> MakeMailReadCompletion(
+    std::optional<base::Value> msg_id,
+    MahoMcpSession::DeferredResponseSender sender) {
+  return base::BindOnce(
+      [](std::optional<base::Value> id,
+         MahoMcpSession::DeferredResponseSender sender, bool ok,
+         std::string result_json) {
+        if (!ok) {
+          sender.Run(BuildJsonRpcErrorLine(
+              std::move(id), -32000,
+              result_json.empty() ? "Mail read failed"
+                                   : std::move(result_json)));
+          return;
+        }
+        base::DictValue text_item;
+        text_item.Set("type", "text");
+        text_item.Set("text", std::move(result_json));
+        base::ListValue content;
+        content.Append(std::move(text_item));
+        base::DictValue result;
+        result.Set("content", std::move(content));
+        sender.Run(BuildJsonRpcSuccessLine(std::move(id),
+                                           base::Value(std::move(result))));
+      },
+      std::move(msg_id), std::move(sender));
+}
+
+const std::string* FindRequiredStringArgument(
+    const base::DictValue* arguments,
+    const char* name) {
+  if (!arguments) {
+    return nullptr;
+  }
+  const std::string* value = arguments->FindString(name);
+  if (!value || value->empty()) {
+    return nullptr;
+  }
+  return value;
+}
+
+std::string RequiredStringArgumentMessage(const char* name) {
+  return std::string("Invalid params: ") + name + " required";
+}
+
+bool ReadOptionalNonNegativeIntArgument(const base::DictValue* arguments,
+                                        const char* name,
+                                        int default_value,
+                                        int* out,
+                                        std::string* error_message) {
+  const base::Value* raw = arguments ? arguments->Find(name) : nullptr;
+  if (!raw) {
+    *out = default_value;
+    return true;
+  }
+  std::optional<int> value = arguments->FindInt(name);
+  if (!value.has_value()) {
+    *error_message = std::string("Invalid params: ") + name +
+                     " must be a non-negative integer";
+    return false;
+  }
+  if (*value < 0) {
+    *error_message = std::string("Invalid params: ") + name +
+                     " must be a non-negative integer";
+    return false;
+  }
+  *out = *value;
+  return true;
+}
+
+bool AddOptionalStringArgument(const base::DictValue* arguments,
+                               const char* name,
+                               base::DictValue* out,
+                               std::string* error_message) {
+  const base::Value* raw = arguments ? arguments->Find(name) : nullptr;
+  if (!raw) {
+    return true;
+  }
+  const std::string* value = arguments->FindString(name);
+  if (!value) {
+    *error_message = std::string("Invalid params: ") + name +
+                     " must be a string";
+    return false;
+  }
+  out->Set(name, *value);
+  return true;
+}
+
+bool BuildMailSearchQueryJson(const base::DictValue* arguments,
+                              std::string* query_json,
+                              std::string* error_message) {
+  const std::string* query = FindRequiredStringArgument(arguments, "query");
+  if (!query) {
+    *error_message = RequiredStringArgumentMessage("query");
+    return false;
+  }
+
+  base::DictValue query_object;
+  query_object.Set("query", *query);
+  if (!AddOptionalStringArgument(arguments, "account_id", &query_object,
+                                 error_message)) {
+    return false;
+  }
+  if (!AddOptionalStringArgument(arguments, "folder_id", &query_object,
+                                 error_message)) {
+    return false;
+  }
+
+  int limit = 50;
+  int offset = 0;
+  if (!ReadOptionalNonNegativeIntArgument(arguments, "limit", 50, &limit,
+                                          error_message) ||
+      !ReadOptionalNonNegativeIntArgument(arguments, "offset", 0, &offset,
+                                          error_message)) {
+    return false;
+  }
+  query_object.Set("limit", limit);
+  query_object.Set("offset", offset);
+
+  base::JSONWriter::Write(base::Value(std::move(query_object)), query_json);
+  return true;
 }
 
 bool TabExists(int tab_id, const std::vector<MahoMcpSession::TabInfo>& fallback_tabs) {
@@ -670,6 +800,58 @@ void MahoMcpSession::HandleActiveMethod(const McpJsonRpcMessage& msg,
     }
     {
       base::DictValue t;
+      t.Set("name", "mail_list_accounts");
+      t.Set("description", "List mail accounts available to the mail read broker.");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "mail_list_folders");
+      t.Set("description", "List folders for a mail account. Args: account_id (string).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "mail_list_emails");
+      t.Set("description",
+            "List emails in a folder. Args: account_id (string), "
+            "folder_id (string), limit (int, optional, default 50), "
+            "offset (int, optional, default 0).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "mail_get_email");
+      t.Set("description", "Get a single email by id. Args: email_id (string).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "mail_search_emails");
+      t.Set("description",
+            "Search emails. Args: query (string), account_id (string, "
+            "optional), folder_id (string, optional), limit (int, optional, "
+            "default 50), offset (int, optional, default 0).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "mail_list_thread");
+      t.Set("description",
+            "List a mail thread. Args: account_id (string), message_id (string).");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
+      t.Set("name", "mail_extract_otp");
+      t.Set("description",
+            "Temporary OTP extraction placeholder. This build returns a "
+            "documented error because OTPs are delivered by the browser "
+            "push/arbitration path.");
+      tools.Append(base::Value(std::move(t)));
+    }
+    {
+      base::DictValue t;
       t.Set("name", "browser_acquire_lease");
       t.Set("description",
             "Acquire exclusive lease on a tab. Args: tab_id (int), "
@@ -923,6 +1105,25 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       g_browser_delegate && IsTabTargetTool(*tool_name);
   const int resolved_tab_id =
       use_resolved_target ? last_resolved_target_.tab_id : 0;
+
+  auto reject_invalid_mail_params = [&](std::string message) {
+    responses.push_back(framer_.BuildErrorResponse(msg.id, -32602, message));
+  };
+  auto reject_mail_broker_unavailable = [&]() {
+    responses.push_back(framer_.BuildErrorResponse(
+        msg.id, -32000, kMailReadBrokerUnavailable));
+  };
+  auto mail_broker_ready = [&]() {
+    if (g_browser_delegate && deferred_response_sender_) {
+      return true;
+    }
+    reject_mail_broker_unavailable();
+    return false;
+  };
+  auto make_mail_read_completion = [&]() {
+    DeferredResponseSender sender = deferred_response_sender_;
+    return MakeMailReadCompletion(CloneMessageId(msg.id), std::move(sender));
+  };
 
   if (*tool_name == "ping") {
     base::DictValue result;
@@ -1197,6 +1398,121 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
                   BuildJsonRpcSuccessLine(std::move(msg_id), std::move(result)));
             },
             CloneMessageId(msg.id), std::move(sender)));
+    return;
+  }
+
+  if (*tool_name == "mail_extract_otp") {
+    responses.push_back(framer_.BuildErrorResponse(
+        msg.id, -32000, kMailExtractOtpUnavailable));
+    return;
+  }
+
+  if (*tool_name == "mail_list_accounts") {
+    if (params.Find("arguments") && !arguments) {
+      reject_invalid_mail_params("Invalid params: arguments must be an object");
+      return;
+    }
+    if (!mail_broker_ready()) {
+      return;
+    }
+    g_browser_delegate->MailListAccounts(make_mail_read_completion());
+    return;
+  }
+
+  if (*tool_name == "mail_list_folders") {
+    const std::string* account_id =
+        FindRequiredStringArgument(arguments, "account_id");
+    if (!account_id) {
+      reject_invalid_mail_params(RequiredStringArgumentMessage("account_id"));
+      return;
+    }
+    if (!mail_broker_ready()) {
+      return;
+    }
+    g_browser_delegate->MailListFolders(*account_id,
+                                        make_mail_read_completion());
+    return;
+  }
+
+  if (*tool_name == "mail_list_emails") {
+    const std::string* account_id =
+        FindRequiredStringArgument(arguments, "account_id");
+    const std::string* folder_id =
+        FindRequiredStringArgument(arguments, "folder_id");
+    if (!account_id) {
+      reject_invalid_mail_params(RequiredStringArgumentMessage("account_id"));
+      return;
+    }
+    if (!folder_id) {
+      reject_invalid_mail_params(RequiredStringArgumentMessage("folder_id"));
+      return;
+    }
+
+    int limit = 50;
+    int offset = 0;
+    std::string error_message;
+    if (!ReadOptionalNonNegativeIntArgument(arguments, "limit", 50, &limit,
+                                            &error_message) ||
+        !ReadOptionalNonNegativeIntArgument(arguments, "offset", 0, &offset,
+                                            &error_message)) {
+      reject_invalid_mail_params(std::move(error_message));
+      return;
+    }
+    if (!mail_broker_ready()) {
+      return;
+    }
+    g_browser_delegate->MailListEmails(*account_id, *folder_id, limit, offset,
+                                       make_mail_read_completion());
+    return;
+  }
+
+  if (*tool_name == "mail_get_email") {
+    const std::string* email_id =
+        FindRequiredStringArgument(arguments, "email_id");
+    if (!email_id) {
+      reject_invalid_mail_params(RequiredStringArgumentMessage("email_id"));
+      return;
+    }
+    if (!mail_broker_ready()) {
+      return;
+    }
+    g_browser_delegate->MailGetEmail(*email_id, make_mail_read_completion());
+    return;
+  }
+
+  if (*tool_name == "mail_search_emails") {
+    std::string query_json;
+    std::string error_message;
+    if (!BuildMailSearchQueryJson(arguments, &query_json, &error_message)) {
+      reject_invalid_mail_params(std::move(error_message));
+      return;
+    }
+    if (!mail_broker_ready()) {
+      return;
+    }
+    g_browser_delegate->MailSearchEmails(query_json,
+                                         make_mail_read_completion());
+    return;
+  }
+
+  if (*tool_name == "mail_list_thread") {
+    const std::string* account_id =
+        FindRequiredStringArgument(arguments, "account_id");
+    const std::string* message_id =
+        FindRequiredStringArgument(arguments, "message_id");
+    if (!account_id) {
+      reject_invalid_mail_params(RequiredStringArgumentMessage("account_id"));
+      return;
+    }
+    if (!message_id) {
+      reject_invalid_mail_params(RequiredStringArgumentMessage("message_id"));
+      return;
+    }
+    if (!mail_broker_ready()) {
+      return;
+    }
+    g_browser_delegate->MailListThread(*account_id, *message_id,
+                                       make_mail_read_completion());
     return;
   }
 
@@ -2418,6 +2734,39 @@ std::string MahoMcpBrowserDelegate::ListRoutines() {
 void MahoMcpBrowserDelegate::RunRoutine(const std::string& id,
                                         RunRoutineCallback callback) {
   std::move(callback).Run(false, "Routines feature unavailable");
+}
+
+void MahoMcpBrowserDelegate::MailListAccounts(MailReadCallback callback) {
+  std::move(callback).Run(false, "Mail read broker unavailable");
+}
+
+void MahoMcpBrowserDelegate::MailListFolders(const std::string& account_id,
+                                             MailReadCallback callback) {
+  std::move(callback).Run(false, "Mail read broker unavailable");
+}
+
+void MahoMcpBrowserDelegate::MailListEmails(const std::string& account_id,
+                                            const std::string& folder_id,
+                                            int64_t limit,
+                                            int64_t offset,
+                                            MailReadCallback callback) {
+  std::move(callback).Run(false, "Mail read broker unavailable");
+}
+
+void MahoMcpBrowserDelegate::MailGetEmail(const std::string& email_id,
+                                          MailReadCallback callback) {
+  std::move(callback).Run(false, "Mail read broker unavailable");
+}
+
+void MahoMcpBrowserDelegate::MailSearchEmails(const std::string& query_json,
+                                              MailReadCallback callback) {
+  std::move(callback).Run(false, "Mail read broker unavailable");
+}
+
+void MahoMcpBrowserDelegate::MailListThread(const std::string& account_id,
+                                            const std::string& message_id,
+                                            MailReadCallback callback) {
+  std::move(callback).Run(false, "Mail read broker unavailable");
 }
 
 MahoMcpTargetResolution MahoMcpBrowserDelegate::ResolveTabTarget(

@@ -40,6 +40,9 @@
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_routines_scheduler.h"
 #include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/mail_helper/maho_mail_helper_version.h"
+#include "maho/browser/mail_helper/maho_mail_service.h"
+#include "maho/browser/mail_helper/maho_mail_service_factory.h"
 #include "maho/browser/ui/views/side_panel/maho_extension_side_panel_coordinator.h"  // nogncheck
 
 #include "maho/browser/maho_tab_registry.h"
@@ -459,6 +462,76 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
         std::move(callback), base::SequencedTaskRunner::GetCurrentDefault()};
     maho_routines_run(core, id.c_str(), tier, &OnRoutineRunComplete,
                       &OnRoutineRunError, ctx);
+  }
+
+  void MailListAccounts(
+      maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
+    maho::MahoMailService* service = GetMailService();
+    if (!service) {
+      std::move(callback).Run(false, "Mail service unavailable");
+      return;
+    }
+    service->ListAccounts(std::move(callback));
+  }
+
+  void MailListFolders(
+      const std::string& account_id,
+      maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
+    maho::MahoMailService* service = GetMailService();
+    if (!service) {
+      std::move(callback).Run(false, "Mail service unavailable");
+      return;
+    }
+    service->ListFolders(account_id, std::move(callback));
+  }
+
+  void MailListEmails(
+      const std::string& account_id,
+      const std::string& folder_id,
+      int64_t limit,
+      int64_t offset,
+      maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
+    maho::MahoMailService* service = GetMailService();
+    if (!service) {
+      std::move(callback).Run(false, "Mail service unavailable");
+      return;
+    }
+    service->ListEmails(account_id, folder_id, limit, offset,
+                        std::move(callback));
+  }
+
+  void MailGetEmail(
+      const std::string& email_id,
+      maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
+    maho::MahoMailService* service = GetMailService();
+    if (!service) {
+      std::move(callback).Run(false, "Mail service unavailable");
+      return;
+    }
+    service->GetEmail(email_id, std::move(callback));
+  }
+
+  void MailSearchEmails(
+      const std::string& query_json,
+      maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
+    maho::MahoMailService* service = GetMailService();
+    if (!service) {
+      std::move(callback).Run(false, "Mail service unavailable");
+      return;
+    }
+    service->SearchEmails(query_json, std::move(callback));
+  }
+
+  void MailListThread(
+      const std::string& account_id,
+      const std::string& message_id,
+      maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
+    maho::MahoMailService* service = GetMailService();
+    if (!service) {
+      std::move(callback).Run(false, "Mail service unavailable");
+      return;
+    }
+    service->ListThread(account_id, message_id, std::move(callback));
   }
 
   std::vector<maho::MahoMcpSession::TabInfo> GetTabList() override {
@@ -915,6 +988,16 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
           return true;
         });
     return profile;
+  }
+
+  // Profile-keyed mail broker for the frontmost eligible profile, or nullptr.
+  // Helper teardown is owned by KeyedService::Shutdown, never by this delegate.
+  maho::MahoMailService* GetMailService() {
+    Profile* profile = GetProfile();
+    if (!profile) {
+      return nullptr;
+    }
+    return maho::MahoMailServiceFactory::GetForProfile(profile);
   }
 
   struct EligibleTab {
@@ -1878,6 +1961,37 @@ void MahoBrowserMainExtraParts::PostMainMessageLoopRun() {
   }
 }
 
+void MahoBrowserMainExtraParts::MaybeLaunchMailHelper(Profile* profile) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (!profile || !profile->IsRegularProfile()) {
+    return;
+  }
+
+  PrefService* prefs = profile->GetPrefs();
+  if (!prefs || !maho::auth::HasValidRelaySession(prefs)) {
+    LOG(INFO) << "[MahoMailService] Skipping launch; profile has no "
+                 "valid mail session.";
+    return;
+  }
+
+  maho::MahoMailService* service =
+      maho::MahoMailServiceFactory::GetForProfile(profile);
+  if (!service) {
+    return;
+  }
+
+  base::FilePath crashpad_database;
+  base::FilePath user_data_dir;
+  if (base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir)) {
+    crashpad_database = user_data_dir.AppendASCII("Crashpad");
+    base::CreateDirectory(crashpad_database);
+  }
+
+  service->EnsureHelperLaunched(maho::mail_helper::kMahoMailHelperVersion,
+                                profile->GetPath().AsUTF8Unsafe(),
+                                crashpad_database);
+}
+
 void MahoBrowserMainExtraParts::InitializeRegularServicesOnce(Profile* profile) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   regular_profile_ = profile;
@@ -1886,9 +2000,11 @@ void MahoBrowserMainExtraParts::InitializeRegularServicesOnce(Profile* profile) 
 
   base::CreateDirectory(storage_path_);
 
-  core_ = maho::core::CreateWithStorage(storage_path_.AsUTF8Unsafe());
-  if (!core_) {
-    core_ = maho::core::Create();
+  base::FilePath key_path = storage_path_.AppendASCII("maho_storage.key");
+  if (maho::core::DeriveAndSetStorageKey(key_path.AsUTF8Unsafe())) {
+    core_ = maho::core::CreateWithStorage(storage_path_.AsUTF8Unsafe());
+  } else {
+    LOG(ERROR) << "Maho storage key derivation/setting failed; password manager/persistent storage will be disabled.";
   }
 
   if (core_) {
@@ -1939,6 +2055,8 @@ void MahoBrowserMainExtraParts::InitializeRegularServicesOnce(Profile* profile) 
 
   maho::MahoUpdateManager::GetInstance()->Initialize(profile);
   maho::updates::MahoConfigManager::GetInstance()->Initialize(profile);
+
+  MaybeLaunchMailHelper(profile);
 
 
   // If user hasn't explicitly set the value, override the default to LAST

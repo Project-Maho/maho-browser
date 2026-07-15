@@ -6,6 +6,7 @@
 #define MAHO_BROWSER_MCP_MAHO_MCP_SESSION_H_
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -384,6 +385,31 @@ class MahoMcpBrowserDelegate {
       base::OnceCallback<void(bool success, std::string content_or_error)>;
   virtual std::string ListRoutines();
   virtual void RunRoutine(const std::string& id, RunRoutineCallback callback);
+
+  // Mail read broker (T8). Each read is served asynchronously and returns a
+  // JSON-encoded result string so the MCP layer forwards the durable broker
+  // payload without deserialising it on the browser side. |ok| is false on a
+  // broker failure; |result_json| then carries an optional diagnostic string.
+  // The callback may be invoked on any sequence. The default implementations
+  // report the broker as unavailable so existing test delegates that do not
+  // model a mail broker keep compiling and dispatch cleanly to a -32000.
+  using MailReadCallback =
+      base::OnceCallback<void(bool ok, std::string result_json)>;
+  virtual void MailListAccounts(MailReadCallback callback);
+  virtual void MailListFolders(const std::string& account_id,
+                               MailReadCallback callback);
+  virtual void MailListEmails(const std::string& account_id,
+                              const std::string& folder_id,
+                              int64_t limit,
+                              int64_t offset,
+                              MailReadCallback callback);
+  virtual void MailGetEmail(const std::string& email_id,
+                            MailReadCallback callback);
+  virtual void MailSearchEmails(const std::string& query_json,
+                                MailReadCallback callback);
+  virtual void MailListThread(const std::string& account_id,
+                              const std::string& message_id,
+                              MailReadCallback callback);
 
   // R-8 non-revealing target resolution. |requested_tab_id| == 0 means the
   // caller omitted the id / passed 0 (active-tab request). Production

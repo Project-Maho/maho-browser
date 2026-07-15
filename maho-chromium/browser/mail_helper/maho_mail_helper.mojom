@@ -14,8 +14,41 @@ interface MahoMailHelper {
   StopSync() => (bool success);
   StartBackfill(string account_id) => (bool success);
 
+  // Version handshake: the helper reports its compiled-in build version so the
+  // host can verify it matches the expected token and refuse to run a stale
+  // on-disk helper binary (kill + relaunch on mismatch).
+  GetVersion() => (string helper_version);
+
+  // Graceful shutdown: instruct the backend to begin draining outstanding work
+  // (e.g. IMAP IDLE / in-flight SMTP) before the terminal Shutdown() call. The
+  // host waits for the ack (bounded by a timeout) before force-terminating.
+  PrepareShutdown() => ();
+
   // Lifecycle
   Shutdown() => ();
+
+  // Read methods — all return a JSON-encoded result string so the MCP layer
+  // can forward responses without deserialising them on the browser side.
+
+  // Returns a JSON array of all configured mail accounts.
+  ListAccounts() => (bool ok, string result_json);
+
+  // Returns a JSON array of folders for the given account.
+  ListFolders(string account_id) => (bool ok, string result_json);
+
+  // Returns a paged JSON array of email headers for the given account/folder.
+  ListEmails(string account_id, string folder_id, int64 limit, int64 offset)
+      => (bool ok, string result_json);
+
+  // Returns full RFC-822 metadata and body for a single email.
+  GetEmail(string email_id) => (bool ok, string result_json);
+
+  // Executes a structured search described by a JSON query object.
+  SearchEmails(string query_json) => (bool ok, string result_json);
+
+  // Returns the ordered JSON array of messages in a conversation thread.
+  ListThread(string account_id, string message_id)
+      => (bool ok, string result_json);
 };
 
 interface MahoMailHelperClient {

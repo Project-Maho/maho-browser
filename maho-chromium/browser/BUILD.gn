@@ -6,16 +6,23 @@ source_set("maho_core_holder") {
   sources = [
     "maho_core_holder.cc",
     "maho_core_holder.h",
-    "mail_helper/maho_mail_helper_launcher.cc",
-    "mail_helper/maho_mail_helper_launcher.h",
     "mail_helper/maho_mail_arbitration_service.cc",
     "mail_helper/maho_mail_arbitration_service.h",
+  ]
+  # The launcher (and its version header) live in the reusable
+  # :maho_mail_launcher source_set rather than being compiled here directly,
+  # so the browser service and this holder share one copy. Exposed publicly
+  # because consumers of this target use the launcher + version header.
+  public_deps = [
+    "//maho/browser/mail_helper:maho_mail_launcher",
   ]
   deps = [
     "//maho/browser/mail_helper:maho_mail_helper",
     "//maho/browser/mail_helper:mojo_bindings",
     "//base",
     "//mojo/public/cpp/bindings",
+    "//mojo/public/cpp/platform",
+    "//mojo/public/cpp/system",
   ]
 }
 
@@ -544,6 +551,7 @@ source_set("maho_browser_main_extra_parts") {
   deps = [
     ":maho_core_holder",
     ":maho_extension_state_bridge",
+    ":maho_auth_utils",
     ":maho_routines_scheduler",
     ":maho_tab_id_helper",
     ":maho_tab_registry",
@@ -556,6 +564,7 @@ source_set("maho_browser_main_extra_parts") {
     "//services/network/public/mojom",
 
     "//maho/browser/importer",
+    "//maho/browser/mail_helper:maho_mail_service_factory",
     "//maho/browser/mcp:maho_mcp",
     "//maho/browser/updates:maho_updates_lib",
     "//maho/third_party/maho:maho_bridge",

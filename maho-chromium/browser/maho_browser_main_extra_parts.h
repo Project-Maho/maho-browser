@@ -40,6 +40,7 @@ class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts {
    void PostProfileInit(Profile* profile, bool is_initial_profile) override;
    void PostMainMessageLoopRun() override;
    void InitializeRegularServicesOnce(Profile* profile);
+   void MaybeLaunchMailHelper(Profile* profile);
 
    base::FilePath storage_path_;
    RAW_PTR_EXCLUSION MahoCore* core_ = nullptr;
