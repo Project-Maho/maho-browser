@@ -311,6 +311,60 @@ mod tests {
     }
 
     #[test]
+    fn set_folder_pinned_true_then_false_transition() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+
+        let folder = manager.create_folder(&space_id, "Work", false, None).unwrap();
+        assert!(!folder.is_pinned);
+
+        assert!(manager.set_folder_pinned(&space_id, &folder.id, true));
+        let space = manager.spaces.get(&space_id).unwrap();
+        assert!(
+            space.folders.iter().find(|f| f.id == folder.id).unwrap().is_pinned,
+            "Normal->Pinned must set is_pinned=true"
+        );
+
+        assert!(manager.set_folder_pinned(&space_id, &folder.id, false));
+        let space = manager.spaces.get(&space_id).unwrap();
+        assert!(
+            !space.folders.iter().find(|f| f.id == folder.id).unwrap().is_pinned,
+            "Pinned->Normal must set is_pinned=false"
+        );
+    }
+
+    #[test]
+    fn set_folder_pinned_wrong_space_is_noop() {
+        let mut manager = SpaceManager::new();
+        let active_space_id = manager.get_active_space_id().clone();
+        let other_space = manager.create_space(
+            "Other",
+            SpaceColor { hue: 10.0, saturation: 0.5, brightness: 0.5, grain: 0.0 },
+            ProfileId::new(""),
+        );
+
+        let folder = manager
+            .create_folder(&active_space_id, "Research", false, None)
+            .unwrap();
+
+        assert!(!manager.set_folder_pinned(&other_space.id, &folder.id, true));
+        let space = manager.spaces.get(&active_space_id).unwrap();
+        assert!(
+            !space.folders.iter().find(|f| f.id == folder.id).unwrap().is_pinned,
+            "wrong-space call must not mutate the folder"
+        );
+    }
+
+    #[test]
+    fn set_folder_pinned_unknown_folder_is_noop() {
+        let mut manager = SpaceManager::new();
+        let space_id = manager.get_active_space_id().clone();
+        let unknown = FolderId::generate();
+
+        assert!(!manager.set_folder_pinned(&space_id, &unknown, true));
+    }
+
+    #[test]
     fn add_tab_to_folder_adds_tab() {
         let mut manager = SpaceManager::new();
         let space_id = manager.get_active_space_id().clone();
@@ -1636,6 +1690,21 @@ impl SpaceManager {
             }
         }
         None
+    }
+
+    pub fn set_folder_pinned(
+        &mut self,
+        space_id: &SpaceId,
+        folder_id: &FolderId,
+        is_pinned: bool,
+    ) -> bool {
+        if let Some(space) = self.spaces.get_mut(space_id) {
+            if let Some(folder) = space.folders.iter_mut().find(|f| f.id == *folder_id) {
+                folder.is_pinned = is_pinned;
+                return true;
+            }
+        }
+        false
     }
 
 

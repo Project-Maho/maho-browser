@@ -1,0 +1,19 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+source_set("maho_mail") {
+  sources = [
+    "maho_mail_ui.cc",
+    "maho_mail_ui.h",
+  ]
+
+  public_deps = [
+    "//base",
+    "//content/public/browser",
+  ]
+
+  deps = [
+    "//chrome/browser/profiles:profile",
+    "//ui/webui",
+    "//url",
+  ]
+}

@@ -524,6 +524,7 @@ fn sqlite_boosts_migration_self_healing() {
 
     {
         let conn = rusqlite::Connection::open(db_path_str).unwrap();
+        conn.pragma_update(None, "key", "maho_secure_key").unwrap();
         conn.execute_batch(
             "CREATE TABLE boosts (
                 id TEXT PRIMARY KEY,
@@ -878,6 +879,7 @@ fn test_autofill_migration_idempotent() {
     // 1. Create connection manually and set up OLD schema
     {
         let conn = rusqlite::Connection::open(db_path_str).unwrap();
+        conn.pragma_update(None, "key", "maho_secure_key").unwrap();
         conn.execute_batch(
             "CREATE TABLE autofill_addresses (
                 id TEXT PRIMARY KEY,
@@ -955,4 +957,46 @@ fn test_autofill_migration_idempotent() {
     let new_addr = addresses.iter().find(|a| a.0 == "addr-new").unwrap();
     assert_eq!(new_addr.9, Some("Apt 4B".to_string()));
 }
+
+#[test]
+fn sqlite_search_memories_fts_ordering() {
+    let db = SqliteStorage::open_in_memory().unwrap();
+    
+    // Add facts with different BM25 relevance for query "Rust"
+    db.insert_memory("f1", "Rust is a systems programming language focused on safety and speed.", "src1", None, "[]", 0.8, None).unwrap();
+    db.insert_memory("f2", "We write software using many tools.", "src2", None, "[]", 0.5, None).unwrap();
+    db.insert_memory("f3", "Rust programming is very cool and fast.", "src3", None, "[]", 0.9, None).unwrap();
+    
+    // Search for "Rust"
+    let results = db.search_memories_fts("Rust", 5).unwrap();
+    assert_eq!(results.len(), 2);
+    
+    // Check that we got the relevant items
+    let matched_ids: Vec<String> = results.iter().map(|(id, _, _)| id.clone()).collect();
+    assert!(matched_ids.contains(&"f1".to_string()));
+    assert!(matched_ids.contains(&"f3".to_string()));
+}
+
+#[test]
+fn sqlite_search_notes_fts_ordering() {
+    let db = SqliteStorage::open_in_memory().unwrap();
+    
+    db.save_note("n1", None, None, "Rust programming language", "2025-01-01", "2025-01-01").unwrap();
+    db.save_note("n2", None, None, "Random other notes", "2025-01-02", "2025-01-02").unwrap();
+    db.save_note("n3", None, None, "Learning Rust is fun", "2025-01-03", "2025-01-03").unwrap();
+    
+    db.reindex_all_notes_fts(&[
+        ("n1".to_string(), "Rust programming language".to_string()),
+        ("n2".to_string(), "Random other notes".to_string()),
+        ("n3".to_string(), "Learning Rust is fun".to_string()),
+    ]).unwrap();
+    
+    let results = db.search_notes_fts("Rust").unwrap();
+    assert_eq!(results.len(), 2);
+    
+    let matched_ids: Vec<String> = results.iter().map(|(id, _)| id.clone()).collect();
+    assert!(matched_ids.contains(&"n1".to_string()));
+    assert!(matched_ids.contains(&"n3".to_string()));
+}
+
 

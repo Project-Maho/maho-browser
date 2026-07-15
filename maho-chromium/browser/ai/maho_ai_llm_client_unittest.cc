@@ -6,8 +6,10 @@
 
 #include "base/functional/bind.h"
 #include "base/test/task_environment.h"
+#include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 class MahoAiLlmClientTestHelper {

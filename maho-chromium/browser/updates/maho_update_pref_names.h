@@ -25,8 +25,10 @@ inline constexpr char kMahoUpdateServerUrl[] = "maho.update.server_url";
 // selector and at least one full check-→download-→verify-→apply cycle has been
 // validated against a fixture server. See the implementation plan §7.
 inline constexpr char kMahoUpdateEnabled[] = "maho.update.enabled";
+inline constexpr char kMahoConfigEnabled[] = "maho.config.enabled";
 
 }  // namespace prefs
 }  // namespace maho
+
 
 #endif  // MAHO_BROWSER_UPDATES_MAHO_UPDATE_PREF_NAMES_H_

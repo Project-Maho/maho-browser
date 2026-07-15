@@ -2869,6 +2869,19 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard='"//maho/browser:maho_incognito_unittests"',
         ),
         Replacement(
+            old='      "//maho/browser:maho_incognito_unittests",\n',
+            new=(
+                '      "//maho/browser:maho_incognito_unittests",\n'
+                '      "//maho/browser:maho_ai_runtime_router_unittests",\n'
+                '      "//maho/browser:maho_ai_llm_client_unittests",\n'
+            ),
+            description=(
+                "Maho R-9: include the AI runtime-router and LLM-client OTR-denial "
+                "unit tests (task-9-ai-unit) in Chromium unit_tests"
+            ),
+            guard='"//maho/browser:maho_ai_runtime_router_unittests"',
+        ),
+        Replacement(
             old='      "//chrome/browser/ui/views/toolbar:browser_tests",\n',
             new=(
                 '      "//maho/browser/mcp:browser_tests",\n'
@@ -2922,20 +2935,22 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         Replacement(
             old='#include "maho/browser/ui/webui/maho_settings/maho_settings_ui.h"\n',
             new=(
+                '#include "maho/browser/ui/webui/maho_mail/maho_mail_ui.h"\n'
                 '#include "maho/browser/ui/webui/maho_routines/maho_routines_ui.h"\n'
                 '#include "maho/browser/ui/webui/maho_settings/maho_settings_ui.h"\n'
             ),
-            description="Add maho_routines_ui.h include before maho_settings_ui.h",
-            guard='#include "maho/browser/ui/webui/maho_routines/maho_routines_ui.h"',
+            description="Add maho_mail_ui.h and maho_routines_ui.h includes before maho_settings_ui.h",
+            guard='#include "maho/browser/ui/webui/maho_mail/maho_mail_ui.h"',
         ),
         Replacement(
             old='  map.AddWebUIConfig(std::make_unique<MahoSettingsUIConfig>());\n',
             new=(
+                '  map.AddWebUIConfig(std::make_unique<MahoMailUIConfig>());\n'
                 '  map.AddWebUIConfig(std::make_unique<MahoRoutinesUIConfig>());\n'
                 '  map.AddWebUIConfig(std::make_unique<MahoSettingsUIConfig>());\n'
             ),
-            description="Register MahoRoutinesUIConfig before MahoSettingsUIConfig",
-            guard='MahoRoutinesUIConfig',
+            description="Register MahoMailUIConfig and MahoRoutinesUIConfig before MahoSettingsUIConfig",
+            guard='MahoMailUIConfig',
         ),
         Replacement(
             old='#include "maho/browser/ui/webui/maho_test/maho_test_ui.h"\n',
@@ -2965,11 +2980,12 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         Replacement(
             old='    "//maho/browser/ui/webui/maho_settings",\n',
             new=(
+                '    "//maho/browser/ui/webui/maho_mail",\n'
                 '    "//maho/browser/ui/webui/maho_routines",\n'
                 '    "//maho/browser/ui/webui/maho_settings",\n'
             ),
-            description="Add maho_routines dep before maho_settings in webui BUILD.gn",
-            guard='"//maho/browser/ui/webui/maho_routines"',
+            description="Add maho_mail and maho_routines dep before maho_settings in webui BUILD.gn",
+            guard='"//maho/browser/ui/webui/maho_mail"',
         ),
     ],
     "chrome/browser/global_keyboard_shortcuts_mac.mm": [

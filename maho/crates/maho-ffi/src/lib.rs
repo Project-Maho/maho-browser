@@ -2235,9 +2235,12 @@ pub unsafe extern "C" fn maho_core_new_with_storage(path: *const c_char) -> *mut
         None => return ptr::null_mut(),
     };
 
-    let core = MahoCore::new()
+    let mut core = MahoCore::new()
         .with_storage(sqlite_path_str)
         .with_lmdb_storage(&lmdb_path);
+
+    let skills_dir = base_path.join("maho_config").join("skills");
+    let _ = core.load_skills_from_dir(&skills_dir);
 
     Box::into_raw(Box::new(core))
 
@@ -7614,6 +7617,7 @@ pub struct MahoAgentSession {
     runtime: Arc<SwiftideBackend>,
     isolation: Arc<SessionRuntime>,
     session_id: String,
+    profile_dir: std::path::PathBuf,
 }
 
 struct SendableCallback<T>(T);
@@ -7927,10 +7931,13 @@ pub unsafe extern "C" fn maho_agent_create_session(
             }
         };
 
+        let profile_dir = std::path::Path::new(&db_path).parent().unwrap().to_path_buf();
+
         Box::into_raw(Box::new(MahoAgentSession {
             runtime,
             isolation,
             session_id: sid,
+            profile_dir,
         }))
     }, std::ptr::null_mut())
 }
@@ -7971,6 +7978,21 @@ pub unsafe extern "C" fn maho_agent_send_message(
         };
         let runtime = Arc::clone(&session.runtime);
         let session_id = session.session_id.clone();
+
+        if msg_str.starts_with('/') {
+            let cmd = msg_str.split_whitespace().next().unwrap_or("");
+            let skills_dir = session.profile_dir.join("maho_config").join("skills");
+            let mut sm = maho_core::skills_manager::SkillsManager::new();
+            let _ = sm.load_skills_from_dir(&skills_dir);
+            if let Some(skill) = sm.find_by_slash(cmd) {
+                runtime.set_allowed_tools(Some(skill.allowed_tools.clone()));
+            } else {
+                runtime.set_allowed_tools(None);
+            }
+        } else {
+            runtime.set_allowed_tools(None);
+        }
+
 
         let on_token_cb = on_token.map(|cb| {
             let cb_sendable = SendableCallback(cb);

@@ -37,6 +37,11 @@ base::RepeatingCallback<bool()> MakeTokenGate(
 
 class MahoAiPrivateBoundaryTestBase : public ChromeRenderViewHostTestHarness {
  protected:
+  void TearDown() override {
+    otr_contents_.reset();
+    ChromeRenderViewHostTestHarness::TearDown();
+  }
+
   std::shared_ptr<MahoPrivateContextToken> MakeIncognitoToken() {
     Profile* incognito = profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true);
     otr_contents_ =

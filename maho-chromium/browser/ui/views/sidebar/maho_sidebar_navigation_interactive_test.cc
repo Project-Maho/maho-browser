@@ -35,8 +35,6 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_downloads_view.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_easels_view.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_notes_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_library_rail_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_library_action_pane_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_media_view.h"
@@ -558,8 +556,6 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
       MahoSidebarLibraryRailView::Category::kDownloads,
       MahoSidebarLibraryRailView::Category::kMedia,
       MahoSidebarLibraryRailView::Category::kSpaces,
-      MahoSidebarLibraryRailView::Category::kEasels,
-      MahoSidebarLibraryRailView::Category::kNotes,
   };
   for (const auto category : kAllCategories) {
     views::Button* btn = rail->button_for_category_for_testing(category);

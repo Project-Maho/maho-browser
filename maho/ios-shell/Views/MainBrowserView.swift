@@ -58,7 +58,8 @@ struct MainBrowserView: View {
     @State private var showVoiceAssistant = false
     @State private var voiceSearchManager = VoiceSearchManager()
     @State private var showAiChat = false
-    @State private var askAIQuery = ""
+    @State private var autoOpenAiChatOnAppear = false
+    @State private var askAIQuery: String?
 
     private let bridge = MahoBridge.shared
     private let tickTimer = Timer.publish(every: 0.35, on: .main, in: .common).autoconnect()
@@ -171,6 +172,9 @@ struct MainBrowserView: View {
                     },
                     onSettings: {
                         showSettings = true
+                    },
+                    onOpenAiChat: {
+                        presentAiChat(query: "")
                     },
                     onShare: shareCurrentPage,
                     onReload: reloadCurrentPage,
@@ -352,7 +356,7 @@ struct MainBrowserView: View {
                 pageUrl: browserVM.currentUrl,
                 pageTitle: browserVM.currentTitle,
                 pageText: "",
-                autoOpenChatOnAppear: true,
+                autoOpenChatOnAppear: autoOpenAiChatOnAppear,
                 initialQuery: askAIQuery
             )
         }
@@ -811,7 +815,7 @@ struct MainBrowserView: View {
         }
 
         guard !trimmed.isEmpty else { return }
-        createTabAndNavigate(trimmed)
+        presentAiChat(query: trimmed)
     }
 
     private func toggleSearchOverlayPrivateMode() {
@@ -850,7 +854,9 @@ struct MainBrowserView: View {
     }
 
     private func presentAiChat(query: String) {
-        askAIQuery = query
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        askAIQuery = trimmed.isEmpty ? nil : trimmed
+        autoOpenAiChatOnAppear = !trimmed.isEmpty
         showAiChat = true
     }
 

@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import java.util.Locale
+import dev.maho.browser.support.VoiceRecognitionLanguageSettings
 import dev.maho.browser.ui.icons.MahoIcon
 import androidx.compose.ui.res.painterResource
 
@@ -57,10 +58,19 @@ fun LanguageSettingsScreen(
         val saved = prefs.getString("settings.preferredLanguage", null)
         mutableStateOf(saved?.let { tag -> locales.firstOrNull { it.toLanguageTag() == tag } } ?: Locale.getDefault())
     }
+    var selectedVoiceLanguageTag by remember {
+        mutableStateOf(VoiceRecognitionLanguageSettings.load(context))
+    }
+    val voiceLanguageOptions = remember { VoiceRecognitionLanguageSettings.options }
 
     fun selectLocale(locale: Locale) {
         selectedLocale = locale
         prefs.edit().putString("settings.preferredLanguage", locale.toLanguageTag()).apply()
+    }
+
+    fun selectVoiceLanguage(tag: String) {
+        selectedVoiceLanguageTag = tag
+        VoiceRecognitionLanguageSettings.save(context, tag)
     }
 
     Scaffold(
@@ -81,6 +91,7 @@ fun LanguageSettingsScreen(
                 .padding(padding)
                 .verticalScroll(rememberScrollState()),
         ) {
+            SectionHeader("App language")
             locales.forEach { locale ->
                 val isSelected = locale == selectedLocale
                 ListItem(
@@ -94,6 +105,15 @@ fun LanguageSettingsScreen(
                 )
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             }
+
+            SectionHeader("Voice")
+            DropdownPreference(
+                title = "Voice recognition language",
+                value = VoiceRecognitionLanguageSettings.labelFor(selectedVoiceLanguageTag),
+                options = voiceLanguageOptions.map { it.label },
+                onSelect = { index -> selectVoiceLanguage(voiceLanguageOptions[index].tag) },
+            )
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
         }
     }
 }

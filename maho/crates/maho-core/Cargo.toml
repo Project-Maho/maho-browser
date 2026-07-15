@@ -12,6 +12,7 @@ regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 base64 = "0.22"
+ed25519-dalek = { version = "2.1", default-features = false, features = ["alloc"] }
 toml = "0.8"
 lru = "0.12"
 psl = { workspace = true }

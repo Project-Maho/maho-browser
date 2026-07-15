@@ -34,6 +34,7 @@ struct ArcBottomBar: View {
     let onSelectSpace: (String) -> Void
     let onFindInPage: () -> Void
     let onSettings: () -> Void
+    let onOpenAiChat: () -> Void
     let onShare: () -> Void
     let onReload: () -> Void
     let onArchive: () -> Void
@@ -110,6 +111,10 @@ struct ArcBottomBar: View {
 
             Spacer(minLength: ShellTheme.Spacing.medium)
 
+            homeAiButton
+
+            Spacer(minLength: ShellTheme.Spacing.medium)
+
             homeNewTabButton
 
             Spacer(minLength: ShellTheme.Spacing.medium)
@@ -178,7 +183,7 @@ struct ArcBottomBar: View {
             Image(lucide: Lucide.plus)
                 .font(.body.weight(.semibold))
                 .foregroundStyle(foregroundColor)
-                .frame(width: 148, height: ShellTheme.Size.bottomBarCapsuleHeight)
+                .frame(width: 112, height: ShellTheme.Size.bottomBarCapsuleHeight)
                 .background(capsuleBackground)
                 .overlay(capsuleStroke)
         }
@@ -186,6 +191,20 @@ struct ArcBottomBar: View {
         .accessibilityIdentifier("homeNewTabButton")
         .accessibilityLabel("New Tab")
         .accessibilityHint("Opens a new tab to search or enter an address.")
+    }
+
+    private var homeAiButton: some View {
+        Button(action: onOpenAiChat) {
+            Image(lucide: Lucide.bot)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(foregroundColor)
+                .frame(width: ShellTheme.Size.touchTarget, height: ShellTheme.Size.touchTarget)
+                .background(chromeCircleBackground)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("homeAiButton")
+        .accessibilityLabel("AI chat")
+        .accessibilityHint("Opens AI chat.")
     }
 
     private var homeSettingsButton: some View {

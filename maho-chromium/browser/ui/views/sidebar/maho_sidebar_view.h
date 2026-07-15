@@ -70,8 +70,6 @@ class MahoSidebarTabListView;
 class MahoSidebarUpdateNotificationController;
 class MahoSidebarUpdateNotificationView;
 class MahoSidebarTopBarView;
-class MahoSidebarNotesView;
-class MahoSidebarEaselsView;
 class MahoSidebarSpacesView;
 class MahoSpacesOverlayBoardView;
 
@@ -168,12 +166,6 @@ class MahoSidebarView
   bool is_library_mode_for_testing() const { return IsInLibraryMode(); }
   MahoSpacesOverlayBoardView* spaces_view_for_testing() {
     return spaces_view_;
-  }
-  MahoSidebarEaselsView* easel_view_for_testing() {
-    return easel_view_;
-  }
-  MahoSidebarNotesView* notes_view_for_testing() {
-    return notes_view_;
   }
   MahoSidebarLibraryRailView::Category active_library_category_for_testing()
       const;
@@ -277,8 +269,6 @@ class MahoSidebarView
   raw_ptr<MahoSidebarDownloadsView> downloads_view_ = nullptr;
   raw_ptr<MahoSidebarMediaView> media_view_ = nullptr;
   raw_ptr<MahoSpacesOverlayBoardView> spaces_view_ = nullptr;
-  raw_ptr<MahoSidebarEaselsView> easel_view_ = nullptr;
-  raw_ptr<MahoSidebarNotesView> notes_view_ = nullptr;
   raw_ptr<MahoSidebarLibraryRailView> library_rail_view_ = nullptr;
   raw_ptr<MahoSidebarTopBarView> top_bar_view_ = nullptr;
   raw_ptr<MahoSidebarSearchView> search_view_ = nullptr;

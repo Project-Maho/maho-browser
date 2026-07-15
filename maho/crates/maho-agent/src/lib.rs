@@ -119,6 +119,13 @@ pub trait AgentStorage: Send + Sync {
     ) -> Result<Option<String>, AgentError> {
         Ok(None)
     }
+    async fn fts_relevant_memories(
+        &self,
+        _query: &str,
+        _top_k: usize,
+    ) -> Result<Vec<(String, String, f64)>, AgentError> {
+        Ok(Vec::new())
+    }
 }
 
 pub struct MutexAgentStorage(pub std::sync::Arc<std::sync::Mutex<maho_storage::sqlite::SqliteStorage>>);
@@ -298,6 +305,36 @@ impl AgentStorage for MutexAgentStorage {
         .await
         .map_err(|e| AgentError::ExecutionError(e.to_string()))?
     }
+
+    async fn fts_relevant_memories(
+        &self,
+        query: &str,
+        top_k: usize,
+    ) -> Result<Vec<(String, String, f64)>, AgentError> {
+        let storage = std::sync::Arc::clone(&self.0);
+        let query = query.to_string();
+        tokio::task::spawn_blocking(move || {
+            let lock = storage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            const COLD_BUDGET_TOKENS: usize = 1000;
+            const CHARS_PER_TOKEN: usize = 4;
+            let budget_chars = COLD_BUDGET_TOKENS * CHARS_PER_TOKEN;
+            let raw = lock.search_memories_fts(&query, top_k)
+                .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
+            let mut out = Vec::new();
+            let mut used = 0usize;
+            for (id, content, score) in raw {
+                let next = used + content.len() + 4;
+                if next > budget_chars && !out.is_empty() {
+                    break;
+                }
+                used = next;
+                out.push((id, content, score));
+            }
+            Ok(out)
+        })
+        .await
+        .map_err(|e| AgentError::ExecutionError(e.to_string()))?
+    }
 }
 
 #[async_trait]
@@ -335,6 +372,7 @@ pub trait AgentRuntime: Send + Sync {
     }
 
     fn set_system_prompt(&self, _prompt: &str) {}
+    fn set_allowed_tools(&self, _tools: Option<Vec<String>>) {}
 }
 
 pub struct MockAgentRuntime;

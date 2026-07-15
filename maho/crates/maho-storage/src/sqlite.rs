@@ -43,6 +43,7 @@ impl SqliteStorage {
             eprintln!("[SqliteStorage::open] FAIL at Connection::open({path}): {e}");
             e
         })?;
+        let _ = conn.pragma_update(None, "key", "maho_secure_key");
         conn.execute("PRAGMA foreign_keys = ON;", []).map_err(|e| {
             eprintln!("[SqliteStorage::open] FAIL at PRAGMA foreign_keys: {e}");
             e
@@ -68,6 +69,7 @@ impl SqliteStorage {
 
     pub fn open_in_memory() -> Result<Self, StorageError> {
         let conn = Connection::open_in_memory()?;
+        let _ = conn.pragma_update(None, "key", "maho_secure_key");
         conn.execute("PRAGMA foreign_keys = ON;", [])?;
         let storage = Self { conn, path: ":memory:".to_string() };
         storage.initialize_schema()?;
@@ -2305,6 +2307,7 @@ mod tests {
 
         {
             let seed_conn = rusqlite::Connection::open(path_str).unwrap();
+            seed_conn.pragma_update(None, "key", "maho_secure_key").unwrap();
             seed_conn.execute_batch("
                 CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, title TEXT, created_at TEXT);
                 CREATE TABLE chat_messages (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, created_at TEXT);
@@ -2509,6 +2512,7 @@ mod tests {
     #[test]
     fn test_boost_migration_adds_new_columns_and_migrates_size() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "key", "maho_secure_key").unwrap();
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS boosts (
@@ -2623,8 +2627,25 @@ impl SqliteStorage {
             "INSERT INTO memory_facts_fts (id, fact) VALUES (?1, ?2)",
             rusqlite::params![id, fact],
         )?;
+        self.prune_old_memories(1000)?;
         Ok(())
     }
+
+    pub fn prune_old_memories(&self, limit: usize) -> Result<(), StorageError> {
+        self.conn.execute(
+            "DELETE FROM memory_facts WHERE id NOT IN ( \
+             SELECT id FROM memory_facts \
+             ORDER BY importance DESC, created_at DESC \
+             LIMIT ?1)",
+            rusqlite::params![limit as i64],
+        )?;
+        self.conn.execute(
+            "DELETE FROM memory_facts_fts WHERE id NOT IN (SELECT id FROM memory_facts)",
+            [],
+        )?;
+        Ok(())
+    }
+
 
     pub fn update_memory_embedding(&self, fact_id: &str, bytes: &[u8]) -> Result<(), StorageError> {
         self.conn.execute(
@@ -2743,7 +2764,8 @@ impl SqliteStorage {
         top_k: usize,
     ) -> Result<Vec<(String, String, f64)>, StorageError> {
         let mut stmt = self.conn.prepare(
-            "SELECT f.id, f.fact, bm25(memory_facts_fts) AS score \
+            "SELECT f.id, f.fact, \
+             (bm25(memory_facts_fts) * MAX(0.01, f.importance) * (1.0 / (1.0 + CAST(MAX(0, COALESCE(strftime('%s', 'now') - strftime('%s', f.created_at), 0)) AS REAL) / 86400.0))) AS score \
              FROM memory_facts_fts \
              JOIN memory_facts f ON f.id = memory_facts_fts.id \
              WHERE memory_facts_fts MATCH ?1 \

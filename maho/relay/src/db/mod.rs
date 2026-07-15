@@ -49,6 +49,52 @@ pub struct Session {
     pub created_at: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigUpdate {
+    pub version: i32,
+    pub payload: String,
+    pub signature: String,
+    pub rollout_threshold: i32,
+    pub channel: String,
+}
+
+pub async fn find_latest_config_update(
+    db: &D1Database,
+    channel: &str,
+    bucket: i32,
+) -> Result<Option<ConfigUpdate>> {
+    let stmt = db.prepare(
+        "SELECT version, payload, signature, rollout_threshold, channel \
+         FROM config_updates \
+         WHERE channel = ?1 AND ?2 < rollout_threshold \
+         ORDER BY version DESC \
+         LIMIT 1"
+    );
+    let stmt = stmt.bind(&[js(&channel)?, js(&bucket)?])?;
+    let res = stmt.first::<ConfigUpdate>(None).await?;
+    Ok(res)
+}
+
+pub async fn insert_config_update(
+    db: &D1Database,
+    update: &ConfigUpdate,
+) -> Result<()> {
+    let stmt = db.prepare(
+        "INSERT OR REPLACE INTO config_updates \
+         (version, payload, signature, rollout_threshold, channel) \
+         VALUES (?1, ?2, ?3, ?4, ?5)"
+    );
+    let stmt = stmt.bind(&[
+        js(&update.version)?,
+        js(&update.payload)?,
+        js(&update.signature)?,
+        js(&update.rollout_threshold)?,
+        js(&update.channel)?,
+    ])?;
+    stmt.run().await?;
+    Ok(())
+}
+
 pub(crate) fn js<T: serde::Serialize>(val: &T) -> std::result::Result<wasm_bindgen::JsValue, AppError> {
     let js_val = serde_wasm_bindgen::to_value(val).map_err(|e| AppError::Internal(e.to_string()))?;
     if js_val.is_undefined() {

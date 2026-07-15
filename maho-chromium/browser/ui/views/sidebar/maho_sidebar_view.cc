@@ -75,8 +75,6 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_grain_overlay_view.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_notes_view.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_easels_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_spaces_view.h"
 #include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_board_view.h"
 #include "maho/browser/maho_space_profile_bridge.h"
@@ -690,24 +688,6 @@ views::View* MahoSidebarView::GetOrCreateLibraryPane(
       pane = spaces_view_;
       break;
     }
-    case MahoSidebarLibraryRailView::Category::kNotes: {
-      if (!notes_view_) {
-        notes_view_ = library_content_host_->AddChildView(
-            std::make_unique<MahoSidebarNotesView>(browser_));
-        notes_view_->SetVisible(false);
-      }
-      pane = notes_view_;
-      break;
-    }
-    case MahoSidebarLibraryRailView::Category::kEasels: {
-      if (!easel_view_) {
-        easel_view_ = library_content_host_->AddChildView(
-            std::make_unique<MahoSidebarEaselsView>(browser_));
-        easel_view_->SetVisible(false);
-      }
-      pane = easel_view_;
-      break;
-    }
   }
 
   if (pane) {
@@ -764,12 +744,6 @@ void MahoSidebarView::ShowLibraryPane(
   } else if (category == MahoSidebarLibraryRailView::Category::kMedia &&
               media_view_) {
     media_view_->ReloadMedia();
-  } else if (category == MahoSidebarLibraryRailView::Category::kNotes &&
-             notes_view_) {
-    notes_view_->EnsureWebUILoaded();
-  } else if (category == MahoSidebarLibraryRailView::Category::kEasels &&
-             easel_view_) {
-    easel_view_->EnsureWebUILoaded();
   }
 }
 

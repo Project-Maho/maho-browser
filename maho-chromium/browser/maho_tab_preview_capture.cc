@@ -18,6 +18,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/navigation_handle.h"
+#include "content/public/common/isolated_world_ids.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/codec/jpeg_codec.h"
@@ -323,9 +324,9 @@ void MahoTabWakeHelper::DidFinishLoad(content::RenderFrameHost* render_frame_hos
                          "elapsed_ms", elapsed_ms);
     LOG(INFO) << "[MAHO_PERF] WakeTab.DidFinishLoad tab_id=" << tab_id_
               << " elapsed=" << elapsed_ms << "ms";
-    wc->GetPrimaryMainFrame()->ExecuteJavaScript(
+    wc->GetPrimaryMainFrame()->ExecuteJavaScriptInIsolatedWorld(
         base::UTF8ToUTF16(base::StringPrintf("window.scrollTo(%f, %f)", scroll_x_, scroll_y_)),
-        base::NullCallback());
+        base::NullCallback(), content::ISOLATED_WORLD_ID_GLOBAL);
     RemoveOverlay();
   }
 }

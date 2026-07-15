@@ -143,3 +143,8 @@ config("maho_core_prebuilt_config") {
 source_set("maho_core_prebuilt") {
   public_configs = [ ":maho_core_prebuilt_config" ]
 }
+
+static_library("maho_mail_ffi") {
+  sources = [ "maho_mail_ffi_dummy.cc" ]
+}
+

@@ -118,6 +118,7 @@ pub trait SpaceManagerInterface {
     fn remove_tab_from_folder(&mut self, space_id: &SpaceId, folder_id: &FolderId, tab_id: &TabId);
     fn toggle_folder_expanded(&mut self, space_id: &SpaceId, folder_id: &FolderId) -> bool;
     fn find_folder_expanded(&self, space_id: &SpaceId, folder_id: &FolderId) -> Option<bool>;
+    fn set_folder_pinned(&mut self, space_id: &SpaceId, folder_id: &FolderId, is_pinned: bool) -> bool;
     fn move_folder(&mut self, folder_id: &FolderId, new_parent: Option<FolderId>) -> Result<(), FolderError>;
     fn move_folder_in_space(
         &mut self,
@@ -835,6 +836,24 @@ impl EventDispatcher {
                         is_pinned: None,
                     },
                 }]
+            }
+            ShellEvent::SetFolderPinned {
+                space_id,
+                folder_id,
+                is_pinned,
+            } => {
+                if space_mgr.set_folder_pinned(&space_id, &folder_id, is_pinned) {
+                    vec![CoreUpdate::FolderUpdated {
+                        folder_id,
+                        changes: FolderUpdate {
+                            name: None,
+                            is_expanded: None,
+                            is_pinned: Some(is_pinned),
+                        },
+                    }]
+                } else {
+                    vec![]
+                }
             }
             ShellEvent::ConvertFolderToSpace {
                 space_id,

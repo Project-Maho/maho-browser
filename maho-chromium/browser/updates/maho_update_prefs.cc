@@ -21,6 +21,7 @@ void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
   registry->RegisterDictionaryPref(prefs::kMahoUpdateCrashSentinel);
   registry->RegisterBooleanPref(prefs::kMahoUpdateRollbackRequested, false);
   registry->RegisterBooleanPref(prefs::kMahoUpdateEnabled, false);
+  registry->RegisterBooleanPref(prefs::kMahoConfigEnabled, true);
 }
 
 }  // namespace updates

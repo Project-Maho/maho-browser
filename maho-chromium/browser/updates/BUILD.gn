@@ -13,6 +13,8 @@ source_set("maho_updates_lib") {
   sources = [
     "crash_loop_sentinel.cc",
     "crash_loop_sentinel.h",
+    "maho_config_manager.cc",
+    "maho_config_manager.h",
     "maho_update_manager.cc",
     "maho_update_manager.h",
     "maho_update_server_url.cc",
@@ -61,6 +63,7 @@ source_set("maho_updates_lib") {
 source_set("maho_updates_unittests") {
   testonly = true
   sources = [
+    "maho_config_manager_unittest.cc",
     "maho_update_manager_unittest.cc",
     "maho_update_signature_unittest.cc",
   ]

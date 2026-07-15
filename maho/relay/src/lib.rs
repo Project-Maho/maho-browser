@@ -8,6 +8,8 @@ pub mod errors;
 pub mod room;
 pub mod sync;
 pub mod waitlist;
+pub mod updates;
+
 
 #[event(fetch)]
 pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
@@ -137,6 +139,20 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 Err(e) => e.to_response(),
             }
         })
+
+        .get_async("/updates/config", |req, ctx| async move {
+            match updates::get_config(req, ctx.env).await {
+                Ok(res) => Ok(res),
+                Err(e) => e.to_response(),
+            }
+        })
+        .post_async("/updates/config", |req, ctx| async move {
+            match updates::post_config(req, ctx.env).await {
+                Ok(res) => Ok(res),
+                Err(e) => e.to_response(),
+            }
+        })
+
 
         .on_async("/ws", |req, ctx| async move {
             match room::ws_upgrade(req, ctx.env).await {

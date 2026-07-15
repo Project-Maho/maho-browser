@@ -1,0 +1,26 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+
+module maho.mojom;
+
+interface MahoMailHelper {
+  // Launch the helper process and verify handshakes
+  Initialize(string version_token, string profile_path) => (bool success);
+
+  // Sync credentials from host to helper (HC3 / DB decrypt key injection)
+  InjectKeys(string sqlcipher_key, string credential_key) => (bool success);
+
+  // Command proxying
+  StartSync(string account_id) => (bool success);
+  StopSync() => (bool success);
+  StartBackfill(string account_id) => (bool success);
+
+  // Lifecycle
+  Shutdown() => ();
+};
+
+interface MahoMailHelperClient {
+  // Callback events from helper back to host browser
+  OnSyncEvent(string event_type, string payload);
+  OnBackfillEvent(string event_type, string payload);
+  OnStatusChanged(string account_id, bool connected);
+};

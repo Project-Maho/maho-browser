@@ -1,0 +1,21 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+import("//mojo/public/tools/bindings/mojom.gni")
+
+mojom("mojo_bindings") {
+  sources = [ "maho_mail_helper.mojom" ]
+}
+
+executable("maho_mail_helper") {
+  sources = [
+    "maho_mail_helper_main.cc",
+  ]
+
+  deps = [
+    ":mojo_bindings",
+    "//base",
+    "//mojo/core/embedder",
+    "//mojo/public/cpp/bindings",
+    "//maho/third_party/maho:maho_mail_ffi",
+  ]
+}

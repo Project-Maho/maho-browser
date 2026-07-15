@@ -68,11 +68,27 @@ async function main() {
   assert(initCheck!.hasRadioByok === true, "BYOK radio option present");
 
   step("Switch to BYOK — controls usable without a relay session");
+  // The BYOK radio is already checked when provider is any non-managed value
+  // (incl. the '(not set)' default), so clicking it fires no onChange. Only
+  // click to flip out of managed mode, then choose a concrete provider below.
   await cdp.eval<boolean>(`(function(){
     var radios = Array.from(document.querySelectorAll('input[type="radio"]'));
     var byok = radios.find(function(r){ return r.nextSibling && r.nextSibling.textContent.includes("Use my own"); });
-    if (byok) { byok.click(); return true; }
+    if (byok && !byok.checked) { byok.click(); return true; }
     return false;
+  })()`);
+  await new Promise(r => setTimeout(r, 900));
+
+  // The '(not set)' default renders only the provider dropdown; a concrete
+  // provider must be selected before the OpenAI BYOK key field exists.
+  await cdp.eval(`(function(){
+    var trigger = document.querySelector('main button[role="combobox"][aria-label="Provider"]');
+    if (trigger) trigger.click();
+  })()`);
+  await new Promise(r => setTimeout(r, 700));
+  await cdp.eval(`(function(){
+    var opt = Array.from(document.querySelectorAll('[role="option"]')).find(function(o){ return (o.textContent||'').trim() === 'OpenAI'; });
+    if (opt) opt.click();
   })()`);
   await new Promise(r => setTimeout(r, 1400));
 

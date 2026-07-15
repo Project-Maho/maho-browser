@@ -14,6 +14,10 @@ enum VoiceSearchState: Equatable {
 @MainActor
 @Observable
 final class VoiceSearchManager {
+    nonisolated static let sttLocaleDefaultsKey = "voice.sttLocale"
+
+    private nonisolated static let sttLocaleDidChangeNotification = Notification.Name("dev.maho.browser.voice.sttLocaleDidChange")
+
     var state: VoiceSearchState = .idle
     var audioLevel: Float = 0
     var transcript: String = ""
@@ -23,15 +27,58 @@ final class VoiceSearchManager {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var speechRecognizer: SFSpeechRecognizer?
+    private var activeLocaleIdentifier: String?
+    private var localeChangeObserver: NSObjectProtocol?
     private var silenceTimer: Timer?
     private let silenceTimeout: TimeInterval = 5.0
 
     init() {
-        speechRecognizer = SFSpeechRecognizer(locale: Locale.current)
+        activeLocaleIdentifier = Self.normalizedLocaleIdentifier(
+            UserDefaults.standard.string(forKey: Self.sttLocaleDefaultsKey)
+        )
+        speechRecognizer = Self.makeSpeechRecognizer(for: activeLocaleIdentifier)
+        observeLocaleChanges()
     }
 
     var isAvailable: Bool {
         speechRecognizer?.isAvailable ?? false
+    }
+
+    func applyLocale(_ identifier: String?) {
+        let normalizedIdentifier = Self.normalizedLocaleIdentifier(identifier)
+        guard normalizedIdentifier != activeLocaleIdentifier else { return }
+
+        reset()
+        activeLocaleIdentifier = normalizedIdentifier
+        speechRecognizer = Self.makeSpeechRecognizer(for: normalizedIdentifier)
+    }
+
+    private nonisolated static func normalizedLocaleIdentifier(_ identifier: String?) -> String? {
+        guard let trimmed = identifier?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+
+        return trimmed
+    }
+
+    private static func makeSpeechRecognizer(for identifier: String?) -> SFSpeechRecognizer? {
+        let locale = identifier.map { Locale(identifier: $0) } ?? Locale.current
+        return SFSpeechRecognizer(locale: locale)
+    }
+
+    private func observeLocaleChanges() {
+        localeChangeObserver = NotificationCenter.default.addObserver(
+            forName: Self.sttLocaleDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { notification in
+            let identifier = notification.userInfo?[Self.sttLocaleDefaultsKey] as? String
+
+            Task { @MainActor [weak self] in
+                self?.applyLocale(identifier)
+            }
+        }
     }
 
     func requestPermissions() async -> Bool {

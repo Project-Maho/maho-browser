@@ -72,10 +72,6 @@ constexpr RailCategorySpec kRailCategories[] = {
     {MahoSidebarLibraryRailView::Category::kMedia, u"Media", u"Media",
      &maho_lucide_icons::kImagesIcon, "Media",
      false},
-    {MahoSidebarLibraryRailView::Category::kEasels, u"Easels", u"Easels",
-     &maho_lucide_icons::kPencilLineIcon, "Easels", false},
-    {MahoSidebarLibraryRailView::Category::kNotes, u"Notes", u"Notes",
-     &maho_lucide_icons::kNotebookTextIcon, "Notes", false},
 };
 
 void StyleIconButton(views::ImageButton* button) {

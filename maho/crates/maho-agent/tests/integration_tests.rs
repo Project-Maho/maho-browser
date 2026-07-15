@@ -1221,3 +1221,98 @@ if __name__ == "__main__":
         "#12: is_alive() must become false once the transport closes after disconnect",
     );
 }
+
+#[derive(Clone)]
+struct RAGMockAgentStorage {
+    messages: Arc<Mutex<Vec<(String, String, String)>>>,
+}
+
+#[async_trait]
+impl AgentStorage for RAGMockAgentStorage {
+    async fn get_byok_key(&self, _provider: &str) -> Result<Option<maho_agent::ZeroizedString>, maho_agent::AgentError> {
+        Ok(Some(maho_agent::ZeroizedString::new("mock-key".to_string())))
+    }
+
+    async fn get_setting(&self, _key: &str) -> Result<Option<maho_agent::ZeroizedString>, maho_agent::AgentError> {
+        Ok(None)
+    }
+
+    async fn save_message(&self, session_id: &str, role: &str, content: &str) -> Result<(), maho_agent::AgentError> {
+        self.messages.lock().unwrap().push((session_id.to_string(), role.to_string(), content.to_string()));
+        Ok(())
+    }
+
+    async fn get_history(&self, session_id: &str) -> Result<Vec<ChatMessage>, maho_agent::AgentError> {
+        let lock = self.messages.lock().unwrap();
+        let history: Vec<ChatMessage> = lock.iter()
+            .filter(|(sid, _, _)| sid == session_id)
+            .map(|(_, role, content)| {
+                if role == "user" {
+                    ChatMessage::user(ChatContent::text(content.clone()))
+                } else if role == "assistant" {
+                    ChatMessage::assistant(ChatContent::text(content.clone()))
+                } else {
+                    ChatMessage::system(ChatContent::text(content.clone()))
+                }
+            })
+            .collect();
+        Ok(history)
+    }
+
+    async fn fts_relevant_memories(&self, _query: &str, _top_k: usize) -> Result<Vec<(String, String, f64)>, maho_agent::AgentError> {
+        Ok(vec![
+            ("f1".to_string(), "Mock memory: Rust is super fast.".to_string(), -1.5),
+            ("f2".to_string(), "Mock memory: RAG is awesome.".to_string(), -1.2),
+        ])
+    }
+}
+
+#[tokio::test]
+async fn test_agent_rag_integration() {
+    let storage = Arc::new(RAGMockAgentStorage {
+        messages: Arc::new(Mutex::new(Vec::new())),
+    });
+
+    let backend = SwiftideBackend::new(
+        Arc::clone(&storage) as Arc<dyn AgentStorage>,
+        Some(Box::new(|_req| Box::pin(async { PermissionDecision::Allow }))),
+        std::env::temp_dir(),
+        true,
+    );
+
+    let mock_response = ChatCompletionResponse::builder()
+        .message("Hello! I am a helpful assistant.".to_string())
+        .build()
+        .unwrap();
+
+    let mock_llm = MockLLM {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        response: Arc::new(Mutex::new(mock_response)),
+    };
+
+    backend.set_llm_override(Box::new(mock_llm.clone()) as Box<dyn ChatCompletion>);
+    backend.set_system_prompt("System Prompt Base");
+
+    let user_msg = ChatMessage::user(ChatContent::text("Hello agent".to_string()));
+    let _response_msg = backend.run_turn("session-123", user_msg, None).await.unwrap();
+
+    let calls = mock_llm.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    let messages = &calls[0].messages;
+    assert!(messages.len() >= 2);
+    
+    // Find the system prompt message
+    let system_message = messages.iter().find_map(|msg| {
+        if let swiftide_core::chat_completion::ChatMessage::System(prompt) = msg {
+            Some(prompt)
+        } else {
+            None
+        }
+    }).expect("System message must be present");
+    
+    assert!(system_message.contains("System Prompt Base"));
+    assert!(system_message.contains("Retrieved Memories:"));
+    assert!(system_message.contains("Mock memory: Rust is super fast."));
+    assert!(system_message.contains("Mock memory: RAG is awesome."));
+}
+

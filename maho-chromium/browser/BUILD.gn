@@ -6,8 +6,20 @@ source_set("maho_core_holder") {
   sources = [
     "maho_core_holder.cc",
     "maho_core_holder.h",
+    "mail_helper/maho_mail_helper_launcher.cc",
+    "mail_helper/maho_mail_helper_launcher.h",
+    "mail_helper/maho_mail_arbitration_service.cc",
+    "mail_helper/maho_mail_arbitration_service.h",
+  ]
+  deps = [
+    "//maho/browser/mail_helper:maho_mail_helper",
+    "//maho/browser/mail_helper:mojo_bindings",
+    "//base",
+    "//mojo/public/cpp/bindings",
   ]
 }
+
+
 
 source_set("maho_routines_scheduler") {
   sources = [
@@ -796,6 +808,7 @@ test("maho_theme_io_test") {
   deps = [
     ":maho_ffi_callback_handle_unittests",
     ":maho_theme_io_unittests",
+    "//maho/browser/updates:maho_updates_unittests",
     "//base",
     "//base/test:test_support",
     "//chrome/browser:browser",

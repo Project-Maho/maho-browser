@@ -37,8 +37,6 @@ class MahoSidebarLibraryRailView : public views::View {
     kDownloads,
     kMedia,
     kSpaces,
-    kEasels,
-    kNotes,
   };
 
   using CategorySelectedCallback = base::RepeatingCallback<void(Category)>;

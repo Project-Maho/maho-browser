@@ -170,6 +170,9 @@ void MahoAIUI::CreatePageHandler(
   // agrees with the host, build a kAI token, and deny every non-regular
   // context with no handler/data source/pref consumption and a dropped pipe.
   if (!browser || !profile || browser_window->GetProfile() != profile) {
+    LOG(ERROR) << "[MAHO-AI-PANEL-DBG] CreatePageHandler R-9 reject: "
+               << "browser=" << (browser != nullptr)
+               << " profile=" << (profile != nullptr) << " -> pipe dropped";
     receiver.reset();
     page.reset();
     return;
@@ -177,10 +180,13 @@ void MahoAIUI::CreatePageHandler(
 
   auto token = std::make_unique<MahoPrivateContextToken>(browser_window, host);
   if (!token->Revalidate(MahoPrivateCapability::kAI)) {
+    LOG(ERROR) << "[MAHO-AI-PANEL-DBG] CreatePageHandler R-9 reject: "
+               << "Revalidate(kAI)=false for side-panel host -> pipe dropped";
     receiver.reset();
     page.reset();
     return;
   }
+  LOG(ERROR) << "[MAHO-AI-PANEL-DBG] CreatePageHandler R-9 PASS -> creating page handler";
 
   auto url_loader_factory =
       profile->GetDefaultStoragePartition()->GetURLLoaderFactoryForBrowserProcess();

@@ -45,6 +45,7 @@
 #include "maho/browser/maho_tab_registry.h"
 #include "maho/browser/sync/maho_sync_relay_client.h"
 #include "maho/browser/updates/maho_update_manager.h"
+#include "maho/browser/updates/maho_config_manager.h"
 #include "chrome/browser/sessions/session_restore.h"
 #include "base/strings/utf_string_conversions.h"
 #include "maho/browser/maho_tab_id_helper.h"
@@ -1937,6 +1938,8 @@ void MahoBrowserMainExtraParts::InitializeRegularServicesOnce(Profile* profile) 
   maho::MahoTabIdSessionHelper::GetForProfile(profile);
 
   maho::MahoUpdateManager::GetInstance()->Initialize(profile);
+  maho::updates::MahoConfigManager::GetInstance()->Initialize(profile);
+
 
   // If user hasn't explicitly set the value, override the default to LAST
   // so SessionService restore kicks in.

@@ -314,6 +314,11 @@ pub enum ShellEvent {
         space_id: SpaceId,
         folder_id: FolderId,
     },
+    SetFolderPinned {
+        space_id: SpaceId,
+        folder_id: FolderId,
+        is_pinned: bool,
+    },
 
 
     // Root ordering (unified mixed-item contract)
@@ -785,6 +790,7 @@ impl ShellEvent {
                 | Self::MoveTabToFolder { .. }
                 | Self::RemoveTabFromFolder { .. }
                 | Self::ToggleFolderExpanded { .. }
+                | Self::SetFolderPinned { .. }
                 | Self::ReorderRootItem { .. }
         )
     }

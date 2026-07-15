@@ -665,3 +665,56 @@ fn test_lmdb_schema_migration_v3_dedups_duplicate_favorites() {
         serde_json::from_slice(&storage.get("schema_version").unwrap().unwrap()).unwrap();
     assert_eq!(schema_version, 4);
 }
+
+#[test]
+fn lmdb_persists_set_folder_pinned_true_and_false() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let storage_path = temp_dir.path().join("maho-core.lmdb");
+
+    let (space_id, folder_id) = {
+        let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
+        let space_id = core.get_active_space_id();
+        let folder_id = create_folder_for_test(&mut core, space_id.clone(), "Pinnable");
+
+        core.handle_event(ShellEvent::SetFolderPinned {
+            space_id: space_id.clone(),
+            folder_id: folder_id.clone(),
+            is_pinned: true,
+        });
+        core.handle_event(ShellEvent::AppWillTerminate);
+        (space_id, folder_id)
+    };
+
+    {
+        let mut restored = MahoCore::new().with_lmdb_storage(&storage_path);
+        restored.load_state().expect("state should restore");
+        let folders = restored.space_manager().get_folder_view_models(&space_id);
+        let folder = folders
+            .iter()
+            .find(|f| f.id == folder_id)
+            .expect("folder should exist after reload");
+        assert!(folder.is_pinned, "is_pinned=true must survive reload");
+    }
+
+    {
+        let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
+        core.load_state().expect("state should restore");
+        core.handle_event(ShellEvent::SetFolderPinned {
+            space_id: space_id.clone(),
+            folder_id: folder_id.clone(),
+            is_pinned: false,
+        });
+        core.handle_event(ShellEvent::AppWillTerminate);
+    }
+
+    {
+        let mut restored = MahoCore::new().with_lmdb_storage(&storage_path);
+        restored.load_state().expect("state should restore");
+        let folders = restored.space_manager().get_folder_view_models(&space_id);
+        let folder = folders
+            .iter()
+            .find(|f| f.id == folder_id)
+            .expect("folder should exist after reload");
+        assert!(!folder.is_pinned, "is_pinned=false must survive reload");
+    }
+}

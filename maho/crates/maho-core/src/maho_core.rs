@@ -1041,6 +1041,10 @@ impl Default for MahoCore {
 }
 
 impl MahoCore {
+    pub fn load_skills_from_dir(&mut self, dir_path: &std::path::Path) -> Result<(), String> {
+        self.skills_manager.load_skills_from_dir(dir_path)
+    }
+
     pub fn space_manager(&self) -> &SpaceManager {
         &self.space_manager
     }
@@ -3257,6 +3261,7 @@ impl MahoCore {
             ShellEvent::CreateFolder { space_id, .. }
             | ShellEvent::RenameFolder { space_id, .. }
             | ShellEvent::DeleteFolder { space_id, .. }
+            | ShellEvent::SetFolderPinned { space_id, .. }
             | ShellEvent::ReorderFolder { space_id, .. }
             | ShellEvent::ReorderTabInFolder { space_id, .. }
             | ShellEvent::ReorderRootItem { space_id, .. }
@@ -3319,6 +3324,7 @@ impl MahoCore {
             | ShellEvent::CreateFolder { .. }
             | ShellEvent::RenameFolder { .. }
             | ShellEvent::DeleteFolder { .. }
+            | ShellEvent::SetFolderPinned { .. }
             | ShellEvent::ConvertFolderToSpace { .. }
             | ShellEvent::MoveFolderIntoFolder { .. }
             | ShellEvent::MoveFolderToRoot { .. }
@@ -9257,6 +9263,10 @@ impl SpaceManagerInterface for SpaceManager {
 
     fn find_folder_expanded(&self, space_id: &SpaceId, folder_id: &FolderId) -> Option<bool> {
         self.find_folder_expanded(space_id, folder_id)
+    }
+
+    fn set_folder_pinned(&mut self, space_id: &SpaceId, folder_id: &FolderId, is_pinned: bool) -> bool {
+        self.set_folder_pinned(space_id, folder_id, is_pinned)
     }
 
     fn move_folder(&mut self, folder_id: &FolderId, new_parent: Option<FolderId>) -> Result<(), crate::space_manager::FolderError> {

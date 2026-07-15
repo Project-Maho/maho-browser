@@ -780,6 +780,7 @@ pub struct SwiftideBackend {
     active_space_id: Arc<Mutex<Option<String>>>,
     approval_policy: Arc<Mutex<String>>,
     preferred_provider: Arc<Mutex<Option<String>>>,
+    allowed_tools: Arc<Mutex<Option<Vec<String>>>>,
 }
 
 impl Clone for SwiftideBackend {
@@ -798,6 +799,7 @@ impl Clone for SwiftideBackend {
             active_space_id: Arc::clone(&self.active_space_id),
             approval_policy: Arc::clone(&self.approval_policy),
             preferred_provider: Arc::clone(&self.preferred_provider),
+            allowed_tools: Arc::clone(&self.allowed_tools),
         }
     }
 }
@@ -824,11 +826,16 @@ impl SwiftideBackend {
             active_space_id: Arc::new(Mutex::new(None)),
             approval_policy: Arc::new(Mutex::new(String::from("prompt"))),
             preferred_provider: Arc::new(Mutex::new(None)),
+            allowed_tools: Arc::new(Mutex::new(None)),
         }
     }
 
     pub fn set_active_space_id(&self, space_id: Option<String>) {
         *self.active_space_id.lock_unpoison() = space_id;
+    }
+
+    pub fn set_allowed_tools(&self, tools: Option<Vec<String>>) {
+        *self.allowed_tools.lock_unpoison() = tools;
     }
 
     pub fn set_approval_policy(&self, policy: String) {
@@ -1019,15 +1026,30 @@ impl SwiftideBackend {
         // Priority: explicit programmatic override (empty in production) >
         // per-conversation snapshot (frozen at first turn so mid-conversation
         // profile switches do NOT rewrite an ongoing chat, #13) > current profile.
+        let mut memories_str = String::new();
+        if let Ok(memories) = self.storage.fts_relevant_memories(&content_str, 10).await {
+            if !memories.is_empty() {
+                memories_str.push_str("\n\nRetrieved Memories:\n");
+                for (_, content, _) in memories {
+                    memories_str.push_str(&format!("- {}\n", content));
+                }
+            }
+        }
+
         let system_prompt_val = {
             let sp = self.system_prompt.lock_unpoison().clone();
-            if !sp.is_empty() {
+            let base = if !sp.is_empty() {
                 sp
             } else {
                 match self.storage.get_system_prompt_snapshot(session_id).await {
                     Ok(Some(snap)) => snap,
                     _ => resolved.system_prompt.clone(),
                 }
+            };
+            if base.is_empty() && memories_str.is_empty() {
+                String::new()
+            } else {
+                format!("{}{}", base, memories_str)
             }
         };
         if !system_prompt_val.is_empty() {
@@ -1259,6 +1281,19 @@ impl SwiftideBackend {
             platform_tools.retain(|t| profile.tools.contains(&t.name().to_string()));
         }
 
+        {
+            let filter_lock = self.allowed_tools.lock_unpoison();
+            if let Some(ref allowed) = *filter_lock {
+                platform_tools.retain(|t| {
+                    let name_cow = t.name();
+                    let name_str = name_cow.as_ref();
+                    let raw_name = name_str.split_once('/').map(|(_, name)| name).unwrap_or(name_str);
+                    allowed.iter().any(|a| a.as_str() == name_str || a.as_str() == raw_name)
+                });
+            }
+        }
+
+
         let final_names: Vec<_> = platform_tools.iter().map(|t| t.name().to_string()).collect();
         dbg_log(&format!("[swiftide_backend] Final platform_tools count: {} names: {:?}",
             platform_tools.len(), final_names));
@@ -1468,6 +1503,16 @@ impl SwiftideBackend {
             });
         }
 
+        {
+            let filter_lock = self.allowed_tools.lock_unpoison();
+            if let Some(ref allowed) = *filter_lock {
+                platform_tools.retain(|t| {
+                    let raw_name = t.name.split_once('/').map(|(_, name)| name).unwrap_or(&t.name);
+                    allowed.iter().any(|a| a == &t.name || a == raw_name)
+                });
+            }
+        }
+
         platform_tools
     }
 
@@ -1648,17 +1693,31 @@ impl SwiftideBackend {
 
         // Retrieve system prompt and prepend it.
         // Priority: explicit programmatic override (empty in production) >
-        // per-conversation snapshot (frozen at first turn so mid-conversation
-        // profile switches do NOT rewrite an ongoing chat, #13) > current profile.
+        // per-conversation snapshot (frozen at conversational first turn) > current profile.
+        let mut memories_str = String::new();
+        if let Ok(memories) = self.storage.fts_relevant_memories(&content_str, 10).await {
+            if !memories.is_empty() {
+                memories_str.push_str("\n\nRetrieved Memories:\n");
+                for (_, content, _) in memories {
+                    memories_str.push_str(&format!("- {}\n", content));
+                }
+            }
+        }
+
         let system_prompt_val = {
             let sp = self.system_prompt.lock_unpoison().clone();
-            if !sp.is_empty() {
+            let base = if !sp.is_empty() {
                 sp
             } else {
                 match self.storage.get_system_prompt_snapshot(session_id).await {
                     Ok(Some(snap)) => snap,
                     _ => resolved.system_prompt.clone(),
                 }
+            };
+            if base.is_empty() && memories_str.is_empty() {
+                String::new()
+            } else {
+                format!("{}{}", base, memories_str)
             }
         };
         if !system_prompt_val.is_empty() {
@@ -1892,6 +1951,10 @@ impl AgentRuntime for SwiftideBackend {
 
     fn set_system_prompt(&self, prompt: &str) {
         *self.system_prompt.lock_unpoison() = prompt.to_string();
+    }
+
+    fn set_allowed_tools(&self, tools: Option<Vec<String>>) {
+        *self.allowed_tools.lock_unpoison() = tools;
     }
 }
 
